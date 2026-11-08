@@ -87,3 +87,89 @@ dictionary to the value to copy it, and released the copy at the end.
   scalar unboxed in a list of that kind keeps it. 1,434M -> 1,164M
   instructions, 0.59 -> 0.53 s (6.2x Rust). What remains: cloning the
   element `Type` (String allocation) for each new list, about 6%.
+
+## 2026-11-08: docdb and json_roundtrip (PR from `claude/project-thread-yj00ct`)
+
+Goal: beat Python wall time on `docdb` (Python 574 ms) and
+`json_roundtrip` (Python 434 ms). Not met yet; this PR is progress.
+Callgrind instruction counts (docdb 10000 rows, json_roundtrip 10):
+
+| Step | docdb | json_roundtrip |
+| --- | --- | --- |
+| Start | 1376M | 946M |
+| Typed `json.Value` layout, lent field reads | 1102M | 911M |
+| Dict literal entries, element path walks on bytes | 964M | 887M |
+| Map insert in place, faster JSON runtime | 947M | 879M |
+| Shadow loans of dict values to borrowing calls | 896M | 776M |
+| Frozen borrowed str literals, own SipHash-1-3, next-entry lookup hint, cached payload tags | 830M | 752M |
+
+- `json.Value` uses the typed enum layout. Generated code mutates its
+  ElementBoxes in place without refcount checks, so two holders must
+  never share a payload box. Sharing them on clone broke
+  `module_constants_read_across_tasks` and was reverted.
+- Shadow loans: when every read of a dict entry loan is a borrowed
+  argument of a user call, the entry's value is aliased into a box whose
+  count carries `SHADOW_REFERENCE`, so it always looks shared and never
+  frees the value. `aura_direct_end_shadow` frees the box, or makes a
+  real copy if a callee kept it. Only typed variants in a confined,
+  unshared dict get a shadow.
+- Owned host builtin arguments now copy a box that another reference
+  holds, rather than emptying it under the other holder.
+- Wall time on the cloud box after these (bench sizes): docdb about
+  1030 ms against Python's 500, json_roundtrip about 680 ms against 410.
+- Dict keys still hash with keyed SipHash-1-3, now the runtime's own copy
+  (checked against the reference vectors) with keys taken from
+  `RandomState` once per process, so a one-word key compresses directly.
+- A `str` literal passed to a borrowing parameter is one frozen box per
+  literal, kept in a data word, like a module constant.
+- Tried and dropped: lending `list[str]` elements (`keys[i]`) in
+  `lent_element_reads`; it saved under 1% (892M / 776M).
+- Callgrind counts include the scheduler spin around file calls (about
+  331M of docdb), so docdb counts overstate the work.
+- What remains: json_roundtrip walk over `keys()` (str copies, releases,
+  type tags), parse 254M, dumps 153M, tree drop 141M; docdb `field_str`
+  (its loan copy outlives the loan), parse, dumps, insert.
+- `d[k]` passed to a borrowing parameter now takes a shadow box too, and
+  `json.dumps` / `json.parse` read and build `json.Value` variants by
+  their index in the layout (docdb 801M, json_roundtrip 708M).
+- Keys loops: `for key in d.keys(): match d.lookup(key)` over a dict that
+  nothing changes no longer copies the keys or each key and does not
+  hash. Native code keeps the slot of the entry it is on
+  (`aura_direct_map_next_slot`) and the fused test lends that slot's
+  value (`aura_direct_map_shadow_at`). The analysis is
+  `native_codegen_key_loops.rs`. A micro walk of 8000 keys per round went
+  from about 1800 to 700 instructions per key. json_roundtrip 10 rounds:
+  708M -> 546M; wall about 620 ms against Python's 420.
+- Found while profiling: a typed variant box's layout tag is registered
+  under the plain name (`json.Value`) and generated code tags with the
+  descriptor (`aura-type-v2:n10:json.Value0;`), so the two never compare
+  equal and each fresh element box is tagged once more (about 130
+  instructions each). Parse is about 1150 instructions per value and
+  dropping the tree about 1000.
+- The native binary size baselines were re-recorded: the json subject
+  grew about 11% on Linux with this work (1661336 -> 1838368 bytes).
+- Matched lookups: `match d.lookup(k): case Found(v): match v: case
+  json.Value.String(text): return text.clone()` reads a shadow box when
+  the read is only matched and its payloads are only cloned on a straight
+  path (`native_codegen_shadow_reads.rs`). `field_str` went from about
+  2100 to 1200 instructions a call; docdb 10k 803M -> 768M.
+- `xs.append(x)` of a scalar through an element or entry loan is one call,
+  `aura_direct_element_path_push_scalar`, instead of a take, a push, and a
+  store of the list (docdb 768M -> 729M).
+- The allocation counters of `AURA_RUNTIME_STATS` now count only when the
+  report is requested, and a release of a box's last reference frees it
+  without a compare-exchange. Neither moved wall time on this machine.
+- Wall time is still about 1.8x Python on docdb (975 ms vs 540 at 50k)
+  although Aura now runs fewer instructions (729M vs 814M at 10k, Python's
+  startup taken out). Aura peaks at 210 MB against Python's 120 MB and
+  takes twice the page faults: every box is 192 bytes (`Value` is 96, the
+  largest variants being `EnumVariantValue` 80 with two 24-byte
+  `RuntimeName`s, `VecValue` 72, `IntegerValue` 48), and a dict entry is
+  two `Value`s. Per phase at 50k (Aura / Python ms): insert 216 / 81,
+  reads 73 / 63, count_where 43 / 17, update 26 / 1, aggregate 45 / 7,
+  dumps 161 / 181, reload 206 / 155, and about 120 ms of freeing at the
+  end against Python's 20.
+- `match mut d.lookup(k)` on a dict value lowers to a copy of the entry
+  (`aura_direct_element_path_load` clones the whole JSON document), a
+  mutation of the copy, and a store of it back, so docdb's update loop
+  costs about 25k instructions an update.

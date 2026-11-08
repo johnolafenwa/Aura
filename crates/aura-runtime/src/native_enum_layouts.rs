@@ -31,7 +31,7 @@ use std::ptr::NonNull;
 use std::sync::atomic::{AtomicPtr, AtomicU32, AtomicUsize, Ordering};
 use std::sync::{Arc, OnceLock, RwLock};
 
-use aura_core::layout::{LayoutId, LayoutKind, LayoutTable};
+use aura_core::layout::{LayoutId, LayoutKind, LayoutTable, ScalarLayout};
 use aura_core::types::Type;
 
 use super::typed_layout::{self, FieldOps, TypedLayout};
@@ -62,6 +62,9 @@ pub struct EnumLayout {
     /// The one frozen box each variant with no payloads is built as, made
     /// on first use, by the variant's index. Zero while there is none.
     unit_boxes: Vec<AtomicUsize>,
+    /// The tag of each handle layout's box, by layout id, looked up on
+    /// first use so building a payload box compares no types.
+    handle_tags: Vec<OnceLock<Option<Arc<RuntimeTypeTag>>>>,
     /// How values move in and out of a variant's block.
     ops: &'static FieldOps,
 }
@@ -156,6 +159,13 @@ impl EnumLayout {
         self.layout.table()
     }
 
+    /// The tag a payload box at `place` carries.
+    fn handle_tag(&self, place: Place) -> Option<&RuntimeTypeTag> {
+        self.handle_tags[place.layout.index()]
+            .get_or_init(|| (self.ops.handle_tag)(self.type_of(place)))
+            .as_deref()
+    }
+
     fn is_box(&self, place: Place) -> bool {
         matches!(self.table().get(place.layout).kind, LayoutKind::Handle)
     }
@@ -222,8 +232,10 @@ impl EnumLayout {
                 }
             })
             .collect();
+        let handle_tags = (0..table.len()).map(|_| OnceLock::new()).collect();
         Ok(Self {
             access,
+            handle_tags,
             enum_name,
             runtime_type: Arc::clone(&tag.name),
             tag,
@@ -264,9 +276,41 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
         access,
         &build,
     )?;
-    Ok(layout
+    let layout: &'static EnumLayout = layout
         .downcast_ref()
-        .expect("the enum layout registry holds enum layouts"))
+        .expect("the enum layout registry holds enum layouts");
+    if layout.enum_name.as_str() == "json.Value" {
+        // A test's layout serves only that test's thread (see
+        // `TEST_JSON_VALUE_LAYOUT`), so the other tests keep parsing into
+        // payloads kept as values.
+        #[cfg(test)]
+        TEST_JSON_VALUE_LAYOUT.with(|cell| cell.set(Some(layout)));
+        #[cfg(not(test))]
+        JSON_VALUE_LAYOUT.store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
+    }
+    Ok(layout)
+}
+
+/// The layout of `json.Value` once the program registered it, which a
+/// parse builds its values in.
+static JSON_VALUE_LAYOUT: AtomicPtr<EnumLayout> = AtomicPtr::new(std::ptr::null_mut());
+
+#[cfg(test)]
+thread_local! {
+    /// The `json.Value` layout a test registered on this thread.
+    static TEST_JSON_VALUE_LAYOUT: std::cell::Cell<Option<&'static EnumLayout>> =
+        const { std::cell::Cell::new(None) };
+}
+
+/// The layout of `json.Value`, when the program has registered one.
+pub fn json_value_layout() -> Option<&'static EnumLayout> {
+    #[cfg(test)]
+    if let Some(layout) = TEST_JSON_VALUE_LAYOUT.with(std::cell::Cell::get) {
+        return Some(layout);
+    }
+    // SAFETY: only registered layouts, which live for the rest of the
+    // process, are stored.
+    unsafe { JSON_VALUE_LAYOUT.load(Ordering::Acquire).as_ref() }
 }
 
 /// The cell generated code keeps for one enum layout: its access code and
@@ -394,12 +438,73 @@ impl TypedPayloads {
         if !fits {
             return Err(payloads);
         }
-        let mut typed = Self::new(layout, variant);
+        // Every place is written below, so the block needs no zeroing.
+        let mut typed = Self::uninit(layout, variant);
         for (index, value) in payloads.into_iter().enumerate() {
             // SAFETY: the place is dead, and the value fits it.
             unsafe { typed.write_dead(index, value) };
         }
         Ok(typed)
+    }
+
+    /// [`Self::from_values`] for a variant that takes one payload, with no
+    /// vector of payloads to build: a parse makes every `json.Value` this
+    /// way.
+    pub fn from_value(
+        layout: &'static EnumLayout,
+        variant_name: &str,
+        payload: Value,
+    ) -> Result<Self, Value> {
+        let Some(variant) = layout.variant_index(variant_name) else {
+            return Err(payload);
+        };
+        let plan = &layout.variants[variant];
+        let [place] = plan.payloads.as_slice() else {
+            return Err(payload);
+        };
+        if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
+            return Err(payload);
+        }
+        let mut typed = Self::uninit(layout, variant);
+        // SAFETY: the place is dead, and the value fits it.
+        unsafe { typed.write_dead(0, payload) };
+        Ok(typed)
+    }
+
+    /// [`Self::from_value`] for the variant at index `variant`, which the
+    /// caller looked up once.
+    pub fn from_value_at(
+        layout: &'static EnumLayout,
+        variant: usize,
+        payload: Value,
+    ) -> Result<Self, Value> {
+        let Some(plan) = layout.variants.get(variant) else {
+            return Err(payload);
+        };
+        let [place] = plan.payloads.as_slice() else {
+            return Err(payload);
+        };
+        if !layout.is_box(*place) && !(layout.ops.fits)(layout.table(), place.layout, &payload) {
+            return Err(payload);
+        }
+        let mut typed = Self::uninit(layout, variant);
+        // SAFETY: the place is dead, and the value fits it.
+        unsafe { typed.write_dead(0, payload) };
+        Ok(typed)
+    }
+
+    /// Variant `variant` with a block whose bytes are dead. The caller
+    /// writes every payload before the variant is read, copied, or dropped.
+    fn uninit(layout: &'static EnumLayout, variant: usize) -> Self {
+        let plan = &layout.variants[variant];
+        let data = plan
+            .block
+            .map(|block| super::allocate_layout_block(block, false));
+        Self {
+            layout,
+            variant: variant as u32,
+            data,
+        }
     }
 
     pub fn layout(&self) -> &'static EnumLayout {
@@ -447,7 +552,7 @@ impl TypedPayloads {
         let place = self.places()[index];
         let address = self.address(place);
         if self.layout.is_box(place) {
-            let boxed = (self.layout.ops.field_box)(value, self.layout.type_of(place));
+            let boxed = (self.layout.ops.tagged_box)(value, self.layout.handle_tag(place));
             // SAFETY: the slot's pointer is dead.
             unsafe { std::ptr::write(address.cast::<Option<ElementBox>>(), Some(boxed)) };
         } else {
@@ -534,6 +639,26 @@ impl TypedPayloads {
         Some(Cow::Owned(unsafe {
             (self.layout.ops.read)(self.layout.table(), place.layout, address)
         }))
+    }
+
+    /// The bits of payload `index` when the block holds it in place as an
+    /// `int64`, a `float64`, or a `bool`: the integer, the float's bits, or
+    /// 0 or 1. `None` for any other payload.
+    pub fn scalar_bits(&self, index: usize) -> Option<(ScalarLayout, i64)> {
+        let place = self.place(index)?;
+        let LayoutKind::Scalar(scalar) = self.layout.table().get(place.layout).kind else {
+            return None;
+        };
+        let address = self.address(place);
+        // SAFETY: the place holds a scalar of its layout, at its alignment.
+        let bits = unsafe {
+            match scalar {
+                ScalarLayout::Int64 | ScalarLayout::Float64 => address.cast::<i64>().read(),
+                ScalarLayout::Bool => i64::from(address.read() != 0),
+                _ => return None,
+            }
+        };
+        Some((scalar, bits))
     }
 
     /// Every payload, in order.

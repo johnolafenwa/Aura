@@ -1,0 +1,86 @@
+import json
+
+
+def json_x(doc: json.Value) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup("x"):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as n:
+                            return n
+                        case None:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+def make() -> json.Value:
+    return json.Value.Object(
+        {"x": json.Value.Int(1), "t": json.Value.Array([json.Value.Int(5)])}
+    )
+
+
+def main() -> int32:
+    original = make()
+    mut d: dict[int64, json.Value] = {}
+    d[1] = make()
+    d[2] = make()
+    mut seen = 0
+    match d.lookup(1):
+        case Lookup.Found(v):
+            seen = json_x(v)
+        case Lookup.Missing:
+            pass
+    match mut d.lookup(1):
+        case Lookup.Found(doc):
+            match mut doc:
+                case json.Value.Object(fields):
+                    fields["x"] = json.Value.Int(7)
+                    match mut fields.lookup("t"):
+                        case Lookup.Found(tags):
+                            match mut tags:
+                                case json.Value.Array(items):
+                                    items.append(json.Value.String("updated"))
+                                case _:
+                                    pass
+                        case Lookup.Missing:
+                            pass
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    mut third = make()
+    match mut third:
+        case json.Value.Object(fields):
+            match mut fields.lookup("t"):
+                case Lookup.Found(tags):
+                    match mut tags:
+                        case json.Value.Array(items):
+                            items.append(json.Value.Int(3))
+                        case _:
+                            pass
+                case Lookup.Missing:
+                    pass
+        case _:
+            pass
+    print(json.dumps(original))
+    print(json.dumps(d[1]))
+    print(json.dumps(d[2]))
+    print(seen)
+    print(json.dumps(third))
+    match json.parse("{\"a\":[1,2,{\"b\":\"c\"}]}"):
+        case Result.Ok(parsed):
+            mut p2 = json.Value.Null
+            match parsed:
+                case json.Value.Object(f):
+                    p2 = json.Value.Object(f.copy())
+                case _:
+                    pass
+            print(json.dumps(parsed))
+            print(json.dumps(p2))
+        case Result.Err(_):
+            pass
+    return 0

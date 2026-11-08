@@ -113,6 +113,9 @@ fn program_defines_enum(enum_name: &str) -> bool {
     ) {
         return false;
     }
+    if enum_name == "json.Value" {
+        return true;
+    }
     match enum_name.rsplit_once('.') {
         Some((module, _)) => {
             let path = module.split('.').map(str::to_string).collect::<Vec<_>>();

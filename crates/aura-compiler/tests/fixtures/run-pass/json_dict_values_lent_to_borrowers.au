@@ -1,0 +1,50 @@
+import json
+
+
+class Keep:
+    docs: list[str] = []
+
+    def keep(mut self, doc: json.Value):
+        self.docs.append(json.dumps(doc))
+
+
+def size(doc: json.Value) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            return fields.len()
+        case json.Value.Array(items):
+            mut n = 0
+            for item in items:
+                n += size(item)
+            return n + items.len()
+        case _:
+            return 1
+
+
+def main():
+    mut docs: dict[int64, json.Value] = {}
+    for i in range(5):
+        docs[i] = json.Value.Object(
+            {
+                "id": json.Value.Int(i),
+                "tags": json.Value.Array([json.Value.String(f"t{i}")]),
+            }
+        )
+    docs[9] = json.Value.Array(
+        [json.Value.Int(1), json.Value.Array([json.Value.Int(2)])]
+    )
+    mut keep = Keep()
+    mut total = 0
+    for key in docs.keys():
+        match docs.lookup(key):
+            case Lookup.Found(doc):
+                total += size(doc)
+                keep.keep(doc)
+            case Lookup.Missing:
+                pass
+    docs[0] = json.Value.Null
+    docs.remove(1)
+    mut again = 0
+    for text in keep.docs:
+        again += text.len()
+    print(f"{total} {again} {keep.docs[0]} {keep.docs[5]} {docs.len()}")

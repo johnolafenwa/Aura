@@ -74,11 +74,12 @@ use crate::runtime_value::{
     InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
     ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
-    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, TaskCancelledSignal,
-    TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue,
-    TlsStreamValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
-    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, SharedType,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
+    WebSocketValue, DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD,
+    DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -169,7 +170,8 @@ pub use class_layouts::{
 pub use element_boxes::{ElementBox, ElementMut};
 use enum_layouts::{celled_enum_layout, registered_enum_layout};
 pub use enum_layouts::{
-    register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads, FIRST_ENUM_ACCESS,
+    json_value_layout, register_enum_layout, EnumLayout, EnumLayoutCell, TypedPayloads,
+    FIRST_ENUM_ACCESS,
 };
 pub use frame_stack::{
     direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
@@ -2035,7 +2037,12 @@ fn element_boxed_value(value: Value) -> *mut OpaqueValue {
     {
         element.owner_thread = LIST_ELEMENT_THREAD;
     }
-    allocate_box(element)
+    let boxed = allocate_box(element);
+    // A variant kept in its layout has the layout's type from the start,
+    // so generated code that reads the element as that type tags nothing.
+    // SAFETY: the box is new and nothing else reads it yet.
+    unsafe { record_typed_variant_shape(boxed) };
+    boxed
 }
 
 // These helpers validate the explicit refcount stored in `OpaqueValue`, but they cannot detect
@@ -2069,6 +2076,14 @@ fn release_ref_count(ref_count: &AtomicU32) -> std::result::Result<bool, &'stati
         }
         if current >= FROZEN_REFERENCES {
             return Ok(false);
+        }
+        if current == 1 {
+            // The caller holds the only reference, so no other thread can
+            // reach the box to change its count, and the acquiring load
+            // above already saw every earlier release. A plain store frees
+            // it without a locked instruction.
+            ref_count.store(0, Ordering::Relaxed);
+            return Ok(true);
         }
         let next = current - 1;
         if ref_count
@@ -2233,7 +2248,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         ))),
         Value::Map(map) => Some(canonical_runtime_type_name(&Type::Named(
             "dict".to_string(),
-            vec![map.key_type.clone(), map.value_type.clone()],
+            vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
         ))),
         Value::Instance(instance) => {
             instance
@@ -2826,8 +2841,12 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Map(map) => {
             if let Type::Named(name, args) = parsed {
                 if name == "dict" && args.len() == 2 {
-                    assign_type(&mut map.key_type, &args[0]);
-                    assign_type(&mut map.value_type, &args[1]);
+                    if map.key_type != args[0] {
+                        map.key_type = args[0].clone().into();
+                    }
+                    if map.value_type != args[1] {
+                        map.value_type = args[1].clone().into();
+                    }
                 }
             }
         }
@@ -3280,7 +3299,8 @@ unsafe fn consume_value(ptr: *mut OpaqueValue) -> Value {
 
 /// Takes the value out of a box the caller owns one reference to. A box
 /// that another reference still holds keeps its value, and the caller gets
-/// a copy. Only a box with one reference is emptied.
+/// a copy. Only a box with one reference is emptied, and the caller then
+/// releases that reference, freeing the box.
 unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
     // SAFETY: the caller owns a reference, so the box is live. A count of
     // one cannot grow while the caller holds the only reference.
@@ -3288,10 +3308,16 @@ unsafe fn take_owned_contents(ptr: *mut OpaqueValue) -> Value {
         unsafe { ptr.as_ref() }.is_some_and(|value| value.ref_count.load(Ordering::Acquire) > 1);
     if shared {
         crate::runtime_value::representation_stats::note_clone();
-        unsafe { value_ref(ptr) }
-    } else {
-        unsafe { value_mut(ptr, |value| std::mem::replace(value, Value::Unit)) }
+        return unsafe { value_ref(ptr) };
     }
+    let Some(opaque) = (unsafe { ptr.as_ref() }) else {
+        runtime_error("direct runtime received a null opaque value pointer");
+    };
+    let _access = opaque.access(true);
+    // Every caller releases its only reference next, which frees the box,
+    // so the emptied box's list view need not follow the write.
+    // SAFETY: as in `value_mut`.
+    unsafe { std::mem::replace(&mut *opaque.value.get(), Value::Unit) }
 }
 
 unsafe fn consume_owned_value(ptr: *mut OpaqueValue) -> Value {
@@ -3595,7 +3621,10 @@ impl DirectHostArgBuffer {
 
     fn take_value(&self, name: &str, index: usize) -> std::result::Result<Value, Diagnostic> {
         let handle = self.handle(name, index, ReceiverKind::Value)?;
-        Ok(unsafe { value_mut(handle, |value| mem::replace(value, Value::Unit)) })
+        // The buffer owns one reference. A box another reference holds, or
+        // a frozen one, such as the shared box of a variant with no
+        // payloads, keeps its value and the builtin takes a copy.
+        Ok(unsafe { take_owned_contents(handle) })
     }
 }
 
@@ -3658,14 +3687,13 @@ fn direct_json_exact_payload<'a>(
     value: &'a Value,
     expected_variant: &str,
     call: &str,
-) -> std::result::Result<Option<&'a Value>, Diagnostic> {
+) -> std::result::Result<Option<Cow<'a, Value>>, Diagnostic> {
     let variant = direct_json_variant(value, call)?;
     if variant.variant_name != expected_variant {
         return Ok(None);
     }
-    // The runtime builds every `json.Value` with its payloads as values.
-    match variant.payloads.values() {
-        [payload] => Ok(Some(payload)),
+    match variant.payloads.get(0) {
+        Some(payload) if variant.payloads.len() == 1 => Ok(Some(payload)),
         _ => Err(Diagnostic::coded(
             "AU4001",
             format!("malformed runtime `json.Value.{expected_variant}` payload in `{call}`"),
@@ -3783,35 +3811,70 @@ fn direct_json_is_null(args: &DirectHostArgBuffer) -> std::result::Result<Value,
 fn direct_json_as_bool(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_bool";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Bool", name)? {
-            Some(Value::Bool(value)) => optional_named("bool", Some(Value::Bool(*value))),
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
-                ))
-            }
-            None => optional_named("bool", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Bool", name)?.as_deref() {
+                Some(Value::Bool(value)) => optional_named("bool", Some(Value::Bool(*value))),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Bool` payload in `json::as_bool`",
+                    ))
+                }
+                None => optional_named("bool", None),
+            },
+        )
     })
 }
 
 fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_int";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Int", name)? {
-            Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
-                optional_named("int64", Some(Value::Int(*value)))
-            }
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Int` payload in `json::as_int`",
-                ))
-            }
-            None => optional_named("int64", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Int", name)?.as_deref() {
+                Some(Value::Int(value)) if json_int_metadata_is_exact(value) => {
+                    optional_named("int64", Some(Value::Int(*value)))
+                }
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Int` payload in `json::as_int`",
+                    ))
+                }
+                None => optional_named("int64", None),
+            },
+        )
     })
+}
+
+/// `aura_direct_json_as_scalar` for a `json.Value` kept in its layout,
+/// which holds a scalar payload in place: `Some(Some(bits))` when `value`
+/// is `variant`, `Some(None)` when it is another variant, and `None` when
+/// the value is not kept in the layout, which the general path reads.
+fn typed_json_scalar_bits(value: &Value, variant: &str, kind: i64) -> Option<Option<i64>> {
+    let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = value
+    else {
+        return None;
+    };
+    let layout = enum_layouts::json_value_layout()?;
+    if !std::ptr::eq(typed.layout(), layout) {
+        return None;
+    }
+    if typed.variant_name().as_str() != variant {
+        return Some(None);
+    }
+    let expected = match kind {
+        0 => aura_core::layout::ScalarLayout::Int64,
+        1 => aura_core::layout::ScalarLayout::Float64,
+        _ => aura_core::layout::ScalarLayout::Bool,
+    };
+    match typed.scalar_bits(0) {
+        Some((scalar, bits)) if scalar == expected => Some(Some(bits)),
+        // A payload of another shape takes the general path, which reports it.
+        _ => None,
+    }
 }
 
 /// `json.as_int`, `json.as_float`, or `json.as_bool` for a union that
@@ -3832,7 +3895,13 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
         };
         let bits = unsafe {
             with_lent_value(value, |value| {
-                match direct_json_exact_payload(value, variant, name) {
+                if let Some(bits) = typed_json_scalar_bits(value, variant, kind) {
+                    return bits;
+                }
+                match direct_json_exact_payload(value, variant, name)
+                    .as_ref()
+                    .map(|payload| payload.as_deref())
+                {
                     Ok(None) => None,
                     Ok(Some(payload @ Value::Int(number)))
                         if kind == 0 && json_int_metadata_is_exact(number) =>
@@ -3845,7 +3914,7 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
                         "AU4001",
                         format!("malformed runtime `json.Value.{variant}` payload in `{name}`"),
                     )),
-                    Err(diagnostic) => runtime_diagnostic_error(diagnostic),
+                    Err(diagnostic) => runtime_diagnostic_error(diagnostic.clone()),
                 }
             })
         };
@@ -3862,16 +3931,18 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
 fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     let name = "json::as_float";
     args.with_borrow(name, 0, |value| {
-        Ok(match direct_json_exact_payload(value, "Float", name)? {
-            Some(Value::Float(value)) => optional_named("float64", Some(Value::Float(*value))),
-            Some(_) => {
-                return Err(Diagnostic::coded(
-                    "AU4001",
-                    "malformed runtime `json.Value.Float` payload in `json::as_float`",
-                ))
-            }
-            None => optional_named("float64", None),
-        })
+        Ok(
+            match direct_json_exact_payload(value, "Float", name)?.as_deref() {
+                Some(Value::Float(value)) => optional_named("float64", Some(Value::Float(*value))),
+                Some(_) => {
+                    return Err(Diagnostic::coded(
+                        "AU4001",
+                        "malformed runtime `json.Value.Float` payload in `json::as_float`",
+                    ))
+                }
+                None => optional_named("float64", None),
+            },
+        )
     })
 }
 
@@ -3949,6 +4020,11 @@ thread_local! {
 /// share one copy of each name instead of allocating their own.
 fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
     let bytes = unsafe { slice::from_raw_parts(ptr, len) };
+    // The names of the enums the runtime itself defines need no lookup,
+    // and copying or dropping a static name touches no count.
+    if let Some(name) = well_known_runtime_name(bytes) {
+        return RuntimeName::from_static(name);
+    }
     let address = ptr as usize;
     let slot = ((address >> 3) ^ (address >> 11) ^ len) % LITERAL_NAME_LOOKUP_SLOTS;
     let slots = [slot, slot ^ 1];
@@ -3981,6 +4057,27 @@ fn literal_runtime_name(ptr: *const u8, len: usize) -> RuntimeName {
         lookup[index] = Some((address, len, name.clone()));
     });
     name
+}
+
+/// `bytes` as a static name when it spells one of the enum or variant
+/// names of the enums every program uses: `Result`, `Option`, `Lookup`,
+/// and `json.Value`.
+#[inline]
+fn well_known_runtime_name(bytes: &[u8]) -> Option<&'static str> {
+    let names: &[&'static str] = match bytes.len() {
+        2 => &["Ok"],
+        3 => &["Int", "Err"],
+        4 => &["Null", "Bool", "Some", "None"],
+        5 => &["Found", "Float", "Array"],
+        6 => &["String", "Object", "Lookup", "Result", "Option"],
+        7 => &["Missing"],
+        10 => &["json.Value"],
+        _ => return None,
+    };
+    names
+        .iter()
+        .copied()
+        .find(|name| crate::collection_index::short_bytes_eq(name.as_bytes(), bytes))
 }
 
 /// The text of the UTF-8 bytes at `ptr`, which generated code passes for a
@@ -4527,8 +4624,8 @@ pub extern "C-unwind" fn aura_direct_ffi_call(
 
 fn headers_map_value(headers: Vec<(String, String)>) -> Value {
     Value::Map(MapValue {
-        key_type: Type::named("str"),
-        value_type: Type::named("str"),
+        key_type: SharedType::named("str"),
+        value_type: SharedType::named("str"),
         entries: headers
             .into_iter()
             .map(|(key, value)| (Value::String(key.into()), Value::String(value.into())))
@@ -5206,7 +5303,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::Set(set) => Type::Named("set".to_string(), vec![set.element_type.clone()]),
         Value::Map(map) => Type::Named(
             "dict".to_string(),
-            vec![map.key_type.clone(), map.value_type.clone()],
+            vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
         ),
         Value::Duration(_) => Type::named("Duration"),
         Value::Rng(_) => Type::named("random.Rng"),
@@ -6348,8 +6445,9 @@ fn lock_direct_module_constants(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The layout slots that hold a shared variant box, which the program's
-/// end frees with the module constants.
+/// The layout slots that hold a shared variant box, and the cells of
+/// borrowed `str` literals, which the program's end frees with the module
+/// constants.
 fn shared_unit_variant_slots() -> &'static Mutex<Vec<&'static std::sync::atomic::AtomicUsize>> {
     static SLOTS: OnceLock<Mutex<Vec<&'static std::sync::atomic::AtomicUsize>>> = OnceLock::new();
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
@@ -6622,6 +6720,57 @@ fn direct_ownership_tracking_active() -> bool {
     // SAFETY: the stack belongs to the running task.
     current_direct_frame_stack()
         .is_some_and(|stack| unsafe { stack.as_ref() }.owned_values.tracking())
+}
+
+/// The one frozen box of a `str` literal that generated code passes to a
+/// parameter that borrows it, kept in `cell`, a word of the program's data
+/// for that literal: the first call makes it, and every later one returns
+/// it without allocating. A frozen box takes no references, so the
+/// caller's release of it does nothing, and anything that would change or
+/// take its text copies it first, as for a module constant.
+///
+/// # Safety
+///
+/// `cell` is a word of the program's data that only this function writes,
+/// and `ptr` and `len` name the literal's UTF-8 bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_literal_cell(
+    cell: *const std::sync::atomic::AtomicUsize,
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let Some(cell) = (unsafe { cell.as_ref() }) else {
+        return aura_direct_string_literal(ptr, len);
+    };
+    let stored = cell.load(Ordering::Acquire);
+    if stored != 0 {
+        return stored as *mut OpaqueValue;
+    }
+    task_runtime_boundary(|| {
+        let boxed = boxed_value(Value::String(literal_str(ptr, len).into()));
+        // SAFETY: the box is new and confined to this thread, and the cell
+        // publishes it with a release store.
+        unsafe { freeze_direct_value(boxed) };
+        match cell.compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                // SAFETY: the cell is a word of the program's data, which
+                // lives until the process exits.
+                let cell: &'static std::sync::atomic::AtomicUsize =
+                    unsafe { &*(cell as *const std::sync::atomic::AtomicUsize) };
+                shared_unit_variant_slots()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(cell);
+                boxed
+            }
+            Err(winner) => {
+                // SAFETY: no other thread saw the box this thread lost with.
+                unsafe { free_frozen_direct_value(boxed) };
+                winner as *mut OpaqueValue
+            }
+        }
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10208,8 +10357,8 @@ pub extern "C-unwind" fn aura_direct_array_reduce(
 pub extern "C-unwind" fn aura_direct_map_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Map(MapValue {
-            key_type: Type::named("Unknown"),
-            value_type: Type::named("Unknown"),
+            key_type: SharedType::named("Unknown"),
+            value_type: SharedType::named("Unknown"),
             entries: DictEntries::new(),
         }))
     })
@@ -10272,7 +10421,40 @@ fn boxed_map_lookup(found: Option<&Value>) -> *mut OpaqueValue {
 /// key is missing. Generated code keeps a `Lookup` it only matches and
 /// unpacks in this form.
 fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
-    map_lookup_copy(found).map_or(std::ptr::null_mut(), boxed_value)
+    map_lookup_copy(found).map_or(std::ptr::null_mut(), |value| {
+        let boxed = boxed_value(value);
+        // SAFETY: the box is new.
+        unsafe { record_typed_variant_shape(boxed) };
+        boxed
+    })
+}
+
+/// Gives a new box that holds an enum variant kept in its layout the type
+/// tag and shape a variant box generated code builds has, so the tag of
+/// its static type that follows costs one compare. Any other box keeps
+/// what it has.
+///
+/// # Safety
+///
+/// `boxed` is a new box confined to this thread.
+unsafe fn record_typed_variant_shape(boxed: *mut OpaqueValue) {
+    // SAFETY: the caller's contract.
+    let header = unsafe { &*boxed };
+    // SAFETY: as above; nothing else reads the box yet.
+    let held = unsafe { &*header.value.get() };
+    let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = held
+    else {
+        return;
+    };
+    let layout = typed.layout();
+    // SAFETY: as above.
+    unsafe { *header.runtime_type_name.get() = Some(Arc::clone(layout.runtime_type())) };
+    header
+        .shape_tag
+        .store(layout.shape_tag(), Ordering::Relaxed);
 }
 
 /// The low bit of a lent lookup result. A `Value` is aligned to at least
@@ -10298,10 +10480,9 @@ fn lent_map_payload(found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
 /// only those.
 fn copies_infallibly(value: &Value) -> bool {
     match value {
-        Value::EnumVariant(variant) => variant
-            .payloads
-            .iter()
-            .all(|payload| is_clone_leaf(&payload)),
+        // A variant kept in its layout copies its scalars as bytes, so only
+        // its payload boxes are checked, without reading the scalars out.
+        Value::EnumVariant(variant) => variant.payloads.copy_flat(is_clone_leaf),
         leaf => is_clone_leaf(leaf),
     }
 }
@@ -10342,6 +10523,177 @@ fn lent_map_lookup(
             )),
         })
     }
+}
+
+/// The count bit of a shadow box (see [`shadow_map_payload`]). While it is
+/// set the count never reaches zero, and every check for a box with one
+/// reference sees a shared box, so nothing empties or changes it in place.
+/// It sits below [`FROZEN_REFERENCES`], so retains and releases count as
+/// usual.
+pub(crate) const SHADOW_REFERENCE: u32 = 1 << 29;
+
+/// A lookup result for an entry loan whose every read borrows it: a box
+/// whose value is the found value itself, read where the dict keeps it, or
+/// what [`boxed_map_payload`] returns. Only a dict confined to this thread
+/// whose entries no other dict shares lends, so nothing else reaches the
+/// value, and nothing names the dict while the loan lives. Only a variant
+/// kept in its enum's layout lends: the box's value is then the variant's
+/// block address and payload boxes, which the dict's entry owns, and a
+/// reader that changes a payload's form in place changes the entry's.
+/// [`aura_direct_end_shadow`] ends the loan.
+fn shadow_map_payload(map: &MapValue, found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
+    match found {
+        Some(
+            value @ Value::EnumVariant(EnumVariantValue {
+                payloads: VariantPayloads::Typed(_),
+                ..
+            }),
+        ) if confined && !map.entries.is_shared() => {
+            // SAFETY: the copy of the value's bytes is never dropped:
+            // `aura_direct_end_shadow` forgets it or replaces it.
+            let alias = unsafe { std::ptr::read(value) };
+            let boxed = untracked_boxed_value(alias, None);
+            // SAFETY: the box is new.
+            unsafe { record_typed_variant_shape(boxed) };
+            // SAFETY: as above.
+            unsafe { &*boxed }
+                .ref_count
+                .store(SHADOW_REFERENCE + 1, Ordering::Release);
+            boxed
+        }
+        found => boxed_map_payload(found),
+    }
+}
+
+/// Looks a key up in the `dict` that `map` holds for a borrowing entry
+/// loan (see [`shadow_map_payload`]).
+fn shadow_map_lookup(
+    map: *mut OpaqueValue,
+    find: impl FnOnce(&MapValue) -> Option<&Value>,
+) -> *mut OpaqueValue {
+    unsafe {
+        with_lendable_value(map, false, |value, confined| match value {
+            Value::Map(map) => shadow_map_payload(map, find(map), confined),
+            other => runtime_error(format!(
+                "expected `dict`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// `aura_direct_map_get_payload` for an entry loan whose every read borrows
+/// the value (see [`shadow_map_payload`]).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_shadow(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        shadow_map_lookup(map, |map| {
+            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+                .map(|found| unsafe { &*found })
+        })
+    })
+}
+
+/// [`aura_direct_map_get_shadow`] for an `int64` key.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_int64_shadow(
+    map: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| shadow_map_lookup(map, |map| map.entries.value_of_i64(key)))
+}
+
+/// The first slot of `map` at or after `slot` that holds an entry, or -1.
+/// Generated code walks an unchanged dict's entries with it in place of a
+/// copy of its keys, as `for key in d.keys(): match d.lookup(key)` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_next_slot(map: *mut OpaqueValue, slot: i64) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| {
+            usize::try_from(slot)
+                .ok()
+                .and_then(|slot| map.entries.next_slot(slot))
+                .and_then(|slot| i64::try_from(slot).ok())
+                .unwrap_or(-1)
+        })
+    })
+}
+
+/// [`aura_direct_map_get_shadow`] for the entry in `slot`, which
+/// [`aura_direct_map_next_slot`] found, without a key: null when no entry
+/// is there.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_shadow_at(
+    map: *mut OpaqueValue,
+    slot: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        shadow_map_lookup(map, |map| {
+            usize::try_from(slot)
+                .ok()
+                .and_then(|slot| map.entries.slot(slot))
+                .map(|(_, value)| value)
+        })
+    })
+}
+
+/// Ends an entry loan [`aura_direct_map_get_shadow`] began. A shadow box
+/// nothing else holds is freed without dropping the value it reads, which
+/// the dict still owns. One that a borrower kept a reference to takes a
+/// copy of the value first, so the holder keeps what it saw. A box that
+/// holds a copy is released.
+///
+/// # Safety
+///
+/// `boxed` is null or the result of the loan's lookup, and nothing reads it
+/// through the loan again.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_end_shadow(boxed: *mut OpaqueValue) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller passes null or a live box.
+        let Some(header) = (unsafe { boxed.as_ref() }) else {
+            return;
+        };
+        let count = header.ref_count.load(Ordering::Acquire);
+        if count & SHADOW_REFERENCE == 0 || count >= FROZEN_REFERENCES {
+            unsafe { aura_direct_release_value(boxed) };
+            return;
+        }
+        if count == SHADOW_REFERENCE + 1 {
+            // Only the loan holds the box, so nothing can take another
+            // reference. The value's bytes go back to the dict unread.
+            // SAFETY: no other reference exists.
+            unsafe { std::ptr::write(header.value.get(), Value::Unit) };
+            header.ref_count.store(1, Ordering::Release);
+            unsafe { release_untracked_value(boxed) };
+            return;
+        }
+        {
+            // A holder kept the box: give it a copy of its own, under the
+            // box's lock when another thread may read it.
+            let lock = header.shared_lock();
+            let _guard = lock.map(|lock| {
+                lock.write()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            });
+            // SAFETY: the guard, or confinement, keeps every reader out, and
+            // the copy of the bytes is forgotten, not dropped.
+            unsafe {
+                let alias = std::ptr::read(header.value.get());
+                let copy = alias.clone();
+                std::mem::forget(alias);
+                std::ptr::write(header.value.get(), copy);
+            }
+            header.refresh_list_view();
+        }
+        header
+            .ref_count
+            .fetch_sub(SHADOW_REFERENCE, Ordering::AcqRel);
+        unsafe { release_untracked_value(boxed) };
+    })
 }
 
 /// Looks a key up in the `dict` at `index` of `list`, lending the result.
@@ -10631,25 +10983,153 @@ pub extern "C-unwind" fn aura_direct_map_set_in_place(
     value: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let key = unsafe { consume_owned_value(key) };
-        let value = unsafe { consume_owned_value(value) };
-        let previous = with_map_mut(map, |map| {
-            if is_unknown_runtime_type(&map.key_type) {
-                let inferred = inferred_collection_type(&key);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.key_type = inferred;
-                }
-            }
-            if is_unknown_runtime_type(&map.value_type) {
-                let inferred = inferred_collection_type(&value);
-                if !is_unknown_runtime_type(&inferred) {
-                    map.value_type = inferred;
-                }
-            }
-            map.entries.insert(key, value)
-        });
+        let previous = unsafe { direct_map_insert(map, key, value) };
         boxed_value(previous.map(lookup_found).unwrap_or_else(lookup_missing))
     })
+}
+
+/// `aura_direct_map_set_in_place` for a caller that drops the `Lookup` it
+/// returns, such as a dict literal or `d[k] = v`: the replaced value is
+/// dropped here, and no box is made for it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_insert_in_place(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        drop(unsafe { direct_map_insert(map, key, value) });
+    })
+}
+
+/// Stores the owned `key` and `value` boxes' values in `map`, and returns
+/// the value an equal key held. A map that does not know its key or value
+/// type yet takes it from the entry.
+unsafe fn direct_map_insert(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) -> Option<Value> {
+    let key = unsafe { consume_owned_value(key) };
+    let value = unsafe { consume_owned_value(value) };
+    with_map_mut(map, |map| {
+        if is_unknown_runtime_type(&map.key_type) {
+            let inferred = inferred_collection_type(&key);
+            if !is_unknown_runtime_type(&inferred) {
+                map.key_type = inferred.into();
+            }
+        }
+        if is_unknown_runtime_type(&map.value_type) {
+            let inferred = inferred_collection_type(&value);
+            if !is_unknown_runtime_type(&inferred) {
+                map.value_type = inferred.into();
+            }
+        }
+        map.entries.insert(key, value)
+    })
+}
+
+/// Puts one entry of a dict literal into the dict the literal builds,
+/// taking the key's and the value's boxes. Nothing reads the entry a later
+/// key of the same literal replaces, so no `Lookup` comes back.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_literal_entry(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let key = unsafe { consume_owned_value(key) };
+        let value = unsafe { consume_owned_value(value) };
+        insert_literal_entry(map, key, value);
+    })
+}
+
+/// [`aura_direct_map_literal_entry`] for a `str` key the source spells:
+/// the key comes as its bytes, with no box. A key no other key of the
+/// literal spells (`distinct` is 1) is appended without a search.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_literal_str_entry(
+    map: *mut OpaqueValue,
+    key_ptr: *const u8,
+    key_len: usize,
+    value: *mut OpaqueValue,
+    distinct: i64,
+) {
+    task_runtime_boundary(|| {
+        let key = Value::String(literal_str(key_ptr, key_len).into());
+        let value = unsafe { consume_owned_value(value) };
+        if distinct == 0 {
+            insert_literal_entry(map, key, value);
+            return;
+        }
+        with_map_mut(map, |map| {
+            infer_literal_entry_types(map, &key, &value);
+            map.entries.push_new((key, value));
+        });
+    })
+}
+
+/// An empty dict with room for the `entries` entries of the literal that
+/// builds it.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_with_capacity(entries: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let mut map = DictEntries::new();
+        // Reserving is only a hint; a failed one leaves the dict to grow.
+        let _ = map.try_reserve(usize::try_from(entries).unwrap_or(0));
+        boxed_value(Value::Map(MapValue {
+            key_type: SharedType::named("Unknown"),
+            value_type: SharedType::named("Unknown"),
+            entries: map,
+        }))
+    })
+}
+
+fn infer_literal_entry_types(map: &mut MapValue, key: &Value, value: &Value) {
+    if is_unknown_runtime_type(&map.key_type) {
+        if let Some(inferred) = shared_literal_entry_type(key) {
+            map.key_type = inferred;
+        } else {
+            let inferred = inferred_collection_type(key);
+            if !is_unknown_runtime_type(&inferred) {
+                map.key_type = inferred.into();
+            }
+        }
+    }
+    if is_unknown_runtime_type(&map.value_type) {
+        if let Some(inferred) = shared_literal_entry_type(value) {
+            map.value_type = inferred;
+        } else {
+            let inferred = inferred_collection_type(value);
+            if !is_unknown_runtime_type(&inferred) {
+                map.value_type = inferred.into();
+            }
+        }
+    }
+}
+
+/// The type [`inferred_collection_type`] gives `value`, as the shared copy
+/// [`SharedType::named`] keeps, for a `str` or a `json.Value` kept in its
+/// layout: no name is parsed for them.
+fn shared_literal_entry_type(value: &Value) -> Option<SharedType> {
+    match value {
+        Value::String(_) => Some(SharedType::named("str")),
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) if &**typed.layout().runtime_type() == "json.Value" => {
+            Some(SharedType::named("json.Value"))
+        }
+        _ => None,
+    }
+}
+
+fn insert_literal_entry(map: *mut OpaqueValue, key: Value, value: Value) {
+    with_map_mut(map, |map| {
+        infer_literal_entry_types(map, &key, &value);
+        map.entries.insert(key, value);
+    });
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10699,7 +11179,7 @@ pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut Opa
         });
         let (key_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: key_type,
+            element_type: Type::clone(&key_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -10719,7 +11199,7 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
         });
         let (value_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: value_type,
+            element_type: Type::clone(&value_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -10730,12 +11210,15 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
 pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let result = with_map(map, |map| {
-            let element_type = Type::Tuple(vec![map.key_type.clone(), map.value_type.clone()]);
+            let element_type = Type::Tuple(vec![
+                Type::clone(&map.key_type),
+                Type::clone(&map.value_type),
+            ]);
             let mut elements =
                 try_array_buffer(map.entries.len(), "Array-containing Map items copy")?;
             for (key, value) in &map.entries {
                 elements.push(Value::Tuple(TupleValue {
-                    element_types: vec![map.key_type.clone(), map.value_type.clone()],
+                    element_types: vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
                     elements: vec![
                         try_clone_array_containing_value(key)?,
                         try_clone_array_containing_value(value)?,
@@ -10972,6 +11455,7 @@ impl<'p> std::ops::Deref for DirectElementPathSteps<'p> {
     }
 }
 
+#[inline(always)]
 fn direct_element_path_steps(
     path: &str,
 ) -> std::result::Result<DirectElementPathSteps<'_>, String> {
@@ -10983,7 +11467,18 @@ fn direct_element_path_steps(
         len: 0,
         spilled: Vec::new(),
     };
-    for segment in path.split('.') {
+    // Split at each `.` by byte: a path is short, and a `char` search costs
+    // more than the walk it plans.
+    let bytes = path.as_bytes();
+    let mut start = 0;
+    while start <= bytes.len() {
+        let end = bytes[start..]
+            .iter()
+            .position(|&byte| byte == b'.')
+            .map_or(bytes.len(), |offset| start + offset);
+        // Both ends sit at an end of the path or next to an ASCII `.`.
+        let segment = &path[start..end];
+        start = end + 1;
         let step = match segment {
             "" => return Err(format!("invalid element path `{path}`")),
             "[i]" => DirectElementPathStep::Index,
@@ -11115,11 +11610,14 @@ fn direct_element_step<'a>(
                     value_type_name(value)
                 )));
             };
-            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
-            map.entries
-                .value_of(&key)
+            // The key is read where its box holds it; only a missing key,
+            // which the error reports, is copied.
+            let key = selectors.next()? as *mut OpaqueValue;
+            unsafe { with_value(key, |key| map.entries.value_of(key)) }
                 .map(Cow::Borrowed)
-                .ok_or_else(|| DirectElementPathError::MissingKey(Box::new(key)))
+                .ok_or_else(|| {
+                    DirectElementPathError::MissingKey(Box::new(unsafe { take_value(key) }))
+                })
         }
         DirectElementPathStep::Projection(projection) => {
             direct_value_at_path(value, &[projection], selectors.path)
@@ -11165,15 +11663,18 @@ fn direct_element_walk_mut<R>(
                     value_type_name(value)
                 )));
             };
-            let key = unsafe { take_value(selectors.next()? as *mut OpaqueValue) };
-            match map.entries.position(&key) {
+            // As in `direct_element_step`, the key is read in its box.
+            let key = selectors.next()? as *mut OpaqueValue;
+            match unsafe { with_value(key, |key| map.entries.position(key)) } {
                 Some(position) => direct_element_walk_mut(
                     map.entries.value_at_mut(position),
                     rest,
                     selectors,
                     edit,
                 ),
-                None => Err(DirectElementPathError::MissingKey(Box::new(key))),
+                None => Err(DirectElementPathError::MissingKey(Box::new(unsafe {
+                    take_value(key)
+                }))),
             }
         }
         DirectElementPathStep::Projection(projection) => {
@@ -11515,6 +12016,67 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
                 direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
                     selectors.finish()?;
                     *current = stored;
+                    Ok(())
+                })?
+            })
+        };
+        if let Err(error) = result {
+            direct_element_path_failure(error, line, column);
+        }
+    })
+}
+
+/// Appends a scalar given as its bits (see `aura_direct_vec_push_scalar`)
+/// to the list an element path reaches inside `collection`, in place:
+/// `d[k].append(x)` or `match mut d.lookup(k): case Found(xs):
+/// xs.append(x)` through a mutable entry loan. Nothing is moved out of the
+/// collection or boxed, and a missing position or key traps.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_element_path_push_scalar(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    bits: i64,
+    kind: i64,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        let path = literal_str(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path,
+        };
+        let result = unsafe {
+            value_mut(collection, |value| {
+                direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
+                    selectors.finish()?;
+                    let Value::Vec(vector) = current else {
+                        runtime_error(format!(
+                            "expected `list`, found `{}`",
+                            value_type_name(current)
+                        ));
+                    };
+                    if kind == DirectScalarKind::Float32 {
+                        vector.elements.narrow_to_float32();
+                    }
+                    if !push_scalar_bits(&mut vector.elements, kind, bits) {
+                        let value = kind.value(bits);
+                        if is_unknown_runtime_type(&vector.element_type) {
+                            let inferred = inferred_collection_type(&value);
+                            if !is_unknown_runtime_type(&inferred) {
+                                vector.element_type = inferred;
+                            }
+                        }
+                        vector.elements.push(value);
+                    }
                     Ok(())
                 })?
             })
