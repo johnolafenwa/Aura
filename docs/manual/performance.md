@@ -514,6 +514,28 @@ same two passes on a busier container, are within run-to-run spread:
 | Programs faster than Python | 24 | 24 |
 | Programs above 8x Rust | 0 | 0 |
 
+Aura 0.13.0 adds the Batch 8 multicore runtime: tasks start on their
+parent's worker, idle workers steal queued tasks, and finished task stacks
+are reused. It also makes `json.parse`, small-dict lookups, and
+`json.Value` copies cheaper, and appends `text += x` in place. Both
+compilers measured in the same two passes on 8 November 2026, median of
+ten runs, on a much less busy container than on 3 November:
+
+| Measure | Aura 0.12.0 | Aura 0.13.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 14.2 s | 10.0 s |
+| Median Aura / Rust, wall time | 3.6x | 3.4x |
+| Median Aura / Python 3.13, wall time | 0.42x | 0.37x |
+| Programs faster than Python | 24 | 25 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 30 programs | 88.5 billion | 78.0 billion |
+
+The threaded programs gain most: `kv_server` takes 0.2 times Rust's time
+(from 1.0), `pubsub_broker` 0.4 (from 1.3), and `task_pool` 1.4 (from
+3.4). `docdb` ran 33% faster and `json_roundtrip` 23%. Aura is still
+slower than Python on `csv_aggregate`, `docdb`, `file_io`,
+`json_roundtrip`, and `template_render`.
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute

@@ -7,6 +7,40 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.13.0 — 2026-11-08
+
+- Shows proof results inline: on open and save it runs `aura verify`,
+  shows each check it cannot prove as a diagnostic with the
+  counterexample, and ends each line whose checks are all proved with a
+  `✓ proved` hint. The new `aura.verifyOnSave` setting turns it off.
+- Highlights `yield`, `ghost`, and `lemma def`. Bundles language server
+  0.13.0; the semantic interface version stays 20.
+
+## 0.13.0 — 2026-11-08 (technical preview)
+
+Aura 0.13.0 adds generators, associated types, and static verification,
+and brings a multicore task runtime. A function declared `-> Generator[T]`
+may `yield`, traits can declare associated types, and the new
+`iter.IntoIterator[T]` trait lets `for` loops, comprehensions, `enumerate`,
+and `zip` take any iterable source. `aura verify` proves, with an external
+Z3 or cvc5, that a program's contracts and runtime checks cannot fail:
+integers, floats, lists, strings, dictionaries, sets, quantifiers,
+recursion measures, class invariants, trait contracts, lemmas, ghost
+locals, tasks, function values, and `extern` contracts, with a proof cache
+and inline results in VS Code; `aura build --remove-proved-checks` drops
+the checks it proves. Tasks now start on their parent's worker and idle
+workers steal queued ones. Loops over user iterators and generators run
+within 3 times Rust's time on the operation probes. Measured against 0.12.0
+on the Linux measurement host, the 30
+[cross-language programs](benchmarks/cross_language/README.md) take 10.0
+seconds instead of 14.2 and run 12% fewer instructions, and the median
+program takes 3.4 times Rust's time, down from 3.6. Breaking: an
+invariant of a `for` loop over a `range(...)` call is also checked when
+the range runs out, so one that only held inside the range now fails.
+`yield`, `ghost`, and `lemma` are contextual words, so existing names keep
+working. The semantic interface stays 20, and the native cache format
+stays `v10`.
+
 - A type alias of a callable type may end with `:` and a block of
   `requires` and `ensures` clauses. A parameter of that type has the
   contract: `aura verify` proves the `requires` at each call through it and
