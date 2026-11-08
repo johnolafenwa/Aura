@@ -174,7 +174,7 @@ admin: error (io.Error.ConnectionRefused)
 
 (This time the HTTP server was not running.) With a release compiler on a
 Linux x86-64 container, that run took about 2 seconds. The second, with no
-changes to the source, took about 0.12 seconds and printed no build notice,
+changes to the source, took about 120 milliseconds and printed no build notice,
 because the binary came from a cache. Aura keeps
 built programs in a content-addressed cache, by default under
 `~/.cache/aura/native` (set `AURA_CACHE_DIR` to move it). The cache key covers

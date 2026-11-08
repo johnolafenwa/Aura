@@ -713,6 +713,6 @@ resources and the runtime's size caps.
 
 ## Status
 
-The collection contract on this page is the Aura 0.12 surface.
+The collection contract on this page is the Aura 0.13 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).
