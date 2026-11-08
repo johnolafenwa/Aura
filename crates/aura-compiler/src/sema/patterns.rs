@@ -42,6 +42,56 @@ fn type_pattern_coverage_diagnostic(mut diagnostic: Diagnostic, has_type_arm: bo
     diagnostic
 }
 
+/// An enum match whose arms leave some variants (or payload shapes)
+/// uncovered. The help line spells out the `case` arms to add, so a reader
+/// can copy them; `Result.Ok(None)` is the end-of-input outcome of
+/// `io.read_line` and similar calls, which is easy to miss.
+fn enum_match_not_exhaustive(
+    span: crate::diag::Span,
+    enum_name: &str,
+    missing: &[String],
+) -> Diagnostic {
+    let rendered = missing
+        .iter()
+        .map(|name| format!("`{name}`"))
+        .collect::<Vec<_>>()
+        .join(", ");
+    // A nested payload shape such as `Value(Off)` names an inner variant
+    // without its enum, so it is not valid `case` text; only spell out arms
+    // whose payloads are wildcards, `None`, or builtin type patterns.
+    let mut help = if missing.iter().all(|name| suggestable_case(name)) {
+        let cases = missing
+            .iter()
+            .map(|name| format!("`case {enum_name}.{name}:`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        format!("add {cases}, or a final `case _:`")
+    } else {
+        "add a `case` for each missing pattern, or a final `case _:`".to_string()
+    };
+    if enum_name == "Result" && missing.iter().any(|name| name == "Ok(None)") {
+        help.push_str("; `Ok(None)` is how calls such as `io.read_line` report end of input");
+    }
+    Diagnostic::at(
+        span,
+        format!("non-exhaustive match over `{enum_name}`: missing {rendered}"),
+    )
+    .with_help(help)
+}
+
+/// Whether a missing-pattern name can be pasted after `case Enum.` as is:
+/// every identifier inside its payload is `None` or a lowercase builtin
+/// type such as `str`, never an unqualified nested variant name.
+fn suggestable_case(name: &str) -> bool {
+    let Some((_, payload)) = name.split_once('(') else {
+        return true;
+    };
+    payload
+        .split(|ch: char| !(ch.is_alphanumeric() || ch == '_'))
+        .filter(|word| !word.is_empty())
+        .all(|word| word == "None" || !word.starts_with(|ch: char| ch.is_ascii_uppercase()))
+}
+
 /// A list or class match without a final catch-all whose arms do not cover
 /// every value.
 fn structural_match_not_exhaustive(span: crate::diag::Span, scrutinee_ty: &Type) -> Diagnostic {
@@ -569,17 +619,10 @@ impl FunctionChecker<'_> {
                     .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
                 if wildcard_span.is_none() && !missing.is_empty() {
-                    let rendered = missing
-                        .iter()
-                        .map(|name| format!("`{}`", name))
-                        .collect::<Vec<_>>()
-                        .join(", ");
-                    return Err(Diagnostic::at(
+                    return Err(enum_match_not_exhaustive(
                         match_stmt.span,
-                        format!(
-                            "non-exhaustive match over `{}`: missing {}",
-                            enum_name, rendered
-                        ),
+                        enum_name,
+                        &missing,
                     ));
                 }
 
@@ -1535,18 +1578,7 @@ impl FunctionChecker<'_> {
                     .collect::<Vec<_>>();
                 let missing = self.missing_patterns_for_type(&pattern_refs, &scrutinee_ty);
                 if !wildcard_seen && !missing.is_empty() {
-                    return Err(Diagnostic::at(
-                        span,
-                        format!(
-                            "non-exhaustive match over `{}`: missing {}",
-                            enum_name,
-                            missing
-                                .iter()
-                                .map(|name| format!("`{}`", name))
-                                .collect::<Vec<_>>()
-                                .join(", ")
-                        ),
-                    ));
+                    return Err(enum_match_not_exhaustive(span, enum_name, &missing));
                 }
 
                 return Ok(result_ty.unwrap_or(Type::Unit));

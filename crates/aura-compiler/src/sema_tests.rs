@@ -32616,6 +32616,44 @@ fn a_task_group_is_created_only_as_a_with_item() {
 }
 
 #[test]
+fn non_exhaustive_enum_match_help_spells_out_missing_cases() {
+    let read_line = crate::check_source(
+        "import io\n\ndef main() -> int32:\n    match io.read_line():\n        case Result.Ok(str as line):\n            print(line)\n        case Result.Err(error):\n            print(error)\n    return 0\n",
+    )
+    .expect_err("a read_line match without the end-of-input arm must fail");
+    assert_eq!(read_line.code, "AU2013");
+    assert_eq!(
+        read_line.message,
+        "non-exhaustive match over `Result`: missing `Ok(None)`"
+    );
+    assert_eq!(
+        read_line.help,
+        vec![
+            "add `case Result.Ok(None):`, or a final `case _:`; `Ok(None)` is how calls such as `io.read_line` report end of input"
+                .to_string()
+        ]
+    );
+
+    let expression = crate::check_source(
+        "enum Light:\n    Red\n    Green\n\ndef score(light: Light) -> int32:\n    return match light:\n        case Light.Red: 1\n\ndef main():\n    print(score(Light.Red))\n",
+    )
+    .expect_err("a match expression missing a variant must fail");
+    assert_eq!(
+        expression.help,
+        vec!["add `case Light.Green:`, or a final `case _:`".to_string()]
+    );
+
+    let nested = crate::check_source(
+        "enum Flag:\n    On\n    Off\n\nenum Wrap:\n    Value(Flag)\n    Empty\n\ndef main():\n    value = Wrap.Value(Flag.On)\n    match value:\n        case Value(On):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("nested enum matches must report the uncovered payload shape");
+    assert_eq!(
+        nested.help,
+        vec!["add a `case` for each missing pattern, or a final `case _:`".to_string()]
+    );
+}
+
+#[test]
 fn generator_error_mapping_keeps_unrelated_diagnostics() {
     let params = generators::GeneratorParams::default();
     let unplaced = Diagnostic::new("`__aura_generator_yield` failed");
