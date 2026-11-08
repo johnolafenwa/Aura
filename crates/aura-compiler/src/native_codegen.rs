@@ -9168,6 +9168,9 @@ impl<'a> FunctionCompiler<'a> {
                 path.column,
             ],
         );
+        // As after any instruction, the temporaries the loads made end here.
+        self.release_all_temporary_owned();
+        self.cancel_unconsumed_retains();
         Ok(Some(4))
     }
 

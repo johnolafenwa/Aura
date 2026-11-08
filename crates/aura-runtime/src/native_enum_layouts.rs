@@ -280,6 +280,12 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
         .downcast_ref()
         .expect("the enum layout registry holds enum layouts");
     if layout.enum_name.as_str() == "json.Value" {
+        // A test's layout serves only that test's thread (see
+        // `TEST_JSON_VALUE_LAYOUT`), so the other tests keep parsing into
+        // payloads kept as values.
+        #[cfg(test)]
+        TEST_JSON_VALUE_LAYOUT.with(|cell| cell.set(Some(layout)));
+        #[cfg(not(test))]
         JSON_VALUE_LAYOUT.store(std::ptr::from_ref(layout).cast_mut(), Ordering::Release);
     }
     Ok(layout)
@@ -289,8 +295,19 @@ pub fn register_enum_layout(descriptor: &str, access: u32) -> Result<&'static En
 /// parse builds its values in.
 static JSON_VALUE_LAYOUT: AtomicPtr<EnumLayout> = AtomicPtr::new(std::ptr::null_mut());
 
+#[cfg(test)]
+thread_local! {
+    /// The `json.Value` layout a test registered on this thread.
+    static TEST_JSON_VALUE_LAYOUT: std::cell::Cell<Option<&'static EnumLayout>> =
+        const { std::cell::Cell::new(None) };
+}
+
 /// The layout of `json.Value`, when the program has registered one.
 pub fn json_value_layout() -> Option<&'static EnumLayout> {
+    #[cfg(test)]
+    if let Some(layout) = TEST_JSON_VALUE_LAYOUT.with(std::cell::Cell::get) {
+        return Some(layout);
+    }
     // SAFETY: only registered layouts, which live for the rest of the
     // process, are stored.
     unsafe { JSON_VALUE_LAYOUT.load(Ordering::Acquire).as_ref() }

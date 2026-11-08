@@ -148,3 +148,28 @@ Callgrind instruction counts (docdb 10000 rows, json_roundtrip 10):
   dropping the tree about 1000.
 - The native binary size baselines were re-recorded: the json subject
   grew about 11% on Linux with this work (1661336 -> 1838368 bytes).
+- Matched lookups: `match d.lookup(k): case Found(v): match v: case
+  json.Value.String(text): return text.clone()` reads a shadow box when
+  the read is only matched and its payloads are only cloned on a straight
+  path (`native_codegen_shadow_reads.rs`). `field_str` went from about
+  2100 to 1200 instructions a call; docdb 10k 803M -> 768M.
+- `xs.append(x)` of a scalar through an element or entry loan is one call,
+  `aura_direct_element_path_push_scalar`, instead of a take, a push, and a
+  store of the list (docdb 768M -> 729M).
+- The allocation counters of `AURA_RUNTIME_STATS` now count only when the
+  report is requested, and a release of a box's last reference frees it
+  without a compare-exchange. Neither moved wall time on this machine.
+- Wall time is still about 1.8x Python on docdb (975 ms vs 540 at 50k)
+  although Aura now runs fewer instructions (729M vs 814M at 10k, Python's
+  startup taken out). Aura peaks at 210 MB against Python's 120 MB and
+  takes twice the page faults: every box is 192 bytes (`Value` is 96, the
+  largest variants being `EnumVariantValue` 80 with two 24-byte
+  `RuntimeName`s, `VecValue` 72, `IntegerValue` 48), and a dict entry is
+  two `Value`s. Per phase at 50k (Aura / Python ms): insert 216 / 81,
+  reads 73 / 63, count_where 43 / 17, update 26 / 1, aggregate 45 / 7,
+  dumps 161 / 181, reload 206 / 155, and about 120 ms of freeing at the
+  end against Python's 20.
+- `match mut d.lookup(k)` on a dict value lowers to a copy of the entry
+  (`aura_direct_element_path_load` clones the whole JSON document), a
+  mutation of the copy, and a store of it back, so docdb's update loop
+  costs about 25k instructions an update.
