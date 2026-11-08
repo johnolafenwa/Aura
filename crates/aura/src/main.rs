@@ -222,7 +222,13 @@ fn main() {
                 )
                 .map(|(mir, removed)| {
                     if diagnostic_format == DiagnosticFormat::Human {
-                        eprintln!("aura: {removed} bounds checks proved and removed");
+                        eprintln!(
+                            "aura: {} checks proved and removed ({} bounds, {} arithmetic, {} assertion)",
+                            removed.total(),
+                            removed.bounds,
+                            removed.arithmetic,
+                            removed.assertions
+                        );
                     }
                     mir
                 })

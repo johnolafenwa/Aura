@@ -594,3 +594,40 @@ fn the_interpreter_lowering_leaves_checks_to_the_boundary() {
         crate::native_codegen::emit_host_object(&explicit)
     );
 }
+
+#[test]
+fn a_proved_trap_stands_only_for_a_check_a_proof_can_remove() {
+    let source = "def f(a: int64, b: int64) -> bool:\n    return a + b < b\n\ndef main():\n    print(f(1, 2))\n";
+    let set_proved = |module: &mut crate::mir::MirModule, op: BinaryOp| {
+        for block in &mut function_mut(module, "f").blocks {
+            for instruction in &mut block.instructions {
+                if let Instruction::Assign {
+                    value:
+                        Rvalue::Binary {
+                            op: found, trap, ..
+                        },
+                    ..
+                } = instruction
+                {
+                    if *found == op {
+                        *trap = ArithmeticTrap::Proved;
+                    }
+                }
+            }
+        }
+    };
+    let mut module = lowered(source);
+    set_proved(&mut module, BinaryOp::Add);
+    validate_checks(&module).expect("a proof may stand for an overflow check");
+    // Naming the traps again keeps the proof.
+    super::resolve_checks(&mut module);
+    let text = format!("{module:?}");
+    assert!(text.contains("Proved"), "{text}");
+    let mut module = lowered(source);
+    set_proved(&mut module, BinaryOp::Less);
+    let error = validate_checks(&module).expect_err("a comparison has no check to prove");
+    assert!(error.contains("names trap `Proved`"), "{error}");
+    assert!(!ArithmeticTrap::Proved.checks_overflow());
+    assert!(!ArithmeticTrap::Proved.checks_divisor());
+    assert!(!ArithmeticTrap::Runtime.provable());
+}

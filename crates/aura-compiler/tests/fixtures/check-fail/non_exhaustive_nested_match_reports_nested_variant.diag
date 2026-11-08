@@ -3,3 +3,4 @@ error[AU2999]: non-exhaustive match over `Outer`: missing `Wrapped(Solo(_))`
    |
 10 |     return match own value:
    |            ^
+  = help: add a `case` for each missing pattern, or a final `case _:`

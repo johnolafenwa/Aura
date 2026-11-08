@@ -1,0 +1,22 @@
+# A `ghost` local exists only for the verifier: the program never computes
+# it, and an `assert` or loop clause that reads one is not checked when the
+# program runs.
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    ghost mut steps = 0
+    for i in range(n + 1):
+        invariant 0 <= i and i <= n + 1 and total == i * (i - 1) // 2
+        invariant steps == i
+        total += i
+        ghost steps += 1
+    assert steps == n + 1
+    return total
+
+def main():
+    print(sum_to(10))
+    print(sum_to(0))

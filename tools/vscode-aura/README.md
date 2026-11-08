@@ -23,6 +23,11 @@ files. It provides:
   highlighting of the other uses of the name under the cursor, and quick
   fixes for compiler suggestions and unused locals
 - workspace symbol search and go-to-implementation for traits and types
+- proof results inline: when a file opens or is saved, the extension runs
+  `aura verify` and shows each check it cannot prove as a diagnostic, with
+  the counterexample, and a `✓ proved` hint at the end of each line whose
+  checks it proves. It needs an SMT solver (`z3` or `cvc5`) on `PATH`;
+  turn it off with **Aura: Verify On Save** (`aura.verifyOnSave`)
 - recovery while you edit incomplete functions, member access, comprehensions,
   slices, and numeric arrays
 - **Aura: Run File**, **Build File**, **Test File**, and **Run Workspace

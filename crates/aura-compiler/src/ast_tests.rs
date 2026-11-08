@@ -70,6 +70,7 @@ fn item_name_matches_decl_name() {
         params: vec![],
         return_type: dummy_type("int32"),
         span: Span::new(1, 1),
+        contracts: Vec::new(),
     });
     let extern_opaque_item = Item::ExternOpaqueClass(ExternOpaqueClassDecl {
         public: true,
@@ -679,6 +680,7 @@ fn type_alias_items_report_their_alias_name() {
         type_param_bounds: BTreeMap::new(),
         target: dummy_type("int32"),
         span: Span::new(1, 1),
+        contracts: Vec::new(),
     });
     assert_eq!(alias.name(), "Pair");
 }

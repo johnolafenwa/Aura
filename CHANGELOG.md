@@ -7,6 +7,71 @@ in this file.
 
 ## Unreleased
 
+- A type alias of a callable type may end with `:` and a block of
+  `requires` and `ensures` clauses. A parameter of that type has the
+  contract: `aura verify` proves the `requires` at each call through it and
+  assumes the `ensures`, and proves that a named function passed as one
+  fits the contract. Calls through adapted callables (`Alias(function)`)
+  are followed too.
+- An `extern "C"` function may end its signature with `:` and an indented
+  block of `requires` and `ensures` clauses: a trusted contract. `aura
+  verify` proves the `requires` at each call and assumes the `ensures`
+  after it; the program checks neither.
+- `aura verify` proves the `requires` of a task's target where the task
+  starts, and gives the task's result the target's `ensures` when
+  `result`, `poll`, or `result_or` reads it.
+- `aura verify` follows function values that name one function: a call
+  through `g = inc` proves `inc`'s `requires` and assumes its `ensures`. A
+  function value with a `requires` that is passed on, stored, or chosen on
+  different paths is still reported where the verifier stops following it.
+- `aura verify` models `float32` and `float64` as IEEE-754 values, with
+  rounding, NaN, infinities, and signed zeros. It proves float division by
+  zero cannot happen, that `as` casts between floats and integers are exact
+  or in range, and float contracts and assertions. A solver answer stopped
+  at the time limit is reported as undecided instead of an error.
+- `aura verify` models `str`, `dict`, and `set`. Strings are sequences of
+  characters with `+`, comparisons, `len`, `in`, `contains`, `starts_with`,
+  and `ends_with`; dictionaries and sets with integer or `str` keys track
+  which keys they hold, their length, and a dictionary's values. A new
+  `key present` check proves each `d[k]` read and `set.remove` finds what
+  it looks for, and quantifiers range over a `set` or a dictionary's
+  `keys()`. Lists of `str` are modeled element by element.
+- The VS Code extension shows proof results inline: on open and save it
+  runs `aura verify`, shows each check it cannot prove as a diagnostic
+  with the counterexample, and ends each line whose checks are all proved
+  with a `✓ proved` hint. The `aura.verifyOnSave` setting turns it off.
+- `aura build --remove-proved-checks` also removes the integer overflow and
+  zero-divisor checks, and the `assert`, `ensures`, loop `invariant`, and
+  `decreases` checks, that `aura verify` proves can never fail, and tells
+  LLVM that proved integer arithmetic does not wrap. It reports how many
+  checks of each kind it removed. A function's `requires` stays checked.
+- `ghost name = value` declares a local only the verifier reads. The program
+  never computes it, and an `assert` or loop clause that reads one is
+  proved by `aura verify` and not checked when the program runs. Ghost
+  values are pure and may call `spec def` functions; ordinary code cannot
+  read a ghost local.
+- A `for` loop over a `range(...)` call checks its invariants once more when
+  the range runs out, with the target at the range's end, so after
+  `for i in range(n)` an invariant holds with `i == n`. An invariant that
+  only held inside the range, such as `invariant i < n`, now fails at the
+  end of the loop. `aura verify` models lists of tuples and classes element
+  by element, and quantifiers over several `for` clauses, tuple targets,
+  `enumerate`, and `zip`; `enumerate` and `zip` may now appear in
+  contracts. It also proves that objects of classes with invariants keep
+  them where they cross a function boundary (calls of public read-only
+  methods, arguments, results, and `mut` parameters) and assumes it on the
+  other side, so a public getter starts from a valid object.
+- Methods may declare `decreases`, and functions that call each other in a
+  cycle check at each call between them that the callee's measure is
+  smaller than the caller's; `aura verify` proves both. A measured function
+  calling a measured helper outside its cycle is not compared.
+- A class may declare `spec def` methods, which conditions may call (and
+  `old(self.headroom())` may read), and a `spec def` may state `requires`
+  clauses that `aura verify` proves wherever a contract uses it.
+- A trait implementation may add `ensures` clauses to the trait method's
+  and state its own `requires` in place of the trait's; `aura verify`
+  proves that the trait's `requires` imply the implementation's, and calls
+  through the trait rely on the trait's contract.
 - `aura verify file.au` proves, with an external Z3 or cvc5, that a
   program's checks cannot fail: integer overflow, zero divisors, list
   indexes, `assert`, `requires`, `ensures`, loop `invariant` and

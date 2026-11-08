@@ -65,43 +65,8 @@ and punctuation, which will cause us trouble in a useful way.
 
 The first job is to read text. Aura's functions for standard input and output
 live in a module called `io`, and the one we want is `io.read_line`, which
-reads one line. Replace the contents of `src/main.au` with Listing 2-1.
-
-*Filename: src/main.au*
-
-```aura check-fail:AU2013
-import io
-
-def main() -> int32:
-    match io.read_line():
-        case Result.Ok(str as line):
-            print(f"read: {line}")
-        case Result.Err(error):
-            print(f"could not read input: {error}")
-    return 0
-```
-
-<span class="caption">Listing 2-1: A first attempt at reading one line from standard input</span>
-
-There's a lot in these few lines. `import io` makes the `io` module available
-in this file, so that we can call `io.read_line()`. The rest is a `match`
-statement, which looks at a value and picks one of several `case` branches
-depending on its shape. Before we go through it, let's see what the compiler
-thinks:
-
-```console
-$ aura run src/main.au
-error[AU2013]: non-exhaustive match over `Result`: missing `Ok(None)`
- --> src/main.au:4:5
-  |
-4 |     match io.read_line():
-  |     ^
-```
-
-The program didn't run. The compiler says our `match` is *non-exhaustive*:
-there is a possible value that none of our cases handles, and it even names
-the missing one, `Ok(None)`. To see where that comes from, we need to know
-what `io.read_line` returns. Its type is:
+reads one line. Before we write the code, it helps to know what
+`io.read_line` gives back. Its type is:
 
 ```text
 Result[str | None, io.Error]
@@ -119,17 +84,8 @@ The successful value has its own twist. Its type is `str | None`, which means
 "either a `str` or `None`". `io.read_line` returns `Ok` with a string for each
 line it reads, and `Ok(None)` when it reaches the end of the input and there
 are no more lines. So there are three outcomes, not two: a line, the end of
-the input, and an error. Our `match` handled the first and the last, and the
-compiler noticed that we forgot the middle one.
-
-This check is one of the things that makes Aura programs hold up well. If we
-had been allowed to run Listing 2-1, it would have worked when we tested it
-with a line of text, and then done something unpredictable the first time
-someone ran it on an empty file. Because `match` must be exhaustive, the
-question "what happens at end of input?" has to be answered before the
-program can run at all.
-
-Add the missing case, as in Listing 2-2.
+the input, and an error. Replace the contents of `src/main.au` with Listing
+2-1, which handles all three.
 
 *Filename: src/main.au*
 
@@ -147,7 +103,12 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-2: Handling a line, the end of input, and an error</span>
+<span class="caption">Listing 2-1: Reading one line, and handling the end of input and errors</span>
+
+There's a lot in these few lines. `import io` makes the `io` module available
+in this file, so that we can call `io.read_line()`. The rest is a `match`
+statement, which looks at a value and picks one of several `case` branches
+depending on its shape.
 
 Each `case` is a *pattern*. `Result.Ok(str as line)` matches an `Ok` whose
 contents are a `str`, and binds that string to the name `line` so the body
@@ -157,6 +118,26 @@ each case uses an f-string to build its message, like the ones we saw in
 Chapter 1. Patterns can do a good deal more than this, and
 [Chapter 6](/book/ch06-00-enums-and-match) covers `match` in full;
 [Chapter 9](/book/ch09-00-error-handling) does the same for `Result`.
+
+The `Result.Ok(None)` case is not optional. A `match` in Aura must be
+*exhaustive*: every possible value has to be handled by some `case`. If we
+left the end-of-input case out, the program would work when we tested it with
+a line of text, and then do something unpredictable the first time someone ran
+it on an empty file. So the compiler refuses to build it, and names the case
+we missed:
+
+```console
+$ aura run src/main.au
+error[AU2013]: non-exhaustive match over `Result`: missing `Ok(None)`
+ --> src/main.au:4:5
+  |
+4 |     match io.read_line():
+  |     ^
+  = help: add `case Result.Ok(None):`, or a final `case _:`; `Ok(None)` is how calls such as `io.read_line` report end of input
+```
+
+The question "what happens at end of input?" has to be answered before the
+program can run at all.
 
 Now let's run it. Piping text into a program with `echo` is a quick way to
 give it a line of input:
@@ -203,7 +184,7 @@ send end-of-input.
 We want every line, not only the first. Let's put the `match` in a loop that
 keeps going until the end of the input. To check that it works before we
 count any words, we'll count lines first. Change `src/main.au` to Listing
-2-3.
+2-2.
 
 *Filename: src/main.au*
 
@@ -225,7 +206,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-3: Counting lines until the end of input</span>
+<span class="caption">Listing 2-2: Counting lines until the end of input</span>
 
 `while true:` loops forever, and the `break` in the `Ok(None)` case gets us
 out when the input runs out. If reading fails, we print a message and
@@ -284,7 +265,7 @@ lines: 0
 Now for the real work. For each line, we need to split it into words and
 keep a tally of how many times we have seen each word. A *dictionary* is the
 natural fit: a `dict` maps keys to values, so we can map each word to its
-count. Listing 2-4 is our first attempt.
+count. Listing 2-3 is our first attempt.
 
 *Filename: src/main.au*
 
@@ -310,7 +291,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-4: A first attempt at counting words in a dictionary</span>
+<span class="caption">Listing 2-3: A first attempt at counting words in a dictionary</span>
 
 The line `mut counts: dict[str, int64] = {}` creates an empty dictionary.
 This time we wrote the type ourselves, after the colon: a `dict` whose keys
@@ -372,7 +353,7 @@ But our counter has another problem we haven't seen yet: `The` and `the`
 would be counted as different words. The usual fix for that is to convert
 every word to lowercase, and `to_lower()` returns a brand-new string, which
 means a string that we own. One change solves both problems. Update the loop
-as in Listing 2-5.
+as in Listing 2-4.
 
 *Filename: src/main.au*
 
@@ -399,7 +380,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-5: Lowercasing each word gives the dictionary a string it can own</span>
+<span class="caption">Listing 2-4: Lowercasing each word gives the dictionary a string it can own</span>
 
 The loop now borrows each piece as `raw`, and `word = raw.to_lower()` makes a
 new lowercase string owned by the binding `word`. When we store it with
@@ -431,7 +412,7 @@ who is only borrowing it, and it will tell you when those two get mixed up.
 We want the most common words first, and only the top few. A dictionary isn't
 sorted by its values, so we'll copy its entries into a list and sort that.
 Replace the `print(counts)` line and add a constant at the top of the file,
-as in Listing 2-6.
+as in Listing 2-5.
 
 *Filename: src/main.au*
 
@@ -464,7 +445,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-6: Sorting the entries by count and printing the top five</span>
+<span class="caption">Listing 2-5: Sorting the entries by count and printing the top five</span>
 
 `TOP: int64 = 5` is a binding at the top level of the file, outside any
 function. A top-level binding is a *module constant*: it can't be changed,
@@ -561,7 +542,7 @@ The last problem is the punctuation stuck to the words. We'll write a
 function, `clean`, that strips punctuation characters from the start and end
 of a word and lowercases what's left. While we are at it, we'll move the
 counting loop into a function of its own, so that `main` reads as a summary
-of what the program does. Listing 2-7 is the finished program.
+of what the program does. Listing 2-6 is the finished program.
 
 *Filename: src/main.au*
 
@@ -611,7 +592,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-7: The finished word counter</span>
+<span class="caption">Listing 2-6: The finished word counter</span>
 
 Let's start with `clean`. Its signature, `def clean(word: str) -> str`, says
 it takes a string called `word` and returns a string. Every parameter in Aura

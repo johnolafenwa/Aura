@@ -31,6 +31,7 @@ const {
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
   openDocumentOverlays,
+  resolveCompilerCommand,
   setCompilerSchemaMismatchHandler,
   setCompilerUnavailableHandler,
   expandHome,
@@ -38,6 +39,13 @@ const {
   setWorkspaceRoots
 } = require("./compiler_bridge");
 const { createDocumentStateCache } = require("./document_state");
+const {
+  createVerificationState,
+  runVerifier,
+  verificationDiagnostics,
+  verificationHints,
+  verifyOnSave
+} = require("./verification");
 const { canonicalFileUri, uriToPath } = require("./uri");
 
 const { registerEditorHandlers, editorCapabilities } = require("./editor_handlers");
@@ -61,6 +69,9 @@ const documentStateCache = createDocumentStateCache(
   compilerDependencyUris
 );
 const validationTimers = new Map();
+// Proof results from `aura verify`, which runs when a document opens or is
+// saved and shows only while the text is the text it verified.
+const verificationState = createVerificationState();
 
 // The compiler checks each document against the unsaved text of the others.
 setSourceOverlayProvider((uri) => openDocumentOverlays(uri, documents.all()));
@@ -104,7 +115,11 @@ connection.onInitialize((params) => {
       version: "0.12.0"
     },
     capabilities: {
-      textDocumentSync: TextDocumentSyncKind.Incremental,
+      textDocumentSync: {
+        openClose: true,
+        change: TextDocumentSyncKind.Incremental,
+        save: { includeText: false }
+      },
       completionProvider: {
         triggerCharacters: ["."]
       },
@@ -203,9 +218,16 @@ connection.languages.semanticTokens.on(async (params) => {
 
 connection.languages.inlayHint.on(async (params) => {
   const found = await analysisFor(params.textDocument.uri);
-  return found && found.analysis
-    ? inlayHints(found.analysis, found.document.getText(), params.range)
-    : [];
+  const hints =
+    found && found.analysis
+      ? inlayHints(found.analysis, found.document.getText(), params.range)
+      : [];
+  const document = documents.get(params.textDocument.uri);
+  if (!document) {
+    return hints;
+  }
+  const report = verificationState.report(document.uri, document.version);
+  return hints.concat(verificationHints(report, document.getText(), params.range));
 });
 
 connection.onCodeAction((params) => {
@@ -330,6 +352,11 @@ connection.onDefinition(async (params) => {
 
 documents.onDidOpen((event) => {
   scheduleValidation(invalidateDocument(event.document.uri));
+  verifyDocument(event.document);
+});
+
+documents.onDidSave((event) => {
+  verifyDocument(event.document);
 });
 
 documents.onDidChangeContent((event) => {
@@ -340,6 +367,7 @@ documents.onDidClose((event) => {
   const affected = invalidateDocument(event.document.uri);
   affected.delete(event.document.uri);
   documentStateCache.deleteDocument(event.document.uri);
+  verificationState.delete(event.document.uri);
   clearValidationTimer(event.document.uri);
   connection.sendDiagnostics({ uri: event.document.uri, diagnostics: [] });
   scheduleValidation(affected);
@@ -443,10 +471,35 @@ function validateDocument(document) {
           source: "aura-lsp"
         }));
 
+    const report = verificationState.report(document.uri, requestedVersion);
     connection.sendDiagnostics({
       uri: document.uri,
-      diagnostics
+      diagnostics: diagnostics.concat(verificationDiagnostics(report, current.getText()))
     });
+  });
+}
+
+// Runs `aura verify` on the document as it is now, then shows the results
+// if the text has not changed since.
+function verifyDocument(document) {
+  if (!verifyOnSave()) {
+    return;
+  }
+  const run = verificationState.start(document.uri);
+  const version = document.version;
+  const filePath = uriToPath(document.uri) || document.uri;
+  void runVerifier(resolveCompilerCommand(), filePath, document.getText()).then((report) => {
+    const current = documents.get(document.uri);
+    if (!current || !verificationState.finish(document.uri, run, version, report)) {
+      return;
+    }
+    void validateDocument(current);
+    // A client without inlay hint refresh asks again when it scrolls.
+    try {
+      void connection.languages.inlayHint.refresh().catch(() => {});
+    } catch {
+      // Nothing to refresh.
+    }
   });
 }
 

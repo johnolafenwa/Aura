@@ -14,6 +14,7 @@
 
 #[path = "verify_exec.rs"]
 mod exec;
+pub(crate) use exec::CHECK_FAILURE_SITE;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -47,6 +48,9 @@ pub enum ObligationKind {
     Decreases,
     /// A class invariant holds where it is checked.
     ClassInvariant,
+    /// A `dict` key read with brackets, or a `set` element removed, is
+    /// there.
+    KeyPresent,
 }
 
 impl ObligationKind {
@@ -61,6 +65,7 @@ impl ObligationKind {
             Self::LoopInvariant => "loop invariant",
             Self::Decreases => "decreases",
             Self::ClassInvariant => "class invariant",
+            Self::KeyPresent => "key present",
         }
     }
 }
@@ -214,24 +219,45 @@ pub(crate) struct VerifyContext<'a> {
     classes: BTreeMap<&'a str, &'a MirClass>,
     enums: BTreeMap<&'a str, &'a MirEnum>,
     decls: BTreeMap<String, &'a FunctionDecl>,
-    spec_defs: BTreeMap<&'a str, &'a FunctionDecl>,
+    spec_defs: BTreeMap<String, &'a FunctionDecl>,
     class_invariants: BTreeMap<String, Vec<ContractClause>>,
+    /// Each trait method's declaration, by `Trait.method`.
+    trait_methods: BTreeMap<String, &'a FunctionDecl>,
+    /// The trait method each implementation method implements, by MIR
+    /// function name.
+    implemented: BTreeMap<String, &'a FunctionDecl>,
+    /// The contract of each callable alias that states one, by name.
+    callable_contracts: BTreeMap<String, &'a crate::sema::FunctionInfo>,
 }
 
 impl<'a> VerifyContext<'a> {
     fn new(program: &'a Program, module: &'a MirModule) -> Self {
         let mut decls = BTreeMap::new();
         let mut spec_defs = BTreeMap::new();
+        for function in program.extern_functions.values() {
+            if let Some(decl) = &function.contract_decl {
+                decls.entry(function.decl.name.clone()).or_insert(decl);
+            }
+        }
         for (name, function) in &program.functions {
             decls.insert(name.clone(), &function.decl);
             if function.decl.spec {
-                spec_defs.insert(name.as_str(), &function.decl);
+                spec_defs.insert(name.clone(), &function.decl);
+            }
+        }
+        let mut callable_contracts = BTreeMap::new();
+        for (name, alias) in program.aliases_in_scope() {
+            if let Some(info) = &alias.contract {
+                callable_contracts.insert(name.clone(), info);
             }
         }
         let mut class_invariants = BTreeMap::new();
         for class in program.classes.values() {
             for (name, method) in &class.methods {
                 decls.insert(format!("{}.{name}", class.decl.name), &method.decl);
+                if method.decl.spec {
+                    spec_defs.insert(format!("{}.{name}", class.decl.name), &method.decl);
+                }
                 if name == crate::ast::CLASS_INVARIANT_METHOD {
                     class_invariants.insert(
                         class.decl.name.clone(),
@@ -249,20 +275,37 @@ impl<'a> VerifyContext<'a> {
         // A method of a trait implementation has the contract of its
         // declaration, found by its span: the implementation's own method,
         // or the trait's default.
+        let mut trait_methods = BTreeMap::new();
+        for (trait_name, info) in &program.traits {
+            for (method, method_info) in &info.methods {
+                trait_methods.insert(format!("{trait_name}.{method}"), &method_info.decl);
+            }
+        }
         let mut impl_methods = BTreeMap::new();
         for trait_impl in &program.trait_impls {
-            for method in trait_impl.methods.values() {
+            for (method_name, method) in &trait_impl.methods {
+                let trait_method = program
+                    .traits
+                    .get(&trait_impl.trait_name)
+                    .and_then(|info| info.methods.get(method_name))
+                    .map(|info| &info.decl);
                 impl_methods.insert(
                     (method.decl.span.line, method.decl.span.column),
-                    &method.decl,
+                    (&method.decl, trait_method),
                 );
             }
         }
+        let mut implemented = BTreeMap::new();
         for function in &module.functions {
             let name = spec::base_name(&function.name);
-            if !decls.contains_key(name) && name.contains(" for ") {
-                if let Some(decl) = impl_methods.get(&(function.span.line, function.span.column)) {
-                    decls.insert(name.to_string(), decl);
+            if name.contains(" for ") {
+                if let Some((decl, trait_method)) =
+                    impl_methods.get(&(function.span.line, function.span.column))
+                {
+                    decls.entry(name.to_string()).or_insert(decl);
+                    if let Some(trait_method) = trait_method {
+                        implemented.insert(name.to_string(), *trait_method);
+                    }
                 }
             }
         }
@@ -285,7 +328,23 @@ impl<'a> VerifyContext<'a> {
             decls,
             spec_defs,
             class_invariants,
+            trait_methods,
+            implemented,
+            callable_contracts,
         }
+    }
+
+    /// The declaration of trait method `method` of `trait_name`.
+    pub(crate) fn trait_method(&self, trait_name: &str, method: &str) -> Option<&'a FunctionDecl> {
+        let trait_name = trait_name.rsplit("::").next().unwrap_or(trait_name);
+        self.trait_methods
+            .get(&format!("{trait_name}.{method}"))
+            .copied()
+    }
+
+    /// The trait method the implementation method `name` implements.
+    pub(crate) fn implemented(&self, name: &str) -> Option<&'a FunctionDecl> {
+        self.implemented.get(spec::base_name(name)).copied()
     }
 
     pub(crate) fn function(&self, name: &str) -> Option<&'a MirFunction> {
@@ -297,8 +356,30 @@ impl<'a> VerifyContext<'a> {
         self.decls.get(spec::base_name(name)).copied()
     }
 
+    /// The alias and its contract, when `ty` names a callable alias that
+    /// states one.
+    pub(crate) fn callable_contract(
+        &self,
+        ty: &crate::ast::TypeRef,
+    ) -> Option<(String, &'a crate::sema::FunctionInfo)> {
+        let crate::ast::TypeRefKind::Named { name, args } = &ty.kind else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        self.callable_contracts
+            .get(name)
+            .map(|info| (name.clone(), *info))
+    }
+
+    /// The contract of the callable alias `name`.
+    pub(crate) fn alias_contract(&self, name: &str) -> Option<&'a crate::sema::FunctionInfo> {
+        self.callable_contracts.get(name).copied()
+    }
+
     pub(crate) fn spec_def(&self, name: &str) -> Option<&'a FunctionDecl> {
-        self.spec_defs.get(name).copied()
+        self.spec_defs.get(spec::base_name(name)).copied()
     }
 
     pub(crate) fn class_invariant(&self, class: &str) -> Option<&[ContractClause]> {
@@ -360,6 +441,12 @@ impl<'a> VerifyContext<'a> {
     }
 
     pub(crate) fn variant_index(&self, name: &str, variant: &str) -> Option<usize> {
+        // The builtin `Lookup` a checked list read returns.
+        if name == LOOKUP && !self.enums.contains_key(name) {
+            return ["Found", "Missing"]
+                .iter()
+                .position(|candidate| *candidate == variant);
+        }
         self.enums
             .get(name)?
             .variants
@@ -461,8 +548,10 @@ pub fn verify_module(
         let mut exec = exec::Exec::new(&cx, function);
         exec.prove_sites = options.prove_sites;
         let entry = exec.entry_state();
+        exec.prove_weakened_requires(&entry);
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
+        exec.assume_entry_parameters(&entry);
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
             let key = (
@@ -703,3 +792,7 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+
+/// The builtin enum a checked list read returns: `Found(element)` or
+/// `Missing`.
+pub(crate) const LOOKUP: &str = "Lookup";

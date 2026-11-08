@@ -30998,6 +30998,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             params,
             return_type,
             span,
+            contracts: Vec::new(),
         };
     let opaque_handles = BTreeMap::new();
     let type_names = TypeDefinitions::default();
@@ -31910,16 +31911,6 @@ fn contract_clauses_check_as_pure_bool_conditions() {
             "a function with a view result cannot declare `ensures` yet",
         ),
         (
-            "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
-            "AU2048",
-            "the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out",
-        ),
-        (
-            "trait Shape:\n    def area(self) -> int64:\n        ensures result >= 0\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result > 0\n        return self.side\n",
-            "AU2048",
-            "must repeat the trait method's clauses exactly or leave them out",
-        ),
-        (
             "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k > 0\n\nclass Sq:\n    side: int64\n\nimpl Scale for Sq:\n    def by(self, j: int64) -> int64:\n        return j\n",
             "AU2048",
             "names this parameter `j`; the trait's clauses read it as `k`",
@@ -32101,6 +32092,19 @@ fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
         "\n",
         "def main():\n",
         "    print(walk([1, 2], 0))\n",
+        "\n",
+        "class Tree:\n",
+        "    depth: int64\n",
+        "\n",
+        "    def size(self, k: int64) -> int64:\n",
+        "        decreases self.depth + k\n",
+        "        if k <= 0:\n",
+        "            return 0\n",
+        "        return self.size(k - 1) + other_size(self, k - 1)\n",
+        "\n",
+        "def other_size(t: Tree, k: int64) -> int64:\n",
+        "    decreases t.depth + k\n",
+        "    return t.size(k)\n",
     ))
     .expect("a function measure checks");
     for (source, code, message) in [
@@ -32115,9 +32119,14 @@ fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
             "a `decreases` measure must be `int64`, found `bool`",
         ),
         (
-            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases k\n        return k\n",
+            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases self.n + k\n        return k\n\ndef g(k: int64) -> int64:\n    decreases k\n    return C(n=1).f(k)\n",
             "AU2048",
-            "a method cannot declare `decreases` yet",
+            "the receiver of a call whose `decreases` measure reads `self` must name a variable",
+        ),
+        (
+            "def h(k: int64) -> int64:\n    decreases k\n    return k\n\ndef g(k: int64) -> int64:\n    decreases k\n    mut ys = [1]\n    return h(ys.pop())\n",
+            "AU2048",
+            "an argument the `decreases` measure reads must not change program state",
         ),
         (
             "def f(xs: list[int64], k: int64) -> int64:\n    decreases k\n    if k <= 0:\n        return 0\n    mut ys = [1]\n    return f(xs, k=ys.pop() - 1)\n",
@@ -32220,8 +32229,16 @@ fn old_values_and_spec_functions_check_in_spec_contexts_only() {
             "a `spec def` cannot take `mut` parameter `xs`",
         ),
         (
-            "spec def pos(x: int64) -> bool:\n    requires x > 0\n    return x > 0\n",
-            "a `spec def` cannot declare contract clauses yet",
+            "spec def pos(x: int64) -> bool:\n    ensures result\n    return x > 0\n",
+            "a `spec def` states only `requires`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    spec def pos(mut self) -> bool:\n        return self.n > 0\n",
+            "a `spec def` method reads `self`",
+        ),
+        (
+            "class D:\n    n: int64\n\n    spec def bump(self) -> int64:\n        return self.n\n\nclass C:\n    n: int64\n\n    def bump(mut self) -> int64:\n        self.n += 1\n        return self.n\n\ndef f(c: mut C) -> int64:\n    requires c.bump() > 0\n    return 0\n",
+            "a method call on `C`, which may change program state",
         ),
         (
             "def g() -> int64:\n    return 1\n\nspec def pos(x: int64) -> bool:\n    return x > g()\n",
@@ -32240,7 +32257,7 @@ fn old_values_and_spec_functions_check_in_spec_contexts_only() {
             "`old` reads a parameter or `self`",
         ),
         (
-            "def f(xs: list[int64]) -> int64:\n    ensures old(xs.copy()) == xs\n    return 1\n",
+            "def f(xs: list[int64]) -> int64:\n    ensures old(len(xs)) == len(xs)\n    return 1\n",
             "`old` reads a parameter or `self`",
         ),
         (
@@ -32616,6 +32633,44 @@ fn a_task_group_is_created_only_as_a_with_item() {
 }
 
 #[test]
+fn non_exhaustive_enum_match_help_spells_out_missing_cases() {
+    let read_line = crate::check_source(
+        "import io\n\ndef main() -> int32:\n    match io.read_line():\n        case Result.Ok(str as line):\n            print(line)\n        case Result.Err(error):\n            print(error)\n    return 0\n",
+    )
+    .expect_err("a read_line match without the end-of-input arm must fail");
+    assert_eq!(read_line.code, "AU2013");
+    assert_eq!(
+        read_line.message,
+        "non-exhaustive match over `Result`: missing `Ok(None)`"
+    );
+    assert_eq!(
+        read_line.help,
+        vec![
+            "add `case Result.Ok(None):`, or a final `case _:`; `Ok(None)` is how calls such as `io.read_line` report end of input"
+                .to_string()
+        ]
+    );
+
+    let expression = crate::check_source(
+        "enum Light:\n    Red\n    Green\n\ndef score(light: Light) -> int32:\n    return match light:\n        case Light.Red: 1\n\ndef main():\n    print(score(Light.Red))\n",
+    )
+    .expect_err("a match expression missing a variant must fail");
+    assert_eq!(
+        expression.help,
+        vec!["add `case Light.Green:`, or a final `case _:`".to_string()]
+    );
+
+    let nested = crate::check_source(
+        "enum Flag:\n    On\n    Off\n\nenum Wrap:\n    Value(Flag)\n    Empty\n\ndef main():\n    value = Wrap.Value(Flag.On)\n    match value:\n        case Value(On):\n            pass\n        case Empty:\n            pass\n",
+    )
+    .expect_err("nested enum matches must report the uncovered payload shape");
+    assert_eq!(
+        nested.help,
+        vec!["add a `case` for each missing pattern, or a final `case _:`".to_string()]
+    );
+}
+
+#[test]
 fn generator_error_mapping_keeps_unrelated_diagnostics() {
     let params = generators::GeneratorParams::default();
     let unplaced = Diagnostic::new("`__aura_generator_yield` failed");
@@ -32699,5 +32754,59 @@ fn associated_type_misuse_reports_clear_diagnostics() {
     for (source, expected) in cases {
         let error = crate::check_source(source).expect_err(source);
         assert!(error.message.contains(expected), "{source}\n{error:?}");
+    }
+}
+
+#[test]
+fn ghost_locals_are_pure_and_read_only_by_ghost_code() {
+    crate::check_source(concat!(
+        "spec def sq(n: int64) -> int64:\n",
+        "    return n * n\n",
+        "\n",
+        "def f(n: int64, xs: list[int64]) -> int64:\n",
+        "    ghost k: int64 = sq(n)\n",
+        "    ghost mut m = len(xs)\n",
+        "    ghost m += k\n",
+        "    for x in xs:\n",
+        "        invariant m >= 0 or k < 0\n",
+        "        pass\n",
+        "    assert m == m, \"a ghost assert\"\n",
+        "    ghost = 3\n",
+        "    return n + ghost\n",
+        "\n",
+        "def main():\n",
+        "    print(f(1, [2]))\n",
+    ))
+    .expect("ghost locals check");
+    for (source, code, message) in [
+        (
+            "def f(xs: list[int64]):\n    ghost k = xs.pop()\n",
+            "AU2048",
+            "a `ghost` value must not change program state",
+        ),
+        (
+            "def f(n: int64) -> int64:\n    ghost k = n\n    return k\n",
+            "AU2048",
+            "`k` is a `ghost` local; only `ghost` values",
+        ),
+        (
+            "def g(n: int64) -> int64:\n    print(n)\n    return n\n\ndef f(n: int64):\n    ghost k = n\n    assert k == g(n)\n",
+            "AU2048",
+            "an `assert` that reads a `ghost` local must not change program state",
+        ),
+        (
+            "def f(n: int64):\n    ghost k = n\n    k = 3\n",
+            "AU2048",
+            "`k` is a `ghost` local; only `ghost k = value` may change it",
+        ),
+        (
+            "def f(xs: list[int64]):\n    ghost xs[0] = 1\n",
+            "AU2048",
+            "`ghost` declares a local",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }

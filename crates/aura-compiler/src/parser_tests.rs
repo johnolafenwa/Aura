@@ -145,7 +145,7 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
         .expect_err("extern functions have no Aura body");
     assert_eq!(
         body.message,
-        "`extern` function declarations have no Aura body; remove `:` and the indented block"
+        "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses"
     );
 
     let missing_return = parse("extern \"C\" def flush()\n")
@@ -182,6 +182,28 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
         opaque_body.message,
         "`extern` opaque classes have no Aura body; remove `:` and the indented block"
     );
+
+    // The block holds only a trusted contract.
+    let module =
+        parse("extern \"C\" def getpid() -> int32:\n    requires true\n\n    ensures result > 0\n")
+            .expect("an extern contract parses");
+    let Item::ExternFunction(decl) = &module.items[0] else {
+        panic!("an extern function");
+    };
+    assert_eq!(decl.contracts.len(), 2);
+    let measure = parse("extern \"C\" def getpid() -> int32:\n    decreases 1\n")
+        .expect_err("an extern function has no measure");
+    assert_eq!(
+        measure.message,
+        "an `extern` function states only `requires` and `ensures`"
+    );
+    for source in [
+        "extern \"C\" def getpid() -> int32:\n    requires true\n    return 1\n",
+        "extern \"C\" def getpid() -> int32:\n    pass\n",
+    ] {
+        let error = parse(source).expect_err("only clauses");
+        assert_eq!(error.message, "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses");
+    }
 }
 
 #[test]
@@ -5343,9 +5365,16 @@ fn quantifiers_old_values_and_spec_functions_parse() {
     let rendered = format!("{:?}", function.contracts[1].condition);
     assert_eq!(rendered.matches("\"forall\"").count(), 3, "{rendered}");
 
-    let error = crate::parser::parse(
-        "class C:\n    n: int64\n\n    spec def p(self) -> bool:\n        return true\n",
+    let module = crate::parser::parse(
+        "class C:\n    n: int64\n\n    public spec def p(self) -> bool:\n        return forall(i in range(self.n), i >= 0)\n",
     )
-    .expect_err("spec methods are rejected");
+    .expect("spec methods parse");
+    let Item::Class(class) = &module.items[0] else {
+        panic!("a class");
+    };
+    assert!(class.methods[0].spec && class.methods[0].public);
+    let error =
+        crate::parser::parse("class C:\n    n: int64\n\n    lemma def p(self):\n        pass\n")
+            .expect_err("lemma methods are rejected");
     assert_eq!(error.code, "AU2048");
 }

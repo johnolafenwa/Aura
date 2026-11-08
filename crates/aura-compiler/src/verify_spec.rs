@@ -11,7 +11,10 @@
 
 use std::collections::BTreeMap;
 
-use super::exec::{conjoin, not, Exec, Goal, IntTy, State, Val};
+use super::exec::{
+    conjoin, key_sort, not, scalar_val, smt_string, structural_eq, Exec, FloatTy, Goal, IntTy,
+    State, Val,
+};
 use super::ObligationKind;
 use crate::ast::{
     BinaryOp, BindingTarget, CompareOp, ComprehensionOutput, ContractClause, ContractKind, Expr,
@@ -34,7 +37,7 @@ impl Exec<'_> {
         pre: &[(String, Val)],
         span: Span,
     ) {
-        let Some(decl) = self.cx.decl(callee) else {
+        let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
             return;
         };
         let env: Env = pre.iter().cloned().collect();
@@ -57,11 +60,23 @@ impl Exec<'_> {
         if let Some(clauses) = self.guarded_invariant(callee) {
             if let Some((_, receiver)) = pre.first() {
                 let env: Env = [("self".to_string(), receiver.clone())].into();
+                // No run checks the invariant on entry to a method that
+                // only reads `self`; the method's proof assumes it.
+                let reads_only = self.reads_only(callee);
+                let erasing = self.erasing;
+                self.erasing |= reads_only;
                 for clause in clauses {
-                    let message = format!(
-                        "class invariant holds before `{display}`: `{}`",
-                        clause.text
-                    );
+                    let message = if reads_only {
+                        format!(
+                            "class invariant holds before `{display}`, which assumes it: `{}`",
+                            clause.text
+                        )
+                    } else {
+                        format!(
+                            "class invariant holds before `{display}`: `{}`",
+                            clause.text
+                        )
+                    };
                     self.prove_clause(
                         state,
                         ObligationKind::ClassInvariant,
@@ -71,8 +86,105 @@ impl Exec<'_> {
                         &env,
                     );
                 }
+                self.erasing = erasing;
             }
         }
+        // An object of a class with invariants passed to a function holds
+        // them: the function's proof assumes they do.
+        for (param, value) in pre.iter().filter(|(param, _)| param != "self") {
+            let Some(clauses) = self.record_invariant(value) else {
+                continue;
+            };
+            let erasing = self.erasing;
+            self.erasing = true;
+            let env: Env = [("self".to_string(), value.clone())].into();
+            for clause in clauses {
+                let message = format!(
+                    "class invariant holds for `{param}` passed to `{display}`: `{}`",
+                    clause.text
+                );
+                self.prove_clause(
+                    state,
+                    ObligationKind::ClassInvariant,
+                    span,
+                    message,
+                    &clause,
+                    &env,
+                );
+            }
+            self.erasing = erasing;
+        }
+    }
+
+    /// The invariant clauses of the class of `value`, when it is an object
+    /// of a class with invariants.
+    fn record_invariant(&self, value: &Val) -> Option<Vec<ContractClause>> {
+        let Val::Record(class, _) = value else {
+            return None;
+        };
+        let clauses = self.cx.class_invariant(class)?;
+        (!clauses.is_empty()).then(|| clauses.to_vec())
+    }
+
+    /// Assumes the invariants of each object of a class with invariants
+    /// among `values`.
+    fn assume_record_invariants<'v>(
+        &mut self,
+        state: &State,
+        values: impl IntoIterator<Item = &'v Val>,
+    ) {
+        for value in values {
+            if let Some(clauses) = self.record_invariant(value) {
+                let env: Env = [("self".to_string(), value.clone())].into();
+                for clause in clauses {
+                    self.assume_clause(state, &clause, &env);
+                }
+            }
+        }
+    }
+
+    /// At a return, the objects of classes with invariants that leave the
+    /// function, its result and its `mut` parameters, hold them: callers
+    /// assume they do.
+    pub(super) fn prove_return_invariants(&mut self, state: &State, result: &Val) {
+        let mut values = vec![("the result".to_string(), result.clone())];
+        for param in &self.function.params {
+            if param.passing == crate::mir::MirReceiverKind::BorrowMut {
+                if let Some(value) = state.env.get(&param.name) {
+                    values.push((format!("`{}`", param.name), value.clone()));
+                }
+            }
+        }
+        let erasing = self.erasing;
+        self.erasing = true;
+        for (label, value) in values {
+            let Some(clauses) = self.record_invariant(&value) else {
+                continue;
+            };
+            let env: Env = [("self".to_string(), value)].into();
+            for clause in clauses {
+                let message = format!(
+                    "class invariant holds for {label} on return: `{}`",
+                    clause.text
+                );
+                self.prove_clause(
+                    state,
+                    ObligationKind::ClassInvariant,
+                    self.span,
+                    message,
+                    &clause,
+                    &env,
+                );
+            }
+        }
+        self.erasing = erasing;
+    }
+
+    /// Whether `callee` is a method that only reads `self`.
+    fn reads_only(&self, callee: &str) -> bool {
+        self.cx
+            .decl(callee)
+            .is_some_and(|decl| decl.receiver == Some(crate::ast::ReceiverKind::Borrow))
     }
 
     /// Assumes each `ensures` of `callee`, with `result` and the values the
@@ -85,7 +197,7 @@ impl Exec<'_> {
         post: &[(String, Val)],
         result: &Val,
     ) {
-        let Some(decl) = self.cx.decl(callee) else {
+        let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
             return;
         };
         let pre_env: Env = pre.iter().cloned().collect();
@@ -123,6 +235,152 @@ impl Exec<'_> {
                 }
             }
         }
+        // A function returns objects of classes with invariants that hold
+        // them, through its result and its `mut` parameters.
+        let returned: Vec<Val> = std::iter::once(result.clone())
+            .chain(
+                post.iter()
+                    .filter(|(param, _)| param != "self")
+                    .map(|(_, value)| value.clone()),
+            )
+            .collect();
+        self.assume_record_invariants(state, &returned);
+    }
+
+    /// A named function passed as a callable alias with a contract meets
+    /// it: on any arguments the alias's `requires` allows, the function's
+    /// `requires` holds, and its `ensures` gives the alias's.
+    pub(super) fn prove_callable_refinement(&mut self, state: &State, function: &str, alias: &str) {
+        let span = self.span;
+        let pc = state.pc.clone();
+        let (Some(decl), Some(info)) = (self.cx.decl(function), self.cx.alias_contract(alias))
+        else {
+            return;
+        };
+        let display = public_name(function);
+        let goals = (|| -> Result<(String, String), String> {
+            if decl.params.len() != info.decl.params.len() {
+                return Err(format!("`{display}` takes a different number of arguments"));
+            }
+            let mut alias_env = Env::new();
+            let mut function_env = Env::new();
+            for ((alias_param, ty), param) in info
+                .decl
+                .params
+                .iter()
+                .zip(&info.signature.params)
+                .zip(&decl.params)
+            {
+                let value = self.fresh(ty, &alias_param.name);
+                alias_env.insert(alias_param.name.clone(), value.clone());
+                function_env.insert(param.name.clone(), value);
+            }
+            let result = self.fresh(&info.signature.return_type, "result");
+            let terms = |clauses: &[ContractClause],
+                         kind: ContractKind,
+                         env: &Env,
+                         exec: &mut Self|
+             -> Result<String, String> {
+                let mut parts = Vec::new();
+                for clause in clauses.iter().filter(|clause| clause.kind == kind) {
+                    if !clause.olds.is_empty() {
+                        return Err("`old` in a callable contract is not modeled yet".into());
+                    }
+                    let mut env = env.clone();
+                    env.insert("result".to_string(), result.clone());
+                    let mut wd = Vec::new();
+                    let Val::Bool(term) = exec.spec(&clause.condition, &env, &mut wd, 0)? else {
+                        return Err("a clause is not a modeled `bool`".into());
+                    };
+                    parts.extend(wd);
+                    parts.push(term);
+                }
+                Ok(conjoin(&parts))
+            };
+            let alias_requires = terms(
+                &info.decl.contracts,
+                ContractKind::Requires,
+                &alias_env,
+                self,
+            )?;
+            let function_requires =
+                terms(&decl.contracts, ContractKind::Requires, &function_env, self)?;
+            let function_ensures =
+                terms(&decl.contracts, ContractKind::Ensures, &function_env, self)?;
+            let alias_ensures = terms(
+                &info.decl.contracts,
+                ContractKind::Ensures,
+                &alias_env,
+                self,
+            )?;
+            Ok((
+                format!("(=> {alias_requires} {function_requires})"),
+                format!("(=> (and {alias_requires} {function_ensures}) {alias_ensures})"),
+            ))
+        })();
+        let (accepts, keeps) = match goals {
+            Ok((accepts, keeps)) => (Goal::Holds(accepts), Goal::Holds(keeps)),
+            Err(reason) => (Goal::Unsupported(reason.clone()), Goal::Unsupported(reason)),
+        };
+        self.oblige(
+            ObligationKind::Requires,
+            span,
+            format!("`{display}` accepts every call the contract of `{alias}` allows"),
+            &pc,
+            accepts,
+        );
+        self.oblige(
+            ObligationKind::Ensures,
+            span,
+            format!("`{display}` keeps the `ensures` of `{alias}`"),
+            &pc,
+            keeps,
+        );
+    }
+
+    /// When an implementation of a trait method states its own `requires`,
+    /// a call through the trait proves only the trait's: each of the
+    /// implementation's must follow from them.
+    pub(super) fn prove_weakened_requires(&mut self, state: &State) {
+        let name = self.function.name.clone();
+        let (Some(decl), Some(trait_method)) = (self.cx.decl(&name), self.cx.implemented(&name))
+        else {
+            return;
+        };
+        let own: Vec<&ContractClause> = decl
+            .contracts
+            .iter()
+            .filter(|clause| clause.kind == ContractKind::Requires)
+            .collect();
+        let inherited: Vec<&ContractClause> = trait_method
+            .contracts
+            .iter()
+            .filter(|clause| clause.kind == ContractKind::Requires)
+            .collect();
+        let same = own.len() == inherited.len()
+            && own.iter().zip(&inherited).all(|(a, b)| a.text == b.text);
+        if same {
+            return;
+        }
+        let env: Env = state.env.clone();
+        for clause in inherited {
+            self.assume_clause(state, clause, &env);
+        }
+        let display = public_name(&name);
+        for clause in own {
+            let message = format!(
+                "`requires` of `{display}` follows from the trait method's: `{}`",
+                clause.text
+            );
+            self.prove_clause(
+                state,
+                ObligationKind::Requires,
+                clause.span,
+                message,
+                clause,
+                &env,
+            );
+        }
     }
 
     /// On entry, each `requires` that the contract model reads holds and is
@@ -140,8 +398,8 @@ impl Exec<'_> {
         }
     }
 
-    /// On entry to a public `mut self` method of a class with invariants,
-    /// the invariants hold: every caller proves them.
+    /// On entry to a public method of a class with invariants that takes
+    /// `mut self` or `self`, the invariants hold: every caller proves them.
     pub(super) fn assume_entry_invariant(&mut self, state: &State) {
         let name = self.function.name.clone();
         let Some(clauses) = self.guarded_invariant(&name) else {
@@ -156,11 +414,30 @@ impl Exec<'_> {
         }
     }
 
-    /// The invariant clauses a call of `callee` must keep, when it is a
-    /// public method that takes `mut self` of a class with invariants.
+    /// On entry, each parameter that is an object of a class with
+    /// invariants holds them: every call proves it.
+    pub(super) fn assume_entry_parameters(&mut self, state: &State) {
+        let values: Vec<Val> = self
+            .function
+            .params
+            .iter()
+            .filter_map(|param| state.env.get(&param.name).cloned())
+            .collect();
+        self.assume_record_invariants(state, &values);
+    }
+
+    /// The invariant clauses that hold on entry to `callee` and on its
+    /// return, when it is a public method of a class with invariants that
+    /// takes `mut self` (where they are checked when the program runs) or
+    /// `self` (where each call is proved to keep them).
     fn guarded_invariant(&self, callee: &str) -> Option<Vec<ContractClause>> {
         let decl = self.cx.decl(callee)?;
-        if !decl.public || decl.receiver != Some(crate::ast::ReceiverKind::BorrowMut) {
+        if !decl.public
+            || !matches!(
+                decl.receiver,
+                Some(crate::ast::ReceiverKind::BorrowMut | crate::ast::ReceiverKind::Borrow)
+            )
+        {
             return None;
         }
         let (class, _) = base_name(callee).rsplit_once('.')?;
@@ -211,6 +488,10 @@ impl Exec<'_> {
         match &expr.kind {
             ExprKind::Int(value) => Ok(Val::Int(value.to_string(), IntTy::INT64)),
             ExprKind::Bool(value) => Ok(Val::Bool(value.to_string())),
+            ExprKind::Float(value) => Ok(Val::Float(FloatTy::literal(*value), FloatTy::F64)),
+            ExprKind::String(text) => smt_string(text)
+                .map(Val::Str)
+                .ok_or("this string literal is not modeled yet".to_string()),
             ExprKind::Name(name) => env
                 .get(name)
                 .cloned()
@@ -220,6 +501,9 @@ impl Exec<'_> {
                 let value = self.spec(inner, env, wd, depth)?;
                 match (op, value) {
                     (UnaryOp::Not, Val::Bool(term)) => Ok(Val::Bool(not(&term))),
+                    (UnaryOp::Neg, Val::Float(term, float)) => {
+                        Ok(Val::Float(format!("(fp.neg {term})"), float))
+                    }
                     (UnaryOp::Neg, Val::Int(term, ty)) => {
                         let result = format!("(- {term})");
                         wd.push(ty.contains(&result));
@@ -244,13 +528,31 @@ impl Exec<'_> {
                         CompareOp::Greater => BinaryOp::Greater,
                         CompareOp::GreaterEq => BinaryOp::GreaterEq,
                         CompareOp::In | CompareOp::NotIn => {
-                            return Err("membership is not modeled in contracts yet".into())
+                            let held = self.membership(&previous, &next)?;
+                            parts.push(if link.op == CompareOp::In {
+                                held
+                            } else {
+                                not(&held)
+                            });
+                            previous = next;
+                            continue;
                         }
                     };
                     parts.push(compare(op, &previous, &next)?);
                     previous = next;
                 }
                 Ok(Val::Bool(conjoin(&parts)))
+            }
+            ExprKind::Membership {
+                value,
+                container,
+                negated,
+                ..
+            } => {
+                let item = self.spec(value, env, wd, depth)?;
+                let collection = self.spec(container, env, wd, depth)?;
+                let held = self.membership(&item, &collection)?;
+                Ok(Val::Bool(if *negated { not(&held) } else { held }))
             }
             ExprKind::Conditional {
                 then_expr,
@@ -272,6 +574,20 @@ impl Exec<'_> {
                     }
                     (Val::Bool(a), Val::Bool(b)) => {
                         Ok(Val::Bool(format!("(ite {condition} {a} {b})")))
+                    }
+                    (Val::Str(a), Val::Str(b)) => {
+                        Ok(Val::Str(format!("(ite {condition} {a} {b})")))
+                    }
+                    (Val::Float(a, aty), Val::Float(b, bty)) => {
+                        let float = wider_of(aty, bty);
+                        Ok(Val::Float(
+                            format!(
+                                "(ite {condition} {} {})",
+                                float.convert(&a, aty),
+                                float.convert(&b, bty)
+                            ),
+                            float,
+                        ))
                     }
                     _ => Err("a conditional of this type is not modeled yet".into()),
                 }
@@ -296,19 +612,37 @@ impl Exec<'_> {
                             else {
                                 return Err("elements of this type are not modeled yet".into());
                             };
-                            let term = format!(
-                                "(select {data} (ite (< {index} 0) (+ {index} {len}) {index}))"
-                            );
-                            return Ok(match IntTy::of(elem) {
-                                Some(int) => Val::Int(term, int),
-                                None => Val::Bool(term),
-                            });
+                            let index = format!("(ite (< {index} 0) (+ {index} {len}) {index})");
+                            return Ok(self.store_select(data, elem, &index));
                         }
                         let index = self.normalize_index(&len, &index);
                         match self.element(&object, &index, "element") {
                             Val::Opaque => Err("elements of this type are not modeled yet".into()),
                             value => Ok(value),
                         }
+                    }
+                    Val::Map {
+                        keys,
+                        values,
+                        value,
+                        ..
+                    } => {
+                        let key = match self.spec(index, env, wd, depth)? {
+                            Val::Int(term, _) | Val::Str(term) => term,
+                            _ => return Err("a dict key is not a modeled value".into()),
+                        };
+                        wd.push(format!("(select {keys} {key})"));
+                        let Some(values) = values else {
+                            return Err("values of this type are not modeled yet".into());
+                        };
+                        let read = scalar_val(format!("(select {values} {key})"), &value);
+                        // Under a quantifier the key names a bound
+                        // variable, which no declared constant may use.
+                        Ok(if key.contains("!q") {
+                            read
+                        } else {
+                            self.name_scalars(read, "value")
+                        })
                     }
                     Val::Tuple(items) => match &index.kind {
                         ExprKind::Int(position) => items
@@ -329,6 +663,50 @@ impl Exec<'_> {
                 _ => Err(format!("`.{field}` on this value is not modeled yet")),
             },
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { object, field } = &callee.kind {
+                    // A `spec def` method of the receiver's class.
+                    let receiver = self.spec(object, env, wd, depth)?;
+                    if let (Val::List { .. }, "contains", [arg]) =
+                        (&receiver, field.as_str(), args.as_slice())
+                    {
+                        let item = self.spec(&arg.value, env, wd, depth)?;
+                        return self.membership(&item, &receiver).map(Val::Bool);
+                    }
+                    if let Val::Str(text) = &receiver {
+                        let [arg] = args.as_slice() else {
+                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
+                        };
+                        let Val::Str(other) = self.spec(&arg.value, env, wd, depth)? else {
+                            return Err(format!("`str.{field}` is not modeled in contracts yet"));
+                        };
+                        return match field.as_str() {
+                            "starts_with" => {
+                                Ok(Val::Bool(format!("(str.prefixof {other} {text})")))
+                            }
+                            "ends_with" => Ok(Val::Bool(format!("(str.suffixof {other} {text})"))),
+                            "contains" => Ok(Val::Bool(format!("(str.contains {text} {other})"))),
+                            _ => Err(format!("`str.{field}` is not modeled in contracts yet")),
+                        };
+                    }
+                    let Val::Record(class, _) = &receiver else {
+                        return Err(format!(
+                            "`.{field}(...)` on this value is not modeled in contracts yet"
+                        ));
+                    };
+                    let Some(spec) = self.cx.spec_def(&format!("{class}.{field}")) else {
+                        return Err(format!(
+                            "`{class}.{field}` is not a `spec def`; it is not modeled in contracts"
+                        ));
+                    };
+                    if args.iter().any(|arg| arg.name.is_some()) {
+                        return Err("keyword arguments in contracts are not modeled yet".into());
+                    }
+                    let mut values = vec![receiver];
+                    for arg in args {
+                        values.push(self.spec(&arg.value, env, wd, depth)?);
+                    }
+                    return self.spec_call(spec, values, wd, depth);
+                }
                 let ExprKind::Name(name) = &callee.kind else {
                     return Err("only `len`, `abs`, `min`, `max`, and `spec def` calls are modeled in contracts yet".into());
                 };
@@ -343,7 +721,16 @@ impl Exec<'_> {
                     values.push(self.spec(&arg.value, env, wd, depth)?);
                 }
                 match (name.as_str(), values.as_slice()) {
-                    ("len", [Val::List { len, .. }]) => Ok(Val::Int(len.clone(), IntTy::INT64)),
+                    (
+                        "len",
+                        [Val::List { len, .. } | Val::Map { len, .. } | Val::Set { len, .. }],
+                    ) => Ok(Val::Int(len.clone(), IntTy::INT64)),
+                    ("len", [Val::Str(text)]) => {
+                        Ok(Val::Int(format!("(str.len {text})"), IntTy::INT64))
+                    }
+                    ("abs", [Val::Float(term, float)]) => {
+                        Ok(Val::Float(format!("(fp.abs {term})"), *float))
+                    }
                     ("abs", [Val::Int(term, ty)]) => {
                         let result = format!("(ite (< {term} 0) (- {term}) {term})");
                         wd.push(ty.contains(&result));
@@ -365,6 +752,39 @@ impl Exec<'_> {
         }
     }
 
+    /// Whether `item` is in `collection`: a key of a `dict`, an element of
+    /// a `set` or a list, or a part of a `str`.
+    fn membership(&mut self, item: &Val, collection: &Val) -> Result<String, String> {
+        match (item, collection) {
+            (Val::Int(key, _) | Val::Str(key), Val::Map { keys, key: ty, .. })
+                if key_sort(ty).is_some() =>
+            {
+                Ok(format!("(select {keys} {key})"))
+            }
+            (Val::Int(key, _) | Val::Str(key), Val::Set { members, .. }) => {
+                Ok(format!("(select {members} {key})"))
+            }
+            (Val::Str(part), Val::Str(text)) => Ok(format!("(str.contains {text} {part})")),
+            (
+                _,
+                Val::List {
+                    len,
+                    data: Some(data),
+                    elem,
+                },
+            ) => {
+                let k = self.bound_name();
+                let element = self.store_select(data, elem, &k);
+                let equal = structural_eq(item, &element)
+                    .ok_or("membership of this value is not modeled yet".to_string())?;
+                Ok(format!(
+                    "(exists (({k} Int)) (and (<= 0 {k}) (< {k} {len}) {equal}))"
+                ))
+            }
+            _ => Err("membership in this collection is not modeled in contracts yet".into()),
+        }
+    }
+
     pub(super) fn spec_call(
         &mut self,
         spec: &FunctionDecl,
@@ -378,8 +798,22 @@ impl Exec<'_> {
                 spec.name
             ));
         }
-        if values.len() != spec.params.len() {
+        let names: Vec<String> = spec
+            .receiver
+            .map(|_| "self".to_string())
+            .into_iter()
+            .chain(spec.params.iter().map(|param| param.name.clone()))
+            .collect();
+        if values.len() != names.len() {
             return Err(format!("`spec def {}` takes default arguments", spec.name));
+        }
+        let env: Env = names.into_iter().zip(values).collect();
+        // Each `requires` must hold where the `spec def` is used.
+        for clause in &spec.contracts {
+            match self.spec(&clause.condition, &env, wd, depth + 1)? {
+                Val::Bool(term) => wd.push(term),
+                _ => return Err("a `spec def` `requires` is not a modeled `bool`".into()),
+            }
         }
         let body = spec
             .body
@@ -389,12 +823,6 @@ impl Exec<'_> {
                 _ => None,
             })
             .expect("a checked `spec def` body is one `return`");
-        let env: Env = spec
-            .params
-            .iter()
-            .map(|param| param.name.clone())
-            .zip(values)
-            .collect();
         self.spec(body, &env, wd, depth + 1)
     }
 
@@ -435,6 +863,31 @@ impl Exec<'_> {
             | BinaryOp::LessEq
             | BinaryOp::Greater
             | BinaryOp::GreaterEq => compare(op, &lhs, &rhs).map(Val::Bool),
+            BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div
+                if matches!((&lhs, &rhs), (Val::Float(..), Val::Float(..))) =>
+            {
+                let (Val::Float(a, aty), Val::Float(b, bty)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                let float = wider_of(*aty, *bty);
+                let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+                let symbol = match op {
+                    BinaryOp::Add => "fp.add",
+                    BinaryOp::Sub => "fp.sub",
+                    BinaryOp::Mul => "fp.mul",
+                    _ => {
+                        wd.push(format!("(not (fp.isZero {b}))"));
+                        "fp.div"
+                    }
+                };
+                Ok(Val::Float(format!("({symbol} RNE {a} {b})"), float))
+            }
+            BinaryOp::Add if matches!((&lhs, &rhs), (Val::Str(_), Val::Str(_))) => {
+                let (Val::Str(a), Val::Str(b)) = (&lhs, &rhs) else {
+                    unreachable!("matched above")
+                };
+                Ok(Val::Str(format!("(str.++ {a} {b})")))
+            }
             BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::FloorDiv | BinaryOp::Mod => {
                 let (Val::Int(a, aty), Val::Int(b, bty)) = (&lhs, &rhs) else {
                     return Err("arithmetic on these operands is not modeled yet".into());
@@ -474,26 +927,78 @@ impl Exec<'_> {
         wd: &mut Vec<String>,
         depth: usize,
     ) -> Result<Val, String> {
-        let unsupported = || "`all` and `any` are modeled over one `for` clause yet".to_string();
         let ExprKind::Comprehension {
             output: ComprehensionOutput::List(body),
             clauses,
         } = &arg.kind
         else {
-            return Err(unsupported());
+            return Err("`all` and `any` are modeled over a list comprehension".into());
         };
-        let [clause] = clauses.as_slice() else {
-            return Err(unsupported());
+        // Each `for` clause binds one more variable, over positions that may
+        // depend on the variables before it.
+        let mut ks: Vec<String> = Vec::new();
+        let mut hypotheses: Vec<String> = Vec::new();
+        let mut inner = env.clone();
+        for clause in clauses {
+            let k = self.bound_name();
+            let mut iterable_wd = Vec::new();
+            let (range, value, sort) =
+                self.quantified_values(&clause.iterable, &k, &inner, &mut iterable_wd, depth)?;
+            push_quantified_wd(wd, &ks, &hypotheses, &iterable_wd);
+            ks.push(format!("({k} {sort})"));
+            // An element of a list of integers lies in its type's range.
+            hypotheses.push(range);
+            int_ranges(&value, &mut hypotheses);
+            bind_target(&clause.target, value, &mut inner)?;
+            // Each filter, then the condition, is evaluated only where the
+            // filters before it hold, so each is well-defined there.
+            for filter in &clause.filters {
+                let mut filter_wd = Vec::new();
+                let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
+                    return Err("a comprehension filter is not a modeled `bool`".into());
+                };
+                push_quantified_wd(wd, &ks, &hypotheses, &filter_wd);
+                hypotheses.push(term);
+            }
+        }
+        let mut body_wd = Vec::new();
+        let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
+            return Err("a quantified condition is not a modeled `bool`".into());
         };
-        let BindingTarget::Name { name, .. } = &clause.target else {
-            return Err(unsupported());
-        };
-        let k = self.bound_name();
-        // The range of positions, and the value the target takes at `k`.
-        let (range, value) = match &clause.iterable.kind {
-            ExprKind::Call { callee, args }
-                if matches!(&callee.kind, ExprKind::Name(callee) if callee == "range")
-                    && (1..=2).contains(&args.len()) =>
+        push_quantified_wd(wd, &ks, &hypotheses, &body_wd);
+        let binders = binders(&ks);
+        let hypotheses = conjoin(&hypotheses);
+        Ok(Val::Bool(if universal {
+            format!("(forall ({binders}) (=> {hypotheses} {condition}))")
+        } else {
+            format!("(exists ({binders}) (and {hypotheses} {condition}))")
+        }))
+    }
+
+    /// The positions a quantifier's `for` clause ranges over, as a condition
+    /// on the bound variable `k`, and the value its target takes at `k`:
+    /// `range(...)`, a modeled list, or `enumerate` of one.
+    fn quantified_values(
+        &mut self,
+        iterable: &Expr,
+        k: &str,
+        env: &Env,
+        wd: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(String, Val, &'static str), String> {
+        if let ExprKind::Call { callee, args } = &iterable.kind {
+            if let ExprKind::Member { object, field } = &callee.kind {
+                // `for k in d.keys()` ranges over the keys, as `for k in d`.
+                if field == "keys" && args.is_empty() {
+                    return self.quantified_list(object, k, env, wd, depth);
+                }
+            }
+            let ExprKind::Name(callee) = &callee.kind else {
+                return self.quantified_list(iterable, k, env, wd, depth);
+            };
+            if callee == "range"
+                && (1..=2).contains(&args.len())
+                && args.iter().all(|arg| arg.name.is_none())
             {
                 let mut bounds = Vec::new();
                 for arg in args {
@@ -507,67 +1012,141 @@ impl Exec<'_> {
                     [low, high] => (low.clone(), high.clone()),
                     _ => unreachable!("one or two bounds"),
                 };
-                (
+                return Ok((
                     format!("(and (<= {low} {k}) (< {k} {high}))"),
-                    Val::Int(k.clone(), IntTy::INT64),
-                )
+                    Val::Int(k.to_string(), IntTy::INT64),
+                    "Int",
+                ));
             }
-            _ => match self.spec(&clause.iterable, env, wd, depth)? {
-                Val::List {
-                    len,
-                    data: Some(data),
-                    elem,
-                } => {
-                    let term = format!("(select {data} {k})");
-                    let value = match IntTy::of(&elem) {
-                        Some(int) => Val::Int(term, int),
-                        None => Val::Bool(term),
-                    };
-                    (format!("(and (<= 0 {k}) (< {k} {len}))"), value)
+            if callee == "zip" && args.len() >= 2 && args.iter().all(|arg| arg.name.is_none()) {
+                let mut ranges = Vec::new();
+                let mut values = Vec::new();
+                for arg in args {
+                    let (range, value, sort) =
+                        self.quantified_list(&arg.value, k, env, wd, depth)?;
+                    if sort != "Int" {
+                        return Err("`zip` over a `dict` or a `set` is not modeled yet".into());
+                    }
+                    ranges.push(range);
+                    values.push(value);
                 }
-                _ => return Err("quantifiers over this collection are not modeled yet".into()),
-            },
-        };
-        // An element of a list of integers lies in its type's range.
-        let mut hypotheses = vec![range];
-        if let Val::Int(term, int) = &value {
-            hypotheses.push(int.contains(term));
+                return Ok((conjoin(&ranges), Val::Tuple(values), "Int"));
+            }
+            if callee == "enumerate" && (1..=2).contains(&args.len()) && args[0].name.is_none() {
+                let start = match args.get(1) {
+                    Some(arg) if matches!(arg.name.as_deref(), None | Some("start")) => {
+                        let Val::Int(term, _) = self.spec(&arg.value, env, wd, depth)? else {
+                            return Err("an `enumerate` start is not a modeled integer".into());
+                        };
+                        term
+                    }
+                    Some(_) => return Err("this `enumerate` call is not modeled yet".into()),
+                    None => "0".to_string(),
+                };
+                let (range, value, sort) =
+                    self.quantified_list(&args[0].value, k, env, wd, depth)?;
+                if sort != "Int" {
+                    return Err("`enumerate` over a `dict` or a `set` is not modeled yet".into());
+                }
+                let position = if start == "0" {
+                    k.to_string()
+                } else {
+                    format!("(+ {start} {k})")
+                };
+                return Ok((
+                    range,
+                    Val::Tuple(vec![Val::Int(position, IntTy::INT64), value]),
+                    "Int",
+                ));
+            }
         }
-        let mut inner = env.clone();
-        inner.insert(name.clone(), value);
-        // Each filter, then the condition, is evaluated only where the
-        // filters before it hold, so each is well-defined there.
-        for filter in &clause.filters {
-            let mut filter_wd = Vec::new();
-            let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
-                return Err("a comprehension filter is not a modeled `bool`".into());
-            };
-            push_quantified_wd(wd, &k, &hypotheses, &filter_wd);
-            hypotheses.push(term);
+        self.quantified_list(iterable, k, env, wd, depth)
+    }
+
+    fn quantified_list(
+        &mut self,
+        iterable: &Expr,
+        k: &str,
+        env: &Env,
+        wd: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<(String, Val, &'static str), String> {
+        match self.spec(iterable, env, wd, depth)? {
+            Val::List {
+                len,
+                data: Some(data),
+                elem,
+            } => {
+                let value = self.store_select(&data, &elem, k);
+                Ok((format!("(and (<= 0 {k}) (< {k} {len}))"), value, "Int"))
+            }
+            // A `for` over a `dict` takes its keys, and over a `set` its
+            // elements: the bound variable ranges over what it holds.
+            Val::Map { keys, key: ty, .. }
+            | Val::Set {
+                members: keys,
+                elem: ty,
+                ..
+            } => {
+                let sort = key_sort(&ty).expect("a modeled collection has a modeled key");
+                Ok((
+                    format!("(select {keys} {k})"),
+                    scalar_val(k.to_string(), &ty),
+                    sort,
+                ))
+            }
+            _ => Err("quantifiers over this collection are not modeled yet".into()),
         }
-        let mut body_wd = Vec::new();
-        let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
-            return Err("a quantified condition is not a modeled `bool`".into());
-        };
-        push_quantified_wd(wd, &k, &hypotheses, &body_wd);
-        let hypotheses = conjoin(&hypotheses);
-        Ok(Val::Bool(if universal {
-            format!("(forall (({k} Int)) (=> {hypotheses} {condition}))")
-        } else {
-            format!("(exists (({k} Int)) (and {hypotheses} {condition}))")
-        }))
     }
 }
 
-/// Records that `terms` hold at every position `k` where `hypotheses` do.
-fn push_quantified_wd(wd: &mut Vec<String>, k: &str, hypotheses: &[String], terms: &[String]) {
-    if !terms.is_empty() {
-        wd.push(format!(
-            "(forall (({k} Int)) (=> {} {}))",
-            conjoin(hypotheses),
-            conjoin(terms)
-        ));
+/// Binds a quantifier's `for` target to `value`, item by item for a tuple
+/// target.
+fn bind_target(target: &BindingTarget, value: Val, env: &mut Env) -> Result<(), String> {
+    match (target, value) {
+        (BindingTarget::Name { name, .. }, value) => {
+            if name != "_" {
+                env.insert(name.clone(), value);
+            }
+            Ok(())
+        }
+        (BindingTarget::Tuple { elements, .. }, Val::Tuple(items))
+            if elements.len() == items.len() =>
+        {
+            for (element, item) in elements.iter().zip(items) {
+                bind_target(element, item, env)?;
+            }
+            Ok(())
+        }
+        _ => Err("this quantifier target is not modeled yet".into()),
     }
+}
+
+/// The SMT binder list of the bound variables `ks`.
+fn binders(ks: &[String]) -> String {
+    ks.join(" ")
+}
+
+/// Records that `terms` hold at every position `ks` where `hypotheses` do.
+fn push_quantified_wd(
+    wd: &mut Vec<String>,
+    ks: &[String],
+    hypotheses: &[String],
+    terms: &[String],
+) {
+    if terms.is_empty() {
+        return;
+    }
+    if ks.is_empty() {
+        wd.extend(terms.iter().cloned());
+        return;
+    }
+    wd.push(format!(
+        "(forall ({}) (=> {} {}))",
+        binders(ks),
+        conjoin(hypotheses),
+        conjoin(terms)
+    ));
 }
 
 /// The SMT term of an integer `//` or `%` with a non-zero divisor: `//`
@@ -593,6 +1172,27 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     let term = match (lhs, rhs) {
         (Val::Int(a, _), Val::Int(b, _)) => format!("({symbol} {a} {b})"),
         (Val::Bool(a), Val::Bool(b)) if symbol == "=" => format!("(= {a} {b})"),
+        (Val::Float(a, aty), Val::Float(b, bty)) => {
+            let float = wider_of(*aty, *bty);
+            let (a, b) = (float.convert(a, *aty), float.convert(b, *bty));
+            let symbol = match op {
+                BinaryOp::Less => "fp.lt",
+                BinaryOp::LessEq => "fp.leq",
+                BinaryOp::Greater => "fp.gt",
+                BinaryOp::GreaterEq => "fp.geq",
+                _ => "fp.eq",
+            };
+            format!("({symbol} {a} {b})")
+        }
+        (Val::Str(a), Val::Str(b)) => match op {
+            BinaryOp::Less => format!("(str.< {a} {b})"),
+            BinaryOp::LessEq => format!("(str.<= {a} {b})"),
+            BinaryOp::Greater => format!("(str.< {b} {a})"),
+            BinaryOp::GreaterEq => format!("(str.<= {b} {a})"),
+            _ => format!("(= {a} {b})"),
+        },
+        (Val::Map { .. } | Val::Set { .. }, _) if symbol == "=" => structural_eq(lhs, rhs)
+            .ok_or("comparing these values is not modeled in contracts yet".to_string())?,
         _ => return Err("comparing these values is not modeled in contracts yet".into()),
     };
     Ok(if op == BinaryOp::NotEq {
@@ -600,6 +1200,16 @@ fn compare(op: BinaryOp, lhs: &Val, rhs: &Val) -> Result<String, String> {
     } else {
         term
     })
+}
+
+/// The type two float operands meet at: a `float64` literal beside a
+/// `float32` rounds to it.
+fn wider_of(a: FloatTy, b: FloatTy) -> FloatTy {
+    if a == FloatTy::F32 || b == FloatTy::F32 {
+        FloatTy::F32
+    } else {
+        FloatTy::F64
+    }
 }
 
 /// A MIR function name without the type arguments of a specialized copy.
@@ -657,6 +1267,9 @@ impl<'a> Exec<'a> {
             let goal = conjoin(&wd);
             let pc = state.pc.clone();
             self.oblige(obligation, *span, text, &pc, Goal::Holds(goal));
+            if self.prove_sites {
+                self.copy_as_site((fail, super::exec::CHECK_FAILURE_SITE));
+            }
         }
         let pc = state.pc.clone();
         self.assume(&pc, term);
@@ -746,4 +1359,16 @@ fn find_condition<'a>(
         Stmt::With(stmt) => find_condition(&[], &stmt.body, span),
         _ => None,
     })
+}
+
+/// The range facts of each integer a value holds.
+fn int_ranges(value: &Val, facts: &mut Vec<String>) {
+    match value {
+        Val::Int(term, int) => facts.push(int.contains(term)),
+        Val::Tuple(items) => items.iter().for_each(|item| int_ranges(item, facts)),
+        Val::Record(_, fields) => fields
+            .iter()
+            .for_each(|(_, value)| int_ranges(value, facts)),
+        _ => {}
+    }
 }

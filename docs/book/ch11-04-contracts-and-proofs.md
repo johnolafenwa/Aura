@@ -202,12 +202,15 @@ A proof doesn't remove anything by default. Every contract and every bounds
 check stays in the program, which is why a `requires` that the verifier
 couldn't prove still stops a bad call with a clear diagnostic. When you want
 the proofs to pay for themselves, `aura build --remove-proved-checks` builds
-a native binary without the list bounds checks the verifier proves can never
-fail, and keeps every other check.
+a native binary without the bounds, overflow, divisor, and `assert` checks
+the verifier proves can never fail, and keeps every other check.
 
-The verifier doesn't model everything yet. Floats, strings, dictionaries,
-and sets are outside what it reads today, and a check that depends on them
-is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+The verifier reads strings, dictionaries, and sets too, so it proves that
+a `prices[item]` read finds its key when a `requires item in prices` says
+so. Floats are IEEE-754 values, so a contract over them means what the
+hardware computes, NaN included. It doesn't model everything yet: most
+library calls are outside what it reads today, and a check that depends on them is reported
+as `AU5104` and stays a run-time check. Quantifiers are modeled:
 a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
 call and assumed inside the function. The [verification manual page](/manual/verification)
 lists exactly what is modeled.

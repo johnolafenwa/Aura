@@ -3,3 +3,4 @@ error[AU2999]: non-exhaustive match over `TrafficLight`: missing `Green`
   |
 7 |     match own light:
   |     ^
+  = help: add `case TrafficLight.Green:`, or a final `case _:`

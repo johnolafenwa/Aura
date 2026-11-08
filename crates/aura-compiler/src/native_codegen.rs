@@ -12,7 +12,8 @@ use crate::mir::{
 use crate::native_backend::{
     types, AliasClass, Blk, CallConv, DataDescription, DataHandle, DebugEncoding, DebugRecord,
     DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef, FunctionBackend, FunctionSource,
-    Inst, IntCC, Linkage, MemFlags, ModuleBackend, ScalarType, Signature, TrapCode, Val, Var,
+    Inst, IntCC, Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature, TrapCode, Val,
+    Var,
 };
 use crate::native_runtime::{
     encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
@@ -6107,6 +6108,14 @@ impl<'a> FunctionCompiler<'a> {
         span: Option<Span>,
         trap: ArithmeticTrap,
     ) -> std::result::Result<Val, String> {
+        if trap == ArithmeticTrap::Proved {
+            let op = match op {
+                WideOverflowOp::Add => NoWrapOp::Add,
+                WideOverflowOp::Sub => NoWrapOp::Sub,
+                WideOverflowOp::Mul | WideOverflowOp::Div => NoWrapOp::Mul,
+            };
+            return Ok(self.builder.no_wrap(op, kind.is_signed(), left, right));
+        }
         if !trap.checks_overflow() {
             return Ok(match op {
                 WideOverflowOp::Add => self.builder.iadd(left, right),

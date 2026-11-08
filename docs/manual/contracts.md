@@ -126,13 +126,43 @@ def main():
     print(xs)  # [1, 3, 4, 5]
 ```
 
-- A `spec def` is a module-level function. Its body is one `return` of an
-  expression that follows the condition rules, after an optional docstring.
-- It takes no `mut` parameters and declares no clauses of its own.
+- A `spec def` is a module-level function or a method. Its body is one
+  `return` of an expression that follows the condition rules, after an
+  optional docstring.
+- It takes no `mut` parameters. It may state `requires` clauses, which say
+  where it is defined: they are checked when it runs, and `aura verify`
+  proves them wherever a contract uses it. It takes no other clauses.
 - It may call other `spec def` functions, itself included.
-- Only contract clauses and other `spec def` bodies may call or name it.
-  Using one anywhere else is `AU2048`.
+- Only contract clauses and other `spec def` bodies may call or name a
+  module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.
+
+A `spec def` method reads `self` and is an ordinary method too, so code may
+call it as well as conditions:
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+
+    spec def headroom(self) -> int64:
+        return self.limit - self.balance
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0 and amount <= self.headroom()
+        ensures self.headroom() == old(self.headroom()) - amount
+        self.balance += amount
+
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.headroom())  # 985
+```
+
+A condition may call a method only when it is a read-only builtin method,
+such as `contains`, or a `spec def` method of the receiver's class. It
+takes `self`, never `mut self`.
 
 ## Loop Invariants And `decreases`
 
@@ -175,7 +205,11 @@ def main():
   entry, after every iteration (including one that ends in `continue`),
   and when the condition ends the loop. A `break` leaves without a check.
 - A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target.
+  loop target is bound, so it can read the target. A loop over a
+  `range(...)` call checks it once more when the range runs out, with the
+  target at the range's end (or at its start when the range is empty), so
+  after `for i in range(n)` the invariant holds with `i == n`. A `break`
+  leaves without a check.
 - `decreases measure` takes an `int64` measure. It is checked each time
   the body starts: the measure must be at least 0, and smaller than it was
   the previous time. A loop that keeps both rules must end. A `for` loop
@@ -201,10 +235,42 @@ def main():
     print(gcd(84, 36))  # 12
 ```
 
+A method can state one too; its measure may read `self`, and a call on
+another object, such as `rest.total()` on the next node of a list, computes
+the callee's measure with `self` naming that object.
+
+Functions that call each other in a cycle each state a measure, and every
+call between two of them checks that the callee's measure of the call's
+arguments is smaller than the caller's measure on entry:
+
+```aura
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def main():
+    print(is_even(10))  # true
+```
+
+A call to a function that never calls back is not compared, so a measured
+function may call a measured helper with any argument.
+
 The measure is computed again from the call's arguments before the call,
-so each argument the measure reads must be a pure expression. A function
-takes at most one `decreases`, a method takes none yet, and a call to
-another function is not checked, so mutual recursion is not covered.
+so each argument the measure reads must be a pure expression, and a
+receiver the measure reads must name a variable or a field of one. A
+function takes at most one `decreases`. A cycle through a function that
+states no measure, a call through a function value, or a call through a
+trait is not checked.
 
 ## Trait Methods
 
@@ -235,10 +301,38 @@ def main():
     print(total([Square(side=1), Square(side=2)]))  # 5
 ```
 
-The clauses are checked in each implementation as if it had written them.
-An implementation may repeat the trait's clauses exactly or leave them out,
+The clauses are checked in each implementation as if it had written them,
 and its parameters keep the trait's names, which the clauses read. A trait
 method takes no `decreases`.
+
+An implementation may refine the contract:
+
+- It keeps every `ensures` of the trait, and may add more. A caller that
+  knows the implementation relies on all of them.
+- Stating its own `requires` replaces the trait's, so it may ask for less.
+  A call through the trait checks the implementation's `requires` when it
+  runs, and `aura verify` proves that the trait's `requires` imply them,
+  so a caller that proved the trait's never fails them.
+
+```aura
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 100
+        ensures result >= 0
+
+class Double:
+    pad: int64
+
+impl Scaler for Double:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 1000
+        ensures result == 2 * x
+        return 2 * x
+
+def main():
+    d = Double(pad=0)
+    print(d.scale(500))  # 1000
+```
 
 ## Lemmas
 
@@ -287,6 +381,79 @@ run. Because nothing checks an erased call when the program runs, a lemma
 or a lemma call that the verifier cannot prove keeps
 `aura build --remove-proved-checks` from removing any check.
 
+## Ghost Locals
+
+A `ghost` local holds a value only the verifier reads: a count of steps, a
+copy of an earlier value, or the result of a `spec def`. Declare it with
+`ghost name = value`, or `ghost mut name = value` to change it later with
+`ghost name = value` or `ghost name += value`. The program never computes a
+ghost local, and an `assert` or loop clause that reads one is checked by
+`aura verify` but not when the program runs.
+
+```aura
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    ghost mut steps = 0
+    for i in range(len(xs)):
+        invariant steps == i and 0 <= s and s <= 10 * i
+        s += xs[i]
+        ghost steps += 1
+    assert steps == len(xs)
+    return s
+
+def main():
+    print(total([1, 2, 3]))  # 6
+```
+
+A ghost value, and an `assert` that reads a ghost local, must be pure, and
+either may call `spec def` functions. Only ghost values, `assert`s, and
+loop clauses may read a ghost local; ordinary code that reads one, or
+assigns its name without `ghost`, reports `AU2048`. As with an erased
+lemma call, a ghost `assert` that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
+## Callable Contracts
+
+A type alias for a callable type can end with `:` and an indented block of
+`requires` and `ensures` clauses over the callable's named parameters and
+`result`. A parameter of that type has the contract: a call through it must
+meet the `requires`, and its result has the `ensures`.
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def main():
+    print(apply_twice(inc, 3))
+```
+
+Passing `inc` as a `Step` asks `aura verify` to prove that `inc` fits:
+every call `Step` allows meets `inc`'s `requires`, and `inc`'s `ensures`
+gives `Step`'s. A callable contract is for the verifier. The program checks
+it nowhere; each function still checks its own `requires` when it runs. A
+function value that is not a named function, such as a lambda, is reported
+as `AU5104` where it becomes a `Step`.
+
+The callable type names each parameter and takes none as `mut`, and the
+alias has no type parameters.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -324,6 +491,10 @@ an invariant as long as the public method that calls it restores it. Code
 in the class's own module that assigns a field directly is not checked
 either. Objects that `json.decode` builds are not checked yet.
 
+`aura verify` goes further and proves that an object holds its invariants
+everywhere it crosses a function boundary, and assumes it there; see
+[What It Proves](/manual/verification#what-it-proves).
+
 The method name `__invariant__` is reserved for the check.
 
 ## Failures
@@ -348,7 +519,8 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` and `lemma` only before `def`. Elsewhere they
+the start of a clause line, `spec` and `lemma` only before `def`, and
+`ghost` only before a local's assignment. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
@@ -358,14 +530,13 @@ and `exists` are special only inside clauses and `spec def` bodies.
 
 These forms report `AU2048`:
 
-- `decreases` on a method
 - `ensures` on `__init__` or on a function with a view result
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on a trait implementation's method that differ from the trait
-  method's
-- `spec def` methods
+- `lemma def` methods
+- a contract on a generic type alias, on a callable type with an unnamed
+  or `mut` parameter, or on an alias of a type that is not callable
 
 ## Diagnostics
 

@@ -196,6 +196,11 @@ pub struct TypeAliasDecl {
     pub type_param_bounds: BTreeMap<String, Vec<TypeRef>>,
     pub target: TypeRef,
     pub span: Span,
+    /// The `requires` and `ensures` of a callable alias's indented block:
+    /// what every function value of the alias's type accepts and promises,
+    /// which `aura verify` proves where a function becomes one.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contracts: Vec<ContractClause>,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -533,6 +538,11 @@ pub struct ExternFunctionDecl {
     pub params: Vec<Param>,
     pub return_type: TypeRef,
     pub span: Span,
+    /// The trusted `requires` and `ensures` clauses of an indented block
+    /// after the signature: `aura verify` proves the `requires` at each
+    /// call and assumes the `ensures`, and no run checks either.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub contracts: Vec<ContractClause>,
 }
 
 /// A bodyless, layout-opaque foreign handle type declaration.

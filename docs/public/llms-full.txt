@@ -2872,7 +2872,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
-| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -6143,13 +6143,42 @@ def main():
     print(xs)  # [1, 3, 4, 5]
 ```
 
-- A `spec def` is a module-level function. Its body is one `return` of an
-  expression that follows the condition rules, after an optional docstring.
-- It takes no `mut` parameters and declares no clauses of its own.
+- A `spec def` is a module-level function or a method. Its body is one
+  `return` of an expression that follows the condition rules, after an
+  optional docstring.
+- It takes no `mut` parameters. It may state `requires` clauses, which say
+  where it is defined: they are checked when it runs, and `aura verify`
+  proves them wherever a contract uses it. It takes no other clauses.
 - It may call other `spec def` functions, itself included.
-- Only contract clauses and other `spec def` bodies may call or name it.
-  Using one anywhere else is `AU2048`.
+- Only contract clauses and other `spec def` bodies may call or name a
+  module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.
+
+A `spec def` method reads `self` and is an ordinary method too, so code may
+call it as well as conditions:
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+
+    spec def headroom(self) -> int64:
+        return self.limit - self.balance
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0 and amount <= self.headroom()
+        ensures self.headroom() == old(self.headroom()) - amount
+        self.balance += amount
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.headroom())  # 985
+```
+
+A condition may call a method only when it is a read-only builtin method,
+such as `contains`, or a `spec def` method of the receiver's class. It
+takes `self`, never `mut self`.
 
 ## Loop Invariants And `decreases`
 
@@ -6190,11 +6219,254 @@ def main():
   entry, after every iteration (including one that ends in `continue`),
   and when the condition ends the loop. A `break` leaves without a check.
 - A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target.
+  loop target is bound, so it can read the target. A loop over a
+  `range(...)` call checks it once more when the range runs out, with the
+  target at the range's end (or at its start when the range is empty), so
+  after `for i in range(n)` the invariant holds with `i == n`. A `break`
+  leaves without a check.
 - `decreases measure` takes an `int64` measure. It is checked each time
   the body starts: the measure must be at least 0, and smaller than it was
   the previous time. A loop that keeps both rules must end. A `for` loop
   always ends, so it takes no `decreases`, and a loop takes at most one.
+
+### Recursive Functions
+
+A function that calls itself can state a `decreases` measure too. It is
+checked on entry, where it must be at least 0, and before every call the
+function makes to itself, where the measure of the call's arguments must
+be smaller than the measure on entry. A recursion that keeps both rules
+must end.
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def main():
+    print(gcd(84, 36))  # 12
+```
+
+A method can state one too; its measure may read `self`, and a call on
+another object, such as `rest.total()` on the next node of a list, computes
+the callee's measure with `self` naming that object.
+
+Functions that call each other in a cycle each state a measure, and every
+call between two of them checks that the callee's measure of the call's
+arguments is smaller than the caller's measure on entry:
+
+```aura
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def main():
+    print(is_even(10))  # true
+```
+
+A call to a function that never calls back is not compared, so a measured
+function may call a measured helper with any argument.
+
+The measure is computed again from the call's arguments before the call,
+so each argument the measure reads must be a pure expression, and a
+receiver the measure reads must name a variable or a field of one. A
+function takes at most one `decreases`. A cycle through a function that
+states no measure, a call through a function value, or a call through a
+trait is not checked.
+
+## Trait Methods
+
+A trait method can state `requires` and `ensures` clauses, and every
+implementation of it inherits them. A call through the trait, such as a
+call on a value whose type is a type parameter bounded by the trait, relies
+on the same contract whichever implementation runs.
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Square:
+    side: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+def total[T: Shape](items: list[T]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.area()
+    return sum
+
+def main():
+    print(total([Square(side=1), Square(side=2)]))  # 5
+```
+
+The clauses are checked in each implementation as if it had written them,
+and its parameters keep the trait's names, which the clauses read. A trait
+method takes no `decreases`.
+
+An implementation may refine the contract:
+
+- It keeps every `ensures` of the trait, and may add more. A caller that
+  knows the implementation relies on all of them.
+- Stating its own `requires` replaces the trait's, so it may ask for less.
+  A call through the trait checks the implementation's `requires` when it
+  runs, and `aura verify` proves that the trait's `requires` imply them,
+  so a caller that proved the trait's never fails them.
+
+```aura
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 100
+        ensures result >= 0
+
+class Double:
+    pad: int64
+
+impl Scaler for Double:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 1000
+        ensures result == 2 * x
+        return 2 * x
+
+def main():
+    d = Double(pad=0)
+    print(d.scale(500))  # 1000
+```
+
+## Lemmas
+
+A `lemma def` is a proof: a function with no result whose `ensures`
+clauses state a fact, and whose body shows why it holds. `aura verify`
+proves a lemma once, like any function, and then relies on its `ensures`
+wherever it is called. A call written as a statement is erased when the
+program runs, so a lemma costs nothing at run time, however much work its
+body does.
+
+```aura
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))  # 55
+```
+
+A recursive lemma with a `decreases` measure is a proof by induction: the
+call `tri_bounded(n - 1)` assumes the fact for the smaller case. A lemma
+body holds only `assert`, `if`, loops, assignments of local names, and
+calls of other lemmas, each pure, and it may read `spec def` helpers.
+Its parameters cannot be `mut`, and it returns nothing. The arguments of a
+lemma call written as a statement must be pure, since the call does not
+run. Because nothing checks an erased call when the program runs, a lemma
+or a lemma call that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
+## Ghost Locals
+
+A `ghost` local holds a value only the verifier reads: a count of steps, a
+copy of an earlier value, or the result of a `spec def`. Declare it with
+`ghost name = value`, or `ghost mut name = value` to change it later with
+`ghost name = value` or `ghost name += value`. The program never computes a
+ghost local, and an `assert` or loop clause that reads one is checked by
+`aura verify` but not when the program runs.
+
+```aura
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    ghost mut steps = 0
+    for i in range(len(xs)):
+        invariant steps == i and 0 <= s and s <= 10 * i
+        s += xs[i]
+        ghost steps += 1
+    assert steps == len(xs)
+    return s
+
+def main():
+    print(total([1, 2, 3]))  # 6
+```
+
+A ghost value, and an `assert` that reads a ghost local, must be pure, and
+either may call `spec def` functions. Only ghost values, `assert`s, and
+loop clauses may read a ghost local; ordinary code that reads one, or
+assigns its name without `ghost`, reports `AU2048`. As with an erased
+lemma call, a ghost `assert` that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
+## Callable Contracts
+
+A type alias for a callable type can end with `:` and an indented block of
+`requires` and `ensures` clauses over the callable's named parameters and
+`result`. A parameter of that type has the contract: a call through it must
+meet the `requires`, and its result has the `ensures`.
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def main():
+    print(apply_twice(inc, 3))
+```
+
+Passing `inc` as a `Step` asks `aura verify` to prove that `inc` fits:
+every call `Step` allows meets `inc`'s `requires`, and `inc`'s `ensures`
+gives `Step`'s. A callable contract is for the verifier. The program checks
+it nowhere; each function still checks its own `requires` when it runs. A
+function value that is not a named function, such as a lambda, is reported
+as `AU5104` where it becomes a `Step`.
+
+The callable type names each parameter and takes none as `mut`, and the
+alias has no type parameters.
 
 ## Class Invariants
 
@@ -6232,6 +6504,10 @@ an invariant as long as the public method that calls it restores it. Code
 in the class's own module that assigns a field directly is not checked
 either. Objects that `json.decode` builds are not checked yet.
 
+`aura verify` goes further and proves that an object holds its invariants
+everywhere it crosses a function boundary, and assumes it there; see
+[What It Proves](/manual/verification#what-it-proves).
+
 The method name `__invariant__` is reserved for the check.
 
 ## Failures
@@ -6256,7 +6532,8 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` only before `def`. Elsewhere they
+the start of a clause line, `spec` and `lemma` only before `def`, and
+`ghost` only before a local's assignment. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
@@ -6270,8 +6547,9 @@ These forms report `AU2048`:
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on the methods of a trait implementation
-- `spec def` methods
+- `lemma def` methods
+- a contract on a generic type alias, on a callable type with an unnamed
+  or `mut` parameter, or on an alias of a type that is not callable
 
 ## Diagnostics
 
@@ -10910,7 +11188,12 @@ The rules for these declarations:
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
   `-> None` for a C function that returns no value.
 - **No body.** An extern function has no Aura body, type parameters, receiver,
-  defaults, or trailing colon.
+  or defaults. Its only block is an optional trusted contract.
+- **Trusted contract.** An indented block of `requires` and `ensures` clauses
+  states what the C function needs and promises. `aura verify` proves each
+  `requires` at every call and assumes each `ensures` after it, without
+  proof. The program checks neither when it runs, because the contract is
+  trusted. See [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
@@ -13130,14 +13413,19 @@ item
     | impl-declaration ;
 
 type-alias-declaration
-    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
+    = "type", identifier, [ bounded-type-parameters ], "=", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
-      "(", [ parameter-list ], ")", "->", type, NEWLINE ;
+      "(", [ parameter-list ], ")", "->", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+
+contract-clause
+    = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
 Item declarations are module-level. They are not statements and cannot appear
@@ -13151,7 +13439,9 @@ own type parameters. Anywhere else, `type` is an ordinary identifier. Static
 checking rejects alias expansion cycles with `AU2012`.
 
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
-declarations are bodyless and non-generic.
+declarations are bodyless and non-generic. An extern function's optional
+indented block holds only `requires` and `ensures` clauses, its trusted
+contract.
 [FFI v0](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
@@ -22987,19 +23277,33 @@ function:
 
 | Check | Example | Runtime failure it rules out |
 | --- | --- | --- |
-| overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
-| division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
+| overflow | `a + b`, `-x`, `abs(x)`, `x as int32`, `f as int64`, `n as float64` | `AU4002` integer overflow or an inexact or out-of-range conversion |
+| division by zero | `a // b`, `a % b`, `x / y` of floats | `AU4004` zero divisor |
 | index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| key present | `d[k]`, `s.remove(x)` | `AU4003` missing key, `AU4008` missing element |
 | assert | `assert total >= 0` | `AU4001` assertion failed |
 | requires | each call of a function with `requires` | `AU4009` at the call |
 | ensures | each `return` of a function with `ensures` | `AU4009` on return |
 | loop invariant | each loop `invariant` | `AU4009` in the loop |
-| decreases | each `decreases` measure | `AU4009` in the loop |
+| decreases | each `decreases` measure of a loop or a recursive function | `AU4009` in the loop or at the recursive call |
 | class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
+
+`aura verify` also proves that an object of a class with invariants holds
+them wherever it crosses a function boundary: at each call of a public
+method that only reads `self`, for each argument passed to a function, and
+for a function's result and `mut` parameters on return. Each function's
+proof assumes the same on its side, so a public getter, or a function that
+takes an `Account`, starts from an object that keeps its invariants. No run
+checks these places, so while one of them is unproved
+`aura build --remove-proved-checks` removes nothing.
 
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
-assumes its `ensures`. Nothing else about the callee's body is used, so
+assumes its `ensures`. A call through a trait, on a value whose type is a
+type parameter, relies on the trait method's contract, which every
+implementation is proved to keep. A call of a `lemma def` relies on the
+lemma's `ensures` the same way; see
+[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
 what a caller needs to know must be in the contract.
 
 ```aura
@@ -23054,7 +23358,19 @@ loop never assigns keeps its value, and a counter the loop only steps up
 covers indexes such as `for i in range(len(xs))` and `while i < len(xs)`.
 
 A `decreases` measure is proved to stay at least 0 and to get smaller in
-every iteration, which proves that the loop ends.
+every iteration, which proves that the loop ends. On a function, it is
+proved to be at least 0 on entry and smaller at every call the function
+makes to itself, which proves that the recursion ends:
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+```
 
 ## Reports
 
@@ -23077,7 +23393,7 @@ verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 
 | `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
 | `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
 | `AU5103` | No solver could be started. |
-| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point arithmetic. It is not proved, and it stays a runtime check. |
+| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point `**`. It is not proved, and it stays a runtime check. |
 
 A check that fails to prove is not always a bug: the verifier may lack a
 fact that holds. Add it as a `requires` on the function, an `invariant` on
@@ -23105,26 +23421,64 @@ edit solves only what the edit touched. The summary line says how many
 functions the cache answered. A check the solver gave up on is never
 cached.
 
+In VS Code, the Aura extension runs `aura verify` each time an Aura file
+opens or is saved. Each check it cannot prove shows as a diagnostic at the
+check, with the counterexample, and each line whose checks are all proved
+ends with a `✓ proved` hint. The results show until the file is edited
+again. Set `aura.verifyOnSave` to `false` to turn this off.
+
 ## What It Models
 
 The verifier reasons about values exactly, as mathematical integers and
 booleans, with each integer type's range as a check:
 
 - integers of every width, `bool`, and `None`
-- lists of integers and of `bool`, with their lengths and elements, and the
-  length of any other list
+- lists, with their lengths, and their elements when those are integers,
+  `bool`, `str`, or tuples and classes of modeled values; the length of any
+  other list
+- `float32` and `float64` as IEEE-754 values, rounding each `+`, `-`, `*`,
+  `/`, and `sqrt` to nearest, ties to even, with NaN, infinities, and signed
+  zeros; comparisons, `abs`, `to_float`, and casts between floats and
+  integers
+- `str`, as a sequence of characters: literals, `+`, `==`, `<` and the other
+  comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
+- `dict` and `set` with integer or `str` keys: which keys they hold, their
+  length, and a `dict`'s values when those are integers, `bool`, or `str`;
+  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `keys`,
+  `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
+  `clear` of a `set`, with `==` of whole collections
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
-- `spec def` helpers, `old`, and `result` in contracts
+- `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- parameters of a callable alias with a contract
+  ([Callable Contracts](/manual/contracts#callable-contracts)): calls
+  through them prove its `requires` and assume its `ensures`, and a named
+  function passed as one is proved to fit it
+- `extern "C"` functions with a trusted contract: an indented block of
+  `requires` and `ensures` after the signature. Each call proves the
+  `requires`, and the result and `mut` arguments have the `ensures`
+- task starts: `group.start(work, n)` proves `work`'s `requires` on the
+  arguments the child receives, and the value of `Ready` from
+  `task.result()`, `poll()`, or `result_or(...)` has `work`'s `ensures`.
+  Each task's function is verified like any other
+- calls through a function value that names one function, such as
+  `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
+  `ensures`
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
-  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
-  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
-  or loop `invariant`
+  `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
+  over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
+  `enumerate` or `zip` of modeled lists,
+  with tuple targets and `if` filters, nested, in any contract, `assert`, or
+  loop `invariant`
 
-Anything else is a value the verifier knows nothing about: a `str`, a
-`dict`, a `set`, a float, the result of most library calls, and what a call
-through a function value returns. A check that depends on one of them can
+Anything else is a value the verifier knows nothing about: a `dict` or
+`set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
+`str.split` or `dict.get`, and what a call returns through a function value the verifier cannot
+follow, such as one passed as an argument, stored in a collection, or
+chosen on different paths. Such a value's `requires` is reported as
+`AU5104` where it leaves the function, and stays checked when it is
+called. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
 A loop that builds a list proves what it builds with a quantified
@@ -23146,9 +23500,29 @@ def squares(n: int64) -> list[int64]:
     return out
 ```
 
-A quantifier over several `for` clauses, over a tuple target, or over a list
-of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
-are planned. See the
+A `for` loop over a `range(...)` call can say the same with less: its
+invariants also hold when the range runs out, with the target at the end,
+so `len(out) == i` gives `len(out) == n` after `for i in range(n)`.
+
+A dictionary read proves its key is there from what the code and contracts
+say about it:
+
+```aura
+def price(prices: dict[str, int64], item: str) -> int64:
+    requires item in prices
+    requires all([prices[k] >= 0 for k in prices.keys()])
+    ensures result >= 0
+    return prices[item]
+```
+
+A float contract is about IEEE-754 values, so `x == x` fails for NaN, and a
+contract that needs `x / y` to be a number says so, as `requires y > 0.0`
+does about the divisor. Proofs about float division and square roots can
+take the solver longer than proofs about integers; one it cannot finish in
+time is reported as `AU5102`.
+
+A quantifier over a `str`, or over a list of other elements, is reported as
+`AU5104`. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
@@ -23156,19 +23530,41 @@ are planned. See the
 A check counts as proved only when the solver answers that no input breaks
 it. `aura verify` itself removes nothing: every check stays in the program.
 
-`aura build --remove-proved-checks` builds a native binary without the list
-bounds checks of element reads and element borrows (`view x = xs[i]`) that
-the verifier proves can never fail, and prints how many it removed. It runs
-the verifier first, so it needs a solver, and it uses the proof cache. A read
-is left unchecked only when its index is proved to be in range and not
-negative on every path that reaches it, since an unchecked read does not
-count from the end of the list. Every other check stays, and a `--debug`
-build keeps every check.
+`aura build --remove-proved-checks` builds a native binary without the
+checks that the verifier proves can never fail, and prints how many of each
+kind it removed:
+
+- the list bounds checks of element reads and element borrows
+  (`view x = xs[i]`), when the index is proved to be in range and not
+  negative, since an unchecked read does not count from the end of the list
+- the overflow and zero-divisor checks of integer `+`, `-`, `*`, `//`, `%`,
+  `/`, and negation; the native backend also tells LLVM that such a result
+  does not wrap, which lets it optimize the arithmetic around it
+- `assert`s, and the `ensures`, loop `invariant`, and `decreases` checks
+
+A check goes only when it is proved on every path that reaches it. A
+function's `requires` stays checked on entry, since a caller the verifier
+does not see may break it. The flag runs the verifier first, so it needs a
+solver, and it uses the proof cache. A `--debug` build keeps every check.
 
 Removing a check moves the verifier and the solver into what the program
-trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+trusts: a wrong proof would turn a trap into an out-of-bounds read, a
+wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
+
+A trusted contract on an `extern "C"` function is the other thing a proof
+relies on without checking. The verifier cannot read C, so it takes the
+`ensures` as given:
+
+```aura fragment
+extern "C" def clamp_index(i: int64, n: int64) -> int64:
+    requires n > 0
+    ensures 0 <= result and result < n
+```
+
+A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
+contract to what the C function's own documentation promises.
 
 ## Source: docs/book/index.md
 
@@ -24273,43 +24669,8 @@ and punctuation, which will cause us trouble in a useful way.
 
 The first job is to read text. Aura's functions for standard input and output
 live in a module called `io`, and the one we want is `io.read_line`, which
-reads one line. Replace the contents of `src/main.au` with Listing 2-1.
-
-*Filename: src/main.au*
-
-```aura check-fail:AU2013
-import io
-
-def main() -> int32:
-    match io.read_line():
-        case Result.Ok(str as line):
-            print(f"read: {line}")
-        case Result.Err(error):
-            print(f"could not read input: {error}")
-    return 0
-```
-
-<span class="caption">Listing 2-1: A first attempt at reading one line from standard input</span>
-
-There's a lot in these few lines. `import io` makes the `io` module available
-in this file, so that we can call `io.read_line()`. The rest is a `match`
-statement, which looks at a value and picks one of several `case` branches
-depending on its shape. Before we go through it, let's see what the compiler
-thinks:
-
-```console
-$ aura run src/main.au
-error[AU2013]: non-exhaustive match over `Result`: missing `Ok(None)`
- --> src/main.au:4:5
-  |
-4 |     match io.read_line():
-  |     ^
-```
-
-The program didn't run. The compiler says our `match` is *non-exhaustive*:
-there is a possible value that none of our cases handles, and it even names
-the missing one, `Ok(None)`. To see where that comes from, we need to know
-what `io.read_line` returns. Its type is:
+reads one line. Before we write the code, it helps to know what
+`io.read_line` gives back. Its type is:
 
 ```text
 Result[str | None, io.Error]
@@ -24327,17 +24688,8 @@ The successful value has its own twist. Its type is `str | None`, which means
 "either a `str` or `None`". `io.read_line` returns `Ok` with a string for each
 line it reads, and `Ok(None)` when it reaches the end of the input and there
 are no more lines. So there are three outcomes, not two: a line, the end of
-the input, and an error. Our `match` handled the first and the last, and the
-compiler noticed that we forgot the middle one.
-
-This check is one of the things that makes Aura programs hold up well. If we
-had been allowed to run Listing 2-1, it would have worked when we tested it
-with a line of text, and then done something unpredictable the first time
-someone ran it on an empty file. Because `match` must be exhaustive, the
-question "what happens at end of input?" has to be answered before the
-program can run at all.
-
-Add the missing case, as in Listing 2-2.
+the input, and an error. Replace the contents of `src/main.au` with Listing
+2-1, which handles all three.
 
 *Filename: src/main.au*
 
@@ -24355,7 +24707,12 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-2: Handling a line, the end of input, and an error</span>
+<span class="caption">Listing 2-1: Reading one line, and handling the end of input and errors</span>
+
+There's a lot in these few lines. `import io` makes the `io` module available
+in this file, so that we can call `io.read_line()`. The rest is a `match`
+statement, which looks at a value and picks one of several `case` branches
+depending on its shape.
 
 Each `case` is a *pattern*. `Result.Ok(str as line)` matches an `Ok` whose
 contents are a `str`, and binds that string to the name `line` so the body
@@ -24365,6 +24722,26 @@ each case uses an f-string to build its message, like the ones we saw in
 Chapter 1. Patterns can do a good deal more than this, and
 [Chapter 6](/book/ch06-00-enums-and-match) covers `match` in full;
 [Chapter 9](/book/ch09-00-error-handling) does the same for `Result`.
+
+The `Result.Ok(None)` case is not optional. A `match` in Aura must be
+*exhaustive*: every possible value has to be handled by some `case`. If we
+left the end-of-input case out, the program would work when we tested it with
+a line of text, and then do something unpredictable the first time someone ran
+it on an empty file. So the compiler refuses to build it, and names the case
+we missed:
+
+```console
+$ aura run src/main.au
+error[AU2013]: non-exhaustive match over `Result`: missing `Ok(None)`
+ --> src/main.au:4:5
+  |
+4 |     match io.read_line():
+  |     ^
+  = help: add `case Result.Ok(None):`, or a final `case _:`; `Ok(None)` is how calls such as `io.read_line` report end of input
+```
+
+The question "what happens at end of input?" has to be answered before the
+program can run at all.
 
 Now let's run it. Piping text into a program with `echo` is a quick way to
 give it a line of input:
@@ -24411,7 +24788,7 @@ send end-of-input.
 We want every line, not only the first. Let's put the `match` in a loop that
 keeps going until the end of the input. To check that it works before we
 count any words, we'll count lines first. Change `src/main.au` to Listing
-2-3.
+2-2.
 
 *Filename: src/main.au*
 
@@ -24433,7 +24810,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-3: Counting lines until the end of input</span>
+<span class="caption">Listing 2-2: Counting lines until the end of input</span>
 
 `while true:` loops forever, and the `break` in the `Ok(None)` case gets us
 out when the input runs out. If reading fails, we print a message and
@@ -24492,7 +24869,7 @@ lines: 0
 Now for the real work. For each line, we need to split it into words and
 keep a tally of how many times we have seen each word. A *dictionary* is the
 natural fit: a `dict` maps keys to values, so we can map each word to its
-count. Listing 2-4 is our first attempt.
+count. Listing 2-3 is our first attempt.
 
 *Filename: src/main.au*
 
@@ -24518,7 +24895,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-4: A first attempt at counting words in a dictionary</span>
+<span class="caption">Listing 2-3: A first attempt at counting words in a dictionary</span>
 
 The line `mut counts: dict[str, int64] = {}` creates an empty dictionary.
 This time we wrote the type ourselves, after the colon: a `dict` whose keys
@@ -24580,7 +24957,7 @@ But our counter has another problem we haven't seen yet: `The` and `the`
 would be counted as different words. The usual fix for that is to convert
 every word to lowercase, and `to_lower()` returns a brand-new string, which
 means a string that we own. One change solves both problems. Update the loop
-as in Listing 2-5.
+as in Listing 2-4.
 
 *Filename: src/main.au*
 
@@ -24607,7 +24984,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-5: Lowercasing each word gives the dictionary a string it can own</span>
+<span class="caption">Listing 2-4: Lowercasing each word gives the dictionary a string it can own</span>
 
 The loop now borrows each piece as `raw`, and `word = raw.to_lower()` makes a
 new lowercase string owned by the binding `word`. When we store it with
@@ -24639,7 +25016,7 @@ who is only borrowing it, and it will tell you when those two get mixed up.
 We want the most common words first, and only the top few. A dictionary isn't
 sorted by its values, so we'll copy its entries into a list and sort that.
 Replace the `print(counts)` line and add a constant at the top of the file,
-as in Listing 2-6.
+as in Listing 2-5.
 
 *Filename: src/main.au*
 
@@ -24672,7 +25049,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-6: Sorting the entries by count and printing the top five</span>
+<span class="caption">Listing 2-5: Sorting the entries by count and printing the top five</span>
 
 `TOP: int64 = 5` is a binding at the top level of the file, outside any
 function. A top-level binding is a *module constant*: it can't be changed,
@@ -24769,7 +25146,7 @@ The last problem is the punctuation stuck to the words. We'll write a
 function, `clean`, that strips punctuation characters from the start and end
 of a word and lowercases what's left. While we are at it, we'll move the
 counting loop into a function of its own, so that `main` reads as a summary
-of what the program does. Listing 2-7 is the finished program.
+of what the program does. Listing 2-6 is the finished program.
 
 *Filename: src/main.au*
 
@@ -24819,7 +25196,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 2-7: The finished word counter</span>
+<span class="caption">Listing 2-6: The finished word counter</span>
 
 Let's start with `clean`. Its signature, `def clean(word: str) -> str`, says
 it takes a string called `word` and returns a string. Every parameter in Aura
@@ -38450,12 +38827,15 @@ A proof doesn't remove anything by default. Every contract and every bounds
 check stays in the program, which is why a `requires` that the verifier
 couldn't prove still stops a bad call with a clear diagnostic. When you want
 the proofs to pay for themselves, `aura build --remove-proved-checks` builds
-a native binary without the list bounds checks the verifier proves can never
-fail, and keeps every other check.
+a native binary without the bounds, overflow, divisor, and `assert` checks
+the verifier proves can never fail, and keeps every other check.
 
-The verifier doesn't model everything yet. Floats, strings, dictionaries,
-and sets are outside what it reads today, and a check that depends on them
-is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+The verifier reads strings, dictionaries, and sets too, so it proves that
+a `prices[item]` read finds its key when a `requires item in prices` says
+so. Floats are IEEE-754 values, so a contract over them means what the
+hardware computes, NaN included. It doesn't model everything yet: most
+library calls are outside what it reads today, and a check that depends on them is reported
+as `AU5104` and stays a run-time check. Quantifiers are modeled:
 a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
 call and assumed inside the function. The [verification manual page](/manual/verification)
 lists exactly what is modeled.

@@ -10,19 +10,21 @@ const { registerDebugger } = require("./debug");
 let client;
 
 // `aura.compilerPath` reaches the server as `AURA_LSP_AURA_PATH`, which wins
-// over `aura` on PATH.
-function serverEnvironment(configuredPath) {
+// over `aura` on PATH, and `aura.verifyOnSave` as `AURA_LSP_VERIFY`.
+function serverEnvironment(configuredPath, verifyOnSave = true) {
   const env = { ...process.env };
   if (configuredPath) {
     env.AURA_LSP_AURA_PATH = configuredPath;
   }
+  env.AURA_LSP_VERIFY = verifyOnSave ? "1" : "0";
   return env;
 }
 
 function createClient(context) {
   const serverModule = context.asAbsolutePath(path.join("dist", "server.js"));
   const configuredPath = vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim();
-  const env = serverEnvironment(configuredPath);
+  const verifyOnSave = vscode.workspace.getConfiguration("aura").get("verifyOnSave", true);
+  const env = serverEnvironment(configuredPath, verifyOnSave);
   const serverOptions = {
     run: { module: serverModule, transport: TransportKind.ipc, options: { env } },
     debug: {
@@ -63,7 +65,10 @@ async function activate(context) {
   context.subscriptions.push(
     vscode.commands.registerCommand("aura.restartLanguageServer", () => restartClient(context)),
     vscode.workspace.onDidChangeConfiguration((event) => {
-      if (event.affectsConfiguration("aura.compilerPath")) {
+      if (
+        event.affectsConfiguration("aura.compilerPath") ||
+        event.affectsConfiguration("aura.verifyOnSave")
+      ) {
         void restartClient(context);
       }
     }),
