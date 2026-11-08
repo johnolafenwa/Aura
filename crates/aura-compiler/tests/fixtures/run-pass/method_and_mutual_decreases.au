@@ -1,0 +1,45 @@
+class Node:
+    value: int64
+    height: int64
+    next: indirect Node | None = None
+
+    def total(self) -> int64:
+        requires self.height >= 0
+        decreases self.height
+        match self.next:
+            case None:
+                return self.value
+            case Node as rest:
+                return self.value + rest.total()
+
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def helper(k: int64) -> int64:
+    decreases k
+    if k <= 0:
+        return 0
+    return helper(k - 1)
+
+def outer(n: int64) -> int64:
+    decreases n
+    # `helper` is not in a cycle with `outer`, so no check compares them.
+    return helper(100) + n
+
+def main():
+    chain = Node(value=1, height=2, next=Node(value=2, height=1, next=Node(value=3, height=0)))
+    print(chain.total())
+    print(is_even(10))
+    print(is_odd(7))
+    print(outer(3))

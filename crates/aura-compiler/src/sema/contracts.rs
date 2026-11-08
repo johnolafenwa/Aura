@@ -155,13 +155,6 @@ impl FunctionChecker<'_> {
         function: &FunctionDecl,
         clause: &ContractClause,
     ) -> Result<()> {
-        if function.receiver.is_some() {
-            return Err(Diagnostic::coded_at(
-                CODE,
-                clause.span,
-                "a method cannot declare `decreases` yet; state the measure on a function",
-            ));
-        }
         let mut measure = self.recursion_measure.borrow_mut();
         if measure.is_some() {
             return Err(Diagnostic::coded_at(
@@ -182,23 +175,68 @@ impl FunctionChecker<'_> {
         Ok(())
     }
 
-    /// A call to the function being checked, when it declares `decreases`,
-    /// passes a pure argument for each parameter the measure reads, so the
-    /// lowering can evaluate the measure on them before the call.
+    /// A call that a function with a `decreases` measure makes to a
+    /// function or method that declares one too passes a pure argument for
+    /// each parameter the callee's measure reads, and a receiver that names
+    /// a place when that measure reads `self`, so the lowering can evaluate
+    /// the callee's measure before the call when the two recurse together.
     pub(super) fn check_recursive_call(
         &self,
         callee: &Expr,
         args: &[Argument],
         locals: &HashMap<String, LocalBinding>,
     ) -> Result<()> {
-        let measure = self.recursion_measure.borrow();
-        let Some((function, params)) = measure.as_ref() else {
-            return Ok(());
-        };
-        if !matches!(&callee.kind, ExprKind::Name(name) if name == function && !locals.contains_key(name))
-        {
+        if self.recursion_measure.borrow().is_none() {
             return Ok(());
         }
+        let (decl, receiver) = match &callee.kind {
+            ExprKind::Name(name) if !locals.contains_key(name) => match self.functions.get(name) {
+                Some(function) => (&function.decl, None),
+                None => return Ok(()),
+            },
+            ExprKind::Member { object, field } => {
+                let Ok(Type::Named(class, _)) =
+                    self.with_spec(|| self.type_of_expr(object, &mut locals.clone()))
+                else {
+                    return Ok(());
+                };
+                match self
+                    .classes
+                    .get(&class)
+                    .and_then(|class| class.methods.get(field))
+                {
+                    Some(method) if method.decl.receiver.is_some() => {
+                        (&method.decl, Some(object.as_ref()))
+                    }
+                    _ => return Ok(()),
+                }
+            }
+            _ => return Ok(()),
+        };
+        let Some(clause) = decl
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == ContractKind::Decreases)
+        else {
+            return Ok(());
+        };
+        if let Some(receiver) = receiver {
+            if super::expr_references_name(&clause.condition, "self") && !is_place(receiver) {
+                return Err(Diagnostic::coded_at(
+                    CODE,
+                    receiver.span,
+                    "the receiver of a call whose `decreases` measure reads `self` must name a variable or a field of one",
+                ));
+            }
+        }
+        let params: Vec<Option<&str>> = decl
+            .params
+            .iter()
+            .map(|param| {
+                super::expr_references_name(&clause.condition, &param.name)
+                    .then_some(param.name.as_str())
+            })
+            .collect();
         for (index, arg) in args.iter().enumerate() {
             let measured = match &arg.name {
                 Some(name) => params.iter().flatten().any(|param| param == name),
@@ -766,5 +804,15 @@ fn reject_impure_condition<'e>(
         ExprKind::Specialize { .. } => Err(impure(expr, kind, "an explicit specialization")),
         ExprKind::Try(_) => Err(impure(expr, kind, "`try`, which can return early,")),
         ExprKind::Match { .. } => Err(impure(expr, kind, "a `match` expression")),
+    }
+}
+
+/// Whether `expr` names a variable or a field of one, through any grouping.
+fn is_place(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Name(_) => true,
+        ExprKind::Member { object, .. } => is_place(object),
+        ExprKind::Group(inner) => is_place(inner),
+        _ => false,
     }
 }

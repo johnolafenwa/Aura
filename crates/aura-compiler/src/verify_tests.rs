@@ -1599,3 +1599,75 @@ def main():
     assert_eq!(report.proved_sites.len(), 1);
     crate::run_source(&fixed).expect("the program runs");
 }
+
+#[test]
+fn measures_cover_methods_and_mutual_recursion() {
+    assert_proved(
+        r#"
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def countdown(k: int64) -> int64:
+    requires 0 <= k and k <= 1000
+    decreases k
+    ensures result == 0
+    if k == 0:
+        return 0
+    return countdown(k - 1)
+
+def start(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    decreases n
+    ensures result == 0
+    # Not a cycle: `countdown` never calls back, so its larger measure is
+    # fine here.
+    return countdown(100)
+
+class Counter:
+    depth: int64
+
+    def down(self, k: int64) -> int64:
+        requires k >= 0
+        decreases k
+        if k == 0:
+            return self.depth
+        return self.down(k - 1)
+
+def main():
+    print(is_even(10))
+    print(start(3))
+    c = Counter(depth=4)
+    print(c.down(3))
+"#,
+    );
+    assert_open(
+        r#"
+def ping(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return 0
+    return pong(n)
+
+def pong(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    return ping(n - 1)
+
+def main():
+    print(ping(0))
+"#,
+        &["7 decreases failed", "12 requires failed"],
+    );
+}

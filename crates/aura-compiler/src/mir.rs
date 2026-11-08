@@ -1554,10 +1554,6 @@ const DECREASES_STARTED: &str = "measured before";
 /// calls.
 #[derive(Clone)]
 struct RecursionMeasure {
-    function: String,
-    clause: crate::ast::ContractClause,
-    /// Each parameter in order, with its default.
-    params: Vec<(String, Option<Expr>)>,
     /// The local holding the measure's value on entry.
     entry: String,
 }
@@ -10551,7 +10547,95 @@ pub(crate) fn public_function_name(name: &str) -> String {
 }
 
 /// Lowers `program` up to the calls runtime operations make.
+/// While a program with `decreases` measures on functions is lowered: the
+/// calls between functions, by MIR name, and each check that a call keeps
+/// its callee's measure smaller, so the checks outside a recursion cycle
+/// can be dropped once every call is known.
+#[derive(Default)]
+struct MeasureCalls {
+    edges: BTreeSet<(String, String)>,
+    /// The caller, the callee, the block that enters the check, and the
+    /// block after it.
+    checks: Vec<(String, String, String, String)>,
+}
+
+thread_local! {
+    static MEASURE_CALLS: std::cell::RefCell<Option<MeasureCalls>> = const { std::cell::RefCell::new(None) };
+}
+
+fn program_has_function_measures(program: &Program) -> bool {
+    let measured = |decl: &crate::ast::FunctionDecl| {
+        decl.contracts
+            .iter()
+            .any(|clause| clause.kind == crate::ast::ContractKind::Decreases)
+    };
+    program
+        .functions
+        .values()
+        .any(|function| measured(&function.decl))
+        || program
+            .classes
+            .values()
+            .any(|class| class.methods.values().any(|method| measured(&method.decl)))
+}
+
+/// Drops each measure check of a call whose callee is not in a recursion
+/// cycle with its caller: its entry jumps past it.
+fn drop_measure_checks_outside_cycles(functions: &mut [MirFunction], calls: MeasureCalls) {
+    let mut graph: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
+    for (from, to) in &calls.edges {
+        graph.entry(from.as_str()).or_default().push(to.as_str());
+    }
+    let reaches = |from: &str, to: &str| {
+        let mut seen = BTreeSet::new();
+        let mut work = vec![from];
+        while let Some(node) = work.pop() {
+            if node == to {
+                return true;
+            }
+            if seen.insert(node) {
+                work.extend(graph.get(node).into_iter().flatten().copied());
+            }
+        }
+        false
+    };
+    for (caller, callee, entry, after) in &calls.checks {
+        // A call is in a cycle with its caller when the callee calls back.
+        if reaches(callee, caller) {
+            continue;
+        }
+        let Some(function) = functions
+            .iter_mut()
+            .find(|function| &function.name == caller)
+        else {
+            continue;
+        };
+        if let Some(block) = function
+            .blocks
+            .iter_mut()
+            .find(|block| &block.label == entry)
+        {
+            block.terminator = Terminator::Goto(after.clone());
+        }
+    }
+}
+
 fn lower_unresolved(program: &Program) -> MirModule {
+    let measured = program_has_function_measures(program);
+    if measured {
+        MEASURE_CALLS.with(|calls| *calls.borrow_mut() = Some(MeasureCalls::default()));
+    }
+    let mut module = lower_unresolved_functions(program);
+    if measured {
+        if let Some(calls) = MEASURE_CALLS.with(|calls| calls.borrow_mut().take()) {
+            drop_measure_checks_outside_cycles(&mut module.functions, calls);
+        }
+    }
+    type_param_calls::specialize_type_param_calls(program, &mut module);
+    module
+}
+
+fn lower_unresolved_functions(program: &Program) -> MirModule {
     let mut functions = program
         .functions
         .values()
@@ -10694,7 +10778,7 @@ fn lower_unresolved(program: &Program) -> MirModule {
         Some(top_level)
     };
 
-    let mut module = MirModule {
+    MirModule {
         constants,
         functions,
         classes,
@@ -10704,9 +10788,7 @@ fn lower_unresolved(program: &Program) -> MirModule {
         top_level,
         ownership: MirOwnership::Implicit,
         borrowing: Default::default(),
-    };
-    type_param_calls::specialize_type_param_calls(program, &mut module);
-    module
+    }
 }
 
 /// Names the runtime operation each call runs and plans every union.
@@ -14232,47 +14314,109 @@ impl<'a> Lowerer<'a> {
             crate::ast::ContractKind::Decreases,
         );
         self.scoped_names.pop();
-        self.recursion_measure = Some(RecursionMeasure {
-            function: function.name.clone(),
-            clause: clause.clone(),
-            params: function
-                .params
-                .iter()
-                .map(|param| (param.name.clone(), param.default.clone()))
-                .collect(),
-            entry,
-        });
+        self.recursion_measure = Some(RecursionMeasure { entry });
     }
 
-    /// Before a call of the function being lowered, when it has a
-    /// `decreases` measure, checks that the measure of the call's
-    /// arguments is smaller than on entry. Each argument is evaluated again
-    /// for it, which the checker allows because each is pure.
+    /// The MIR name of the user function or method a call runs, with its
+    /// declaration and, for a method, its receiver.
+    fn resolved_callee<'e>(
+        &self,
+        callee: &'e Expr,
+    ) -> Option<(String, &'a crate::ast::FunctionDecl, Option<&'e Expr>)> {
+        match &callee.kind {
+            ExprKind::Name(name) => {
+                if self.local_types.contains_key(&self.render_local_name(name)) {
+                    return None;
+                }
+                let function = self.program.functions.get(name)?;
+                (function.module_name == self.program.module_name)
+                    .then(|| (function.decl.name.clone(), &function.decl, None))
+            }
+            ExprKind::Member { object, field } => {
+                let Some(Type::Named(class, _)) = self.infer_expr_type(object) else {
+                    return None;
+                };
+                let class_info = self.program.classes.get(&class)?;
+                let method = class_info.methods.get(field)?;
+                method.decl.receiver?;
+                Some((
+                    mir_class_method_name(self.program, class_info, field),
+                    &method.decl,
+                    Some(object.as_ref()),
+                ))
+            }
+            ExprKind::Group(inner) => self.resolved_callee(inner),
+            _ => None,
+        }
+    }
+
+    /// While a program with function measures is lowered, records the call
+    /// and, when both the function being lowered and the callee declare
+    /// `decreases`, checks that the callee's measure of the call's
+    /// arguments is smaller than the caller's on entry. The check is
+    /// dropped later unless the two are in one recursion cycle. Each
+    /// argument is evaluated again for it, which the checker allows because
+    /// each is pure.
     fn lower_recursive_call_measure(&mut self, callee: &Expr, args: &[Argument]) {
-        let (Some(measure), ExprKind::Name(name)) = (&self.recursion_measure, &callee.kind) else {
-            return;
-        };
-        if *name != measure.function || self.local_types.contains_key(&self.render_local_name(name))
-        {
+        if !MEASURE_CALLS.with(|calls| calls.borrow().is_some()) {
             return;
         }
-        let measure = measure.clone();
+        let Some((callee_name, decl, receiver)) = self.resolved_callee(callee) else {
+            return;
+        };
+        let caller = self.function_name.to_string();
+        MEASURE_CALLS.with(|calls| {
+            if let Some(calls) = calls.borrow_mut().as_mut() {
+                calls.edges.insert((caller.clone(), callee_name.clone()));
+            }
+        });
+        let Some(measure) = self.recursion_measure.clone() else {
+            return;
+        };
+        let Some(clause) = decl
+            .contracts
+            .iter()
+            .find(|clause| clause.kind == crate::ast::ContractKind::Decreases)
+        else {
+            return;
+        };
         let mut scope = std::collections::HashMap::from([(
             DECREASES_PREVIOUS.to_string(),
             measure.entry.clone(),
         )]);
-        for (index, (param, default)) in measure.params.iter().enumerate() {
-            if !crate::sema::expr_references_name(&measure.clause.condition, param) {
+        if let Some(receiver) = receiver {
+            if crate::sema::expr_references_name(&clause.condition, "self") {
+                let Some(place) = self.render_place_expr_option(receiver) else {
+                    return;
+                };
+                scope.insert("self".to_string(), place);
+            }
+        }
+        let check_block = self.new_block("measure_check");
+        let after_block = self.new_block("measure_done");
+        let entry = self.label(self.current_block);
+        let after = self.label(after_block);
+        MEASURE_CALLS.with(|calls| {
+            if let Some(calls) = calls.borrow_mut().as_mut() {
+                calls
+                    .checks
+                    .push((caller, callee_name, entry, after.clone()));
+            }
+        });
+        self.terminate(Terminator::Goto(self.label(check_block)));
+        self.switch_to(check_block);
+        for (index, param) in decl.params.iter().enumerate() {
+            if !crate::sema::expr_references_name(&clause.condition, &param.name) {
                 continue;
             }
             let value = args
                 .iter()
-                .find(|arg| arg.name.as_deref() == Some(param.as_str()))
+                .find(|arg| arg.name.as_deref() == Some(param.name.as_str()))
                 .or_else(|| args.get(index).filter(|arg| arg.name.is_none()))
                 .map(|arg| &arg.value)
-                .or(default.as_ref());
+                .or(param.default.as_ref());
             let Some(value) = value else {
-                return;
+                continue;
             };
             let place = self.new_temp_for_expr(value);
             let operand = self.lower_expr(value);
@@ -14280,13 +14424,13 @@ impl<'a> Lowerer<'a> {
                 target: place.clone(),
                 value: Rvalue::Use(operand),
             });
-            scope.insert(param.clone(), place);
+            scope.insert(param.name.clone(), place);
         }
         let span = callee.span;
         let smaller = Expr {
             kind: ExprKind::Binary {
                 op: BinaryOp::Less,
-                left: Box::new(measure.clause.condition.clone()),
+                left: Box::new(clause.condition.clone()),
                 right: Box::new(Expr {
                     kind: ExprKind::Name(DECREASES_PREVIOUS.to_string()),
                     span,
@@ -14299,12 +14443,14 @@ impl<'a> Lowerer<'a> {
             &smaller,
             format!(
                 "`decreases` clause failed: `{}` did not get smaller at the recursive call",
-                measure.clause.text
+                clause.text
             ),
             span,
             crate::ast::ContractKind::Decreases,
         );
         self.scoped_names.pop();
+        self.terminate(Terminator::Goto(after));
+        self.switch_to(after_block);
     }
 
     /// Lowers the hidden state a `while` loop's `decreases` measure needs:

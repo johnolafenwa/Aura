@@ -32101,6 +32101,19 @@ fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
         "\n",
         "def main():\n",
         "    print(walk([1, 2], 0))\n",
+        "\n",
+        "class Tree:\n",
+        "    depth: int64\n",
+        "\n",
+        "    def size(self, k: int64) -> int64:\n",
+        "        decreases self.depth + k\n",
+        "        if k <= 0:\n",
+        "            return 0\n",
+        "        return self.size(k - 1) + other_size(self, k - 1)\n",
+        "\n",
+        "def other_size(t: Tree, k: int64) -> int64:\n",
+        "    decreases t.depth + k\n",
+        "    return t.size(k)\n",
     ))
     .expect("a function measure checks");
     for (source, code, message) in [
@@ -32115,9 +32128,14 @@ fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
             "a `decreases` measure must be `int64`, found `bool`",
         ),
         (
-            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases k\n        return k\n",
+            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases self.n + k\n        return k\n\ndef g(k: int64) -> int64:\n    decreases k\n    return C(n=1).f(k)\n",
             "AU2048",
-            "a method cannot declare `decreases` yet",
+            "the receiver of a call whose `decreases` measure reads `self` must name a variable",
+        ),
+        (
+            "def h(k: int64) -> int64:\n    decreases k\n    return k\n\ndef g(k: int64) -> int64:\n    decreases k\n    mut ys = [1]\n    return h(ys.pop())\n",
+            "AU2048",
+            "an argument the `decreases` measure reads must not change program state",
         ),
         (
             "def f(xs: list[int64], k: int64) -> int64:\n    decreases k\n    if k <= 0:\n        return 0\n    mut ys = [1]\n    return f(xs, k=ys.pop() - 1)\n",

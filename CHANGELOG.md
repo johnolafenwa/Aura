@@ -18,6 +18,10 @@ in this file.
   them where they cross a function boundary (calls of public read-only
   methods, arguments, results, and `mut` parameters) and assumes it on the
   other side, so a public getter starts from a valid object.
+- Methods may declare `decreases`, and functions that call each other in a
+  cycle check at each call between them that the callee's measure is
+  smaller than the caller's; `aura verify` proves both. A measured function
+  calling a measured helper outside its cycle is not compared.
 - `aura verify file.au` proves, with an external Z3 or cvc5, that a
   program's checks cannot fail: integer overflow, zero divisors, list
   indexes, `assert`, `requires`, `ensures`, loop `invariant` and

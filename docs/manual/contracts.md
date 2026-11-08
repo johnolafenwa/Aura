@@ -205,10 +205,42 @@ def main():
     print(gcd(84, 36))  # 12
 ```
 
+A method can state one too; its measure may read `self`, and a call on
+another object, such as `rest.total()` on the next node of a list, computes
+the callee's measure with `self` naming that object.
+
+Functions that call each other in a cycle each state a measure, and every
+call between two of them checks that the callee's measure of the call's
+arguments is smaller than the caller's measure on entry:
+
+```aura
+def is_even(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return true
+    return is_odd(n - 1)
+
+def is_odd(n: int64) -> bool:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return false
+    return is_even(n - 1)
+
+def main():
+    print(is_even(10))  # true
+```
+
+A call to a function that never calls back is not compared, so a measured
+function may call a measured helper with any argument.
+
 The measure is computed again from the call's arguments before the call,
-so each argument the measure reads must be a pure expression. A function
-takes at most one `decreases`, a method takes none yet, and a call to
-another function is not checked, so mutual recursion is not covered.
+so each argument the measure reads must be a pure expression, and a
+receiver the measure reads must name a variable or a field of one. A
+function takes at most one `decreases`. A cycle through a function that
+states no measure, a call through a function value, or a call through a
+trait is not checked.
 
 ## Trait Methods
 
