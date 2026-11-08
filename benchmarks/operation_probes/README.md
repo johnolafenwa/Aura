@@ -99,4 +99,38 @@ and LLVM folds it into the loop around it, while Rust still builds its
 (more than one `yield`, or a call in its body) runs as a state machine,
 about 22 instructions per item on the same loop. A generator passed
 around as a value, or with locals other than numbers, `bool`, and `str`,
-still runs on its own stack.
+still ran on its own stack.
+
+`generator_value`, `generator_pipeline`, `generator_list`, and
+`generator_class` (step 9g, added on 7 November 2026) measure those cases:
+a generator passed to a function that sums it, a generator that doubles the
+items of another generator it was passed, a generator over a `list[int64]`
+it owns, and a generator whose loop counter is a field of a class instance.
+`str_append` and `str_format` measure a string-building loop. At `453a42b`,
+before step 9g:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_value` | 9g | 100,000 | 5.0 | 8,087.3 | 1,617.1x |
+| `generator_pipeline` | 9g | 100,000 | 8.0 | 16,170.6 | 2,021.0x |
+| `generator_list` | 9g | 100,000 | 5.0 | 8,094.4 | 1,618.7x |
+| `generator_class` | 9g | 100,000 | 5.0 | 8,115.3 | 1,622.7x |
+| `str_append` | 9g | 100,000 | 38.4 | 101,245.1 | 2,639.8x |
+| `str_format` | 9g | 100,000 | 308.9 | 291,220.8 | 942.7x |
+
+A call that passes a generator call to a function that only loops over it
+now calls a copy of the function that loops over the generator call
+itself, and generator frames hold collections, classes, and other
+generators' frames, so all four run as a state machine or in place:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `generator_value` | 9g | 100,000 | 5.0 | 6.0 | 1.2x |
+| `generator_pipeline` | 9g | 100,000 | 8.0 | 10.0 | 1.2x |
+| `generator_list` | 9g | 100,000 | 5.0 | 7.0 | 1.4x |
+| `generator_class` | 9g | 100,000 | 5.0 | 28.1 | 5.6x |
+
+`generator_class` costs what the same loop costs without a generator: each
+read or write of a field of an instance with a `str` field checks the
+instance's layout first, which `class_field_read` and `field_write` also
+measure.

@@ -1160,6 +1160,8 @@ scope, terminology, authority, and conformance language.
 - [Contracts](/manual/contracts): `requires`, `ensures`, loop and class
   invariants, `decreases`, `old`, `forall`, `exists`, `spec def`, and
   `AU4009` failures.
+- [Verification](/manual/verification): `aura verify`, which proves with an
+  SMT solver that contracts, arithmetic, and list indexes cannot fail.
 - [Functions](/manual/functions): signatures, the bare, `own`, and `mut`
   parameter modes, default and named arguments, `main`, owned returns, and
   call binding.
@@ -2881,6 +2883,7 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -6024,10 +6027,9 @@ a loop runs or while an object exists. Aura checks every clause each time
 it applies, in `aura run` and in built programs alike, and stops the program
 with `AU4009` when one is false.
 
-Contracts are the first stage of Aura's verification plan. A later
-`aura verify` command will prove clauses before the program runs; until
-then they are runtime checks. See the
-[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+`aura verify` proves clauses before the program runs, together with the
+arithmetic and list indexes around them; see
+[Verification](/manual/verification). The checks still run in every build.
 
 ## Function Contracts
 
@@ -7471,6 +7473,18 @@ Editor warnings come from editor analysis only. `aura check`, `aura run`, and
 
 `AU5001` is reported only when the file checks. A `with` binding is exempt,
 since it holds its resource open for the block.
+
+### Verifier Diagnostics
+
+`aura verify` reports these for each check it could not prove. Other
+commands never report them. See [Verification](/manual/verification).
+
+| Code | Meaning | Common causes | How to fix |
+| --- | --- | --- | --- |
+| `AU5101` | check not proved | Inputs exist that make an overflow, a zero divisor, an out-of-range index, a failed `assert`, or a false contract clause happen. The note gives a counterexample. | Fix the code, or state the missing fact as a `requires`, `invariant`, or callee `ensures`. |
+| `AU5102` | solver could not decide | The solver ran out of time or gave up, often on nonlinear arithmetic. | Raise `--timeout`, or add an `assert` or `invariant` that narrows the case. |
+| `AU5103` | solver unavailable | No Z3 or cvc5 on `PATH`, `AURA_SMT_SOLVER` or `--solver` names a missing program, or the solver stopped. | Install Z3 or cvc5, or point `--solver` at it. |
+| `AU5104` | check outside the verified subset | The check depends on a step the verifier does not model yet, such as floating-point arithmetic, a power with a large or unknown exponent, or a contract expression it cannot read. | Keep it as a runtime check, or restate the contract with modeled operations. |
 
 ## Diagnostic Structure
 
@@ -22943,6 +22957,168 @@ Design records:
 - `architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md`: Duration rounding, rendering, and invalid host-timer policy.
 - `architecture_docs/decisions/0026-minimal-tuples.md`: structural tuple types and tuple equality.
 - `architecture_docs/decisions/0033-structural-transfer-and-task-results.md`: Transfer classification and conditional `Task[T]` copies.
+
+## Source: docs/manual/verification.md
+
+# Verification
+
+`aura verify` proves, before a program runs, that its checks cannot fail.
+It reads the same [contracts](/manual/contracts) that `aura run` checks at
+run time, and it also proves that no integer overflows, no divisor is zero,
+and no list index is out of range. Each check it cannot prove is reported
+with the inputs that break it.
+
+```bash
+aura verify bank.au
+```
+
+`aura verify` needs an SMT solver: [Z3](https://github.com/Z3Prover/z3) or
+[cvc5](https://cvc5.github.io/). It runs the solver as a separate program, so
+nothing is added to the compiler or to built programs. Install one with your
+package manager (`brew install z3`, `apt install z3`, or
+`pip install z3-solver`), or with `scripts/install-z3.sh` from the Aura
+repository, which installs the version Aura's own tests use.
+
+## What It Proves
+
+`aura verify` proves each of these checks on every path through each
+function:
+
+| Check | Example | Runtime failure it rules out |
+| --- | --- | --- |
+| overflow | `a + b`, `-x`, `abs(x)`, `x as int32` | `AU4002` integer overflow |
+| division by zero | `a // b`, `a % b` | `AU4004` zero divisor |
+| index in range | `xs[i]`, `xs[i] = v`, `xs.pop()` | `AU4003` index out of range |
+| assert | `assert total >= 0` | `AU4001` assertion failed |
+| requires | each call of a function with `requires` | `AU4009` at the call |
+| ensures | each `return` of a function with `ensures` | `AU4009` on return |
+| loop invariant | each loop `invariant` | `AU4009` in the loop |
+| decreases | each `decreases` measure | `AU4009` in the loop |
+| class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
+
+A function is proved on its own. A call relies only on what its callee
+declares: the verifier proves the callee's `requires` at the call, and then
+assumes its `ensures`. Nothing else about the callee's body is used, so
+what a caller needs to know must be in the contract.
+
+```aura
+def clamp(x: int64, lo: int64, hi: int64) -> int64:
+    requires lo <= hi
+    ensures lo <= result and result <= hi
+    if x < lo:
+        return lo
+    if x > hi:
+        return hi
+    return x
+
+def percent(x: int64) -> int64:
+    p = clamp(x, 0, 100)
+    return p * 1000  # proved: p is at most 100
+
+def main():
+    print(percent(250))  # 100000
+```
+
+Inside a function, its own `requires` clauses are assumed, since every call
+proves them.
+
+## Loops
+
+A loop is proved one iteration at a time. On entering the loop, the verifier
+forgets the value of every local the loop body assigns, and keeps only what
+the loop's `invariant` clauses say about them. It proves each invariant on
+entry and after every iteration, and the code after the loop learns only
+the invariants and the condition that ended the loop.
+
+```aura
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    mut i = 0
+    mut total = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant 0 <= total and total <= i * 1000
+        total += i
+        i += 1
+    return total
+
+def main():
+    print(sum_to(10))  # 45
+```
+
+Without the second invariant, `total += i` cannot be proved: nothing would
+bound `total` in a later iteration. Two facts need no invariant: a local the
+loop never assigns keeps its value, and a counter the loop only steps up
+(`i += 1`) or only steps down stays on its side of its entry value. That
+covers indexes such as `for i in range(len(xs))` and `while i < len(xs)`.
+
+A `decreases` measure is proved to stay at least 0 and to get smaller in
+every iteration, which proves that the loop ends.
+
+## Reports
+
+`aura verify` prints a diagnostic for each check it could not prove, then a
+summary line. It exits with status 0 only when every check was proved.
+
+```text
+error[AU5101]: cannot prove integer result in range
+ --> scale.au:2:12
+  |
+2 |     return x * 2
+  |            ^
+  = note: in `double` (overflow check)
+  = note: counterexample: x = 4611686018427387904
+verified scale.au: 0 of 1 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+| Code | Meaning |
+| --- | --- |
+| `AU5101` | The check can fail. The counterexample gives parameter values that make it fail, as far as the solver reports them. |
+| `AU5102` | The solver gave up before deciding. Raise `--timeout`, or add a `requires`, `invariant`, or `assert` that narrows the case. |
+| `AU5103` | No solver could be started. |
+| `AU5104` | The check depends on something the verifier does not model yet, such as floating-point arithmetic. It is not proved, and it stays a runtime check. |
+
+A check that fails to prove is not always a bug: the verifier may lack a
+fact that holds. Add it as a `requires` on the function, an `invariant` on
+the loop, or an `ensures` on the callee, and the verifier proves the fact
+where it is stated and uses it where it is needed.
+
+### Options
+
+| Option | Meaning |
+| --- | --- |
+| `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
+| `--timeout <ms>` | The time limit for each check. The default is 10000. |
+| `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+
+## What It Models
+
+The verifier reasons about values exactly, as mathematical integers and
+booleans, with each integer type's range as a check:
+
+- integers of every width, `bool`, and `None`
+- lists of integers and of `bool`, with their lengths and elements, and the
+  length of any other list
+- tuples, classes, enums, and unions such as `int64 | None`, field by field
+- `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
+  element reads and writes, and `copy`
+- `spec def` helpers, `old`, and `result` in contracts
+
+Anything else is a value the verifier knows nothing about: a `str`, a
+`dict`, a `set`, a float, the result of most library calls, and what a call
+through a function value returns. A check that depends on one of them can
+still be proved when the contract around it says enough.
+
+Quantifiers (`forall`, `exists`) in contracts, and `str`, `dict`, and `set`
+models, are planned. See the
+[verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
+
+## Trust
+
+A check counts as proved only when the solver answers that no input breaks
+it. Every check stays in the program at run time: `aura verify` adds proof,
+and does not yet remove checks.
 
 ## Source: docs/book/index.md
 

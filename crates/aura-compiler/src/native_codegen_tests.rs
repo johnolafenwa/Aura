@@ -14830,6 +14830,113 @@ def main() -> int32:
     );
 }
 
+#[test]
+fn direct_str_appends_build_in_the_local_box() {
+    let appending = r#"
+def main() -> int32:
+    piece = "cd"
+    mut text = ""
+    for i in range(3):
+        text += "ab"
+        text += f"{i},"
+        text += piece
+    print(text)
+    return 0
+"#;
+    let mir = lower_source_to_mir(appending).expect("the appends should lower");
+    let object = emit_host_object(&mir).expect("the appends should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_format_append_begin",
+        "aura_direct_format_append_str",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    // No append concatenates or starts a new text.
+    for forbidden in ["aura_direct_binary_value_at", "aura_direct_format_begin"] {
+        assert!(
+            !referenced.contains(forbidden),
+            "{forbidden}: {referenced:?}"
+        );
+    }
+
+    // An append that reads the text it changes concatenates as before.
+    let aliasing = r#"
+def main() -> int32:
+    mut text = "a"
+    text += text
+    text += f"[{text}]"
+    print(text)
+    return 0
+"#;
+    let mir = lower_source_to_mir(aliasing).expect("the appends should lower");
+    let object = emit_host_object(&mir).expect("the appends should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for forbidden in [
+        "aura_direct_format_append_begin",
+        "aura_direct_format_append_str",
+    ] {
+        assert!(
+            !referenced.contains(forbidden),
+            "{forbidden}: {referenced:?}"
+        );
+    }
+}
+
+#[test]
+fn str_append_root_needs_the_ownership_pass_form() {
+    let append = |first: &str, released: &str, moved: &str, rest: Operand| {
+        vec![
+            Instruction::Assign {
+                target: "%t1".to_string(),
+                value: Rvalue::FormatString {
+                    parts: vec![
+                        crate::mir::MirFormatPart::Value(Operand::Place(first.to_string())),
+                        crate::mir::MirFormatPart::Value(rest),
+                    ],
+                },
+            },
+            Instruction::Release {
+                place: released.to_string(),
+            },
+            Instruction::Assign {
+                target: "text".to_string(),
+                value: Rvalue::Use(Operand::MovePlace(moved.to_string())),
+            },
+        ]
+    };
+    let other = || Operand::Place("other".to_string());
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t1", other())),
+        Some("text")
+    );
+    assert_eq!(
+        super::str_append_root(&append("other", "text", "%t1", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "other", "%t1", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t2", other())),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append(
+            "text",
+            "text",
+            "%t1",
+            Operand::Place("text".to_string())
+        )),
+        None
+    );
+    assert_eq!(
+        super::str_append_root(&append("text", "text", "%t1", other())[..2]),
+        None
+    );
+}
+
 /// The lookup slots of `LOOKUP_MATCH_SOURCE`'s `main` after `change`.
 fn lookup_slots_after(change: impl FnOnce(&mut MirFunction, &str)) -> BTreeSet<String> {
     let mir = lower_source_to_mir(LOOKUP_MATCH_SOURCE).expect("the lookup match should lower");

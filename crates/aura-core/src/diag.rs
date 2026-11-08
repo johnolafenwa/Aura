@@ -376,6 +376,26 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         band: "lint",
         title: "unused local binding",
     },
+    DiagnosticCodeInfo {
+        code: "AU5101",
+        band: "verify",
+        title: "check not proved",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5102",
+        band: "verify",
+        title: "solver could not decide",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5103",
+        band: "verify",
+        title: "solver unavailable",
+    },
+    DiagnosticCodeInfo {
+        code: "AU5104",
+        band: "verify",
+        title: "check outside the verified subset",
+    },
 ];
 
 #[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
@@ -480,6 +500,7 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
             None => (None, frame.function.as_str()),
         };
         if let Some(generator) = name.strip_prefix(GENERATOR_BODY_PREFIX) {
+            let generator = generator_copy_original(generator).unwrap_or(generator);
             let function = match module {
                 Some(module) => format!("{module}::{generator}"),
                 None => generator.to_string(),
@@ -495,7 +516,9 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
         // and a fast iterator's advance method as its `next`.
         if let Some(advance) = name.strip_suffix(".__aura_advance") {
             let shown = match advance.strip_prefix("__aura_frame_") {
-                Some(generator) => generator.to_string(),
+                Some(generator) => generator_copy_original(generator)
+                    .unwrap_or(generator)
+                    .to_string(),
                 None => format!("Iterator for {advance}.next"),
             };
             visible.push(RuntimeCallFrame {
@@ -518,7 +541,39 @@ pub fn visible_call_frames(frames: &[RuntimeCallFrame]) -> Vec<RuntimeCallFrame>
         after_body = false;
         visible.push(frame.clone());
     }
+    for frame in &mut visible {
+        let (module, name) = match frame.function.rsplit_once("::") {
+            Some((module, name)) => (Some(module), name),
+            None => (None, frame.function.as_str()),
+        };
+        if let Some(original) = generator_copy_original(name) {
+            frame.function = match module {
+                Some(module) => format!("{module}::{original}"),
+                None => original.to_string(),
+            };
+        }
+    }
     visible
+}
+
+/// The name prefix of a copy of a function that takes a generator's
+/// arguments in place of the generator.
+pub const GENERATOR_COPY_PREFIX: &str = "__aura_with_";
+
+/// The function a generator copy was made from: `__aura_with_total__0_upto`
+/// is a copy of `total` whose parameter 0 calls `upto`. The copy's name
+/// ends in one `__<position>_<generator>` part per replaced parameter.
+pub fn generator_copy_original(name: &str) -> Option<&str> {
+    let rest = name.strip_prefix(GENERATOR_COPY_PREFIX)?;
+    let bytes = rest.as_bytes();
+    (1..rest.len()).find_map(|at| {
+        let digits = bytes[at..]
+            .strip_prefix(b"__")?
+            .iter()
+            .take_while(|byte| byte.is_ascii_digit())
+            .count();
+        (digits > 0 && bytes.get(at + 2 + digits) == Some(&b'_')).then(|| &rest[..at])
+    })
 }
 
 /// A loop can run a generator's body in place, so a trap there has no frame

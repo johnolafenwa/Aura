@@ -1725,6 +1725,7 @@ impl<'a> NativeCodegen<'a> {
             lent_element_flag: None,
             lookup_payload: None,
             emptied_store_root: None,
+            str_append_root: None,
             lent_temps: HashMap::new(),
             field_lend_temps,
             field_lends: HashMap::new(),
@@ -3088,6 +3089,9 @@ struct FunctionCompiler<'a> {
     /// A tracked root the current instruction assigns. The MIR released its
     /// old value, so the store adds no release.
     emptied_store_root: Option<String>,
+    /// The `str` root that the current instruction appends to, as
+    /// [`str_append_root`] finds it.
+    str_append_root: Option<String>,
     /// The temporaries of the function's lends, each with whether its lend
     /// is mutable. The call that writes back a mutable one takes its value,
     /// as MIR states by giving it no retain. A builtin operation changes a
@@ -3983,7 +3987,11 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
             }
-            self.compile_instruction(&block.label, instruction_index, instruction)?;
+            self.str_append_root =
+                str_append_root(&block.instructions[instruction_index..]).map(str::to_string);
+            let compiled = self.compile_instruction(&block.label, instruction_index, instruction);
+            self.str_append_root = None;
+            compiled?;
         }
         // A retain before the terminator pays for the value a `Return`
         // hands back.
@@ -4654,6 +4662,8 @@ impl<'a> FunctionCompiler<'a> {
                     self.store_place(target, scalar)?;
                 } else if let Some(found) = self.compile_fused_entry_probe(target, value)? {
                     self.store_place(target, found)?;
+                } else if let Some(appended) = self.compile_str_append(value)? {
+                    self.store_place(target, appended)?;
                 } else {
                     let target_ty = self.type_of_place(target)?;
                     let compiled = self.compile_rvalue_for_target(value, &target_ty)?;
@@ -7614,7 +7624,68 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(value) = boxed_first {
             self.push_format_value(handle, value)?;
         }
-        for part in rest {
+        self.push_format_parts(handle, rest)?;
+        Ok(builder)
+    }
+
+    /// `text += ...` on a `str` local, which MIR states as an f-string
+    /// whose first part reads the local, released and then replaced by the
+    /// result: the local's box becomes the builder, so the other parts
+    /// append to its text in place, and the statement copies the text only
+    /// when another handle shares it. `None` for any other assignment, which
+    /// compiles as usual.
+    fn compile_str_append(
+        &mut self,
+        value: &Rvalue,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some(root) = self.str_append_root.clone() else {
+            return Ok(None);
+        };
+        let Rvalue::FormatString { parts } = value else {
+            return Ok(None);
+        };
+        if !self.tracked_roots.contains(&root)
+            || self.loan_locals.contains(&root)
+            || self.lent_places.contains(&root)
+            || self.lent_elements.contains_key(&root)
+            || !matches!(
+                self.local_type(&root)?,
+                DirectType::Opaque(Type::Named(name, args)) if name == "str" && args.is_empty()
+            )
+        {
+            return Ok(None);
+        }
+        let text = self.take_place(&root)?;
+        let text = self.transfer_owned_opaque_value(&text);
+        // A leading literal part, as in `text += "..."`, appends in the call
+        // that starts the builder.
+        let (call, rest) = match &parts[1..] {
+            [MirFormatPart::Literal(literal), rest @ ..] => {
+                let (ptr, len) = self.string_constant(literal.as_bytes())?;
+                let call = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FormatAppendStr], &[text, ptr, len]);
+                (call, rest)
+            }
+            rest => {
+                let call = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::FormatAppendBegin], &[text]);
+                (call, rest)
+            }
+        };
+        let builder = self.owned_opaque_result(call.results, Type::named("str"));
+        self.push_format_parts(builder.values[0], rest)?;
+        Ok(Some(builder))
+    }
+
+    /// Appends each of `parts` to the f-string builder `handle`.
+    fn push_format_parts(
+        &mut self,
+        handle: Val,
+        parts: &[MirFormatPart],
+    ) -> std::result::Result<(), String> {
+        for part in parts {
             match part {
                 MirFormatPart::Literal(text) => {
                     let (ptr, len) = self.string_constant(text.as_bytes())?;
@@ -7671,7 +7742,7 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
         }
-        Ok(builder)
+        Ok(())
     }
 
     /// Appends a boxed f-string part.
@@ -16676,6 +16747,38 @@ fn validate_rvalue(
             Ok(())
         }
     }
+}
+
+/// The root `x` of `instructions` that start `t = f"{x}..."; Release(x);
+/// x = move t`, the form the ownership pass gives `x += ...` on a `str`
+/// local, when no later part of the f-string reads `x`.
+fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
+    let [Instruction::Assign {
+        target: temporary,
+        value: Rvalue::FormatString { parts },
+    }, Instruction::Release { place: released }, Instruction::Assign {
+        target: root,
+        value: Rvalue::Use(Operand::MovePlace(moved)),
+    }, ..] = instructions
+    else {
+        return None;
+    };
+    let [MirFormatPart::Value(Operand::Place(first)), rest @ ..] = parts.as_slice() else {
+        return None;
+    };
+    let reads_root = |operand: &Operand| {
+        matches!(operand, Operand::Place(place) | Operand::MovePlace(place)
+            if place.split('.').next() == Some(root.as_str()))
+    };
+    (first == root
+        && released == root
+        && moved == temporary
+        && !root.contains('.')
+        && !rest
+            .iter()
+            .filter_map(MirFormatPart::operand)
+            .any(reads_root))
+    .then_some(root.as_str())
 }
 
 fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {

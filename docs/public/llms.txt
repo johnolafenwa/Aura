@@ -60,6 +60,7 @@
 - [Status And Compatibility](https://johnolafenwa.github.io/Aura/manual/status-and-compatibility): Aura 0.12.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 - [Tuples](https://johnolafenwa.github.io/Aura/manual/tuples): A tuple is a fixed-size value that holds a known number of elements, each with its own type. Use tuples to return, pass, unpack, and pattern-match a small group of values. Tuples are not variable-size collections.
 - [Types](https://johnolafenwa.github.io/Aura/manual/types): This page covers Aura's type system: scalars, unions, copy and move categories, builtin and user types, annotations, and casts. Aura is statically typed, so every expression has a type. Type annotations are part of the public shape of functions, fields, methods, and many empty literals.
+- [Verification](https://johnolafenwa.github.io/Aura/manual/verification): `aura verify` proves, before a program runs, that its checks cannot fail. It reads the same [contracts](/manual/contracts) that `aura run` checks at run time, and it also proves that no integer overflows, no divisor is zero, and no list index is out of range. Each check it cannot prove is reported with the inputs that break it.
 
 ## The Aura Programming Language
 

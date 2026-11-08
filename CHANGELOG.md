@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- `aura verify file.au` proves, with an external Z3 or cvc5, that a
+  program's checks cannot fail: integer overflow, zero divisors, list
+  indexes, `assert`, `requires`, `ensures`, loop `invariant` and
+  `decreases`, and class invariants. Each function is proved on its own
+  from its callees' contracts. A check that can fail is reported as
+  `AU5101` with a counterexample; `AU5102` when the solver gives up,
+  `AU5103` when no solver runs, and `AU5104` for a step outside the
+  modeled subset (floats, strings, and other collections for now).
+  `--format json` prints one entry per check. See the new Verification
+  manual page.
 - Generator functions: a module-level function declared `-> Generator[T]`
   (from `iter`) may `yield` values. Calling it runs nothing; each `next`
   runs the body to its next `yield` on a stack of its own, on both the
@@ -58,6 +68,22 @@ in this file.
   1,620x). Output, diagnostics, and trap call chains are unchanged. Small
   native functions that only compute on numbers also skip their call-frame
   record.
+- Faster generators passed around as values and generators with
+  collection or class locals. A call such as `total(upto(n))`, or
+  `g = upto(n)` followed by `total(g)`, where `total` takes an
+  `own Generator[T]` parameter and loops over it once, now runs the loop
+  over the generator directly instead of switching stacks per item, and so
+  does a generator that loops over another one it was passed
+  (`total(doubled(upto(n)))`). Generators whose parameters and locals are
+  lists, dicts, sets, or classes of the module, that loop over a list or
+  over another generator call, or that assign a local's field or element,
+  run as state machines or in place too. The new operation probes measure
+  `generator_value` 1.2x Rust (from 1,617x), `generator_pipeline` 1.2x
+  (from 2,021x), `generator_list` 1.4x (from 1,619x), and
+  `generator_class` 5.6x (from 1,623x; the same loop without a generator
+  costs the same). Output, diagnostics, and trap call chains are unchanged,
+  except that a trap in a generator run in place inside another generator
+  run in place names only the innermost one.
 - Fixed: `aura fmt` removed the space in `yield (a, b)`, which turned the
   statement into a call of a function named `yield`.
 

@@ -10430,6 +10430,27 @@ pub(crate) fn lower_unspecialized(program: &Program) -> MirModule {
     make_explicit(program, lower_unresolved(program))
 }
 
+/// Lowers `program` for `aura verify`: every generic call copied, every
+/// trap named, and every method call resolved, with a `SourceLocation`
+/// before each statement, but no ownership pass. Retains and releases
+/// carry no logical meaning, so the verifier reads the module before them.
+pub fn lower_for_verification(program: &Program) -> MirModule {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            SOURCE_LOCATIONS.with(|enabled| enabled.set(self.0));
+        }
+    }
+    let _restore = Restore(SOURCE_LOCATIONS.with(|enabled| enabled.replace(true)));
+    let mut module = lower_unresolved(program);
+    specialize::specialize_generic_functions(&mut module);
+    resolve_runtime_ops_and_unions(program, &mut module);
+    checks::resolve_checks(&mut module);
+    type_args::record_call_type_args(&mut module);
+    methods::resolve_methods(&mut module);
+    module
+}
+
 fn make_explicit(program: &Program, mut module: MirModule) -> MirModule {
     resolve_runtime_ops_and_unions(program, &mut module);
     checks::resolve_checks(&mut module);
@@ -14754,6 +14775,19 @@ impl<'a> Lowerer<'a> {
                     self.emit_list_member_call(&target, "extend", vec![Operand::MovePlace(other)]);
                     return;
                 }
+            }
+            let appended = match (&assign.target, &narrowed_target, op) {
+                (AssignTarget::Name(name), None, BinaryOp::Add) => {
+                    self.lower_str_append_parts(name, &target, target_ty.as_ref(), &assign.value)
+                }
+                _ => None,
+            };
+            if let Some(parts) = appended {
+                self.emit(Instruction::Assign {
+                    target,
+                    value: Rvalue::FormatString { parts },
+                });
+                return;
             }
             let left = match &assign.target {
                 AssignTarget::Name(name) => Expr {
@@ -19945,80 +19979,10 @@ impl<'a> Lowerer<'a> {
             }
             ExprKind::FString(parts) => {
                 let temp = self.new_typed_temp(Type::named("str"));
-                let mut lowered_parts = Vec::with_capacity(parts.len());
-                for part in parts {
-                    let lowered = match part {
-                        crate::ast::FormatPart::Literal(text) => {
-                            MirFormatPart::Literal(text.clone())
-                        }
-                        crate::ast::FormatPart::Expr(expr) => {
-                            let value_type = self.infer_expr_type(expr);
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            if value_type
-                                .as_ref()
-                                .is_some_and(|ty| self.renders_without_effects(ty))
-                            {
-                                // The sequence point copied the scalar, and
-                                // rendering it runs no user code, so the
-                                // string renders it in place.
-                                lowered_parts.push(MirFormatPart::Value(value));
-                                continue;
-                            }
-                            let rendered = self.new_typed_temp(Type::named("str"));
-                            self.emit(Instruction::Assign {
-                                target: rendered.clone(),
-                                value: Rvalue::FormatString {
-                                    parts: vec![MirFormatPart::Value(value)],
-                                },
-                            });
-                            MirFormatPart::Value(Operand::Place(rendered))
-                        }
-                        crate::ast::FormatPart::Formatted { expr, spec, .. } => {
-                            let value_type = self
-                                .infer_expr_type(expr)
-                                .unwrap_or_else(|| Type::named("Unknown"));
-                            let value = self.lower_expr_at_sequence_point(expr, None);
-                            if self.has_custom_display(&value_type) {
-                                // A custom Display value renders once, then
-                                // the string subset formats the rendered text.
-                                let rendered = self.new_typed_temp(Type::named("str"));
-                                self.emit(Instruction::Assign {
-                                    target: rendered.clone(),
-                                    value: Rvalue::FormatString {
-                                        parts: vec![MirFormatPart::Value(value)],
-                                    },
-                                });
-                                // Precision truncates the rendered text, so a
-                                // bare precision takes the explicit string code.
-                                let spec = match crate::runtime_value::parse_format_spec(spec) {
-                                    Ok(parsed)
-                                        if parsed.precision.is_some() && parsed.ty.is_none() =>
-                                    {
-                                        format!("{spec}s")
-                                    }
-                                    _ => spec.clone(),
-                                };
-                                MirFormatPart::Formatted {
-                                    value: Operand::Place(rendered),
-                                    spec,
-                                    value_type: Type::named("str"),
-                                }
-                            } else {
-                                MirFormatPart::Formatted {
-                                    value,
-                                    spec: spec.clone(),
-                                    value_type,
-                                }
-                            }
-                        }
-                    };
-                    lowered_parts.push(lowered);
-                }
+                let parts = self.lower_format_parts(parts);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
-                    value: Rvalue::FormatString {
-                        parts: lowered_parts,
-                    },
+                    value: Rvalue::FormatString { parts },
                 });
                 Operand::Place(temp)
             }
@@ -20516,6 +20480,109 @@ impl<'a> Lowerer<'a> {
     }
 
     /// Calls the list method `field` on the list in `place` for its effect.
+    /// `text += value` on a `str` local, as the f-string `f"{text}..."`
+    /// whose first part is `text` and whose other parts are the parts of an
+    /// f-string `value`, its literal text, or `value` itself. Native code
+    /// appends the rest to the local's own text in place when nothing else
+    /// holds it. `None` for any other `+=`, and for a `value` that reads
+    /// `name`, which would see the text it changes.
+    fn lower_str_append_parts(
+        &mut self,
+        name: &str,
+        target: &str,
+        target_ty: Option<&Type>,
+        value: &Expr,
+    ) -> Option<Vec<MirFormatPart>> {
+        let is_str = |ty: Option<&Type>| ty == Some(&Type::named("str"));
+        if !is_str(target_ty)
+            || !is_str(self.infer_expr_type(value).as_ref())
+            || crate::sema::expr_references_name(value, name)
+        {
+            return None;
+        }
+        let mut parts = vec![MirFormatPart::Value(Operand::Place(target.to_string()))];
+        match &value.kind {
+            ExprKind::FString(value_parts) => parts.extend(self.lower_format_parts(value_parts)),
+            ExprKind::String(text) => parts.push(MirFormatPart::Literal(text.clone())),
+            _ => {
+                let value = self.lower_expr(value);
+                parts.push(MirFormatPart::Value(value));
+            }
+        }
+        Some(parts)
+    }
+
+    /// The parts of an f-string, each interpolated value lowered in order
+    /// to the operand the string renders.
+    fn lower_format_parts(&mut self, parts: &[crate::ast::FormatPart]) -> Vec<MirFormatPart> {
+        let mut lowered_parts = Vec::with_capacity(parts.len());
+        for part in parts {
+            let lowered = match part {
+                crate::ast::FormatPart::Literal(text) => MirFormatPart::Literal(text.clone()),
+                crate::ast::FormatPart::Expr(expr) => {
+                    let value_type = self.infer_expr_type(expr);
+                    let value = self.lower_expr_at_sequence_point(expr, None);
+                    if value_type
+                        .as_ref()
+                        .is_some_and(|ty| self.renders_without_effects(ty))
+                    {
+                        // The sequence point copied the scalar, and
+                        // rendering it runs no user code, so the
+                        // string renders it in place.
+                        lowered_parts.push(MirFormatPart::Value(value));
+                        continue;
+                    }
+                    let rendered = self.new_typed_temp(Type::named("str"));
+                    self.emit(Instruction::Assign {
+                        target: rendered.clone(),
+                        value: Rvalue::FormatString {
+                            parts: vec![MirFormatPart::Value(value)],
+                        },
+                    });
+                    MirFormatPart::Value(Operand::Place(rendered))
+                }
+                crate::ast::FormatPart::Formatted { expr, spec, .. } => {
+                    let value_type = self
+                        .infer_expr_type(expr)
+                        .unwrap_or_else(|| Type::named("Unknown"));
+                    let value = self.lower_expr_at_sequence_point(expr, None);
+                    if self.has_custom_display(&value_type) {
+                        // A custom Display value renders once, then
+                        // the string subset formats the rendered text.
+                        let rendered = self.new_typed_temp(Type::named("str"));
+                        self.emit(Instruction::Assign {
+                            target: rendered.clone(),
+                            value: Rvalue::FormatString {
+                                parts: vec![MirFormatPart::Value(value)],
+                            },
+                        });
+                        // Precision truncates the rendered text, so a
+                        // bare precision takes the explicit string code.
+                        let spec = match crate::runtime_value::parse_format_spec(spec) {
+                            Ok(parsed) if parsed.precision.is_some() && parsed.ty.is_none() => {
+                                format!("{spec}s")
+                            }
+                            _ => spec.clone(),
+                        };
+                        MirFormatPart::Formatted {
+                            value: Operand::Place(rendered),
+                            spec,
+                            value_type: Type::named("str"),
+                        }
+                    } else {
+                        MirFormatPart::Formatted {
+                            value,
+                            spec: spec.clone(),
+                            value_type,
+                        }
+                    }
+                }
+            };
+            lowered_parts.push(lowered);
+        }
+        lowered_parts
+    }
+
     fn emit_list_member_call(&mut self, place: &str, field: &str, args: Vec<Operand>) {
         let ignored = self.new_typed_temp(Type::Unit);
         self.emit(Instruction::Assign {

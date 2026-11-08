@@ -51,7 +51,16 @@ const ITER_ALIAS: &str = "__aura_iter";
 
 /// The module with the fast forms added and its context, or `None` when
 /// nothing in the module qualifies.
-pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module, ModuleContext)> {
+///
+/// `extended` also copies functions that generators are passed to (see
+/// `iterator_fast_args.rs`) and gives frames to generators with collection
+/// and class locals and loops over lists and other generators. A module
+/// whose extended forms do not check is tried with the others alone.
+pub(super) fn expand(
+    module: &Module,
+    context: &ModuleContext,
+    extended: bool,
+) -> Option<(Module, ModuleContext)> {
     if context.module_name == super::iterator_loops::ITER_MODULE {
         return None;
     }
@@ -67,6 +76,11 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
         .collect::<BTreeSet<_>>();
     let mut windows = 0usize;
     let mut columns = 0usize;
+    let specialized = if extended {
+        super::iterator_fast_args::specialize(&mut module, &mut columns)
+    } else {
+        0
+    };
     let mut advances = Vec::new();
     for item in &mut module.items {
         let Item::Impl(impl_decl) = item else {
@@ -90,17 +104,50 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
     let mut frames = Vec::new();
     let mut fusable = BTreeMap::new();
     let mut framed = BTreeMap::new();
-    for item in &module.items {
-        let Item::Function(function) = item else {
-            continue;
-        };
-        if let Some(frame) = generator_frame(function, &mut columns) {
+    let mut scope = Scope::of(&module, extended);
+    // A generator that loops over another generator gets a frame once that
+    // generator has one, so the module is walked until nothing changes.
+    loop {
+        let mut changed = false;
+        for item in &module.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if framed.contains_key(&function.name) {
+                continue;
+            }
+            let Some(frame) = generator_frame(function, &scope, &mut columns) else {
+                continue;
+            };
+            changed = true;
             windows += 1;
             frames.extend(frame);
             framed.insert(function.name.clone(), function.params.len());
-            if let Some(found) = Fusable::of(function) {
+            let item = generator_item_key(function).expect("framed generators have an item type");
+            let params = function
+                .params
+                .iter()
+                .map(|param| type_key(&param.ty).expect("framed parameters have keys"))
+                .collect();
+            scope
+                .generators
+                .insert(function.name.clone(), (item, params));
+        }
+        for item in &module.items {
+            let Item::Function(function) = item else {
+                continue;
+            };
+            if !framed.contains_key(&function.name) || fusable.contains_key(&function.name) {
+                continue;
+            }
+            if let Some(found) = Fusable::of(function, &scope) {
+                changed = true;
+                scope.fusable.insert(function.name.clone());
                 fusable.insert(function.name.clone(), found);
             }
+        }
+        if !changed {
+            break;
         }
     }
     let mut fused = 0;
@@ -138,7 +185,11 @@ pub(super) fn expand(module: &Module, context: &ModuleContext) -> Option<(Module
             }
         }
     }
-    if windows == 0 && fused == 0 {
+    if windows == 0 && fused == 0 && specialized == 0 {
+        return None;
+    }
+    // Without any extended form, the other forms alone are the same module.
+    if extended && specialized == 0 && !scope.used.get() {
         return None;
     }
     module.items.extend(frames);
@@ -223,14 +274,6 @@ const SCALARS: &[&str] = &[
     "bool",
 ];
 
-/// The name of a type a frame field may have: a number, `bool`, or `str`.
-fn field_type_name(ty: &TypeRef) -> Option<&str> {
-    match &ty.kind {
-        TypeRefKind::Named { name, args } if args.is_empty() && name == "str" => Some(name),
-        _ => scalar_name(ty),
-    }
-}
-
 fn scalar_name(ty: &TypeRef) -> Option<&str> {
     match &ty.kind {
         TypeRefKind::Named { name, args }
@@ -252,6 +295,227 @@ fn none_free(ty: &TypeRef, classes: &BTreeSet<String>) -> bool {
         }
         _ => false,
     }
+}
+
+/// What the frame pass knows about the module around a generator: its
+/// classes, the generators that already have frames, and the declared
+/// result of each module function. Frame fields name their types by a key,
+/// the written type's text (`int64`, `list[str]`, `Point`).
+#[derive(Default)]
+pub(super) struct Scope {
+    /// Each non-generic class: its fields' names, type keys, and whether
+    /// they have a default.
+    classes: BTreeMap<String, Vec<(String, Option<String>, bool)>>,
+    /// Each generator with a frame: its item's key and its parameters'
+    /// keys.
+    generators: BTreeMap<String, (String, Vec<String>)>,
+    /// Each fusable generator.
+    fusable: BTreeSet<String>,
+    /// The result key of each module function that is not a generator.
+    results: BTreeMap<String, String>,
+    /// Whether frames may hold collections, classes, and other frames.
+    extended: bool,
+    /// Whether an accepted form needed `extended`.
+    used: std::cell::Cell<bool>,
+}
+
+/// Builtin collections a frame field may hold.
+const COLLECTIONS: &[(&str, usize)] = &[("list", 1), ("dict", 2), ("set", 1)];
+
+impl Scope {
+    pub(super) fn of(module: &Module, extended: bool) -> Self {
+        let mut scope = Self {
+            extended,
+            ..Self::default()
+        };
+        if !extended {
+            return scope;
+        }
+        for item in &module.items {
+            match item {
+                Item::Class(class) if class.type_params.is_empty() => {
+                    let fields = class
+                        .fields
+                        .iter()
+                        .map(|field| {
+                            (
+                                field.name.clone(),
+                                type_key(&field.ty),
+                                field.default.is_some(),
+                            )
+                        })
+                        .collect();
+                    scope.classes.insert(class.name.clone(), fields);
+                }
+                Item::Function(function)
+                    if function.type_params.is_empty()
+                        && !super::generators::body_yields(&function.body) =>
+                {
+                    if let Some(key) = type_key(&function.return_type) {
+                        scope.results.insert(function.name.clone(), key);
+                    }
+                }
+                _ => {}
+            }
+        }
+        scope
+    }
+
+    /// Whether a field may hold a value of type `key`: a number, `bool`,
+    /// `str`, a builtin collection of those, a class of this module, or
+    /// another generator's frame.
+    pub(super) fn holds(&self, key: &str) -> bool {
+        if SCALARS.contains(&key) || key == "str" {
+            return true;
+        }
+        self.extended && self.mark(self.zero(key, Span::new(0, 0), 0).is_some())
+    }
+
+    /// A value of type `key` that runs nothing: the starting value of a
+    /// frame field before the generator's body assigns it.
+    fn zero(&self, key: &str, span: Span, depth: usize) -> Option<Expr> {
+        if depth > 8 {
+            return None;
+        }
+        let (name, args) = parse_key(key)?;
+        if args.is_empty() {
+            if SCALARS.contains(&name.as_str()) || name == "str" {
+                return Some(zero(&name, span));
+            }
+            if let Some(generator) = name.strip_prefix(FRAME_CLASS_PREFIX) {
+                let (_, params) = self.generators.get(generator)?;
+                let args = params
+                    .iter()
+                    .map(|param| self.zero(param, span, depth + 1))
+                    .collect::<Option<Vec<_>>>()?;
+                return Some(call(
+                    name_expr(&format!("{FRAME_NEW_PREFIX}{generator}"), span),
+                    args,
+                    span,
+                ));
+            }
+            let fields = self.classes.get(&name)?;
+            let mut args = Vec::new();
+            for (field, ty, default) in fields {
+                if *default {
+                    continue;
+                }
+                let value = self.zero(ty.as_deref()?, span, depth + 1)?;
+                args.push(Argument {
+                    name: Some(field.clone()),
+                    value,
+                    span,
+                });
+            }
+            return Some(Expr {
+                kind: ExprKind::Call {
+                    callee: Box::new(name_expr(&name, span)),
+                    args,
+                },
+                span,
+            });
+        }
+        let arity = COLLECTIONS
+            .iter()
+            .find(|(collection, _)| *collection == name)
+            .map(|(_, arity)| *arity)?;
+        if args.len() != arity || !args.iter().all(|arg| self.holds_element(arg, depth)) {
+            return None;
+        }
+        let kind = match name.as_str() {
+            "list" => ExprKind::List(Vec::new()),
+            "set" => ExprKind::Set(Vec::new()),
+            _ => ExprKind::Map(Vec::new()),
+        };
+        Some(Expr { kind, span })
+    }
+
+    /// Records that a form only extended frames take was accepted.
+    fn mark(&self, accepted: bool) -> bool {
+        if accepted {
+            self.used.set(true);
+        }
+        accepted
+    }
+
+    fn holds_element(&self, key: &str, depth: usize) -> bool {
+        self.zero(key, Span::new(0, 0), depth + 1).is_some()
+    }
+
+    /// The key of the items of a `for` loop over a value of type `key`, when
+    /// a frame can step through it by index: a list of numbers, `bool`, or
+    /// `str`.
+    pub(super) fn indexed_item(key: &str) -> Option<String> {
+        let (name, args) = parse_key(key)?;
+        (name == "list" && args.len() == 1)
+            .then(|| args[0].clone())
+            .filter(|item| SCALARS.contains(&item.as_str()) || item == "str")
+    }
+
+    /// The key of a list's elements.
+    pub(super) fn element(key: &str) -> Option<String> {
+        let (name, args) = parse_key(key)?;
+        (name == "list" && args.len() == 1).then(|| args[0].clone())
+    }
+}
+
+/// The key of the item type of a generator function.
+fn generator_item_key(function: &FunctionDecl) -> Option<String> {
+    let TypeRefKind::Named { args, .. } = &function.return_type.kind else {
+        return None;
+    };
+    type_key(args.first()?)
+}
+
+/// The key of a written type: a name with optional type arguments, as
+/// written. Unions, tuples, and callables have none.
+pub(super) fn type_key(ty: &TypeRef) -> Option<String> {
+    let TypeRefKind::Named { name, args } = &ty.kind else {
+        return None;
+    };
+    if ty.indirect {
+        return None;
+    }
+    if args.is_empty() {
+        return Some(name.clone());
+    }
+    let args = args.iter().map(type_key).collect::<Option<Vec<_>>>()?;
+    Some(format!("{name}[{}]", args.join(", ")))
+}
+
+/// A key's name and type argument keys.
+pub(super) fn parse_key(key: &str) -> Option<(String, Vec<String>)> {
+    let Some(open) = key.find('[') else {
+        return Some((key.to_string(), Vec::new()));
+    };
+    let inner = key.strip_suffix(']')?.get(open + 1..)?;
+    let mut args = Vec::new();
+    let mut depth = 0usize;
+    let mut start = 0;
+    for (at, ch) in inner.char_indices() {
+        match ch {
+            '[' => depth += 1,
+            ']' => depth = depth.checked_sub(1)?,
+            ',' if depth == 0 => {
+                args.push(inner[start..at].trim().to_string());
+                start = at + 1;
+            }
+            _ => {}
+        }
+    }
+    args.push(inner[start..].trim().to_string());
+    Some((key[..open].to_string(), args))
+}
+
+/// The written type a key names.
+pub(super) fn key_type(key: &str, span: Span) -> TypeRef {
+    let (name, args) = parse_key(key).unwrap_or_else(|| (key.to_string(), Vec::new()));
+    TypeRef::named(
+        name,
+        args.iter().map(|arg| key_type(arg, span)).collect(),
+        false,
+        span,
+    )
 }
 
 /// The class and `__aura_advance` method for an `impl Iterator[T] for C`
@@ -420,18 +684,18 @@ impl FrameLayout {
 
     /// The type of `expr` when every name in it is a parameter or local
     /// whose type is known, by the checker's own rules for these forms.
-    fn infer(&self, expr: &Expr) -> Option<String> {
+    fn infer(&self, expr: &Expr, scope: &Scope) -> Option<String> {
         match &expr.kind {
             ExprKind::Int(_) => Some("int64".to_string()),
             ExprKind::Float(_) => Some("float64".to_string()),
             ExprKind::Bool(_) => Some("bool".to_string()),
             ExprKind::String(_) | ExprKind::FString(_) => Some("str".to_string()),
             ExprKind::Name(name) => self.ty(name).map(str::to_string),
-            ExprKind::Group(inner) => self.infer(inner),
+            ExprKind::Group(inner) => self.infer(inner, scope),
             ExprKind::Cast { ty, .. } => scalar_name(ty).map(str::to_string),
             ExprKind::Unary { op, expr } => match op {
                 UnaryOp::Not => Some("bool".to_string()),
-                UnaryOp::Neg | UnaryOp::BitNot => self.infer(expr),
+                UnaryOp::Neg | UnaryOp::BitNot => self.infer(expr, scope),
             },
             ExprKind::Binary { op, left, right } => match op {
                 BinaryOp::And
@@ -445,17 +709,60 @@ impl FrameLayout {
                 BinaryOp::Div | BinaryOp::Pow => None,
                 _ => {
                     let literal = |side: &Expr| matches!(side.kind, ExprKind::Int(_));
-                    match (literal(left), literal(right)) {
-                        (true, false) => self.infer(right),
-                        (false, true) => self.infer(left),
+                    let found = match (literal(left), literal(right)) {
+                        (true, false) => self.infer(right, scope),
+                        (false, true) => self.infer(left, scope),
                         _ => {
-                            let left = self.infer(left)?;
-                            (self.infer(right)? == left).then_some(left)
+                            let left = self.infer(left, scope)?;
+                            (self.infer(right, scope)? == left).then_some(left)
                         }
-                    }
+                    }?;
+                    // Only numbers and `str` take arithmetic here.
+                    (SCALARS.contains(&found.as_str()) || found == "str").then_some(found)
                 }
             },
             ExprKind::CompareChain { .. } | ExprKind::IsNone { .. } => Some("bool".to_string()),
+            ExprKind::Call { callee, args } => match &callee.kind {
+                // A class of this module builds an instance of itself.
+                ExprKind::Name(name)
+                    if scope.classes.contains_key(name) && self.ty(name).is_none() =>
+                {
+                    Some(name.clone())
+                }
+                ExprKind::Name(name) if self.ty(name).is_none() => scope.results.get(name).cloned(),
+                ExprKind::Member { object, field }
+                    if scope.extended && field == "len" && args.is_empty() =>
+                {
+                    let object = self.infer(object, scope)?;
+                    let (name, _) = parse_key(&object)?;
+                    scope
+                        .mark(matches!(name.as_str(), "list" | "dict" | "set" | "str"))
+                        .then(|| "int64".to_string())
+                }
+                _ => None,
+            },
+            ExprKind::Member { object, field } => {
+                let class = self.infer(object, scope)?;
+                let fields = scope.classes.get(&class)?;
+                fields
+                    .iter()
+                    .find(|(name, ..)| name == field)
+                    .and_then(|(_, ty, _)| ty.clone())
+            }
+            ExprKind::Index { object, .. } => {
+                let object = self.infer(object, scope)?;
+                if object == "str" {
+                    return Some(object);
+                }
+                Scope::element(&object)
+            }
+            ExprKind::List(elements) => {
+                let first = self.infer(elements.first()?, scope)?;
+                elements
+                    .iter()
+                    .all(|element| self.infer(element, scope).as_deref() == Some(first.as_str()))
+                    .then(|| format!("list[{first}]"))
+            }
             _ => None,
         }
     }
@@ -514,12 +821,36 @@ fn yield_value(stmt: &Stmt) -> Option<&Expr> {
     }
 }
 
+/// The root name of an assignment target that writes through a local:
+/// `name.field`, `name[index]`, and deeper paths from `name`.
+fn place_root(expr: &Expr) -> Option<&str> {
+    match &expr.kind {
+        ExprKind::Name(name) => Some(name),
+        ExprKind::Member { object, .. } | ExprKind::Index { object, .. } => place_root(object),
+        _ => None,
+    }
+}
+
+/// The generator a `for` loop source calls directly, with its arguments,
+/// when that generator has a frame.
+fn framed_call<'e>(iterable: &'e Expr, scope: &Scope) -> Option<(&'e str, &'e [Argument])> {
+    let ExprKind::Call { callee, args } = &iterable.kind else {
+        return None;
+    };
+    let ExprKind::Name(name) = &callee.kind else {
+        return None;
+    };
+    (scope.generators.contains_key(name) && args.iter().all(|arg| arg.name.is_none()))
+        .then_some((name.as_str(), args.as_slice()))
+}
+
 /// Collects the locals of a simple generator body and their types. False
 /// when the body uses anything a frame cannot hold.
 fn collect_locals(
     body: &[Stmt],
     layout: &mut FrameLayout,
     loop_targets: &mut BTreeSet<String>,
+    scope: &Scope,
 ) -> bool {
     body.iter().all(|stmt| {
         if let Some(value) = yield_value(stmt) {
@@ -527,20 +858,42 @@ fn collect_locals(
         }
         match stmt {
             Stmt::Assign(assign) => {
-                let AssignTarget::Name(target) = &assign.target else {
+                if !frame_expr(&assign.value) {
                     return false;
+                }
+                let target = match &assign.target {
+                    AssignTarget::Name(target) => target,
+                    _ if !scope.extended => return false,
+                    // A write through a local: its field or element.
+                    AssignTarget::Member { object, .. } => {
+                        return scope.mark(true)
+                            && assign.annotation.is_none()
+                            && frame_expr(object)
+                            && place_root(object).is_some_and(|root| {
+                                layout.ty(root).is_some() && !loop_targets.contains(root)
+                            });
+                    }
+                    AssignTarget::Index { object, index } => {
+                        return scope.mark(true)
+                            && assign.annotation.is_none()
+                            && frame_expr(object)
+                            && frame_expr(index)
+                            && place_root(object).is_some_and(|root| {
+                                layout.ty(root).is_some() && !loop_targets.contains(root)
+                            });
+                    }
                 };
-                if !frame_expr(&assign.value) || loop_targets.contains(target) {
+                if loop_targets.contains(target) {
                     return false;
                 }
                 if assign.op.is_some() {
                     return layout.ty(target).is_some();
                 }
                 let ty = match &assign.annotation {
-                    Some(annotation) => field_type_name(annotation).map(str::to_string),
-                    None => layout.infer(&assign.value),
+                    Some(annotation) => type_key(annotation),
+                    None => layout.infer(&assign.value, scope),
                 };
-                ty.is_some_and(|ty| layout.declare(target, ty))
+                ty.is_some_and(|ty| scope.holds(&ty) && layout.declare(target, ty))
             }
             Stmt::Expr(expr_stmt) => frame_expr(&expr_stmt.expr),
             Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => true,
@@ -548,42 +901,60 @@ fn collect_locals(
             Stmt::If(if_stmt) => {
                 if_stmt.branches.iter().all(|branch| {
                     frame_expr(&branch.condition)
-                        && collect_locals(&branch.body, layout, loop_targets)
+                        && collect_locals(&branch.body, layout, loop_targets, scope)
                 }) && if_stmt
                     .else_body
                     .as_ref()
-                    .is_none_or(|body| collect_locals(body, layout, loop_targets))
+                    .is_none_or(|body| collect_locals(body, layout, loop_targets, scope))
             }
             Stmt::While(while_stmt) => {
                 while_stmt.contracts.is_empty()
                     && frame_expr(&while_stmt.condition)
-                    && collect_locals(&while_stmt.body, layout, loop_targets)
+                    && collect_locals(&while_stmt.body, layout, loop_targets, scope)
             }
             Stmt::For(for_stmt) => {
                 let BindingTarget::Name { name, .. } = &for_stmt.target else {
                     return false;
                 };
-                let Some((start, end)) = range_bounds(&for_stmt.iterable) else {
-                    return false;
-                };
-                let int64 = |expr: &Expr| {
-                    matches!(expr.kind, ExprKind::Int(_))
-                        || layout.infer(expr).as_deref() == Some("int64")
-                };
                 if for_stmt.borrow_mode.is_some()
                     || !for_stmt.contracts.is_empty()
-                    || !frame_expr(&start)
-                    || !frame_expr(&end)
-                    || !int64(&start)
-                    || !int64(&end)
                     || layout.ty(name).is_some()
-                    || !layout.declare(name, "int64".to_string())
                 {
+                    return false;
+                }
+                let item = if let Some((start, end)) = range_bounds(&for_stmt.iterable) {
+                    let int64 = |expr: &Expr| {
+                        matches!(expr.kind, ExprKind::Int(_))
+                            || layout.infer(expr, scope).as_deref() == Some("int64")
+                    };
+                    if !frame_expr(&start) || !frame_expr(&end) || !int64(&start) || !int64(&end) {
+                        return false;
+                    }
+                    "int64".to_string()
+                } else if let Some((generator, args)) = framed_call(&for_stmt.iterable, scope)
+                    .filter(|_| scope.extended && scope.mark(true))
+                {
+                    let (item, params) = &scope.generators[generator];
+                    if args.len() != params.len() || !args.iter().all(|arg| frame_expr(&arg.value))
+                    {
+                        return false;
+                    }
+                    item.clone()
+                } else if let ExprKind::Name(source) = &for_stmt.iterable.kind {
+                    // A list local or parameter, stepped through by index.
+                    let Some(item) = layout.ty(source).and_then(Scope::indexed_item) else {
+                        return false;
+                    };
+                    item
+                } else {
+                    return false;
+                };
+                if !layout.declare(name, item) {
                     return false;
                 }
                 layout.loops += 1;
                 loop_targets.insert(name.clone());
-                let ok = collect_locals(&for_stmt.body, layout, loop_targets);
+                let ok = collect_locals(&for_stmt.body, layout, loop_targets, scope);
                 loop_targets.remove(name);
                 ok
             }
@@ -598,7 +969,11 @@ fn collect_locals(
 
 /// The frame class and builder function of `function` when it is a simple
 /// generator.
-fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<Item>> {
+fn generator_frame(
+    function: &FunctionDecl,
+    scope: &Scope,
+    columns: &mut usize,
+) -> Option<Vec<Item>> {
     let TypeRefKind::Named { name, args } = &function.return_type.kind else {
         return None;
     };
@@ -606,7 +981,8 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
         return None;
     }
     let item = args[0].clone();
-    if !none_free(&item, &BTreeSet::new()) {
+    let classes = scope.classes.keys().cloned().collect::<BTreeSet<_>>();
+    if !none_free(&item, &classes) {
         return None;
     }
     if !function.type_params.is_empty()
@@ -622,11 +998,10 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
         loops: 0,
     };
     for param in &function.params {
-        let ty = field_type_name(&param.ty)?;
-        (param.mode != ParamMode::BorrowMut && layout.declare(&param.name, ty.to_string()))
-            .then_some(())?;
+        let ty = type_key(&param.ty).filter(|ty| scope.holds(ty))?;
+        (param.mode != ParamMode::BorrowMut && layout.declare(&param.name, ty)).then_some(())?;
     }
-    if !collect_locals(&function.body, &mut layout, &mut BTreeSet::new()) {
+    if !collect_locals(&function.body, &mut layout, &mut BTreeSet::new(), scope) {
         return None;
     }
     let span = function.span;
@@ -637,7 +1012,10 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
         current: 0,
         loops: Vec::new(),
         fields: &fields,
+        layout: &layout,
+        scope,
         counters: 0,
+        subs: Vec::new(),
         span,
     };
     machine.lower(&function.body);
@@ -654,6 +1032,14 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
     for counter in 0..machine.counters {
         class_fields.push(field(&counter_name(counter), "int64", span));
         class_fields.push(field(&end_name(counter), "int64", span));
+    }
+    let subs = machine.subs.clone();
+    for (index, generator) in subs.iter().enumerate() {
+        class_fields.push(field(
+            &sub_name(index),
+            &format!("{FRAME_CLASS_PREFIX}{generator}"),
+            span,
+        ));
     }
 
     // Each resume point gets a dispatch arm; jumps between blocks run
@@ -749,7 +1135,7 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
         let value = if params.contains(name) {
             name_expr(name, span)
         } else {
-            zero(ty, span)
+            scope.zero(ty, span, 0)?
         };
         inits.push((name.clone(), value));
     }
@@ -757,6 +1143,10 @@ fn generator_frame(function: &FunctionDecl, columns: &mut usize) -> Option<Vec<I
     for counter in 0..machine.counters {
         inits.push((counter_name(counter), int_expr(0, span)));
         inits.push((end_name(counter), int_expr(0, span)));
+    }
+    for (index, generator) in subs.iter().enumerate() {
+        let key = format!("{FRAME_CLASS_PREFIX}{generator}");
+        inits.push((sub_name(index), scope.zero(&key, span, 0)?));
     }
     let construct = Expr {
         kind: ExprKind::Call {
@@ -785,6 +1175,14 @@ fn end_name(index: usize) -> String {
     format!("__aura_end_{index}")
 }
 
+fn sub_name(index: usize) -> String {
+    format!("__aura_sub_{index}")
+}
+
+fn sub_step_name(index: usize) -> String {
+    format!("sub step {index}")
+}
+
 fn zero(ty: &str, span: Span) -> Expr {
     let kind = match ty {
         "bool" => ExprKind::Bool(false),
@@ -799,7 +1197,7 @@ fn field(name: &str, ty: &str, span: Span) -> FieldDecl {
     FieldDecl {
         public: false,
         name: name.to_string(),
-        ty: TypeRef::named(ty, Vec::new(), false, span),
+        ty: key_type(ty, span),
         default: None,
         span,
         doc: None,
@@ -828,7 +1226,11 @@ struct Machine<'a> {
     /// The `continue` and `break` targets of each enclosing loop.
     loops: Vec<(usize, usize)>,
     fields: &'a BTreeSet<String>,
+    layout: &'a FrameLayout,
+    scope: &'a Scope,
     counters: usize,
+    /// The generator each loop over a generator call steps, in order.
+    subs: Vec<String>,
     span: Span,
 }
 
@@ -864,6 +1266,68 @@ impl Machine<'_> {
         expr
     }
 
+    /// A loop over a call of a generator that has a frame: the frame is a
+    /// hidden field, advanced once per item.
+    ///
+    /// ```text
+    /// self.<sub> = __aura_frame_new_<generator>(args)
+    /// head:  <step> = self.<sub>.__aura_advance()
+    ///        if <step> is not None: self.target = <step>
+    ///        branch <step> is not None -> body, exit
+    /// ```
+    fn lower_sub_loop(&mut self, target: &str, generator: &str, args: &[Argument], body: &[Stmt]) {
+        let span = self.span;
+        let index = self.subs.len();
+        self.subs.push(generator.to_string());
+        let sub = sub_name(index);
+        let step_local = sub_step_name(index);
+        let args = args.iter().map(|arg| self.framed(&arg.value)).collect();
+        self.push(set_field(
+            &sub,
+            call(
+                name_expr(&format!("{FRAME_NEW_PREFIX}{generator}"), span),
+                args,
+                span,
+            ),
+            span,
+        ));
+        let head = self.block();
+        let body_block = self.block();
+        let exit = self.block();
+        self.jump_to(Terminator::Goto(head), head);
+        self.push(assign(
+            &step_local,
+            method_call(self_field(&sub, span), ADVANCE, span),
+            false,
+            span,
+        ));
+        let not_none = |span| Expr {
+            kind: ExprKind::IsNone {
+                value: Box::new(name_expr(&step_local, span)),
+                negated: true,
+                operator_span: span,
+            },
+            span,
+        };
+        self.push(Stmt::If(IfStmt {
+            branches: vec![IfBranch {
+                condition: not_none(span),
+                body: vec![set_field(target, name_expr(&step_local, span), span)],
+                span,
+            }],
+            else_body: None,
+            span,
+        }));
+        self.jump_to(
+            Terminator::Branch(not_none(span), body_block, exit),
+            body_block,
+        );
+        self.loops.push((head, exit));
+        self.lower(body);
+        self.loops.pop();
+        self.jump_to(Terminator::Goto(head), exit);
+    }
+
     fn lower(&mut self, body: &[Stmt]) {
         for stmt in body {
             self.lower_stmt(stmt);
@@ -880,16 +1344,24 @@ impl Machine<'_> {
         }
         match stmt {
             Stmt::Assign(assign) => {
-                let AssignTarget::Name(target) = &assign.target else {
-                    unreachable!("a frame body assigns names");
+                let target = match &assign.target {
+                    AssignTarget::Name(target) => AssignTarget::Member {
+                        object: Box::new(name_expr("self", span)),
+                        field: target.clone(),
+                    },
+                    AssignTarget::Member { object, field } => AssignTarget::Member {
+                        object: Box::new(self.framed(object)),
+                        field: field.clone(),
+                    },
+                    AssignTarget::Index { object, index } => AssignTarget::Index {
+                        object: Box::new(self.framed(object)),
+                        index: Box::new(self.framed(index)),
+                    },
                 };
                 let value = self.framed(&assign.value);
                 self.push(Stmt::Assign(AssignStmt {
                     mutable: false,
-                    target: AssignTarget::Member {
-                        object: Box::new(name_expr("self", span)),
-                        field: target.clone(),
-                    },
+                    target,
                     annotation: None,
                     op: assign.op,
                     value,
@@ -951,8 +1423,32 @@ impl Machine<'_> {
                 let BindingTarget::Name { name, .. } = &for_stmt.target else {
                     unreachable!("a frame body loops over names");
                 };
-                let (start, end) =
-                    range_bounds(&for_stmt.iterable).expect("a frame body loops over `range`");
+                if let Some((generator, args)) = framed_call(&for_stmt.iterable, self.scope) {
+                    self.lower_sub_loop(name, generator, args, &for_stmt.body);
+                    return;
+                }
+                // A list is stepped through by index; `range` by its bounds.
+                let (start, end, list) = match range_bounds(&for_stmt.iterable) {
+                    Some((start, end)) => (start, end, None),
+                    None => {
+                        let ExprKind::Name(list) = &for_stmt.iterable.kind else {
+                            unreachable!("a frame body loops over `range`, a list, or a generator");
+                        };
+                        debug_assert!(self.layout.ty(list).is_some());
+                        let len = call(
+                            Expr {
+                                kind: ExprKind::Member {
+                                    object: Box::new(name_expr(list, span)),
+                                    field: "len".to_string(),
+                                },
+                                span,
+                            },
+                            Vec::new(),
+                            span,
+                        );
+                        (int_expr(0, span), len, Some(list.clone()))
+                    }
+                };
                 let counter = counter_name(self.counters);
                 let limit = end_name(self.counters);
                 self.counters += 1;
@@ -972,7 +1468,27 @@ impl Machine<'_> {
                     span,
                 );
                 self.jump_to(Terminator::Branch(condition, body, exit), body);
-                self.push(set_field(name, self_field(&counter, span), span));
+                let item = match &list {
+                    Some(list) => {
+                        let element = Expr {
+                            kind: ExprKind::Index {
+                                object: Box::new(self_field(list, span)),
+                                index: Box::new(self_field(&counter, span)),
+                            },
+                            span,
+                        };
+                        // A `str` item is an independent copy of the
+                        // element, which the loop body only reads.
+                        let copied = self.layout.ty(list).and_then(Scope::indexed_item);
+                        if copied.as_deref() == Some("str") {
+                            method_call(element, "clone", span)
+                        } else {
+                            element
+                        }
+                    }
+                    None => self_field(&counter, span),
+                };
+                self.push(set_field(name, item, span));
                 self.loops.push((step, exit));
                 self.lower(&for_stmt.body);
                 self.loops.pop();
@@ -1093,7 +1609,7 @@ fn frame_names(expr: &mut Expr, fields: &BTreeSet<String>) {
 
 /// `span` moved to a column of its own that still reads as `span` (see
 /// `GENERATED_COLUMN_STRIDE`).
-fn generated_span(span: Span, next: &mut usize) -> Span {
+pub(super) fn generated_span(span: Span, next: &mut usize) -> Span {
     *next += 1;
     Span::new(
         span.line,
@@ -1104,7 +1620,7 @@ fn generated_span(span: Span, next: &mut usize) -> Span {
 /// Gives every generated statement and expression in `body` a span of its
 /// own on its line. The checker keys facts about expressions by span, and
 /// generated code reads the same names in many places.
-fn renumber(body: &mut [Stmt], next: &mut usize) {
+pub(super) fn renumber(body: &mut [Stmt], next: &mut usize) {
     fn fresh(span: &mut Span, next: &mut usize) {
         *span = generated_span(*span, next);
     }
@@ -1124,8 +1640,13 @@ fn renumber(body: &mut [Stmt], next: &mut usize) {
         match stmt {
             Stmt::Assign(assign) => {
                 fresh(&mut assign.span, next);
-                if let AssignTarget::Member { object, .. } = &mut assign.target {
-                    expr(object, next);
+                match &mut assign.target {
+                    AssignTarget::Name(_) => {}
+                    AssignTarget::Member { object, .. } => expr(object, next),
+                    AssignTarget::Index { object, index } => {
+                        expr(object, next);
+                        expr(index, next);
+                    }
                 }
                 expr(&mut assign.value, next);
             }
@@ -1313,11 +1834,13 @@ struct Fusable {
     /// Whether the generator has a `return`.
     returns: bool,
     fields: BTreeSet<String>,
+    /// The generators its loops call, which the caller must not rebind.
+    generators: BTreeSet<String>,
     body: Vec<Stmt>,
 }
 
 impl Fusable {
-    fn of(function: &FunctionDecl) -> Option<Self> {
+    fn of(function: &FunctionDecl, scope: &Scope) -> Option<Self> {
         if function
             .params
             .iter()
@@ -1331,10 +1854,30 @@ impl Fusable {
             loops: 0,
         };
         for param in &function.params {
-            layout.declare(&param.name, field_type_name(&param.ty)?.to_string());
+            layout.declare(&param.name, type_key(&param.ty)?);
         }
         // The frame pass already accepted this body.
-        collect_locals(&function.body, &mut layout, &mut BTreeSet::new()).then_some(())?;
+        collect_locals(&function.body, &mut layout, &mut BTreeSet::new(), scope).then_some(())?;
+        // Loops over other generators run in place too, once those are
+        // fusable; the caller fuses them in turn.
+        let mut generators = BTreeSet::new();
+        let mut loops_fuse = true;
+        let mut writes_elements = false;
+        visit_stmts(&function.body, &mut |stmt| match stmt {
+            Stmt::For(for_stmt) => {
+                if let Some((generator, _)) = framed_call(&for_stmt.iterable, scope) {
+                    loops_fuse &= scope.fusable.contains(generator);
+                    generators.insert(generator.to_string());
+                }
+            }
+            Stmt::Assign(assign) => {
+                writes_elements |= matches!(assign.target, AssignTarget::Index { .. });
+            }
+            _ => {}
+        });
+        if !loops_fuse || writes_elements {
+            return None;
+        }
         let fields = layout.locals.keys().cloned().collect::<BTreeSet<_>>();
         let mut yields = 0;
         let mut closed = true;
@@ -1348,9 +1891,10 @@ impl Fusable {
         });
         // A call in the body could trap, and a trap's call chain names the
         // generator only while it runs in a frame of its own.
+        // Building an instance of a class of this module cannot trap.
         if callee_names(&function.body)
             .iter()
-            .any(|name| name != "range")
+            .any(|name| name != "range" && !scope.classes.contains_key(name))
             || !trap_free(&function.body)
         {
             return None;
@@ -1367,6 +1911,7 @@ impl Fusable {
                 .map(|param| param.name.clone())
                 .collect(),
             fields,
+            generators,
             body: function.body.clone(),
         })
     }
@@ -1553,11 +2098,13 @@ impl Fuser<'_> {
                 continue;
             };
             body.remove(index);
-            let added = replacement.len();
             for (offset, stmt) in replacement.into_iter().enumerate() {
                 body.insert(index + offset, stmt);
             }
-            index += added;
+            // The fused body may loop over another fusable generator, so
+            // the replacement is walked again; each pass replaces a loop
+            // over a generator with the loops of the generators it calls,
+            // which ends because no fusable generator reaches itself.
             self.count += 1;
         }
     }
@@ -1614,6 +2161,7 @@ impl Fuser<'_> {
             || args.iter().any(|arg| arg.name.is_some())
             || callee_names(&fusable.body)
                 .iter()
+                .chain(&fusable.generators)
                 .any(|name| self.bound.contains(name))
         {
             return None;
@@ -1894,9 +2442,16 @@ fn rename_body(body: &mut [Stmt], renamed: &BTreeMap<String, String>) {
     for stmt in body {
         match stmt {
             Stmt::Assign(assign) => {
-                if let AssignTarget::Name(name) = &mut assign.target {
-                    if let Some(new) = renamed.get(name) {
-                        *name = new.clone();
+                match &mut assign.target {
+                    AssignTarget::Name(name) => {
+                        if let Some(new) = renamed.get(name) {
+                            *name = new.clone();
+                        }
+                    }
+                    AssignTarget::Member { object, .. } => expr(object, renamed),
+                    AssignTarget::Index { object, index } => {
+                        expr(object, renamed);
+                        expr(index, renamed);
                     }
                 }
                 expr(&mut assign.value, renamed);

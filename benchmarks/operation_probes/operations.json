@@ -88,5 +88,35 @@
     "count": 10000,
     "plan_step": "9f",
     "measures": "creating a one-item generator, running it to its end, and dropping it"
+  },
+  "generator_value": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "one item of a generator passed to a function that sums it with a `for` loop"
+  },
+  "generator_pipeline": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "one item of a generator that doubles the items of another generator it was passed"
+  },
+  "generator_list": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "one item of a generator that yields the items of a `list[int64]` it owns"
+  },
+  "generator_class": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "one item of a generator whose loop counter is a field of a class instance local"
+  },
+  "str_append": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "`text += \"ab\"` on a growing `str`"
+  },
+  "str_format": {
+    "count": 100000,
+    "plan_step": "9g",
+    "measures": "`text += f\"{i},\"` on a growing `str`"
   }
 }
