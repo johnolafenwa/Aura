@@ -759,3 +759,38 @@ fn lookups_in_entry_order_and_after_removals_find_every_key() {
     }
     assert_eq!(texts.value_of_str("k20"), None);
 }
+
+#[test]
+fn slots_walk_the_entries_in_order_past_removed_ones() {
+    // Walks the entries by slot, as a keys loop over an unchanged dict does.
+    fn walk(entries: &DictEntries) -> Vec<Value> {
+        let mut found = Vec::new();
+        let mut slot = 0;
+        while let Some(next) = entries.next_slot(slot) {
+            let (key, _) = entries.slot(next).expect("a live slot holds an entry");
+            found.push(key.clone());
+            slot = next + 1;
+        }
+        found
+    }
+    let mut small = DictEntries::new();
+    for key in 0..4 {
+        small.insert(int(key), int(key * 10));
+    }
+    small.remove(&int(1));
+    assert_eq!(walk(&small), vec![int(0), int(2), int(3)]);
+    assert_eq!(small.slot(3), None);
+
+    let mut large = DictEntries::new();
+    for key in 0..100 {
+        large.insert(int(key), int(key * 10));
+    }
+    for key in (1..100).step_by(3) {
+        large.remove(&int(key));
+    }
+    let live: Vec<Value> = (0..100).filter(|key| key % 3 != 1).map(int).collect();
+    assert_eq!(walk(&large), live);
+    assert_eq!(large.slot(1), None);
+    assert_eq!(large.next_slot(usize::MAX), None);
+    assert_eq!(DictEntries::new().next_slot(0), None);
+}

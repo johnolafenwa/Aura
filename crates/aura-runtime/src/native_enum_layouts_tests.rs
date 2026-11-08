@@ -661,3 +661,52 @@ fn borrowing_entry_loans_read_the_dict_value_in_place() {
     })
     .expect("the loans run");
 }
+
+#[test]
+fn slot_loans_walk_a_dicts_entries_without_keys() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_next_slot, aura_direct_map_shadow_at,
+        SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let access = FIRST_TEST_ACCESS + 66;
+            let map = shadow_map("SlotShadow", access);
+            // The copy of the dict that gives the values goes before the
+            // walk, so the dict's entries are its own again.
+            let expected = match unsafe { value_ref(map) } {
+                Value::Map(stored) => stored
+                    .entries
+                    .iter()
+                    .map(|(_, value)| value.clone())
+                    .collect::<Vec<_>>(),
+                _ => panic!("a dict"),
+            };
+            let mut seen = Vec::new();
+            let mut slot = 0;
+            loop {
+                let next = aura_direct_map_next_slot(map, slot);
+                if next < 0 {
+                    break;
+                }
+                let shadow = aura_direct_map_shadow_at(map, next);
+                let header = unsafe { &*shadow };
+                assert_eq!(
+                    header.ref_count.load(Ordering::Acquire),
+                    SHADOW_REFERENCE + 1
+                );
+                seen.push(unsafe { value_ref(shadow) });
+                unsafe { aura_direct_end_shadow(shadow) };
+                slot = next + 1;
+            }
+            assert_eq!(seen, expected);
+            assert_eq!(aura_direct_map_next_slot(map, -1), -1);
+            // No entry in the slot, or a slot that is no slot, lends nothing.
+            assert!(aura_direct_map_shadow_at(map, slot).is_null());
+            assert!(aura_direct_map_shadow_at(map, -1).is_null());
+            unsafe { aura_direct_release_value(map) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}

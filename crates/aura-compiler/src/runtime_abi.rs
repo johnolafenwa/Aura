@@ -254,6 +254,8 @@ runtime_functions! {
     ValueSlotSetInt64 => ("aura_direct_value_slot_set_int64", [I64, I64], None),
     MapGetInt64Lent => ("aura_direct_map_get_int64_lent", [I64, I64], Some(I64)),
     MapGetShadow => ("aura_direct_map_get_shadow", [I64, I64], Some(I64)),
+    MapNextSlot => ("aura_direct_map_next_slot", [I64, I64], Some(I64)),
+    MapShadowAt => ("aura_direct_map_shadow_at", [I64, I64], Some(I64)),
     MapGetInt64Shadow => ("aura_direct_map_get_int64_shadow", [I64, I64], Some(I64)),
     EndShadow => ("aura_direct_end_shadow", [I64], None),
     LookupPayload => ("aura_direct_lookup_payload", [I64], Some(I64)),

@@ -769,6 +769,29 @@ impl<T> IndexedEntries<T> {
         entry.expect("a slot from a lookup holds an entry")
     }
 
+    /// The entry in `slot`, or `None` for a hole or a slot past the end.
+    pub fn slot(&self, slot: usize) -> Option<&T> {
+        match &self.storage {
+            Storage::Small(entries) => entries.get(slot),
+            Storage::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
+        }
+    }
+
+    /// The first slot at or after `from` that holds an entry. Walking from
+    /// slot 0, each time from the slot after the last one found, visits the
+    /// entries in order while the collection is unchanged.
+    pub fn next_slot(&self, from: usize) -> Option<usize> {
+        match &self.storage {
+            Storage::Small(entries) => (from < entries.len()).then_some(from),
+            Storage::Large(large) => large
+                .slots
+                .get(from..)?
+                .iter()
+                .position(Option::is_some)
+                .map(|offset| from + offset),
+        }
+    }
+
     /// The slot of the first entry that `matches`, scanning in order.
     pub fn slot_where(&self, mut matches: impl FnMut(&T) -> bool) -> Option<usize> {
         match &self.storage {

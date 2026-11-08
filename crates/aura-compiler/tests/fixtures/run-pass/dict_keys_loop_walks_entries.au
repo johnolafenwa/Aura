@@ -1,0 +1,54 @@
+# `for key in d.keys(): match d.lookup(key)` over a dict nothing changes
+# walks the dict's entries in order, past the ones removals left behind,
+# for a local dict, a parameter, and a variant's payload.
+import json
+
+
+def size(value: json.Value) -> int64:
+    match value:
+        case json.Value.Int(number):
+            return number
+        case json.Value.Array(items):
+            mut total = 0
+            for item in items:
+                total += size(item)
+            return total
+        case json.Value.Object(fields):
+            mut total = 0
+            for key in fields.keys():
+                match fields.lookup(key):
+                    case Lookup.Found(item):
+                        total += size(item)
+                    case Lookup.Missing:
+                        pass
+            return total
+        case _:
+            return 0
+
+
+def lengths(groups: dict[str, list[int64]]) -> str:
+    mut out = ""
+    for key in groups.keys():
+        match groups.lookup(key):
+            case Lookup.Found(items):
+                out = out + f"{len(items)}"
+            case Lookup.Missing:
+                out = out + "?"
+    return out
+
+
+def main():
+    mut groups: dict[str, list[int64]] = {}
+    for i in range(20):
+        groups[f"g{i}"] = [i, i]
+    for i in range(0, 20, 3):
+        groups.remove(f"g{i}")
+    groups["g3"] = [1, 2, 3]
+    print(lengths(groups))
+    mut empty: dict[str, list[int64]] = {}
+    print(lengths(empty))
+    match json.parse("{\"a\":1,\"b\":[2,3],\"c\":{\"d\":4,\"e\":{}},\"f\":5}"):
+        case Result.Ok(value):
+            print(size(value))
+        case Result.Err(error):
+            print(error)

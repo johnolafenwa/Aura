@@ -713,7 +713,22 @@ impl FunctionCompiler<'_> {
         // A loan only borrowers read takes a box that reads the found
         // value in place (see [`shadow_entry_copy_loans`]).
         let shadow = !lend && self.shadow_entry_copies.contains(&loan);
-        let (find, key) = if op == DictOp::ContainsKeyInt64 {
+        // A loop that walks the dict's entries tests the entry it is at.
+        let walked_slot = match key {
+            Operand::Place(place) => self
+                .key_loop_keys
+                .get(place.as_str())
+                .map(|list| self.key_loops[list].1),
+            _ => None,
+        };
+        let (find, key) = if let Some(slot) = walked_slot {
+            if !shadow || field.is_some() || op != DictOp::ContainsKey {
+                return Err(format!(
+                    "direct backend cannot walk the entries of `{map}` for loan `{loan}`"
+                ));
+            }
+            (RuntimeFn::MapShadowAt, self.builder.use_var(slot))
+        } else if op == DictOp::ContainsKeyInt64 {
             (
                 if lend {
                     RuntimeFn::MapGetInt64Lent

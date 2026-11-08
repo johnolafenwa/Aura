@@ -171,6 +171,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             && !matches!(
                 helper,
                 RuntimeFn::StringLiteral
+                    | RuntimeFn::StringLiteralCell
                     | RuntimeFn::StringSlice
                     | RuntimeFn::StringAffixLiteral
                     | RuntimeFn::StringReplaceLiteral
@@ -247,6 +248,8 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapProbeSlot,
             RuntimeFn::MapProbeSlotInt64,
             RuntimeFn::MapGetInt64Lent,
+            RuntimeFn::MapNextSlot,
+            RuntimeFn::MapShadowAt,
             RuntimeFn::MapSetIndexInt64,
         ]
     );

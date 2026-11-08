@@ -1680,6 +1680,53 @@ impl<'a> NativeCodegen<'a> {
         }
         let entry_copy_loans = element_loans::entry_copy_loans(function);
         let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
+        let fused_entry_probes = element_loans::fused_entry_probes(function);
+        let shadow_entry_copies = element_loans::shadow_entry_copy_loans(
+            function,
+            &entry_copy_loans,
+            &lent_entry_copies,
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    self.borrowing.get(name)
+                })
+            },
+        );
+        // A fused test reads a local dict where it lies, for a loan that
+        // holds a box.
+        let shadow_boxes = shadow_entry_copies
+            .iter()
+            .filter(|loan| {
+                matches!(
+                    variable_types.get(loan.as_str()),
+                    Some(DirectType::Opaque(_))
+                )
+            })
+            .cloned()
+            .collect::<HashSet<_>>();
+        let mut key_loops = HashMap::new();
+        let mut key_loop_keys = HashMap::new();
+        for (list, key_loop) in
+            key_loops::entry_key_loops(function, &fused_entry_probes, &shadow_boxes, |dict| {
+                !lookup_slots.contains(dict)
+                    && !lent_places.contains(dict)
+                    && matches!(
+                        variable_types.get(dict),
+                        Some(DirectType::Opaque(Type::Named(name, _))) if name == "dict"
+                    )
+            })
+        {
+            // The slot the walk is at, and the one after it.
+            let at = Var(variable_index as u32);
+            let next = Var(variable_index as u32 + 1);
+            variable_index += 2;
+            for variable in [at, next] {
+                builder.declare_var(variable, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(variable, zero);
+            }
+            key_loop_keys.insert(key_loop.key.clone(), list.clone());
+            key_loops.insert(list, (key_loop, at, next));
+        }
         let mut compiler = FunctionCompiler {
             builder,
             blocks,
@@ -1733,19 +1780,12 @@ impl<'a> NativeCodegen<'a> {
             native_loan_uses,
             element_lend_temps,
             native_loans: HashMap::new(),
-            fused_entry_probes: element_loans::fused_entry_probes(function),
+            fused_entry_probes,
             fused_entry_slots: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
-            shadow_entry_copies: element_loans::shadow_entry_copy_loans(
-                function,
-                &entry_copy_loans,
-                &lent_entry_copies,
-                |instruction| {
-                    crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
-                        self.borrowing.get(name)
-                    })
-                },
-            ),
+            shadow_entry_copies,
+            key_loops,
+            key_loop_keys,
             lent_entry_copies,
             lent_fused_copies: HashSet::new(),
             shadow_fused_copies: HashSet::new(),
@@ -3131,6 +3171,12 @@ struct FunctionCompiler<'a> {
     /// The entry loans only borrowers read. See
     /// `element_loans::shadow_entry_copy_loans`.
     shadow_entry_copies: HashSet<String>,
+    /// The loops over a dict's keys that walk its entries instead (see
+    /// `key_loops`), by the keys copy they make no more, with the slot the
+    /// walk is at and the slot it goes on from.
+    key_loops: HashMap<String, (key_loops::KeyLoop, Var, Var)>,
+    /// The key local of each of `key_loops`, with its keys copy.
+    key_loop_keys: HashMap<String, String>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
@@ -4064,6 +4110,73 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Lowers an instruction of a loop that walks a dict's entries in
+    /// place of a copy of its keys (see `key_loops`): the copy starts the
+    /// walk at the first slot, its length is the dict's, and each key read
+    /// moves the walk to the next entry. Returns false for any other
+    /// instruction.
+    fn compile_key_loop_assign(
+        &mut self,
+        target: &str,
+        value: &Rvalue,
+    ) -> std::result::Result<bool, String> {
+        if self.key_loops.is_empty() {
+            return Ok(false);
+        }
+        if let Some(&(_, _, next)) = self.key_loops.get(target) {
+            let first = self.builder.iconst(types::I64, 0);
+            self.builder.def_var(next, first);
+            return Ok(true);
+        }
+        let Rvalue::Call {
+            callee:
+                CallTarget::Runtime {
+                    op: RuntimeOp::List(op),
+                    receiver: Some(Operand::Place(list)),
+                    ..
+                },
+            ..
+        } = value
+        else {
+            return Ok(false);
+        };
+        let Some((key_loop, at, next)) = self.key_loops.get(list.as_str()).cloned() else {
+            return Ok(false);
+        };
+        let map = self.load_root(&key_loop.dict)?.values[0];
+        match op {
+            ListOp::Len => {
+                let len = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::MapLen], &[map])
+                    .results[0];
+                self.store_place(
+                    target,
+                    ValueRef {
+                        values: vec![len],
+                        ty: DirectType::Scalar(ScalarKind::Int64),
+                    },
+                )?;
+            }
+            ListOp::IndexUnchecked => {
+                let from = self.builder.use_var(next);
+                let slot = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::MapNextSlot], &[map, from])
+                    .results[0];
+                self.builder.def_var(at, slot);
+                let after = self.builder.iadd_imm(slot, 1);
+                self.builder.def_var(next, after);
+            }
+            op => {
+                return Err(format!(
+                    "direct backend cannot walk the keys copy `{list}` for `{op:?}`"
+                ))
+            }
+        }
+        Ok(true)
+    }
+
     /// Lowers MIR `Retain`: makes the new reference by the value's layout
     /// and keeps it for the consumer that follows. A copy the load already
     /// made is the new reference.
@@ -4228,6 +4341,12 @@ impl<'a> FunctionCompiler<'a> {
             // that only borrows, such as a call dispatched on a boxed
             // generic receiver, adds none.
             Instruction::IndexInRange { .. } | Instruction::Retain { .. } => {}
+            Instruction::Assign { target, value }
+                if self.compile_key_loop_assign(target, value)? => {}
+            // A walk by entry makes neither the keys copy nor the key.
+            Instruction::Release { place }
+                if self.key_loops.contains_key(place) || self.key_loop_keys.contains_key(place) => {
+            }
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
             Instruction::Release { place } => self.release_root(place)?,
@@ -18016,6 +18135,8 @@ mod element_loans;
 mod elements;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_key_loops.rs"]
+mod key_loops;
 #[path = "native_codegen_lookups.rs"]
 mod lookups;
 #[path = "native_codegen_math.rs"]

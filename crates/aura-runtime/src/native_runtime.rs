@@ -10593,6 +10593,40 @@ pub extern "C-unwind" fn aura_direct_map_get_int64_shadow(
     task_runtime_boundary(|| shadow_map_lookup(map, |map| map.entries.value_of_i64(key)))
 }
 
+/// The first slot of `map` at or after `slot` that holds an entry, or -1.
+/// Generated code walks an unchanged dict's entries with it in place of a
+/// copy of its keys, as `for key in d.keys(): match d.lookup(key)` does.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_next_slot(map: *mut OpaqueValue, slot: i64) -> i64 {
+    task_runtime_boundary(|| {
+        with_map(map, |map| {
+            usize::try_from(slot)
+                .ok()
+                .and_then(|slot| map.entries.next_slot(slot))
+                .and_then(|slot| i64::try_from(slot).ok())
+                .unwrap_or(-1)
+        })
+    })
+}
+
+/// [`aura_direct_map_get_shadow`] for the entry in `slot`, which
+/// [`aura_direct_map_next_slot`] found, without a key: null when no entry
+/// is there.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_shadow_at(
+    map: *mut OpaqueValue,
+    slot: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        shadow_map_lookup(map, |map| {
+            usize::try_from(slot)
+                .ok()
+                .and_then(|slot| map.entries.slot(slot))
+                .map(|(_, value)| value)
+        })
+    })
+}
+
 /// Ends an entry loan [`aura_direct_map_get_shadow`] began. A shadow box
 /// nothing else holds is freed without dropping the value it reads, which
 /// the dict still owns. One that a borrower kept a reference to takes a
