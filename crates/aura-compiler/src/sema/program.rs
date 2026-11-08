@@ -65,6 +65,10 @@ pub struct AliasInfo {
     pub decl: crate::ast::TypeAliasDecl,
     pub target: Type,
     pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
+    /// A callable alias's contract as a bodyless function over the
+    /// callable's parameters, which the checker and `aura verify` read like
+    /// any other contract.
+    pub contract: Option<FunctionInfo>,
 }
 
 impl AliasInfo {
@@ -257,6 +261,71 @@ const INITIALIZER_SHAPE_HELP: &str = "write `def __init__(self, ...)`; the class
 /// Rejects every `__init__` declaration whose shape is not
 /// `def __init__(self, ...)` with ordinary parameters (`AU2016`). The result
 /// annotation is checked once its type is lowered.
+/// The contract of a callable alias as a bodyless function: the alias must
+/// name a plain callable type whose parameters all have names and none is
+/// `mut`.
+fn callable_contract_decl(alias: &crate::ast::TypeAliasDecl) -> Result<FunctionDecl> {
+    let error = |message: &str| Diagnostic::coded_at("AU2048", alias.contracts[0].span, message);
+    if !alias.type_params.is_empty() {
+        return Err(error(
+            "a contract on a generic type alias is not supported yet",
+        ));
+    }
+    let signature = match &alias.target.kind {
+        crate::ast::TypeRefKind::Callable { signature, .. } => signature.as_ref(),
+        _ => &alias.target,
+    };
+    let crate::ast::TypeRefKind::Function {
+        params,
+        return_type,
+        view_return: None,
+    } = &signature.kind
+    else {
+        return Err(error(
+            "only a callable type such as `Callable[def(n: int64) -> int64]` can have a contract",
+        ));
+    };
+    let mut decl_params = Vec::new();
+    for param in params {
+        let Some(name) = &param.name else {
+            return Err(error(
+                "a callable type with a contract names each parameter, as in `def(n: int64)`",
+            ));
+        };
+        if param.mode == crate::ast::ParamMode::BorrowMut {
+            return Err(error(
+                "a callable type with a contract cannot take a `mut` parameter yet",
+            ));
+        }
+        decl_params.push(crate::ast::Param {
+            name: name.clone(),
+            mode: param.mode,
+            ty: param.ty.clone(),
+            default: None,
+            keyword_only: param.keyword_only,
+            span: param.span,
+        });
+    }
+    Ok(FunctionDecl {
+        public: alias.public,
+        name: alias.name.clone(),
+        type_params: Vec::new(),
+        type_param_bounds: BTreeMap::new(),
+        receiver: None,
+        params: decl_params,
+        return_type: return_type.as_ref().clone(),
+        view_return: None,
+        body: Vec::new(),
+        span: alias.span,
+        property: None,
+        decorators: Vec::new(),
+        doc: None,
+        contracts: alias.contracts.clone(),
+        spec: false,
+        lemma: false,
+    })
+}
+
 fn validate_initializer_declaration(method: &FunctionDecl) -> Result<()> {
     if method.receiver != Some(ReceiverKind::Borrow) {
         return Err(Diagnostic::coded_at(
@@ -820,6 +889,38 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &type_param_scope(&alias.type_params),
         )?;
         super::types::reject_span_type(&target, alias.target.span, "a type alias target")?;
+        let contract = if alias.contracts.is_empty() {
+            None
+        } else {
+            let decl = callable_contract_decl(alias)?;
+            let lower = |ty: &crate::ast::TypeRef| {
+                lower_type(
+                    ty,
+                    &type_names,
+                    &type_arities,
+                    &canonical_type_names,
+                    &BTreeMap::new(),
+                )
+            };
+            let params = decl
+                .params
+                .iter()
+                .map(|param| lower(&param.ty))
+                .collect::<Result<Vec<_>>>()?;
+            let return_type = lower(&decl.return_type)?;
+            Some(FunctionInfo {
+                module_name: module_name.clone(),
+                signature: FunctionSignature {
+                    params,
+                    param_passings: resolve_param_passings(&decl.params),
+                    return_type,
+                    rng_clone_safe_type_params: BTreeSet::new(),
+                    array_equality_safe_type_params: BTreeSet::new(),
+                },
+                decl,
+                type_param_bounds: BTreeMap::new(),
+            })
+        };
         aliases.insert(
             name.clone(),
             AliasInfo {
@@ -827,6 +928,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 decl: alias.clone(),
                 target,
                 type_param_bounds: BTreeMap::new(),
+                contract,
             },
         );
     }
@@ -2162,6 +2264,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                         (trait_name.clone(), method_name.clone()),
                         equality_sink.borrow().clone(),
                     );
+                }
+            }
+            // A callable alias's contract checks like a function's, over the
+            // callable's parameters.
+            for alias in program.aliases.values() {
+                if alias.module_name != program.module_name {
+                    continue;
+                }
+                if let Some(info) = &alias.contract {
+                    checker
+                        .with_module_name(&alias.module_name)
+                        .check_function_contracts(info)?;
                 }
             }
             // A trusted `extern` contract checks like a function's, with no

@@ -297,6 +297,9 @@ pub(super) enum Val {
     /// A `Task[T]` handle, with the value its task returns when it
     /// finishes normally.
     Task(Box<Val>),
+    /// A function value of a callable alias with a contract, named by the
+    /// alias: a call through it has that contract.
+    Contracted(String),
     /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
     /// and its values as an `(Array K S)` when the encoding models them.
     Map {
@@ -828,13 +831,65 @@ impl<'a> Exec<'a> {
         // A function value that goes where the verifier cannot follow it,
         // such as into a call or a collection, may be called with
         // arguments its `requires` does not allow.
-        if let Val::Func(name) = &value {
-            if !self.func_ok {
-                let pc = state.pc.clone();
-                self.oblige_unfollowed(name, &pc);
-            }
+        if !self.func_ok {
+            let pc = state.pc.clone();
+            self.oblige_escape(&value, &pc);
         }
         value
+    }
+
+    /// Reports what a function value needs where it goes somewhere the
+    /// verifier stops following it.
+    fn oblige_escape(&mut self, value: &Val, pc: &str) {
+        match value {
+            Val::Func(name) => self.oblige_unfollowed(name, pc),
+            Val::Contracted(alias) => {
+                let span = self.span;
+                self.oblige(
+                    ObligationKind::Requires,
+                    span,
+                    format!("the contract of `{alias}` holds where it is called through a value"),
+                    pc,
+                    Goal::Unsupported(
+                        "a function value passed where its contract is not known is not followed"
+                            .into(),
+                    ),
+                );
+            }
+            _ => {}
+        }
+    }
+
+    /// What a function value passed as `param` of `callee` needs: one
+    /// passed as a callable alias with a contract meets it, and one passed
+    /// as anything else is no longer followed.
+    fn pass_function_value(&mut self, state: &State, callee: &str, param: &str, value: &Val) {
+        let contracted = self
+            .cx
+            .decl(callee)
+            .and_then(|decl| decl.params.iter().find(|p| p.name == param))
+            .and_then(|p| self.cx.callable_contract(&p.ty));
+        let pc = state.pc.clone();
+        match (value, contracted) {
+            (Val::Contracted(from), Some((alias, _))) if *from == alias => {}
+            (Val::Func(function), Some((alias, _))) if self.cx.decl(function).is_some() => {
+                self.prove_callable_refinement(state, function, &alias);
+            }
+            (_, Some((alias, _))) => {
+                let span = self.span;
+                self.oblige(
+                    ObligationKind::Requires,
+                    span,
+                    format!("the value passed as `{param}` meets the contract of `{alias}`"),
+                    &pc,
+                    Goal::Unsupported(
+                        "only a named function, or a value of the same alias, is checked against a callable contract"
+                            .into(),
+                    ),
+                );
+            }
+            (value, None) => self.oblige_escape(value, &pc),
+        }
     }
 
     /// Reports that the `requires` of `name`, if it has one, is checked
@@ -939,8 +994,16 @@ impl<'a> Exec<'a> {
                 state.env.insert("self".to_string(), value);
             }
         }
+        let declared = self.cx.decl(&self.function.name);
         for param in &self.function.params {
-            let value = self.fresh(&param.ty, &param.name);
+            // A parameter of a callable alias with a contract has it.
+            let contracted = declared
+                .and_then(|decl| decl.params.iter().find(|p| p.name == param.name))
+                .and_then(|p| self.cx.callable_contract(&p.ty));
+            let value = match contracted {
+                Some((alias, _)) => Val::Contracted(alias),
+                None => self.fresh(&param.ty, &param.name),
+            };
             self.record_inputs(&param.name, &value);
             state.env.insert(param.name.clone(), value);
         }
@@ -1440,9 +1503,7 @@ impl<'a> Exec<'a> {
         // Different function values merge to one the verifier does not
         // follow.
         for (pc, value) in pcs.iter().zip(values) {
-            if let Val::Func(name) = value {
-                self.oblige_unfollowed(name, pc);
-            }
+            self.oblige_escape(value, pc);
         }
         // Values of different shapes, such as a havocked `Opaque` and a
         // modeled value, merge to a value the encoding knows nothing about.
@@ -1579,7 +1640,9 @@ impl<'a> Exec<'a> {
                 Val::Union(tag, self.merge_children(pcs, values, hint))
             }
             // Equal units and opaque values returned above.
-            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) => Val::Opaque,
+            Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
+                Val::Opaque
+            }
         }
     }
 
@@ -2251,6 +2314,13 @@ impl<'a> Exec<'a> {
         };
         match value {
             Rvalue::Use(operand) => self.followed_operand(state, operand, hint),
+            // An adapted function value still calls the function it names.
+            Rvalue::CallableAdapt { value, .. } => {
+                match self.followed_operand(state, value, None) {
+                    value @ (Val::Func(_) | Val::Contracted(_)) => value,
+                    _ => fresh_target(self),
+                }
+            }
             Rvalue::Binary {
                 op,
                 left,
@@ -2635,7 +2705,7 @@ impl<'a> Exec<'a> {
                 for arg in args {
                     actuals.push((
                         arg.name.clone(),
-                        self.operand(state, &arg.value, None),
+                        self.followed_operand(state, &arg.value, None),
                         None,
                     ));
                 }
@@ -2946,7 +3016,7 @@ impl<'a> Exec<'a> {
                     for arg in args {
                         actuals.push((
                             arg.name.clone(),
-                            self.operand(state, &arg.value, None),
+                            self.followed_operand(state, &arg.value, None),
                             arg.writeback_place.clone(),
                         ));
                     }
@@ -2973,7 +3043,7 @@ impl<'a> Exec<'a> {
                 for arg in args {
                     actuals.push((
                         arg.name.clone(),
-                        self.operand(state, &arg.value, None),
+                        self.followed_operand(state, &arg.value, None),
                         arg.writeback_place.clone(),
                     ));
                 }
@@ -3007,7 +3077,7 @@ impl<'a> Exec<'a> {
                 for arg in args {
                     actuals.push((
                         arg.name.clone(),
-                        self.operand(state, &arg.value, None),
+                        self.followed_operand(state, &arg.value, None),
                         arg.writeback_place.clone(),
                     ));
                 }
@@ -3032,12 +3102,30 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
             CallTarget::Value(callee) => match self.followed_operand(state, callee, None) {
+                Val::Contracted(alias) => {
+                    let info = self.cx.alias_contract(&alias).expect("a contracted alias");
+                    let mut pre = Vec::new();
+                    for (param, arg) in info.decl.params.iter().zip(args) {
+                        let value = self.operand(state, &arg.value, None);
+                        pre.push((param.name.clone(), value));
+                    }
+                    let span = self.span;
+                    self.contract_override = Some(&info.decl);
+                    self.call_requires(state, &alias, &pre, span);
+                    let result = match target_type.as_ref().unwrap_or(&info.signature.return_type) {
+                        Type::Unit => Val::Unit,
+                        ty => self.fresh(ty, target.unwrap_or("result")),
+                    };
+                    self.call_ensures(state, &alias, &pre, &pre, &result);
+                    self.contract_override = None;
+                    result
+                }
                 Val::Func(name) if self.cx.function(&name).is_some() => {
                     let mut actuals = Vec::new();
                     for arg in args {
                         actuals.push((
                             arg.name.clone(),
-                            self.operand(state, &arg.value, None),
+                            self.followed_operand(state, &arg.value, None),
                             arg.writeback_place.clone(),
                         ));
                     }
@@ -3217,6 +3305,7 @@ impl<'a> Exec<'a> {
             if let (Some(place), MirReceiverKind::BorrowMut) = (place, param.passing) {
                 post_places.push((param.name.clone(), place));
             }
+            self.pass_function_value(state, name, &param.name, &value);
             pre.push((param.name.clone(), fit(value, &param.ty)));
         }
         let span = self.span;

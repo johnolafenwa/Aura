@@ -195,7 +195,7 @@ fn p64_extern_declarations_reject_unsupported_abis_bodies_and_defaults() {
         .expect_err("an extern function has no measure");
     assert_eq!(
         measure.message,
-        "an `extern` function states only `requires` and `ensures`, which `aura verify` trusts"
+        "an `extern` function states only `requires` and `ensures`"
     );
     for source in [
         "extern \"C\" def getpid() -> int32:\n    requires true\n    return 1\n",

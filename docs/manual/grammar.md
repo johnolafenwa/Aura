@@ -294,7 +294,8 @@ item
     | impl-declaration ;
 
 type-alias-declaration
-    = "type", identifier, [ bounded-type-parameters ], "=", type, NEWLINE ;
+    = "type", identifier, [ bounded-type-parameters ], "=", type,
+      ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-function-declaration
     = "extern", STRING, "def", identifier,
@@ -303,6 +304,9 @@ extern-function-declaration
 
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+
+contract-clause
+    = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
 Item declarations are module-level. They are not statements and cannot appear

@@ -173,6 +173,7 @@ fn desugar(
         type_param_bounds: Default::default(),
         target: callable.clone(),
         span,
+        contracts: Vec::new(),
     };
 
     let undecorated = format!("{UNDECORATED_PREFIX}{name}");

@@ -2501,3 +2501,93 @@ def main():
     assert!(error.message.contains("`y`"), "{}", error.message);
     let _ = std::fs::remove_dir_all(&dir);
 }
+
+#[test]
+fn callable_aliases_carry_contracts() {
+    assert_open(
+        r#"
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+type Boxed = Callable[def(n: int64) -> int64]:
+    requires 0 <= n and n < 500
+    ensures result >= n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def jump(n: int64) -> int64:
+    requires n < 10
+    return n + 5
+
+def apply_twice(f: Step, x: int64) -> int64:
+    requires 0 <= x and x < 50
+    ensures result > x
+    y = f(x)
+    if y < 100:
+        return f(y)
+    return y
+
+def again(f: Step) -> int64:
+    return apply_twice(f, 1)
+
+def plain(f: def(n: int64) -> int64) -> int64:
+    return f(1)
+
+def leak(f: Step) -> int64:
+    return plain(f)
+
+def boxed(g: Boxed) -> int64:
+    ensures result >= 2
+    return g(2)
+
+def main():
+    print(apply_twice(inc, 3))
+    print(apply_twice(jump, 3))
+    print(again(inc))
+    print(apply_twice(lambda n: n + 1, 3))
+    print(boxed(Boxed(inc)))
+    print(leak(inc))
+"#,
+        &[
+            "34 requires unsupported",
+            "42 requires failed",
+            "42 ensures failed",
+            "44 requires unsupported",
+            "44 overflow failed",
+        ],
+    );
+    for (source, message) in [
+        (
+            "type S[T] = def(n: T) -> T:\n    requires true\n",
+            "a contract on a generic type alias is not supported yet",
+        ),
+        (
+            "type S = int64:\n    requires true\n",
+            "only a callable type such as `Callable[def(n: int64) -> int64]` can have a contract",
+        ),
+        (
+            "type S = def(int64) -> int64:\n    requires true\n",
+            "a callable type with a contract names each parameter, as in `def(n: int64)`",
+        ),
+        (
+            "type S = def(n: mut list[int64]) -> int64:\n    requires true\n",
+            "a callable type with a contract cannot take a `mut` parameter yet",
+        ),
+        (
+            "type S = def(n: int64) -> int64:\n    ensures result > m\n",
+            "unknown name `m`",
+        ),
+        (
+            "type S = def(n: int64) -> int64:\n    decreases n\n",
+            "a callable type states only `requires` and `ensures`",
+        ),
+    ] {
+        let error = crate::check_source(&format!("{source}\ndef main():\n    pass\n"))
+            .expect_err("a contract the checker refuses");
+        assert_eq!(error.message, message, "{source}");
+    }
+}

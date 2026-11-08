@@ -247,6 +247,97 @@ impl Exec<'_> {
         self.assume_record_invariants(state, &returned);
     }
 
+    /// A named function passed as a callable alias with a contract meets
+    /// it: on any arguments the alias's `requires` allows, the function's
+    /// `requires` holds, and its `ensures` gives the alias's.
+    pub(super) fn prove_callable_refinement(&mut self, state: &State, function: &str, alias: &str) {
+        let span = self.span;
+        let pc = state.pc.clone();
+        let (Some(decl), Some(info)) = (self.cx.decl(function), self.cx.alias_contract(alias))
+        else {
+            return;
+        };
+        let display = public_name(function);
+        let goals = (|| -> Result<(String, String), String> {
+            if decl.params.len() != info.decl.params.len() {
+                return Err(format!("`{display}` takes a different number of arguments"));
+            }
+            let mut alias_env = Env::new();
+            let mut function_env = Env::new();
+            for ((alias_param, ty), param) in info
+                .decl
+                .params
+                .iter()
+                .zip(&info.signature.params)
+                .zip(&decl.params)
+            {
+                let value = self.fresh(ty, &alias_param.name);
+                alias_env.insert(alias_param.name.clone(), value.clone());
+                function_env.insert(param.name.clone(), value);
+            }
+            let result = self.fresh(&info.signature.return_type, "result");
+            let terms = |clauses: &[ContractClause],
+                         kind: ContractKind,
+                         env: &Env,
+                         exec: &mut Self|
+             -> Result<String, String> {
+                let mut parts = Vec::new();
+                for clause in clauses.iter().filter(|clause| clause.kind == kind) {
+                    if !clause.olds.is_empty() {
+                        return Err("`old` in a callable contract is not modeled yet".into());
+                    }
+                    let mut env = env.clone();
+                    env.insert("result".to_string(), result.clone());
+                    let mut wd = Vec::new();
+                    let Val::Bool(term) = exec.spec(&clause.condition, &env, &mut wd, 0)? else {
+                        return Err("a clause is not a modeled `bool`".into());
+                    };
+                    parts.extend(wd);
+                    parts.push(term);
+                }
+                Ok(conjoin(&parts))
+            };
+            let alias_requires = terms(
+                &info.decl.contracts,
+                ContractKind::Requires,
+                &alias_env,
+                self,
+            )?;
+            let function_requires =
+                terms(&decl.contracts, ContractKind::Requires, &function_env, self)?;
+            let function_ensures =
+                terms(&decl.contracts, ContractKind::Ensures, &function_env, self)?;
+            let alias_ensures = terms(
+                &info.decl.contracts,
+                ContractKind::Ensures,
+                &alias_env,
+                self,
+            )?;
+            Ok((
+                format!("(=> {alias_requires} {function_requires})"),
+                format!("(=> (and {alias_requires} {function_ensures}) {alias_ensures})"),
+            ))
+        })();
+        let (accepts, keeps) = match goals {
+            Ok((accepts, keeps)) => (Goal::Holds(accepts), Goal::Holds(keeps)),
+            Err(reason) => (Goal::Unsupported(reason.clone()), Goal::Unsupported(reason)),
+        };
+        self.oblige(
+            ObligationKind::Requires,
+            span,
+            format!("`{display}` accepts every call the contract of `{alias}` allows"),
+            &pc,
+            accepts,
+        );
+        self.oblige(
+            ObligationKind::Ensures,
+            span,
+            format!("`{display}` keeps the `ensures` of `{alias}`"),
+            &pc,
+            keeps,
+        );
+    }
+
     /// When an implementation of a trait method states its own `requires`,
     /// a call through the trait proves only the trait's: each of the
     /// implementation's must follow from them.

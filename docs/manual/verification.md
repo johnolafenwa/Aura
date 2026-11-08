@@ -202,6 +202,10 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- parameters of a callable alias with a contract
+  ([Callable Contracts](/manual/contracts#callable-contracts)): calls
+  through them prove its `requires` and assume its `ensures`, and a named
+  function passed as one is proved to fit it
 - `extern "C"` functions with a trusted contract: an indented block of
   `requires` and `ensures` after the signature. Each call proves the
   `requires`, and the result and `mut` arguments have the `ensures`

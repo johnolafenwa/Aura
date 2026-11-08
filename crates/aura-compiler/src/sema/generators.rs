@@ -155,6 +155,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
         type_param_bounds: Default::default(),
         target: TypeRef::callable(false, ReceiverKind::Value, signature, first_span),
         span: first_span,
+        contracts: Vec::new(),
     }));
     module.items.extend(bodies);
     Ok(params)

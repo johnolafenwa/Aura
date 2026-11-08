@@ -226,6 +226,8 @@ pub(crate) struct VerifyContext<'a> {
     /// The trait method each implementation method implements, by MIR
     /// function name.
     implemented: BTreeMap<String, &'a FunctionDecl>,
+    /// The contract of each callable alias that states one, by name.
+    callable_contracts: BTreeMap<String, &'a crate::sema::FunctionInfo>,
 }
 
 impl<'a> VerifyContext<'a> {
@@ -241,6 +243,12 @@ impl<'a> VerifyContext<'a> {
             decls.insert(name.clone(), &function.decl);
             if function.decl.spec {
                 spec_defs.insert(name.clone(), &function.decl);
+            }
+        }
+        let mut callable_contracts = BTreeMap::new();
+        for (name, alias) in program.aliases_in_scope() {
+            if let Some(info) = &alias.contract {
+                callable_contracts.insert(name.clone(), info);
             }
         }
         let mut class_invariants = BTreeMap::new();
@@ -322,6 +330,7 @@ impl<'a> VerifyContext<'a> {
             class_invariants,
             trait_methods,
             implemented,
+            callable_contracts,
         }
     }
 
@@ -345,6 +354,28 @@ impl<'a> VerifyContext<'a> {
     /// The declaration whose contract a call of MIR function `name` uses.
     pub(crate) fn decl(&self, name: &str) -> Option<&'a FunctionDecl> {
         self.decls.get(spec::base_name(name)).copied()
+    }
+
+    /// The alias and its contract, when `ty` names a callable alias that
+    /// states one.
+    pub(crate) fn callable_contract(
+        &self,
+        ty: &crate::ast::TypeRef,
+    ) -> Option<(String, &'a crate::sema::FunctionInfo)> {
+        let crate::ast::TypeRefKind::Named { name, args } = &ty.kind else {
+            return None;
+        };
+        if !args.is_empty() {
+            return None;
+        }
+        self.callable_contracts
+            .get(name)
+            .map(|info| (name.clone(), *info))
+    }
+
+    /// The contract of the callable alias `name`.
+    pub(crate) fn alias_contract(&self, name: &str) -> Option<&'a crate::sema::FunctionInfo> {
+        self.callable_contracts.get(name).copied()
     }
 
     pub(crate) fn spec_def(&self, name: &str) -> Option<&'a FunctionDecl> {

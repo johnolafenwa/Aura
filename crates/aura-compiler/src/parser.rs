@@ -695,7 +695,13 @@ impl Parser {
         let (type_params, type_param_bounds) = self.parse_optional_type_params(true)?;
         self.expect_simple(TokenKind::Equal)?;
         let target = self.parse_type()?;
-        self.expect_statement_terminator()?;
+        // A callable alias may end with `:` and its contract.
+        let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
+            self.parse_signature_contract("a callable type")?
+        } else {
+            self.expect_statement_terminator()?;
+            Vec::new()
+        };
         Ok(TypeAliasDecl {
             public,
             name,
@@ -703,7 +709,34 @@ impl Parser {
             type_param_bounds,
             target,
             span,
+            contracts,
         })
+    }
+
+    /// The indented block of `requires` and `ensures` clauses after a
+    /// bodyless signature's `:`, which `what` names.
+    fn parse_signature_contract(&mut self, what: &str) -> Result<Vec<ContractClause>> {
+        self.expect_newline()?;
+        self.expect_simple(TokenKind::Indent)?;
+        let contracts = self.parse_contract_clauses(ClauseContext::Function)?;
+        self.skip_newlines();
+        if let Some(clause) = contracts
+            .iter()
+            .find(|clause| clause.kind == ContractKind::Decreases)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                clause.span,
+                format!("{what} states only `requires` and `ensures`"),
+            ));
+        }
+        if contracts.is_empty() || !self.at_simple(&TokenKind::Dedent) {
+            return Err(self.error_here(format!(
+                "{what} has no Aura body; its indented block holds only `requires` and `ensures` clauses"
+            )));
+        }
+        self.expect_simple(TokenKind::Dedent)?;
+        Ok(contracts)
     }
 
     fn parse_extern_item(&mut self, public: bool) -> Result<Item> {
@@ -781,27 +814,7 @@ impl Parser {
         }
         // An indented block holds only the trusted contract.
         let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
-            self.expect_newline()?;
-            self.expect_simple(TokenKind::Indent)?;
-            let contracts = self.parse_contract_clauses(ClauseContext::Function)?;
-            self.skip_newlines();
-            if let Some(clause) = contracts
-                .iter()
-                .find(|clause| clause.kind == ContractKind::Decreases)
-            {
-                return Err(Diagnostic::coded_at(
-                    "AU2048",
-                    clause.span,
-                    "an `extern` function states only `requires` and `ensures`, which `aura verify` trusts",
-                ));
-            }
-            if contracts.is_empty() || !self.at_simple(&TokenKind::Dedent) {
-                return Err(self.error_here(
-                    "an `extern` function has no Aura body; its indented block holds only `requires` and `ensures` clauses",
-                ));
-            }
-            self.expect_simple(TokenKind::Dedent)?;
-            contracts
+            self.parse_signature_contract("an `extern` function")?
         } else {
             self.expect_newline()?;
             Vec::new()

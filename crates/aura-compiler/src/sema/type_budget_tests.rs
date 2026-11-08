@@ -375,9 +375,11 @@ fn repeated_constructor_alias_expansions_share_aggregate_accounting() {
                 span: TEST_SPAN,
             },
             span: TEST_SPAN,
+            contracts: Vec::new(),
         },
         target: Type::Named("Box".to_string(), vec![Type::TypeParam("T".to_string())]),
         type_param_bounds: Default::default(),
+        contract: None,
     };
     let budget = ExpansionBudget::with_limits(4, 4, 3);
     let arguments = [Type::Unit];

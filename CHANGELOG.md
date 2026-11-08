@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- A type alias of a callable type may end with `:` and a block of
+  `requires` and `ensures` clauses. A parameter of that type has the
+  contract: `aura verify` proves the `requires` at each call through it and
+  assumes the `ensures`, and proves that a named function passed as one
+  fits the contract. Calls through adapted callables (`Alias(function)`)
+  are followed too.
 - An `extern "C"` function may end its signature with `:` and an indented
   block of `requires` and `ensures` clauses: a trusted contract. `aura
   verify` proves the `requires` at each call and assumes the `ensures`
