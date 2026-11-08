@@ -2077,6 +2077,14 @@ fn release_ref_count(ref_count: &AtomicU32) -> std::result::Result<bool, &'stati
         if current >= FROZEN_REFERENCES {
             return Ok(false);
         }
+        if current == 1 {
+            // The caller holds the only reference, so no other thread can
+            // reach the box to change its count, and the acquiring load
+            // above already saw every earlier release. A plain store frees
+            // it without a locked instruction.
+            ref_count.store(0, Ordering::Relaxed);
+            return Ok(true);
+        }
         let next = current - 1;
         if ref_count
             .compare_exchange_weak(current, next, Ordering::AcqRel, Ordering::Acquire)
@@ -12008,6 +12016,67 @@ pub extern "C-unwind" fn aura_direct_element_path_store(
                 direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
                     selectors.finish()?;
                     *current = stored;
+                    Ok(())
+                })?
+            })
+        };
+        if let Err(error) = result {
+            direct_element_path_failure(error, line, column);
+        }
+    })
+}
+
+/// Appends a scalar given as its bits (see `aura_direct_vec_push_scalar`)
+/// to the list an element path reaches inside `collection`, in place:
+/// `d[k].append(x)` or `match mut d.lookup(k): case Found(xs):
+/// xs.append(x)` through a mutable entry loan. Nothing is moved out of the
+/// collection or boxed, and a missing position or key traps.
+#[cfg_attr(not(coverage), no_mangle)]
+#[allow(clippy::too_many_arguments)]
+pub extern "C-unwind" fn aura_direct_element_path_push_scalar(
+    collection: *mut OpaqueValue,
+    path_ptr: *const u8,
+    path_len: usize,
+    selectors_ptr: *const i64,
+    selector_count: usize,
+    bits: i64,
+    kind: i64,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        let path = literal_str(path_ptr, path_len);
+        let steps =
+            direct_element_path_steps(path).unwrap_or_else(|message| runtime_error(message));
+        let mut selectors = DirectElementSelectors {
+            words: direct_element_selector_words(selectors_ptr, selector_count),
+            cursor: 0,
+            path,
+        };
+        let result = unsafe {
+            value_mut(collection, |value| {
+                direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
+                    selectors.finish()?;
+                    let Value::Vec(vector) = current else {
+                        runtime_error(format!(
+                            "expected `list`, found `{}`",
+                            value_type_name(current)
+                        ));
+                    };
+                    if kind == DirectScalarKind::Float32 {
+                        vector.elements.narrow_to_float32();
+                    }
+                    if !push_scalar_bits(&mut vector.elements, kind, bits) {
+                        let value = kind.value(bits);
+                        if is_unknown_runtime_type(&vector.element_type) {
+                            let inferred = inferred_collection_type(&value);
+                            if !is_unknown_runtime_type(&inferred) {
+                                vector.element_type = inferred;
+                            }
+                        }
+                        vector.elements.push(value);
+                    }
                     Ok(())
                 })?
             })

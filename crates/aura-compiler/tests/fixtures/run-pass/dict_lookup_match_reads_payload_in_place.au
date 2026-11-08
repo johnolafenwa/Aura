@@ -1,0 +1,73 @@
+# `match d.lookup(k)` whose found value is only matched and its string
+# payload cloned reads the entry where the dict keeps it. The clone keeps
+# its text after the dict changes or goes away, a shared dict still reads
+# a copy, and a missing key or another variant takes the other arms.
+import json
+
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return "?"
+                case Lookup.Missing:
+                    return "-"
+        case _:
+            return "!"
+
+
+def name_of(people: dict[str, json.Value], key: str) -> str:
+    match people.lookup(key):
+        case Lookup.Found(value):
+            match value:
+                case json.Value.String(text):
+                    return text.clone()
+                case _:
+                    return "?"
+        case Lookup.Missing:
+            return "-"
+
+
+def make(city: str) -> json.Value:
+    mut fields: dict[str, json.Value] = {}
+    fields["city"] = json.Value.String(city.clone())
+    fields["age"] = json.Value.Int(7)
+    return json.Value.Object(fields)
+
+
+def main() -> int32:
+    mut doc = make("Lagos")
+    first = field_str(doc, "city")
+    print(first)
+    print(field_str(doc, "age"))
+    print(field_str(doc, "zip"))
+    print(field_str(json.Value.Int(3), "city"))
+    match mut doc:
+        case json.Value.Object(fields):
+            fields["city"] = json.Value.String("Accra")
+        case _:
+            pass
+    print(first)
+    print(field_str(doc, "city"))
+
+    mut people: dict[str, json.Value] = {}
+    mut i = 0
+    while i < 40:
+        people[f"p{i}"] = json.Value.String(f"name{i}")
+        i += 1
+    people["n"] = json.Value.Null
+    mut names: list[str] = []
+    for key in ["p3", "p39", "n", "q"]:
+        names.append(name_of(people, key))
+    shared = people.copy()
+    names.append(name_of(shared, "p5"))
+    people["p5"] = json.Value.String("changed")
+    names.append(name_of(shared, "p5"))
+    names.append(name_of(people, "p5"))
+    print(", ".join(names))
+    return 0

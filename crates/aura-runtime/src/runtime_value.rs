@@ -333,11 +333,12 @@ impl Value {
 /// standard error when its program ends, so measurements are the same
 /// numbers on the interpreter and the direct backend. The direct runtime also
 /// counts the retains, releases, and copies of its boxes, and the boxes it
-/// frees. Those four counters run only when the report is requested, so a
-/// retain costs one relaxed load otherwise. The interpreter reports zero for
+/// frees. Every counter runs only when the report is requested, so a
+/// retain or an allocation costs one relaxed load otherwise. The interpreter reports zero for
 /// them.
 pub mod representation_stats {
     use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
+    use std::sync::OnceLock;
 
     static UNION_PAYLOAD_BOXES: AtomicU64 = AtomicU64::new(0);
     static CLOSURE_ENVIRONMENTS: AtomicU64 = AtomicU64::new(0);
@@ -445,25 +446,46 @@ pub mod representation_stats {
         }
     }
 
+    /// Whether the allocation counters count: only when the process asked
+    /// for the report, which it reads once. Each count is an atomic add on
+    /// a word every thread shares, so counting unasked would cost each box
+    /// a locked instruction and, across workers, a contended cache line.
+    /// Unit tests always count.
+    #[inline]
+    fn counting() -> bool {
+        if cfg!(test) {
+            return true;
+        }
+        static REQUESTED: OnceLock<bool> = OnceLock::new();
+        *REQUESTED.get_or_init(requested)
+    }
+
+    #[inline]
+    fn note_allocation(counter: &AtomicU64, count: u64) {
+        if counting() {
+            counter.fetch_add(count, Ordering::Relaxed);
+        }
+    }
+
     pub fn note_union_payload_box() {
-        UNION_PAYLOAD_BOXES.fetch_add(1, Ordering::Relaxed);
+        note_allocation(&UNION_PAYLOAD_BOXES, 1);
     }
 
     pub fn note_closure_environment() {
-        CLOSURE_ENVIRONMENTS.fetch_add(1, Ordering::Relaxed);
+        note_allocation(&CLOSURE_ENVIRONMENTS, 1);
     }
 
     pub fn note_opaque_box() {
-        OPAQUE_BOXES.fetch_add(1, Ordering::Relaxed);
+        note_allocation(&OPAQUE_BOXES, 1);
     }
 
     pub fn note_callable_overflow_allocation() {
-        CALLABLE_OVERFLOW_ALLOCATIONS.fetch_add(1, Ordering::Relaxed);
+        note_allocation(&CALLABLE_OVERFLOW_ALLOCATIONS, 1);
     }
 
     pub fn note_cloned_elements(count: usize) {
         if count > 0 {
-            CLONED_ELEMENTS.fetch_add(count as u64, Ordering::Relaxed);
+            note_allocation(&CLONED_ELEMENTS, count as u64);
         }
     }
 

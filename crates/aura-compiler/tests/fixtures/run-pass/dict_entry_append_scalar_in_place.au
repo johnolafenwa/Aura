@@ -1,0 +1,48 @@
+# Appending a scalar to a list held in a dict entry, through `d[k]` or a
+# `match mut` lookup, on a local dict, a field, and a list element, changes
+# the list in place. A copy taken before keeps its own elements, and a
+# missing key takes the other arm.
+class Index:
+    by_key: dict[str, list[int64]] = {}
+    weights: dict[int64, list[float64]] = {}
+
+    def add(mut self, key: own str, id: int64):
+        match mut self.by_key.lookup(key):
+            case Lookup.Found(ids):
+                ids.append(id)
+            case Lookup.Missing:
+                self.by_key[key] = [id]
+
+    def weigh(mut self, key: int64, weight: float64):
+        if key in self.weights:
+            self.weights[key].append(weight)
+        else:
+            self.weights[key] = [weight]
+
+
+def main() -> int32:
+    mut index = Index()
+    for i in range(10):
+        index.add(["a", "b", "c"][i % 3].clone(), i)
+        index.weigh(i % 2, 0.5 * (i as float64))
+    snapshot = index.by_key.copy()
+    index.add("a", 100)
+    print(index.by_key["a"])
+    print(snapshot["a"])
+    print(index.by_key["b"])
+    print(index.weights[1])
+
+    mut local: dict[str, list[int64]] = {"x": [1]}
+    local["x"].append(2)
+    match mut local.lookup("x"):
+        case Lookup.Found(xs):
+            xs.append(3)
+        case Lookup.Missing:
+            pass
+    print(local["x"])
+
+    mut nested: list[dict[str, list[int64]]] = [{"k": []}, {"k": [9]}]
+    nested[1]["k"].append(10)
+    print(nested[1]["k"])
+    print(nested[0]["k"])
+    return 0

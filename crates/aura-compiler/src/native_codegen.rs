@@ -1691,6 +1691,26 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
+        // A loan read into a local that is only matched and read for
+        // payloads that are only cloned takes a shadow box too.
+        let mut shadow_entry_copies = shadow_entry_copies;
+        let mut shadow_read_targets = HashSet::new();
+        for (loan, target) in
+            shadow_reads::shadow_read_loans(function, &entry_copy_loans, &lent_entry_copies)
+        {
+            if lookup_slots.contains(&target)
+                || lent_places.contains(&target)
+                || lent_element_reads.payloads.contains_key(&target)
+                || !matches!(
+                    variable_types.get(loan.as_str()),
+                    Some(DirectType::Opaque(_))
+                )
+            {
+                continue;
+            }
+            shadow_entry_copies.insert(loan);
+            shadow_read_targets.insert(target);
+        }
         // A fused test reads a local dict where it lies, for a loan that
         // holds a box.
         let shadow_boxes = shadow_entry_copies
@@ -1784,6 +1804,9 @@ impl<'a> NativeCodegen<'a> {
             fused_entry_slots: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
             shadow_entry_copies,
+            shadow_read_targets,
+            shadow_reads_taken: HashSet::new(),
+            shadow_reads_released: HashSet::new(),
             key_loops,
             key_loop_keys,
             lent_entry_copies,
@@ -3171,6 +3194,16 @@ struct FunctionCompiler<'a> {
     /// The entry loans only borrowers read. See
     /// `element_loans::shadow_entry_copy_loans`.
     shadow_entry_copies: HashSet<String>,
+    /// The locals a loan of `shadow_entry_copies` is read into that are only
+    /// matched and read for payloads (see `shadow_reads::shadow_read_loans`).
+    /// The loan's end takes the shadow box back, so their releases are
+    /// skipped.
+    shadow_read_targets: HashSet<String>,
+    /// The locals of `shadow_read_targets` whose read took a shadow box.
+    shadow_reads_taken: HashSet<String>,
+    /// The locals of `shadow_read_targets` released before any read took a
+    /// shadow box, which then holds a copy of its own.
+    shadow_reads_released: HashSet<String>,
     /// The loops over a dict's keys that walk its entries instead (see
     /// `key_loops`), by the keys copy they make no more, with the slot the
     /// walk is at and the slot it goes on from.
@@ -4027,10 +4060,21 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
 
+        let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
+            if skipped > 0 {
+                skipped -= 1;
+                continue;
+            }
             // A fact emits nothing. The accesses it covers say so, and a
             // retain before it stays for the read that follows.
             if matches!(instruction, Instruction::IndexInRange { .. }) {
+                continue;
+            }
+            if let Some(fused) =
+                self.compile_element_path_push(&block.instructions[instruction_index..])?
+            {
+                skipped = fused - 1;
                 continue;
             }
             self.str_append_root =
@@ -4347,6 +4391,13 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::Release { place }
                 if self.key_loops.contains_key(place) || self.key_loop_keys.contains_key(place) => {
             }
+            // A shadow read holds the loan's box, which the loan's end takes
+            // back.
+            Instruction::Release { place } if self.shadow_reads_taken.contains(place) => {}
+            Instruction::Release { place } if self.shadow_read_targets.contains(place) => {
+                self.shadow_reads_released.insert(place.clone());
+                self.release_root(place)?;
+            }
             // A slice native code did not make holds nothing.
             Instruction::Release { place } if self.text_byte_slices.contains(place) => {}
             Instruction::Release { place } => self.release_root(place)?,
@@ -4608,7 +4659,29 @@ impl<'a> FunctionCompiler<'a> {
             }
             Instruction::ReadLoan { target, loan } => {
                 self.mark_emptied_store_root(target);
-                if self.lent_payloads.contains(target.as_str()) {
+                if self.shadow_read_targets.contains(target.as_str())
+                    && self.shadow_fused_copies.contains(loan.as_str())
+                {
+                    // The local reads the shadow box, which the loan's end
+                    // takes back (see `shadow_reads`).
+                    if self.shadow_reads_released.contains(target.as_str()) {
+                        return Err(format!(
+                            "direct backend released shadow read `{target}` before reading it"
+                        ));
+                    }
+                    self.shadow_reads_taken.insert(target.clone());
+                    // The box has the shape of the loan's type, which the
+                    // local shares, so it takes no tag.
+                    let loaded = self.load_place(loan)?;
+                    if self.type_of_place(target)? != self.type_of_place(loan)? {
+                        return Err(format!(
+                            "direct backend cannot read shadow `{loan}` into `{target}` of another type"
+                        ));
+                    }
+                    // The local takes the loan's reference as it is.
+                    self.mark_temporary_opaque_owned(&loaded);
+                    self.store_place(target, loaded)?;
+                } else if self.lent_payloads.contains(target.as_str()) {
                     self.read_lent_union_payload(target, loan)?;
                 } else if !self.read_native_loan(target, loan)? {
                     let loaded = self.load_place(loan)?;
@@ -8988,6 +9061,114 @@ impl<'a> FunctionCompiler<'a> {
         let taken = self.owned_opaque_result(inst.results, element_type);
         let ty = self.type_of_place(place)?;
         self.coerce_value(taken, &ty)
+    }
+
+    /// `xs.append(x)` of a scalar through an element or entry loan, as the
+    /// four instructions `Lend`, the push on the lent temporary, `EndLend`,
+    /// and the push's unit result's `Eval` lower it: one runtime call
+    /// appends the bits to the list the loan's path reaches, in place,
+    /// instead of moving the list out of its collection into a box and
+    /// storing it back. Returns how many instructions it compiled, or
+    /// `None` when `instructions` start otherwise.
+    fn compile_element_path_push(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<Option<usize>, String> {
+        let [Instruction::Lend {
+            place,
+            temp,
+            mutable: true,
+        }, Instruction::Assign {
+            target: pushed,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: op @ RuntimeOp::List(ListOp::PushScalar(kind)),
+                            receiver: Some(Operand::Place(receiver)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }, Instruction::EndLend {
+            place: ended,
+            temp: ended_temp,
+            mutable: true,
+        }, Instruction::Eval {
+            value: Operand::Place(evaluated),
+        }, ..] = instructions
+        else {
+            return Ok(None);
+        };
+        if receiver != temp
+            || ended != place
+            || ended_temp != temp
+            || evaluated != pushed
+            || args.len() != 1
+            || self
+                .lent_elements
+                .contains_key(place.split('.').next().unwrap_or(place))
+            || self.native_loans.contains_key(place.as_str())
+        {
+            return Ok(None);
+        }
+        let resolved = self.resolve_view_place(place)?;
+        let [alternative] = resolved.alternatives.as_slice() else {
+            return Ok(None);
+        };
+        if !alternative.conditions.is_empty()
+            || !alternative.union_payloads.is_empty()
+            || alternative.elements.is_empty()
+        {
+            return Ok(None);
+        }
+        let Some(Type::Named(name, element_types)) = alternative
+            .elements
+            .last()
+            .map(|selector| selector.element_type.clone())
+        else {
+            return Ok(None);
+        };
+        if name != "list" || element_types.len() != 1 {
+            return Ok(None);
+        }
+        let element_direct_ty =
+            ensure_direct_type(&element_types[0], &self.classes, "list element")?;
+        let elements = alternative.elements.clone();
+        let root_place = alternative.place.clone();
+        let loaded =
+            self.load_operand_with_integer_hint(&args[0].value, element_direct_ty.scalar_kind())?;
+        let value = self.coerce_value(loaded, &element_direct_ty)?.values[0];
+        let bits = if kind.is_float() {
+            self.builder.bitcast(types::I64, value)
+        } else {
+            value
+        };
+        let (collection, projection) = self.load_element_path_root(&root_place)?;
+        let path = self.element_path_operands(&projection, &elements)?;
+        let mut kind_words = Vec::new();
+        self.push_runtime_call_words(op.runtime_call(), &mut kind_words);
+        let [kind_word] = kind_words.as_slice() else {
+            return Err(format!(
+                "direct backend has no scalar kind for the push on `{place}`"
+            ));
+        };
+        self.builder.call(
+            self.runtime[RuntimeFn::ElementPathPushScalar],
+            &[
+                collection.values[0],
+                path.path_ptr,
+                path.path_len,
+                path.selectors_ptr,
+                path.count,
+                bits,
+                *kind_word,
+                path.line,
+                path.column,
+            ],
+        );
+        Ok(Some(4))
     }
 
     /// Runs the dispatch MIR resolved for `.field` on a loaded receiver.
@@ -18141,6 +18322,8 @@ mod key_loops;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_shadow_reads.rs"]
+mod shadow_reads;
 
 #[path = "native_codegen_plain.rs"]
 mod plain;

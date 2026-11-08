@@ -25781,6 +25781,51 @@ fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
         "[1, 2, 3, 4]"
     );
 
+    // A push appends a scalar's bits to the list in place, and a list of
+    // no known element type takes the value path and learns it.
+    let push = |bits: i64, kind: super::DirectScalarKind| {
+        super::aura_direct_element_path_push_scalar(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [key as i64].as_ptr(),
+            1,
+            bits,
+            kind as i64,
+            3,
+            9,
+        );
+    };
+    push(5, super::DirectScalarKind::Int64);
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[1, 2, 3, 4, 5]"
+    );
+    let untyped = super::aura_direct_vec_empty();
+    element_path_store(table, "[k]", &[key as i64], unsafe { take_value(untyped) });
+    push(2.5f64.to_bits() as i64, super::DirectScalarKind::Float64);
+    assert_eq!(
+        element_path_load(table, "[k]", &[key as i64]).render(),
+        "[2.5]"
+    );
+    // A value that is not a list traps.
+    element_path_store(table, "[k]", &[key as i64], Value::Unit);
+    let not_list = element_trap_message(move || {
+        super::aura_direct_element_path_push_scalar(
+            table as *mut OpaqueValue,
+            "[k]".as_ptr(),
+            3,
+            [key as i64].as_ptr(),
+            1,
+            1,
+            super::DirectScalarKind::Int64 as i64,
+            3,
+            9,
+        );
+    });
+    assert!(not_list.contains("expected `list`"), "{not_list}");
+    element_path_store(table, "[k]", &[key as i64], bucket(&[1, 2, 3, 4]));
+
     // A missing key traps at the index expression for both helpers.
     let missing = string_value("missing") as usize;
     let missing_probe = element_trap(move || {
