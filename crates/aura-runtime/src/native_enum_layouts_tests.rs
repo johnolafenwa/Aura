@@ -819,7 +819,7 @@ fn json_parses_build_typed_variants_that_dump_and_read_in_place() {
         layout,
         "Array",
         vec![Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("json.Value"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
             elements: vec![
                 json_typed(layout, "Bool", vec![Value::Bool(false)]),
                 json_typed(layout, "Int", vec![int64(4)]),

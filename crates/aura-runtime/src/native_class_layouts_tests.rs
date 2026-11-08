@@ -46,7 +46,7 @@ fn int32(value: i64) -> Value {
 
 fn ints(values: &[i64]) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: ListElements::from(values.iter().map(|value| int64(*value)).collect::<Vec<_>>()),
         str_view: Default::default(),
     })
@@ -114,7 +114,7 @@ fn layout(prefix: &str, access: u32) -> &'static ClassLayout {
 
 fn meta(prefix: &str, name: &str, count: i64) -> Value {
     Value::Instance(InstanceValue {
-        class_name: format!("{prefix}Meta"),
+        class_name: crate::runtime_value::RuntimeName::from(format!("{prefix}Meta")),
         fields: BTreeMap::from([
             ("name".to_string(), text(name)),
             ("count".to_string(), int64(count)),
@@ -147,7 +147,7 @@ fn typed_book(prefix: &str, access: u32) -> TypedFields {
 
 fn instance(class_name: &str, fields: InstanceFields) -> Value {
     Value::Instance(InstanceValue {
-        class_name: class_name.to_string(),
+        class_name: crate::runtime_value::RuntimeName::from(class_name.to_string()),
         fields,
     })
 }
@@ -639,7 +639,9 @@ fn appended_typed_instances_keep_their_own_boxes() {
         let prefix = "Appended";
         let access = FIRST_TEST_ACCESS + 70;
         let list = boxed_value(Value::Vec(VecValue {
-            element_type: Type::named(&format!("{prefix}Book")),
+            element_type: crate::runtime_value::SharedType::from(Type::named(&format!(
+                "{prefix}Book"
+            ))),
             elements: ListElements::new(),
             str_view: Default::default(),
         }));
@@ -666,7 +668,9 @@ fn appended_typed_instances_keep_their_own_boxes() {
         unsafe { aura_direct_release_value(second) };
         // A list that keeps `Value`s takes the instance out of its box.
         let values = boxed_value(Value::Vec(VecValue {
-            element_type: Type::named(&format!("{prefix}Book")),
+            element_type: crate::runtime_value::SharedType::from(Type::named(&format!(
+                "{prefix}Book"
+            ))),
             elements: ListElements::from(vec![instance(
                 &format!("{prefix}Book"),
                 InstanceFields::Typed(typed_book(prefix, access)),

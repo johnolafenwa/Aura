@@ -3075,14 +3075,14 @@ impl MirRuntime {
             Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone())),
             Value::Vec(vector) => Some(Type::Named(
                 "list".to_string(),
-                vec![vector.element_type.clone()],
+                vec![Type::clone(&vector.element_type)],
             )),
             Value::Array(array) => {
                 Some(Type::Named("Array".to_string(), vec![array.element_type()]))
             }
             Value::Set(set) => Some(Type::Named(
                 "set".to_string(),
-                vec![set.element_type.clone()],
+                vec![Type::clone(&set.element_type)],
             )),
             Value::Map(map) => Some(Type::Named(
                 "dict".to_string(),
@@ -3159,7 +3159,7 @@ impl MirRuntime {
     }
 
     fn infer_instance_type(&self, instance: &InstanceValue) -> Option<Type> {
-        let class = self.classes.get(&instance.class_name)?;
+        let class = self.classes.get(instance.class_name.as_str())?;
         if class.type_params.is_empty() {
             return Some(Type::named(&instance.class_name));
         }
@@ -3179,7 +3179,7 @@ impl MirRuntime {
                 None => Type::named("Unknown"),
             })
             .collect();
-        Some(Type::Named(instance.class_name.clone(), resolved_args))
+        Some(Type::Named(instance.class_name.to_string(), resolved_args))
     }
 
     fn infer_runtime_value_type(&self, value: &Value) -> Option<Type> {
@@ -4397,7 +4397,7 @@ impl MirRuntime {
     ) -> Result<(String, Value)> {
         let class = self
             .classes
-            .get(&instance.class_name)
+            .get(instance.class_name.as_str())
             .cloned()
             .ok_or_else(|| {
                 Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
@@ -4735,7 +4735,7 @@ impl MirRuntime {
                 elements,
                 element_type,
             } => Ok(RvalueOutcome::Value(Value::Vec(VecValue {
-                element_type: element_type.clone(),
+                element_type: aura_runtime::runtime_value::SharedType::from(element_type.clone()),
                 elements: elements
                     .iter()
                     .map(|operand| self.evaluate_owned_operand(operand, env))
@@ -4795,7 +4795,9 @@ impl MirRuntime {
                     values.insert(value);
                 }
                 Ok(RvalueOutcome::Value(Value::Set(SetValue {
-                    element_type: element_type.clone(),
+                    element_type: aura_runtime::runtime_value::SharedType::from(
+                        element_type.clone(),
+                    ),
                     elements: values,
                 })))
             }
@@ -4825,7 +4827,7 @@ impl MirRuntime {
                     );
                 }
                 Ok(RvalueOutcome::Value(Value::Instance(InstanceValue {
-                    class_name: class_name.clone(),
+                    class_name: aura_runtime::runtime_value::RuntimeName::from(class_name.clone()),
                     fields: values.into(),
                 })))
             }
@@ -5075,7 +5077,7 @@ impl MirRuntime {
             let values = evaluate_named_args(args, env)?;
             bind_builtin_args(&[], values)?;
             return Ok(Value::Vec(VecValue {
-                element_type: Type::named("Unknown"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("Unknown")),
                 elements: Vec::new().into(),
                 str_view: Default::default(),
             }));
@@ -5085,7 +5087,7 @@ impl MirRuntime {
             let values = evaluate_named_args(args, env)?;
             bind_builtin_args(&[], values)?;
             return Ok(Value::Set(SetValue {
-                element_type: Type::named("Unknown"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("Unknown")),
                 elements: SetElements::new(),
             }));
         }
@@ -5225,7 +5227,9 @@ impl MirRuntime {
                         Diagnostic::coded("AU4005", "list capacity allocation failed")
                     })?;
                     Ok(Value::Vec(VecValue {
-                        element_type: args[0].clone(),
+                        element_type: aura_runtime::runtime_value::SharedType::from(
+                            args[0].clone(),
+                        ),
                         elements: elements.into(),
                         str_view: Default::default(),
                     }))
@@ -5247,7 +5251,9 @@ impl MirRuntime {
                         Diagnostic::coded("AU4005", "set capacity allocation failed")
                     })?;
                     Ok(Value::Set(SetValue {
-                        element_type: args[0].clone(),
+                        element_type: aura_runtime::runtime_value::SharedType::from(
+                            args[0].clone(),
+                        ),
                         elements,
                     }))
                 }
@@ -6197,7 +6203,7 @@ impl MirRuntime {
                     .unwrap_or(Type::named(&instance.class_name));
                 let class = self
                     .classes
-                    .get(&instance.class_name)
+                    .get(instance.class_name.as_str())
                     .cloned()
                     .ok_or_else(|| {
                         Diagnostic::new(format!("unknown MIR class `{}`", instance.class_name))
@@ -7753,7 +7759,9 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(key)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::clone(&map.key_type),
+                    element_type: aura_runtime::runtime_value::SharedType::from(Type::clone(
+                        &map.key_type,
+                    )),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7768,7 +7776,9 @@ impl MirRuntime {
                     elements.push(try_clone_mir_value(value)?);
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::clone(&map.value_type),
+                    element_type: aura_runtime::runtime_value::SharedType::from(Type::clone(
+                        &map.value_type,
+                    )),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7792,10 +7802,10 @@ impl MirRuntime {
                     }));
                 }
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::Tuple(vec![
+                    element_type: aura_runtime::runtime_value::SharedType::from(Type::Tuple(vec![
                         Type::clone(&map.key_type),
                         Type::clone(&map.value_type),
-                    ]),
+                    ])),
                     elements: elements.into(),
                     str_view: Default::default(),
                 }))
@@ -7922,7 +7932,7 @@ impl MirRuntime {
                     return Err(Diagnostic::new("`split` requires a `str` argument"));
                 };
                 Ok(Value::Vec(VecValue {
-                    element_type: Type::named("str"),
+                    element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
                     elements: text.split(separator.as_str()).map(Value::string).collect(),
                     str_view: Default::default(),
                 }))
@@ -8755,7 +8765,9 @@ impl MirRuntime {
                     Some(&self.cancellation),
                 ) {
                     Ok(names) => Ok(result_ok(Value::Vec(VecValue {
-                        element_type: Type::named("str"),
+                        element_type: aura_runtime::runtime_value::SharedType::from(Type::named(
+                            "str",
+                        )),
                         elements: names.into_iter().map(Value::string).collect(),
                         str_view: Default::default(),
                     }))),
@@ -10882,7 +10894,7 @@ fn opaque_handle_from_runtime(value: &Value) -> Option<FfiValue> {
 
 fn bytes_runtime_value(bytes: &[u8]) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
         elements: bytes
             .iter()
             .copied()
@@ -11807,7 +11819,7 @@ fn headers_map_value(headers: Vec<(String, String)>) -> Value {
 
 fn bytes_vec_value(bytes: Vec<u8>) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
         elements: bytes
             .into_iter()
             .map(|byte| {

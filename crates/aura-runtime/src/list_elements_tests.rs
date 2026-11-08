@@ -69,7 +69,7 @@ fn test_record_layout() -> &'static PlainLayout {
 fn record(x: i64) -> Value {
     test_record_layout();
     Value::Instance(InstanceValue {
-        class_name: "ListTestRecord".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("ListTestRecord".to_string()),
         fields: [
             ("x".to_string(), int(x)),
             ("flag".to_string(), Value::Bool(x % 2 == 0)),
@@ -84,7 +84,7 @@ fn record(x: i64) -> Value {
 fn misshapen_record(x: i64) -> Value {
     test_record_layout();
     Value::Instance(InstanceValue {
-        class_name: "ListTestRecord".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("ListTestRecord".to_string()),
         fields: [("x".to_string(), Value::String(format!("r{x}").into()))].into(),
     })
 }
@@ -121,12 +121,12 @@ fn lists_keep_registered_records_in_place() {
     assert_eq!(boxed.form(), ListForm::Values);
     assert_eq!(list, boxed);
     let typed_value = Value::Vec(crate::runtime_value::VecValue {
-        element_type: Type::named("ListTestRecord"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("ListTestRecord")),
         elements: list.clone(),
         str_view: Default::default(),
     });
     let boxed_value = Value::Vec(crate::runtime_value::VecValue {
-        element_type: Type::named("ListTestRecord"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("ListTestRecord")),
         elements: boxed,
         str_view: Default::default(),
     });
@@ -929,7 +929,7 @@ fn reserve_and_capacity_work_in_every_form() {
 fn slices_of_records_in_place_copy_their_words() {
     let layout = test_record_layout();
     let vector = crate::runtime_value::VecValue {
-        element_type: Type::named("ListTestRecord"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("ListTestRecord")),
         elements: ListElements::from(vec![record(1), record(2), record(3), record(4)]),
         str_view: Default::default(),
     };

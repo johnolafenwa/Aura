@@ -201,3 +201,22 @@ Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds, docdb
 | --- | --- | --- | --- |
 | json_roundtrip | 367 ms | 306 ms | 224 ms |
 | docdb | 831 ms, 194 MB | 768 ms, 194 MB | 488 ms, 115 MB |
+
+## Lean values, step 3: a 64-byte `Value` (2026-11-08)
+
+- `RuntimeName` is one word. A static name keeps its address in the low
+  48 bits, its length in the next 15, and sets the top bit; a shared name
+  is the address of an `Arc<String>`. `EnumVariantValue` went from 80 to
+  48 bytes without dropping its names.
+- `list` and `set` keep their element type as a `SharedType` (one
+  `Arc<Type>`, with the common types shared once), like `dict` already
+  did: `VecValue` 72 -> 32 bytes, `SetValue` 64 -> 24.
+- An instance's class name is a `RuntimeName` (`InstanceValue` 56 -> 40),
+  and an HTTP response keeps its parts behind one pointer (80 -> 8).
+- `Value` is 64 bytes (from 96), a box 160 (from 192), and a dict entry
+  128 (from 192).
+
+| Program | Before | After | Python |
+| --- | --- | --- | --- |
+| json_roundtrip, 30 rounds | 340 ms, 16 MB | 318 ms, 12 MB | 228 ms, 14 MB |
+| docdb, 50k docs | 798 ms, 194 MB | 730 ms, 151 MB | 452 ms, 115 MB |
