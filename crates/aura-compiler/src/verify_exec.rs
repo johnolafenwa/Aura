@@ -289,6 +289,9 @@ pub(super) enum Val {
     Str(String),
     /// A float, as an IEEE-754 SMT `FloatingPoint` term.
     Float(String, FloatTy),
+    /// A function value that names one function: a call through it is a
+    /// call of that function.
+    Func(String),
     /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
     /// and its values as an `(Array K S)` when the encoding models them.
     Map {
@@ -432,6 +435,9 @@ pub(super) struct Exec<'a> {
     pub(super) assumed_fails: BTreeSet<usize>,
     /// Set while the `requires` of a `lemma def` call are proved.
     pub(super) erasing: bool,
+    /// Set while an operand is read where a function value stays one the
+    /// verifier follows: copied to a place, or called.
+    func_ok: bool,
     /// Set while a block of `ghost` code runs.
     in_ghost: bool,
     /// Set, for a build, while the integer operation at the current
@@ -482,6 +488,7 @@ impl<'a> Exec<'a> {
             span: function.span,
             assumed_fails: BTreeSet::new(),
             erasing: false,
+            func_ok: false,
             in_ghost: false,
             trap_site: false,
             contract_override: None,
@@ -812,6 +819,60 @@ impl<'a> Exec<'a> {
     // ----- Operands --------------------------------------------------------
 
     fn operand(&mut self, state: &mut State, operand: &Operand, hint: Option<IntTy>) -> Val {
+        let value = self.operand_value(state, operand, hint);
+        // A function value that goes where the verifier cannot follow it,
+        // such as into a call or a collection, may be called with
+        // arguments its `requires` does not allow.
+        if let Val::Func(name) = &value {
+            if !self.func_ok {
+                let pc = state.pc.clone();
+                self.oblige_unfollowed(name, &pc);
+            }
+        }
+        value
+    }
+
+    /// Reports that the `requires` of `name`, if it has one, is checked
+    /// where its function value is called, since the verifier no longer
+    /// knows which value that is.
+    fn oblige_unfollowed(&mut self, name: &str, pc: &str) {
+        let has_requires = self.cx.decl(name).is_some_and(|decl| {
+            decl.contracts
+                .iter()
+                .any(|clause| clause.kind == crate::ast::ContractKind::Requires)
+        });
+        if has_requires {
+            let span = self.span;
+            self.oblige(
+                ObligationKind::Requires,
+                span,
+                format!(
+                    "`requires` of `{}` holds where it is called through a value",
+                    crate::mir::public_function_name(name)
+                ),
+                pc,
+                Goal::Unsupported(
+                    "a call through a function value checks `requires` when it runs".into(),
+                ),
+            );
+        }
+    }
+
+    /// `operand`, read where a function value stays one the verifier
+    /// follows.
+    fn followed_operand(
+        &mut self,
+        state: &mut State,
+        operand: &Operand,
+        hint: Option<IntTy>,
+    ) -> Val {
+        self.func_ok = true;
+        let value = self.operand(state, operand, hint);
+        self.func_ok = false;
+        value
+    }
+
+    fn operand_value(&mut self, state: &mut State, operand: &Operand, hint: Option<IntTy>) -> Val {
         match operand {
             Operand::Place(place) | Operand::MovePlace(place) => self.read_place(state, place),
             Operand::Int(value) => Val::Int(value.to_string(), hint.unwrap_or(IntTy::INT64)),
@@ -819,30 +880,7 @@ impl<'a> Exec<'a> {
             Operand::String(text) => smt_string(text).map_or(Val::Opaque, Val::Str),
             Operand::Float(value) => Val::Float(FloatTy::literal(*value), FloatTy::F64),
             Operand::Unit => Val::Unit,
-            Operand::Function { name, .. } => {
-                let has_requires = self.cx.decl(name).is_some_and(|decl| {
-                    decl.contracts
-                        .iter()
-                        .any(|clause| clause.kind == crate::ast::ContractKind::Requires)
-                });
-                if has_requires {
-                    let pc = state.pc.clone();
-                    let span = self.span;
-                    self.oblige(
-                        ObligationKind::Requires,
-                        span,
-                        format!(
-                            "`requires` of `{}` holds where it is called through a value",
-                            crate::mir::public_function_name(name)
-                        ),
-                        &pc,
-                        Goal::Unsupported(
-                            "a call through a function value checks `requires` when it runs".into(),
-                        ),
-                    );
-                }
-                Val::Opaque
-            }
+            Operand::Function { name, .. } => Val::Func(name.clone()),
             _ => Val::Opaque,
         }
     }
@@ -1394,6 +1432,13 @@ impl<'a> Exec<'a> {
         if values.iter().all(|value| *value == first) {
             return first.clone();
         }
+        // Different function values merge to one the verifier does not
+        // follow.
+        for (pc, value) in pcs.iter().zip(values) {
+            if let Val::Func(name) = value {
+                self.oblige_unfollowed(name, pc);
+            }
+        }
         // Values of different shapes, such as a havocked `Opaque` and a
         // modeled value, merge to a value the encoding knows nothing about.
         if !values.iter().all(|value| same_shape(first, value)) {
@@ -1529,7 +1574,7 @@ impl<'a> Exec<'a> {
                 Val::Union(tag, self.merge_children(pcs, values, hint))
             }
             // Equal units and opaque values returned above.
-            Val::Unit | Val::Opaque => Val::Opaque,
+            Val::Unit | Val::Opaque | Val::Func(_) => Val::Opaque,
         }
     }
 
@@ -2200,7 +2245,7 @@ impl<'a> Exec<'a> {
             None => Val::Opaque,
         };
         match value {
-            Rvalue::Use(operand) => self.operand(state, operand, hint),
+            Rvalue::Use(operand) => self.followed_operand(state, operand, hint),
             Rvalue::Binary {
                 op,
                 left,
@@ -2955,7 +3000,24 @@ impl<'a> Exec<'a> {
                 self.havoc_writebacks(state, args);
                 fresh_target(self)
             }
-            CallTarget::Value(_) | CallTarget::Extern(_) => {
+            CallTarget::Value(callee) => match self.followed_operand(state, callee, None) {
+                Val::Func(name) if self.cx.function(&name).is_some() => {
+                    let mut actuals = Vec::new();
+                    for arg in args {
+                        actuals.push((
+                            arg.name.clone(),
+                            self.operand(state, &arg.value, None),
+                            arg.writeback_place.clone(),
+                        ));
+                    }
+                    self.user_call(state, &name, None, actuals, target_type.as_ref(), target)
+                }
+                _ => {
+                    self.havoc_writebacks(state, args);
+                    fresh_target(self)
+                }
+            },
+            CallTarget::Extern(_) => {
                 self.havoc_writebacks(state, args);
                 fresh_target(self)
             }

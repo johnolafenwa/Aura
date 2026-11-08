@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` follows function values that name one function: a call
+  through `g = inc` proves `inc`'s `requires` and assumes its `ensures`. A
+  function value with a `requires` that is passed on, stored, or chosen on
+  different paths is still reported where the verifier stops following it.
 - `aura verify` models `float32` and `float64` as IEEE-754 values, with
   rounding, NaN, infinities, and signed zeros. It proves float division by
   zero cannot happen, that `as` casts between floats and integers are exact

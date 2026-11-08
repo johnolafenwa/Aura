@@ -2339,3 +2339,57 @@ def main():
         "{failed:?}"
     );
 }
+
+#[test]
+fn a_call_through_a_function_value_that_names_a_function_is_a_call_of_it() {
+    assert_open(
+        r#"
+def inc(n: int64) -> int64:
+    requires n < 100
+    ensures result == n + 1
+    return n + 1
+
+def apply(f: def(n: int64) -> int64, x: int64) -> int64:
+    return f(x)
+
+def direct() -> int64:
+    g = inc
+    y = g(5)
+    assert y == 6
+    return g(y)
+
+def wrong() -> int64:
+    g = inc
+    return g(500)
+
+def escapes() -> int64:
+    return apply(inc, 3)
+
+
+def keep(n: int64) -> int64:
+    return n
+
+def chosen(flag: bool) -> int64:
+    mut g = keep
+    if flag:
+        g = inc
+    return g(1)
+
+def stored() -> int64:
+    fs = [inc]
+    return fs[0](2)
+
+def main():
+    print(direct())
+    print(escapes())
+    print(chosen(true))
+    print(stored())
+"#,
+        &[
+            "18 requires failed",
+            "21 requires unsupported",
+            "30 requires unsupported",
+            "34 requires unsupported",
+        ],
+    );
+}

@@ -23398,6 +23398,9 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
+- calls through a function value that names one function, such as
+  `g = inc` then `g(5)`: the call proves `inc`'s `requires` and assumes its
+  `ensures`
 - quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
   `all([... for ...])` or `any(...)`, with any number of `for` clauses, each
   over a `range`, a modeled list, a `set`, the `keys()` of a `dict`, or
@@ -23407,7 +23410,11 @@ booleans, with each integer type's range as a check:
 
 Anything else is a value the verifier knows nothing about: a `dict` or
 `set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
-`str.split` or `dict.get`, and what a call through a function value returns. A check that depends on one of them can
+`str.split` or `dict.get`, and what a call returns through a function value the verifier cannot
+follow, such as one passed as an argument, stored in a collection, or
+chosen on different paths. Such a value's `requires` is reported as
+`AU5104` where it leaves the function, and stays checked when it is
+called. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
 A loop that builds a list proves what it builds with a quantified
