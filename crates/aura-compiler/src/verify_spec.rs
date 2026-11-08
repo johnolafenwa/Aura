@@ -963,6 +963,9 @@ impl<'a> Exec<'a> {
             let goal = conjoin(&wd);
             let pc = state.pc.clone();
             self.oblige(obligation, *span, text, &pc, Goal::Holds(goal));
+            if self.prove_sites {
+                self.copy_as_site((fail, super::exec::CHECK_FAILURE_SITE));
+            }
         }
         let pc = state.pc.clone();
         self.assume(&pc, term);

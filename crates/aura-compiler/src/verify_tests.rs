@@ -1147,7 +1147,7 @@ def main():
         assert_eq!(proved["last"], plain["last"], "{proved:?}");
         assert_eq!(proved["pick"], plain["pick"], "{proved:?}");
         assert!(proved["bump"] > plain["bump"], "{proved:?}");
-        assert!(removed >= 2, "{removed}");
+        assert!(removed.bounds >= 2, "{removed:?}");
     }
 }
 
@@ -1407,7 +1407,8 @@ def main():
     let proved = erased.replace("big(1)", "big(101)");
     let report = verify_with(&proved, &options).expect("a solver ran above");
     assert!(report.is_proved());
-    assert_eq!(report.proved_sites.len(), 1);
+    // The read, and the lemma's own `assert`.
+    assert_eq!(report.proved_sites.len(), 2, "{:?}", report.proved_sites);
 }
 
 #[test]
@@ -1596,7 +1597,7 @@ def main():
     let fixed = source.replace("a.balance = -1", "a.balance = 4");
     let report = verify_with(&fixed, &options).expect("a solver ran above");
     assert!(report.is_proved(), "{report:#?}");
-    assert_eq!(report.proved_sites.len(), 1);
+    assert!(!report.proved_sites.is_empty());
     crate::run_source(&fixed).expect("the program runs");
 }
 
@@ -1922,7 +1923,7 @@ def main():
         })
         .expect("verifies");
         // The read of `xs[i]` maps across the ghost code around it.
-        assert!(removed >= 1, "{removed}");
+        assert!(removed.bounds >= 1, "{removed:?}");
     }
 
     // A ghost `assert` no run checks: until it is proved, nothing counts as
@@ -1945,4 +1946,99 @@ def main():
         return;
     };
     assert!(report.proved_sites.is_empty());
+}
+
+#[test]
+fn proved_arithmetic_and_assertions_lose_their_checks_in_a_build() {
+    let source = r#"
+def total(xs: list[int64]) -> int64:
+    requires len(xs) <= 100
+    requires all([0 <= x and x <= 10 for x in xs])
+    ensures result <= 1000
+    mut s = 0
+    for i in range(len(xs)):
+        invariant 0 <= s and s <= 10 * i
+        s += xs[i]
+    assert s >= 0
+    return s
+
+def avg(a: int64, b: int64) -> int64:
+    requires 0 <= a and a <= 1000 and 1 <= b and b <= 10
+    return a // b + (a % b) * 2 - -a
+
+def unproved(n: int64, d: int64) -> int64:
+    assert n < 5
+    return n * 2 + n // d
+
+def main():
+    print(total([1, 2, 3]))
+    print(avg(17, 4))
+    print(unproved(3, 1))
+"#;
+    if smt::SolverCommand::find(None).is_err() {
+        return;
+    }
+    let program = crate::check_source(source).expect("checks");
+    let (module, removed) = crate::mir::lower_with_proved_checks(&program, false, |module| {
+        let options = Options {
+            prove_sites: true,
+            ..Options::default()
+        };
+        verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+    .expect("verifies");
+    assert!(removed.bounds >= 1, "{removed:?}");
+    assert!(removed.arithmetic >= 6, "{removed:?}");
+    assert!(removed.assertions >= 3, "{removed:?}");
+    assert_eq!(
+        removed.total(),
+        removed.bounds + removed.arithmetic + removed.assertions
+    );
+    crate::mir::checks::validate_checks(&module).expect("proved traps validate");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .expect("the function")
+    };
+    let traps = |name: &str| {
+        let mut traps = Vec::new();
+        for block in &function(name).blocks {
+            for instruction in &block.instructions {
+                if let crate::mir::Instruction::Assign {
+                    value:
+                        crate::mir::Rvalue::Binary { trap, .. } | crate::mir::Rvalue::Unary { trap, .. },
+                    ..
+                } = instruction
+                {
+                    traps.push(*trap);
+                }
+            }
+        }
+        traps
+    };
+    use crate::mir::ArithmeticTrap;
+    assert!(
+        traps("avg").contains(&ArithmeticTrap::Proved),
+        "{:?}",
+        traps("avg")
+    );
+    assert!(!traps("avg")
+        .iter()
+        .any(|trap| trap.checks_overflow() || trap.checks_divisor()));
+    // What is not proved keeps its checks: the `assert`, and `n * 2` and
+    // `n // d`.
+    let unproved = traps("unproved");
+    assert!(!unproved.contains(&ArithmeticTrap::Proved), "{unproved:?}");
+    let fails = function("unproved")
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, crate::mir::Terminator::AssertFail { .. }))
+        .count();
+    assert!(fails >= 1);
+    assert_eq!(
+        crate::run_source(source).expect("runs").stdout,
+        "6\n23\n9\n"
+    );
 }

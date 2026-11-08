@@ -202,8 +202,8 @@ A proof doesn't remove anything by default. Every contract and every bounds
 check stays in the program, which is why a `requires` that the verifier
 couldn't prove still stops a bad call with a clear diagnostic. When you want
 the proofs to pay for themselves, `aura build --remove-proved-checks` builds
-a native binary without the list bounds checks the verifier proves can never
-fail, and keeps every other check.
+a native binary without the bounds, overflow, divisor, and `assert` checks
+the verifier proves can never fail, and keeps every other check.
 
 The verifier doesn't model everything yet. Floats, strings, dictionaries,
 and sets are outside what it reads today, and a check that depends on them

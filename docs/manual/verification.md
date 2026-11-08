@@ -226,16 +226,25 @@ reported as `AU5104`. `str`, `dict`, and `set` models are planned. See the
 A check counts as proved only when the solver answers that no input breaks
 it. `aura verify` itself removes nothing: every check stays in the program.
 
-`aura build --remove-proved-checks` builds a native binary without the list
-bounds checks of element reads and element borrows (`view x = xs[i]`) that
-the verifier proves can never fail, and prints how many it removed. It runs
-the verifier first, so it needs a solver, and it uses the proof cache. A read
-is left unchecked only when its index is proved to be in range and not
-negative on every path that reaches it, since an unchecked read does not
-count from the end of the list. Every other check stays, and a `--debug`
-build keeps every check.
+`aura build --remove-proved-checks` builds a native binary without the
+checks that the verifier proves can never fail, and prints how many of each
+kind it removed:
+
+- the list bounds checks of element reads and element borrows
+  (`view x = xs[i]`), when the index is proved to be in range and not
+  negative, since an unchecked read does not count from the end of the list
+- the overflow and zero-divisor checks of integer `+`, `-`, `*`, `//`, `%`,
+  `/`, and negation; the native backend also tells LLVM that such a result
+  does not wrap, which lets it optimize the arithmetic around it
+- `assert`s, and the `ensures`, loop `invariant`, and `decreases` checks
+
+A check goes only when it is proved on every path that reaches it. A
+function's `requires` stays checked on entry, since a caller the verifier
+does not see may break it. The flag runs the verifier first, so it needs a
+solver, and it uses the proof cache. A `--debug` build keeps every check.
 
 Removing a check moves the verifier and the solver into what the program
-trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+trusts: a wrong proof would turn a trap into an out-of-bounds read, a
+wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.

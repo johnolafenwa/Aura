@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- `aura build --remove-proved-checks` also removes the integer overflow and
+  zero-divisor checks, and the `assert`, `ensures`, loop `invariant`, and
+  `decreases` checks, that `aura verify` proves can never fail, and tells
+  LLVM that proved integer arithmetic does not wrap. It reports how many
+  checks of each kind it removed. A function's `requires` stays checked.
 - `ghost name = value` declares a local only the verifier reads. The program
   never computes it, and an `assert` or loop clause that reads one is
   proved by `aura verify` and not checked when the program runs. Ghost

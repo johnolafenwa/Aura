@@ -493,7 +493,10 @@ fn apply_rewrite(instruction: &mut Instruction, rewrite: Rewrite) {
             Rewrite::Trap(new),
         ) => {
             if let Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. } = value {
-                *trap = new;
+                // A proof still stands for the check the table names.
+                if !(*trap == ArithmeticTrap::Proved && new.provable()) {
+                    *trap = new;
+                }
             }
         }
         (
@@ -573,7 +576,10 @@ fn validate_instruction(
     let expected = context
         .table_trap(function, target, value)
         .expect("a numeric rvalue has a table trap");
-    if *trap == expected || (*trap == ArithmeticTrap::None && covered == Covered::Advance) {
+    if *trap == expected
+        || (*trap == ArithmeticTrap::None && covered == Covered::Advance)
+        || (*trap == ArithmeticTrap::Proved && expected.provable())
+    {
         return Ok(());
     }
     Err(format!(
@@ -604,55 +610,126 @@ fn unchecked_read_op(instruction: &Instruction) -> Option<RuntimeOp> {
 #[path = "mir_checks_tests.rs"]
 mod tests;
 
-/// Puts an `IndexInRange` fact before each element read or loan that
-/// `aura verify` proved in range and not negative, then marks what the
-/// facts cover, so those accesses skip their bounds check. `proved` names
-/// sites by function, block, and position in `verified`, the module the
-/// verifier read; it was lowered with source locations, which `module`
-/// may lack, so positions are matched by the instructions both share. A
-/// site that does not match is left checked. Returns how many accesses
-/// the facts cover.
-pub(crate) fn insert_proved_index_facts(
+/// What `--remove-proved-checks` removed.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ProvedChecks {
+    /// Element reads and loans that skip their bounds check.
+    pub bounds: usize,
+    /// Integer operations that skip their overflow or divisor check.
+    pub arithmetic: usize,
+    /// `assert`s and `ensures`, loop `invariant`, and `decreases` clauses
+    /// that are no longer checked.
+    pub assertions: usize,
+}
+
+impl ProvedChecks {
+    pub fn total(self) -> usize {
+        self.bounds + self.arithmetic + self.assertions
+    }
+}
+
+/// Removes the checks `aura verify` proved: it puts an `IndexInRange` fact
+/// before each element read or loan proved in range and not negative, then
+/// marks what the facts cover, so those accesses skip their bounds check;
+/// it names trap `Proved` on each integer operation proved not to fail;
+/// and it turns each `assert` or clause check proved to hold into a jump
+/// past it. `proved` names sites by function, block, and position in
+/// `verified`, the module the verifier read, where a block's terminator
+/// is at the position after its last instruction. `verified` was lowered
+/// with source locations, which `module` may lack, so positions are
+/// matched by the instructions both share. A site that does not match is
+/// left checked.
+pub(crate) fn remove_proved_checks(
     module: &mut MirModule,
     verified: &MirModule,
     proved: &std::collections::BTreeSet<(String, usize, usize)>,
-) -> usize {
+) -> ProvedChecks {
+    let mut removed = ProvedChecks::default();
     // Each target block's facts, by position.
     let mut inserts: std::collections::BTreeMap<(usize, usize), Vec<(usize, Instruction)>> =
         Default::default();
     for (name, block, position) in proved {
-        if let Some((function, block, position, fact)) =
-            proved_fact(module, verified, name, *block, *position)
-        {
-            inserts
+        match proved_change(module, verified, name, *block, *position) {
+            Some(ProvedChange::Fact(function, block, position, fact)) => inserts
                 .entry((function, block))
                 .or_default()
-                .push((position, fact));
+                .push((position, *fact)),
+            Some(ProvedChange::Trap(function, block, position)) => {
+                let instruction =
+                    &mut module.functions[function].blocks[block].instructions[position];
+                if let Instruction::Assign {
+                    value: Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. },
+                    ..
+                } = instruction
+                {
+                    *trap = ArithmeticTrap::Proved;
+                    removed.arithmetic += 1;
+                }
+            }
+            Some(ProvedChange::Branch(function, block)) => {
+                let terminator = &mut module.functions[function].blocks[block].terminator;
+                if let super::Terminator::Branch { then_label, .. } = terminator {
+                    *terminator = super::Terminator::Goto(then_label.clone());
+                    removed.assertions += 1;
+                }
+            }
+            None => {}
         }
     }
-    let mut covered = 0;
     for ((function, block), mut facts) in inserts {
         facts.sort_by_key(|(position, _)| std::cmp::Reverse(*position));
         let instructions = &mut module.functions[function].blocks[block].instructions;
         for (position, fact) in facts {
             instructions.insert(position, fact);
-            covered += 1;
+            removed.bounds += 1;
         }
     }
     mark_covered_accesses(module);
-    covered
+    removed
 }
 
-/// The fact that covers the access at `position` of block `block` of
+/// The block whose terminator is the only jump to `label`: a `Branch`
+/// whose failure edge it is.
+fn only_branch_into(function: &MirFunction, label: &str) -> Option<usize> {
+    let mut into = function
+        .blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, block)| super::mir_successors(&block.terminator).contains(&label));
+    let (index, block) = into.next()?;
+    if into.next().is_some() {
+        return None;
+    }
+    match &block.terminator {
+        super::Terminator::Branch {
+            then_label,
+            else_label,
+            ..
+        } if else_label == label && then_label != label => Some(index),
+        _ => None,
+    }
+}
+
+/// The change a proved site makes in `module`.
+enum ProvedChange {
+    /// An `IndexInRange` fact to put at a function's block's position.
+    Fact(usize, usize, usize, Box<Instruction>),
+    /// The integer operation at a function's block's position.
+    Trap(usize, usize, usize),
+    /// The check that ends a function's block.
+    Branch(usize, usize),
+}
+
+/// The change that removes the check at `position` of block `block` of
 /// `name` in `verified`, and where it goes in `module`: the function,
-/// block, and position of the same access there.
-fn proved_fact(
+/// block, and position of the same check there.
+fn proved_change(
     module: &MirModule,
     verified: &MirModule,
     name: &str,
     block: usize,
     position: usize,
-) -> Option<(usize, usize, usize, Instruction)> {
+) -> Option<ProvedChange> {
     let debug_only = |instruction: &&Instruction| {
         matches!(
             instruction,
@@ -661,7 +738,6 @@ fn proved_fact(
     };
     let source = verified.functions.iter().find(|f| f.name == name)?;
     let source_block = source.blocks.get(block)?;
-    let instruction = source_block.instructions.get(position)?;
     let (function_index, target) = module
         .functions
         .iter()
@@ -672,7 +748,25 @@ fn proved_fact(
         .iter()
         .enumerate()
         .find(|(_, b)| b.label == source_block.label)?;
-    // The access is the n-th instruction both lowerings emit.
+    if position == crate::verify::CHECK_FAILURE_SITE {
+        // The check whose failure block this is: the one branch into the
+        // same failure, the same in both lowerings.
+        if !matches!(
+            source_block.terminator,
+            super::Terminator::AssertFail { .. }
+        ) || format!("{:?}", source_block.terminator) != format!("{:?}", target_block.terminator)
+        {
+            return None;
+        }
+        let source_branch = only_branch_into(source, &source_block.label)?;
+        let target_branch = only_branch_into(target, &target_block.label)?;
+        let same = source.blocks[source_branch].label == target.blocks[target_branch].label
+            && format!("{:?}", source.blocks[source_branch].terminator)
+                == format!("{:?}", target.blocks[target_branch].terminator);
+        return same.then_some(ProvedChange::Branch(function_index, target_branch));
+    }
+    let instruction = source_block.instructions.get(position)?;
+    // The check is the n-th instruction both lowerings emit.
     let shared = source_block.instructions[..position]
         .iter()
         .filter(|instruction| !debug_only(instruction))
@@ -684,10 +778,26 @@ fn proved_fact(
         .filter(|(_, instruction)| !debug_only(instruction))
         .nth(shared)?;
     (format!("{found:?}") == format!("{instruction:?}")).then_some(())?;
+    if let Instruction::Assign {
+        value: Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. },
+        ..
+    } = found
+    {
+        return trap.provable().then_some(ProvedChange::Trap(
+            function_index,
+            block_index,
+            target_position,
+        ));
+    }
     let (list, index) = element_read(found).or_else(|| element_loan(found))?;
     let fact = Instruction::IndexInRange {
         list: list.to_string(),
         index: index.to_string(),
     };
-    Some((function_index, block_index, target_position, fact))
+    Some(ProvedChange::Fact(
+        function_index,
+        block_index,
+        target_position,
+        Box::new(fact),
+    ))
 }

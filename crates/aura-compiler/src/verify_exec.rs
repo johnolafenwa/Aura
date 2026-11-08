@@ -232,6 +232,9 @@ pub(super) struct Exec<'a> {
     pub(super) erasing: bool,
     /// Set while a block of `ghost` code runs.
     in_ghost: bool,
+    /// Set, for a build, while the integer operation at the current
+    /// position is checked: each of its checks is also a site.
+    trap_site: bool,
     /// The declaration whose contract the call being made uses instead of
     /// its callee's own: a trait method's, for a call through the trait.
     pub(super) contract_override: Option<&'a crate::ast::FunctionDecl>,
@@ -278,6 +281,7 @@ impl<'a> Exec<'a> {
             assumed_fails: BTreeSet::new(),
             erasing: false,
             in_ghost: false,
+            trap_site: false,
             contract_override: None,
             labels,
             unsupported: None,
@@ -332,6 +336,15 @@ impl<'a> Exec<'a> {
         }
     }
 
+    /// Copies the obligation just made as one for the build site `site`.
+    pub(super) fn copy_as_site(&mut self, site: (usize, usize)) {
+        if let Some(last) = self.obligations.last() {
+            let mut copy = last.clone();
+            copy.site = Some(site);
+            self.obligations.push(copy);
+        }
+    }
+
     pub(super) fn oblige(
         &mut self,
         kind: ObligationKind,
@@ -355,6 +368,9 @@ impl<'a> Exec<'a> {
                     .decl(&self.function.name)
                     .is_some_and(|decl| decl.lemma),
         });
+        if self.trap_site {
+            self.copy_as_site(self.position);
+        }
     }
 
     // ----- Types and fresh values ------------------------------------------
@@ -1288,6 +1304,11 @@ impl<'a> Exec<'a> {
                             &state.pc,
                             Goal::Holds("false".into()),
                         );
+                        // For a build, the check whose failure this is may
+                        // go when no path reaches it.
+                        if self.prove_sites {
+                            self.copy_as_site((index, CHECK_FAILURE_SITE));
+                        }
                     }
                     None => self.fact(not(&state.pc)),
                 }
@@ -1770,6 +1791,45 @@ impl<'a> Exec<'a> {
     // ----- Rvalues ---------------------------------------------------------
 
     fn rvalue(
+        &mut self,
+        state: &mut State,
+        target: Option<&str>,
+        value: &Rvalue,
+        hint: Option<IntTy>,
+    ) -> Val {
+        let checked = match value {
+            Rvalue::Binary { trap, .. } | Rvalue::Unary { trap, .. } => trap.provable(),
+            _ => false,
+        };
+        if !(checked && self.prove_sites) {
+            return self.rvalue_value(state, target, value, hint);
+        }
+        // For a build, the operation's checks may go when each is proved
+        // on every path. A path where the encoding makes none keeps them.
+        let site = self.position;
+        let before = self.obligations.len();
+        self.trap_site = true;
+        let result = self.rvalue_value(state, target, value, hint);
+        self.trap_site = false;
+        if !self.obligations[before..]
+            .iter()
+            .any(|obligation| obligation.site == Some(site))
+        {
+            self.obligations.push(Obligation {
+                kind: ObligationKind::Overflow,
+                span: self.span,
+                message: "an operation the encoding does not check".to_string(),
+                pc: state.pc.clone(),
+                goal: Goal::Unsupported("not modeled".into()),
+                facts: self.facts.len(),
+                site: Some(site),
+                erased: false,
+            });
+        }
+        result
+    }
+
+    fn rvalue_value(
         &mut self,
         state: &mut State,
         target: Option<&str>,
@@ -2756,6 +2816,10 @@ fn runtime_op_is_pure(op: RuntimeOp) -> bool {
 
 /// What a failure block's check states, for the report: the clause as
 /// written, or the `assert` and its message.
+/// The position that names a check failure block's own check as a build
+/// site: the branch into it.
+pub(crate) const CHECK_FAILURE_SITE: usize = usize::MAX;
+
 pub(super) fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
     let text = match message {
         Some(Operand::String(text)) => text.as_str(),

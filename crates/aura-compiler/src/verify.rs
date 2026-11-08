@@ -14,6 +14,7 @@
 
 #[path = "verify_exec.rs"]
 mod exec;
+pub(crate) use exec::CHECK_FAILURE_SITE;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
