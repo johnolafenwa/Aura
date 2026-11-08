@@ -3334,6 +3334,10 @@ impl<'a> FunctionChecker<'a> {
             );
         }
 
+        if method.spec {
+            *checker.recursion_measure.borrow_mut() = None;
+            return checker.check_spec_function(method, &mut locals, &return_type);
+        }
         checker.check_contracts(method, &locals, &return_type)?;
         let flow = checker.check_block(&method.body, &mut locals, &return_type, 0, true)?;
         if return_type != Type::Unit && flow != BlockFlow::AlwaysReturns {

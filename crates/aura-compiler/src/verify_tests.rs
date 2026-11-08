@@ -1671,3 +1671,94 @@ def main():
         &["7 decreases failed", "12 requires failed"],
     );
 }
+
+#[test]
+fn spec_methods_and_spec_requires_are_unfolded() {
+    assert_proved(
+        r#"
+class Account:
+    balance: int64
+    limit: int64 = 1000
+
+    spec def headroom(self) -> int64:
+        return self.limit - self.balance
+
+    public def deposit(mut self, amount: int64):
+        requires 0 <= self.balance and self.balance <= self.limit
+        requires amount > 0 and amount <= self.headroom()
+        ensures self.headroom() == old(self.headroom()) - amount
+        self.balance += amount
+
+spec def ratio(a: int64, b: int64) -> int64:
+    requires b > 0
+    return a // b
+
+def half(n: int64) -> int64:
+    requires 0 <= n and n <= 100
+    ensures result == ratio(n, 2)
+    return n // 2
+
+def main():
+    mut a = Account(balance=10)
+    a.deposit(5)
+    print(a.headroom())
+    print(half(7))
+"#,
+    );
+    assert_open(
+        r#"
+spec def ratio(a: int64, b: int64) -> int64:
+    requires b > 0
+    return a // b
+
+def zero(n: int64, d: int64) -> int64:
+    requires n >= 0
+    ensures ratio(n, d) >= 0 or result == 0
+    return 0
+
+def main():
+    print(zero(1, 1))
+"#,
+        &["8 ensures failed", "9 assert failed"],
+    );
+}
+
+#[test]
+fn trait_implementations_may_weaken_requires_and_strengthen_ensures() {
+    let source = r#"
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 100
+        ensures result >= 0
+
+class Double:
+    pad: int64
+
+impl Scaler for Double:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 1000
+        ensures result == 2 * x
+        return 2 * x
+
+class Narrow:
+    pad: int64
+
+impl Scaler for Narrow:
+    def scale(self, x: int64) -> int64:
+        requires x == 5
+        return x
+
+def through[T: Scaler](s: T) -> int64:
+    ensures result >= 0
+    return s.scale(50)
+
+def direct(d: Double) -> int64:
+    ensures result == 1000
+    return d.scale(500)
+
+def main():
+    print(through(Double(pad=0)))
+    print(direct(Double(pad=0)))
+"#;
+    assert_open(source, &["21 requires failed"]);
+}

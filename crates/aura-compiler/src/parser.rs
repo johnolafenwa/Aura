@@ -930,17 +930,34 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_spec_def_start() || self.at_lemma_def_start() {
-                let keyword = if self.at_spec_def_start() {
-                    "spec"
-                } else {
-                    "lemma"
-                };
+            if self.at_lemma_def_start() {
                 return Err(Diagnostic::coded_at(
                     "AU2048",
                     self.current_span(),
-                    format!("a `{keyword} def` is a module-level function; `{keyword} def` methods are not available yet"),
+                    "a `lemma def` is a module-level function; state the lemma outside the class",
                 ));
+            }
+            // `spec def` and `public spec def` declare a spec method.
+            let public_spec = self.at_simple(&TokenKind::KwPublic)
+                && matches!(self.peek_kind_at(self.index + 1), Some(TokenKind::Identifier(name)) if name == "spec")
+                && matches!(self.peek_kind_at(self.index + 2), Some(TokenKind::KwDef));
+            if public_spec || self.at_spec_def_start() {
+                if public_spec {
+                    self.bump();
+                }
+                self.bump();
+                let mut method = self.parse_function_with_receiver(true, public_spec)?;
+                method.spec = true;
+                for stmt in &mut method.body {
+                    if let Stmt::Return(ReturnStmt {
+                        value: Some(value), ..
+                    }) = stmt
+                    {
+                        rewrite_quantifiers(value);
+                    }
+                }
+                methods.push(method);
+                continue;
             }
             if let Some(kind) = self.at_contract_clause() {
                 if kind != ContractKind::Invariant {

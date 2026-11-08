@@ -1,0 +1,15 @@
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        ensures result >= 0
+
+class Flip:
+    pad: int64
+
+impl Scaler for Flip:
+    def scale(self, x: int64) -> int64:
+        ensures result == 0 - x
+        return 0 - x
+
+def main():
+    f = Flip(pad=0)
+    print(f.scale(3))

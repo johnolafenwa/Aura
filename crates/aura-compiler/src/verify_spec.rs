@@ -34,7 +34,7 @@ impl Exec<'_> {
         pre: &[(String, Val)],
         span: Span,
     ) {
-        let Some(decl) = self.cx.decl(callee) else {
+        let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
             return;
         };
         let env: Env = pre.iter().cloned().collect();
@@ -194,7 +194,7 @@ impl Exec<'_> {
         post: &[(String, Val)],
         result: &Val,
     ) {
-        let Some(decl) = self.cx.decl(callee) else {
+        let Some(decl) = self.contract_override.or_else(|| self.cx.decl(callee)) else {
             return;
         };
         let pre_env: Env = pre.iter().cloned().collect();
@@ -242,6 +242,51 @@ impl Exec<'_> {
             )
             .collect();
         self.assume_record_invariants(state, &returned);
+    }
+
+    /// When an implementation of a trait method states its own `requires`,
+    /// a call through the trait proves only the trait's: each of the
+    /// implementation's must follow from them.
+    pub(super) fn prove_weakened_requires(&mut self, state: &State) {
+        let name = self.function.name.clone();
+        let (Some(decl), Some(trait_method)) = (self.cx.decl(&name), self.cx.implemented(&name))
+        else {
+            return;
+        };
+        let own: Vec<&ContractClause> = decl
+            .contracts
+            .iter()
+            .filter(|clause| clause.kind == ContractKind::Requires)
+            .collect();
+        let inherited: Vec<&ContractClause> = trait_method
+            .contracts
+            .iter()
+            .filter(|clause| clause.kind == ContractKind::Requires)
+            .collect();
+        let same = own.len() == inherited.len()
+            && own.iter().zip(&inherited).all(|(a, b)| a.text == b.text);
+        if same {
+            return;
+        }
+        let env: Env = state.env.clone();
+        for clause in inherited {
+            self.assume_clause(state, clause, &env);
+        }
+        let display = public_name(&name);
+        for clause in own {
+            let message = format!(
+                "`requires` of `{display}` follows from the trait method's: `{}`",
+                clause.text
+            );
+            self.prove_clause(
+                state,
+                ObligationKind::Requires,
+                clause.span,
+                message,
+                clause,
+                &env,
+            );
+        }
     }
 
     /// On entry, each `requires` that the contract model reads holds and is
@@ -462,6 +507,28 @@ impl Exec<'_> {
                 _ => Err(format!("`.{field}` on this value is not modeled yet")),
             },
             ExprKind::Call { callee, args } => {
+                if let ExprKind::Member { object, field } = &callee.kind {
+                    // A `spec def` method of the receiver's class.
+                    let receiver = self.spec(object, env, wd, depth)?;
+                    let Val::Record(class, _) = &receiver else {
+                        return Err(format!(
+                            "`.{field}(...)` on this value is not modeled in contracts yet"
+                        ));
+                    };
+                    let Some(spec) = self.cx.spec_def(&format!("{class}.{field}")) else {
+                        return Err(format!(
+                            "`{class}.{field}` is not a `spec def`; it is not modeled in contracts"
+                        ));
+                    };
+                    if args.iter().any(|arg| arg.name.is_some()) {
+                        return Err("keyword arguments in contracts are not modeled yet".into());
+                    }
+                    let mut values = vec![receiver];
+                    for arg in args {
+                        values.push(self.spec(&arg.value, env, wd, depth)?);
+                    }
+                    return self.spec_call(spec, values, wd, depth);
+                }
                 let ExprKind::Name(name) = &callee.kind else {
                     return Err("only `len`, `abs`, `min`, `max`, and `spec def` calls are modeled in contracts yet".into());
                 };
@@ -511,8 +578,22 @@ impl Exec<'_> {
                 spec.name
             ));
         }
-        if values.len() != spec.params.len() {
+        let names: Vec<String> = spec
+            .receiver
+            .map(|_| "self".to_string())
+            .into_iter()
+            .chain(spec.params.iter().map(|param| param.name.clone()))
+            .collect();
+        if values.len() != names.len() {
             return Err(format!("`spec def {}` takes default arguments", spec.name));
+        }
+        let env: Env = names.into_iter().zip(values).collect();
+        // Each `requires` must hold where the `spec def` is used.
+        for clause in &spec.contracts {
+            match self.spec(&clause.condition, &env, wd, depth + 1)? {
+                Val::Bool(term) => wd.push(term),
+                _ => return Err("a `spec def` `requires` is not a modeled `bool`".into()),
+            }
         }
         let body = spec
             .body
@@ -522,12 +603,6 @@ impl Exec<'_> {
                 _ => None,
             })
             .expect("a checked `spec def` body is one `return`");
-        let env: Env = spec
-            .params
-            .iter()
-            .map(|param| param.name.clone())
-            .zip(values)
-            .collect();
         self.spec(body, &env, wd, depth + 1)
     }
 

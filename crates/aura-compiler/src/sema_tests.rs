@@ -31910,16 +31910,6 @@ fn contract_clauses_check_as_pure_bool_conditions() {
             "a function with a view result cannot declare `ensures` yet",
         ),
         (
-            "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
-            "AU2048",
-            "the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out",
-        ),
-        (
-            "trait Shape:\n    def area(self) -> int64:\n        ensures result >= 0\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result > 0\n        return self.side\n",
-            "AU2048",
-            "must repeat the trait method's clauses exactly or leave them out",
-        ),
-        (
             "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k > 0\n\nclass Sq:\n    side: int64\n\nimpl Scale for Sq:\n    def by(self, j: int64) -> int64:\n        return j\n",
             "AU2048",
             "names this parameter `j`; the trait's clauses read it as `k`",
@@ -32238,8 +32228,16 @@ fn old_values_and_spec_functions_check_in_spec_contexts_only() {
             "a `spec def` cannot take `mut` parameter `xs`",
         ),
         (
-            "spec def pos(x: int64) -> bool:\n    requires x > 0\n    return x > 0\n",
-            "a `spec def` cannot declare contract clauses yet",
+            "spec def pos(x: int64) -> bool:\n    ensures result\n    return x > 0\n",
+            "a `spec def` states only `requires`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    spec def pos(mut self) -> bool:\n        return self.n > 0\n",
+            "a `spec def` method reads `self`",
+        ),
+        (
+            "class D:\n    n: int64\n\n    spec def bump(self) -> int64:\n        return self.n\n\nclass C:\n    n: int64\n\n    def bump(mut self) -> int64:\n        self.n += 1\n        return self.n\n\ndef f(c: mut C) -> int64:\n    requires c.bump() > 0\n    return 0\n",
+            "a method call on `C`, which may change program state",
         ),
         (
             "def g() -> int64:\n    return 1\n\nspec def pos(x: int64) -> bool:\n    return x > g()\n",
@@ -32258,7 +32256,7 @@ fn old_values_and_spec_functions_check_in_spec_contexts_only() {
             "`old` reads a parameter or `self`",
         ),
         (
-            "def f(xs: list[int64]) -> int64:\n    ensures old(xs.copy()) == xs\n    return 1\n",
+            "def f(xs: list[int64]) -> int64:\n    ensures old(len(xs)) == len(xs)\n    return 1\n",
             "`old` reads a parameter or `self`",
         ),
         (

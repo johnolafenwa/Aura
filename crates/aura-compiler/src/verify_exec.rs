@@ -230,6 +230,9 @@ pub(super) struct Exec<'a> {
     pub(super) assumed_fails: BTreeSet<usize>,
     /// Set while the `requires` of a `lemma def` call are proved.
     pub(super) erasing: bool,
+    /// The declaration whose contract the call being made uses instead of
+    /// its callee's own: a trait method's, for a call through the trait.
+    pub(super) contract_override: Option<&'a crate::ast::FunctionDecl>,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
@@ -272,6 +275,7 @@ impl<'a> Exec<'a> {
             span: function.span,
             assumed_fails: BTreeSet::new(),
             erasing: false,
+            contract_override: None,
             labels,
             unsupported: None,
             captured: closure_captures(function),
@@ -2233,25 +2237,21 @@ impl<'a> Exec<'a> {
                     values.push(self.operand(state, &arg.value, None));
                 }
                 let spec = self.cx.spec_def(name).expect("checked above");
-                let mut wd = Vec::new();
-                match self.spec_call(spec, values, &mut wd, 0) {
-                    Ok(value) => {
-                        let pc = state.pc.clone();
-                        let span = self.span;
-                        let wd = conjoin(&wd);
-                        if wd != "true" {
-                            self.oblige(
-                                ObligationKind::Assert,
-                                span,
-                                format!("`spec def {name}` is well-defined"),
-                                &pc,
-                                Goal::Holds(wd),
-                            );
-                        }
-                        value
-                    }
-                    Err(_) => fresh_target(self),
+                self.spec_call_value(state, spec, values, name)
+                    .unwrap_or_else(|| fresh_target(self))
+            }
+            CallTarget::Member {
+                object,
+                dispatch: Some(MethodDispatch::Static { function }),
+                ..
+            } if self.cx.spec_def(function).is_some() => {
+                let mut values = vec![self.operand(state, object, None)];
+                for arg in args {
+                    values.push(self.operand(state, &arg.value, None));
                 }
+                let spec = self.cx.spec_def(function).expect("checked above");
+                self.spec_call_value(state, spec, values, function)
+                    .unwrap_or_else(|| fresh_target(self))
             }
             CallTarget::Name(name) if args.is_empty() && self.default_value(name).is_some() => {
                 self.default_value(name).expect("checked above")
@@ -2308,10 +2308,16 @@ impl<'a> Exec<'a> {
             CallTarget::TraitMember {
                 object,
                 receiver_place,
+                trait_name,
+                field,
                 dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
-                ..
-            } if self.shared_contract(candidates).is_some() => {
-                let function = self.shared_contract(candidates).expect("checked above");
+            } if self
+                .trait_call_target(candidates, trait_name, field)
+                .is_some() =>
+            {
+                let (function, contract) = self
+                    .trait_call_target(candidates, trait_name, field)
+                    .expect("checked above");
                 let receiver = self.operand(state, object, None);
                 let mut actuals = Vec::new();
                 for arg in args {
@@ -2321,14 +2327,17 @@ impl<'a> Exec<'a> {
                         arg.writeback_place.clone(),
                     ));
                 }
-                self.user_call(
+                self.contract_override = contract;
+                let result = self.user_call(
                     state,
                     &function,
                     Some((receiver, receiver_place.clone())),
                     actuals,
                     target_type.as_ref(),
                     target,
-                )
+                );
+                self.contract_override = None;
+                result
             }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
@@ -2343,6 +2352,28 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
         }
+    }
+
+    /// The function a call through a trait is modeled by, and the contract
+    /// it relies on: the trait method's, which every implementation keeps,
+    /// or else the one contract all the candidates share.
+    fn trait_call_target(
+        &self,
+        candidates: &[crate::mir::MethodCandidate],
+        trait_name: &str,
+        field: &str,
+    ) -> Option<(String, Option<&'a crate::ast::FunctionDecl>)> {
+        if let Some(contract) = self.cx.trait_method(trait_name, field) {
+            let first = candidates.first()?;
+            if candidates
+                .iter()
+                .all(|candidate| self.cx.function(&candidate.function).is_some())
+            {
+                return Some((first.function.clone(), Some(contract)));
+            }
+        }
+        self.shared_contract(candidates)
+            .map(|function| (function, None))
     }
 
     /// The first of `candidates` when every one is a function with the same
@@ -2382,6 +2413,35 @@ impl<'a> Exec<'a> {
         let mut wd = Vec::new();
         let value = self.spec(default, &Default::default(), &mut wd, 0).ok()?;
         wd.is_empty().then_some(value)
+    }
+
+    /// The value a call of a `spec def` returns, unfolded from its body,
+    /// with the check that the call is well-defined there.
+    fn spec_call_value(
+        &mut self,
+        state: &State,
+        spec: &'a crate::ast::FunctionDecl,
+        values: Vec<Val>,
+        name: &str,
+    ) -> Option<Val> {
+        let mut wd = Vec::new();
+        let value = self.spec_call(spec, values, &mut wd, 0).ok()?;
+        let pc = state.pc.clone();
+        let span = self.span;
+        let wd = conjoin(&wd);
+        if wd != "true" {
+            self.oblige(
+                ObligationKind::Assert,
+                span,
+                format!(
+                    "`spec def {}` is well-defined",
+                    crate::mir::public_function_name(name)
+                ),
+                &pc,
+                Goal::Holds(wd),
+            );
+        }
+        Some(value)
     }
 
     /// A call of a user function: prove its `requires`, then assume its

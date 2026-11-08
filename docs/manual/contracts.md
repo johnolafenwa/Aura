@@ -126,13 +126,43 @@ def main():
     print(xs)  # [1, 3, 4, 5]
 ```
 
-- A `spec def` is a module-level function. Its body is one `return` of an
-  expression that follows the condition rules, after an optional docstring.
-- It takes no `mut` parameters and declares no clauses of its own.
+- A `spec def` is a module-level function or a method. Its body is one
+  `return` of an expression that follows the condition rules, after an
+  optional docstring.
+- It takes no `mut` parameters. It may state `requires` clauses, which say
+  where it is defined: they are checked when it runs, and `aura verify`
+  proves them wherever a contract uses it. It takes no other clauses.
 - It may call other `spec def` functions, itself included.
-- Only contract clauses and other `spec def` bodies may call or name it.
-  Using one anywhere else is `AU2048`.
+- Only contract clauses and other `spec def` bodies may call or name a
+  module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.
+
+A `spec def` method reads `self` and is an ordinary method too, so code may
+call it as well as conditions:
+
+```aura
+class Account:
+    balance: int64
+    limit: int64 = 1000
+
+    spec def headroom(self) -> int64:
+        return self.limit - self.balance
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0 and amount <= self.headroom()
+        ensures self.headroom() == old(self.headroom()) - amount
+        self.balance += amount
+
+
+def main():
+    mut account = Account(balance=10)
+    account.deposit(5)
+    print(account.headroom())  # 985
+```
+
+A condition may call a method only when it is a read-only builtin method,
+such as `contains`, or a `spec def` method of the receiver's class. It
+takes `self`, never `mut self`.
 
 ## Loop Invariants And `decreases`
 
@@ -271,10 +301,38 @@ def main():
     print(total([Square(side=1), Square(side=2)]))  # 5
 ```
 
-The clauses are checked in each implementation as if it had written them.
-An implementation may repeat the trait's clauses exactly or leave them out,
+The clauses are checked in each implementation as if it had written them,
 and its parameters keep the trait's names, which the clauses read. A trait
 method takes no `decreases`.
+
+An implementation may refine the contract:
+
+- It keeps every `ensures` of the trait, and may add more. A caller that
+  knows the implementation relies on all of them.
+- Stating its own `requires` replaces the trait's, so it may ask for less.
+  A call through the trait checks the implementation's `requires` when it
+  runs, and `aura verify` proves that the trait's `requires` imply them,
+  so a caller that proved the trait's never fails them.
+
+```aura
+trait Scaler:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 100
+        ensures result >= 0
+
+class Double:
+    pad: int64
+
+impl Scaler for Double:
+    def scale(self, x: int64) -> int64:
+        requires 0 <= x and x <= 1000
+        ensures result == 2 * x
+        return 2 * x
+
+def main():
+    d = Double(pad=0)
+    print(d.scale(500))  # 1000
+```
 
 ## Lemmas
 
@@ -398,14 +456,11 @@ and `exists` are special only inside clauses and `spec def` bodies.
 
 These forms report `AU2048`:
 
-- `decreases` on a method
 - `ensures` on `__init__` or on a function with a view result
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on a trait implementation's method that differ from the trait
-  method's
-- `spec def` methods
+- `lemma def` methods
 
 ## Diagnostics
 

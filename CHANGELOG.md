@@ -22,6 +22,13 @@ in this file.
   cycle check at each call between them that the callee's measure is
   smaller than the caller's; `aura verify` proves both. A measured function
   calling a measured helper outside its cycle is not compared.
+- A class may declare `spec def` methods, which conditions may call (and
+  `old(self.headroom())` may read), and a `spec def` may state `requires`
+  clauses that `aura verify` proves wherever a contract uses it.
+- A trait implementation may add `ensures` clauses to the trait method's
+  and state its own `requires` in place of the trait's; `aura verify`
+  proves that the trait's `requires` imply the implementation's, and calls
+  through the trait rely on the trait's contract.
 - `aura verify file.au` proves, with an external Z3 or cvc5, that a
   program's checks cannot fail: integer overflow, zero divisors, list
   indexes, `assert`, `requires`, `ensures`, loop `invariant` and

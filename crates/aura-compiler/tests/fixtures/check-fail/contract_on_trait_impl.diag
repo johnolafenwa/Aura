@@ -1,5 +1,0 @@
-error[AU2048]: the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out
- --> crates/aura-compiler/tests/fixtures/check-fail/contract_on_trait_impl.au:11:9
-   |
-11 |         requires self.side > 0
-   |         ^

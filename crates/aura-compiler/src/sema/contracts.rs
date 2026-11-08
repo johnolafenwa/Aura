@@ -272,7 +272,9 @@ impl FunctionChecker<'_> {
                 "`old` reads a parameter or `self`, or a field or element of one",
             ));
         }
-        self.reject_impure(&old.expr, "an `old` value", &mut Vec::new())?;
+        let mut receivers = Vec::new();
+        self.reject_impure(&old.expr, "an `old` value", &mut receivers)?;
+        self.check_receivers(receivers, &mut locals.clone(), "an `old` value")?;
         let ty = self.with_spec(|| self.type_of_expr(&old.expr, &mut locals.clone()))?;
         let copyable = self.is_copy_type(&ty)
             || matches!(&ty, Type::Named(name, _) if matches!(name.as_str(), "str" | "list" | "dict" | "set" | "Array"));
@@ -310,12 +312,30 @@ impl FunctionChecker<'_> {
                 format!("a `spec def` cannot take `mut` parameter `{}`", param.name),
             ));
         }
-        if let Some(clause) = function.contracts.first() {
+        if function.receiver.is_some() && function.receiver != Some(ReceiverKind::Borrow) {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                function.span,
+                "a `spec def` method reads `self`; it cannot take `mut self` or `owned self`",
+            ));
+        }
+        // A `spec def` may state when it is defined.
+        if let Some(clause) = function
+            .contracts
+            .iter()
+            .find(|clause| clause.kind != ContractKind::Requires)
+        {
             return Err(Diagnostic::coded_at(
                 CODE,
                 clause.span,
-                "a `spec def` cannot declare contract clauses yet",
+                format!(
+                    "a `spec def` states only `requires`; its body is its result, so it takes no `{}`",
+                    clause.kind.keyword()
+                ),
             ));
+        }
+        for clause in &function.contracts {
+            self.check_clause_condition(clause, &mut locals.clone())?;
         }
         let [crate::ast::Stmt::Return(crate::ast::ReturnStmt {
             value: Some(value),
@@ -329,7 +349,9 @@ impl FunctionChecker<'_> {
                 "a `spec def` body is one `return` of a pure expression, after an optional docstring",
             ));
         };
-        self.reject_impure(value, "a `spec def` body", &mut Vec::new())?;
+        let mut receivers = Vec::new();
+        self.reject_impure(value, "a `spec def` body", &mut receivers)?;
+        self.check_receivers(receivers, &mut locals.clone(), "a `spec def` body")?;
         self.with_spec(|| {
             self.check_block(&function.body, locals, return_type, 0, true)
                 .map(|_| ())
@@ -504,9 +526,56 @@ impl FunctionChecker<'_> {
         &self,
         expr: &'e Expr,
         what: &str,
-        receivers: &mut Vec<&'e Expr>,
+        receivers: &mut Vec<(&'e Expr, &'e str)>,
     ) -> Result<()> {
-        reject_impure_condition(expr, what, receivers, &|name| self.is_spec_function(name))
+        reject_impure_condition(
+            expr,
+            what,
+            receivers,
+            &|name| match name.strip_prefix('.') {
+                Some(method) => self.is_spec_method_name(method),
+                None => self.is_spec_function(name),
+            },
+        )
+    }
+
+    /// Whether some class of this module has a `spec def` method `name`.
+    fn is_spec_method_name(&self, name: &str) -> bool {
+        self.classes.values().any(|class| {
+            class
+                .methods
+                .get(name)
+                .is_some_and(|method| method.decl.spec)
+        })
+    }
+
+    /// Checks that each method a pure condition calls by name is a read-only
+    /// builtin method, or a `spec def` method of the receiver's class.
+    fn check_receivers(
+        &self,
+        receivers: Vec<(&Expr, &str)>,
+        scope: &mut HashMap<String, LocalBinding>,
+        what: &str,
+    ) -> Result<()> {
+        for (receiver, method) in receivers {
+            let ty = self.with_spec(|| self.type_of_expr(receiver, scope))?;
+            let spec_method = matches!(&ty, Type::Named(class, _) if self
+                .classes
+                .get(class)
+                .and_then(|class| class.methods.get(method))
+                .is_some_and(|method| method.decl.spec));
+            if spec_method {
+                continue;
+            }
+            if !has_builtin_methods(&ty) || !PURE_METHODS.contains(&method) {
+                return Err(impure(
+                    receiver,
+                    what,
+                    &format!("a method call on `{ty}`, which may change program state,"),
+                ));
+            }
+        }
+        Ok(())
     }
 
     /// Checks the clauses of `kinds` at the top of a loop body against the
@@ -581,19 +650,10 @@ impl FunctionChecker<'_> {
                 ),
             ));
         }
-        // A method allowed by name must also be a builtin's: a user type's
-        // method of the same name may change state.
-        for receiver in receivers {
-            let ty = self.with_spec(|| self.type_of_expr(receiver, scope))?;
-            if !has_builtin_methods(&ty) {
-                return Err(impure(
-                    receiver,
-                    &what,
-                    &format!("a method call on `{ty}`, which may change program state,"),
-                ));
-            }
-        }
-        Ok(())
+        // A method allowed by name must also be a builtin's, or a `spec def`
+        // of the receiver's class: a user type's method of the same name may
+        // change state.
+        self.check_receivers(receivers, scope, &what)
     }
 }
 
@@ -653,6 +713,11 @@ fn old_root(expr: &Expr) -> Option<&str> {
         | ExprKind::Index { object, .. }
         | ExprKind::Slice { object, .. } => old_root(object),
         ExprKind::Group(inner) => old_root(inner),
+        // A method call reads its receiver: `old(self.headroom())`.
+        ExprKind::Call { callee, .. } => match &callee.kind {
+            ExprKind::Member { object, .. } => old_root(object),
+            _ => None,
+        },
         _ => None,
     }
 }
@@ -664,7 +729,7 @@ fn old_root(expr: &Expr) -> Option<&str> {
 fn reject_impure_condition<'e>(
     expr: &'e Expr,
     kind: &str,
-    receivers: &mut Vec<&'e Expr>,
+    receivers: &mut Vec<(&'e Expr, &'e str)>,
     is_spec: &dyn Fn(&str) -> bool,
 ) -> Result<()> {
     macro_rules! check {
@@ -783,8 +848,8 @@ fn reject_impure_condition<'e>(
                 ExprKind::Name(name) => PURE_FUNCTIONS.contains(&name.as_str()) || is_spec(name),
                 ExprKind::Member { object, field } => {
                     check!(object)?;
-                    receivers.push(object);
-                    PURE_METHODS.contains(&field.as_str())
+                    receivers.push((object, field.as_str()));
+                    PURE_METHODS.contains(&field.as_str()) || is_spec(&format!(".{field}"))
                 }
                 _ => false,
             };
