@@ -17,7 +17,7 @@
 //! callee in the object shares; the C convention uses the C ABI.
 
 use std::cell::RefCell;
-use std::collections::{BTreeMap, HashMap};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::OnceLock;
 
@@ -672,6 +672,96 @@ enum VarSource {
     Memory,
 }
 
+/// The values `op` reads.
+fn op_operands(op: &Op) -> Vec<Val> {
+    match op {
+        Op::Nop
+        | Op::Iconst(_)
+        | Op::Fconst(_)
+        | Op::StackAddr(..)
+        | Op::FuncAddr(_)
+        | Op::SymbolValue(_)
+        | Op::UseVar(_)
+        | Op::Trap => Vec::new(),
+        Op::Copy(value)
+        | Op::Unary(_, value)
+        | Op::BinaryImm(_, value, _)
+        | Op::IcmpImm(_, value, _) => {
+            vec![*value]
+        }
+        Op::Binary(_, left, right)
+        | Op::Icmp(_, left, right)
+        | Op::Fcmp(_, left, right)
+        | Op::Overflow(_, left, right) => vec![*left, *right],
+        Op::Select(condition, if_true, if_false) => vec![*condition, *if_true, *if_false],
+        Op::Load(_, _, address, _) => vec![*address],
+        Op::Store(_, value, address, _) => vec![*value, *address],
+        Op::Call(_, args) | Op::Return(args) => args.clone(),
+        Op::CallIndirect(_, callee, args) => std::iter::once(*callee)
+            .chain(args.iter().copied())
+            .collect(),
+        Op::DefVar(_, value) => vec![*value],
+        Op::Jump(_, args) => args.clone(),
+        Op::Brif(condition, _, then_args, _, else_args) => std::iter::once(*condition)
+            .chain(then_args.iter().copied())
+            .chain(else_args.iter().copied())
+            .collect(),
+    }
+}
+
+/// The blocks `op` branches to.
+fn op_targets(op: &Op) -> Vec<Blk> {
+    match op {
+        Op::Jump(target, _) => vec![*target],
+        Op::Brif(_, then_block, _, else_block, _) => vec![*then_block, *else_block],
+        _ => Vec::new(),
+    }
+}
+
+/// `op` with each value and block replaced as `value` and `block` say.
+fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op {
+    let values = |args: &[Val]| args.iter().map(|arg| value(*arg)).collect::<Vec<_>>();
+    match op {
+        Op::Nop => Op::Nop,
+        Op::Copy(source) => Op::Copy(value(*source)),
+        Op::Iconst(constant) => Op::Iconst(*constant),
+        Op::Fconst(constant) => Op::Fconst(*constant),
+        Op::Unary(unary, source) => Op::Unary(*unary, value(*source)),
+        Op::Binary(binary, left, right) => Op::Binary(*binary, value(*left), value(*right)),
+        Op::BinaryImm(binary, left, imm) => Op::BinaryImm(*binary, value(*left), *imm),
+        Op::Icmp(cc, left, right) => Op::Icmp(*cc, value(*left), value(*right)),
+        Op::IcmpImm(cc, left, imm) => Op::IcmpImm(*cc, value(*left), *imm),
+        Op::Fcmp(cc, left, right) => Op::Fcmp(*cc, value(*left), value(*right)),
+        Op::Select(condition, if_true, if_false) => {
+            Op::Select(value(*condition), value(*if_true), value(*if_false))
+        }
+        Op::Overflow(overflow, left, right) => Op::Overflow(*overflow, value(*left), value(*right)),
+        Op::Load(kind, flags, address, offset) => Op::Load(*kind, *flags, value(*address), *offset),
+        Op::Store(flags, stored, address, offset) => {
+            Op::Store(*flags, value(*stored), value(*address), *offset)
+        }
+        Op::StackAddr(slot, offset) => Op::StackAddr(*slot, *offset),
+        Op::FuncAddr(function) => Op::FuncAddr(*function),
+        Op::SymbolValue(data) => Op::SymbolValue(*data),
+        Op::Call(callee, args) => Op::Call(*callee, values(args)),
+        Op::CallIndirect(signature, callee, args) => {
+            Op::CallIndirect(*signature, value(*callee), values(args))
+        }
+        Op::UseVar(var) => Op::UseVar(*var),
+        Op::DefVar(var, source) => Op::DefVar(*var, value(*source)),
+        Op::Jump(target, args) => Op::Jump(block(*target), values(args)),
+        Op::Brif(condition, then_block, then_args, else_block, else_args) => Op::Brif(
+            value(*condition),
+            block(*then_block),
+            values(then_args),
+            block(*else_block),
+            values(else_args),
+        ),
+        Op::Return(args) => Op::Return(values(args)),
+        Op::Trap => Op::Trap,
+    }
+}
+
 impl FunctionIr {
     fn new(signature: Signature) -> Self {
         Self {
@@ -773,6 +863,155 @@ impl FunctionIr {
                 _ => return VarSource::Memory,
             }
         }
+    }
+
+    /// See [`FunctionBackend::version_blocks`].
+    fn version_blocks(
+        &mut self,
+        blocks: &[Blk],
+        selects: &[(Val, Option<i64>)],
+        entries: &[crate::native_backend::VersionEntry],
+    ) -> bool {
+        let mut members = blocks
+            .iter()
+            .map(|block| block.0)
+            .filter(|block| self.blocks[*block as usize].in_layout)
+            .collect::<Vec<_>>();
+        members.sort_unstable();
+        members.dedup();
+        let set = members.iter().copied().collect::<HashSet<_>>();
+        let mut defined = HashSet::new();
+        for block in &members {
+            let entry = &self.blocks[*block as usize];
+            defined.extend(entry.params.iter().copied());
+            for inst in &entry.insts {
+                defined.extend(self.insts[*inst as usize].results.iter().copied());
+            }
+        }
+        // The value each select keeps in the copy, before `blocks` keep
+        // their false one.
+        let mut kept = HashMap::new();
+        for (select, constant) in selects {
+            let Some(inst) = self.value_defs[select.0 as usize] else {
+                continue;
+            };
+            let inst = &mut self.insts[inst as usize];
+            if let Op::Select(_, if_true, if_false) = inst.op {
+                kept.insert(inst.results[0], constant.ok_or(if_true));
+                inst.op = Op::Copy(if_false);
+            }
+        }
+        let escapes = self.layout.iter().any(|block| {
+            !set.contains(block)
+                && self.blocks[*block as usize].insts.iter().any(|inst| {
+                    op_operands(&self.insts[*inst as usize].op)
+                        .iter()
+                        .any(|value| defined.contains(value))
+                })
+        });
+        let enters = entries.iter().all(|(pad, _, _)| {
+            !set.contains(&pad.0)
+                && self.blocks[pad.0 as usize]
+                    .insts
+                    .last()
+                    .is_some_and(|inst| {
+                        matches!(&self.insts[*inst as usize].op, Op::Jump(target, _) if set.contains(&target.0))
+                    })
+        });
+        if members.is_empty() || entries.is_empty() || escapes || !enters {
+            return false;
+        }
+        let mut block_map = HashMap::new();
+        let mut value_map = HashMap::new();
+        for block in &members {
+            let copy = self.blocks.len() as u32;
+            let original = &self.blocks[*block as usize];
+            let mut entry = BlockIr {
+                sealed: true,
+                cold: original.cold,
+                in_layout: true,
+                ..BlockIr::default()
+            };
+            let params = original.params.clone();
+            self.blocks.push(BlockIr::default());
+            for param in params {
+                let value = self.new_value(self.ty(param));
+                value_map.insert(param, value);
+                entry.params.push(value);
+            }
+            self.blocks[copy as usize] = entry;
+            block_map.insert(*block, copy);
+        }
+        for block in &members {
+            for inst in self.blocks[*block as usize].insts.clone() {
+                for result in self.insts[inst as usize].results.clone() {
+                    let value = self.new_value(self.ty(result));
+                    value_map.insert(result, value);
+                }
+            }
+        }
+        let value = |value: Val| value_map.get(&value).copied().unwrap_or(value);
+        let target = |block: Blk| Blk(block_map.get(&block.0).copied().unwrap_or(block.0));
+        for block in &members {
+            let copy = block_map[block];
+            for inst in self.blocks[*block as usize].insts.clone() {
+                let original = self.insts[inst as usize].clone();
+                let op = match kept.get(&original.results.first().copied().unwrap_or(Val(u32::MAX)))
+                {
+                    Some(Ok(constant)) => Op::Iconst(*constant),
+                    Some(Err(if_true)) => Op::Copy(value(*if_true)),
+                    None => map_op(&original.op, value, target),
+                };
+                for successor in op_targets(&op) {
+                    self.blocks[successor.0 as usize].predecessors.push(copy);
+                }
+                let results = original
+                    .results
+                    .iter()
+                    .map(|result| value(*result))
+                    .collect::<Vec<_>>();
+                let index = self.insts.len() as u32;
+                for result in &results {
+                    self.value_defs[result.0 as usize] = Some(index);
+                }
+                self.insts.push(InstIr {
+                    op,
+                    results,
+                    block: copy,
+                    location: original.location,
+                });
+                self.blocks[copy as usize].insts.push(index);
+            }
+            self.layout.push(copy);
+        }
+        for (pad, condition, equal) in entries {
+            let inst = *self.blocks[pad.0 as usize]
+                .insts
+                .last()
+                .expect("an entry ends in a jump");
+            let Op::Jump(original, args) = self.insts[inst as usize].op.clone() else {
+                unreachable!("an entry ends in a jump");
+            };
+            let mut condition = *condition;
+            if let Some((word, constant)) = equal {
+                // The check goes in before the jump.
+                let jump = self.blocks[pad.0 as usize].insts.pop().expect("the jump");
+                let saved = (self.current, self.location);
+                self.current = Some(pad.0);
+                self.location = self.insts[jump as usize].location;
+                let same =
+                    self.push_value(Op::IcmpImm(IntCC::Equal, *word, *constant), ScalarType::I8);
+                let wide = self.push_value(Op::Unary(UnaryOp::Uextend, same), ScalarType::I64);
+                condition =
+                    self.push_value(Op::Binary(BinaryOp::Band, condition, wide), ScalarType::I64);
+                (self.current, self.location) = saved;
+                self.blocks[pad.0 as usize].insts.push(jump);
+            }
+            let copy = target(original);
+            self.blocks[copy.0 as usize].predecessors.push(pad.0);
+            self.insts[inst as usize].op = Op::Brif(condition, copy, args.clone(), original, args);
+        }
+        true
     }
 
     /// A readable listing for verifier errors.
@@ -887,6 +1126,19 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn switch_to_block(&mut self, block: Blk) {
         self.ir.current = Some(block.0);
+    }
+
+    fn block_count(&self) -> u32 {
+        self.ir.blocks.len() as u32
+    }
+
+    fn version_blocks(
+        &mut self,
+        blocks: &[Blk],
+        selects: &[(Val, Option<i64>)],
+        entries: &[crate::native_backend::VersionEntry],
+    ) -> bool {
+        self.ir.version_blocks(blocks, selects, entries)
     }
 
     fn seal_block(&mut self, block: Blk) {

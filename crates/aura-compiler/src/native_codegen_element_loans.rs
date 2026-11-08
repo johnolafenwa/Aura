@@ -536,8 +536,7 @@ impl FunctionCompiler<'_> {
                     self.emit_unshared_storage_check(list_box, position, slow_block);
                 }
                 let elements =
-                    self.builder
-                        .load(types::I64, flags, list_box, layout.elements_offset);
+                    self.list_view_word(list_box, super::list_snapshots::ViewWord::Elements);
                 self.scalar_list_element(elements, position, stride)
             }
             LoanTarget::Place(LoanPlace::Leaves(_)) | LoanTarget::Slot => {
@@ -560,8 +559,7 @@ impl FunctionCompiler<'_> {
                     self.emit_unshared_storage_check(list_box, position, slow_block);
                 }
                 let elements =
-                    self.builder
-                        .load(types::I64, flags, list_box, layout.elements_offset);
+                    self.list_view_word(list_box, super::list_snapshots::ViewWord::Elements);
                 let element_slot = self.scalar_list_element(elements, position, 8);
                 match &class {
                     None => element_slot,
@@ -1047,10 +1045,7 @@ impl FunctionCompiler<'_> {
     /// shares has none: any access, or a read of a held box, takes it back
     /// until a write finds the storage unshared again.
     fn emit_unshared_storage_check(&mut self, list_box: Val, position: Val, slow_block: Blk) {
-        let layout = aura_runtime::native_runtime::direct_list_layout();
-        let capacity = self
-            .builder
-            .uload32(MemFlags::trusted(), list_box, layout.capacity_offset);
+        let capacity = self.list_view_word(list_box, super::list_snapshots::ViewWord::Room);
         let unshared = self
             .builder
             .icmp(IntCC::UnsignedLessThan, position, capacity);

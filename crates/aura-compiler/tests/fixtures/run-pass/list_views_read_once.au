@@ -1,0 +1,185 @@
+# Loops that only measure, index, or loan elements of a local list read
+# its list view once when they start. Each case here runs such a loop on a
+# list whose view qualifies and on one whose view does not.
+
+class Counter:
+    name: str
+    count: int64
+
+class Point:
+    x: float64
+    y: float64
+
+def shared_then_loan(n: int64) -> int64:
+    mut a = list[Counter]()
+    for i in range(n):
+        a.append(Counter(name="c", count=i))
+    b = a.copy()
+    mut i = 0
+    mut total = 0
+    while i < a.len():
+        a[i].count += 1
+        total += a[i].count
+        i += 1
+    return total * 1000 + b[0].count
+
+def read_after_print(n: int64) -> int64:
+    mut a = list[Counter]()
+    for i in range(n):
+        a.append(Counter(name="c", count=i))
+    print(a[0].name)
+    mut i = 0
+    while i < a.len():
+        a[i].count += 2
+        i += 1
+    return a[n - 1].count
+
+def nested(n: int64) -> float64:
+    mut ps = list[Point]()
+    for i in range(n):
+        ps.append(Point(x=i as float64, y=1.0))
+    mut total = 0.0
+    mut j = 0
+    while j < 3:
+        mut i = 0
+        while i < ps.len():
+            total += ps[i].x
+            i += 1
+        ps.append(Point(x=0.5, y=0.0))
+        j += 1
+    return total
+
+def two_lists(n: int64) -> float64:
+    mut ps = list[Point]()
+    mut qs = list[Point]()
+    for i in range(n):
+        ps.append(Point(x=i as float64, y=1.0))
+        qs.append(Point(x=2.0, y=i as float64))
+    mut total = 0.0
+    mut i = 0
+    while i < ps.len():
+        total += ps[i].x * qs[i].y
+        i += 1
+    return total
+
+def ints(n: int64) -> int64:
+    mut xs = list[int64]()
+    for i in range(n):
+        xs.append(i)
+    mut total = 0
+    mut i = 0
+    while i < xs.len():
+        total += xs[i]
+        i += 1
+    return total
+
+def strs(n: int64) -> int64:
+    mut xs = list[str]()
+    for i in range(n):
+        xs.append(f"s{i}")
+    mut total = 0
+    mut i = 0
+    while i < xs.len():
+        total += xs[i].len()
+        i += 1
+    return total
+
+def out_of_range(n: int64) -> float64:
+    mut ps = list[Point]()
+    for i in range(n):
+        ps.append(Point(x=i as float64, y=1.0))
+    mut total = 0.0
+    mut i = 0
+    while i <= ps.len():
+        if i == ps.len():
+            return total
+        total += ps[i].x
+        i += 1
+    return total
+
+def counters_copy(n: int64) -> int64:
+    mut a = list[Counter]()
+    for i in range(n):
+        a.append(Counter(name="c", count=i))
+    mut i = 0
+    mut total = 0
+    while i < a.len():
+        view c = a[i]
+        total += c.count
+        a[i].count += 10
+        total += a[i].count
+        i += 1
+    return total * 1000 + a[0].count
+
+PINNED = [Point(x=1.0, y=2.0), Point(x=3.0, y=4.0)]
+
+
+def sum_x(ps: list[Point]) -> float64:
+    mut total = 0.0
+    mut i = 0
+    while i < ps.len():
+        total += ps[i].x
+        i += 1
+    return total
+
+
+def literal_loans() -> int64:
+    mut a = [Counter(name="a", count=1), Counter(name="b", count=2)]
+    mut i = 0
+    while i < a.len():
+        a[i].count *= 3
+        i += 1
+    return a[0].count + a[1].count
+
+
+def floats_in_place(n: int64) -> float64:
+    mut xs = list[float64]()
+    for i in range(n):
+        xs.append(i as float64)
+    mut i = 0
+    while i < xs.len():
+        xs[i] += 0.5
+        i += 1
+    mut total = 0.0
+    mut j = 0
+    while j < xs.len():
+        total += xs[j]
+        j += 1
+    return total
+
+
+def grows_after(n: int64) -> int64:
+    mut a = list[Counter]()
+    for i in range(n):
+        a.append(Counter(name="c", count=i))
+    mut rounds = 0
+    while rounds < 2:
+        mut i = 0
+        while i < a.len():
+            a[i].count += 1
+            i += 1
+        a.append(Counter(name="d", count=100))
+        rounds += 1
+    mut total = 0
+    mut k = 0
+    while k < a.len():
+        total += a[k].count
+        k += 1
+    return total
+
+
+def main():
+    print(shared_then_loan(5))
+    print(read_after_print(5))
+    print(nested(4))
+    print(two_lists(4))
+    print(ints(10))
+    print(strs(12))
+    print(out_of_range(4))
+    print(counters_copy(4))
+    print(sum_x(PINNED))
+    mut local = [Point(x=5.0, y=0.0), Point(x=6.0, y=0.0)]
+    print(sum_x(local))
+    print(literal_loans())
+    print(floats_in_place(4))
+    print(grows_after(3))

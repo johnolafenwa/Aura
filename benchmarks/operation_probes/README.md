@@ -145,3 +145,15 @@ writes now skip that check:
 
 `class_field_read` (14.7x) and `field_write` (4.0x) reach instances held in
 a list, which other code can share, so they still check.
+
+A loop that reaches a list only through its length, its elements, and loans
+of its elements now reads the list's view (its form, length, and element
+storage) once before the loop, instead of after every call the loop makes.
+When that view is one the loop's reads and writes keep, such as a list of
+plain class instances that no other value shares, the loop runs a copy of
+itself with the view's checks already settled:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `class_field_read` | 2d, 2e | 100,000 | 1.5 | 2.1 | 1.4x |
+| `field_write` | 2e | 100,000 | 7.0 | 18.0 | 2.6x |

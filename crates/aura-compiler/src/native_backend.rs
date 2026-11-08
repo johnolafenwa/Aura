@@ -368,6 +368,11 @@ pub(crate) trait ModuleBackend {
     fn finish_units(self: Box<Self>) -> Result<Vec<Vec<u8>>, String>;
 }
 
+/// An entry to blocks a backend copies: the pad that jumps into them, the
+/// condition that picks the copy, and a value the copy also expects to equal
+/// a constant.
+pub(crate) type VersionEntry = (Blk, Val, Option<(Val, i64)>);
+
 /// Builds one function body: blocks, variables, stack slots, and
 /// instructions.
 pub(crate) trait FunctionBackend {
@@ -376,6 +381,27 @@ pub(crate) trait FunctionBackend {
     fn module(&mut self) -> &mut dyn ModuleBackend;
 
     fn create_block(&mut self) -> Blk;
+    /// How many blocks the function has, so the next block made is
+    /// `Blk(block_count())`.
+    fn block_count(&self) -> u32;
+    /// Gives `blocks` a second copy that runs while a condition holds.
+    ///
+    /// Each `(pad, condition)` of `entries` is a block outside `blocks` that
+    /// ends in a jump into them; it then jumps to the copy when
+    /// `condition` is not zero, and the given value equals the given
+    /// constant, and to `blocks` otherwise. Each value of `selects` is a
+    /// `select` in `blocks` on that condition: the copy keeps its true value,
+    /// or the constant given with it, and `blocks` its false one. Nothing is
+    /// copied, and
+    /// every select keeps its false value, when a block outside `blocks`
+    /// uses a value defined in them, or `entries` is empty; the result
+    /// says whether the copy was made.
+    fn version_blocks(
+        &mut self,
+        blocks: &[Blk],
+        selects: &[(Val, Option<i64>)],
+        entries: &[VersionEntry],
+    ) -> bool;
     fn switch_to_block(&mut self, block: Blk);
     /// Declares that every branch to `block` is built.
     fn seal_block(&mut self, block: Blk);

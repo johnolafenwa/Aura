@@ -1,0 +1,15 @@
+class Point:
+    x: float64
+    y: float64
+
+def main() -> int32:
+    mut ps = list[Point]()
+    for i in range(3):
+        ps.append(Point(x=i as float64, y=0.0))
+    mut total = 0.0
+    mut i = 0
+    while i < 10:
+        total += ps[i].x
+        i += 1
+    print(total)
+    return 0
