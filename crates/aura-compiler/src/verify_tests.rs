@@ -1724,6 +1724,113 @@ def main():
 }
 
 #[test]
+fn spec_methods_with_arguments_and_shifted_enumerate_are_modeled() {
+    assert_proved(
+        r#"
+class Box:
+    n: int64
+
+    spec def plus(self, extra: int64) -> int64:
+        return self.n + extra
+
+    public def grow(mut self, k: int64):
+        requires 0 <= self.n and self.n <= 100 and 0 <= k and k <= 100
+        ensures self.n == old(self.plus(k))
+        self.n = self.plus(k)
+
+def second(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    requires forall((i, x) in enumerate(xs, 0), x == i + 1)
+    ensures result == 2
+    return xs[1]
+
+def pairs(xs: list[int64], ys: list[int64]) -> int64:
+    mut n = 0
+    for (x, y) in zip(xs, ys):
+        if 0 <= x and x <= 10 and 0 <= y and y <= 10 and n < 1000:
+            n += x * y
+    return n
+
+def main():
+    mut b = Box(n=1)
+    b.grow(2)
+    print(b.n)
+    print(second([1, 2, 3]))
+    print(pairs([1, 2], [3, 4]))
+"#,
+    );
+    assert_proved(
+        r#"
+class Node:
+    depth: int64
+
+    def count(self, n: int64) -> int64:
+        requires n >= 0
+        decreases n
+        if n == 0:
+            return 0
+        return (self).count(n - 1)
+
+class Tree:
+    root: Node
+
+    def walk(self, n: int64) -> int64:
+        requires n >= 0
+        decreases n
+        if n == 0:
+            return self.root.count(3)
+        return self.walk(n - 1)
+
+def down(n: int64) -> int64:
+    requires n >= 0
+    decreases n
+    if n == 0:
+        return 0
+    return (down)(n - 1)
+
+def main():
+    t = Tree(root=Node(depth=1))
+    print(t.walk(2))
+    print(down(3))
+"#,
+    );
+    assert_open(
+        r#"
+class Box:
+    n: int64
+
+    spec def plus(self, extra: int64) -> int64:
+        return self.n + extra
+
+def kw(b: Box) -> int64:
+    requires b.plus(extra=1) > 0
+    return 0
+
+def meth(xs: list[int64]) -> int64:
+    requires all([x > 0 for x in xs.copy()])
+    return 0
+
+def strs(xs: list[str]) -> int64:
+    requires all([len(x) > i for (i, x) in enumerate(xs, start=1)])
+    return 0
+
+def shifted(xs: list[int64]) -> int64:
+    requires forall((i, x) in enumerate(xs, 1), x == i)
+    return 0
+
+def main():
+    print(kw(Box(n=1)))
+"#,
+        &[
+            "8 assert failed",
+            "17 overflow failed",
+            "21 overflow failed",
+            "25 requires unsupported",
+        ],
+    );
+}
+
+#[test]
 fn trait_implementations_may_weaken_requires_and_strengthen_ensures() {
     let source = r#"
 trait Scaler:
