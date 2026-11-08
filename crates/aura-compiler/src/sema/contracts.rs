@@ -27,8 +27,25 @@ pub(crate) const RESULT_NAME: &str = "result";
 
 /// Builtin functions a condition may call. Each reads its arguments only.
 const PURE_FUNCTIONS: &[&str] = &[
-    "len", "abs", "min", "max", "sum", "any", "all", "ord", "chr", "str", "round", "sqrt",
-    "sorted", "reversed", "list", "divmod", "range",
+    "len",
+    "abs",
+    "min",
+    "max",
+    "sum",
+    "any",
+    "all",
+    "ord",
+    "chr",
+    "str",
+    "round",
+    "sqrt",
+    "sorted",
+    "reversed",
+    "list",
+    "divmod",
+    "range",
+    "enumerate",
+    "zip",
 ];
 
 /// Builtin methods a condition may call. Each reads its receiver and

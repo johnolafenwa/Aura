@@ -7,6 +7,17 @@ in this file.
 
 ## Unreleased
 
+- A `for` loop over a `range(...)` call checks its invariants once more when
+  the range runs out, with the target at the range's end, so after
+  `for i in range(n)` an invariant holds with `i == n`. An invariant that
+  only held inside the range, such as `invariant i < n`, now fails at the
+  end of the loop. `aura verify` models lists of tuples and classes element
+  by element, and quantifiers over several `for` clauses, tuple targets,
+  `enumerate`, and `zip`; `enumerate` and `zip` may now appear in
+  contracts. It also proves that objects of classes with invariants keep
+  them where they cross a function boundary (calls of public read-only
+  methods, arguments, results, and `mut` parameters) and assumes it on the
+  other side, so a public getter starts from a valid object.
 - `aura verify file.au` proves, with an external Z3 or cvc5, that a
   program's checks cannot fail: integer overflow, zero divisors, list
   indexes, `assert`, `requires`, `ensures`, loop `invariant` and

@@ -1,0 +1,6 @@
+def main():
+    mut seen = 0
+    for i in range(3):
+        invariant i < 3
+        seen += 1
+    print(seen)

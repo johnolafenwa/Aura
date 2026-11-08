@@ -360,6 +360,12 @@ impl<'a> VerifyContext<'a> {
     }
 
     pub(crate) fn variant_index(&self, name: &str, variant: &str) -> Option<usize> {
+        // The builtin `Lookup` a checked list read returns.
+        if name == LOOKUP && !self.enums.contains_key(name) {
+            return ["Found", "Missing"]
+                .iter()
+                .position(|candidate| *candidate == variant);
+        }
         self.enums
             .get(name)?
             .variants
@@ -463,6 +469,7 @@ pub fn verify_module(
         let entry = exec.entry_state();
         exec.assume_entry_requires(&entry);
         exec.assume_entry_invariant(&entry);
+        exec.assume_entry_parameters(&entry);
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
             let key = (
@@ -703,3 +710,7 @@ fn solve(
 #[cfg(test)]
 #[path = "verify_tests.rs"]
 mod tests;
+
+/// The builtin enum a checked list read returns: `Found(element)` or
+/// `Missing`.
+pub(crate) const LOOKUP: &str = "Lookup";

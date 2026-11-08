@@ -103,10 +103,11 @@ fn is_bool(ty: &Type) -> bool {
 pub(super) enum Val {
     Int(String, IntTy),
     Bool(String),
-    /// A list: its length, and for scalar elements an `(Array Int E)` store.
+    /// A list: its length, and the store of its elements when the
+    /// encoding models them.
     List {
         len: String,
-        data: Option<String>,
+        data: Option<Store>,
         elem: Type,
     },
     Tuple(Vec<Val>),
@@ -120,6 +121,14 @@ pub(super) enum Val {
     Unit,
     /// A value the encoding does not model.
     Opaque,
+}
+
+/// A list's element store: an `(Array Int S)` for each scalar an element
+/// holds, nested as the element's tuple items or class fields are.
+#[derive(Clone, Debug, PartialEq)]
+pub(super) enum Store {
+    Leaf(String, &'static str),
+    Items(Vec<Store>),
 }
 
 /// A loan's target, as far as the encoding follows it.
@@ -186,6 +195,10 @@ struct Loop {
     /// The locals every write of the loop steps by a constant in one
     /// direction.
     counters: BTreeMap<String, Step>,
+    /// Counters that step by one only right after a test that they are
+    /// below a bound the loop does not write, by counter: they never pass
+    /// the larger of their entry value and the bound.
+    bounds: BTreeMap<String, Operand>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -212,11 +225,11 @@ pub(super) struct Exec<'a> {
     counter: usize,
     local_types: BTreeMap<String, Type>,
     /// The source position of the statement being executed.
-    span: Span,
+    pub(super) span: Span,
     /// Check failure blocks whose paths the current iteration assumes away.
     pub(super) assumed_fails: BTreeSet<usize>,
     /// Set while the `requires` of a `lemma def` call are proved.
-    erasing: bool,
+    pub(super) erasing: bool,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
@@ -359,8 +372,7 @@ impl<'a> Exec<'a> {
             Type::Named(name, args) if name == "list" && args.len() == 1 => {
                 let len = self.fresh_const("Int", &format!("{hint}_len"));
                 self.fact(format!("(and (<= 0 {len}) (<= {len} {}))", i64::MAX));
-                let data = element_sort(&args[0])
-                    .map(|sort| self.fresh_const(&format!("(Array Int {sort})"), hint));
+                let data = self.fresh_store(&args[0], hint);
                 Val::List {
                     len,
                     data,
@@ -739,6 +751,7 @@ impl<'a> Exec<'a> {
                         check_region: BTreeSet::new(),
                         writes: BTreeSet::new(),
                         counters: BTreeMap::new(),
+                        bounds: BTreeMap::new(),
                     })
                     .body;
                 let mut work = vec![node];
@@ -840,8 +853,76 @@ impl<'a> Exec<'a> {
                 other.extend(writes);
             }
             lp.counters.retain(|name, _| !other.contains(name));
+            lp.bounds = self.counter_bounds(lp, &preds);
         }
         Ok(Cfg { rpo, loops })
+    }
+
+    /// The loop's counters `c` whose only write is `c = c + 1` in a block
+    /// entered only when a test `c < bound` holds, with `bound` a constant or
+    /// a local the loop does not write: the shape of a counted `range` loop.
+    fn counter_bounds(&self, lp: &Loop, preds: &[Vec<usize>]) -> BTreeMap<String, Operand> {
+        let blocks = &self.function.blocks;
+        let mut bounds = BTreeMap::new();
+        for &block in &lp.body {
+            let Terminator::Branch {
+                condition: Operand::Place(test),
+                then_label,
+                ..
+            } = &blocks[block].terminator
+            else {
+                continue;
+            };
+            let Some(Instruction::Assign {
+                value:
+                    Rvalue::Binary {
+                        op: BinaryOp::Less,
+                        left: Operand::Place(counter),
+                        right: bound @ (Operand::Place(_) | Operand::Int(_)),
+                        ..
+                    },
+                ..
+            }) = blocks[block].instructions.iter().rev().find(
+                |instruction| matches!(instruction, Instruction::Assign { target, .. } if target == test),
+            )
+            else {
+                continue;
+            };
+            if lp.counters.get(counter) != Some(&Step::Up)
+                || matches!(bound, Operand::Place(place) if lp.writes.contains(place.split('.').next().unwrap_or(place)))
+            {
+                continue;
+            }
+            let step = self.labels[then_label.as_str()];
+            if !lp.body.contains(&step) || preds[step] != [block] {
+                continue;
+            }
+            let writes: Vec<&Rvalue> = lp
+                .body
+                .iter()
+                .flat_map(|&body| &blocks[body].instructions)
+                .filter_map(|instruction| match instruction {
+                    Instruction::Assign { target, value } if target == counter => Some(value),
+                    _ => None,
+                })
+                .collect();
+            let unit_step = matches!(
+                writes.as_slice(),
+                [Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Place(left),
+                    right: Operand::Int(1),
+                    ..
+                }] if left == counter
+            );
+            let in_step = blocks[step].instructions.iter().any(|instruction| {
+                matches!(instruction, Instruction::Assign { target, .. } if target == counter)
+            });
+            if unit_step && in_step {
+                bounds.insert(counter.clone(), bound.clone());
+            }
+        }
+        bounds
     }
 
     /// Executes the blocks of `region` reachable from `entry`, in reverse
@@ -906,6 +987,20 @@ impl<'a> Exec<'a> {
                     Step::Up => format!("(<= {before} {after})"),
                     Step::Down => format!("(<= {after} {before})"),
                 };
+                self.assume(&havoc.pc.clone(), fact);
+            }
+        }
+        // A bounded counter never passes the larger of its entry value and
+        // its bound.
+        for (root, bound) in &lp.bounds {
+            let bound = match self.operand(&mut havoc, bound, None) {
+                Val::Int(term, _) if !term.starts_with('-') => Some(term),
+                _ => None,
+            };
+            if let (Some(bound), Some(Val::Int(before, _)), Some(Val::Int(after, _))) =
+                (bound, state.env.get(root), havoc.env.get(root))
+            {
+                let fact = format!("(or (= {after} {before}) (<= {after} {bound}))");
                 self.assume(&havoc.pc.clone(), fact);
             }
         }
@@ -1013,15 +1108,16 @@ impl<'a> Exec<'a> {
                 for value in values {
                     if let Val::List { len, data, .. } = value {
                         lens.push(len.as_str());
-                        datas.extend(data.as_deref());
+                        datas.extend(data.as_ref());
                     }
                 }
                 let len = self.merge_terms("Int", pcs, &lens, &format!("{hint}_len"));
                 // A store merges only when every path still models one.
-                let data = (data.is_some() && datas.len() == values.len()).then(|| {
-                    let sort = format!("(Array Int {})", element_sort(elem).unwrap_or("Int"));
-                    self.merge_terms(&sort, pcs, &datas, hint)
-                });
+                let data = if data.is_some() && datas.len() == values.len() {
+                    self.merge_stores(pcs, &datas, hint)
+                } else {
+                    None
+                };
                 Val::List {
                     len,
                     data,
@@ -1081,7 +1177,11 @@ impl<'a> Exec<'a> {
         }
         let target = |exec: &Self, label: &str| exec.labels[label];
         match &block.terminator {
-            Terminator::Return(_) => Vec::new(),
+            Terminator::Return(value) => {
+                let result = self.operand(&mut state, value, None);
+                self.prove_return_invariants(&state, &result);
+                Vec::new()
+            }
             Terminator::Goto(label) => vec![(target(self, label), state)],
             Terminator::Branch {
                 condition,
@@ -1318,9 +1418,17 @@ impl<'a> Exec<'a> {
                         list,
                         index,
                         projection,
-                    }) if projection.is_empty() => {
+                    }) => {
                         let list = self.read_place(state, &list);
-                        self.element(&list, &index, target)
+                        let mut value = self.element(&list, &index, target);
+                        for segment in projection.split('.').filter(|segment| !segment.is_empty()) {
+                            value = project(&value, segment).unwrap_or(Val::Opaque);
+                        }
+                        if value == Val::Opaque {
+                            self.fresh_local(target)
+                        } else {
+                            value
+                        }
                     }
                     _ => self.fresh_local(target),
                 };
@@ -1337,41 +1445,29 @@ impl<'a> Exec<'a> {
                         projection,
                     }) => {
                         let current = self.read_place(state, &list);
-                        match (current, projection.is_empty(), value) {
-                            (
-                                Val::List {
-                                    len,
-                                    data: Some(data),
-                                    elem,
-                                },
-                                true,
-                                Val::Int(term, _) | Val::Bool(term),
-                            ) => {
-                                let data = format!("(store {data} {index} {term})");
-                                let sort =
-                                    format!("(Array Int {})", element_sort(&elem).unwrap_or("Int"));
-                                let data = self.define(&sort, "store", data);
-                                self.write_place(
-                                    state,
-                                    &list,
-                                    Val::List {
-                                        len,
-                                        data: Some(data),
-                                        elem,
-                                    },
-                                );
-                            }
-                            (Val::List { len, elem, .. }, _, _) => {
-                                let fresh = self.fresh_list_data(&elem, "store");
-                                self.write_place(
-                                    state,
-                                    &list,
-                                    Val::List {
-                                        len,
-                                        data: fresh,
-                                        elem,
-                                    },
-                                );
+                        match current {
+                            Val::List { len, data, elem } => {
+                                let list_value = Val::List {
+                                    len: len.clone(),
+                                    data: data.clone(),
+                                    elem: elem.clone(),
+                                };
+                                // A write through a field of the element
+                                // rewrites the whole element.
+                                let element = if projection.is_empty() {
+                                    Some(value)
+                                } else {
+                                    let mut element = self.element(&list_value, &index, "element");
+                                    let segments: Vec<&str> = projection.split('.').collect();
+                                    set_in(&mut element, &segments, value).then_some(element)
+                                };
+                                let data = match (data, element) {
+                                    (Some(data), Some(element)) => {
+                                        self.put_or_fresh(&data, &elem, &index, &element, "store")
+                                    }
+                                    _ => self.fresh_store(&elem, "store"),
+                                };
+                                self.write_place(state, &list, Val::List { len, data, elem });
                             }
                             _ => self.havoc_place(state, &list),
                         }
@@ -1398,8 +1494,14 @@ impl<'a> Exec<'a> {
             Loan::Place(place) => self.place_type(place).as_ref().and_then(IntTy::of),
             Loan::Element {
                 list, projection, ..
-            } if projection.is_empty() => match self.place_type(list)? {
-                Type::Named(name, args) if name == "list" && args.len() == 1 => IntTy::of(&args[0]),
+            } => match self.place_type(list)? {
+                Type::Named(name, args) if name == "list" && args.len() == 1 => {
+                    let mut ty = args[0].clone();
+                    for segment in projection.split('.').filter(|segment| !segment.is_empty()) {
+                        ty = self.cx.project_type(&ty, segment)?;
+                    }
+                    IntTy::of(&ty)
+                }
                 _ => None,
             },
             _ => None,
@@ -1412,8 +1514,185 @@ impl<'a> Exec<'a> {
             .map_or(Val::Opaque, |ty| self.fresh(&ty, target))
     }
 
-    fn fresh_list_data(&mut self, elem: &Type, hint: &str) -> Option<String> {
-        element_sort(elem).map(|sort| self.fresh_const(&format!("(Array Int {sort})"), hint))
+    /// A fresh store for elements of type `elem`, when the encoding models
+    /// them: scalars, and tuples and classes of modeled values.
+    pub(super) fn fresh_store(&mut self, elem: &Type, hint: &str) -> Option<Store> {
+        self.fresh_store_at(elem, hint, 0)
+    }
+
+    fn fresh_store_at(&mut self, elem: &Type, hint: &str, depth: usize) -> Option<Store> {
+        if let Some(sort) = element_sort(elem) {
+            let array = self.fresh_const(&format!("(Array Int {sort})"), hint);
+            return Some(Store::Leaf(array, sort));
+        }
+        if depth > MAX_DEPTH {
+            return None;
+        }
+        let items = self.element_items(elem)?;
+        items
+            .iter()
+            .enumerate()
+            .map(|(index, (_, ty))| self.fresh_store_at(ty, &format!("{hint}_{index}"), depth + 1))
+            .collect::<Option<Vec<_>>>()
+            .map(Store::Items)
+    }
+
+    /// The items of a tuple or the fields of a class, in order.
+    fn element_items(&self, elem: &Type) -> Option<Vec<(Option<String>, Type)>> {
+        match elem {
+            Type::Tuple(items) => Some(items.iter().map(|item| (None, item.clone())).collect()),
+            Type::Named(name, args) => self.cx.class_fields(name, args).map(|fields| {
+                fields
+                    .into_iter()
+                    .map(|(field, ty)| (Some(field), ty))
+                    .collect()
+            }),
+            _ => None,
+        }
+    }
+
+    /// The element a store holds at the term `index`, as `select` terms.
+    /// The index may name a quantifier's bound variable.
+    pub(super) fn store_select(&self, store: &Store, elem: &Type, index: &str) -> Val {
+        match store {
+            Store::Leaf(array, _) => {
+                let term = format!("(select {array} {index})");
+                match IntTy::of(elem) {
+                    Some(int) => Val::Int(term, int),
+                    None => Val::Bool(term),
+                }
+            }
+            Store::Items(stores) => {
+                let Some(items) = self.element_items(elem) else {
+                    return Val::Opaque;
+                };
+                let values = stores
+                    .iter()
+                    .zip(&items)
+                    .map(|(store, (_, ty))| self.store_select(store, ty, index));
+                match elem {
+                    Type::Named(name, _) => Val::Record(
+                        name.clone(),
+                        items
+                            .iter()
+                            .map(|(field, _)| field.clone().unwrap_or_default())
+                            .zip(values)
+                            .collect(),
+                    ),
+                    _ => Val::Tuple(values.collect()),
+                }
+            }
+        }
+    }
+
+    /// The store with `value` at `index`, when the store models each of
+    /// its scalars.
+    fn store_put(&mut self, store: &Store, index: &str, value: &Val) -> Option<Store> {
+        match (store, value) {
+            (Store::Leaf(array, sort), Val::Int(term, _) | Val::Bool(term)) => {
+                let array = self.define(
+                    &format!("(Array Int {sort})"),
+                    "store",
+                    format!("(store {array} {index} {term})"),
+                );
+                Some(Store::Leaf(array, sort))
+            }
+            (Store::Items(stores), Val::Tuple(values)) if stores.len() == values.len() => stores
+                .iter()
+                .zip(values)
+                .map(|(store, value)| self.store_put(store, index, value))
+                .collect::<Option<Vec<_>>>()
+                .map(Store::Items),
+            (Store::Items(stores), Val::Record(_, fields)) if stores.len() == fields.len() => {
+                stores
+                    .iter()
+                    .zip(fields)
+                    .map(|(store, (_, value))| self.store_put(store, index, value))
+                    .collect::<Option<Vec<_>>>()
+                    .map(Store::Items)
+            }
+            _ => None,
+        }
+    }
+
+    /// `store_put`, or a fresh store when the value is not modeled.
+    fn put_or_fresh(
+        &mut self,
+        store: &Store,
+        elem: &Type,
+        index: &str,
+        value: &Val,
+        hint: &str,
+    ) -> Option<Store> {
+        match self.store_put(store, index, value) {
+            Some(store) => Some(store),
+            None => self.fresh_store(elem, hint),
+        }
+    }
+
+    fn merge_stores(&mut self, pcs: &[String], stores: &[&Store], hint: &str) -> Option<Store> {
+        match stores.first()? {
+            Store::Leaf(_, sort) => {
+                let sort = *sort;
+                let mut arrays = Vec::new();
+                for store in stores {
+                    let Store::Leaf(array, _) = store else {
+                        return None;
+                    };
+                    arrays.push(array.as_str());
+                }
+                let array = self.merge_terms(&format!("(Array Int {sort})"), pcs, &arrays, hint);
+                Some(Store::Leaf(array, sort))
+            }
+            Store::Items(first) => {
+                let mut merged = Vec::new();
+                for position in 0..first.len() {
+                    let mut children = Vec::new();
+                    for store in stores {
+                        let Store::Items(items) = store else {
+                            return None;
+                        };
+                        children.push(items.get(position)?);
+                    }
+                    merged.push(self.merge_stores(
+                        pcs,
+                        &children,
+                        &format!("{hint}_{position}"),
+                    )?);
+                }
+                Some(Store::Items(merged))
+            }
+        }
+    }
+
+    /// Names each scalar of a value built from `select` terms, with the
+    /// range of its integer type.
+    fn name_scalars(&mut self, value: Val, hint: &str) -> Val {
+        match value {
+            Val::Int(term, int) => {
+                let term = self.define("Int", hint, term);
+                self.fact(int.contains(&term));
+                Val::Int(term, int)
+            }
+            Val::Bool(term) => Val::Bool(self.define("Bool", hint, term)),
+            Val::Tuple(items) => Val::Tuple(
+                items
+                    .into_iter()
+                    .map(|item| self.name_scalars(item, hint))
+                    .collect(),
+            ),
+            Val::Record(class, fields) => Val::Record(
+                class,
+                fields
+                    .into_iter()
+                    .map(|(field, value)| {
+                        let value = self.name_scalars(value, hint);
+                        (field, value)
+                    })
+                    .collect(),
+            ),
+            other => other,
+        }
     }
 
     /// The element at the normalized index `index` of `list`.
@@ -1424,15 +1703,8 @@ impl<'a> Exec<'a> {
                 elem,
                 ..
             } => {
-                let term = format!("(select {data} {index})");
-                match IntTy::of(elem) {
-                    Some(int) => {
-                        let term = self.define("Int", hint, term);
-                        self.fact(int.contains(&term));
-                        Val::Int(term, int)
-                    }
-                    None => Val::Bool(self.define("Bool", hint, term)),
-                }
+                let value = self.store_select(data, elem, index);
+                self.name_scalars(value, hint)
             }
             Val::List { elem, .. } => {
                 let elem = elem.clone();
@@ -1578,22 +1850,20 @@ impl<'a> Exec<'a> {
                 element_type,
             } => {
                 let len = elements.len().to_string();
-                let data = match element_sort(element_type) {
-                    Some(sort) => {
-                        let hint = IntTy::of(element_type);
-                        let mut data = self.fresh_const(&format!("(Array Int {sort})"), "literal");
-                        for (index, element) in elements.iter().enumerate() {
-                            match self.operand(state, element, hint) {
-                                Val::Int(term, _) | Val::Bool(term) => {
-                                    data = format!("(store {data} {index} {term})");
-                                }
-                                _ => {}
-                            }
-                        }
-                        Some(self.define(&format!("(Array Int {sort})"), "literal", data))
+                let hint = IntTy::of(element_type);
+                let mut data = self.fresh_store(element_type, "literal");
+                for (index, element) in elements.iter().enumerate() {
+                    let value = self.operand(state, element, hint);
+                    if let Some(store) = &data {
+                        data = self.put_or_fresh(
+                            &store.clone(),
+                            element_type,
+                            &index.to_string(),
+                            &value,
+                            "literal",
+                        );
                     }
-                    None => None,
-                };
+                }
                 Val::List {
                     len,
                     data,
@@ -2246,6 +2516,34 @@ impl<'a> Exec<'a> {
                         let list = Val::List { len, data, elem };
                         Some(self.element(&list, &index, target.unwrap_or("element")))
                     }
+                    ListOp::IndexOption | ListOp::TakeIndexOption => {
+                        // `Found(element)` when the index is in range,
+                        // else `Missing`; no index counts from the end.
+                        let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
+                            return None;
+                        };
+                        let list = Val::List {
+                            len: len.clone(),
+                            data,
+                            elem,
+                        };
+                        let element = self.element(&list, &index, target.unwrap_or("element"));
+                        let tag = self.define(
+                            "Int",
+                            "lookup",
+                            format!("(ite (and (<= 0 {index}) (< {index} {len})) 0 1)"),
+                        );
+                        if list_op == ListOp::TakeIndexOption {
+                            if let Some(place) = receiver_place {
+                                self.havoc_place(state, place);
+                            }
+                        }
+                        Some(Val::Enum(
+                            super::LOOKUP.to_string(),
+                            tag,
+                            vec![vec![element], Vec::new()],
+                        ))
+                    }
                     ListOp::SetIndex | ListOp::SetIndexScalar(_) => {
                         let Val::Int(index, _) = arg(self, state, 0, Some(IntTy::INT64)) else {
                             return None;
@@ -2254,17 +2552,9 @@ impl<'a> Exec<'a> {
                         let span = span_of(self, 2);
                         self.oblige_index(state, span, &len, &index);
                         let index = self.normalize_index(&len, &index);
-                        let data = match (data, value) {
-                            (Some(data), Val::Int(term, _) | Val::Bool(term)) => {
-                                let sort =
-                                    format!("(Array Int {})", element_sort(&elem).unwrap_or("Int"));
-                                Some(self.define(
-                                    &sort,
-                                    "store",
-                                    format!("(store {data} {index} {term})"),
-                                ))
-                            }
-                            _ => self.fresh_list_data(&elem, "store"),
+                        let data = match data {
+                            Some(data) => self.put_or_fresh(&data, &elem, &index, &value, "store"),
+                            None => None,
                         };
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
@@ -2274,17 +2564,9 @@ impl<'a> Exec<'a> {
                     ListOp::Push | ListOp::PushScalar(_) => {
                         let value = arg(self, state, 0, elem_int);
                         let new_len = self.define("Int", "len", format!("(+ {len} 1)"));
-                        let data = match (data, value) {
-                            (Some(data), Val::Int(term, _) | Val::Bool(term)) => {
-                                let sort =
-                                    format!("(Array Int {})", element_sort(&elem).unwrap_or("Int"));
-                                Some(self.define(
-                                    &sort,
-                                    "push",
-                                    format!("(store {data} {len} {term})"),
-                                ))
-                            }
-                            _ => self.fresh_list_data(&elem, "push"),
+                        let data = match data {
+                            Some(data) => self.put_or_fresh(&data, &elem, &len, &value, "push"),
+                            None => None,
                         };
                         // A list longer than `int64` can count stops the
                         // program before the push returns.
@@ -2347,7 +2629,7 @@ impl<'a> Exec<'a> {
                         Some(Val::Unit)
                     }
                     ListOp::Reverse | ListOp::Sort | ListOp::Swap => {
-                        let data = self.fresh_list_data(&elem, "permuted");
+                        let data = self.fresh_store(&elem, "permuted");
                         if let Some(place) = receiver_place {
                             self.write_place(state, place, Val::List { len, data, elem });
                         }

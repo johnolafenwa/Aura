@@ -175,7 +175,11 @@ def main():
   entry, after every iteration (including one that ends in `continue`),
   and when the condition ends the loop. A `break` leaves without a check.
 - A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target.
+  loop target is bound, so it can read the target. A loop over a
+  `range(...)` call checks it once more when the range runs out, with the
+  target at the range's end (or at its start when the range is empty), so
+  after `for i in range(n)` the invariant holds with `i == n`. A `break`
+  leaves without a check.
 - `decreases measure` takes an `int64` measure. It is checked each time
   the body starts: the measure must be at least 0, and smaller than it was
   the previous time. A loop that keeps both rules must end. A `for` loop
@@ -323,6 +327,10 @@ without checks, so a private helper may pass through a state that breaks
 an invariant as long as the public method that calls it restores it. Code
 in the class's own module that assigns a field directly is not checked
 either. Objects that `json.decode` builds are not checked yet.
+
+`aura verify` goes further and proves that an object holds its invariants
+everywhere it crosses a function boundary, and assumes it there; see
+[What It Proves](/manual/verification#what-it-proves).
 
 The method name `__invariant__` is reserved for the check.
 

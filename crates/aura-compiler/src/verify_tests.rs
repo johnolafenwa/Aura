@@ -1229,7 +1229,6 @@ def main():
             "20 assert failed",
             "25 requires unsupported",
             "25 requires unsupported",
-            "25 requires unsupported",
         ],
     );
 }
@@ -1409,4 +1408,194 @@ def main():
     let report = verify_with(&proved, &options).expect("a solver ran above");
     assert!(report.is_proved());
     assert_eq!(report.proved_sites.len(), 1);
+}
+
+#[test]
+fn a_range_loop_invariant_holds_when_the_loop_ends() {
+    assert_proved(
+        r#"
+def fill(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 100
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i)
+    mut out: list[int64] = []
+    for i in range(n):
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j)
+        out.append(i)
+    return out
+
+def count(a: int64, b: int64) -> int64:
+    requires 0 <= a and a <= 100 and 0 <= b and b <= 100
+    ensures result == 0 or result == b - a
+    mut c = 0
+    for i in range(a, b):
+        invariant c == i - a
+        c += 1
+    return c
+
+def main():
+    print(fill(3))
+    print(count(3, 7))
+    print(count(7, 3))
+"#,
+    );
+    // The last check runs with the target at the end of the range.
+    assert_open(
+        r#"
+def steps(n: int64) -> int64:
+    requires 0 <= n and n <= 10
+    mut s = 0
+    for i in range(n):
+        invariant s == i
+        invariant i < n
+        s += 1
+    return s
+
+def main():
+    print(steps(2))
+"#,
+        &["7 loop invariant failed"],
+    );
+}
+
+#[test]
+fn lists_of_tuples_and_classes_model_their_elements() {
+    assert_proved(
+        r#"
+class Point:
+    x: int64
+    y: int64
+
+def first_x(ps: list[Point]) -> int64:
+    requires len(ps) > 0 and ps[0].x == 3
+    ensures result == 3
+    return ps[0].x
+
+def bump(ps: mut list[Point]):
+    requires len(ps) > 1
+    requires forall(p in ps, 0 <= p.x and p.x < 1000)
+    ensures ps[1].x == old(ps[1].x) + 1
+    ensures ps[0].y == old(ps[0].y)
+    ps[1].x = ps[1].x + 1
+
+def pairs(n: int64) -> list[(int64, bool)]:
+    requires 0 <= n and n <= 100
+    ensures len(result) == n
+    ensures forall(p in result, p[0] >= 0 and p[1])
+    mut out: list[(int64, bool)] = []
+    for i in range(n):
+        invariant len(out) == i
+        invariant forall(q in out, q[0] >= 0 and q[1])
+        out.append((i, true))
+    return out
+
+def sum_x(ps: list[Point]) -> int64:
+    requires len(ps) <= 100
+    requires forall(p in ps, 0 <= p.x and p.x <= 10)
+    ensures 0 <= result and result <= 1000
+    mut t = 0
+    for i in range(len(ps)):
+        invariant 0 <= t and t <= 10 * i
+        t += ps[i].x
+    return t
+
+def main():
+    mut ps = [Point(x=3, y=4), Point(x=5, y=6)]
+    print(first_x(ps))
+    bump(ps)
+    print(ps[1].x)
+    print(len(pairs(3)))
+"#,
+    );
+}
+
+#[test]
+fn quantifiers_take_several_clauses_and_tuple_targets() {
+    assert_proved(
+        r#"
+def first_le_last(xs: list[int64]) -> bool:
+    requires len(xs) > 1
+    requires all([xs[i] <= xs[j] for i in range(len(xs)) for j in range(len(xs)) if i <= j])
+    ensures result
+    return xs[0] <= xs[len(xs) - 1]
+
+def third(xs: list[int64]) -> int64:
+    requires len(xs) > 3
+    requires forall((i, x) in enumerate(xs), x == i)
+    ensures result == 3
+    return xs[3]
+
+def ordered(xs: list[int64], ys: list[int64]) -> bool:
+    requires len(xs) > 0 and len(ys) > 0
+    requires forall((x, y) in zip(xs, ys), x < y)
+    ensures result
+    return xs[0] < ys[0]
+
+def total(ps: list[(int64, int64)]) -> int64:
+    requires len(ps) > 0
+    requires forall((a, b) in ps, 0 <= a and a <= 5 and b == 10 - a)
+    ensures result == 10
+    return ps[0][0] + ps[0][1]
+
+def main():
+    print(first_le_last([1, 2, 3]))
+    print(third([0, 1, 2, 3]))
+    print(ordered([1], [2]))
+    print(total([(4, 6)]))
+"#,
+    );
+}
+
+#[test]
+fn class_invariants_hold_where_objects_cross_function_boundaries() {
+    let source = r#"
+class Account:
+    balance: int64
+    limit: int64 = 1000
+    invariant 0 <= self.balance and self.balance <= self.limit
+    invariant self.limit <= 1_000_000
+
+    public def headroom(self) -> int64:
+        ensures result >= 0
+        return self.limit - self.balance
+
+def outside(a: Account) -> int64:
+    ensures result >= 0
+    return a.headroom()
+
+def make() -> Account:
+    return Account(balance=3)
+
+def chain() -> int64:
+    ensures result >= 0
+    return make().headroom()
+
+def broken() -> int64:
+    mut a = Account(balance=3)
+    a.balance = -1
+    return outside(a)
+
+def main():
+    print(outside(Account(balance=10)))
+    print(chain())
+    xs = [1, 2]
+    print(xs[min(outside(Account(balance=1000)), 1)])
+"#;
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let Some(report) = verify_with(source, &options) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["26 class invariant failed"]);
+    // No run checks an object passed to a function, so while that check is
+    // open a build removes no check.
+    assert!(report.proved_sites.is_empty());
+    let fixed = source.replace("a.balance = -1", "a.balance = 4");
+    let report = verify_with(&fixed, &options).expect("a solver ran above");
+    assert!(report.is_proved(), "{report:#?}");
+    assert_eq!(report.proved_sites.len(), 1);
+    crate::run_source(&fixed).expect("the program runs");
 }

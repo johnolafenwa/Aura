@@ -18591,16 +18591,39 @@ impl<'a> Lowerer<'a> {
     }
 
     fn lower_for(&mut self, for_stmt: &crate::ast::ForStmt) {
-        // A `for` invariant holds at the start of every iteration, with the
-        // loop target bound.
-        let mut lower_body = |lowerer: &mut Self| {
-            lowerer.lower_clause_checks(&for_stmt.contracts, crate::ast::ContractKind::Invariant);
-            lowerer.lower_stmts(&for_stmt.body);
-        };
+        let mut lower_body = |lowerer: &mut Self| lowerer.lower_stmts(&for_stmt.body);
         self.lower_for_with_body(for_stmt, None, &mut lower_body);
     }
 
+    /// Lowers a `for` loop. Its invariants hold at the start of every
+    /// iteration, with the loop target bound; a counted `range` loop also
+    /// checks them once more when it ends, with the target at the end.
     fn lower_for_with_body(
+        &mut self,
+        for_stmt: &crate::ast::ForStmt,
+        checked_binding: Option<&ComprehensionClauseInfo>,
+        lower_body: &mut dyn FnMut(&mut Self),
+    ) {
+        let invariants = for_stmt
+            .contracts
+            .iter()
+            .any(|clause| clause.kind == crate::ast::ContractKind::Invariant);
+        let counted = self.lockstep_loop_iterables(&for_stmt.iterable).is_none()
+            && counted_range_args(for_stmt, self.infer_expr_type(&for_stmt.iterable).as_ref())
+                .is_some();
+        if invariants && !counted {
+            let mut checked_body = |lowerer: &mut Self| {
+                lowerer
+                    .lower_clause_checks(&for_stmt.contracts, crate::ast::ContractKind::Invariant);
+                lower_body(lowerer);
+            };
+            self.lower_for_loop(for_stmt, checked_binding, &mut checked_body);
+        } else {
+            self.lower_for_loop(for_stmt, checked_binding, lower_body);
+        }
+    }
+
+    fn lower_for_loop(
         &mut self,
         for_stmt: &crate::ast::ForStmt,
         checked_binding: Option<&ComprehensionClauseInfo>,
@@ -18698,12 +18721,35 @@ impl<'a> Lowerer<'a> {
                 let (cursor, stop) = counted_range
                     .take()
                     .expect("the guard checked the counted range");
-                self.lower_counted_range_step(
-                    binding,
+                self.terminate(Terminator::Goto(self.label(dispatch_block)));
+                self.switch_to(dispatch_block);
+                let invariants = for_stmt
+                    .contracts
+                    .iter()
+                    .any(|clause| clause.kind == crate::ast::ContractKind::Invariant);
+                let step_binding = if invariants {
+                    // The invariants are checked before the cursor test, with
+                    // the target bound, so they hold once more when the loop
+                    // ends, with the target at the cursor's final value.
+                    self.emit(Instruction::Assign {
+                        target: binding,
+                        value: Rvalue::Use(Operand::Place(cursor.clone())),
+                    });
+                    self.scoped_names.push(target_scope.clone());
+                    self.lower_clause_checks(
+                        &for_stmt.contracts,
+                        crate::ast::ContractKind::Invariant,
+                    );
+                    self.pop_scoped_names();
+                    None
+                } else {
+                    Some(binding)
+                };
+                self.lower_counted_range_test(
+                    step_binding,
                     cursor,
                     stop,
                     for_stmt.span,
-                    dispatch_block,
                     body_block,
                     after_block,
                 );
@@ -19271,23 +19317,20 @@ impl<'a> Lowerer<'a> {
         (cursor, end)
     }
 
-    /// Branches to the body while `cursor < stop`, binding the cursor and
-    /// stepping it first, as `ForRange` does. The step cannot overflow: the
-    /// cursor stays below `stop`, which is at most `int64` max.
-    #[allow(clippy::too_many_arguments)]
-    fn lower_counted_range_step(
+    /// Branches to the body while `cursor < stop`, binding the cursor (unless
+    /// the caller bound it before the test) and stepping it first, as
+    /// `ForRange` does. The step cannot overflow: the cursor stays below
+    /// `stop`, which is at most `int64` max.
+    fn lower_counted_range_test(
         &mut self,
-        binding: String,
+        binding: Option<String>,
         cursor: String,
         stop: String,
         span: crate::diag::Span,
-        dispatch_block: usize,
         body_block: usize,
         after_block: usize,
     ) {
         let next_block = self.new_block("for_range_next");
-        self.terminate(Terminator::Goto(self.label(dispatch_block)));
-        self.switch_to(dispatch_block);
         let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
             target: more.clone(),
@@ -19305,10 +19348,12 @@ impl<'a> Lowerer<'a> {
             else_label: self.label(after_block),
         });
         self.switch_to(next_block);
-        self.emit(Instruction::Assign {
-            target: binding,
-            value: Rvalue::Use(Operand::Place(cursor.clone())),
-        });
+        if let Some(binding) = binding {
+            self.emit(Instruction::Assign {
+                target: binding,
+                value: Rvalue::Use(Operand::Place(cursor.clone())),
+            });
+        }
         // The cursor is below `stop`, so the advance never traps; the
         // backend drops the check it names.
         self.emit(Instruction::Assign {
