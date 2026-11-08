@@ -1,0 +1,8 @@
+error[AU4009]: `decreases` clause failed: `n` did not get smaller at the recursive call
+ --> crates/aura-compiler/tests/fixtures/run-fail/recursion_decreases_not_smaller.au:5:16
+  |
+5 |     return 1 + countdown(n - step, step=step - 1)
+  |                ^
+  = note: left = 4
+  = note: right = 4
+  = note: Aura call chain (innermost first): countdown at 1:1 -> countdown at 1:1 -> main at 7:1

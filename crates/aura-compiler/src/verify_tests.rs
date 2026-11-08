@@ -593,6 +593,8 @@ fn every_kind_and_status_has_a_report() {
     let report = Report {
         solver: "z3".to_string(),
         functions: 1,
+        cached: 0,
+        proved_sites: BTreeSet::new(),
         obligations: statuses
             .into_iter()
             .zip(kinds)
@@ -934,7 +936,6 @@ def f2(xs: list[int64], names: list[str], name: str, p: P, t: (int64, int64)) ->
     requires xs.contains(3)
     requires str(p.x) == "1"
     requires twice(v=len(xs)) == 2
-    requires all([x > 0 for x in xs])
     return 0
 
 def main():
@@ -944,14 +945,13 @@ def main():
         &[
             "22 assert failed",
             "25 index in range failed",
+            "34 requires unsupported",
             "35 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
-            "36 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
+            "35 requires unsupported",
         ],
     );
 }
@@ -1005,4 +1005,408 @@ def main():
     print(bag.count)
 "#,
     );
+}
+
+#[test]
+fn the_proof_cache_answers_unchanged_functions() {
+    let dir = std::env::temp_dir().join(format!("aura-verify-cache-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let options = Options {
+        cache_dir: Some(dir.clone()),
+        ..Options::default()
+    };
+    let source =
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n";
+    let Some(first) = verify_with(source, &options) else {
+        return;
+    };
+    assert_eq!(first.cached, 0);
+    let second = verify_with(source, &options).expect("a solver");
+    assert_eq!(second.cached, 2);
+    assert_eq!(open_checks(&second), open_checks(&first));
+    assert!(matches!(
+        &second.obligations[0].status,
+        Status::Failed { counterexample } if !counterexample.is_empty()
+    ));
+    // An entry that does not parse, or does not match the function, is
+    // solved again and replaced.
+    let entries: Vec<_> = std::fs::read_dir(&dir)
+        .expect("cache")
+        .map(|entry| entry.expect("entry").path())
+        .collect();
+    assert_eq!(entries.len(), 2);
+    std::fs::write(&entries[0], "not json").expect("corrupt");
+    // One status more than the entry holds, whichever function it is.
+    let held: Vec<Status> =
+        serde_json::from_str(&std::fs::read_to_string(&entries[1]).expect("entry")).expect("json");
+    let longer = vec![Status::Proved; held.len() + 1];
+    std::fs::write(&entries[1], serde_json::to_string(&longer).expect("json"))
+        .expect("wrong length");
+    let third = verify_with(source, &options).expect("a solver");
+    assert_eq!(third.cached, 0);
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 2);
+    // A cache that cannot be written only loses its entries.
+    let blocked = dir.join("blocked");
+    std::fs::write(&blocked, "a file, not a directory").expect("blocker");
+    let options = Options {
+        cache_dir: Some(blocked),
+        ..Options::default()
+    };
+    assert_eq!(verify_with(source, &options).expect("a solver").cached, 0);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn undecided_answers_are_not_cached() {
+    let dir = script_dir("cache-unknown");
+    let options = Options {
+        solver: Some(script(&dir, "z3", UNKNOWN_SOLVER, true)),
+        cache_dir: Some(dir.join("cache")),
+        ..Options::default()
+    };
+    let program =
+        crate::check_source("def double(x: int64) -> int64:\n    return x * 2\n").expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    for _ in 0..2 {
+        let report = verify_module(&program, &module, &options).expect("runs");
+        assert_eq!(report.cached, 0);
+        assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// How many element reads and loans of each function skip their check.
+fn unchecked_accesses(module: &crate::mir::MirModule) -> BTreeMap<String, usize> {
+    module
+        .functions
+        .iter()
+        .map(|function| {
+            let text = format!("{:?}", function.blocks);
+            let count = text.matches("Unchecked").count() + text.matches("checked: false").count();
+            (crate::mir::public_function_name(&function.name), count)
+        })
+        .collect()
+}
+
+#[test]
+fn builds_drop_only_the_bounds_checks_proved_in_range() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI must install an SMT solver"
+        );
+        return;
+    }
+    let source = r#"
+class Cell:
+    value: int64
+
+def middle(xs: list[int64]) -> int64:
+    requires len(xs) > 2
+    i = len(xs) // 2
+    return xs[i]
+
+def last(xs: list[int64]) -> int64:
+    requires len(xs) > 0
+    i = -1
+    return xs[i]
+
+def pick(xs: list[int64], i: int64) -> int64:
+    return xs[i]
+
+def bump(cells: mut list[Cell], i: int64):
+    requires 0 <= i and i < len(cells)
+    view mut cell = cells[i]
+    cell.value += 1
+
+def main():
+    xs = [1, 2, 3]
+    print(middle(xs))
+    print(last(xs))
+    print(pick(xs, 0))
+    mut cells = [Cell(value=1)]
+    bump(cells, 0)
+    print(cells[0].value)
+"#;
+    let program = crate::check_source(source).expect("checks");
+    let plain = unchecked_accesses(&crate::mir::lower(&program));
+    for debug in [false, true] {
+        let (module, removed) = crate::mir::lower_with_proved_checks(&program, debug, |module| {
+            let options = Options {
+                prove_sites: true,
+                ..Options::default()
+            };
+            verify_module(&program, module, &options).map(|report| report.proved_sites)
+        })
+        .expect("verifies");
+        let proved = unchecked_accesses(&module);
+        // `middle` reads in range, and `bump` borrows in range; `last`
+        // counts from the end, and `pick` may read anywhere.
+        assert_eq!(proved["middle"], plain["middle"] + 1, "{proved:?}");
+        assert_eq!(proved["last"], plain["last"], "{proved:?}");
+        assert_eq!(proved["pick"], plain["pick"], "{proved:?}");
+        assert!(proved["bump"] > plain["bump"], "{proved:?}");
+        assert!(removed >= 2, "{removed}");
+    }
+}
+
+#[test]
+fn quantified_contracts_are_proved_and_assumed() {
+    assert_proved(
+        r#"
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    requires all([0 <= p and p <= 1_000_000 for p in prices])
+    mut total = 0
+    for i in range(len(prices)):
+        invariant 0 <= total and total <= i * 1_000_000
+        total += prices[i]
+    return total
+
+def first_positive(xs: list[int64]) -> int64:
+    requires exists(x in xs, x > 0)
+    requires len(xs) <= 100
+    ensures result >= 0
+    for i in range(len(xs)):
+        if xs[i] > 0:
+            return i
+    return 0
+
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+    print(first_positive([-1, 0, 3]))
+    print(squares(4))
+"#,
+    );
+}
+
+#[test]
+fn quantified_contracts_report_what_fails_and_what_is_not_modeled() {
+    assert_open(
+        r#"
+def evens(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 100
+    ensures forall(i in range(n), result[i] % 2 == 0)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n and len(out) == i
+        invariant forall(j in range(i), out[j] % 2 == 0)
+        out.append(i)
+        i += 1
+    return out
+
+def window(xs: list[int64], lo: int64, hi: int64) -> int64:
+    requires all([x >= 0 for x in xs if x > 10])
+    requires all([xs[k] < 50 for k in range(lo, hi)])
+    requires any([x == y for x in xs for y in xs])
+    requires all([len(name) > 0 for name in ["a"]])
+    requires all([x > 0 for (x, y) in [(1, 2)]])
+    assert all([x < 1000 for x in xs])
+    return 0
+
+def main():
+    print(evens(1))
+    print(window([1, 20], 0, 2))
+"#,
+        &[
+            "9 loop invariant failed",
+            "20 assert failed",
+            "25 requires unsupported",
+            "25 requires unsupported",
+            "25 requires unsupported",
+        ],
+    );
+}
+
+#[test]
+fn mut_parameters_change_only_what_their_contracts_say() {
+    assert_proved(
+        r#"
+def bump(xs: mut list[int64], k: int64):
+    requires 0 <= k and k < len(xs)
+    requires xs[k] < 100
+    ensures len(xs) == len(old(xs))
+    ensures xs[k] == old(xs[k]) + 1
+    ensures forall(i in range(len(xs)), i == k or xs[i] == old(xs)[i])
+    xs[k] += 1
+
+def push_one(xs: mut list[int64]):
+    requires len(xs) < 1000
+    ensures len(xs) == len(old(xs)) + 1
+    ensures forall(i in range(len(old(xs))), xs[i] == old(xs)[i])
+    xs.append(1)
+
+def main():
+    mut xs = [1, 2, 3]
+    n = 7
+    bump(xs, 1)
+    assert xs[1] == 3
+    assert n == 7
+    assert len(xs) == 3
+    push_one(xs)
+    assert len(xs) == 4
+    assert xs[0] == 1 and xs[1] == 3
+"#,
+    );
+}
+
+#[test]
+fn recursive_functions_are_proved_to_end() {
+    assert_proved(
+        r#"
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def count(n: int64, step: int64 = 1) -> int64:
+    requires 0 <= n and n <= 1000 and step == 1
+    decreases n
+    ensures 0 <= result and result <= n
+    if n == 0:
+        return 0
+    return 1 + count(n - step)
+
+def main():
+    print(gcd(84, 36))
+    print(count(10))
+"#,
+    );
+    assert_open(
+        r#"
+def spin(n: int64, step: int64) -> int64:
+    decreases n
+    if n <= 0:
+        return 0
+    return spin(n - step, step)
+
+def main():
+    print(spin(3, 1))
+"#,
+        &[
+            "3 decreases failed",
+            "6 decreases failed",
+            "6 overflow failed",
+        ],
+    );
+}
+
+#[test]
+fn trait_contracts_hold_for_every_implementation_and_generic_calls_rely_on_them() {
+    assert_open(
+        r#"
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+    def scaled(self, k: int64) -> int64:
+        requires 1 <= k and k <= 10
+        ensures result >= 0
+        return min(self.area(), 1000) * k
+
+class Square:
+    side: int64
+
+class Sheet:
+    w: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return min(max(self.side, 0), 1000) * 2
+
+impl Shape for Sheet:
+    def area(self) -> int64:
+        return self.w
+
+def first_area[T: Shape](items: list[T]) -> int64:
+    ensures result >= 0
+    for item in items:
+        return item.area()
+    return 0
+
+def main():
+    print(Square(side=3).scaled(2))
+    print(first_area([Square(side=1), Square(side=2)]))
+    print(first_area([Sheet(w=4)]))
+"#,
+        &["4 ensures failed"],
+    );
+}
+
+#[test]
+fn lemmas_are_proved_once_and_relied_on_at_each_call() {
+    let source = r#"
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))
+"#;
+    assert_proved(source);
+    // A call written as a statement is erased, so a run does not check its
+    // `requires`, and a lemma the verifier cannot prove leaves every
+    // access checked.
+    let erased = r#"
+lemma def big(n: int64):
+    requires n > 100
+    assert n > 50
+
+def main():
+    xs = [1, 2]
+    big(1)
+    print(xs[0])
+"#;
+    let output = crate::run_source(erased).expect("an erased lemma call does not run");
+    assert_eq!(output.stdout, "1\n");
+    let options = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let Some(report) = verify_with(erased, &options) else {
+        return;
+    };
+    assert_eq!(open_checks(&report), ["8 requires failed"]);
+    assert!(report.proved_sites.is_empty());
+    let proved = erased.replace("big(1)", "big(101)");
+    let report = verify_with(&proved, &options).expect("a solver ran above");
+    assert!(report.is_proved());
+    assert_eq!(report.proved_sites.len(), 1);
 }

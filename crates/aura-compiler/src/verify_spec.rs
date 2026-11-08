@@ -14,7 +14,8 @@ use std::collections::BTreeMap;
 use super::exec::{conjoin, not, Exec, Goal, IntTy, State, Val};
 use super::ObligationKind;
 use crate::ast::{
-    BinaryOp, CompareOp, ContractClause, ContractKind, Expr, ExprKind, FunctionDecl, Stmt, UnaryOp,
+    BinaryOp, BindingTarget, CompareOp, ComprehensionOutput, ContractClause, ContractKind, Expr,
+    ExprKind, FunctionDecl, Stmt, UnaryOp,
 };
 use crate::diag::Span;
 
@@ -284,6 +285,25 @@ impl Exec<'_> {
                         };
                         wd.push(format!("(and (<= (- {len}) {index}) (< {index} {len}))"));
                         let len = len.clone();
+                        // Under a quantifier the index names a bound
+                        // variable, which no declared constant may use.
+                        if index.contains("!q") {
+                            let Val::List {
+                                data: Some(data),
+                                elem,
+                                ..
+                            } = &object
+                            else {
+                                return Err("elements of this type are not modeled yet".into());
+                            };
+                            let term = format!(
+                                "(select {data} (ite (< {index} 0) (+ {index} {len}) {index}))"
+                            );
+                            return Ok(match IntTy::of(elem) {
+                                Some(int) => Val::Int(term, int),
+                                None => Val::Bool(term),
+                            });
+                        }
                         let index = self.normalize_index(&len, &index);
                         match self.element(&object, &index, "element") {
                             Val::Opaque => Err("elements of this type are not modeled yet".into()),
@@ -314,6 +334,9 @@ impl Exec<'_> {
                 };
                 if args.iter().any(|arg| arg.name.is_some()) {
                     return Err("keyword arguments in contracts are not modeled yet".into());
+                }
+                if let ("all" | "any", [arg]) = (name.as_str(), args.as_slice()) {
+                    return self.quantifier(name == "all", &arg.value, env, wd, depth);
                 }
                 let mut values = Vec::new();
                 for arg in args {
@@ -438,6 +461,115 @@ impl Exec<'_> {
     }
 }
 
+impl Exec<'_> {
+    /// `all(...)` or `any(...)` of a list comprehension with one `for`
+    /// clause over a list of scalars or a `range`, as a quantifier over the
+    /// positions: `forall(x in xs, c)` and `exists(x in xs, c)` are written
+    /// this way.
+    fn quantifier(
+        &mut self,
+        universal: bool,
+        arg: &Expr,
+        env: &Env,
+        wd: &mut Vec<String>,
+        depth: usize,
+    ) -> Result<Val, String> {
+        let unsupported = || "`all` and `any` are modeled over one `for` clause yet".to_string();
+        let ExprKind::Comprehension {
+            output: ComprehensionOutput::List(body),
+            clauses,
+        } = &arg.kind
+        else {
+            return Err(unsupported());
+        };
+        let [clause] = clauses.as_slice() else {
+            return Err(unsupported());
+        };
+        let BindingTarget::Name { name, .. } = &clause.target else {
+            return Err(unsupported());
+        };
+        let k = self.bound_name();
+        // The range of positions, and the value the target takes at `k`.
+        let (range, value) = match &clause.iterable.kind {
+            ExprKind::Call { callee, args }
+                if matches!(&callee.kind, ExprKind::Name(callee) if callee == "range")
+                    && (1..=2).contains(&args.len()) =>
+            {
+                let mut bounds = Vec::new();
+                for arg in args {
+                    let Val::Int(term, _) = self.spec(&arg.value, env, wd, depth)? else {
+                        return Err("a `range` bound is not a modeled integer".into());
+                    };
+                    bounds.push(term);
+                }
+                let (low, high) = match bounds.as_slice() {
+                    [high] => ("0".to_string(), high.clone()),
+                    [low, high] => (low.clone(), high.clone()),
+                    _ => unreachable!("one or two bounds"),
+                };
+                (
+                    format!("(and (<= {low} {k}) (< {k} {high}))"),
+                    Val::Int(k.clone(), IntTy::INT64),
+                )
+            }
+            _ => match self.spec(&clause.iterable, env, wd, depth)? {
+                Val::List {
+                    len,
+                    data: Some(data),
+                    elem,
+                } => {
+                    let term = format!("(select {data} {k})");
+                    let value = match IntTy::of(&elem) {
+                        Some(int) => Val::Int(term, int),
+                        None => Val::Bool(term),
+                    };
+                    (format!("(and (<= 0 {k}) (< {k} {len}))"), value)
+                }
+                _ => return Err("quantifiers over this collection are not modeled yet".into()),
+            },
+        };
+        // An element of a list of integers lies in its type's range.
+        let mut hypotheses = vec![range];
+        if let Val::Int(term, int) = &value {
+            hypotheses.push(int.contains(term));
+        }
+        let mut inner = env.clone();
+        inner.insert(name.clone(), value);
+        // Each filter, then the condition, is evaluated only where the
+        // filters before it hold, so each is well-defined there.
+        for filter in &clause.filters {
+            let mut filter_wd = Vec::new();
+            let Val::Bool(term) = self.spec(filter, &inner, &mut filter_wd, depth)? else {
+                return Err("a comprehension filter is not a modeled `bool`".into());
+            };
+            push_quantified_wd(wd, &k, &hypotheses, &filter_wd);
+            hypotheses.push(term);
+        }
+        let mut body_wd = Vec::new();
+        let Val::Bool(condition) = self.spec(body, &inner, &mut body_wd, depth)? else {
+            return Err("a quantified condition is not a modeled `bool`".into());
+        };
+        push_quantified_wd(wd, &k, &hypotheses, &body_wd);
+        let hypotheses = conjoin(&hypotheses);
+        Ok(Val::Bool(if universal {
+            format!("(forall (({k} Int)) (=> {hypotheses} {condition}))")
+        } else {
+            format!("(exists (({k} Int)) (and {hypotheses} {condition}))")
+        }))
+    }
+}
+
+/// Records that `terms` hold at every position `k` where `hypotheses` do.
+fn push_quantified_wd(wd: &mut Vec<String>, k: &str, hypotheses: &[String], terms: &[String]) {
+    if !terms.is_empty() {
+        wd.push(format!(
+            "(forall (({k} Int)) (=> {} {}))",
+            conjoin(hypotheses),
+            conjoin(terms)
+        ));
+    }
+}
+
 /// The SMT term of an integer `//` or `%` with a non-zero divisor: `//`
 /// floors, and `%` takes the divisor's sign. Integers have no `/`.
 pub(super) fn division_term(op: BinaryOp, a: &str, b: &str) -> String {
@@ -481,4 +613,137 @@ fn public_name(name: &str) -> String {
 
 fn is_invariant_check(callee: &str) -> bool {
     base_name(callee).ends_with(&format!(".{}", crate::ast::CLASS_INVARIANT_METHOD))
+}
+
+impl<'a> Exec<'a> {
+    /// A `Branch` into the failure block `fail` of an `assert`, `ensures`,
+    /// or loop `invariant`, read from the clause as written. The lowered
+    /// condition of a quantified clause is a loop the walk only
+    /// approximates, so when the contract model reads the clause, the check
+    /// is proved from it directly and the walk continues at `pass` with the
+    /// clause known. `None` leaves the branch to the lowered code.
+    pub(super) fn clause_branch(
+        &mut self,
+        state: &State,
+        fail: usize,
+        pass: usize,
+    ) -> Option<Vec<(usize, State)>> {
+        let crate::mir::Terminator::AssertFail {
+            message,
+            span,
+            kind,
+            ..
+        } = &self.function.blocks[fail].terminator
+        else {
+            return None;
+        };
+        let obligation = match kind {
+            crate::mir::AssertKind::Assert => ObligationKind::Assert,
+            crate::mir::AssertKind::Ensures => ObligationKind::Ensures,
+            crate::mir::AssertKind::Invariant => ObligationKind::LoopInvariant,
+            _ => return None,
+        };
+        let decl = self.cx.decl(&self.function.name)?;
+        let condition = find_condition(&decl.contracts, &decl.body, *span)?;
+        let mut state = state.clone();
+        let env = self.clause_env(&mut state, fail, condition);
+        let mut wd = Vec::new();
+        let Ok(Val::Bool(term)) = self.spec(condition, &env, &mut wd, 0) else {
+            return None;
+        };
+        if !self.assumed_fails.contains(&fail) {
+            let text = super::exec::check_message(*kind, message.as_ref());
+            wd.push(term.clone());
+            let goal = conjoin(&wd);
+            let pc = state.pc.clone();
+            self.oblige(obligation, *span, text, &pc, Goal::Holds(goal));
+        }
+        let pc = state.pc.clone();
+        self.assume(&pc, term);
+        Some(vec![(pass, state)])
+    }
+
+    /// The value of each name `condition` reads, from `state`. The failure
+    /// block `fail` names the local behind each renamed source name in
+    /// scope; any other name is its own local.
+    fn clause_env(&mut self, state: &mut State, fail: usize, condition: &Expr) -> Env {
+        let renamed: BTreeMap<&str, &str> = self.function.blocks[fail]
+            .instructions
+            .iter()
+            .filter_map(|instruction| match instruction {
+                crate::mir::Instruction::SourceName { local, name } => {
+                    Some((name.as_str(), local.as_str()))
+                }
+                _ => None,
+            })
+            .collect();
+        let mut env = Env::new();
+        for name in free_names(condition) {
+            let local = renamed
+                .get(name.as_str())
+                .map_or(name.as_str(), |local| local)
+                .to_string();
+            if self.place_type(&local).is_none() {
+                // A name the clause binds itself, or a function.
+                continue;
+            }
+            let value = self.read_place(state, &local);
+            env.insert(name, value);
+        }
+        env
+    }
+}
+
+/// The names `expr` reads, as its debug form spells them.
+fn free_names(expr: &Expr) -> std::collections::BTreeSet<String> {
+    let text = format!("{:?}", expr.kind);
+    let mut names = std::collections::BTreeSet::new();
+    let mut rest = text.as_str();
+    while let Some(start) = rest.find("Name(\"") {
+        rest = &rest[start + 6..];
+        if let Some(end) = rest.find('"') {
+            names.insert(rest[..end].to_string());
+            rest = &rest[end..];
+        }
+    }
+    names
+}
+
+/// The condition of the `assert` or clause whose check reports at `span`.
+fn find_condition<'a>(
+    contracts: &'a [ContractClause],
+    body: &'a [Stmt],
+    span: Span,
+) -> Option<&'a Expr> {
+    let clause = |clause: &'a ContractClause| {
+        (clause.condition.span == span || clause.span == span).then_some(&clause.condition)
+    };
+    if let Some(found) = contracts.iter().find_map(clause) {
+        return Some(found);
+    }
+    body.iter().find_map(|stmt| match stmt {
+        Stmt::Assert(assert) => match &assert.clause {
+            Some(inner) => clause(inner),
+            None => {
+                (assert.condition.span == span || assert.span == span).then_some(&assert.condition)
+            }
+        },
+        Stmt::If(stmt) => stmt
+            .branches
+            .iter()
+            .find_map(|branch| find_condition(&[], &branch.body, span))
+            .or_else(|| {
+                stmt.else_body
+                    .as_deref()
+                    .and_then(|body| find_condition(&[], body, span))
+            }),
+        Stmt::Match(stmt) => stmt
+            .arms
+            .iter()
+            .find_map(|arm| find_condition(&[], &arm.body, span)),
+        Stmt::For(stmt) => find_condition(&stmt.contracts, &stmt.body, span),
+        Stmt::While(stmt) => find_condition(&stmt.contracts, &stmt.body, span),
+        Stmt::With(stmt) => find_condition(&[], &stmt.body, span),
+        _ => None,
+    })
 }

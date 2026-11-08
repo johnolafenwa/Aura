@@ -305,6 +305,10 @@ pub struct FunctionDecl {
     /// `spec def` bodies may call.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub spec: bool,
+    /// `lemma def`: a proof the verifier checks once and then relies on at
+    /// each call. A call written as a statement is erased at run time.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub lemma: bool,
 }
 
 /// The contextual keyword of a yield statement.

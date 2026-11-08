@@ -31,12 +31,16 @@ function:
 | requires | each call of a function with `requires` | `AU4009` at the call |
 | ensures | each `return` of a function with `ensures` | `AU4009` on return |
 | loop invariant | each loop `invariant` | `AU4009` in the loop |
-| decreases | each `decreases` measure | `AU4009` in the loop |
+| decreases | each `decreases` measure of a loop or a recursive function | `AU4009` in the loop or at the recursive call |
 | class invariant | constructions and calls of public `mut self` methods | `AU4009` at the check |
 
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
-assumes its `ensures`. Nothing else about the callee's body is used, so
+assumes its `ensures`. A call through a trait, on a value whose type is a
+type parameter, relies on the trait method's contract, which every
+implementation is proved to keep. A call of a `lemma def` relies on the
+lemma's `ensures` the same way; see
+[Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
 what a caller needs to know must be in the contract.
 
 ```aura
@@ -94,7 +98,19 @@ loop never assigns keeps its value, and a counter the loop only steps up
 covers indexes such as `for i in range(len(xs))` and `while i < len(xs)`.
 
 A `decreases` measure is proved to stay at least 0 and to get smaller in
-every iteration, which proves that the loop ends.
+every iteration, which proves that the loop ends. On a function, it is
+proved to be at least 0 on entry and smaller at every call the function
+makes to itself, which proves that the recursion ends:
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    ensures result >= 0
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+```
 
 ## Reports
 
@@ -131,7 +147,19 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--no-cache` | Solve every check again, without the proof cache. |
 | `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+
+### Proof Cache
+
+`aura verify` keeps each function's results in a proof cache, under
+`verify` in `AURA_CACHE_DIR` when it is set, or else in
+`~/.cache/aura/verify`. A function whose checks, the facts they rely on,
+the solver version, and the time limit are all unchanged is answered from
+the cache without starting the solver, so verifying again after a small
+edit solves only what the edit touched. The summary line says how many
+functions the cache answered. A check the solver gave up on is never
+cached.
 
 ## What It Models
 
@@ -145,18 +173,55 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts
+- quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
+  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
+  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
+  or loop `invariant`
 
 Anything else is a value the verifier knows nothing about: a `str`, a
 `dict`, a `set`, a float, the result of most library calls, and what a call
 through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
-Quantifiers (`forall`, `exists`) in contracts, and `str`, `dict`, and `set`
-models, are planned. See the
+A loop that builds a list proves what it builds with a quantified
+invariant:
+
+```aura
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+```
+
+A quantifier over several `for` clauses, over a tuple target, or over a list
+of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
+are planned. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
 
 A check counts as proved only when the solver answers that no input breaks
-it. Every check stays in the program at run time: `aura verify` adds proof,
-and does not yet remove checks.
+it. `aura verify` itself removes nothing: every check stays in the program.
+
+`aura build --remove-proved-checks` builds a native binary without the list
+bounds checks of element reads and element borrows (`view x = xs[i]`) that
+the verifier proves can never fail, and prints how many it removed. It runs
+the verifier first, so it needs a solver, and it uses the proof cache. A read
+is left unchecked only when its index is proved to be in range and not
+negative on every path that reaches it, since an unchecked read does not
+count from the end of the list. Every other check stays, and a `--debug`
+build keeps every check.
+
+Removing a check moves the verifier and the solver into what the program
+trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+flag is off by default for now. It becomes the default for release builds
+once differential testing of such builds against the interpreter covers it.

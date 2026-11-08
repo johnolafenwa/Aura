@@ -1065,6 +1065,10 @@ struct ResolvedBinaryOperatorAccess {
     rhs_passing: ReceiverKind,
 }
 
+/// A function with a `decreases` measure, and for each of its parameters
+/// in order, the name the measure reads it by, if it reads it.
+type RecursionMeasure = (String, Vec<Option<String>>);
+
 #[derive(Clone)]
 struct FunctionChecker<'a> {
     root_module_name: &'a str,
@@ -1096,6 +1100,10 @@ struct FunctionChecker<'a> {
     /// Set while a contract condition or a `spec def` body is typed: only
     /// there may a `spec def` be named.
     in_spec: Rc<std::cell::Cell<bool>>,
+    /// The function whose body is checked, when it declares `decreases`,
+    /// with the parameters its measure reads: a call to it must pass those
+    /// pure arguments, which the lowering reads again to check the measure.
+    recursion_measure: Rc<RefCell<Option<RecursionMeasure>>>,
     /// Owned lambda captures the current lambda body mutates in place (C2).
     mutated_captures: Rc<RefCell<BTreeSet<String>>>,
     /// The index expression currently typed as a place read: the object of
@@ -2163,6 +2171,7 @@ impl<'a> FunctionChecker<'a> {
             mutable_iteration_places: Rc::new(RefCell::new(Vec::new())),
             suppress_narrowing: Rc::new(std::cell::Cell::new(false)),
             in_spec: Rc::new(std::cell::Cell::new(false)),
+            recursion_measure: Rc::new(RefCell::new(None)),
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
@@ -2224,6 +2233,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2270,6 +2280,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2312,6 +2323,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -2354,6 +2366,7 @@ impl<'a> FunctionChecker<'a> {
             type_param_calls: self.type_param_calls.clone(),
             suppress_narrowing: self.suppress_narrowing.clone(),
             in_spec: self.in_spec.clone(),
+            recursion_measure: self.recursion_measure.clone(),
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
@@ -3160,7 +3173,11 @@ impl<'a> FunctionChecker<'a> {
         }
 
         if function.spec {
+            *checker.recursion_measure.borrow_mut() = None;
             return checker.check_spec_function(function, &mut locals, &return_type);
+        }
+        if function.lemma {
+            return checker.check_lemma(function, &mut locals, &return_type);
         }
         checker.check_contracts(function, &locals, &return_type)?;
         let flow = checker.check_block(&function.body, &mut locals, &return_type, 0, true)?;
@@ -4432,6 +4449,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 Stmt::Expr(expr_stmt) => {
+                    self.check_lemma_call_arguments(&expr_stmt.expr, locals)?;
                     let ty = self.type_of_expr(&expr_stmt.expr, locals)?;
                     if !expr_stmt.discarded {
                         reject_unused_result(&expr_stmt.expr, &ty)?;
@@ -10239,6 +10257,7 @@ impl<'a> FunctionChecker<'a> {
         // Recover the same direct-call specialization only when the indexed
         // object is known to be a returned-view callable; ordinary runtime
         // indexing remains untouched.
+        self.check_recursive_call(callee, args, locals)?;
         let grouped = grouped_expr(callee);
         let mut grouped_specialization_base = None;
         let mut grouped_specialization_args = None;

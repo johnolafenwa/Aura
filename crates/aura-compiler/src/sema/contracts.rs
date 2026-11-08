@@ -14,7 +14,10 @@ use super::{
     BTreeMap, Diagnostic, Expr, ExprKind, FunctionChecker, FunctionDecl, HashMap, LocalBinding,
     Result, Type,
 };
-use crate::ast::{ComprehensionOutput, ContractClause, ContractKind, FormatPart, OldValue};
+use crate::ast::{
+    Argument, AssignTarget, ComprehensionOutput, ContractClause, ContractKind, FormatPart,
+    OldValue, Stmt,
+};
 use aura_core::ops::ReceiverKind;
 
 const CODE: &str = "AU2048";
@@ -69,6 +72,7 @@ impl FunctionChecker<'_> {
         locals: &HashMap<String, LocalBinding>,
         return_type: &Type,
     ) -> Result<()> {
+        *self.recursion_measure.borrow_mut() = None;
         for clause in &function.contracts {
             if clause.kind == ContractKind::Ensures {
                 if function.view_return.is_some() {
@@ -111,6 +115,9 @@ impl FunctionChecker<'_> {
                     ));
                 }
             }
+            if clause.kind == ContractKind::Decreases {
+                self.check_function_measure(function, clause)?;
+            }
             let mut scope = locals.clone();
             if clause.kind == ContractKind::Ensures {
                 scope.insert(RESULT_NAME.to_string(), result_binding(return_type.clone()));
@@ -120,6 +127,74 @@ impl FunctionChecker<'_> {
                 }
             }
             self.check_clause_condition(clause, &mut scope)?;
+        }
+        Ok(())
+    }
+
+    /// Checks a function's `decreases` measure and records, for each
+    /// parameter in order, the name the measure reads it by.
+    fn check_function_measure(
+        &self,
+        function: &FunctionDecl,
+        clause: &ContractClause,
+    ) -> Result<()> {
+        if function.receiver.is_some() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                clause.span,
+                "a method cannot declare `decreases` yet; state the measure on a function",
+            ));
+        }
+        let mut measure = self.recursion_measure.borrow_mut();
+        if measure.is_some() {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                clause.span,
+                "a function takes at most one `decreases` clause",
+            ));
+        }
+        let params = function
+            .params
+            .iter()
+            .map(|param| {
+                super::expr_references_name(&clause.condition, &param.name)
+                    .then(|| param.name.clone())
+            })
+            .collect();
+        *measure = Some((function.name.clone(), params));
+        Ok(())
+    }
+
+    /// A call to the function being checked, when it declares `decreases`,
+    /// passes a pure argument for each parameter the measure reads, so the
+    /// lowering can evaluate the measure on them before the call.
+    pub(super) fn check_recursive_call(
+        &self,
+        callee: &Expr,
+        args: &[Argument],
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let measure = self.recursion_measure.borrow();
+        let Some((function, params)) = measure.as_ref() else {
+            return Ok(());
+        };
+        if !matches!(&callee.kind, ExprKind::Name(name) if name == function && !locals.contains_key(name))
+        {
+            return Ok(());
+        }
+        for (index, arg) in args.iter().enumerate() {
+            let measured = match &arg.name {
+                Some(name) => params.iter().flatten().any(|param| param == name),
+                None => params.get(index).is_some_and(Option::is_some),
+            };
+            if measured {
+                let mut receivers = Vec::new();
+                self.reject_impure(
+                    &arg.value,
+                    "an argument the `decreases` measure reads",
+                    &mut receivers,
+                )?;
+            }
         }
         Ok(())
     }
@@ -204,6 +279,125 @@ impl FunctionChecker<'_> {
             self.check_block(&function.body, locals, return_type, 0, true)
                 .map(|_| ())
         })
+    }
+
+    /// Checks a `lemma def`: a proof with no result and no `mut`
+    /// parameters, whose body only states facts. It may read `spec def`
+    /// helpers, since it never runs where a call is erased.
+    pub(super) fn check_lemma(
+        &self,
+        function: &FunctionDecl,
+        locals: &mut HashMap<String, LocalBinding>,
+        return_type: &Type,
+    ) -> Result<()> {
+        if *return_type != Type::Unit {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                function.span,
+                "a `lemma def` returns nothing; it states its facts as `ensures` clauses",
+            ));
+        }
+        if let Some(param) = function.params.iter().find(|param| {
+            locals
+                .get(&param.name)
+                .is_some_and(|binding| binding.passing == ReceiverKind::BorrowMut)
+        }) {
+            return Err(Diagnostic::coded_at(
+                CODE,
+                param.span,
+                format!("a `lemma def` cannot take `mut` parameter `{}`", param.name),
+            ));
+        }
+        self.check_lemma_body(&function.body)?;
+        self.check_contracts(function, locals, return_type)?;
+        self.with_spec(|| {
+            self.check_block(&function.body, locals, return_type, 0, true)
+                .map(|_| ())
+        })
+    }
+
+    /// A lemma body holds only what states or proves a fact: `assert`,
+    /// `if`, loops, local assignments of pure values, and calls of other
+    /// lemmas, each pure.
+    fn check_lemma_body(&self, body: &[Stmt]) -> Result<()> {
+        let pure = |expr: &Expr| self.reject_impure(expr, "a `lemma def` body", &mut Vec::new());
+        for stmt in body {
+            match stmt {
+                Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+                Stmt::Return(ret) if ret.value.is_none() => {}
+                Stmt::Assert(assert) => {
+                    pure(&assert.condition)?;
+                    if let Some(message) = &assert.message {
+                        pure(message)?;
+                    }
+                }
+                Stmt::Assign(assign) if matches!(assign.target, AssignTarget::Name(_)) => {
+                    pure(&assign.value)?;
+                }
+                Stmt::If(if_stmt) => {
+                    for branch in &if_stmt.branches {
+                        pure(&branch.condition)?;
+                        self.check_lemma_body(&branch.body)?;
+                    }
+                    if let Some(body) = &if_stmt.else_body {
+                        self.check_lemma_body(body)?;
+                    }
+                }
+                Stmt::While(while_stmt) => {
+                    pure(&while_stmt.condition)?;
+                    self.check_lemma_body(&while_stmt.body)?;
+                }
+                Stmt::For(for_stmt) if for_stmt.borrow_mode.is_none() => {
+                    pure(&for_stmt.iterable)?;
+                    self.check_lemma_body(&for_stmt.body)?;
+                }
+                Stmt::Expr(expr_stmt) if self.lemma_call(&expr_stmt.expr).is_some() => {}
+                _ => {
+                    return Err(Diagnostic::coded_at(
+                        CODE,
+                        super::statement_span(stmt),
+                        "a `lemma def` body holds only `assert`, `if`, loops, assignments of local names, and lemma calls, each pure",
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The arguments of `expr`, when it is a call of a `lemma def`.
+    fn lemma_call<'e>(&self, expr: &'e Expr) -> Option<&'e [Argument]> {
+        let ExprKind::Call { callee, args } = &expr.kind else {
+            return None;
+        };
+        let ExprKind::Name(name) = &callee.kind else {
+            return None;
+        };
+        self.functions
+            .get(name)
+            .is_some_and(|function| function.decl.lemma)
+            .then_some(args.as_slice())
+    }
+
+    /// A lemma call written as a statement is erased at run time, so its
+    /// arguments must be pure: nothing they do may be lost.
+    pub(super) fn check_lemma_call_arguments(
+        &self,
+        expr: &Expr,
+        locals: &HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let Some(args) = self.lemma_call(expr) else {
+            return Ok(());
+        };
+        // A local of the same name is called instead.
+        if matches!(&expr.kind, ExprKind::Call { callee, .. }
+            if matches!(&callee.kind, ExprKind::Name(name) if locals.contains_key(name)))
+        {
+            return Ok(());
+        }
+        for arg in args {
+            self.reject_impure(&arg.value, "an argument of a lemma call", &mut Vec::new())?;
+        }
+        Ok(())
     }
 
     /// Runs `check` with `spec def` references allowed.

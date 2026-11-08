@@ -1,0 +1,31 @@
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+lemma def never_true(n: int64):
+    requires n < 0
+    assert n < 0
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    never_true(5)
+    print(sum_to(10))
+    print(sum_to(1000))

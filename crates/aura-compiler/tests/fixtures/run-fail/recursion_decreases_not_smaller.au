@@ -1,0 +1,8 @@
+def countdown(n: int64, step: int64 = 1) -> int64:
+    decreases n
+    if n <= 0:
+        return 0
+    return 1 + countdown(n - step, step=step - 1)
+
+def main():
+    print(countdown(5))

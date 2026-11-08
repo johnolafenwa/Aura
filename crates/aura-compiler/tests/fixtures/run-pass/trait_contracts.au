@@ -1,0 +1,35 @@
+trait Shape:
+    def area(self) -> int64:
+        """The area, never negative."""
+        ensures result >= 0
+    def scaled(self, k: int64) -> int64:
+        requires 1 <= k and k <= 10
+        ensures result >= 0
+        return self.area() * k
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        ensures result >= 0
+        return self.w * self.h
+
+def total[T: Shape](items: list[T]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.area()
+    return sum
+
+def main():
+    print(Square(side=3).scaled(2))
+    print(Rect(w=2, h=5).area())
+    print(total([Square(side=1), Square(side=2)]))

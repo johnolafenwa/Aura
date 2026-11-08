@@ -2872,6 +2872,7 @@ aura check app.au
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
+| `aura build --remove-proved-checks -o path file.au` | Build a native binary without the list bounds checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -2883,7 +2884,7 @@ aura check app.au
 | `aura fmt --stdin [--check]` | Format standard input to standard output. |
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
-| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
+| `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
@@ -23090,7 +23091,19 @@ where it is stated and uses it where it is needed.
 | `--solver <path>` | The solver to run. The default is `AURA_SMT_SOLVER` when it is set, else `z3`, else `cvc5`, found on `PATH`. |
 | `--timeout <ms>` | The time limit for each check. The default is 10000. |
 | `--function <name>` | Verify only the functions whose name contains `name`. |
+| `--no-cache` | Solve every check again, without the proof cache. |
 | `--format json` | Print the report as JSON: one entry for each check, with its kind, function, line, column, message, and status (`proved`, `failed`, `unknown`, or `unsupported`), then the diagnostics. |
+
+### Proof Cache
+
+`aura verify` keeps each function's results in a proof cache, under
+`verify` in `AURA_CACHE_DIR` when it is set, or else in
+`~/.cache/aura/verify`. A function whose checks, the facts they rely on,
+the solver version, and the time limit are all unchanged is answered from
+the cache without starting the solver, so verifying again after a small
+edit solves only what the edit touched. The summary line says how many
+functions the cache answered. A check the solver gave up on is never
+cached.
 
 ## What It Models
 
@@ -23104,21 +23117,58 @@ booleans, with each integer type's range as a check:
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts
+- quantifiers: `forall(x in xs, condition)`, `exists(...)`, and
+  `all([... for ...])` or `any(...)` with one `for` clause over a `range` or
+  a list of integers or `bool`, with `if` filters, in any contract, `assert`,
+  or loop `invariant`
 
 Anything else is a value the verifier knows nothing about: a `str`, a
 `dict`, a `set`, a float, the result of most library calls, and what a call
 through a function value returns. A check that depends on one of them can
 still be proved when the contract around it says enough.
 
-Quantifiers (`forall`, `exists`) in contracts, and `str`, `dict`, and `set`
-models, are planned. See the
+A loop that builds a list proves what it builds with a quantified
+invariant:
+
+```aura
+def squares(n: int64) -> list[int64]:
+    requires 0 <= n and n <= 1000
+    ensures len(result) == n
+    ensures forall(i in range(n), result[i] == i * i)
+    mut out: list[int64] = []
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant len(out) == i
+        invariant forall(j in range(i), out[j] == j * j)
+        out.append(i * i)
+        i += 1
+    return out
+```
+
+A quantifier over several `for` clauses, over a tuple target, or over a list
+of other elements is reported as `AU5104`. `str`, `dict`, and `set` models
+are planned. See the
 [verification design](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/23-verification-design-checkpoint.md).
 
 ## Trust
 
 A check counts as proved only when the solver answers that no input breaks
-it. Every check stays in the program at run time: `aura verify` adds proof,
-and does not yet remove checks.
+it. `aura verify` itself removes nothing: every check stays in the program.
+
+`aura build --remove-proved-checks` builds a native binary without the list
+bounds checks of element reads and element borrows (`view x = xs[i]`) that
+the verifier proves can never fail, and prints how many it removed. It runs
+the verifier first, so it needs a solver, and it uses the proof cache. A read
+is left unchecked only when its index is proved to be in range and not
+negative on every path that reaches it, since an unchecked read does not
+count from the end of the list. Every other check stays, and a `--debug`
+build keeps every check.
+
+Removing a check moves the verifier and the solver into what the program
+trusts: a wrong proof would turn a trap into an out-of-bounds read. So the
+flag is off by default for now. It becomes the default for release builds
+once differential testing of such builds against the interpreter covers it.
 
 ## Source: docs/book/index.md
 
@@ -37141,7 +37191,9 @@ shopping cart, applies discounts, and formats prices. We'll write tests for it,
 watch one of them catch a real bug in code that looks correct, learn to read
 failure output and select which tests run, and then organize a growing test
 suite with shared fixtures, parameterized cases, and machine-readable output
-for CI.
+for CI. Finally we'll add contracts to the discount code and use
+`aura verify` to prove that they hold for every input, not only the ones we
+tested.
 
 ## Source: docs/book/ch11-01-writing-tests.md
 
@@ -38189,6 +38241,225 @@ stopped safely, so its teardown isn't guaranteed to run. A test that times out
 may leave its fixture behind, which is one more reason to keep fixtures in
 files with fixed names that the next setup overwrites.
 
+Tests check the cases you choose. In the next section we'll write down
+what must hold for every case, and have the compiler prove it.
+
+## Source: docs/book/ch11-04-contracts-and-proofs.md
+
+# Contracts and proofs
+
+A test checks the inputs you thought of. When `test_discount` passes, we know
+`apply_discount` works for the carts in that test, and we hope it works for
+the rest. Most of the time that hope is well founded. But the bugs that reach
+production tend to live in exactly the inputs nobody wrote down: a percentage
+above 100, a price near the top of `int64`, an empty list.
+
+Aura lets a function state what it needs and what it promises, as part of
+its signature, and then `aura verify` can prove that those statements hold
+for every input, not only the ones in your tests. In this section we'll add
+contracts to the discount function from `checkout`, watch the verifier find
+inputs that break it, and fix it until every check is proved.
+
+## Stating what a function needs
+
+Here is `apply_discount` with two new kinds of line at the top of its body:
+
+*Filename: src/main.au*
+
+```aura
+def apply_discount(cents: int64, percent: int64) -> int64:
+    requires 0 <= percent and percent <= 100
+    ensures 0 <= result and result <= cents
+    return cents - cents * percent // 100
+
+def main():
+    print(apply_discount(2500, 10))
+    print(apply_discount(2500, 150))
+```
+
+<span class="caption">Listing 11-8: A discount with a `requires` and an `ensures` clause</span>
+
+A `requires` clause is a condition the caller must meet: a percentage from 0
+to 100. An `ensures` clause is a promise the function makes about its
+`result`: the discounted price is never negative and never more than the
+original. Both are ordinary `bool` expressions, and both are checked while
+the program runs, so the second call stops the program at once:
+
+```console
+$ aura run src/main.au
+2250
+error[AU4009]: `requires` clause failed: `0 <= percent and percent <= 100`
+ --> src/main.au:2:14
+  |
+2 |     requires 0 <= percent and percent <= 100
+  |              ^
+  = note: Aura call chain (innermost first): apply_discount at 1:1 -> main at 6:1
+```
+
+That's already better than an `assert` buried in the body, because the
+condition is where every caller and every reader will look for it. The
+details of contracts, including `old()` for values on entry and `spec def`
+helpers, are in the [contracts manual page](/manual/contracts).
+
+## Proving it
+
+A failed `requires` at run time still needs a run that reaches it. Let's ask
+the verifier instead. `aura verify` needs an SMT solver, a program that
+answers logic questions; install Z3 with `brew install z3`, `apt install z3`,
+or `pip install z3-solver`.
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove `ensures` clause `0 <= result and result <= cents`
+ --> src/main.au:3:13
+  |
+3 |     ensures 0 <= result and result <= cents
+  |             ^
+  = note: in `apply_discount` (ensures check)
+  = note: counterexample: cents = -1, percent = 1
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:4:20
+  |
+4 |     return cents - cents * percent // 100
+  |                    ^
+  = note: in `apply_discount` (overflow check)
+  = note: counterexample: cents = 9223372036854775807, percent = 100
+error[AU5101]: cannot prove `requires` of `apply_discount` holds: `0 <= percent and percent <= 100`
+ --> src/main.au:8:5
+  |
+8 |     print(apply_discount(2500, 150))
+  |     ^
+  = note: in `main` (requires check)
+verified src/main.au: 3 of 6 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Nothing ran. The verifier read every path through both functions and found
+three checks that can fail, each with inputs that make it fail. The last one
+we expected: `main` passes 150. The other two are real bugs that no test of
+ours would have found. A negative price of `-1` cents breaks the promise that
+the result is at least 0, and a price near the top of `int64` overflows when
+it's multiplied by 100. Neither looks likely, but `cents` comes from a price
+file, and a price file can say anything.
+
+The fix is to say what a price is. Cart prices in `checkout` are never
+negative and never more than ten billion dollars, so we require that, and we
+fix the call in `main`:
+
+```aura
+def apply_discount(cents: int64, percent: int64) -> int64:
+    requires 0 <= cents and cents <= 1_000_000_000_000
+    requires 0 <= percent and percent <= 100
+    ensures 0 <= result and result <= cents
+    return cents - cents * percent // 100
+
+def main():
+    print(apply_discount(2500, 10))
+    print(apply_discount(2500, 100))
+```
+
+<span class="caption">Listing 11-9: A discount whose checks are all proved</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 8 of 8 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+Eight checks, all proved: both `requires` at both calls, the `ensures`, and
+the arithmetic, which cannot overflow because `cents * percent` is at most a
+hundred trillion. That is a statement about every possible input, which is
+something no number of tests can make.
+
+Notice how `main` was verified. The verifier didn't look inside
+`apply_discount` to see what it does; it only proved the `requires` at each
+call and then assumed the `ensures`. Each function is proved on its own, from
+the contracts of the functions it calls. That keeps proofs fast, and it means
+a contract is the whole agreement between a function and its callers: if a
+caller needs to know something about the result, the callee has to promise
+it.
+
+## Loops need invariants
+
+Totals are where overflow likes to hide. Here's a cart total that clamps each
+price to a sane range before adding it:
+
+```aura
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    mut total = 0
+    for i in range(len(prices)):
+        price = min(max(prices[i], 0), 1_000_000)
+        total += price
+    return total
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+```
+
+Every price is at most a million cents and there are at most ten thousand of
+them, so the total can't overflow. The verifier disagrees:
+
+```console
+$ aura verify src/main.au
+error[AU5101]: cannot prove integer result in range
+ --> src/main.au:6:9
+  |
+6 |         total += price
+  |         ^
+  = note: in `cart_total` (overflow check)
+  = note: counterexample: len(prices) = 1
+verified src/main.au: 3 of 4 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier proves a loop one iteration at a time, so it doesn't know how
+many times `total += price` has already run. It knows only what never changes
+in the loop and what the loop says about itself. Our reasoning above used a
+fact about `total` that we never wrote down: after `i` iterations it's at
+most `i` million. Writing that fact as an `invariant` gives the verifier what
+it needs:
+
+```aura
+def cart_total(prices: list[int64]) -> int64:
+    requires len(prices) <= 10_000
+    mut total = 0
+    for i in range(len(prices)):
+        invariant 0 <= total and total <= i * 1_000_000
+        price = min(max(prices[i], 0), 1_000_000)
+        total += price
+    return total
+
+def main():
+    print(cart_total([1250, 499, 2000]))
+```
+
+<span class="caption">Listing 11-10: A loop invariant that bounds the running total</span>
+
+```console
+$ aura verify src/main.au
+verified src/main.au: 6 of 6 checks proved in 2 functions (/usr/bin/z3 (Z3 version 5.3.3 - 64 bit))
+```
+
+The verifier proves the invariant twice: once on entry, where `total` is 0,
+and once after an arbitrary iteration, assuming it held before. Then it can
+use it inside the loop to prove the addition safe. The invariant is also
+checked at run time, like every contract, so it documents the loop for the
+next reader and guards it in every run.
+
+## Proofs and run-time checks
+
+A proof doesn't remove anything by default. Every contract and every bounds
+check stays in the program, which is why a `requires` that the verifier
+couldn't prove still stops a bad call with a clear diagnostic. When you want
+the proofs to pay for themselves, `aura build --remove-proved-checks` builds
+a native binary without the list bounds checks the verifier proves can never
+fail, and keeps every other check.
+
+The verifier doesn't model everything yet. Floats, strings, dictionaries,
+and sets are outside what it reads today, and a check that depends on them
+is reported as `AU5104` and stays a run-time check. Quantifiers are modeled:
+a contract such as `requires forall(p in prices, 0 <= p)` is proved at every
+call and assumed inside the function. The [verification manual page](/manual/verification)
+lists exactly what is modeled.
+
 ## Summary
 
 You can now test Aura code with nothing but the `aura` command. A test is a
@@ -38198,15 +38469,19 @@ printed for you. A trap in the code under test fails the case with its full
 diagnostic and call chain. You can narrow a run to a file, a directory, or any
 case whose name contains a substring, set time limits, share setup and teardown
 between cases, generate cases from a list, and produce JSON for CI, while the
-exit status tells any script whether the suite passed.
+exit status tells any script whether the suite passed. Where a test checks
+the inputs you chose, a contract states what must hold for all of them, and
+`aura verify` proves it or shows you an input that breaks it.
 
 Along the way the tests did more than catch mistakes. They found a real bug in
 `format_cents`, forced a decision about the average of an empty cart, and
-pushed `load_prices` apart into a pure parser and a thin file reader. That's
-the usual effect of writing tests early, and it's the approach we'll take in
-the next chapter. In [Chapter 12](/book/ch12-00-log-analyzer) we'll put
-everything from the last few chapters together and build a command-line log
-analyzer, starting from an empty directory.
+pushed `load_prices` apart into a pure parser and a thin file reader. The
+verifier found two more, in inputs nobody would have written a test for.
+That's the usual effect of writing tests and contracts early, and it's the
+approach we'll take in the next chapter. In
+[Chapter 12](/book/ch12-00-log-analyzer) we'll put everything from the last
+few chapters together and build a command-line log analyzer, starting from an
+empty directory.
 
 ## Source: docs/book/ch12-00-log-analyzer.md
 

@@ -43,7 +43,8 @@ fn misplaced_contract_error(span: Span, kind: ContractKind) -> Diagnostic {
         ContractKind::Requires | ContractKind::Ensures => {
             "a function body, after any docstring and"
         }
-        ContractKind::Invariant | ContractKind::Decreases => "a loop body,",
+        ContractKind::Invariant => "a loop body,",
+        ContractKind::Decreases => "a function or loop body, after any docstring and",
     };
     Diagnostic::coded_at(
         "AU2048",
@@ -79,6 +80,7 @@ fn class_invariant_method(
         doc: None,
         contracts: invariants,
         spec: false,
+        lemma: false,
     }
 }
 
@@ -205,17 +207,18 @@ fn wrong_place_contract_error(
             format!(
                 "a class body states only `invariant` clauses; `{}` belongs at the top of a {} body",
                 kind.keyword(),
-                if kind == ContractKind::Decreases { "`while` loop" } else { "method" }
+                if kind == ContractKind::Decreases { "function or `while` loop" } else { "method" }
             ),
         );
     }
-    let message = match kind {
-        ContractKind::Requires | ContractKind::Ensures => format!(
+    // A function and a loop both take `decreases`.
+    let message = if let ContractKind::Requires | ContractKind::Ensures = kind {
+        format!(
             "`{}` clauses belong at the top of a function body; a loop states `invariant` and `decreases`",
             kind.keyword()
-        ),
-        ContractKind::Invariant => "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires` and `ensures`".to_string(),
-        ContractKind::Decreases => "`decreases` clauses belong at the top of a `while` loop body; a function states `requires` and `ensures`".to_string(),
+        )
+    } else {
+        "`invariant` clauses belong at the top of a loop body or in a class body; a function states `requires`, `ensures`, and `decreases`".to_string()
     };
     Diagnostic::coded_at("AU2048", span, message)
 }
@@ -521,6 +524,7 @@ impl Parser {
                 || self.at_keyword_extern()
                 || self.at_keyword_def()
                 || self.at_spec_def_start()
+                || self.at_lemma_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -551,7 +555,7 @@ impl Parser {
             }
             TokenKind::KwPublic => {
                 matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
-                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec")
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec" || name == "lemma")
                         && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
             }
             _ => false,
@@ -615,6 +619,11 @@ impl Parser {
                 }
             }
             Ok(Item::Function(function))
+        } else if self.at_lemma_def_start() {
+            self.bump();
+            let mut function = self.parse_function(public)?;
+            function.lemma = true;
+            Ok(Item::Function(function))
         } else if self.at_keyword_trait() {
             Ok(Item::Trait(self.parse_trait(public)?))
         } else if self.at_keyword_impl() {
@@ -630,6 +639,12 @@ impl Parser {
     /// `spec def`: `spec` is a keyword only before `def`.
     fn at_spec_def_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
+            && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
+    }
+
+    /// `lemma def`: `lemma` is a keyword only before `def`.
+    fn at_lemma_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "lemma")
             && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
     }
 
@@ -915,11 +930,16 @@ impl Parser {
         let mut methods = Vec::new();
         let mut invariants = Vec::new();
         while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_spec_def_start() {
+            if self.at_spec_def_start() || self.at_lemma_def_start() {
+                let keyword = if self.at_spec_def_start() {
+                    "spec"
+                } else {
+                    "lemma"
+                };
                 return Err(Diagnostic::coded_at(
                     "AU2048",
                     self.current_span(),
-                    "a `spec def` is a module-level function; `spec def` methods are not available yet",
+                    format!("a `{keyword} def` is a module-level function; `{keyword} def` methods are not available yet"),
                 ));
             }
             if let Some(kind) = self.at_contract_clause() {
@@ -1248,6 +1268,7 @@ impl Parser {
             doc,
             contracts,
             spec: false,
+            lemma: false,
         })
     }
 
@@ -1465,17 +1486,18 @@ impl Parser {
         let (receiver, params) = self.parse_params(true)?;
         self.expect_simple(TokenKind::RParen)?;
         let (return_type, view_return) = self.parse_return_annotation(span)?;
-        // A docstring-only body leaves the method signature-only.
-        let (doc, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
+        // A body of only a docstring and clauses leaves the method
+        // signature-only.
+        let (doc, contracts, body) = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.expect_newline()?;
             let previous_view_return = self.current_function_returns_view;
             self.current_function_returns_view = view_return.is_some();
-            let body = self.parse_block_with_docstring();
+            let body = self.parse_trait_method_body();
             self.current_function_returns_view = previous_view_return;
             body?
         } else {
             self.expect_newline()?;
-            (None, Vec::new())
+            (None, Vec::new(), Vec::new())
         };
         Ok(FunctionDecl {
             public: false,
@@ -1491,8 +1513,9 @@ impl Parser {
             property: None,
             decorators: Vec::new(),
             doc,
-            contracts: Vec::new(),
+            contracts,
             spec: false,
+            lemma: false,
         })
     }
 
@@ -2492,27 +2515,6 @@ impl Parser {
         }))
     }
 
-    /// Parses an indented body whose first statement slot may hold a
-    /// docstring. The docstring is returned separately and produces no
-    /// statement.
-    fn parse_block_with_docstring(&mut self) -> Result<(Option<DocString>, Vec<Stmt>)> {
-        self.expect_simple(TokenKind::Indent)?;
-        self.skip_newlines();
-        let doc = self.take_docstring()?;
-
-        let mut body = Vec::new();
-        while !self.at_simple(&TokenKind::Dedent) && !self.at_eof() {
-            if self.at_simple(&TokenKind::Newline) {
-                self.bump();
-                continue;
-            }
-            body.push(self.parse_stmt()?);
-        }
-
-        self.expect_simple(TokenKind::Dedent)?;
-        Ok((doc, body))
-    }
-
     /// Parses a function body: an optional docstring, then the `requires`
     /// and `ensures` clauses, then the statements.
     fn parse_function_body(
@@ -2534,6 +2536,26 @@ impl Parser {
         Ok((doc, contracts, body))
     }
 
+    /// Parses a trait method body: a function body whose clauses are only
+    /// `requires` and `ensures`, which every implementation inherits.
+    fn parse_trait_method_body(
+        &mut self,
+    ) -> Result<(Option<DocString>, Vec<ContractClause>, Vec<Stmt>)> {
+        let body = self.parse_function_body()?;
+        if let Some(clause) = body
+            .1
+            .iter()
+            .find(|clause| clause.kind == ContractKind::Decreases)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2048",
+                clause.span,
+                "a trait method states only `requires` and `ensures`, which every implementation inherits",
+            ));
+        }
+        Ok(body)
+    }
+
     /// Parses the clauses at the top of a body, each on its own line.
     fn parse_contract_clauses(&mut self, context: ClauseContext) -> Result<Vec<ContractClause>> {
         let mut clauses = Vec::new();
@@ -2547,7 +2569,7 @@ impl Parser {
                     context == ClauseContext::Function
                 }
                 ContractKind::Invariant => context != ClauseContext::Function,
-                ContractKind::Decreases => context == ClauseContext::Loop,
+                ContractKind::Decreases => context != ClauseContext::Class,
             };
             if !allowed {
                 return Err(wrong_place_contract_error(

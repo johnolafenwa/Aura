@@ -16,7 +16,27 @@ in this file.
   `AU5103` when no solver runs, and `AU5104` for a step outside the
   modeled subset (floats, strings, and other collections for now).
   `--format json` prints one entry per check. See the new Verification
-  manual page.
+  manual page. Results are kept in a proof cache, so an unchanged function
+  is answered without the solver; `--no-cache` turns it off. Quantified
+  contracts (`forall`, `exists`, and `all`/`any` over one `for` clause) are
+  proved and assumed, so a loop invariant can describe a whole list.
+- A function may declare a `decreases` measure. It is checked on entry,
+  where it must be at least 0, and before each call the function makes to
+  itself, where the measure of the arguments must be smaller; `aura verify`
+  proves both, so a recursion with a measure is proved to end. The
+  arguments the measure reads must be pure.
+- A trait method may state `requires` and `ensures`. Every implementation
+  inherits them (it may repeat them exactly or leave them out), they are
+  checked in each implementation, and `aura verify` proves each
+  implementation keeps them and relies on them at calls through the trait.
+- `lemma def` declares a proof: a function with no result whose `ensures`
+  state a fact. `aura verify` proves it once and relies on it at each call;
+  a call written as a statement is erased at run time. A recursive lemma
+  with `decreases` is a proof by induction.
+- `aura build --remove-proved-checks` leaves out the list bounds checks of
+  element reads and borrows that `aura verify` proves can never fail. It is
+  off by default; debug builds keep every check.
+- The book gains a section on contracts and `aura verify` (11.4).
 - Generator functions: a module-level function declared `-> Generator[T]`
   (from `iter`) may `yield` values. Calling it runs nothing; each `next`
   runs the body to its next `yield` on a stack of its own, on both the

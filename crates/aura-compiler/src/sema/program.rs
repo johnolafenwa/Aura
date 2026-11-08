@@ -1519,6 +1519,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         );
     }
 
+    let mut module = module;
+    inherit_trait_contracts(&mut module, &traits)?;
+    let module = module;
     let mut trait_impls = Vec::new();
     for item in &module.items {
         let Item::Impl(impl_decl) = item else {
@@ -2784,6 +2787,70 @@ fn reject_signature_span_positions(
 /// The `impl` block with its associated types appended to its trait
 /// arguments, in the order the trait declares them, since each associated
 /// type is a trailing trait type parameter.
+/// Gives each method of a trait implementation the `requires` and
+/// `ensures` clauses of the trait method it implements, so a call through
+/// the trait and a direct call rely on the same contract. A method may
+/// repeat the trait's clauses or omit them; anything else would change what
+/// callers through the trait rely on.
+fn inherit_trait_contracts(
+    module: &mut Module,
+    traits: &BTreeMap<String, TraitInfo>,
+) -> Result<()> {
+    for item in &mut module.items {
+        let Item::Impl(impl_decl) = item else {
+            continue;
+        };
+        let Some(trait_info) = traits.get(&impl_decl.trait_name) else {
+            continue;
+        };
+        for method in &mut impl_decl.methods {
+            let Some(trait_method) = trait_info.methods.get(&method.name) else {
+                continue;
+            };
+            let inherited = &trait_method.decl.contracts;
+            if method.contracts.is_empty() && inherited.is_empty() {
+                continue;
+            }
+            let key = |clauses: &[crate::ast::ContractClause]| {
+                clauses
+                    .iter()
+                    .map(|clause| (clause.kind, clause.text.clone()))
+                    .collect::<Vec<_>>()
+            };
+            if !method.contracts.is_empty() && key(&method.contracts) != key(inherited) {
+                let clause = &method.contracts[0];
+                return Err(Diagnostic::coded_at(
+                    "AU2048",
+                    clause.span,
+                    format!(
+                        "the `{}` implementation of `{}` must repeat the trait method's clauses exactly or leave them out",
+                        impl_decl.trait_name, method.name
+                    ),
+                ));
+            }
+            if let Some(param) = method
+                .params
+                .iter()
+                .zip(&trait_method.decl.params)
+                .find(|(param, expected)| param.name != expected.name)
+            {
+                return Err(Diagnostic::coded_at(
+                    "AU2048",
+                    param.0.span,
+                    format!(
+                        "the `{}` implementation of `{}` names this parameter `{}`; the trait's clauses read it as `{}`",
+                        impl_decl.trait_name, method.name, param.0.name, param.1.name
+                    ),
+                ));
+            }
+            if method.contracts.is_empty() {
+                method.contracts = inherited.clone();
+            }
+        }
+    }
+    Ok(())
+}
+
 fn impl_with_assoc_type_args(impl_decl: &ImplDecl, trait_info: &TraitInfo) -> Result<ImplDecl> {
     let declared = &trait_info.decl.assoc_types;
     for binding in &impl_decl.assoc_types {

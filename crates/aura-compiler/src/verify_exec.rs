@@ -162,6 +162,14 @@ pub(super) struct Obligation {
     /// How many facts were known when the check was reached. A fact
     /// assumed later, such as a callee's `ensures`, holds only after it.
     pub(super) facts: usize,
+    /// For the stricter check an index proof for a build needs, the
+    /// element access it covers: its block and position. Such checks are
+    /// not reported.
+    pub(super) site: Option<(usize, usize)>,
+    /// A check no run performs: one in a `lemma def`, or the `requires` of
+    /// an erased lemma call. Until it is proved, what follows from it is
+    /// not known to hold when the program runs.
+    pub(super) erased: bool,
 }
 
 /// The loops of a function's control-flow graph.
@@ -206,13 +214,20 @@ pub(super) struct Exec<'a> {
     /// The source position of the statement being executed.
     span: Span,
     /// Check failure blocks whose paths the current iteration assumes away.
-    assumed_fails: BTreeSet<usize>,
+    pub(super) assumed_fails: BTreeSet<usize>,
+    /// Set while the `requires` of a `lemma def` call are proved.
+    erasing: bool,
     labels: BTreeMap<&'a str, usize>,
     /// Set when the function is outside what the executor can walk.
     pub(super) unsupported: Option<String>,
     /// Locals a closure of this function captures by reference. Any call
     /// may run the closure and change them.
     captured: BTreeSet<String>,
+    /// Whether to add the stricter check of each element access a build
+    /// can leave unchecked.
+    pub(super) prove_sites: bool,
+    /// The block and position of the instruction being executed.
+    position: (usize, usize),
 }
 
 const MAX_DEPTH: usize = 3;
@@ -243,13 +258,22 @@ impl<'a> Exec<'a> {
             local_types,
             span: function.span,
             assumed_fails: BTreeSet::new(),
+            erasing: false,
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            prove_sites: false,
+            position: (0, 0),
         }
     }
 
     // ----- SMT text --------------------------------------------------------
+
+    /// A fresh name for a variable a quantifier binds; it is not declared.
+    pub(super) fn bound_name(&mut self) -> String {
+        self.counter += 1;
+        format!("k!q{}", self.counter)
+    }
 
     pub(super) fn fresh_const(&mut self, sort: &str, hint: &str) -> String {
         self.counter += 1;
@@ -303,6 +327,12 @@ impl<'a> Exec<'a> {
             pc: pc.to_string(),
             goal,
             facts: self.facts.len(),
+            site: None,
+            erased: self.erasing
+                || self
+                    .cx
+                    .decl(&self.function.name)
+                    .is_some_and(|decl| decl.lemma),
         });
     }
 
@@ -399,7 +429,7 @@ impl<'a> Exec<'a> {
     }
 
     /// The type of a place path such as `self.balance` or `pair.0`.
-    fn place_type(&self, path: &str) -> Option<Type> {
+    pub(super) fn place_type(&self, path: &str) -> Option<Type> {
         let mut segments = path.split('.');
         let mut ty = self.local_types.get(segments.next()?)?.clone();
         for segment in segments {
@@ -410,7 +440,7 @@ impl<'a> Exec<'a> {
 
     // ----- Places ----------------------------------------------------------
 
-    fn read_place(&mut self, state: &mut State, path: &str) -> Val {
+    pub(super) fn read_place(&mut self, state: &mut State, path: &str) -> Val {
         let mut segments = path.split('.');
         let root = segments.next().unwrap_or(path).to_string();
         let rest: Vec<&str> = segments.collect();
@@ -1045,7 +1075,8 @@ impl<'a> Exec<'a> {
 
     fn block(&mut self, index: usize, mut state: State) -> Vec<(usize, State)> {
         let block: &'a BasicBlock = &self.function.blocks[index];
-        for instruction in &block.instructions {
+        for (position, instruction) in block.instructions.iter().enumerate() {
+            self.position = (index, position);
             self.instruction(&mut state, instruction);
         }
         let target = |exec: &Self, label: &str| exec.labels[label];
@@ -1057,6 +1088,10 @@ impl<'a> Exec<'a> {
                 then_label,
                 else_label,
             } => {
+                let (pass, fail) = (target(self, then_label), target(self, else_label));
+                if let Some(next) = self.clause_branch(&state, fail, pass) {
+                    return next;
+                }
                 let condition = match self.operand(&mut state, condition, None) {
                     Val::Bool(term) => term,
                     _ => self.fresh_const("Bool", "branch"),
@@ -1204,6 +1239,7 @@ impl<'a> Exec<'a> {
                     (Val::List { len, .. }, Val::Int(index, _)) => {
                         if *checked {
                             self.oblige_index(state, *span, len, index);
+                            self.oblige_site(state, *span, len, index);
                         }
                         let index = self.normalize_index(len, index);
                         Loan::Element {
@@ -1429,6 +1465,25 @@ impl<'a> Exec<'a> {
             &state.pc,
             Goal::Holds(goal),
         );
+    }
+
+    /// For a build, the check that the element access at the current
+    /// position may skip its bounds check: the index is in range and not
+    /// negative, since an unchecked access does not count from the end.
+    fn oblige_site(&mut self, state: &State, span: Span, len: &str, index: &str) {
+        if !self.prove_sites {
+            return;
+        }
+        self.obligations.push(Obligation {
+            kind: ObligationKind::IndexInRange,
+            span,
+            message: "list index is not negative and in range".to_string(),
+            pc: state.pc.clone(),
+            goal: Goal::Holds(format!("(and (<= 0 {index}) (< {index} {len}))")),
+            facts: self.facts.len(),
+            site: Some(self.position),
+            erased: false,
+        });
     }
 
     // ----- Rvalues ---------------------------------------------------------
@@ -1928,6 +1983,9 @@ impl<'a> Exec<'a> {
                     Err(_) => fresh_target(self),
                 }
             }
+            CallTarget::Name(name) if args.is_empty() && self.default_value(name).is_some() => {
+                self.default_value(name).expect("checked above")
+            }
             CallTarget::Name(name) => {
                 if self.cx.function(name).is_some() {
                     let mut actuals = Vec::new();
@@ -1974,6 +2032,34 @@ impl<'a> Exec<'a> {
                     target,
                 )
             }
+            // A call through a trait picks its implementation at run time.
+            // Every implementation has the trait method's contract, so the
+            // call relies on that.
+            CallTarget::TraitMember {
+                object,
+                receiver_place,
+                dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
+            } if self.shared_contract(candidates).is_some() => {
+                let function = self.shared_contract(candidates).expect("checked above");
+                let receiver = self.operand(state, object, None);
+                let mut actuals = Vec::new();
+                for arg in args {
+                    actuals.push((
+                        arg.name.clone(),
+                        self.operand(state, &arg.value, None),
+                        arg.writeback_place.clone(),
+                    ));
+                }
+                self.user_call(
+                    state,
+                    &function,
+                    Some((receiver, receiver_place.clone())),
+                    actuals,
+                    target_type.as_ref(),
+                    target,
+                )
+            }
             CallTarget::Member { receiver_place, .. }
             | CallTarget::TraitMember { receiver_place, .. } => {
                 if let Some(place) = receiver_place {
@@ -1987,6 +2073,45 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
         }
+    }
+
+    /// The first of `candidates` when every one is a function with the same
+    /// contract, as the implementations of one trait method are.
+    fn shared_contract(&self, candidates: &[crate::mir::MethodCandidate]) -> Option<String> {
+        let first = candidates.first()?;
+        let contract = |name: &str| {
+            self.cx.function(name)?;
+            let decl = self.cx.decl(name)?;
+            Some(
+                decl.contracts
+                    .iter()
+                    .map(|clause| (clause.kind, clause.text.clone()))
+                    .collect::<Vec<_>>(),
+            )
+        };
+        let expected = contract(&first.function)?;
+        candidates
+            .iter()
+            .all(|candidate| contract(&candidate.function).as_ref() == Some(&expected))
+            .then(|| first.function.clone())
+    }
+
+    /// The value of the hidden function that computes a parameter's
+    /// default, `f::__default_<index>_<param>`, read from the default as
+    /// written when the contract model reads it.
+    fn default_value(&mut self, name: &str) -> Option<Val> {
+        let (function, rest) = name.split_once("::__default_")?;
+        let (_, param) = rest.split_once('_')?;
+        let decl = self.cx.decl(function)?;
+        let default = decl
+            .params
+            .iter()
+            .find(|p| p.name == param)?
+            .default
+            .as_ref()?;
+        let mut wd = Vec::new();
+        let value = self.spec(default, &Default::default(), &mut wd, 0).ok()?;
+        wd.is_empty().then_some(value)
     }
 
     /// A call of a user function: prove its `requires`, then assume its
@@ -2030,7 +2155,9 @@ impl<'a> Exec<'a> {
             pre.push((param.name.clone(), value));
         }
         let span = self.span;
+        self.erasing = self.cx.decl(name).is_some_and(|decl| decl.lemma);
         self.call_requires(state, name, &pre, span);
+        self.erasing = false;
         let result = match result_type {
             Some(ty) => self.fresh(ty, hint.unwrap_or("result")),
             None => match &callee.return_type {
@@ -2113,6 +2240,7 @@ impl<'a> Exec<'a> {
                         if matches!(list_op, ListOp::Index | ListOp::IndexScalar(_)) {
                             let span = span_of(self, 1);
                             self.oblige_index(state, span, &len, &index);
+                            self.oblige_site(state, span, &len, &index);
                         }
                         let index = self.normalize_index(&len, &index);
                         let list = Val::List { len, data, elem };
@@ -2281,7 +2409,7 @@ fn runtime_op_is_pure(op: RuntimeOp) -> bool {
 
 /// What a failure block's check states, for the report: the clause as
 /// written, or the `assert` and its message.
-fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
+pub(super) fn check_message(kind: AssertKind, message: Option<&Operand>) -> String {
     let text = match message {
         Some(Operand::String(text)) => text.as_str(),
         _ => return "`assert` condition".to_string(),

@@ -387,6 +387,29 @@ pub fn verify_path_with_source(
     verify_program(&program, options)
 }
 
+/// Lowers `path` for a native build as [`lower_path_to_mir`] does, or with
+/// source locations for a `debug` build, and leaves unchecked each element
+/// read and loan `aura verify` proves in range. Returns the module and how
+/// many accesses lost their bounds check.
+pub fn lower_path_to_mir_with_proved_checks(
+    path: &Path,
+    source: Option<&str>,
+    debug: bool,
+    options: &verify::Options,
+) -> Result<(MirModule, usize)> {
+    let program = match source {
+        Some(source) => check_path_with_source(path, source)?,
+        None => check_path(path)?,
+    };
+    let options = verify::Options {
+        prove_sites: true,
+        ..options.clone()
+    };
+    mir::lower_with_proved_checks(&program, debug, |module| {
+        verify::verify_module(&program, module, &options).map(|report| report.proved_sites)
+    })
+}
+
 fn verify_program(program: &Program, options: &verify::Options) -> Result<verify::Report> {
     let module = mir::lower_for_verification(program);
     verify::verify_module(program, &module, options)

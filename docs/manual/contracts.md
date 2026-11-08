@@ -181,6 +181,112 @@ def main():
   the previous time. A loop that keeps both rules must end. A `for` loop
   always ends, so it takes no `decreases`, and a loop takes at most one.
 
+### Recursive Functions
+
+A function that calls itself can state a `decreases` measure too. It is
+checked on entry, where it must be at least 0, and before every call the
+function makes to itself, where the measure of the call's arguments must
+be smaller than the measure on entry. A recursion that keeps both rules
+must end.
+
+```aura
+def gcd(a: int64, b: int64) -> int64:
+    requires a >= 0 and b >= 0
+    decreases b
+    if b == 0:
+        return a
+    return gcd(b, a % b)
+
+def main():
+    print(gcd(84, 36))  # 12
+```
+
+The measure is computed again from the call's arguments before the call,
+so each argument the measure reads must be a pure expression. A function
+takes at most one `decreases`, a method takes none yet, and a call to
+another function is not checked, so mutual recursion is not covered.
+
+## Trait Methods
+
+A trait method can state `requires` and `ensures` clauses, and every
+implementation of it inherits them. A call through the trait, such as a
+call on a value whose type is a type parameter bounded by the trait, relies
+on the same contract whichever implementation runs.
+
+```aura
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+class Square:
+    side: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+def total[T: Shape](items: list[T]) -> int64:
+    mut sum = 0
+    for item in items:
+        sum += item.area()
+    return sum
+
+def main():
+    print(total([Square(side=1), Square(side=2)]))  # 5
+```
+
+The clauses are checked in each implementation as if it had written them.
+An implementation may repeat the trait's clauses exactly or leave them out,
+and its parameters keep the trait's names, which the clauses read. A trait
+method takes no `decreases`.
+
+## Lemmas
+
+A `lemma def` is a proof: a function with no result whose `ensures`
+clauses state a fact, and whose body shows why it holds. `aura verify`
+proves a lemma once, like any function, and then relies on its `ensures`
+wherever it is called. A call written as a statement is erased when the
+program runs, so a lemma costs nothing at run time, however much work its
+body does.
+
+```aura
+spec def tri(n: int64) -> int64:
+    return n * (n + 1) // 2
+
+lemma def tri_bounded(n: int64):
+    requires 0 <= n and n <= 1000
+    decreases n
+    ensures 0 <= tri(n) and tri(n) <= 500500
+    if n > 0:
+        tri_bounded(n - 1)
+
+def sum_to(n: int64) -> int64:
+    requires 0 <= n and n <= 1000
+    ensures result == tri(n)
+    mut total = 0
+    mut i = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant total == tri(i)
+        tri_bounded(i)
+        i += 1
+        total += i
+    return total
+
+def main():
+    print(sum_to(10))  # 55
+```
+
+A recursive lemma with a `decreases` measure is a proof by induction: the
+call `tri_bounded(n - 1)` assumes the fact for the smaller case. A lemma
+body holds only `assert`, `if`, loops, assignments of local names, and
+calls of other lemmas, each pure, and it may read `spec def` helpers.
+Its parameters cannot be `mut`, and it returns nothing. The arguments of a
+lemma call written as a statement must be pure, since the call does not
+run. Because nothing checks an erased call when the program runs, a lemma
+or a lemma call that the verifier cannot prove keeps
+`aura build --remove-proved-checks` from removing any check.
+
 ## Class Invariants
 
 A class can state what is true of every one of its objects, with
@@ -242,7 +348,7 @@ followed by the method or construction that ran the check.
 ## Contextual Keywords
 
 `requires`, `ensures`, `invariant`, and `decreases` are keywords only at
-the start of a clause line, and `spec` only before `def`. Elsewhere they
+the start of a clause line, and `spec` and `lemma` only before `def`. Elsewhere they
 are ordinary names, so `requires = 1`, `invariant: int64`, and the call
 `requires(x)` keep their meaning. Write a space before a parenthesis that
 starts a condition: `requires (a or b) and c`. `result`, `old`, `forall`,
@@ -252,11 +358,13 @@ and `exists` are special only inside clauses and `spec def` bodies.
 
 These forms report `AU2048`:
 
+- `decreases` on a method
 - `ensures` on `__init__` or on a function with a view result
 - an `ensures` that reads an `own` parameter of a non-Copy type, which the
   body may have moved; `old(param)` reads it on entry instead
 - a parameter named `result` in a function with `ensures`
-- clauses on the methods of a trait implementation
+- clauses on a trait implementation's method that differ from the trait
+  method's
 - `spec def` methods
 
 ## Diagnostics

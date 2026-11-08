@@ -7629,6 +7629,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         doc: None,
         contracts: Vec::new(),
         spec: false,
+        lemma: false,
     }
 }
 
@@ -31911,13 +31912,120 @@ fn contract_clauses_check_as_pure_bool_conditions() {
         (
             "trait Shape:\n    def area(self) -> int64\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result >= 0\n        return self.side\n",
             "AU2048",
-            "cannot declare `ensures`: trait methods do not have contracts yet",
+            "the `Shape` implementation of `area` must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Shape:\n    def area(self) -> int64:\n        ensures result >= 0\n\nclass Sq:\n    side: int64\n\nimpl Shape for Sq:\n    def area(self) -> int64:\n        ensures result > 0\n        return self.side\n",
+            "AU2048",
+            "must repeat the trait method's clauses exactly or leave them out",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k > 0\n\nclass Sq:\n    side: int64\n\nimpl Scale for Sq:\n    def by(self, j: int64) -> int64:\n        return j\n",
+            "AU2048",
+            "names this parameter `j`; the trait's clauses read it as `k`",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        requires k.pop() > 0\n",
+            "AU2048",
+            "a `requires` condition must not change program state",
+        ),
+        (
+            "trait Scale:\n    def by(self, k: int64) -> int64:\n        decreases k\n",
+            "AU2048",
+            "a trait method states only `requires` and `ensures`",
         ),
     ] {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
+}
+
+#[test]
+fn lemmas_state_facts_with_pure_bodies_and_pure_arguments() {
+    crate::check_source(concat!(
+        "spec def tri(n: int64) -> int64:\n",
+        "    return n * (n + 1) // 2\n",
+        "\n",
+        "lemma def tri_bounded(n: int64):\n",
+        "    requires 0 <= n and n <= 1000\n",
+        "    decreases n\n",
+        "    ensures 0 <= tri(n)\n",
+        "    k = n - 1\n",
+        "    if k >= 0:\n",
+        "        tri_bounded(k)\n",
+        "    else:\n",
+        "        pass\n",
+        "    for i in range(n):\n",
+        "        assert i < n, \"in range\"\n",
+        "    mut j = 0\n",
+        "    while j < 2:\n",
+        "        j += 1\n",
+        "        if j == 2:\n",
+        "            break\n",
+        "        continue\n",
+        "    return\n",
+        "\n",
+        "def main():\n",
+        "    tri_bounded(3)\n",
+    ))
+    .expect("a lemma checks");
+    for (source, message) in [
+        (
+            "lemma def f(n: int64) -> int64:\n    return n\n",
+            "a `lemma def` returns nothing",
+        ),
+        (
+            "lemma def f(xs: mut list[int64]):\n    assert len(xs) >= 0\n",
+            "a `lemma def` cannot take `mut` parameter `xs`",
+        ),
+        (
+            "lemma def f(n: int64):\n    print(n)\n",
+            "a `lemma def` body holds only",
+        ),
+        (
+            "lemma def f(xs: list[int64]):\n    assert xs.copy().pop() > 0\n",
+            "a `lemma def` body must not change program state",
+        ),
+        (
+            "lemma def f(n: int64):\n    requires n > 0\n\ndef main():\n    mut xs = [1]\n    f(xs.pop())\n",
+            "an argument of a lemma call must not change program state",
+        ),
+        (
+            "class C:\n    n: int64\n\n    lemma def f(self):\n        pass\n",
+            "a `lemma def` is a module-level function",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, "AU2048", "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn trait_methods_state_contracts_their_implementations_inherit() {
+    crate::check_source(concat!(
+        "trait Shape:\n",
+        "    def area(self) -> int64:\n",
+        "        \"\"\"The area.\"\"\"\n",
+        "        ensures result >= 0\n",
+        "    def scaled(self, k: int64) -> int64:\n",
+        "        requires k >= 1\n",
+        "        ensures result >= 0\n",
+        "        return self.area() * k\n",
+        "\n",
+        "class Sq:\n",
+        "    side: int64\n",
+        "\n",
+        "impl Shape for Sq:\n",
+        "    def area(self) -> int64:\n",
+        "        ensures result >= 0\n",
+        "        return self.side * self.side\n",
+        "\n",
+        "def main():\n",
+        "    print(Sq(side=2).scaled(3))\n",
+    ))
+    .expect("an implementation may repeat the trait's clauses");
 }
 
 #[test]
@@ -31969,6 +32077,52 @@ fn loop_clauses_check_as_pure_conditions_and_measures() {
             "def main():\n    for x in [1]:\n        invariant [y for y in [x]].pop() > 0\n",
             "AU2048",
             "an `invariant` condition must not change program state",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}: {}", error.message);
+        assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn function_measures_check_and_recursive_calls_pass_pure_arguments() {
+    crate::check_source(concat!(
+        "def walk(xs: list[int64], i: int64, label: str = \"x\") -> int64:\n",
+        "    requires 0 <= i and i <= len(xs)\n",
+        "    decreases len(xs) - i\n",
+        "    if i == len(xs):\n",
+        "        return 0\n",
+        "    print(label)\n",
+        "    return xs[i] + walk(xs, i + 1, label + \"y\")\n",
+        "\n",
+        "spec def twice(v: int64) -> int64:\n",
+        "    return v * 2\n",
+        "\n",
+        "def main():\n",
+        "    print(walk([1, 2], 0))\n",
+    ))
+    .expect("a function measure checks");
+    for (source, code, message) in [
+        (
+            "def f(n: int64) -> int64:\n    decreases n\n    decreases n + 1\n    return n\n",
+            "AU2048",
+            "a function takes at most one `decreases` clause",
+        ),
+        (
+            "def f(n: int64) -> int64:\n    decreases n > 0\n    return n\n",
+            "AU2002",
+            "a `decreases` measure must be `int64`, found `bool`",
+        ),
+        (
+            "class C:\n    n: int64\n\n    def f(self, k: int64) -> int64:\n        decreases k\n        return k\n",
+            "AU2048",
+            "a method cannot declare `decreases` yet",
+        ),
+        (
+            "def f(xs: list[int64], k: int64) -> int64:\n    decreases k\n    if k <= 0:\n        return 0\n    mut ys = [1]\n    return f(xs, k=ys.pop() - 1)\n",
+            "AU2048",
+            "an argument the `decreases` measure reads must not change program state",
         ),
     ] {
         let error = crate::check_source(source).expect_err(source);
