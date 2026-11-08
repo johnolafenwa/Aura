@@ -626,6 +626,10 @@ unsafe fn write_plain(table: &LayoutTable, id: LayoutId, value: &Value, dst: *mu
 pub(super) struct FieldOps {
     pub(super) fits: fn(&LayoutTable, LayoutId, &Value) -> bool,
     pub(super) field_box: fn(Value, &Type) -> ElementBox,
+    /// The tag a handle of a type carries, which a layout looks up once.
+    pub(super) handle_tag: fn(&Type) -> Option<Arc<RuntimeTypeTag>>,
+    /// A field's box with the tag its layout looked up.
+    pub(super) tagged_box: fn(Value, Option<&RuntimeTypeTag>) -> ElementBox,
     pub(super) write: unsafe fn(&LayoutTable, LayoutId, Value, *mut u8),
     pub(super) read: unsafe fn(&LayoutTable, LayoutId, *const u8) -> Value,
     pub(super) take: unsafe fn(&LayoutTable, LayoutId, *mut u8) -> Value,
@@ -636,6 +640,8 @@ pub(super) struct FieldOps {
 pub(super) static FIELD_OPS: FieldOps = FieldOps {
     fits,
     field_box: field_box_for,
+    handle_tag: uncached_handle_type_tag,
+    tagged_box: tagged_field_box,
     write: write_unchecked,
     read: read_at,
     take: take_at,
@@ -697,10 +703,7 @@ fn handle_type_tag(ty: &Type) -> Option<Arc<RuntimeTypeTag>> {
     if cached.is_some() {
         return cached;
     }
-    if names_type_param(ty) || is_unknown_runtime_type(ty) {
-        return None;
-    }
-    let tag = shared_runtime_type_tag(canonical_runtime_type_name(ty).as_bytes());
+    let tag = uncached_handle_type_tag(ty)?;
     let _ = HANDLE_TAGS.try_with(|tags| {
         let mut tags = tags.borrow_mut();
         let index = slots
@@ -710,6 +713,28 @@ fn handle_type_tag(ty: &Type) -> Option<Arc<RuntimeTypeTag>> {
         tags[index] = Some((address, ty.clone(), tag.clone()));
     });
     Some(tag)
+}
+
+/// The tag a box for a handle of `ty` carries, or `None` for an erased
+/// type, looked up in the registry.
+fn uncached_handle_type_tag(ty: &Type) -> Option<Arc<RuntimeTypeTag>> {
+    if names_type_param(ty) || is_unknown_runtime_type(ty) {
+        return None;
+    }
+    Some(shared_runtime_type_tag(
+        canonical_runtime_type_name(ty).as_bytes(),
+    ))
+}
+
+/// [`field_box_for`] with the tag the layout already looked up.
+fn tagged_field_box(value: Value, tag: Option<&RuntimeTypeTag>) -> ElementBox {
+    let boxed = element_boxed_value(value);
+    if let Some(tag) = tag {
+        // SAFETY: the box is new and confined to this thread.
+        unsafe { set_explicit_runtime_type_tag(boxed, tag) };
+    }
+    // SAFETY: the box is new, and its one reference is the field's.
+    unsafe { ElementBox::from_raw(boxed) }
 }
 
 /// The box of a field an instance keeps in its layout (see

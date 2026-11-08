@@ -669,3 +669,93 @@ fn small_and_large_dicts_match_str_and_integer_keys_by_value() {
     assert!(set.insert(int(7)));
     assert!(!set.insert(typed_seven));
 }
+
+/// SipHash-2-4 with key bytes 0..16 over messages of bytes 0..n, from the
+/// reference implementation's test vectors.
+#[test]
+fn sip_hasher_matches_the_reference_vectors() {
+    use super::SipHasher;
+    use std::hash::Hasher;
+    let k0 = u64::from_le_bytes([0, 1, 2, 3, 4, 5, 6, 7]);
+    let k1 = u64::from_le_bytes([8, 9, 10, 11, 12, 13, 14, 15]);
+    let message: Vec<u8> = (0..15).collect();
+    for (len, expected) in [
+        (0, 0x726f_db47_dd0e_0e31u64),
+        (1, 0x74f8_39c5_93dc_67fd),
+        (15, 0xa129_ca61_49be_45e5),
+    ] {
+        let mut hasher = SipHasher::<2, 4>::with_keys(k0, k1);
+        hasher.write(&message[..len]);
+        assert_eq!(hasher.finish(), expected, "message of {len} bytes");
+    }
+}
+
+#[test]
+fn keyed_hasher_hashes_split_writes_and_words_as_one_stream() {
+    use super::KeyedHasher;
+    use std::hash::Hasher;
+    let bytes: Vec<u8> = (0..41).map(|byte| byte * 7).collect();
+    let mut whole = KeyedHasher::with_keys(3, 9);
+    whole.write(&bytes);
+    for split in [0, 1, 7, 8, 9, 16, 23, 40, 41] {
+        for second in split..=bytes.len() {
+            let mut parts = KeyedHasher::with_keys(3, 9);
+            parts.write(&bytes[..split]);
+            parts.write(&bytes[split..second]);
+            parts.write(&bytes[second..]);
+            assert_eq!(
+                parts.finish(),
+                whole.finish(),
+                "split at {split} and {second}"
+            );
+        }
+    }
+    for prefix in 0..9 {
+        let word = 0x0123_4567_89ab_cdefu64;
+        let mut by_word = KeyedHasher::with_keys(5, 11);
+        by_word.write(&bytes[..prefix]);
+        by_word.write_u64(word);
+        by_word.write_i64(-2);
+        let mut by_bytes = KeyedHasher::with_keys(5, 11);
+        by_bytes.write(&bytes[..prefix]);
+        by_bytes.write(&word.to_le_bytes());
+        by_bytes.write(&(-2i64).to_le_bytes());
+        assert_eq!(by_word.finish(), by_bytes.finish(), "after {prefix} bytes");
+    }
+    assert_ne!(
+        KeyedHasher::with_keys(1, 2).finish(),
+        KeyedHasher::with_keys(2, 1).finish()
+    );
+}
+
+#[test]
+fn lookups_in_entry_order_and_after_removals_find_every_key() {
+    let mut entries = DictEntries::new();
+    for key in 0..100 {
+        entries.insert(int(key), int(key * 10));
+    }
+    for key in (1..100).step_by(3) {
+        entries.remove(&int(key));
+    }
+    let live: Vec<i64> = (0..100).filter(|key| key % 3 != 1).collect();
+    // In order, the hint finds most keys; out of order and missing keys
+    // fall back to the index.
+    for pass in [live.clone(), live.iter().rev().copied().collect()] {
+        for key in pass {
+            assert_eq!(entries.value_of_i64(key), Some(&int(key * 10)), "key {key}");
+            assert_eq!(entries.value_of(&int(key)), Some(&int(key * 10)));
+        }
+    }
+    for key in (1..100).step_by(3) {
+        assert_eq!(entries.value_of_i64(key), None, "removed key {key}");
+    }
+    assert_eq!(entries.value_of_i64(1000), None);
+    let mut texts = DictEntries::new();
+    for key in 0..20 {
+        texts.insert(text(&format!("k{key}")), int(key));
+    }
+    for key in [0, 1, 2, 19, 5, 6, 0] {
+        assert_eq!(texts.value_of_str(&format!("k{key}")), Some(&int(key)));
+    }
+    assert_eq!(texts.value_of_str("k20"), None);
+}

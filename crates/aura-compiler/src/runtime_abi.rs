@@ -108,6 +108,7 @@ runtime_functions! {
     FunctionBindDefaults => ("aura_direct_function_bind_defaults", [I64, I64, I64, I64], None),
     BoxUnit => ("aura_direct_box_unit", [], Some(I64)),
     StringLiteral => ("aura_direct_string_literal", [I64, I64], Some(I64)),
+    StringLiteralCell => ("aura_direct_string_literal_cell", [I64, I64, I64], Some(I64)),
     StringLen => ("aura_direct_string_len", [I64], Some(I64)),
     StringByteLen => ("aura_direct_string_byte_len", [I64], Some(I64)),
     StringSlice => ("aura_direct_string_slice", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),

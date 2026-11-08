@@ -7834,6 +7834,13 @@ impl<'a> FunctionCompiler<'a> {
                 Operand::Place(place) if reads_arguments_only && place.contains('.') => {
                     self.load_borrowed_field_argument(&argument.value, &semantic_expected)?
                 }
+                Operand::String(text)
+                    if kept.get(index) == Some(&MirReceiverKind::Borrow)
+                        && argument.writeback_place.is_none()
+                        && semantic_expected == DirectType::Opaque(Type::named("str")) =>
+                {
+                    self.load_borrowed_string_literal(text)?
+                }
                 operand => self.load_operand_for_target(operand, &semantic_expected)?,
             };
             let semantic_coerced = self.coerce_value(loaded, &semantic_expected)?;
@@ -10587,6 +10594,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.runtime[RuntimeFn::ReleaseValue],
                 self.runtime[RuntimeFn::FormatBegin],
                 self.runtime[RuntimeFn::StringLiteral],
+                self.runtime[RuntimeFn::StringLiteralCell],
                 self.runtime[RuntimeFn::BoxI64],
                 self.runtime[RuntimeFn::BoxBool],
             ],
@@ -12091,6 +12099,27 @@ impl<'a> FunctionCompiler<'a> {
 
     fn string_constant(&mut self, bytes: &[u8]) -> std::result::Result<(Val, Val), String> {
         declare_string_constant(self.string_data, &mut *self.builder, bytes)
+    }
+
+    /// A `str` literal a callee borrows: one frozen box per literal, made
+    /// on first use and kept in a word of the program's data, so a call in
+    /// a loop allocates no box for it. The caller's release of a frozen box
+    /// does nothing.
+    fn load_borrowed_string_literal(
+        &mut self,
+        text: &str,
+    ) -> std::result::Result<ValueRef, String> {
+        let (ptr, len) = self.string_constant(text.as_bytes())?;
+        let cell = word_cell(
+            self.tag_cells,
+            &mut *self.builder,
+            &format!("\0str literal {text}"),
+        )?;
+        let inst = self.builder.call(
+            self.runtime[RuntimeFn::StringLiteralCell],
+            &[cell, ptr, len],
+        );
+        Ok(self.owned_opaque_result(inst.results, Type::named("str")))
     }
 
     /// Compiles a tuple literal as one opaque aggregate handle.

@@ -31,9 +31,145 @@ pub const INDEX_THRESHOLD: usize = 8;
 /// still hash consistently because equal values visit the same prefix.
 const HASH_NODE_BUDGET: usize = 64;
 
-fn hash_state() -> &'static RandomState {
-    static STATE: OnceLock<RandomState> = OnceLock::new();
-    STATE.get_or_init(RandomState::new)
+/// A new hasher for a key, with this process's keys.
+fn hash_state() -> KeyedHasher {
+    static KEYS: OnceLock<(u64, u64)> = OnceLock::new();
+    let &(k0, k1) = KEYS.get_or_init(|| {
+        // `RandomState` holds random keys it does not expose, so the keys
+        // are two of its hashes: as secret and as random as its own.
+        let state = RandomState::new();
+        (state.hash_one(0u64), state.hash_one(1u64))
+    });
+    KeyedHasher::with_keys(k0, k1)
+}
+
+/// The keyed hasher of `dict` and `set` keys: SipHash-1-3, the hash
+/// `RandomState` computes, with keys chosen once per process. The standard
+/// library's copy is not public, and it hashes a one-word key through the
+/// general byte path; this one compresses a word that starts on a word
+/// boundary directly, which halves the cost of an integer key.
+pub(crate) type KeyedHasher = SipHasher<1, 3>;
+
+/// SipHash with `C` compression and `D` finalization rounds over a byte
+/// stream, as the reference describes it. Bytes split across writes hash
+/// as one stream.
+#[derive(Clone, Debug)]
+pub(crate) struct SipHasher<const C: usize, const D: usize> {
+    v0: u64,
+    v1: u64,
+    v2: u64,
+    v3: u64,
+    /// The bytes after the last whole word, little-endian.
+    tail: u64,
+    /// How many bytes `tail` holds, below 8.
+    ntail: usize,
+    /// How many bytes were written.
+    length: usize,
+}
+
+impl<const C: usize, const D: usize> SipHasher<C, D> {
+    pub(crate) fn with_keys(k0: u64, k1: u64) -> Self {
+        Self {
+            v0: k0 ^ 0x736f_6d65_7073_6575,
+            v1: k1 ^ 0x646f_7261_6e64_6f6d,
+            v2: k0 ^ 0x6c79_6765_6e65_7261,
+            v3: k1 ^ 0x7465_6462_7974_6573,
+            tail: 0,
+            ntail: 0,
+            length: 0,
+        }
+    }
+
+    #[inline(always)]
+    fn round(&mut self) {
+        self.v0 = self.v0.wrapping_add(self.v1);
+        self.v1 = self.v1.rotate_left(13) ^ self.v0;
+        self.v0 = self.v0.rotate_left(32);
+        self.v2 = self.v2.wrapping_add(self.v3);
+        self.v3 = self.v3.rotate_left(16) ^ self.v2;
+        self.v0 = self.v0.wrapping_add(self.v3);
+        self.v3 = self.v3.rotate_left(21) ^ self.v0;
+        self.v2 = self.v2.wrapping_add(self.v1);
+        self.v1 = self.v1.rotate_left(17) ^ self.v2;
+        self.v2 = self.v2.rotate_left(32);
+    }
+
+    #[inline(always)]
+    fn compress(&mut self, word: u64) {
+        self.v3 ^= word;
+        for _ in 0..C {
+            self.round();
+        }
+        self.v0 ^= word;
+    }
+}
+
+/// Up to 7 bytes of `bytes` from `start`, little-endian.
+#[inline(always)]
+fn load_tail(bytes: &[u8], start: usize, len: usize) -> u64 {
+    debug_assert!(len < 8);
+    let mut word = 0u64;
+    for (index, byte) in bytes[start..start + len].iter().enumerate() {
+        word |= u64::from(*byte) << (8 * index);
+    }
+    word
+}
+
+impl<const C: usize, const D: usize> Hasher for SipHasher<C, D> {
+    fn write(&mut self, bytes: &[u8]) {
+        let length = bytes.len();
+        self.length = self.length.wrapping_add(length);
+        let mut start = 0;
+        if self.ntail != 0 {
+            let needed = 8 - self.ntail;
+            let fill = needed.min(length);
+            self.tail |= load_tail(bytes, 0, fill) << (8 * self.ntail);
+            if length < needed {
+                self.ntail += length;
+                return;
+            }
+            let word = self.tail;
+            self.compress(word);
+            self.tail = 0;
+            self.ntail = 0;
+            start = needed;
+        }
+        let mut words = bytes[start..].chunks_exact(8);
+        for chunk in &mut words {
+            let word = u64::from_le_bytes(chunk.try_into().expect("an 8-byte chunk"));
+            self.compress(word);
+        }
+        let rest = words.remainder();
+        self.tail = load_tail(rest, 0, rest.len());
+        self.ntail = rest.len();
+    }
+
+    #[inline]
+    fn write_u64(&mut self, word: u64) {
+        if self.ntail == 0 {
+            self.length = self.length.wrapping_add(8);
+            self.compress(word);
+        } else {
+            self.write(&word.to_le_bytes());
+        }
+    }
+
+    #[inline]
+    fn write_i64(&mut self, word: i64) {
+        self.write_u64(word as u64);
+    }
+
+    #[inline]
+    fn finish(&self) -> u64 {
+        let mut state = self.clone();
+        let last = ((self.length as u64 & 0xff) << 56) | self.tail;
+        state.compress(last);
+        state.v2 ^= 0xff;
+        for _ in 0..D {
+            state.round();
+        }
+        state.v0 ^ state.v1 ^ state.v2 ^ state.v3
+    }
 }
 
 /// A hash of `value` that agrees with `Value`'s equality.
@@ -45,7 +181,7 @@ pub fn hash_value(value: &Value) -> u64 {
     while let Value::Union(union) = root {
         root = &union.payload;
     }
-    let mut hasher = hash_state().build_hasher();
+    let mut hasher = hash_state();
     match root {
         Value::Int(integer) => {
             write_integer(integer, &mut hasher);
@@ -184,7 +320,7 @@ fn hash_nodes(root: &Value, hasher: &mut impl Hasher, budget: &mut usize) {
 
 /// [`hash_value`] of a `str` value holding `text`, without building one.
 pub fn hash_str(text: &str) -> u64 {
-    let mut hasher = hash_state().build_hasher();
+    let mut hasher = hash_state();
     hasher.write(text.as_bytes());
     hasher.finish()
 }
@@ -192,7 +328,7 @@ pub fn hash_str(text: &str) -> u64 {
 /// [`hash_value`] of an integer value equal to `integer`, of any width,
 /// without building one.
 pub fn hash_i64(integer: i64) -> u64 {
-    let mut hasher = hash_state().build_hasher();
+    let mut hasher = hash_state();
     hasher.write_i64(integer);
     hasher.finish()
 }
@@ -359,6 +495,33 @@ struct Large<T> {
     index: HashTable<(u64, usize)>,
     /// How many slots are holes.
     holes: usize,
+    /// The slot the last lookup found, a hint only: a loop that reads the
+    /// entries in order, such as `for key in d.keys(): d.lookup(key)`,
+    /// finds the next key in the slot after it without hashing.
+    cursor: LookupCursor,
+}
+
+/// [`Large::cursor`]: a word any thread may overwrite, since a wrong hint
+/// costs one compare and a stale one is never trusted without one.
+#[derive(Debug, Default)]
+struct LookupCursor(std::sync::atomic::AtomicUsize);
+
+impl Clone for LookupCursor {
+    fn clone(&self) -> Self {
+        Self(std::sync::atomic::AtomicUsize::new(self.get()))
+    }
+}
+
+impl LookupCursor {
+    #[inline(always)]
+    fn get(&self) -> usize {
+        self.0.load(std::sync::atomic::Ordering::Relaxed)
+    }
+
+    #[inline(always)]
+    fn set(&self, slot: usize) {
+        self.0.store(slot, std::sync::atomic::Ordering::Relaxed);
+    }
 }
 
 impl<T> Large<T> {
@@ -679,6 +842,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                         slots: entries.into_iter().map(Some).collect(),
                         index,
                         holes: 0,
+                        cursor: LookupCursor::default(),
                     })),
                 }
             }
@@ -688,24 +852,50 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The slot of the entry whose key equals `key`, for [`Self::at_slot`].
     pub fn position(&self, key: &Value) -> Option<usize> {
-        self.probe(|| hash_value(key), |candidate| key_equals(candidate, key))
-            .0
+        self.lookup(|| hash_value(key), |candidate| key_equals(candidate, key))
     }
 
     /// [`Self::position`] of a `str` key holding `text`, without building it.
     pub fn position_str(&self, text: &str) -> Option<usize> {
-        self.probe(|| hash_str(text), |candidate| key_is_str(candidate, text))
-            .0
+        self.lookup(|| hash_str(text), |candidate| key_is_str(candidate, text))
     }
 
     /// [`Self::position`] of an integer key equal to `integer`, without
     /// building it.
     pub fn position_i64(&self, integer: i64) -> Option<usize> {
-        self.probe(
+        self.lookup(
             || hash_i64(integer),
             |candidate| key_is_i64(candidate, integer),
         )
-        .0
+    }
+
+    /// [`Self::probe`] for a read, which first tries the entry after the
+    /// one the last read found, skipping a hole or two, and remembers the
+    /// slot it finds.
+    #[inline(always)]
+    fn lookup(
+        &self,
+        hash: impl FnOnce() -> u64,
+        matches: impl Fn(&Value) -> bool,
+    ) -> Option<usize> {
+        if let Storage::Large(large) = &self.storage {
+            let start = large.cursor.get().wrapping_add(1);
+            for slot in start..large.slots.len().min(start.saturating_add(3)) {
+                if let Some(entry) = &large.slots[slot] {
+                    if matches(entry.key()) {
+                        large.cursor.set(slot);
+                        return Some(slot);
+                    }
+                    break;
+                }
+            }
+            let found = self.probe(hash, matches).0;
+            if let Some(slot) = found {
+                large.cursor.set(slot);
+            }
+            return found;
+        }
+        self.probe(hash, matches).0
     }
 
     /// The slot of the entry whose key `matches`, and the key's hash when
@@ -892,6 +1082,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
             slots: entries.into_iter().map(Some).collect(),
             index,
             holes: 0,
+            cursor: LookupCursor::default(),
         }));
     }
 }

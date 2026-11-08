@@ -6432,8 +6432,9 @@ fn lock_direct_module_constants(
         .unwrap_or_else(std::sync::PoisonError::into_inner)
 }
 
-/// The layout slots that hold a shared variant box, which the program's
-/// end frees with the module constants.
+/// The layout slots that hold a shared variant box, and the cells of
+/// borrowed `str` literals, which the program's end frees with the module
+/// constants.
 fn shared_unit_variant_slots() -> &'static Mutex<Vec<&'static std::sync::atomic::AtomicUsize>> {
     static SLOTS: OnceLock<Mutex<Vec<&'static std::sync::atomic::AtomicUsize>>> = OnceLock::new();
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
@@ -6706,6 +6707,57 @@ fn direct_ownership_tracking_active() -> bool {
     // SAFETY: the stack belongs to the running task.
     current_direct_frame_stack()
         .is_some_and(|stack| unsafe { stack.as_ref() }.owned_values.tracking())
+}
+
+/// The one frozen box of a `str` literal that generated code passes to a
+/// parameter that borrows it, kept in `cell`, a word of the program's data
+/// for that literal: the first call makes it, and every later one returns
+/// it without allocating. A frozen box takes no references, so the
+/// caller's release of it does nothing, and anything that would change or
+/// take its text copies it first, as for a module constant.
+///
+/// # Safety
+///
+/// `cell` is a word of the program's data that only this function writes,
+/// and `ptr` and `len` name the literal's UTF-8 bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_string_literal_cell(
+    cell: *const std::sync::atomic::AtomicUsize,
+    ptr: *const u8,
+    len: usize,
+) -> *mut OpaqueValue {
+    // SAFETY: the caller's contract.
+    let Some(cell) = (unsafe { cell.as_ref() }) else {
+        return aura_direct_string_literal(ptr, len);
+    };
+    let stored = cell.load(Ordering::Acquire);
+    if stored != 0 {
+        return stored as *mut OpaqueValue;
+    }
+    task_runtime_boundary(|| {
+        let boxed = boxed_value(Value::String(literal_str(ptr, len).into()));
+        // SAFETY: the box is new and confined to this thread, and the cell
+        // publishes it with a release store.
+        unsafe { freeze_direct_value(boxed) };
+        match cell.compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire) {
+            Ok(_) => {
+                // SAFETY: the cell is a word of the program's data, which
+                // lives until the process exits.
+                let cell: &'static std::sync::atomic::AtomicUsize =
+                    unsafe { &*(cell as *const std::sync::atomic::AtomicUsize) };
+                shared_unit_variant_slots()
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+                    .push(cell);
+                boxed
+            }
+            Err(winner) => {
+                // SAFETY: no other thread saw the box this thread lost with.
+                unsafe { free_frozen_direct_value(boxed) };
+                winner as *mut OpaqueValue
+            }
+        }
+    })
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -10356,7 +10408,40 @@ fn boxed_map_lookup(found: Option<&Value>) -> *mut OpaqueValue {
 /// key is missing. Generated code keeps a `Lookup` it only matches and
 /// unpacks in this form.
 fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
-    map_lookup_copy(found).map_or(std::ptr::null_mut(), boxed_value)
+    map_lookup_copy(found).map_or(std::ptr::null_mut(), |value| {
+        let boxed = boxed_value(value);
+        // SAFETY: the box is new.
+        unsafe { record_typed_variant_shape(boxed) };
+        boxed
+    })
+}
+
+/// Gives a new box that holds an enum variant kept in its layout the type
+/// tag and shape a variant box generated code builds has, so the tag of
+/// its static type that follows costs one compare. Any other box keeps
+/// what it has.
+///
+/// # Safety
+///
+/// `boxed` is a new box confined to this thread.
+unsafe fn record_typed_variant_shape(boxed: *mut OpaqueValue) {
+    // SAFETY: the caller's contract.
+    let header = unsafe { &*boxed };
+    // SAFETY: as above; nothing else reads the box yet.
+    let held = unsafe { &*header.value.get() };
+    let Value::EnumVariant(EnumVariantValue {
+        payloads: VariantPayloads::Typed(typed),
+        ..
+    }) = held
+    else {
+        return;
+    };
+    let layout = typed.layout();
+    // SAFETY: as above.
+    unsafe { *header.runtime_type_name.get() = Some(Arc::clone(layout.runtime_type())) };
+    header
+        .shape_tag
+        .store(layout.shape_tag(), Ordering::Relaxed);
 }
 
 /// The low bit of a lent lookup result. A `Value` is aligned to at least
@@ -10456,6 +10541,8 @@ fn shadow_map_payload(map: &MapValue, found: Option<&Value>, confined: bool) -> 
             let alias = unsafe { std::ptr::read(value) };
             let boxed = untracked_boxed_value(alias, None);
             // SAFETY: the box is new.
+            unsafe { record_typed_variant_shape(boxed) };
+            // SAFETY: as above.
             unsafe { &*boxed }
                 .ref_count
                 .store(SHADOW_REFERENCE + 1, Ordering::Release);

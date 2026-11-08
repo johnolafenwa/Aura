@@ -62,6 +62,9 @@ pub struct EnumLayout {
     /// The one frozen box each variant with no payloads is built as, made
     /// on first use, by the variant's index. Zero while there is none.
     unit_boxes: Vec<AtomicUsize>,
+    /// The tag of each handle layout's box, by layout id, looked up on
+    /// first use so building a payload box compares no types.
+    handle_tags: Vec<OnceLock<Option<Arc<RuntimeTypeTag>>>>,
     /// How values move in and out of a variant's block.
     ops: &'static FieldOps,
 }
@@ -156,6 +159,13 @@ impl EnumLayout {
         self.layout.table()
     }
 
+    /// The tag a payload box at `place` carries.
+    fn handle_tag(&self, place: Place) -> Option<&RuntimeTypeTag> {
+        self.handle_tags[place.layout.index()]
+            .get_or_init(|| (self.ops.handle_tag)(self.type_of(place)))
+            .as_deref()
+    }
+
     fn is_box(&self, place: Place) -> bool {
         matches!(self.table().get(place.layout).kind, LayoutKind::Handle)
     }
@@ -222,8 +232,10 @@ impl EnumLayout {
                 }
             })
             .collect();
+        let handle_tags = (0..table.len()).map(|_| OnceLock::new()).collect();
         Ok(Self {
             access,
+            handle_tags,
             enum_name,
             runtime_type: Arc::clone(&tag.name),
             tag,
@@ -501,7 +513,7 @@ impl TypedPayloads {
         let place = self.places()[index];
         let address = self.address(place);
         if self.layout.is_box(place) {
-            let boxed = (self.layout.ops.field_box)(value, self.layout.type_of(place));
+            let boxed = (self.layout.ops.tagged_box)(value, self.layout.handle_tag(place));
             // SAFETY: the slot's pointer is dead.
             unsafe { std::ptr::write(address.cast::<Option<ElementBox>>(), Some(boxed)) };
         } else {
