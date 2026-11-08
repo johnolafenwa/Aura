@@ -3,3 +3,4 @@ error[AU2013]: non-exhaustive match over `Packet`: missing `Data(str)`
   |
 5 |     match value:
   |     ^
+  = help: add `case Packet.Data(str):`, or a final `case _:`

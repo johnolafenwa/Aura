@@ -3,3 +3,4 @@ error[AU2999]: non-exhaustive match over `State`: missing `Ready`
   |
 7 |     match state:
   |     ^
+  = help: add `case State.Ready:`, or a final `case _:`
