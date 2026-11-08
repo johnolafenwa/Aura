@@ -732,6 +732,7 @@ fn a_list_element_box_of_a_typed_variant_has_its_layouts_shape() {
 /// parses then build their values in.
 fn json_layout(access: u32) -> &'static EnumLayout {
     let json = Type::named("json.Value");
+    let text_type = Type::named("str");
     let env = LayoutEnv {
         classes: Default::default(),
         enums: [(
@@ -743,7 +744,7 @@ fn json_layout(access: u32) -> &'static EnumLayout {
                     ("Bool".to_string(), vec![Type::named("bool")]),
                     ("Int".to_string(), vec![Type::named("int64")]),
                     ("Float".to_string(), vec![Type::named("float64")]),
-                    ("String".to_string(), vec![Type::named("str")]),
+                    ("String".to_string(), vec![text_type.clone()]),
                     (
                         "Array".to_string(),
                         vec![Type::Named("list".to_string(), vec![json.clone()])],
@@ -752,7 +753,7 @@ fn json_layout(access: u32) -> &'static EnumLayout {
                         "Object".to_string(),
                         vec![Type::Named(
                             "dict".to_string(),
-                            vec![Type::named("str"), json.clone()],
+                            vec![text_type, json.clone()],
                         )],
                     ),
                 ],
