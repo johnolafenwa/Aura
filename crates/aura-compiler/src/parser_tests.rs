@@ -5351,9 +5351,8 @@ fn quantifiers_old_values_and_spec_functions_parse() {
         panic!("a class");
     };
     assert!(class.methods[0].spec && class.methods[0].public);
-    let error = crate::parser::parse(
-        "class C:\n    n: int64\n\n    lemma def p(self):\n        pass\n",
-    )
-    .expect_err("lemma methods are rejected");
+    let error =
+        crate::parser::parse("class C:\n    n: int64\n\n    lemma def p(self):\n        pass\n")
+            .expect_err("lemma methods are rejected");
     assert_eq!(error.code, "AU2048");
 }
