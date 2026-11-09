@@ -32712,6 +32712,24 @@ fn the_iter_module_cannot_declare_generator_functions() {
 }
 
 #[test]
+fn class_and_impl_bounds_may_name_associated_type_traits() {
+    let source = include_str!("../tests/fixtures/run-pass/into_iterator_class_bounds.au");
+    crate::check_source(source).expect("class and impl IntoIterator bounds type-check");
+    let unmet = include_str!("../tests/fixtures/check-fail/into_iterator_class_bound_unmet.au");
+    let error = crate::check_source(unmet).expect_err("int64 is no IntoIterator");
+    assert_eq!(error.code, "AU2002", "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("type `int64` does not implement trait `IntoIterator[str]`"),
+        "{error:?}"
+    );
+    // A bound type parameter of the class comes from the source's impl.
+    let inferred = "from iter import Generator, IntoIterator\n\nclass Bag:\n    n: int64\n\ndef walk(n: int64) -> Generator[int64]:\n    yield n\n\nimpl IntoIterator[int64] for Bag:\n    type Iter = Generator[int64]\n    def into_iter(own self) -> Self.Iter:\n        return walk(self.n)\n\nclass Pipe[T, S: IntoIterator[T]]:\n    source: S\n\n    def open(own self) -> S.Iter:\n        return self.source.into_iter()\n\ndef main():\n    it: Generator[int64] = Pipe(source=Bag(n=2)).open()\n    print(it.collect())\n";
+    crate::check_source(inferred).expect("T and S.Iter are inferred from Bag");
+}
+
+#[test]
 fn associated_type_misuse_reports_clear_diagnostics() {
     let cases = [
         (
@@ -32731,8 +32749,8 @@ fn associated_type_misuse_reports_clear_diagnostics() {
             "a `for` loop consumes an `IntoIterator` source",
         ),
         (
-            "from iter import IntoIterator\n\nclass Holder[S: IntoIterator[int64]]:\n    source: S\n\ndef main():\n    print(1)\n",
-            "only a function or method bound can name `IntoIterator` yet",
+            "from iter import IntoIterator\n\nenum Holder[S: IntoIterator[int64]]:\n    Full(S)\n\ndef main():\n    print(1)\n",
+            "only a function, method, class, or impl bound can name `IntoIterator` yet",
         ),
         (
             "trait Source:\n    def open(self) -> int64\n    type Iter\n\ndef main():\n    print(1)\n",

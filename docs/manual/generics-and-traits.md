@@ -486,8 +486,8 @@ These rules apply:
   arguments substituted (`AU2002`).
 - A generic implementation can fix an associated type in terms of its own
   type parameters, as in `type Iter = Generator[T]`.
-- A class, enum, or implementation cannot bound a type parameter by a
-  trait with associated types yet (`AU2002`). A function or method can.
+- An enum cannot bound a type parameter by a trait with associated types
+  yet (`AU2002`). A function, method, class, or implementation can.
 
 A function or method bound writes only the trait's own arguments, as in
 `S: Source[int64]`. Each associated type then becomes a hidden type
@@ -533,6 +533,60 @@ def main():
 
 Here `T` in `iterator_of` appears only in the bound, and the call infers it
 the same way, from `impl IntoIterator[int64] for Numbers`.
+
+A class or implementation bound works the same way. The class keeps the
+type parameters it writes, so `Pipe[T, S]` is still written with two
+arguments. Its methods can name `S.Iter`, and constructing the class or
+calling a method infers `S.Iter`, and any parameter such as `T` that only
+the bound names, from the implementation for `S`:
+
+```aura
+from iter import Generator, IntoIterator
+
+
+class Numbers:
+    values: list[int64]
+
+
+def walk(values: own list[int64]) -> Generator[int64]:
+    for value in values:
+        yield value
+
+
+impl IntoIterator[int64] for Numbers:
+    type Iter = Generator[int64]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.values)
+
+
+class Pipe[T, S: IntoIterator[T]]:
+    source: S
+
+    def open(own self) -> S.Iter:
+        return self.source.into_iter()
+
+
+trait Total:
+    def total(own self) -> int64
+
+
+class Holder[S]:
+    source: S
+
+
+impl[S: IntoIterator[int64]] Total for Holder[S]:
+    def total(own self) -> int64:
+        mut sum = 0
+        for value in self.source:
+            sum += value
+        return sum
+
+
+def main():
+    print(Pipe(source=Numbers(values=[1, 2])).open().collect())
+    print(Holder(source=Numbers(values=[3, 4])).total())
+```
 
 The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
 `for` loop can consume any value that turns into an iterator. See
@@ -693,7 +747,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- Only a function or method can bound a type parameter by a trait with associated types.
+- An enum cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.

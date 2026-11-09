@@ -1,0 +1,5 @@
+error[AU2002]: type `int64` does not implement trait `IntoIterator[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/into_iterator_class_bound_unmet.au:9:9
+  |
+9 |     p = Pipe(source=5)
+  |         ^

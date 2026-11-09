@@ -6433,8 +6433,9 @@ lemma call, a ghost `assert` that the verifier cannot prove keeps
 
 A type alias for a callable type can end with `:` and an indented block of
 `requires` and `ensures` clauses over the callable's named parameters and
-`result`. A parameter of that type has the contract: a call through it must
-meet the `requires`, and its result has the `ensures`.
+`result`. A parameter, a class field, or a function result of that type has
+the contract: a call through it must meet the `requires`, and its result has
+the `ensures`.
 
 ```aura
 type Step = def(n: int64) -> int64:
@@ -6464,6 +6465,38 @@ gives `Step`'s. A callable contract is for the verifier. The program checks
 it nowhere; each function still checks its own `requires` when it runs. A
 function value that is not a named function, such as a lambda, is reported
 as `AU5104` where it becomes a `Step`.
+
+The same holds where a function value is stored in a field of that type or
+returned as one. Each construction or assignment of the field, and each
+`return`, proves that the function fits, so every read of the field and
+every call's result can rely on the contract:
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+class Stepper:
+    step: Step
+
+    def advance(self, n: int64) -> int64:
+        requires 0 <= n and n < 100
+        ensures result > n
+        return self.step(n)
+
+def make() -> Step:
+    return inc
+
+def main():
+    print(Stepper(step=inc).advance(1))
+    s = make()
+    print(s(5))
+```
 
 The callable type names each parameter and takes none as `mut`, and the
 alias has no type parameters.
@@ -12795,8 +12828,8 @@ These rules apply:
   arguments substituted (`AU2002`).
 - A generic implementation can fix an associated type in terms of its own
   type parameters, as in `type Iter = Generator[T]`.
-- A class, enum, or implementation cannot bound a type parameter by a
-  trait with associated types yet (`AU2002`). A function or method can.
+- An enum cannot bound a type parameter by a trait with associated types
+  yet (`AU2002`). A function, method, class, or implementation can.
 
 A function or method bound writes only the trait's own arguments, as in
 `S: Source[int64]`. Each associated type then becomes a hidden type
@@ -12836,6 +12869,52 @@ def main():
 
 Here `T` in `iterator_of` appears only in the bound, and the call infers it
 the same way, from `impl IntoIterator[int64] for Numbers`.
+
+A class or implementation bound works the same way. The class keeps the
+type parameters it writes, so `Pipe[T, S]` is still written with two
+arguments. Its methods can name `S.Iter`, and constructing the class or
+calling a method infers `S.Iter`, and any parameter such as `T` that only
+the bound names, from the implementation for `S`:
+
+```aura
+from iter import Generator, IntoIterator
+
+class Numbers:
+    values: list[int64]
+
+def walk(values: own list[int64]) -> Generator[int64]:
+    for value in values:
+        yield value
+
+impl IntoIterator[int64] for Numbers:
+    type Iter = Generator[int64]
+
+    def into_iter(own self) -> Self.Iter:
+        return walk(self.values)
+
+class Pipe[T, S: IntoIterator[T]]:
+    source: S
+
+    def open(own self) -> S.Iter:
+        return self.source.into_iter()
+
+trait Total:
+    def total(own self) -> int64
+
+class Holder[S]:
+    source: S
+
+impl[S: IntoIterator[int64]] Total for Holder[S]:
+    def total(own self) -> int64:
+        mut sum = 0
+        for value in self.source:
+            sum += value
+        return sum
+
+def main():
+    print(Pipe(source=Numbers(values=[1, 2])).open().collect())
+    print(Holder(source=Numbers(values=[3, 4])).total())
+```
 
 The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
 `for` loop can consume any value that turns into an iterator. See
@@ -12996,7 +13075,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- Only a function or method can bound a type parameter by a trait with associated types.
+- An enum cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.
@@ -23466,17 +23545,17 @@ booleans, with each integer type's range as a check:
   comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
 - `dict` and `set` with integer or `str` keys: which keys they hold, their
   length, and a `dict`'s values when those are integers, `bool`, or `str`;
-  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `keys`,
-  `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
+  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `get`,
+  `remove`, `keys`, `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
   `clear` of a `set`, with `==` of whole collections
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
-- parameters of a callable alias with a contract
-  ([Callable Contracts](/manual/contracts#callable-contracts)): calls
-  through them prove its `requires` and assume its `ensures`, and a named
-  function passed as one is proved to fit it
+- parameters, class fields, and function results of a callable alias with
+  a contract ([Callable Contracts](/manual/contracts#callable-contracts)):
+  calls through them prove its `requires` and assume its `ensures`, and a
+  named function passed, stored, or returned as one is proved to fit it
 - `extern "C"` functions with a trusted contract: an indented block of
   `requires` and `ensures` after the signature. Each call proves the
   `requires`, and the result and `mut` arguments have the `ensures`
@@ -23496,7 +23575,7 @@ booleans, with each integer type's range as a check:
 
 Anything else is a value the verifier knows nothing about: a `dict` or
 `set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
-`str.split` or `dict.get`, and what a call returns through a function value the verifier cannot
+`str.split`, and what a call returns through a function value the verifier cannot
 follow, such as one passed as an argument, stored in a collection, or
 chosen on different paths. Such a value's `requires` is reported as
 `AU5104` where it leaves the function, and stays checked when it is
@@ -23539,9 +23618,31 @@ def price(prices: dict[str, int64], item: str) -> int64:
 
 A float contract is about IEEE-754 values, so `x == x` fails for NaN, and a
 contract that needs `x / y` to be a number says so, as `requires y > 0.0`
-does about the divisor. Proofs about float division and square roots can
-take the solver longer than proofs about integers; one it cannot finish in
-time is reported as `AU5102`.
+does about the divisor.
+
+An exact float division or square root is slow for the solver, so a check
+that reads one is first tried with what is known about the rounded result:
+its sign, when it is NaN, zero, or infinite, how its size compares with its
+operands and with `1.0`, and its bounds when its operands lie between
+literals of the function. A check that follows from those is proved at once:
+
+```aura
+def ratio(x: float64, y: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    requires 1.0 <= y and y <= 10.0
+    ensures 0.0 <= result and result <= x
+    return x / y
+
+def root(x: float64) -> float64:
+    requires 1.0 <= x and x <= 100.0
+    ensures 1.0 <= result and result <= 10.0
+    return x.sqrt()
+```
+
+Any other check is asked of the exact problem, which also finds the
+counterexample of one that fails. One the solver cannot finish in time is
+reported as `AU5102`; a contract that bounds the operands by literals often
+turns it into one the first query proves.
 
 A quantifier over a `str`, or over a list of other elements, is reported as
 `AU5104`. See the

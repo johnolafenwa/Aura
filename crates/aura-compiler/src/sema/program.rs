@@ -1173,13 +1173,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 .map(Type::TypeParam)
                 .collect(),
         );
+        let mut class_bound_params = class_decl.type_params.clone();
+        class_bound_params.extend(super::assoc_bounds::hidden_bound_params(
+            &class_decl.type_params,
+            &class_decl.type_param_bounds,
+        ));
         let type_param_bounds = lower_trait_bounds(
             &class_decl.type_param_bounds,
             &traits,
             &type_names,
             &type_arities,
             &canonical_type_names,
-            &class_type_param_scope,
+            &type_param_scope(&class_bound_params),
         )?;
         let mut fields = BTreeMap::new();
         let mut methods = BTreeMap::new();
