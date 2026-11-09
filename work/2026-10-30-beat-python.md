@@ -220,3 +220,19 @@ Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds, docdb
 | --- | --- | --- | --- |
 | json_roundtrip, 30 rounds | 340 ms, 16 MB | 318 ms, 12 MB | 228 ms, 14 MB |
 | docdb, 50k docs | 798 ms, 194 MB | 730 ms, 151 MB | 452 ms, 115 MB |
+
+## Lean values, step 4: a smaller box header (2026-11-09)
+
+- A task's ledger keeps its linked boxes in a vector, and each box holds
+  its index there (4 bytes) instead of two list links (16). A box leaves
+  by swapping with the last.
+- A box's type name is a one-word `RuntimeName`. Type tags live in the
+  registry for good, so their names are static text, and tagging a box
+  copies a word instead of taking an `Arc` count.
+- A box is 144 bytes (from 160). Getting to 128 needs a 4-byte cut more,
+  which means generated code reading a narrower field; left for later.
+
+| Program | Before | After | Python |
+| --- | --- | --- | --- |
+| json_roundtrip, 30 rounds | 309 ms, 12 MB | 268 ms, 12 MB | 228 ms, 14 MB |
+| docdb, 50k docs | 739 ms, 151 MB | 689 ms, 146 MB | 452 ms, 115 MB |

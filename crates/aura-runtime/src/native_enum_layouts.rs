@@ -54,7 +54,7 @@ pub struct EnumLayout {
     /// gives it.
     enum_name: RuntimeName,
     /// The type tag of a box that holds a variant of the layout.
-    runtime_type: Arc<str>,
+    runtime_type: RuntimeName,
     /// The same tag as the registry keeps it, which a new variant's box
     /// records as its shape so generated code does not tag it again.
     tag: Arc<RuntimeTypeTag>,
@@ -100,7 +100,7 @@ impl EnumLayout {
         &self.enum_name
     }
 
-    pub fn runtime_type(&self) -> &Arc<str> {
+    pub fn runtime_type(&self) -> &RuntimeName {
         &self.runtime_type
     }
 
@@ -244,7 +244,7 @@ impl EnumLayout {
             access,
             handle_tags,
             enum_name,
-            runtime_type: Arc::clone(&tag.name),
+            runtime_type: tag.name.clone(),
             tag,
             layout,
             unit_boxes: variants.iter().map(|_| AtomicUsize::new(0)).collect(),
