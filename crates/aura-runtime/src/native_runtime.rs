@@ -1387,7 +1387,7 @@ fn int32_overflow_message(value: i64) -> String {
 /// Generated code reads the list view and the shared lock in place (see
 /// [`DirectListLayout`]), and the reference counts and ledger owner (see
 /// [`DirectOwnershipLayout`]), so the layout is `repr(C)`. The fields fill
-/// 160 bytes, the last 8 of them padding.
+/// 144 bytes, 4 of them padding after the slot and 8 at the end.
 #[repr(C)]
 pub struct OpaqueValue {
     value: UnsafeCell<Value>,
@@ -1423,9 +1423,9 @@ pub struct OpaqueValue {
     /// it makes shares the storage. That read may run on several threads at
     /// once under a shared holder's lock, so the word is atomic.
     list_capacity: AtomicU32,
-    prev: std::cell::Cell<*mut OpaqueValue>,
-    next: std::cell::Cell<*mut OpaqueValue>,
-    runtime_type_name: UnsafeCell<Option<Arc<str>>>,
+    /// The value's index in the list of the ledger that links it.
+    slot: std::cell::Cell<u32>,
+    runtime_type_name: UnsafeCell<Option<RuntimeName>>,
     /// The tag cell's tag this value last took the shape of, or null. A
     /// tag through that cell then changes nothing, so generated code skips
     /// the call when the cell holds this tag (Rust-speed step 5a). Every
@@ -1477,7 +1477,7 @@ fn direct_value_thread_identity() -> usize {
 }
 
 impl OpaqueValue {
-    fn new(value: Value, runtime_type_name: Option<Arc<str>>) -> Self {
+    fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
         // first write to a list gives it room.
         let (access, elements, len, _) = list_view_of(&value);
@@ -1490,8 +1490,7 @@ impl OpaqueValue {
             shared_lock: std::sync::atomic::AtomicPtr::new(std::ptr::null_mut()),
             owner: std::cell::Cell::new(std::ptr::null_mut()),
             owned: std::cell::Cell::new(0),
-            prev: std::cell::Cell::new(std::ptr::null_mut()),
-            next: std::cell::Cell::new(std::ptr::null_mut()),
+            slot: std::cell::Cell::new(0),
             #[cfg(all(debug_assertions, not(test)))]
             owner_thread: direct_value_thread_identity(),
             value: UnsafeCell::new(value),
@@ -1997,10 +1996,10 @@ fn boxed_value(value: Value) -> *mut OpaqueValue {
 }
 
 fn boxed_typed_value(value: Value, runtime_type_name: &str) -> *mut OpaqueValue {
-    boxed_value_with_type(value, Some(Arc::from(runtime_type_name)))
+    boxed_value_with_type(value, Some(RuntimeName::from(runtime_type_name)))
 }
 
-fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
+fn boxed_value_with_type(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
     let value = untracked_boxed_value(value, runtime_type_name);
     register_direct_owned_value(value);
     value
@@ -2009,7 +2008,7 @@ fn boxed_value_with_type(value: Value, runtime_type_name: Option<Arc<str>>) -> *
 /// A new box that no task's ledger links. Its owner releases it with
 /// `release_untracked_value`.
 #[inline]
-fn untracked_boxed_value(value: Value, runtime_type_name: Option<Arc<str>>) -> *mut OpaqueValue {
+fn untracked_boxed_value(value: Value, runtime_type_name: Option<RuntimeName>) -> *mut OpaqueValue {
     allocate_box(OpaqueValue::new(value, runtime_type_name))
 }
 
@@ -2229,7 +2228,7 @@ unsafe fn explicit_runtime_type_name(ptr: *mut OpaqueValue) -> Option<String> {
     explicit_runtime_type_tag(ptr).map(|name| name.to_string())
 }
 
-unsafe fn explicit_runtime_type_tag(ptr: *mut OpaqueValue) -> Option<Arc<str>> {
+unsafe fn explicit_runtime_type_tag(ptr: *mut OpaqueValue) -> Option<RuntimeName> {
     match ptr.as_ref() {
         Some(value) => {
             let _access = value.access(false);
@@ -2597,7 +2596,9 @@ fn runtime_type_pattern_matches(
 /// tagged with it. Codegen tags values with pointers into static descriptor
 /// constants, so the same descriptor recurs on every loop iteration.
 pub(crate) struct RuntimeTypeTag {
-    pub(crate) name: Arc<str>,
+    /// Static text, since the registry keeps every tag for good: a box
+    /// that takes the name copies one word.
+    pub(crate) name: RuntimeName,
     /// Shared, so a union value built or aligned from the tag takes a
     /// reference to its type instead of a copy.
     pub(crate) parsed: Arc<Type>,
@@ -2718,7 +2719,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         _ => None,
     };
     let tag = Arc::new(RuntimeTypeTag {
-        name: Arc::from(name),
+        name: RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str())),
         parsed: Arc::new(parsed),
         integer_kind,
         name_only,
@@ -2768,10 +2769,10 @@ unsafe fn set_explicit_runtime_type_tag(ptr: *mut OpaqueValue, tag: &RuntimeType
             // SAFETY: as in `value_mut`.
             let stored = unsafe { &mut *value.runtime_type_name.get() };
             let already = stored.as_ref().is_some_and(|existing| {
-                Arc::ptr_eq(existing, &tag.name) || **existing == *runtime_type_name
+                existing.is_same(&tag.name) || **existing == *runtime_type_name
             });
             if !already {
-                *stored = Some(Arc::clone(&tag.name));
+                *stored = Some(tag.name.clone());
             }
             // SAFETY: the access above still holds.
             let held = unsafe { &*value.value.get() };
@@ -8364,7 +8365,7 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
                 elements,
                 str_view: Default::default(),
             }),
-            Some(Arc::clone(&tag.name)),
+            Some(tag.name.clone()),
         );
         // The new list has the shape the tag records, as a tag through the
         // same cell would leave it.
@@ -10482,7 +10483,7 @@ unsafe fn record_typed_variant_shape(boxed: *mut OpaqueValue) {
     };
     let layout = typed.layout();
     // SAFETY: as above.
-    unsafe { *header.runtime_type_name.get() = Some(Arc::clone(layout.runtime_type())) };
+    unsafe { *header.runtime_type_name.get() = Some(layout.runtime_type().clone()) };
     header
         .shape_tag
         .store(layout.shape_tag(), Ordering::Relaxed);
@@ -13557,7 +13558,7 @@ pub extern "C-unwind" fn aura_direct_union_inject_copy(
         let injected =
             crate::union_runtime::inject_shared_union_member(&tag.parsed, member_index, copied)
                 .unwrap_or_else(|message| runtime_error(message));
-        boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
+        boxed_value_with_type(injected, Some(tag.name.clone()))
     })
 }
 
@@ -13582,7 +13583,7 @@ pub extern "C-unwind" fn aura_direct_union_inject(
         let injected =
             crate::union_runtime::inject_shared_union_member(&tag.parsed, member_index, payload)
                 .unwrap_or_else(|message| runtime_error(message));
-        boxed_value_with_type(injected, Some(Arc::clone(&tag.name)))
+        boxed_value_with_type(injected, Some(tag.name.clone()))
     })
 }
 
@@ -14033,7 +14034,7 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
                     variant_name: variant_name.clone(),
                     payloads: VariantPayloads::Typed(payloads),
                 }),
-                Some(Arc::clone(layout.runtime_type())),
+                Some(layout.runtime_type().clone()),
             );
             // The box already has the shape its type's tag records.
             // SAFETY: `boxed_value_with_type` returns a live box.

@@ -20280,7 +20280,12 @@ fn ledger_test_type() -> Arc<str> {
 fn hold_values_in_every_ledger_form() {
     let name = ledger_test_type();
     let held = (0..6)
-        .map(|_| super::boxed_value_with_type(Value::Unit, Some(name.clone())))
+        .map(|_| {
+            super::boxed_value_with_type(
+                Value::Unit,
+                Some(crate::runtime_value::RuntimeName::from(&*name)),
+            )
+        })
         .collect::<Vec<_>>();
     unsafe {
         super::aura_direct_retain_value(held[0]);
@@ -20391,7 +20396,12 @@ fn native_runtime_releases_a_tasks_last_linked_reference_without_a_lookup() {
     let baseline = Arc::strong_count(&name);
     let result = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
-            let boxed = || super::boxed_value_with_type(Value::Unit, Some(ledger_test_type()));
+            let boxed = || {
+                super::boxed_value_with_type(
+                    Value::Unit,
+                    Some(crate::runtime_value::RuntimeName::from(&*ledger_test_type())),
+                )
+            };
             let header = |value: *mut OpaqueValue| unsafe { &*value };
             let entries =
                 || super::with_direct_task_runtime_state(|state| state.owned_values().entries());
@@ -27904,16 +27914,16 @@ fn a_tag_through_a_cell_records_the_shape_until_the_next_write() {
 
 #[test]
 fn opaque_values_keep_their_box_size() {
-    // Every boxed value pays for these bytes. The list view fits in the
-    // space a confined value does not need for a lock. The ledger's owner
-    // and links take 24, and its count shares 8 with the room for
-    // in-place appends. The shape tag that lets generated code skip a
-    // repeated tag takes 8, and the value's 16-byte alignment pads 8.
-    // The value itself is 64 bytes.
+    // Every boxed value pays for these bytes: the 64-byte value, the
+    // list view (24, with the room for in-place appends sharing a word
+    // with the ledger's count), the lock, the counts, the ledger's owner
+    // and the value's slot in its list, the one-word type name, and the
+    // shape tag that lets generated code skip a repeated tag. The value's
+    // 16-byte alignment pads 8.
     #[cfg(target_pointer_width = "64")]
     assert_eq!(std::mem::size_of::<Value>(), 64);
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 160);
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 144);
 }
 
 #[test]

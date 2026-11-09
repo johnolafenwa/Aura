@@ -1227,6 +1227,13 @@ impl RuntimeName {
         Self(unsafe { std::num::NonZeroUsize::new_unchecked(word) })
     }
 
+    /// Whether `other` is this very name (the same text at the same
+    /// place), which is cheaper than comparing the text.
+    #[inline]
+    pub fn is_same(&self, other: &Self) -> bool {
+        self.0 == other.0
+    }
+
     #[inline]
     fn is_static(&self) -> bool {
         self.0.get() & RUNTIME_NAME_STATIC != 0

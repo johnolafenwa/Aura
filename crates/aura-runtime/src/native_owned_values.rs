@@ -4,7 +4,7 @@
 //! A task's ledger lives in its [`DirectFrameStack`], whose address names
 //! the task. A value confined to its thread links into the ledger of the
 //! task that first owns it: the value's header names that stack, counts the
-//! references the task owns, and holds the list links. Registering and
+//! references the task owns, and holds its slot in the ledger's list. Registering and
 //! releasing such a reference changes the header and needs no lookup, and
 //! generated code does the same in place while the count stays above one.
 //!
@@ -26,8 +26,9 @@ type OtherReferences = HashMap<usize, usize, BuildHasherDefault<AddressHasher>>;
 pub(super) struct DirectOwnedValues {
     /// Whether the task keeps a ledger at all.
     tracking: bool,
-    /// The most recently linked value, or null.
-    head: *mut OpaqueValue,
+    /// The linked values. Each one's header holds its index here, so it
+    /// leaves the list by swapping with the last.
+    linked: Vec<*mut OpaqueValue>,
     /// References to values this ledger does not link, by address.
     others: OtherReferences,
 }
@@ -36,7 +37,7 @@ impl DirectOwnedValues {
     pub(super) fn new() -> Self {
         Self {
             tracking: false,
-            head: ptr::null_mut(),
+            linked: Vec::new(),
             others: OtherReferences::default(),
         }
     }
@@ -51,7 +52,7 @@ impl DirectOwnedValues {
 
     /// Whether the task owns no reference.
     pub(super) fn is_empty(&self) -> bool {
-        self.head.is_null() && self.others.is_empty()
+        self.linked.is_empty() && self.others.is_empty()
     }
 
     /// The references the task owns to `value`.
@@ -67,12 +68,13 @@ impl DirectOwnedValues {
 
     /// Every owned value's address with its reference count.
     pub(super) fn entries(&self) -> Vec<(usize, usize)> {
-        let mut entries = Vec::new();
-        let mut value = self.head;
-        while let Some(current) = unsafe { value.as_ref() } {
-            entries.push((value as usize, current.owned.get() as usize));
-            value = current.next.get();
-        }
+        let mut entries = self
+            .linked
+            .iter()
+            .rev()
+            // SAFETY: a linked value is live and confined to this thread.
+            .map(|value| (*value as usize, unsafe { (**value).owned.get() } as usize))
+            .collect::<Vec<_>>();
         entries.extend(
             self.others
                 .iter()
@@ -114,17 +116,13 @@ impl DirectOwnedValues {
                 };
             }
             if linked.is_null() {
-                header.owner.set(owner);
-                header.owned.set(1);
-                header.prev.set(ptr::null_mut());
-                header.next.set(self.head);
-                // SAFETY: a linked value is live and confined to this
-                // thread.
-                if let Some(head) = unsafe { self.head.as_ref() } {
-                    head.prev.set(value);
+                if let Ok(slot) = u32::try_from(self.linked.len()) {
+                    header.owner.set(owner);
+                    header.owned.set(1);
+                    header.slot.set(slot);
+                    self.linked.push(value);
+                    return true;
                 }
-                self.head = value;
-                return true;
             }
         }
         let count = self.others.entry(value as usize).or_default();
@@ -202,11 +200,13 @@ impl DirectOwnedValues {
     /// each address its count of times.
     pub(super) fn take_all(&mut self) -> Vec<(usize, usize)> {
         let mut entries = Vec::new();
-        while let Some(head) = unsafe { self.head.as_ref() } {
-            entries.push((self.head as usize, head.owned.get() as usize));
-            head.owned.set(0);
-            // SAFETY: the head is linked here.
-            unsafe { self.unlink(head) };
+        while let Some(&last) = self.linked.last() {
+            // SAFETY: a linked value is live and confined to this thread.
+            let header = unsafe { &*last };
+            entries.push((last as usize, header.owned.get() as usize));
+            header.owned.set(0);
+            // SAFETY: the value is linked here.
+            unsafe { self.unlink(header) };
         }
         entries.extend(self.others.drain());
         entries
@@ -225,19 +225,15 @@ impl DirectOwnedValues {
     ///
     /// `header` is linked into this ledger.
     unsafe fn unlink(&mut self, header: &OpaqueValue) {
-        let prev = header.prev.get();
-        let next = header.next.get();
-        // SAFETY: linked neighbours are live and confined to this thread.
-        match unsafe { prev.as_ref() } {
-            Some(prev) => prev.next.set(next),
-            None => self.head = next,
-        }
-        if let Some(next) = unsafe { next.as_ref() } {
-            next.prev.set(prev);
+        let slot = header.slot.get() as usize;
+        debug_assert!(std::ptr::eq(self.linked[slot], header));
+        self.linked.swap_remove(slot);
+        if let Some(&moved) = self.linked.get(slot) {
+            // SAFETY: a linked value is live and confined to this thread.
+            unsafe { (*moved).slot.set(slot as u32) };
         }
         header.owner.set(ptr::null_mut());
-        header.prev.set(ptr::null_mut());
-        header.next.set(ptr::null_mut());
+        header.slot.set(0);
     }
 }
 
@@ -245,10 +241,12 @@ impl Drop for DirectOwnedValues {
     /// Forgets the references still listed without releasing them, so no
     /// value names a stack that is gone.
     fn drop(&mut self) {
-        while let Some(head) = unsafe { self.head.as_ref() } {
-            head.owned.set(0);
-            // SAFETY: the head is linked here.
-            unsafe { self.unlink(head) };
+        while let Some(&last) = self.linked.last() {
+            // SAFETY: a linked value is live and confined to this thread.
+            let header = unsafe { &*last };
+            header.owned.set(0);
+            // SAFETY: the value is linked here.
+            unsafe { self.unlink(header) };
         }
     }
 }

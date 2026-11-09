@@ -331,3 +331,26 @@ fn counts_that_would_overflow_are_refused() {
     free_box(linked);
     free_box(shared);
 }
+
+#[test]
+fn a_value_leaving_the_middle_of_the_list_moves_the_last_into_its_slot() {
+    let task = Task::new();
+    let values = [new_box(), new_box(), new_box()];
+    for value in values {
+        assert!(task.add(value));
+    }
+    assert_eq!(header(values[2]).slot.get(), 2);
+    assert!(task.remove(values[0]));
+    assert_eq!(header(values[2]).slot.get(), 0);
+    assert_eq!(header(values[1]).slot.get(), 1);
+    assert!(header(values[0]).owner.get().is_null());
+    let mut expected = vec![(values[1] as usize, 1), (values[2] as usize, 1)];
+    expected.sort_unstable();
+    assert_eq!(task.entries(), expected);
+    assert!(task.remove(values[2]));
+    assert!(task.remove(values[1]));
+    assert!(task.ledger().is_empty());
+    for value in values {
+        free_box(value);
+    }
+}
