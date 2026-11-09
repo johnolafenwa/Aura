@@ -981,6 +981,11 @@ pub use crate::native_runtime::TypedPayloads;
 pub enum VariantPayloads {
     Values(Vec<Value>),
     Typed(TypedPayloads),
+    /// A `json.Value` that lies in a parsed document's tape. Its one
+    /// payload is read out of the tape as a new value each time (see
+    /// [`crate::json_tape::JsonNode::payload`]), and a write makes it
+    /// values first.
+    Json(crate::json_tape::JsonNode),
 }
 
 impl Default for VariantPayloads {
@@ -1024,7 +1029,15 @@ impl VariantPayloads {
     pub fn typed(&self) -> Option<&TypedPayloads> {
         match self {
             Self::Typed(typed) => Some(typed),
-            Self::Values(_) => None,
+            Self::Values(_) | Self::Json(_) => None,
+        }
+    }
+
+    /// The tape node of a `json.Value` that lies in a parsed document.
+    pub fn json(&self) -> Option<&crate::json_tape::JsonNode> {
+        match self {
+            Self::Json(node) => Some(node),
+            _ => None,
         }
     }
 
@@ -1038,6 +1051,7 @@ impl VariantPayloads {
                 "variant `{}` keeps its payloads in its layout",
                 typed.variant_name()
             ),
+            Self::Json(_) => panic!("a `json.Value` in a tape keeps its payload there"),
         }
     }
 
@@ -1050,9 +1064,12 @@ impl VariantPayloads {
                 std::mem::replace(typed, TypedPayloads::new(typed.layout(), typed.variant()));
             *self = Self::Values(typed.into_vec());
         }
+        if let Self::Json(node) = self {
+            *self = Self::Values(node.payload().into_iter().collect());
+        }
         match self {
             Self::Values(payloads) => payloads,
-            Self::Typed(_) => unreachable!("the layout was turned into values"),
+            Self::Typed(_) | Self::Json(_) => unreachable!("the payloads were turned into values"),
         }
     }
 
@@ -1060,6 +1077,7 @@ impl VariantPayloads {
         match self {
             Self::Values(payloads) => payloads.len(),
             Self::Typed(typed) => typed.len(),
+            Self::Json(node) => usize::from(node.tag() != crate::json_tape::JsonTag::Null),
         }
     }
 
@@ -1070,6 +1088,8 @@ impl VariantPayloads {
         match self {
             Self::Values(payloads) => payloads.iter().all(leaf),
             Self::Typed(typed) => typed.boxed_payloads_all(leaf),
+            // A copy shares the tape.
+            Self::Json(_) => true,
         }
     }
 
@@ -1081,6 +1101,8 @@ impl VariantPayloads {
         match self {
             Self::Values(payloads) => payloads.get(index).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(index),
+            Self::Json(node) if index == 0 => node.payload().map(Cow::Owned),
+            Self::Json(_) => None,
         }
     }
 
@@ -1109,6 +1131,10 @@ impl VariantPayloads {
                 .get_mut(index)
                 .map(|payload| std::mem::replace(payload, Value::Unit)),
             Self::Typed(typed) => typed.take(index),
+            Self::Json(_) => self
+                .values_mut()
+                .get_mut(index)
+                .map(|payload| std::mem::replace(payload, Value::Unit)),
         }
     }
 
@@ -1117,7 +1143,7 @@ impl VariantPayloads {
     /// payloads as values or holds this one in place.
     pub fn take_box(&mut self, index: usize) -> Option<crate::native_runtime::ElementBox> {
         match self {
-            Self::Values(_) => None,
+            Self::Values(_) | Self::Json(_) => None,
             Self::Typed(typed) => typed.take_box(index),
         }
     }
@@ -1126,6 +1152,7 @@ impl VariantPayloads {
         match self {
             Self::Values(payloads) => payloads,
             Self::Typed(typed) => typed.into_vec(),
+            Self::Json(node) => node.payload().into_iter().collect(),
         }
     }
 }
@@ -3311,7 +3338,7 @@ fn drop_array_containing_value_iteratively(value: Value, frames: &mut Vec<ArrayC
                 // A variant laid out in its enum's layout drops its payloads
                 // itself.
                 Value::EnumVariant(EnumVariantValue {
-                    payloads: VariantPayloads::Typed(_),
+                    payloads: VariantPayloads::Typed(_) | VariantPayloads::Json(_),
                     ..
                 }) => None,
                 Value::EnumVariant(EnumVariantValue { payloads, .. }) => Some(
@@ -3749,6 +3776,11 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         }))
                     }
                 }
+                // A variant that lies in a tape shares it.
+                Value::EnumVariant(EnumVariantValue {
+                    payloads: VariantPayloads::Json(_),
+                    ..
+                }) => Some(value.clone()),
                 // A variant kept in its layout copies its payloads held in
                 // place as bytes, and walks its payload boxes, so a deep
                 // recursive enum is copied without recursion.
@@ -9415,7 +9447,10 @@ impl Clone for Value {
         // A variant kept in its layout copies its block, and its payload
         // boxes copy their values.
         if let Value::EnumVariant(variant) = self {
-            if matches!(variant.payloads, VariantPayloads::Typed(_)) {
+            if matches!(
+                variant.payloads,
+                VariantPayloads::Typed(_) | VariantPayloads::Json(_)
+            ) {
                 return Value::EnumVariant(variant.clone());
             }
         }
@@ -18293,9 +18328,18 @@ fn run_json_codec_parse_on_pool(
     reservation: JsonCodecReservation,
 ) -> std::result::Result<ParsedJson, JsonCodecServiceError> {
     let hooked = json_runtime_conversion_hooked();
+    let tape = json_tape_parse_limit(hooked);
     let parsed = Arc::new(Mutex::new(None));
     let output = parsed.clone();
     run_json_codec_operation_on_pool_with(reservation, move || {
+        if let Some(max_nodes) = tape {
+            if let Some(tape) =
+                crate::json_tape::JsonTape::parse(&source, json_codec::MAX_JSON_DEPTH, max_nodes)
+            {
+                *lock_mutex(&output) = Some(ParsedJson::Tape(tape));
+                return Ok(JsonValue::Null);
+            }
+        }
         *lock_mutex(&output) = Some(json_parse_runtime(&source, hooked)?);
         Ok(JsonValue::Null)
     })?;
@@ -18700,12 +18744,22 @@ fn json_runtime_conversion_hooked() -> bool {
 enum ParsedJson {
     Runtime(Value),
     Tree(JsonValue),
+    /// A document kept as a tape (see [`crate::json_tape`]).
+    Tape(Arc<crate::json_tape::JsonTape>),
+}
+
+/// The most values a parse keeps in a tape, when a parse keeps its
+/// document in one: only for a program whose `json.Value` has its layout,
+/// and while no test hook watches the conversion to a tree.
+fn json_tape_parse_limit(hooked: bool) -> Option<usize> {
+    (!hooked && crate::native_runtime::json_value_layout().is_some()).then(json_runtime_node_limit)
 }
 
 impl ParsedJson {
     fn into_runtime(self) -> Result<Value> {
         match self {
             Self::Runtime(value) => Ok(value),
+            Self::Tape(tape) => Ok(crate::json_tape::JsonNode::root(tape).into_value()),
             Self::Tree(value) => json_value_to_runtime(value),
         }
     }
@@ -18783,6 +18837,11 @@ fn json_parse_runtime_within_depth(
         return json_codec::parse_into_within_depth::<JsonValue>(source, limit)
             .map(|parsed| parsed.map(ParsedJson::Tree));
     }
+    if let Some(max_nodes) = json_tape_parse_limit(hooked) {
+        if let Some(tape) = crate::json_tape::JsonTape::parse(source, limit, max_nodes) {
+            return Some(Ok(ParsedJson::Tape(tape)));
+        }
+    }
     json_codec::parse_into_within_depth::<RuntimeJson>(source, limit)
         .map(|parsed| parsed.map(|value| ParsedJson::Runtime(value.0)))
 }
@@ -18846,6 +18905,8 @@ enum RuntimeJsonNode<'a> {
     String(&'a str),
     Array(&'a ListElements),
     Object(&'a DictEntries),
+    /// A value that lies in a parsed document's tape, written from it.
+    Tape(&'a crate::json_tape::JsonNode),
 }
 
 /// `value` as a node [`runtime_value_to_json`] would convert without
@@ -18872,6 +18933,7 @@ fn runtime_json_node(value: &Value) -> Option<RuntimeJsonNode<'_>> {
         return None;
     }
     let payloads: &[Value] = match payloads {
+        VariantPayloads::Json(node) => return Some(RuntimeJsonNode::Tape(node)),
         VariantPayloads::Values(payloads) => payloads,
         // A variant in `json.Value`'s layout: a scalar is read out of the
         // block, and any other payload borrowed from its box.
@@ -19074,6 +19136,11 @@ fn json_dumps_runtime_direct(value: &Value, indent: Option<i64>) -> Option<Strin
                 RuntimeJsonNode::Int(value) => write_int(&mut output, value).ok()?,
                 RuntimeJsonNode::Float(value) => write_float(&mut output, value).ok()?,
                 RuntimeJsonNode::String(value) => write_string(&mut output, value).ok()?,
+                RuntimeJsonNode::Tape(node) => {
+                    // The node counts itself.
+                    remaining += 1;
+                    node.write(&mut output, indent, depth, &mut remaining)?;
+                }
                 RuntimeJsonNode::Array(values) => {
                     let child_depth = depth + 1;
                     if child_depth > json_codec::MAX_JSON_DEPTH {
@@ -19242,6 +19309,16 @@ pub fn runtime_value_to_json(value: &Value) -> Result<JsonValue> {
             'node: {
                 let read_out;
                 let payloads: &[Value] = match &variant.payloads {
+                    VariantPayloads::Json(node) => {
+                        // The node was counted above, and counts itself.
+                        remaining += 1;
+                        completed = Some(node.to_json_value(
+                            depth,
+                            &mut || consume_json_runtime_node(&mut remaining, limit),
+                            &mut |depth| json_runtime_child_depth(depth),
+                        )?);
+                        break 'node;
+                    }
                     VariantPayloads::Values(payloads) => payloads,
                     VariantPayloads::Typed(_) => match variant.payloads.borrowed(0) {
                         Some(payload) if variant.payloads.len() == 1 => {
