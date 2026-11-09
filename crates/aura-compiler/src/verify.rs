@@ -581,14 +581,8 @@ pub fn verify_module(
                 statuses
             }
             None => {
-                let solver = match &mut solver {
-                    Some(solver) => solver,
-                    None => solver.insert(
-                        smt::Solver::start(&command, options.timeout_ms)
-                            .map_err(|message| Diagnostic::coded("AU5103", message))?,
-                    ),
-                };
-                let statuses = solve(solver, &exec, trace)
+                let start = || smt::Solver::start(&command, options.timeout_ms);
+                let statuses = solve(&mut solver, &start, &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
                 if let Some(path) = &cache {
                     write_cache(path, &statuses);
@@ -713,8 +707,82 @@ fn write_cache(path: &std::path::Path, statuses: &[Status]) {
 }
 
 /// Checks each obligation of `exec` against its declarations and facts.
-fn solve(
+/// The running solver, started (and given `base`, everything sent so far
+/// at the function's own scope) when there is none.
+fn running<'s>(
+    slot: &'s mut Option<smt::Solver>,
+    start: &dyn Fn() -> std::result::Result<smt::Solver, String>,
+    base: &str,
+) -> std::result::Result<&'s mut smt::Solver, String> {
+    if slot.is_none() {
+        let mut fresh = start()?;
+        if !base.is_empty() {
+            fresh.send(base)?;
+        }
+        *slot = Some(fresh);
+    }
+    slot.as_mut()
+        .ok_or_else(|| "the SMT solver did not start".to_string())
+}
+
+/// Sends `text` at the function's scope, and keeps it in `base` so a fresh
+/// solver can be brought to the same point.
+fn send_base(
+    slot: &mut Option<smt::Solver>,
+    start: &dyn Fn() -> std::result::Result<smt::Solver, String>,
+    base: &mut String,
+    text: &str,
+) -> std::result::Result<(), String> {
+    let fresh = slot.is_none();
+    base.push_str(text);
+    base.push('\n');
+    let solver = running(slot, start, base)?;
+    if !fresh {
+        solver.send(text)?;
+    }
+    Ok(())
+}
+
+/// One obligation's query: assert its negated goal in a scope of its own
+/// and ask whether that is satisfiable. The caller pops the scope.
+fn query(
     solver: &mut smt::Solver,
+    exec: &exec::Exec<'_>,
+    query: &str,
+) -> std::result::Result<Status, String> {
+    solver.send(query)?;
+    Ok(match solver.check()? {
+        smt::SatResult::Unsat => Status::Proved,
+        smt::SatResult::Unknown => Status::Unknown,
+        smt::SatResult::Sat => {
+            let terms: Vec<String> = exec.inputs.iter().map(|(_, term)| term.clone()).collect();
+            let counterexample = solver
+                .values(&terms)
+                .map(|values| {
+                    exec.inputs
+                        .iter()
+                        .zip(values)
+                        .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
+                        .collect()
+                })
+                .unwrap_or_default();
+            Status::Failed { counterexample }
+        }
+    })
+}
+
+/// Proves `exec`'s obligations, starting a solver in `slot` when there is
+/// none.
+///
+/// Z3 does not always survive a query that stops at its time limit: later
+/// queries in the same process have crashed it (SIGSEGV) or had their
+/// `push` canceled. So a solver that answered `unknown` is not reused, and
+/// the next query runs in a fresh one brought to the same point. A solver
+/// that dies mid-query gets one fresh retry of that query; a second death
+/// is reported, so a solver that always crashes still fails the run.
+fn solve(
+    slot: &mut Option<smt::Solver>,
+    start: &dyn Fn() -> std::result::Result<smt::Solver, String>,
     exec: &exec::Exec<'_>,
     trace: bool,
 ) -> std::result::Result<Vec<Status>, String> {
@@ -726,7 +794,8 @@ fn solve(
     if trace {
         eprintln!("; function {}\n{prelude}", exec.function.name);
     }
-    solver.send(&prelude)?;
+    let mut base = String::new();
+    send_base(slot, start, &mut base, &prelude)?;
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
     for obligation in &exec.obligations {
@@ -740,7 +809,7 @@ fn solve(
             if trace {
                 eprintln!("{text}");
             }
-            solver.send(&text)?;
+            send_base(slot, start, &mut base, &text)?;
             asserted = obligation.facts;
         }
         let goal = match &obligation.goal {
@@ -750,42 +819,42 @@ fn solve(
             }
             exec::Goal::Holds(goal) => goal,
         };
-        let query = format!(
+        let text = format!(
             "(push 1)\n(assert {})\n",
             exec::and(&obligation.pc, &exec::not(goal))
         );
         if trace {
             eprintln!(
-                "; {} at {}:{}\n{query}",
+                "; {} at {}:{}\n{text}",
                 obligation.message, obligation.span.line, obligation.span.column
             );
         }
-        solver.send(&query)?;
-        let status = match solver.check()? {
-            smt::SatResult::Unsat => Status::Proved,
-            smt::SatResult::Unknown => Status::Unknown,
-            smt::SatResult::Sat => {
-                let terms: Vec<String> = exec.inputs.iter().map(|(_, term)| term.clone()).collect();
-                let counterexample = solver
-                    .values(&terms)
-                    .map(|values| {
-                        exec.inputs
-                            .iter()
-                            .zip(values)
-                            .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Status::Failed { counterexample }
+        let mut retried = false;
+        let status = loop {
+            let solver = running(slot, start, &base)?;
+            match query(solver, exec, &text) {
+                Ok(status) => break status,
+                Err(_) if !retried && solver.exit_status().is_some() => {
+                    *slot = None;
+                    retried = true;
+                }
+                Err(message) => return Err(message),
             }
         };
         if trace {
             eprintln!("; => {status:?}");
         }
+        if status == Status::Unknown {
+            *slot = None;
+        } else {
+            running(slot, start, &base)?.send("(pop 1)")?;
+        }
         statuses.push(status);
+    }
+    // A solver dropped after an `unknown` has no scope left to close.
+    if let Some(solver) = slot {
         solver.send("(pop 1)")?;
     }
-    solver.send("(pop 1)")?;
     Ok(statuses)
 }
 

@@ -181,7 +181,10 @@ impl Solver {
                 .read_line(&mut line)
                 .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?;
             if read == 0 {
-                return Err("the SMT solver exited before answering".to_string());
+                let status = self
+                    .exit_status()
+                    .map_or(String::new(), |status| format!(" ({status})"));
+                return Err(format!("the SMT solver exited before answering{status}"));
             }
             if line.trim().trim_matches('"') == marker {
                 return Ok(output);
@@ -190,13 +193,29 @@ impl Solver {
         }
     }
 
+    /// How the solver process ended, once it has: its exit code or the
+    /// signal that stopped it. `None` while it still runs. A solver that
+    /// closed its output is given a moment to finish exiting.
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        for _ in 0..50 {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
     /// Runs `(check-sat)`.
     pub fn check(&mut self) -> Result<SatResult, String> {
         let answer = self.exchange("(check-sat)")?;
         let answer = answer.trim();
         // A query stopped at the time limit answers `unknown`, after an
-        // error that says so.
-        if answer.contains("canceled") && answer.ends_with("unknown") {
+        // error that says so. Z3's limit can also cancel a `push` or an
+        // `assert` sent before the query, under load, and then it answers
+        // for a different set of facts: that answer is not trusted either.
+        if answer.contains("canceled") {
             return Ok(SatResult::Unknown);
         }
         if answer.contains("(error") {

@@ -775,6 +775,14 @@ fn solver_failures_and_unknown_answers_are_reported() {
     );
     let report = run(script(&dir, "cvc5", &canceled, true)).expect("runs");
     assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // An answer after a canceled `push` is for other facts, so it is not
+    // taken as a proof.
+    let canceled_push = UNKNOWN_SOLVER.replace(
+        "echo unknown",
+        "echo '(error \"line 9 column 7: push canceled\")'; echo unsat",
+    );
+    let report = run(script(&dir, "cvc5", &canceled_push, true)).expect("runs");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     let command = smt::SolverCommand {
         kind: smt::SolverKind::Z3,
         program: dir.join("cvc5"),
@@ -794,6 +802,46 @@ fn solver_failures_and_unknown_answers_are_reported() {
     assert_eq!(error.code, "AU5103");
     let error = run(script(&dir, "z3-locked", "exit 0\n", false)).expect_err("cannot start");
     assert_eq!(error.code, "AU5103");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_solver_that_dies_once_is_restarted_and_one_that_keeps_dying_is_an_error() {
+    let dir = script_dir("restart");
+    let program = crate::check_source(
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n",
+    )
+    .expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let run = |solver: String| {
+        let options = Options {
+            solver: Some(solver),
+            ..Options::default()
+        };
+        verify_module(&program, &module, &options)
+    };
+    // The first process dies at its first query; the second answers.
+    let flaky = format!(
+        "if [ ! -e '{flag}' ]; then : > '{flag}'; while IFS= read -r line; do case \"$line\" in *check-sat*) kill -SEGV $$ ;; esac; done; fi\n{UNKNOWN_SOLVER}",
+        flag = dir.join("died").display(),
+    );
+    let report = run(script(&dir, "z3", &flaky, true)).expect("restarted");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // A solver that dies every time is reported, with how it ended.
+    let error = run(script(
+        &dir,
+        "z3-dies",
+        "while IFS= read -r line; do case \"$line\" in *check-sat*) exit 3 ;; esac; done\n",
+        true,
+    ))
+    .expect_err("keeps dying");
+    assert_eq!(error.code, "AU5103");
+    assert!(
+        error.message.contains("exit status: 3"),
+        "{}",
+        error.message
+    );
     let _ = std::fs::remove_dir_all(&dir);
 }
 
