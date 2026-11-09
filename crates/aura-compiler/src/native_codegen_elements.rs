@@ -661,6 +661,102 @@ pub(super) fn lent_payload_reads<'f>(
     }
 }
 
+/// Adds the `views` of `function` (see `json_views`) that may hold the box
+/// of the `json.Value` they read, or the dict box its variant holds,
+/// without a reference to the lent payloads of `lent`, and returns them.
+///
+/// A view may hold a box that is not a dict, so it can never take a
+/// reference of its own as a lent payload does. It is adopted only when
+/// nothing does more than read its scrutinee, or ends the loan of the
+/// element or payload the scrutinee itself holds, from its payload read
+/// through its last lookup and the ends of its entry loans, which may hold
+/// the address of a value the scrutinee keeps. A scrutinee that a closure,
+/// a task, or a mutable loan can reach is never read this way.
+///
+/// `borrowed` gives the operands of an instruction that its callee borrows
+/// where they lie, which only read the value.
+pub(super) fn adopt_object_views<'f>(
+    function: &'f MirFunction,
+    lent: &mut LentElements,
+    views: &HashMap<String, super::json_views::ObjectView>,
+    borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+) -> HashSet<String> {
+    let mut names = views.keys().collect::<Vec<_>>();
+    names.sort();
+    let mut adopted = HashSet::new();
+    for name in names {
+        let view = &views[name];
+        let source = view.source.as_str();
+        let loans = view
+            .loans
+            .iter()
+            .map(String::as_str)
+            .collect::<HashSet<_>>();
+        let payloads = lent
+            .payloads
+            .iter()
+            .map(|(temp, source)| (temp.as_str(), source.as_str()))
+            .collect::<HashMap<_, _>>();
+        // The blocks the view is held at the start of, by a backward pass
+        // to a fixed point.
+        let held_at_end = |block: &BasicBlock, held_in: &HashSet<&str>| {
+            successors(&block.terminator)
+                .into_iter()
+                .any(|label| held_in.contains(label))
+        };
+        let mut held_in = HashSet::<&str>::new();
+        let mut changed = true;
+        while changed {
+            changed = false;
+            for block in function.blocks.iter().rev() {
+                let mut held = held_at_end(block, &held_in);
+                for instruction in block.instructions.iter().rev() {
+                    held = view_held_before(instruction, name, &loans, held);
+                }
+                if held && held_in.insert(block.label.as_str()) {
+                    changed = true;
+                }
+            }
+        }
+        let lost = function.blocks.iter().any(|block| {
+            let mut held = held_at_end(block, &held_in);
+            block.instructions.iter().rev().any(|instruction| {
+                held = view_held_before(instruction, name, &loans, held);
+                shares_list(instruction, source)
+                    || (held && ends_payload_loan(instruction, source, &payloads, lent, &borrowed))
+            })
+        });
+        if !lost {
+            adopted.insert(name.clone());
+        }
+    }
+    lent.payloads.extend(
+        adopted
+            .iter()
+            .map(|name| (name.clone(), views[name].source.clone())),
+    );
+    adopted
+}
+
+/// Whether `view`, or an entry loan of it in `loans`, is still to be read
+/// before `instruction`, given whether one is after it: from the view's
+/// payload read through its last lookup and the end of each loan. The
+/// view's release reads nothing, since a view that holds a box of its
+/// scrutinee's releases nothing.
+fn view_held_before(
+    instruction: &Instruction,
+    view: &str,
+    loans: &HashSet<&str>,
+    held_after: bool,
+) -> bool {
+    match instruction {
+        Instruction::Assign { target, .. } if target == view => false,
+        Instruction::Release { place } if place == view => held_after,
+        Instruction::EndLoan { loan } if loans.contains(loan.as_str()) => true,
+        _ => held_after || mentioned_roots(instruction).contains(view),
+    }
+}
+
 /// Whether a local that lends a payload of `source` must take its own
 /// reference before `instruction`: the instruction does more than read
 /// `source`, or ends the loan of the payload or element `source` holds.

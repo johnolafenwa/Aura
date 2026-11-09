@@ -1,0 +1,16 @@
+36 true 1.5 Ada 2 -2 ? {"age":7} 1036
+36 true 1.5 Ada 2 -2 ? {"age":7} 1036
+-3 false -3.0 ! -3 -3 ! none 0
+-3 false -3.0 ! -3 -3 ! none 0
+-2 false -2.0 - -2 -2 - missing 0
+7 -2
+100068 AdaAda-! 36 "old"
+37 true Ada
+36 false
+11076
+1400
+41
+41
+{"active":true,"age":36,"name":"Ada","nested":{"age":7},"score":1.5,"tags":["a","b"]}
+{"active":true,"age":36,"name":"Ada","nested":{"age":7},"score":1.5,"tags":["a","b"]}
+{"active":true,"age":37,"extra":true,"name":"Ada","nested":{"age":7},"score":1.5,"tags":["a","b"]}

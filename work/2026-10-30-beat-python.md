@@ -309,3 +309,33 @@ docdb, 10k docs: 801M -> 695M instructions (callgrind). Wall time on the
 cloud box, 50k docs, median of 11: 667 ms (after step 2: 694 ms) ->
 589 ms. Python took 433 ms on an earlier run on this box. json_roundtrip
 does not change (218 ms, within noise).
+
+## Object fields read from the document's own box (2026-11-09)
+
+Profile of a phase-timed docdb (callgrind, 10k docs) after step 3: a
+field read on a parsed document cost about 1,800 instructions. The
+payload read built a dict box over the tape (600), tagged it (375), the
+lookup boxed the found node (374), and the release freed both (510).
+
+- A payload local of `case json.Value.Object(fields)` that is only looked
+  up (fused `contains_key` tests, their entry-copy loans, its release) is
+  a view: it holds the typed variant's dict box, or the document's own box
+  when the object lies in a tape, without a reference
+  (`native_codegen_json_views.rs`, `elements::adopt_object_views`). The
+  lent flag says which: 1 for the variant's dict, 2 for the document's
+  box. A view never takes a reference of its own, so it is adopted only
+  when nothing does more than read its scrutinee while it or its loans
+  are still to be read.
+- The lookup entry points read an object's own tape box as they read the
+  dict over it. A loan that only `json.as_int`, `json.as_float`, or
+  `json.as_bool` reads takes the address of the entry's tape node
+  (`aura_direct_map_get_scalar_lent`, low bits 2).
+- A dict lends a parsed document it keeps to a borrowing loan, as it
+  lends a typed one, and `json.dumps` and `json.is_null` count as
+  borrowers of their argument.
+
+docdb, 10k docs: 695M -> 614M instructions; a number field read on a
+parsed document about 400. Wall time on the cloud box, 50k docs, median
+of 9: 704 -> 645 ms (Python 524 ms on the same run). json_roundtrip
+290 ms (Python 419 ms). Per phase the program still loses most where it
+builds documents from literals: insert 186M against Python's 77 ms.

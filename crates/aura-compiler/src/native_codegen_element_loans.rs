@@ -746,7 +746,7 @@ impl FunctionCompiler<'_> {
             let key = self.load_operand_as_opaque_direct(key, &key_ty)?;
             (
                 if lend {
-                    RuntimeFn::MapGetLent
+                    RuntimeFn::MapGetScalarLent
                 } else if shadow {
                     RuntimeFn::MapGetShadow
                 } else {
@@ -1851,6 +1851,34 @@ pub(super) fn shadow_entry_copy_loans<'f>(
         .collect()
 }
 
+/// The argument of `instruction` that a host builtin reads where it lies
+/// and keeps no reference to: the value `json.dumps` writes out or
+/// `json.is_null` tests. Their wrappers inline to the builtin's call, so
+/// no callee's signature says the argument is borrowed; the runtime entry
+/// of each reads it through its box for as long as the call lasts.
+pub(super) fn host_borrowed_operand(instruction: &Instruction) -> Option<&Operand> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::Host(builtin),
+                        ..
+                    },
+                args,
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    if !matches!(builtin.name(), "json::dumps" | "json::is_null") {
+        return None;
+    }
+    args.first().map(|arg| &arg.value)
+}
+
 /// The entry loans of `entry_copies` (see [`entry_copy_loans`]) whose
 /// every read is the one argument of `json.as_int`, `json.as_float`, or
 /// `json.as_bool`. The accessor reads the value where it lies and keeps no
@@ -1915,3 +1943,7 @@ pub(super) fn lent_entry_copy_loans(
         .cloned()
         .collect()
 }
+
+#[cfg(test)]
+#[path = "native_codegen_element_loans_tests.rs"]
+mod tests;

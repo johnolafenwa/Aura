@@ -1631,24 +1631,56 @@ impl<'a> NativeCodegen<'a> {
             .filter(|param| param.passing == crate::mir::MirReceiverKind::Borrow)
             .map(|param| param.name.as_str())
             .collect::<HashSet<_>>();
+        // An inline union holds its member's box in its payload words. A
+        // parameter the function borrows holds its box for the whole call,
+        // and nothing in the function can change it.
+        let lends_payloads = |place: &str| {
+            let holds = owns_its_word(place)
+                || (matches!(variable_types.get(place), Some(DirectType::Union(_)))
+                    && !explicit_locals.loans.contains(place)
+                    && !writeback_locals
+                        .iter()
+                        .any(|(writeback, _)| writeback == place));
+            (holds && explicit_locals.tracked.contains(place))
+                || (borrowed_params.contains(place)
+                    && matches!(variable_types.get(place), Some(DirectType::Opaque(_))))
+        };
         elements::lent_payload_reads(
             function,
             &mut lent_element_reads,
             owns_its_word,
-            // An inline union holds its member's box in its payload words.
-            // A parameter the function borrows holds its box for the whole
-            // call, and nothing in the function can change it.
-            |place| {
-                let holds = owns_its_word(place)
-                    || (matches!(variable_types.get(place), Some(DirectType::Union(_)))
-                        && !explicit_locals.loans.contains(place)
-                        && !writeback_locals
-                            .iter()
-                            .any(|(writeback, _)| writeback == place));
-                (holds && explicit_locals.tracked.contains(place))
-                    || (borrowed_params.contains(place)
-                        && matches!(variable_types.get(place), Some(DirectType::Opaque(_))))
+            lends_payloads,
+            |instruction| {
+                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                    self.borrowing.get(name)
+                })
             },
+        );
+        let entry_copy_loans = element_loans::entry_copy_loans(function);
+        let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
+        let fused_entry_probes = element_loans::fused_entry_probes(function);
+        // An `Object` payload of a `json.Value` that is only looked up
+        // holds the value's own box (see `json_views`).
+        let mut object_views =
+            json_views::object_view_candidates(function, &fused_entry_probes, &entry_copy_loans);
+        object_views.retain(|view, candidate| {
+            let opaque = |place: &str| match variable_types.get(place) {
+                Some(DirectType::Opaque(Type::Named(name, args))) => {
+                    Some((name.as_str(), args.len()))
+                }
+                _ => None,
+            };
+            owns_its_word(view)
+                && function.params.iter().all(|param| &param.name != view)
+                && opaque(view) == Some(("dict", 2))
+                && opaque(&candidate.source) == Some(("json.Value", 0))
+                && lends_payloads(&candidate.source)
+                && candidate.loans.iter().all(|loan| opaque(loan).is_some())
+        });
+        let json_views = elements::adopt_object_views(
+            function,
+            &mut lent_element_reads,
+            &object_views,
             |instruction| {
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
                     self.borrowing.get(name)
@@ -1679,17 +1711,17 @@ impl<'a> NativeCodegen<'a> {
             builder.def_var(variable, zero);
             lent_elements.insert(name, variable);
         }
-        let entry_copy_loans = element_loans::entry_copy_loans(function);
-        let lent_entry_copies = element_loans::lent_entry_copy_loans(function, &entry_copy_loans);
-        let fused_entry_probes = element_loans::fused_entry_probes(function);
         let shadow_entry_copies = element_loans::shadow_entry_copy_loans(
             function,
             &entry_copy_loans,
             &lent_entry_copies,
             |instruction| {
-                crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
-                    self.borrowing.get(name)
-                })
+                let mut borrowed =
+                    crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
+                        self.borrowing.get(name)
+                    });
+                borrowed.extend(element_loans::host_borrowed_operand(instruction));
+                borrowed
             },
         );
         // A loan read into a local that is only matched and read for
@@ -1842,6 +1874,8 @@ impl<'a> NativeCodegen<'a> {
             lent_payloads: lent_element_reads.payloads.into_keys().collect(),
             element_promotions: lent_element_reads.promotions,
             lend_element: false,
+            json_views,
+            lend_json_view: false,
             lent_element_flag: None,
             lookup_payload: None,
             emptied_store_root: None,
@@ -3216,6 +3250,12 @@ struct FunctionCompiler<'a> {
     element_promotions: HashMap<(String, usize), Vec<String>>,
     /// Set while the element read for a lent local compiles.
     lend_element: bool,
+    /// The lent payloads that are views of a `json.Value` object, which may
+    /// hold the value's own box, with flag 2, and never take a reference.
+    /// See `elements::adopt_object_views`.
+    json_views: HashSet<String>,
+    /// Set while the payload read for one of `json_views` compiles.
+    lend_json_view: bool,
     /// The lent flag of the element read that just compiled, when it could
     /// lend.
     lent_element_flag: Option<Val>,
@@ -3808,8 +3848,10 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<(), String> {
         let target_ty = self.type_of_place(target)?;
         self.lend_element = true;
+        self.lend_json_view = self.json_views.contains(target);
         let compiled = self.compile_rvalue_for_target(value, &target_ty);
         self.lend_element = false;
+        self.lend_json_view = false;
         let flag = self.lent_element_flag.take();
         let compiled = compiled?;
         let flag_var = self.lent_elements[target];
@@ -3865,10 +3907,11 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
-    /// The box a lent lookup result owns: the word itself, or null for a
-    /// value's address, which has its low bit set.
+    /// The box a lent lookup result owns: the word itself, or null for the
+    /// address of a value or of a json tape node, which has one of its two
+    /// low bits set.
     fn owned_lent_word(&mut self, word: Val) -> Val {
-        let bit = self.builder.band_imm(word, 1);
+        let bit = self.builder.band_imm(word, 3);
         let lent = self.builder.icmp_imm(IntCC::NotEqual, bit, 0);
         let null = self.builder.iconst(types::I64, 0);
         self.builder.select(lent, null, word)
@@ -18407,6 +18450,8 @@ mod element_loans;
 mod elements;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_json_views.rs"]
+mod json_views;
 #[path = "native_codegen_key_loops.rs"]
 mod key_loops;
 #[path = "native_codegen_list_snapshots.rs"]

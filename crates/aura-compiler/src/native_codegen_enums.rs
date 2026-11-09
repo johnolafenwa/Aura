@@ -260,6 +260,29 @@ impl FunctionCompiler<'_> {
         self.builder.brif(in_tape, tape_block, &[], slow_block, &[]);
     }
 
+    /// Continues `untyped_block` into a new block that the box `variant`
+    /// reaches only when it holds a `json.Value` in a tape whose node has a
+    /// tag in `tags`. Any other box goes to `slow_block`.
+    fn emit_json_tape_node_check(
+        &mut self,
+        variant: Val,
+        tags: (i64, i64),
+        untyped_block: Blk,
+        slow_block: Blk,
+    ) {
+        let tape_block = self.builder.create_block();
+        let tag_block = self.builder.create_block();
+        self.builder.switch_to_block(untyped_block);
+        self.builder.seal_block(untyped_block);
+        self.emit_json_tape_check(variant, slow_block, tape_block);
+        self.builder.switch_to_block(tape_block);
+        self.builder.seal_block(tape_block);
+        let matches = self.json_tape_tag_in(variant, tags);
+        self.builder.brif(matches, tag_block, &[], slow_block, &[]);
+        self.builder.switch_to_block(tag_block);
+        self.builder.seal_block(tag_block);
+    }
+
     /// Whether the node of a checked tape box `variant` has a tag in
     /// `tags`, as a flag.
     fn json_tape_tag_in(&mut self, variant: Val, tags: (i64, i64)) -> Val {
@@ -438,7 +461,9 @@ impl FunctionCompiler<'_> {
     /// its payloads in place, and with `slow` otherwise. `None` when the
     /// enum is not kept in place or generated code cannot read the payload
     /// as `target`. A read for a lent payload (see `lend_element`) holds the
-    /// payload's box without a reference and sets `lent_element_flag`.
+    /// payload's box without a reference and sets `lent_element_flag`. A
+    /// read for a view (see `lend_json_view`) of an object in a tape holds
+    /// the scrutinee's own box instead, with flag 2.
     pub(super) fn typed_variant_payload(
         &mut self,
         scrutinee: &ValueRef,
@@ -499,9 +524,13 @@ impl FunctionCompiler<'_> {
             },
             _ => None,
         };
-        let untyped_block = match tape_read {
-            Some(_) => self.builder.create_block(),
-            None => slow_block,
+        // A view of a `json.Value` object in a tape holds the value's own
+        // box, with flag 2 (see `json_views`).
+        let view = lend && self.lend_json_view && record.json && variant_name == "Object";
+        let untyped_block = if tape_read.is_some() || view {
+            self.builder.create_block()
+        } else {
+            slow_block
         };
         self.emit_variant_check(
             object,
@@ -511,18 +540,15 @@ impl FunctionCompiler<'_> {
             untyped_block,
             fast_block,
         );
+        if view {
+            use aura_runtime::json_tape::JsonTag;
+            let tags = (JsonTag::Object as i64, JsonTag::Object as i64);
+            self.emit_json_tape_node_check(object, tags, untyped_block, slow_block);
+            let aliased = self.builder.iconst(types::I64, 2);
+            self.builder.jump(join_block, &[object, aliased]);
+        }
         if let Some((tags, kind)) = tape_read {
-            let tape_block = self.builder.create_block();
-            let tag_block = self.builder.create_block();
-            self.builder.switch_to_block(untyped_block);
-            self.builder.seal_block(untyped_block);
-            self.emit_json_tape_check(object, slow_block, tape_block);
-            self.builder.switch_to_block(tape_block);
-            self.builder.seal_block(tape_block);
-            let matches = self.json_tape_tag_in(object, tags);
-            self.builder.brif(matches, tag_block, &[], slow_block, &[]);
-            self.builder.switch_to_block(tag_block);
-            self.builder.seal_block(tag_block);
+            self.emit_json_tape_node_check(object, tags, untyped_block, slow_block);
             let node = self.class_block(object);
             let flags = MemFlags::trusted();
             let offset = aura_runtime::json_tape::NODE_SCALAR_OFFSET;

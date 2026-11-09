@@ -1151,3 +1151,130 @@ fn dict_lookups_read_a_parsed_objects_entries_in_its_tape() {
     })
     .expect("the lookups run");
 }
+
+#[test]
+fn scalar_entry_loans_read_a_parsed_objects_nodes_where_they_lie() {
+    use crate::native_runtime::{aura_direct_json_as_scalar, aura_direct_map_get_scalar_lent};
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let tape =
+                crate::json_tape::JsonTape::parse(r#"{"a": 7, "b": "x", "c": true}"#, 8, 100)
+                    .expect("parses");
+            let node = crate::json_tape::JsonNode::root(tape);
+            let fields = node.payload().expect("a dict");
+            // The value's own box and the dict over its tape lend the same
+            // nodes.
+            let doc = boxed_value(node.into_value());
+            let map = boxed_value(fields);
+            let [key_a, key_b, key_c, key_z] =
+                ["a", "b", "c", "z"].map(|key| boxed_value(text(key)));
+            let key_int = boxed_value(int64(1));
+            let scalar = |word, kind| {
+                let mut out = 0;
+                let held = aura_direct_json_as_scalar(word, kind, &mut out);
+                (held, out)
+            };
+            for object in [doc, map] {
+                let lent = aura_direct_map_get_scalar_lent(object, key_a);
+                assert_eq!(lent as usize & 3, 2, "a node's address");
+                assert_eq!(scalar(lent, 0), (1, 7));
+                assert_eq!(scalar(lent, 1), (0, 0));
+                assert_eq!(scalar(lent, 2), (0, 0));
+                let flag = aura_direct_map_get_scalar_lent(object, key_c);
+                assert_eq!(scalar(flag, 2), (1, 1));
+                let other = aura_direct_map_get_scalar_lent(object, key_b);
+                assert_eq!(scalar(other, 0), (0, 0));
+                assert!(aura_direct_map_get_scalar_lent(object, key_z).is_null());
+            }
+            // A key that is not a `str` looks the entries up as values, and
+            // the dict then lends the value it keeps.
+            assert!(aura_direct_map_get_scalar_lent(map, key_int).is_null());
+            let lent = aura_direct_map_get_scalar_lent(map, key_a);
+            assert_eq!(lent as usize & 3, 1, "a value's address");
+            assert_eq!(scalar(lent, 0), (1, 7));
+
+            // A value another thread can reach hands out a box instead.
+            unsafe { share_direct_value(doc) };
+            let copy = aura_direct_map_get_scalar_lent(doc, key_a);
+            assert_eq!(copy as usize & 3, 0, "a box");
+            assert_eq!(scalar(copy, 0), (1, 7));
+            unsafe { aura_direct_release_value(copy) };
+            assert!(aura_direct_map_get_scalar_lent(doc, key_z).is_null());
+            for boxed in [key_a, key_b, key_c, key_z, key_int, map, doc] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the lookups run");
+}
+
+#[test]
+fn lookups_read_a_parsed_objects_own_box_as_its_dict() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get_payload, aura_direct_map_get_shadow,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let tape = crate::json_tape::JsonTape::parse(r#"{"a": [1], "b": "x"}"#, 8, 100)
+                .expect("parses");
+            let doc = boxed_value(crate::json_tape::JsonNode::root(tape).into_value());
+            let key_a = boxed_value(text("a"));
+            let key_z = boxed_value(text("z"));
+            let variant_of = |boxed: *mut crate::native_runtime::OpaqueValue| match unsafe {
+                value_ref(boxed)
+            } {
+                Value::EnumVariant(variant) => variant.variant_name.as_str().to_string(),
+                other => panic!("a variant, not {other:?}"),
+            };
+            // A borrowing loan of an entry in a tape takes a box of its own,
+            // which its end releases.
+            let shadow = aura_direct_map_get_shadow(doc, key_a);
+            assert_eq!(variant_of(shadow), "Array");
+            assert_eq!(unsafe { &*shadow }.ref_count.load(Ordering::Acquire), 1);
+            unsafe { aura_direct_end_shadow(shadow) };
+            assert!(aura_direct_map_get_shadow(doc, key_z).is_null());
+            let copy = aura_direct_map_get_payload(doc, key_a);
+            assert_eq!(variant_of(copy), "Array");
+            unsafe { aura_direct_release_value(copy) };
+            assert!(aura_direct_map_get_payload(doc, key_z).is_null());
+            for boxed in [key_a, key_z, doc] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the lookups run");
+}
+
+#[test]
+fn a_dict_lends_a_parsed_document_it_keeps_to_a_borrowing_loan() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_empty, aura_direct_map_get_int64_shadow,
+        aura_direct_map_insert_in_place, SHADOW_REFERENCE,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let tape = crate::json_tape::JsonTape::parse(r#"{"a": 1}"#, 8, 100).expect("parses");
+            let doc = crate::json_tape::JsonNode::root(tape).into_value();
+            let docs = aura_direct_map_empty();
+            aura_direct_map_insert_in_place(docs, boxed_value(int64(4)), boxed_value(doc.clone()));
+            // The box reads the entry's own reference to the tape, and it
+            // looks shared to every check.
+            let shadow = aura_direct_map_get_int64_shadow(docs, 4);
+            assert_eq!(
+                unsafe { &*shadow }.ref_count.load(Ordering::Acquire),
+                SHADOW_REFERENCE + 1
+            );
+            assert_eq!(unsafe { value_ref(shadow) }, doc);
+            // Ending the loan leaves the dict's document as it was.
+            unsafe { aura_direct_end_shadow(shadow) };
+            let again = aura_direct_map_get_int64_shadow(docs, 4);
+            assert_eq!(unsafe { value_ref(again) }, doc);
+            unsafe { aura_direct_end_shadow(again) };
+            unsafe { aura_direct_release_value(docs) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the loans run");
+}
