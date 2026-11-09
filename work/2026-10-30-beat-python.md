@@ -236,3 +236,8 @@ Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds, docdb
 | --- | --- | --- | --- |
 | json_roundtrip, 30 rounds | 309 ms, 12 MB | 268 ms, 12 MB | 228 ms, 14 MB |
 | docdb, 50k docs | 739 ms, 151 MB | 689 ms, 146 MB | 452 ms, 115 MB |
+- A full allocator list hands over its newer half without walking it:
+  each list marks the block that took it past half, and the batch runs
+  from the head down to that mark. `share_half` was 2.5% of
+  json_roundtrip's samples. docdb 50k: 670 -> 644 ms; json_roundtrip
+  272 -> 267 ms.

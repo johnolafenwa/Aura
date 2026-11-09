@@ -47,6 +47,10 @@ struct FreeBlock {
 struct BlockList {
     head: Cell<*mut FreeBlock>,
     len: Cell<u32>,
+    /// While the list holds more than `CAPACITY / 2` blocks, the block
+    /// that pushed it past half, so a full list hands the newer half over
+    /// without walking it. Null otherwise.
+    mark: Cell<*mut FreeBlock>,
 }
 
 struct ThreadBlocks {
@@ -186,7 +190,11 @@ impl ThreadBlocks {
         }
         // SAFETY: a free block on the list is ours until it leaves it.
         list.head.set(unsafe { (*head).next });
-        list.len.set(list.len.get() - 1);
+        let len = list.len.get() - 1;
+        list.len.set(len);
+        if len == CAPACITY / 2 {
+            list.mark.set(ptr::null_mut());
+        }
         head.cast()
     }
 
@@ -202,6 +210,16 @@ impl ThreadBlocks {
             let list = &self.lists[class];
             list.head.set(rest);
             list.len.set(len - 1);
+            if len - 1 > CAPACITY / 2 {
+                // Only a thread that ended shares a batch this long, so
+                // the walk to the mark is rare.
+                let mut mark = rest;
+                for _ in 0..len - 1 - (CAPACITY / 2 + 1) {
+                    // SAFETY: the list holds `len - 1` linked blocks.
+                    mark = unsafe { (*mark).next };
+                }
+                list.mark.set(mark);
+            }
             return batch.cast();
         }
         let size = class_size(class);
@@ -232,22 +250,25 @@ impl ThreadBlocks {
         // `STEP` bytes long and aligned to it.
         unsafe { (*free).next = list.head.get() };
         list.head.set(free);
-        list.len.set(list.len.get() + 1);
+        let len = list.len.get() + 1;
+        list.len.set(len);
+        if len == CAPACITY / 2 + 1 {
+            list.mark.set(free);
+        }
     }
 
-    /// Hands the first half of the full list of `class` to its shared list.
+    /// Hands the newer half of the full list of `class` to its shared
+    /// list: the blocks from the head down to the mark.
     #[cold]
     fn share_half(&self, class: usize) {
         let list = &self.lists[class];
         let head = list.head.get();
-        let mut tail = head;
-        for _ in 1..CAPACITY / 2 {
-            // SAFETY: the full list holds `CAPACITY` linked blocks.
-            tail = unsafe { (*tail).next };
-        }
-        // SAFETY: as above, so the tail has a successor.
+        let tail = list.mark.replace(ptr::null_mut());
+        debug_assert!(!tail.is_null());
+        // SAFETY: a full list has its mark, the oldest of its newer half,
+        // so the mark has a successor.
         list.head.set(unsafe { (*tail).next });
-        list.len.set(CAPACITY - CAPACITY / 2);
+        list.len.set(CAPACITY / 2);
         // SAFETY: the batch left the thread's list.
         unsafe { share_batch(class, head, tail, CAPACITY / 2) };
     }
@@ -275,6 +296,7 @@ impl Drop for ThreadBlocks {
         for (class, list) in self.lists.iter().enumerate() {
             let head = list.head.replace(ptr::null_mut());
             let len = list.len.replace(0);
+            list.mark.set(ptr::null_mut());
             if !head.is_null() {
                 // SAFETY: the `len` blocks left the thread's list, which ends
                 // with a null link.
@@ -292,6 +314,7 @@ thread_local! {
                 BlockList {
                     head: Cell::new(ptr::null_mut()),
                     len: Cell::new(0),
+                    mark: Cell::new(ptr::null_mut()),
                 }
             }; CLASSES],
             cut: Cell::new(ptr::null_mut()),

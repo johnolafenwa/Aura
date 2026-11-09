@@ -210,3 +210,55 @@ fn a_block_made_without_thread_lists_comes_from_the_shared_list_or_the_system() 
         unsafe { share_batch(class, block.cast(), block.cast(), 1) };
     }
 }
+
+#[test]
+fn a_list_refilled_from_a_long_batch_still_shares_its_newer_half() {
+    // A size no other test uses.
+    let layout = Layout::from_size_align(712, 8).unwrap();
+    let class = class_of(layout).unwrap();
+    // A thread that ends with a full list shares all of it as one batch.
+    std::thread::spawn(move || {
+        let allocator = AuraAllocator;
+        // SAFETY: the thread owns every block it makes and frees each once.
+        let blocks = (0..CAPACITY)
+            .map(|_| unsafe { allocator.alloc(layout) })
+            .collect::<Vec<_>>();
+        for block in blocks {
+            unsafe { allocator.dealloc(block, layout) };
+        }
+    })
+    .join()
+    .unwrap();
+    std::thread::spawn(move || {
+        let allocator = AuraAllocator;
+        // SAFETY: as above.
+        let first = unsafe { allocator.alloc(layout) };
+        let more = (0..4)
+            .map(|_| unsafe { allocator.alloc(layout) })
+            .collect::<Vec<_>>();
+        unsafe { allocator.dealloc(first, layout) };
+        for block in more {
+            unsafe { allocator.dealloc(block, layout) };
+        }
+        // Freeing past a full list shared half of it through the mark.
+        let extra = (0..CAPACITY)
+            .map(|_| unsafe { allocator.alloc(layout) })
+            .collect::<Vec<_>>();
+        for block in &extra {
+            unsafe { allocator.dealloc(*block, layout) };
+        }
+        THREAD_BLOCKS.with(|lists| {
+            let list = &lists.lists[class];
+            let (mut walked, mut block) = (0, list.head.get());
+            while !block.is_null() {
+                walked += 1;
+                // SAFETY: the blocks on the thread's list are its own.
+                block = unsafe { (*block).next };
+            }
+            assert_eq!(list.len.get(), walked);
+            assert_eq!(list.mark.get().is_null(), walked <= CAPACITY / 2);
+        });
+    })
+    .join()
+    .unwrap();
+}
