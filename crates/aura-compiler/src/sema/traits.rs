@@ -113,6 +113,33 @@ pub(crate) fn self_type_substitutions(
     substitutions
 }
 
+/// The hidden `S.Name` type parameters that the bounds of `type_params`
+/// name without declaring them: a class bound such as `S: IntoIterator[T]`
+/// becomes `S: IntoIterator[T, S.Iter]` while the class keeps its written
+/// parameters, so a use of the class infers `S.Iter` from `S`.
+pub(crate) fn hidden_bound_type_params(
+    type_params: &[String],
+    bounds: &BTreeMap<String, Vec<TraitBound>>,
+) -> Vec<String> {
+    let mut hidden = Vec::new();
+    for param in type_params {
+        let prefix = format!("{param}.");
+        for bound in bounds.get(param).into_iter().flatten() {
+            for arg in &bound.trait_args {
+                if let Type::TypeParam(name) = arg {
+                    if name.starts_with(&prefix)
+                        && !type_params.contains(name)
+                        && !hidden.contains(name)
+                    {
+                        hidden.push(name.clone());
+                    }
+                }
+            }
+        }
+    }
+    hidden
+}
+
 pub(super) fn lower_trait_bounds(
     bounds: &BTreeMap<String, Vec<TypeRef>>,
     traits: &BTreeMap<String, TraitInfo>,
@@ -132,8 +159,10 @@ pub(super) fn lower_trait_bounds(
     )
 }
 
-/// Bounds cannot name a trait with associated types yet: a bound written
-/// with the trait's own type arguments would leave them unknown.
+/// Enum and supertrait bounds cannot name a trait with associated types
+/// yet: a bound written with the trait's own type arguments would leave
+/// them unknown. Function, method, class, and impl bounds get the hidden
+/// arguments first (`assoc_bounds`).
 fn reject_assoc_type_bound(
     trait_info: &TraitInfo,
     written_args: usize,
@@ -147,11 +176,11 @@ fn reject_assoc_type_bound(
         "AU2002",
         span,
         format!(
-            "only a function or method bound can name `{}` yet, because the trait has associated types",
+            "only a function, method, class, or impl bound can name `{}` yet, because the trait has associated types",
             trait_info.decl.name
         ),
     )
-    .with_help("bound a function's type parameter instead, or bound the iterator itself, as `I: Iterator[T]`"))
+    .with_help("bound a function, class, or impl type parameter instead, or bound the iterator itself, as `I: Iterator[T]`"))
 }
 
 pub(super) fn lower_supertraits(
@@ -276,10 +305,14 @@ pub(crate) fn merge_trait_bounds(
 ) -> BTreeMap<String, Vec<TraitBound>> {
     let mut merged = left.clone();
     for (type_param, bounds) in right {
-        merged
-            .entry(type_param.clone())
-            .or_default()
-            .extend(bounds.iter().cloned());
+        let merged_bounds = merged.entry(type_param.clone()).or_default();
+        for bound in bounds {
+            // A class method restates the class bound that fixes its hidden
+            // `S.Iter`; the merged scope keeps one copy.
+            if !merged_bounds.contains(bound) {
+                merged_bounds.push(bound.clone());
+            }
+        }
     }
     merged
 }
@@ -937,6 +970,13 @@ impl<'a> FunctionChecker<'a> {
         ) {
             return None;
         }
+        // An impl bound such as `S: IntoIterator[T]` names a hidden impl
+        // parameter `S.Iter` that only the bound fixes.
+        self.infer_bound_only_type_args(
+            &trait_impl.type_params,
+            &trait_impl.type_param_bounds,
+            &mut substitutions,
+        );
         for (type_param, bounds) in &trait_impl.type_param_bounds {
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
@@ -1078,7 +1118,14 @@ impl<'a> FunctionChecker<'a> {
                     .find_map(|candidate| {
                         let mut trial = substitutions.clone();
                         trial.retain(|name, _| !unresolved(substitutions, name));
-                        bound
+                        // Parameters fixed elsewhere, such as a class's `T`
+                        // from the receiver, are compared as resolved.
+                        let known = trial
+                            .iter()
+                            .filter(|(name, _)| !type_params.contains(*name))
+                            .map(|(name, ty)| (name.clone(), ty.clone()))
+                            .collect::<HashMap<_, _>>();
+                        substitute_trait_bound(bound, &known)
                             .trait_args
                             .iter()
                             .zip(&candidate.trait_args)
@@ -1248,6 +1295,14 @@ impl<'a> FunctionChecker<'a> {
         }
         for bound in bounds {
             let mut presentation = bound.clone();
+            // An unresolved hidden `S.Iter` was never written: show the
+            // bound as `IntoIterator[T]`.
+            while matches!(
+                presentation.trait_args.last(),
+                Some(Type::TypeParam(name)) if name.contains('.')
+            ) {
+                presentation.trait_args.pop();
+            }
             if let Some((_, leaf)) = bound.trait_name.rsplit_once('.') {
                 // Present the bare name only when it names this same trait
                 // here; otherwise the qualified name is the one to write.

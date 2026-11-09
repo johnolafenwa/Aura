@@ -13155,6 +13155,7 @@ impl<'a> Lowerer<'a> {
                     &mut substitutions,
                 );
             }
+            self.infer_class_bound_type_args(class, &mut substitutions);
             return class
                 .decl
                 .type_params
@@ -13193,6 +13194,7 @@ impl<'a> Lowerer<'a> {
             }
         }
 
+        self.infer_class_bound_type_args(class, &mut substitutions);
         let resolved_args = class
             .decl
             .type_params
@@ -13202,6 +13204,26 @@ impl<'a> Lowerer<'a> {
         resolved_args
             .map(|resolved_args| Type::Named(result_name.clone(), resolved_args))
             .or_else(|| Some(Type::named(result_name)))
+    }
+
+    /// Fills in a class type parameter that only a bound names, as `T` in
+    /// `Pipe[T, S: IntoIterator[T]]`, from the implementation for `S`.
+    fn infer_class_bound_type_args(
+        &self,
+        class: &crate::sema::ClassInfo,
+        substitutions: &mut std::collections::HashMap<String, Type>,
+    ) {
+        let mut type_params = class
+            .decl
+            .type_params
+            .iter()
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        type_params.extend(crate::sema::hidden_bound_type_params(
+            &class.decl.type_params,
+            &class.type_param_bounds,
+        ));
+        self.infer_bound_only_type_args(&type_params, &class.type_param_bounds, substitutions);
     }
 
     fn infer_module_path(&self, expr: &Expr) -> Option<String> {
@@ -27594,9 +27616,16 @@ impl<'a> Lowerer<'a> {
                             }
                             if let Some(class) = self.resolve_class_info(class_name) {
                                 if let Some(method) = class.methods.get(field) {
-                                    let substitutions = substitutions_from_decl_type_args(
+                                    let mut substitutions = substitutions_from_decl_type_args(
                                         &class.decl.type_params,
                                         class_args,
+                                    );
+                                    // The hidden `S.Iter` of a class bound
+                                    // `S: IntoIterator[T]` follows from `S`.
+                                    self.infer_bound_only_type_args(
+                                        &method.decl.type_params.iter().cloned().collect(),
+                                        &method.type_param_bounds,
+                                        &mut substitutions,
                                     );
                                     return Some(substitute_type(
                                         &method.signature.return_type,
@@ -28069,7 +28098,17 @@ impl<'a> Lowerer<'a> {
         ) {
             return None;
         }
+        // The hidden `S.Iter` of an impl bound `S: IntoIterator[T]`.
+        self.infer_bound_only_type_args(
+            &type_params,
+            &trait_impl.type_param_bounds,
+            &mut substitutions,
+        );
         for (type_param, bounds) in &trait_impl.type_param_bounds {
+            if is_hidden_assoc_param(type_param) {
+                // The implementation that fixed it already proved its bounds.
+                continue;
+            }
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
                 let resolved_bound = substitute_trait_bound(bound, &substitutions);
@@ -28116,7 +28155,16 @@ impl<'a> Lowerer<'a> {
                 return None;
             }
         }
+        self.infer_bound_only_type_args(
+            &trait_impl.type_params.iter().cloned().collect(),
+            &trait_impl.type_param_bounds,
+            &mut substitutions,
+        );
         for (type_param, bounds) in &trait_impl.type_param_bounds {
+            if is_hidden_assoc_param(type_param) {
+                // The implementation that fixed it already proved its bounds.
+                continue;
+            }
             let actual_ty = substitutions.get(type_param)?;
             for impl_bound in bounds {
                 let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
@@ -28184,7 +28232,14 @@ impl<'a> Lowerer<'a> {
                     .filter(|candidate| candidate.len() == bound.trait_args.len())
                     .find_map(|candidate| {
                         let mut trial = substitutions.clone();
-                        bound
+                        // A parameter fixed elsewhere, such as a class's `T`
+                        // from the receiver, is compared as resolved.
+                        let known = substitutions
+                            .iter()
+                            .filter(|(name, _)| !type_params.contains(*name))
+                            .map(|(name, ty)| (name.clone(), ty.clone()))
+                            .collect::<std::collections::HashMap<_, _>>();
+                        substitute_trait_bound(bound, &known)
                             .trait_args
                             .iter()
                             .zip(&candidate)
@@ -29471,4 +29526,10 @@ fn callback_result_type(ty: Type) -> Option<Type> {
         Type::Callable(callable) => Some(callable.return_type),
         _ => None,
     }
+}
+
+/// A hidden `S.Iter` type parameter of an associated-type bound
+/// `S: IntoIterator[T]`, which the implementation for `S` fixes.
+fn is_hidden_assoc_param(name: &str) -> bool {
+    name.contains('.')
 }

@@ -29,7 +29,8 @@ mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod traits;
 pub(crate) use traits::{
-    binary_operator_trait, merge_trait_bounds, self_type_substitutions, unary_operator_trait,
+    binary_operator_trait, hidden_bound_type_params, merge_trait_bounds, self_type_substitutions,
+    unary_operator_trait,
 };
 use traits::{
     lower_supertraits, lower_trait_bounds, lower_trait_bounds_with_self,
@@ -10065,6 +10066,18 @@ impl<'a> FunctionChecker<'a> {
             }
         }
 
+        // A type parameter that only a bound names, as `T` in
+        // `Pipe[T, S: IntoIterator[T]]`, comes from the implementation for `S`.
+        let mut bound_params = class.decl.type_params.clone();
+        bound_params.extend(hidden_bound_type_params(
+            &class.decl.type_params,
+            &class.type_param_bounds,
+        ));
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &class.type_param_bounds,
+            &mut substitutions,
+        );
         let mut resolved_args = Vec::with_capacity(class.decl.type_params.len());
         for type_param in &class.decl.type_params {
             let Some(resolved) = substitutions.get(type_param).cloned() else {
@@ -10078,8 +10091,15 @@ impl<'a> FunctionChecker<'a> {
             };
             resolved_args.push(resolved);
         }
-        let resolved_substitutions =
+        let mut resolved_substitutions =
             substitutions_from_decl_type_args(&class.decl.type_params, &resolved_args);
+        // A class bound such as `S: IntoIterator[T]` names a hidden `S.Iter`
+        // that the implementation for the resolved `S` fixes.
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &class.type_param_bounds,
+            &mut resolved_substitutions,
+        );
         for (index, type_param) in class.decl.type_params.iter().enumerate() {
             let Some(bounds) = class.type_param_bounds.get(type_param) else {
                 continue;

@@ -1,0 +1,9 @@
+from iter import IntoIterator
+
+
+class Pipe[S: IntoIterator[str]]:
+    source: S
+
+
+def main():
+    p = Pipe(source=5)

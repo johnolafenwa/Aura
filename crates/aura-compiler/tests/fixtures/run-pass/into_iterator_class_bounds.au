@@ -1,0 +1,109 @@
+# Bounds that name IntoIterator on class and impl type parameters (9e-2).
+from iter import Generator, IntoIterator
+
+
+class Playlist:
+    songs: list[str]
+
+
+def play(songs: own list[str]) -> Generator[str]:
+    for song in songs:
+        yield song.clone()
+
+
+impl IntoIterator[str] for Playlist:
+    type Iter = Generator[str]
+    def into_iter(own self) -> Self.Iter:
+        return play(self.songs)
+
+
+class Pipe[T, S: IntoIterator[T]]:
+    source: S
+    label: str
+
+    def items(own self) -> list[T]:
+        mut out: list[T] = []
+        for x in self.source:
+            out.append(x)
+        return out
+
+    def open(own self) -> S.Iter:
+        return self.source.into_iter()
+
+    def first(own self) -> T | None:
+        for x in self.source:
+            return x
+        return None
+
+
+trait Describe:
+    def describe(own self) -> str
+
+
+impl[T, S: IntoIterator[T]] Describe for Pipe[T, S]:
+    def describe(own self) -> str:
+        mut n = 0
+        for _ in self.source:
+            n += 1
+        return f"{self.label}: {n}"
+
+
+class Doubler[S: IntoIterator[int64]]:
+    source: S
+
+
+impl[S: IntoIterator[int64]] Describe for Doubler[S]:
+    def describe(own self) -> str:
+        mut total = 0
+        for x in self.source:
+            total += x * 2
+        return f"{total}"
+
+
+class Box[S]:
+    source: S
+
+
+trait Count:
+    def count(own self) -> int64
+
+
+impl[S: IntoIterator[str]] Count for Box[S]:
+    def count(own self) -> int64:
+        mut n = 0
+        for _ in self.source:
+            n += 1
+        return n
+
+
+def make(songs: own list[str]) -> Pipe[str, Playlist]:
+    return Pipe(source=Playlist(songs=songs), label="mix")
+
+
+def main():
+    print(make(["a", "b"]).items())
+    print(make(["c"]).open().collect())
+    print(make(["d", "e"]).first())
+    print(make(["x", "y", "z"]).describe())
+    p: Pipe[str, Playlist] = Pipe(source=Playlist(songs=[]), label="empty")
+    print(p.describe())
+    print(Doubler(source=Numbers(n=3)).describe())
+    print(Box(source=Playlist(songs=["a", "b", "c"])).count())
+    print(Pipe(source=Numbers(n=2), label="n").open().collect())
+
+
+def count_up(n: int64) -> Generator[int64]:
+    mut i = 1
+    while i <= n:
+        yield i
+        i += 1
+
+
+class Numbers:
+    n: int64
+
+
+impl IntoIterator[int64] for Numbers:
+    type Iter = Generator[int64]
+    def into_iter(own self) -> Self.Iter:
+        return count_up(self.n)

@@ -2042,6 +2042,64 @@ impl<'a> AnalysisBuilder<'a> {
         )
     }
 
+    /// Fills in an impl's hidden `S.Iter` (from a bound `S: IntoIterator[T]`)
+    /// from the implementation of the bound's trait for the type `S` matched.
+    fn infer_hidden_impl_type_args(
+        &self,
+        trait_impl: &crate::sema::TraitImplInfo,
+        substitutions: &mut std::collections::HashMap<String, Type>,
+    ) {
+        let hidden = trait_impl
+            .type_params
+            .iter()
+            .filter(|name| name.contains('.') && !substitutions.contains_key(*name))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        if hidden.is_empty() {
+            return;
+        }
+        for (param, bounds) in &trait_impl.type_param_bounds {
+            let Some(actual) = substitutions.get(param).cloned() else {
+                continue;
+            };
+            for bound in bounds {
+                let open = bound
+                    .trait_args
+                    .iter()
+                    .any(|arg| matches!(arg, Type::TypeParam(name) if hidden.contains(name)));
+                if !open {
+                    continue;
+                }
+                let matched = self
+                    .trait_impls_in_scope()
+                    .filter(|candidate| {
+                        candidate.trait_name == bound.trait_name
+                            && candidate.trait_args.len() == bound.trait_args.len()
+                    })
+                    .find_map(|candidate| {
+                        let inner = self.trait_impl_substitutions(candidate, &actual)?;
+                        let mut trial = substitutions.clone();
+                        substitute_trait_bound(bound, substitutions)
+                            .trait_args
+                            .iter()
+                            .zip(&candidate.trait_args)
+                            .all(|(pattern, implemented)| {
+                                crate::sema::type_pattern_matches(
+                                    pattern,
+                                    &crate::sema::substitute_type(implemented, &inner),
+                                    &hidden,
+                                    &mut trial,
+                                )
+                            })
+                            .then_some(trial)
+                    });
+                if let Some(trial) = matched {
+                    *substitutions = trial;
+                }
+            }
+        }
+    }
+
     fn trait_impl_substitutions(
         &self,
         trait_impl: &crate::sema::TraitImplInfo,
@@ -2061,7 +2119,12 @@ impl<'a> AnalysisBuilder<'a> {
         ) {
             return None;
         }
+        self.infer_hidden_impl_type_args(trait_impl, &mut substitutions);
         for (type_param, bounds) in &trait_impl.type_param_bounds {
+            if is_hidden_assoc_param(type_param) {
+                // The implementation that fixed it already proved its bounds.
+                continue;
+            }
             let actual_ty = substitutions.get(type_param)?;
             for bound in bounds {
                 let resolved_bound = substitute_trait_bound(bound, &substitutions);
@@ -2108,7 +2171,12 @@ impl<'a> AnalysisBuilder<'a> {
                 return None;
             }
         }
+        self.infer_hidden_impl_type_args(trait_impl, &mut substitutions);
         for (type_param, bounds) in &trait_impl.type_param_bounds {
+            if is_hidden_assoc_param(type_param) {
+                // The implementation that fixed it already proved its bounds.
+                continue;
+            }
             let actual_ty = substitutions.get(type_param)?;
             for impl_bound in bounds {
                 let resolved_bound = substitute_trait_bound(impl_bound, &substitutions);
@@ -9235,4 +9303,10 @@ fn lower_callable_type_ref(
         })),
         _ => Type::named("Unknown"),
     }
+}
+
+/// A hidden `S.Iter` type parameter of an associated-type bound
+/// `S: IntoIterator[T]`, which the implementation for `S` fixes.
+fn is_hidden_assoc_param(name: &str) -> bool {
+    name.contains('.')
 }

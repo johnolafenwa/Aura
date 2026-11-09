@@ -467,6 +467,8 @@ pub(super) struct Exec<'a> {
     position: (usize, usize),
     /// Each float `/` and `sqrt` result, for the cheaper first query.
     pub(super) rounded: Vec<super::float::Rounded>,
+    /// The constant each defined term is named by.
+    defined: BTreeMap<String, String>,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -506,6 +508,7 @@ impl<'a> Exec<'a> {
             unsupported: None,
             captured: closure_captures(function),
             rounded: Vec::new(),
+            defined: BTreeMap::new(),
             prove_sites: false,
             position: (0, 0),
         }
@@ -536,18 +539,37 @@ impl<'a> Exec<'a> {
         if is_atom(&term) {
             return term;
         }
+        if let Some(name) = self.defined.get(&term) {
+            return name.clone();
+        }
         let name = self.fresh_const(sort, hint);
         self.facts.push(format!("(= {name} {term})"));
+        self.defined.insert(term, name.clone());
         name
+    }
+
+    /// The constant an earlier `define` named `term` by, else `term`. A
+    /// contract that recomputes a float result the body defined then reads
+    /// the same constant, which spares the solver proving two copies of
+    /// the rounded operation equal.
+    pub(super) fn defined_or(&self, term: String) -> String {
+        self.defined.get(&term).cloned().unwrap_or(term)
     }
 
     /// A float `/` or `sqrt` result, defined by its own fact.
     fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
         let (hint, term) = match &op {
             super::float::RoundedOp::Div(a, b) => ("arith", format!("(fp.div RNE {a} {b})")),
+            super::float::RoundedOp::Add(a, b) => ("arith", format!("(fp.add RNE {a} {b})")),
+            super::float::RoundedOp::Sub(a, b) => ("arith", format!("(fp.sub RNE {a} {b})")),
+            super::float::RoundedOp::Mul(a, b) => ("arith", format!("(fp.mul RNE {a} {b})")),
             super::float::RoundedOp::Sqrt(a) => ("sqrt", format!("(fp.sqrt RNE {a})")),
         };
+        if let Some(name) = self.defined.get(&term) {
+            return name.clone();
+        }
         let result = self.fresh_const(float.sort(), hint);
+        self.defined.insert(term.clone(), result.clone());
         self.rounded.push(super::float::Rounded {
             fact: self.facts.len(),
             result: result.clone(),
@@ -2921,17 +2943,16 @@ impl<'a> Exec<'a> {
                     BinaryOp::Eq => compare("fp.eq"),
                     BinaryOp::NotEq => Val::Bool(format!("(not (fp.eq {a} {b}))")),
                     BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul | BinaryOp::Div => {
-                        let symbol = match op {
-                            BinaryOp::Add => "fp.add",
-                            BinaryOp::Sub => "fp.sub",
-                            BinaryOp::Mul => "fp.mul",
-                            _ => "fp.div",
-                        };
                         let result = if op == BinaryOp::Div {
                             self.oblige_float_divisor(&pc, span, &b, trap);
                             self.define_rounded(float, super::float::RoundedOp::Div(a, b))
                         } else {
-                            self.define(float.sort(), "arith", format!("({symbol} RNE {a} {b})"))
+                            let op = match op {
+                                BinaryOp::Add => super::float::RoundedOp::Add(a, b),
+                                BinaryOp::Sub => super::float::RoundedOp::Sub(a, b),
+                                _ => super::float::RoundedOp::Mul(a, b),
+                            };
+                            self.define_rounded(float, op)
                         };
                         Val::Float(result, float)
                     }
