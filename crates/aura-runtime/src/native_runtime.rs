@@ -3005,13 +3005,30 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
         // A variant kept in its enum's layout: generated code tests the
         // variant's index and reads its payloads at their offsets in the
         // block.
-        Value::EnumVariant(variant) => match variant.payloads.typed() {
-            Some(typed) => (typed.layout().access(), typed.data(), typed.variant(), 0),
-            None => (DirectListAccess::None as u32, 0, 0, 0),
+        // A `json.Value` in a tape: generated code reads the node's tag and
+        // scalar where they lie (see `crate::json_tape`).
+        Value::EnumVariant(variant) => match &variant.payloads {
+            VariantPayloads::Typed(typed) => {
+                (typed.layout().access(), typed.data(), typed.variant(), 0)
+            }
+            VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0),
+            VariantPayloads::Values(_) => (DirectListAccess::None as u32, 0, 0, 0),
         },
         _ => (DirectListAccess::None as u32, 0, 0, 0),
     }
 }
+
+/// The access code of a box that holds a `json.Value` in a parsed
+/// document's tape. Its view's elements are the address of the value's
+/// node, whose tag byte lies at [`crate::json_tape::NODE_TAG_OFFSET`] and
+/// scalar at [`crate::json_tape::NODE_SCALAR_OFFSET`]. The code lies
+/// between the list forms and the first plain layout's code.
+pub const JSON_TAPE_ACCESS: u32 = 0xF0;
+
+const _: () = assert!(
+    JSON_TAPE_ACCESS > DirectListAccess::ArrayFloat64 as u32
+        && JSON_TAPE_ACCESS < FIRST_PLAIN_ACCESS
+);
 
 /// Refreshes a value's list view when a write ends.
 struct RefreshListView<'a>(&'a OpaqueValue);
@@ -3881,12 +3898,17 @@ fn direct_json_as_int(args: &DirectHostArgBuffer) -> std::result::Result<Value, 
 /// is `variant`, `Some(None)` when it is another variant, and `None` when
 /// the value is not kept in the layout, which the general path reads.
 fn typed_json_scalar_bits(value: &Value, variant: &str, kind: i64) -> Option<Option<i64>> {
-    let Value::EnumVariant(EnumVariantValue {
-        payloads: VariantPayloads::Typed(typed),
-        ..
-    }) = value
-    else {
-        return None;
+    let typed = match value {
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) => typed,
+        // A value in a tape reads its node.
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Json(node),
+            ..
+        }) => return Some(node.scalar_bits(kind)),
+        _ => return None,
     };
     let layout = enum_layouts::json_value_layout()?;
     if !std::ptr::eq(typed.layout(), layout) {

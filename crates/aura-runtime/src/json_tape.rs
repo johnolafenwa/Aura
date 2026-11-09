@@ -65,6 +65,12 @@ struct Node {
 
 const _: () = assert!(std::mem::size_of::<Node>() == 16);
 
+/// Where a node keeps its tag, which generated code reads to test a
+/// variant: a [`JsonTag`] as one byte.
+pub const NODE_TAG_OFFSET: i32 = std::mem::offset_of!(Node, tag) as i32;
+/// Where a node keeps an `Int`'s or a `Float`'s bits.
+pub const NODE_SCALAR_OFFSET: i32 = std::mem::offset_of!(Node, b) as i32;
+
 /// The most nodes a thread keeps buffer room for between parses.
 const SCRATCH_NODES_KEPT: usize = 1 << 16;
 
@@ -214,6 +220,12 @@ impl JsonNode {
         self.index
     }
 
+    /// The address of the node, which lies in the tape for as long as the
+    /// tape lives.
+    pub fn address(&self) -> usize {
+        std::ptr::from_ref(&self.tape.nodes[self.index as usize]) as usize
+    }
+
     pub fn tag(&self) -> JsonTag {
         self.tape.node(self.index).tag
     }
@@ -250,6 +262,19 @@ impl JsonNode {
             JsonTag::Float => Value::Float(f64::from_bits(node.b)),
             _ => return None,
         })
+    }
+
+    /// The bits of an `Int` (`kind` 0), a `Float` (1), or a `Bool` (2) as
+    /// `json.as_int` and its kin read them, or `None` for a node of another
+    /// tag.
+    pub fn scalar_bits(&self, kind: i64) -> Option<i64> {
+        let node = self.tape.node(self.index);
+        match (kind, node.tag) {
+            (0, JsonTag::Int) | (1, JsonTag::Float) => Some(node.b as i64),
+            (2, JsonTag::False) => Some(0),
+            (2, JsonTag::True) => Some(1),
+            _ => None,
+        }
     }
 
     /// The text of a string node.
