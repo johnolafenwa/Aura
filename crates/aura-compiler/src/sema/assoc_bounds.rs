@@ -10,7 +10,7 @@
 //! from the implementation `S` resolves to.
 
 use super::{BTreeMap, ImportedBinding, Item, Module, ModuleContext, ModuleNamespace, TraitInfo};
-use crate::ast::{FunctionDecl, TraitDecl, TypeRef, TypeRefKind};
+use crate::ast::{TraitDecl, TypeRef, TypeRefKind};
 
 /// What a bound needs to know about a trait: its written type parameters
 /// and its associated types with their bounds.
@@ -93,13 +93,78 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) {
     for item in &mut module.items {
         let methods = match item {
             Item::Function(function) => std::slice::from_mut(function),
-            Item::Class(class) => class.methods.as_mut_slice(),
-            Item::Impl(impl_decl) => impl_decl.methods.as_mut_slice(),
+            Item::Class(class) => {
+                // A class keeps its written arity: each method gains the
+                // hidden `S.Iter` of a class bound, and a construction
+                // infers it to check the bound.
+                let hidden = expand_bounds(
+                    &mut class.type_params,
+                    &mut class.type_param_bounds,
+                    &traits,
+                    &context.module_registry,
+                    &mut needed,
+                );
+                let written = class.type_params.len() - hidden.len();
+                class.type_params.truncate(written);
+                // Each method also restates the class bound that fixes its
+                // hidden parameters, so a call infers them from the receiver.
+                let owners = class
+                    .type_param_bounds
+                    .iter()
+                    .filter(|(param, _)| {
+                        let prefix = format!("{param}.");
+                        hidden.iter().any(|(name, _)| name.starts_with(&prefix))
+                    })
+                    .map(|(param, bounds)| (param.clone(), bounds.clone()))
+                    .collect::<Vec<_>>();
+                for method in &mut class.methods {
+                    for (param, bounds) in &owners {
+                        method
+                            .type_param_bounds
+                            .entry(param.clone())
+                            .or_default()
+                            .extend(bounds.iter().cloned());
+                    }
+                    for (hidden_name, hidden_bounds) in &hidden {
+                        method
+                            .type_params
+                            .retain(|existing| existing != hidden_name);
+                        method.type_params.push(hidden_name.clone());
+                        method
+                            .type_param_bounds
+                            .entry(hidden_name.clone())
+                            .or_default()
+                            .extend(hidden_bounds.iter().cloned());
+                    }
+                }
+                for hidden_name in hidden.iter().map(|(name, _)| name) {
+                    class.type_param_bounds.remove(hidden_name);
+                }
+                class.methods.as_mut_slice()
+            }
+            Item::Impl(impl_decl) => {
+                // An impl's hidden `S.Iter` is one more impl type parameter,
+                // inferred from `S` whenever the impl is matched.
+                expand_bounds(
+                    &mut impl_decl.type_params,
+                    &mut impl_decl.type_param_bounds,
+                    &traits,
+                    &context.module_registry,
+                    &mut needed,
+                );
+                impl_decl.methods.as_mut_slice()
+            }
             Item::Trait(trait_decl) => trait_decl.methods.as_mut_slice(),
             _ => &mut [],
         };
         for method in methods {
-            expand_function(method, &traits, &context.module_registry, &mut needed);
+            expand_bounds(
+                &mut method.type_params,
+                &mut method.type_param_bounds,
+                &traits,
+                &context.module_registry,
+                &mut needed,
+            );
         }
     }
     // An imported trait's associated-type bound names a trait of its own
@@ -113,15 +178,20 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) {
     }
 }
 
-fn expand_function(
-    function: &mut FunctionDecl,
+/// Rewrites the bounds of `type_params` that leave out a trait's
+/// associated types, appends each hidden `S.Name` parameter with its
+/// bounds, and returns the hidden parameters it added.
+fn expand_bounds(
+    type_params: &mut Vec<String>,
+    type_param_bounds: &mut BTreeMap<String, Vec<TypeRef>>,
     traits: &BTreeMap<String, AssocTrait>,
     registry: &BTreeMap<String, ModuleNamespace>,
     needed: &mut Vec<(String, TraitInfo)>,
-) {
-    let params = function.type_params.clone();
+) -> Vec<(String, Vec<TypeRef>)> {
+    let mut added = Vec::new();
+    let params = type_params.clone();
     for param in params {
-        let Some(bounds) = function.type_param_bounds.get(&param).cloned() else {
+        let Some(bounds) = type_param_bounds.get(&param).cloned() else {
             continue;
         };
         let mut rewritten = Vec::with_capacity(bounds.len());
@@ -181,19 +251,18 @@ fn expand_function(
                 span: bound.span,
             });
         }
-        function.type_param_bounds.insert(param.clone(), rewritten);
+        type_param_bounds.insert(param.clone(), rewritten);
         for (hidden_name, hidden_bounds) in hidden {
-            function
-                .type_params
-                .retain(|existing| *existing != hidden_name);
-            function.type_params.push(hidden_name.clone());
-            function
-                .type_param_bounds
-                .entry(hidden_name)
+            type_params.retain(|existing| *existing != hidden_name);
+            type_params.push(hidden_name.clone());
+            type_param_bounds
+                .entry(hidden_name.clone())
                 .or_default()
-                .extend(hidden_bounds);
+                .extend(hidden_bounds.iter().cloned());
+            added.push((hidden_name, hidden_bounds));
         }
     }
+    added
 }
 
 fn named(name: &str, span: crate::diag::Span) -> TypeRef {
@@ -240,4 +309,35 @@ fn substitute(
         indirect: ty.indirect,
         span,
     }
+}
+
+/// The hidden `S.Name` parameters a class bound names after expansion: a
+/// class keeps only its written parameters, so its bounds are lowered with
+/// these in scope as well.
+pub(super) fn hidden_bound_params(
+    type_params: &[String],
+    bounds: &BTreeMap<String, Vec<TypeRef>>,
+) -> Vec<String> {
+    let mut hidden = Vec::new();
+    for (param, param_bounds) in bounds {
+        let prefix = format!("{param}.");
+        for bound in param_bounds {
+            let Some((_, args)) = bound.named_parts() else {
+                continue;
+            };
+            for arg in args {
+                let TypeRefKind::Named { name, args } = &arg.kind else {
+                    continue;
+                };
+                if args.is_empty()
+                    && name.starts_with(&prefix)
+                    && type_params.contains(param)
+                    && !hidden.contains(name)
+                {
+                    hidden.push(name.clone());
+                }
+            }
+        }
+    }
+    hidden
 }

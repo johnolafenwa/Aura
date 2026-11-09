@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- A class or `impl` type parameter can be bounded by a trait with
+  associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
+  `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name
+  `S.Iter`; constructing the class, calling a method, or matching the impl
+  infers it (and a `T` named only by the bound) from the implementation
+  for `S`. Enum bounds still report `AU2002`.
 - `aura verify` models `dict.get` and `dict.remove` as lookups of the
   modeled dict: `Found` with the stored value when the key is there, else
   `Missing`, and `remove` takes the key out.
