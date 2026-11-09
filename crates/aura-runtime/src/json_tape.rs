@@ -68,8 +68,11 @@ const _: () = assert!(std::mem::size_of::<Node>() == 16);
 /// The most nodes a thread keeps buffer room for between parses.
 const SCRATCH_NODES_KEPT: usize = 1 << 16;
 
+/// A parse's node buffer and its open objects' keys (see [`TapeParser`]).
+type ScratchBuffers = (Vec<Node>, Vec<(u64, u32)>);
+
 thread_local! {
-    static SCRATCH: std::cell::Cell<(Vec<Node>, Vec<(u64, u32)>)> =
+    static SCRATCH: std::cell::Cell<ScratchBuffers> =
         const { std::cell::Cell::new((Vec::new(), Vec::new())) };
 }
 
