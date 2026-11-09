@@ -1,10 +1,10 @@
-//! A cheaper first query for checks that read a float `/` or `sqrt`.
+//! A cheaper first query for checks that read float arithmetic.
 //!
-//! The solver handles an IEEE-754 division or square root by building the
-//! circuit that computes it, which can take it longer than the time limit
-//! even when the check follows from simple facts, such as `x / y <= x` for
-//! `y >= 1.0`. So a check whose function divides floats or takes a square
-//! root is first asked of a weaker problem: each such result is a value of
+//! The solver handles an IEEE-754 `+`, `-`, `*`, `/`, or square root by
+//! building the circuit that computes it, which can take it longer than the
+//! time limit even when the check follows from simple facts, such as
+//! `x / y <= x` for `y >= 1.0`. So a check whose function computes with
+//! floats is first asked of a weaker problem: each such result is a value of
 //! its own, with only facts that the rounded operation is known to have,
 //! such as its sign, when it is NaN, how its size compares with its
 //! operands and with 1, and its bounds where its operands are bounded by
@@ -16,7 +16,8 @@
 use super::exec::FloatTy;
 use std::collections::BTreeSet;
 
-/// A float `/` or `sqrt` result, defined by the fact at `fact`.
+/// A float `+`, `-`, `*`, `/`, or `sqrt` result, defined by the fact at
+/// `fact`.
 #[derive(Clone, Debug)]
 pub(super) struct Rounded {
     pub(super) fact: usize,
@@ -27,13 +28,16 @@ pub(super) struct Rounded {
 
 #[derive(Clone, Debug)]
 pub(super) enum RoundedOp {
+    Add(String, String),
+    Sub(String, String),
+    Mul(String, String),
     Div(String, String),
     Sqrt(String),
 }
 
 /// The most literals each result is related to, so the weaker problem
 /// stays small.
-const MAX_LITERALS: usize = 16;
+const MAX_LITERALS: usize = 8;
 
 /// Each finite, non-negative `float64` literal in `texts`, smallest first.
 pub(super) fn literals<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<f64> {
@@ -172,6 +176,74 @@ pub(super) fn axioms(rounded_op: &Rounded, literals: &[f64]) -> Vec<String> {
                 }
             }
         }
+        RoundedOp::Add(x, y) => {
+            facts.push(format!(
+                "(= (fp.isNaN {d}) (or (fp.isNaN {x}) (fp.isNaN {y}) (and (fp.isInfinite {x}) (fp.isInfinite {y}) (distinct (fp.isNegative {x}) (fp.isNegative {y})))))"
+            ));
+            facts.push(format!(
+                "(=> (and (fp.isZero {x}) (not (fp.isNaN {y}))) (fp.eq {d} {y}))"
+            ));
+            facts.push(format!(
+                "(=> (and (fp.isZero {y}) (not (fp.isNaN {x}))) (fp.eq {d} {x}))"
+            ));
+            // Addition is monotone in each operand.
+            for (a, c) in bound_pairs(literals) {
+                let (la, lc) = (lit(a), lit(c));
+                let sum = lit(round_in(float, a, c, |a, c| a + c, |a, c| a + c));
+                facts.push(format!(
+                    "(=> (and (fp.leq {x} {la}) (fp.leq {y} {lc})) (fp.leq {d} {sum}))"
+                ));
+                facts.push(format!(
+                    "(=> (and (fp.geq {x} {la}) (fp.geq {y} {lc})) (fp.geq {d} {sum}))"
+                ));
+            }
+        }
+        RoundedOp::Sub(x, y) => {
+            facts.push(format!(
+                "(= (fp.isNaN {d}) (or (fp.isNaN {x}) (fp.isNaN {y}) (and (fp.isInfinite {x}) (fp.isInfinite {y}) (= (fp.isNegative {x}) (fp.isNegative {y})))))"
+            ));
+            // `x - x` of a finite `x` is `+0`.
+            facts.push(format!(
+                "(=> (and (= {x} {y}) (not (fp.isInfinite {x})) (not (fp.isNaN {x}))) (and (fp.isZero {d}) (fp.isPositive {d})))"
+            ));
+            facts.push(format!(
+                "(=> (and (fp.isZero {y}) (not (fp.isNaN {x}))) (fp.eq {d} {x}))"
+            ));
+            // Subtraction rises with `x` and falls with `y`.
+            for (a, c) in bound_pairs(literals) {
+                let (la, lc) = (lit(a), lit(c));
+                let difference = lit(round_in(float, a, c, |a, c| a - c, |a, c| a - c));
+                facts.push(format!(
+                    "(=> (and (fp.leq {x} {la}) (fp.geq {y} {lc})) (fp.leq {d} {difference}))"
+                ));
+                facts.push(format!(
+                    "(=> (and (fp.geq {x} {la}) (fp.leq {y} {lc})) (fp.geq {d} {difference}))"
+                ));
+            }
+        }
+        RoundedOp::Mul(x, y) => {
+            facts.push(format!(
+                "(= (fp.isNaN {d}) (or (fp.isNaN {x}) (fp.isNaN {y}) (and (fp.isZero {x}) (fp.isInfinite {y})) (and (fp.isInfinite {x}) (fp.isZero {y}))))"
+            ));
+            facts.push(format!(
+                "(=> (not (fp.isNaN {d})) (= (fp.isNegative {d}) (xor (fp.isNegative {x}) (fp.isNegative {y}))))"
+            ));
+            facts.push(format!("(=> (fp.eq {y} {one}) (= {d} {x}))"));
+            facts.push(format!("(=> (fp.eq {x} {one}) (= {d} {y}))"));
+            // Multiplication of non-negative values is monotone in each.
+            for (a, c) in bound_pairs(literals) {
+                let (la, lc) = (lit(a), lit(c));
+                let product = lit(round_in(float, a, c, |a, c| a * c, |a, c| a * c));
+                facts.push(format!(
+                    "(=> (and (fp.leq {zero} {x}) (fp.leq {x} {la}) (fp.leq {zero} {y}) (fp.leq {y} {lc})) (fp.leq {d} {product}))"
+                ));
+                if a > 0.0 && c > 0.0 {
+                    facts.push(format!(
+                        "(=> (and (fp.geq {x} {la}) (fp.geq {y} {lc})) (fp.geq {d} {product}))"
+                    ));
+                }
+            }
+        }
         RoundedOp::Sqrt(x) => {
             facts.push(format!(
                 "(= (fp.isNaN {d}) (or (fp.isNaN {x}) (fp.lt {x} {zero})))"
@@ -204,6 +276,27 @@ pub(super) fn axioms(rounded_op: &Rounded, literals: &[f64]) -> Vec<String> {
     facts
 }
 
+/// Each ordered pair of `literals`.
+fn bound_pairs(literals: &[f64]) -> impl Iterator<Item = (f64, f64)> + '_ {
+    literals
+        .iter()
+        .flat_map(move |&a| literals.iter().map(move |&c| (a, c)))
+}
+
+/// `op(a, c)` computed in `float`, so it rounds as the program's does.
+fn round_in(
+    float: FloatTy,
+    a: f64,
+    c: f64,
+    op64: impl Fn(f64, f64) -> f64,
+    op32: impl Fn(f32, f32) -> f32,
+) -> f64 {
+    match float {
+        FloatTy::F64 => op64(a, c),
+        FloatTy::F32 => op32(a as f32, c as f32) as f64,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -230,5 +323,25 @@ mod tests {
         let facts = axioms(&rounded_op, &[2.0]);
         let root = literal(FloatTy::F32, (2.0f32).sqrt() as f64);
         assert!(facts.iter().any(|fact| fact.contains(&root)), "{facts:?}");
+    }
+
+    #[test]
+    fn float32_sums_differences_and_products_round_as_float32() {
+        let x = "x".to_string();
+        for (op, value) in [
+            (RoundedOp::Add(x.clone(), x.clone()), 0.1f32 + 0.1f32),
+            (RoundedOp::Sub(x.clone(), x.clone()), 0.1f32 - 0.1f32),
+            (RoundedOp::Mul(x.clone(), x.clone()), 0.1f32 * 0.1f32),
+        ] {
+            let rounded_op = Rounded {
+                fact: 0,
+                result: "d".into(),
+                op,
+                float: FloatTy::F32,
+            };
+            let facts = axioms(&rounded_op, &[0.1]);
+            let bound = literal(FloatTy::F32, value as f64);
+            assert!(facts.iter().any(|fact| fact.contains(&bound)), "{facts:?}");
+        }
     }
 }

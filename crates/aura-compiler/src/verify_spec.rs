@@ -880,7 +880,10 @@ impl Exec<'_> {
                         "fp.div"
                     }
                 };
-                Ok(Val::Float(format!("({symbol} RNE {a} {b})"), float))
+                Ok(Val::Float(
+                    self.defined_or(format!("({symbol} RNE {a} {b})")),
+                    float,
+                ))
             }
             BinaryOp::Add if matches!((&lhs, &rhs), (Val::Str(_), Val::Str(_))) => {
                 let (Val::Str(a), Val::Str(b)) = (&lhs, &rhs) else {
