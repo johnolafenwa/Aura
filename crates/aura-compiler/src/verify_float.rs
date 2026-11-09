@@ -115,6 +115,7 @@ pub(super) fn axioms(rounded_op: &Rounded, literals: &[f64]) -> Vec<String> {
     let zero = literal(float, 0.0);
     let one = literal(float, 1.0);
     let lit = |value: f64| literal(float, value);
+    let literals = &values_in(float, literals);
     let mut facts = Vec::new();
     match &rounded_op.op {
         RoundedOp::Div(x, y) => {
@@ -276,6 +277,27 @@ pub(super) fn axioms(rounded_op: &Rounded, literals: &[f64]) -> Vec<String> {
     facts
 }
 
+/// The finite values `literals` have in `float`, each once.
+///
+/// The bounds are computed and stated in `float`, and a float64 literal can
+/// round to zero or to infinity as a float32. Taken as it was written, it
+/// would pass for a positive, finite bound and give a bound of `0 / 0`,
+/// `inf - inf`, or `0 * inf`: a NaN, which no value compares with, so the
+/// fact would rule out values the program can have.
+fn values_in(float: FloatTy, literals: &[f64]) -> Vec<f64> {
+    let mut values: Vec<f64> = Vec::new();
+    for &value in literals {
+        let value = match float {
+            FloatTy::F64 => value,
+            FloatTy::F32 => f64::from(value as f32),
+        };
+        if value.is_finite() && !values.contains(&value) {
+            values.push(value);
+        }
+    }
+    values
+}
+
 /// Each ordered pair of `literals`.
 fn bound_pairs(literals: &[f64]) -> impl Iterator<Item = (f64, f64)> + '_ {
     literals
@@ -342,6 +364,43 @@ mod tests {
             let facts = axioms(&rounded_op, &[0.1]);
             let bound = literal(FloatTy::F32, value as f64);
             assert!(facts.iter().any(|fact| fact.contains(&bound)), "{facts:?}");
+        }
+    }
+
+    #[test]
+    fn float32_bounds_leave_out_literals_that_round_to_zero_or_infinity() {
+        // As a float32, 1e-300 is zero and 1e300 is infinite. A bound
+        // computed from those (0 / 0, inf - inf, 0 * inf) is NaN, and a fact
+        // that compares with NaN is false of values the program can have.
+        let (x, y) = ("x".to_string(), "y".to_string());
+        for op in [
+            RoundedOp::Div(x.clone(), y.clone()),
+            RoundedOp::Add(x.clone(), y.clone()),
+            RoundedOp::Sub(x.clone(), y.clone()),
+            RoundedOp::Mul(x.clone(), y.clone()),
+            RoundedOp::Sqrt(x.clone()),
+        ] {
+            let mut rounded_op = Rounded {
+                fact: 0,
+                result: "d".into(),
+                op,
+                float: FloatTy::F32,
+            };
+            let facts = axioms(&rounded_op, &[0.0, 1e-300, 5.0, 1e300]);
+            assert_eq!(facts, axioms(&rounded_op, &[0.0, 5.0]));
+            for value in [f64::NAN, f64::INFINITY] {
+                let bound = literal(FloatTy::F32, value);
+                assert!(!facts.iter().any(|fact| fact.contains(&bound)), "{facts:?}");
+            }
+            // Each of them is a float64 value of its own.
+            rounded_op.float = FloatTy::F64;
+            let facts = axioms(&rounded_op, &[0.0, 1e-300, 5.0, 1e300]);
+            for value in [1e-300, 1e300] {
+                let bound = literal(FloatTy::F64, value);
+                assert!(facts.iter().any(|fact| fact.contains(&bound)), "{facts:?}");
+            }
+            let nan = literal(FloatTy::F64, f64::NAN);
+            assert!(!facts.iter().any(|fact| fact.contains(&nan)), "{facts:?}");
         }
     }
 }

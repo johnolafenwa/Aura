@@ -614,30 +614,16 @@ pub fn verify_module(
                 statuses
             }
             None => {
-                let solver = match &mut solver {
-                    Some(solver) => solver,
-                    None => solver.insert(
-                        smt::Solver::start(&command, options.timeout_ms)
-                            .map_err(|message| Diagnostic::coded("AU5103", message))?,
-                    ),
-                };
+                let start = || smt::Solver::start(&command, options.timeout_ms);
+                let rough_start =
+                    || smt::Solver::start(&command, options.timeout_ms.min(ROUGH_TIMEOUT_MS));
+                let main_lane = Lane::new(&mut solver, &start);
                 let rough = if exec.rounded.is_empty() {
                     None
                 } else {
-                    match &mut rough_solver {
-                        Some(solver) => Some(solver),
-                        None => Some(
-                            rough_solver.insert(
-                                smt::Solver::start(
-                                    &command,
-                                    options.timeout_ms.min(ROUGH_TIMEOUT_MS),
-                                )
-                                .map_err(|message| Diagnostic::coded("AU5103", message))?,
-                            ),
-                        ),
-                    }
+                    Some(Lane::new(&mut rough_solver, &rough_start))
                 };
-                let statuses = solve(solver, rough, &exec, trace)
+                let statuses = solve(main_lane, rough, &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
                 if let Some(path) = &cache {
                     write_cache(path, &statuses);
@@ -761,14 +747,147 @@ fn write_cache(path: &std::path::Path, statuses: &[Status]) {
     }
 }
 
-/// Checks each obligation of `exec` against its declarations and facts.
 /// The time limit of the first, weaker query of a check that reads a float
 /// `/` or `sqrt` (see `verify_float.rs`).
 const ROUGH_TIMEOUT_MS: u64 = 2_000;
 
-fn solve(
+/// A solver process for one function's queries, with everything sent at
+/// the function's own scope kept so a fresh process can be brought to the
+/// same point.
+///
+/// Z3 does not always survive a query that stops at its time limit: later
+/// queries in the same process have crashed it (SIGSEGV) or had a `push`
+/// canceled. So a solver that answered `unknown` is not reused, and the
+/// next query runs in a fresh one. A solver that dies mid-query gets one
+/// fresh retry of that query; a second death is reported, so a solver that
+/// always crashes still fails the run. One that dies between queries, after
+/// an answer, is replaced at the next thing sent.
+///
+/// A solver counts as dead when a write to it or a read from it fails, not
+/// when its process is seen to have exited: the pipe closes first, and how
+/// long the exit then takes is the system's business (a crash handler can
+/// hold the process for seconds).
+struct Lane<'a> {
+    slot: &'a mut Option<smt::Solver>,
+    start: &'a dyn Fn() -> std::result::Result<smt::Solver, String>,
+    base: String,
+}
+
+impl<'a> Lane<'a> {
+    fn new(
+        slot: &'a mut Option<smt::Solver>,
+        start: &'a dyn Fn() -> std::result::Result<smt::Solver, String>,
+    ) -> Self {
+        Self {
+            slot,
+            start,
+            base: String::new(),
+        }
+    }
+
+    /// The running solver, started and given the function's scope so far
+    /// when there is none.
+    fn solver(&mut self) -> std::result::Result<&mut smt::Solver, String> {
+        if self.slot.is_none() {
+            let mut fresh = (self.start)()?;
+            if !self.base.is_empty() {
+                fresh.send(&self.base)?;
+            }
+            *self.slot = Some(fresh);
+        }
+        Ok(self.slot.as_mut().expect("a solver was started above"))
+    }
+
+    /// Sends `text` at the function's scope. A solver found dead here, after
+    /// its last answer, is replaced by a fresh one.
+    fn send(&mut self, text: &str) -> std::result::Result<(), String> {
+        self.base.push_str(text);
+        self.base.push('\n');
+        if let Some(solver) = self.slot.as_mut() {
+            if solver.send(text).is_ok() {
+                return Ok(());
+            }
+            *self.slot = None;
+        }
+        self.solver().map(|_| ())
+    }
+
+    /// Asserts `query` (a `(push 1)` and the negated goal) and asks whether
+    /// it is satisfiable, with the model's values of `exec`'s inputs after
+    /// `sat` when `exec` is given. The query's scope is closed after.
+    fn ask(
+        &mut self,
+        query: &str,
+        exec: Option<&exec::Exec<'_>>,
+    ) -> std::result::Result<Status, String> {
+        let mut retried = false;
+        let status = loop {
+            let solver = self.solver()?;
+            match ask_once(solver, query, exec) {
+                Ok(status) => break status,
+                Err(_) if !retried && solver.stopped() => {
+                    *self.slot = None;
+                    retried = true;
+                }
+                Err(message) => return Err(message),
+            }
+        };
+        // A solver that died after answering is dropped like one that
+        // answered `unknown`: the answer it gave stands.
+        if status == Status::Unknown || self.solver()?.send("(pop 1)").is_err() {
+            *self.slot = None;
+        }
+        Ok(status)
+    }
+
+    /// Closes the function's scope. A solver dropped after an `unknown`
+    /// has none left to close, and one that died after its last answer
+    /// is dropped here: the next function starts a fresh one.
+    fn close(self) {
+        if let Some(solver) = self.slot.as_mut() {
+            if solver.send("(pop 1)").is_err() {
+                *self.slot = None;
+            }
+        }
+    }
+}
+
+fn ask_once(
     solver: &mut smt::Solver,
-    mut rough: Option<&mut smt::Solver>,
+    query: &str,
+    exec: Option<&exec::Exec<'_>>,
+) -> std::result::Result<Status, String> {
+    solver.send(query)?;
+    Ok(match solver.check()? {
+        smt::SatResult::Unsat => Status::Proved,
+        smt::SatResult::Unknown => Status::Unknown,
+        smt::SatResult::Sat => {
+            let counterexample = match exec {
+                Some(exec) => {
+                    let terms: Vec<String> =
+                        exec.inputs.iter().map(|(_, term)| term.clone()).collect();
+                    solver
+                        .values(&terms)
+                        .map(|values| {
+                            exec.inputs
+                                .iter()
+                                .zip(values)
+                                .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
+                                .collect()
+                        })
+                        .unwrap_or_default()
+                }
+                None => Vec::new(),
+            };
+            Status::Failed { counterexample }
+        }
+    })
+}
+
+/// Checks each obligation of `exec` against its declarations and facts.
+fn solve(
+    mut solver: Lane<'_>,
+    mut rough: Option<Lane<'_>>,
     exec: &exec::Exec<'_>,
     trace: bool,
 ) -> std::result::Result<Vec<Status>, String> {
@@ -784,7 +903,7 @@ fn solve(
     // The weaker problem has each float `/` and `sqrt` result's facts in
     // place of the fact that defines it.
     let mut replaced: BTreeMap<usize, Vec<String>> = BTreeMap::new();
-    if let Some(rough) = rough.as_deref_mut() {
+    if let Some(rough) = rough.as_mut() {
         rough.send(&prelude)?;
         let literals =
             float::literals(
@@ -825,7 +944,7 @@ fn solve(
                 eprintln!("{text}");
             }
             solver.send(&text)?;
-            if let Some(rough) = rough.as_deref_mut() {
+            if let Some(rough) = rough.as_mut() {
                 rough.send(&rough_text)?;
             }
             asserted = obligation.facts;
@@ -848,11 +967,8 @@ fn solve(
             );
         }
         // A check the weaker problem proves is proved.
-        if let Some(rough) = rough.as_deref_mut() {
-            rough.send(&query)?;
-            let answer = rough.check()?;
-            rough.send("(pop 1)")?;
-            if answer == smt::SatResult::Unsat {
+        if let Some(rough) = rough.as_mut() {
+            if rough.ask(&query, None)? == Status::Proved {
                 if trace {
                     eprintln!("; => Proved from the facts of float `/` and `sqrt`");
                 }
@@ -860,34 +976,15 @@ fn solve(
                 continue;
             }
         }
-        solver.send(&query)?;
-        let status = match solver.check()? {
-            smt::SatResult::Unsat => Status::Proved,
-            smt::SatResult::Unknown => Status::Unknown,
-            smt::SatResult::Sat => {
-                let terms: Vec<String> = exec.inputs.iter().map(|(_, term)| term.clone()).collect();
-                let counterexample = solver
-                    .values(&terms)
-                    .map(|values| {
-                        exec.inputs
-                            .iter()
-                            .zip(values)
-                            .map(|((name, _), value)| (name.clone(), smt::render_int(&value)))
-                            .collect()
-                    })
-                    .unwrap_or_default();
-                Status::Failed { counterexample }
-            }
-        };
+        let status = solver.ask(&query, Some(exec))?;
         if trace {
             eprintln!("; => {status:?}");
         }
         statuses.push(status);
-        solver.send("(pop 1)")?;
     }
-    solver.send("(pop 1)")?;
+    solver.close();
     if let Some(rough) = rough {
-        rough.send("(pop 1)")?;
+        rough.close();
     }
     Ok(statuses)
 }

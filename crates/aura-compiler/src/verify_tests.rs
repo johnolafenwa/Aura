@@ -703,11 +703,26 @@ fn script_dir(test: &str) -> std::path::PathBuf {
 
 #[cfg(unix)]
 fn script(dir: &std::path::Path, name: &str, body: &str, executable: bool) -> String {
-    use std::os::unix::fs::PermissionsExt;
+    use std::io::Write;
+    use std::process::{Command, Stdio};
     let path = dir.join(name);
-    std::fs::write(&path, format!("#!/bin/sh\n{body}")).expect("script");
-    let mode = if executable { 0o755 } else { 0o644 };
-    std::fs::set_permissions(&path, std::fs::Permissions::from_mode(mode)).expect("mode");
+    // A child process writes the file. Were it written here, a process
+    // another test forks at that moment would hold it open for writing
+    // until its own exec, and running the script meanwhile fails with
+    // "Text file busy".
+    let mut writer = Command::new("sh")
+        .args(["-c", "cat > \"$1\" && chmod \"$2\" \"$1\"", "sh"])
+        .arg(&path)
+        .arg(if executable { "755" } else { "644" })
+        .stdin(Stdio::piped())
+        .spawn()
+        .expect("sh");
+    let mut input = writer.stdin.take().expect("piped stdin");
+    input
+        .write_all(format!("#!/bin/sh\n{body}").as_bytes())
+        .expect("script");
+    drop(input);
+    assert!(writer.wait().expect("sh").success());
     path.to_string_lossy().into_owned()
 }
 
@@ -775,6 +790,14 @@ fn solver_failures_and_unknown_answers_are_reported() {
     );
     let report = run(script(&dir, "cvc5", &canceled, true)).expect("runs");
     assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // An answer after a canceled `push` is for other facts, so it is not
+    // taken as a proof.
+    let canceled_push = UNKNOWN_SOLVER.replace(
+        "echo unknown",
+        "echo '(error \"line 9 column 7: push canceled\")'; echo unsat",
+    );
+    let report = run(script(&dir, "cvc5", &canceled_push, true)).expect("runs");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
     let command = smt::SolverCommand {
         kind: smt::SolverKind::Z3,
         program: dir.join("cvc5"),
@@ -794,6 +817,117 @@ fn solver_failures_and_unknown_answers_are_reported() {
     assert_eq!(error.code, "AU5103");
     let error = run(script(&dir, "z3-locked", "exit 0\n", false)).expect_err("cannot start");
     assert_eq!(error.code, "AU5103");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[cfg(unix)]
+#[test]
+fn a_solver_that_dies_once_is_restarted_and_one_that_keeps_dying_is_an_error() {
+    let dir = script_dir("restart");
+    let program = crate::check_source(
+        "def double(x: int64) -> int64:\n    return x * 2\n\ndef main():\n    print(double(2))\n",
+    )
+    .expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let run = |solver: String| {
+        let options = Options {
+            solver: Some(solver),
+            ..Options::default()
+        };
+        verify_module(&program, &module, &options)
+    };
+    // The first process dies at its first query; the second answers.
+    let flaky = format!(
+        "[ \"$1\" = --version ] && exit 0\nif [ ! -e '{flag}' ]; then : > '{flag}'; while IFS= read -r line; do case \"$line\" in *check-sat*) kill -SEGV $$ ;; esac; done; fi\n{UNKNOWN_SOLVER}",
+        flag = dir.join("died").display(),
+    );
+    let report = run(script(&dir, "z3", &flaky, true)).expect("restarted");
+    assert_eq!(open_checks(&report), ["2 overflow unknown"]);
+    // A solver that dies every time is reported, with how it ended.
+    let error = run(script(
+        &dir,
+        "z3-dies",
+        "while IFS= read -r line; do case \"$line\" in *check-sat*) exit 3 ;; esac; done\n",
+        true,
+    ))
+    .expect_err("keeps dying");
+    assert_eq!(error.code, "AU5103");
+    assert!(
+        error.message.contains("exit status: 3"),
+        "{}",
+        error.message
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A stand-in solver that answers one query `unsat` and exits.
+#[cfg(unix)]
+const ONE_ANSWER_SOLVER: &str = r#"while IFS= read -r line; do
+  case "$line" in
+    *check-sat*) echo unsat ;;
+    *echo*) echo "$line" | sed 's/.*echo "\(.*\)".*/\1/'; exit 0 ;;
+  esac
+done
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_solver_that_dies_between_queries_is_replaced() {
+    let dir = script_dir("replace");
+    let command = |name: &str, body: &str| {
+        smt::SolverCommand::find(Some(&script(&dir, name, body, true))).expect("found")
+    };
+    // Each process answers one query and exits, so every later step meets
+    // a dead solver: closing the query's scope, the next fact, the next
+    // query. Whichever step notices, the answers are the same.
+    let one_answer = command("z3", ONE_ANSWER_SOLVER);
+    let start = || smt::Solver::start(&one_answer, 1000);
+    let mut slot = None;
+    let mut lane = Lane::new(&mut slot, &start);
+    lane.send("(declare-const x Int)").expect("sent");
+    for _ in 0..3 {
+        assert_eq!(
+            lane.ask("(push 1)\n(assert false)\n", None),
+            Ok(Status::Proved)
+        );
+        lane.send("(assert (> x 0))")
+            .expect("sent to a fresh solver");
+    }
+    lane.close();
+
+    // A solver known to be dead before anything more is sent: it read its
+    // setup and exited. A process another test forks at that moment holds
+    // the dead solver's pipe open until its own exec, and a write then
+    // still succeeds, so each case is tried until the write fails.
+    let gone = command("z3-gone", "read -r line\n");
+    let dead = || {
+        let mut dead = smt::Solver::start(&gone, 1000).expect("starts");
+        while dead.exit_status().is_none() {}
+        assert!(!dead.stopped());
+        Some(dead)
+    };
+    let starts = std::cell::Cell::new(0);
+    let counted_start = || {
+        starts.set(starts.get() + 1);
+        start()
+    };
+    // The next fact goes to a fresh solver, and so does the query.
+    while starts.get() == 0 {
+        let mut slot = dead();
+        let mut lane = Lane::new(&mut slot, &counted_start);
+        lane.send("(declare-const y Int)").expect("replaced");
+        assert_eq!(
+            lane.ask("(push 1)\n(assert false)\n", None),
+            Ok(Status::Proved)
+        );
+        lane.close();
+    }
+    // One found dead when its scope is closed is dropped.
+    let mut slot = dead();
+    while slot.is_some() {
+        slot = dead();
+        Lane::new(&mut slot, &start).close();
+    }
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -2364,6 +2498,38 @@ def main():
     print(back(2.5))
 "#,
     );
+}
+
+#[test]
+fn float32_bounds_are_not_taken_from_float64_literals_that_round_away() {
+    // `1e-300` is zero and `1e300` is infinite as a float32. Bounds computed
+    // from them once made the first, weaker query contradict itself, which
+    // proved each of these false claims.
+    let Some(report) = assert_open(
+        r#"
+def div_tiny(x: float32, y: float32, w: float64) -> float32:
+    requires w >= 1e-300 and x >= 0.0 and y > 0.0
+    ensures x > 0.0
+    return x / y
+
+def mul_zero(x: float32, y: float32, w: float64) -> float32:
+    requires w <= 1e300 and x >= 0.0 and y == 0.0
+    ensures result > 1.0
+    return x * y
+
+def sub_huge(x: float32, y: float32, w: float64) -> float32:
+    requires w <= 1e300 and x == 0.0 and y > 3.4028235e38
+    ensures result > 5.0
+    return x - y
+
+def main():
+    print(div_tiny(1.0, 5.0, 1.0))
+"#,
+        &["4 ensures failed", "9 ensures failed", "14 ensures failed"],
+    ) else {
+        return;
+    };
+    assert!(report.obligations.len() > 3);
 }
 
 #[test]

@@ -1,6 +1,13 @@
 # Task Board
 
-Last updated: 2026-11-08
+Last updated: 2026-11-09
+
+## Evaluation of the work since 0.13.0-preview (complete)
+
+- #245 to #250 checked by hand; details and the gaps left are in
+  `2026-11-09-evaluation-since-0.13.md`.
+- Fixed: false `float32` proofs from the float rounding facts, and the
+  solver restart from #247 (never merged; its test failed on Linux CI).
 
 ## Release 0.13.0-preview (complete)
 

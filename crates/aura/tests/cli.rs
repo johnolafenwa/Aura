@@ -5643,8 +5643,11 @@ fn native_run_cache_serializes_concurrent_cold_runs_into_one_build_and_verified_
     }
     let mut first_lines = Vec::new();
     let mut barrier_error = None;
+    // The parent holds the lock until every line arrives, so a slow start
+    // cannot reorder anything: the deadline only has to outlast a cold
+    // start on a loaded runner (10 s was too short on macOS CI).
     for (index, receiver) in first_line_receivers.into_iter().enumerate() {
-        match receiver.recv_timeout(std::time::Duration::from_secs(10)) {
+        match receiver.recv_timeout(std::time::Duration::from_secs(60)) {
             Ok((Ok(_), line)) if line == "aura: waiting for a concurrent build...\n" => {
                 first_lines.push(line)
             }
