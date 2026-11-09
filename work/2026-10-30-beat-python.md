@@ -280,3 +280,17 @@ step 3 (lookups in the tape) removes, and its inserted documents are
 still trees until step 4. Its peak grows by about 17 MB during the
 reload: 50k tapes alone take 27 MB against 97 MB as trees, but their
 blocks fall in other size classes than the boxes freed before them.
+
+## Compact JSON storage, step 2: generated code matches tape nodes (2026-11-09)
+
+- A box that holds a tape value gets the list-view access code
+  `JSON_TAPE_ACCESS`, and its view word is the node's address.
+- When generated code tests a `json.Value` variant, it reads the node's
+  tag byte; when it reads an `Int`, `Float` or `Bool` payload, it reads the
+  node's scalar word. A box in either other form takes the path it took
+  before, and so does every other payload read.
+- In the runtime, typed scalar reads (`as_scalar`) also read the node.
+
+json_roundtrip, 10 rounds: 589M -> 513M instructions (callgrind). Wall
+time on the cloud box, 50 rounds, median of 11: 228 -> 208 ms (Python
+377 ms on the same run).
