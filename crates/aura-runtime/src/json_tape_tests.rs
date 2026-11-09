@@ -303,3 +303,69 @@ fn a_huge_document_does_not_keep_its_buffers_for_the_next_parse() {
         JsonValue::Array(vec![JsonValue::Int(1)])
     );
 }
+
+fn object_entries_of(source: &str) -> DictEntries {
+    DictEntries::from_json_object(root(source))
+}
+
+#[test]
+fn an_objects_dict_reads_the_tape_until_a_read_needs_values() {
+    let entries = object_entries_of(r#"{"a": 1, "b": "x", "c": [true]}"#);
+    assert_eq!(entries.len(), 3);
+    assert!(entries.unrealized_json().is_some());
+    assert!(entries.is_shared(), "a write copies first");
+    let node = entries.unrealized_json().unwrap();
+    assert_eq!(node.entry_count(), 3);
+    assert!(matches!(
+        node.lookup_str("a"),
+        Some(Value::EnumVariant(variant)) if variant.variant_name.as_str() == "Int"
+    ));
+    assert!(node.lookup_str("missing").is_none());
+    // Scalars and arrays hold no entries and look nothing up.
+    assert_eq!(root("[1, 2]").entry_count(), 2);
+    assert_eq!(root("7").entry_count(), 0);
+    assert!(root("[1]").lookup_str("a").is_none());
+    assert!(root("[1]").object_entries().is_empty());
+
+    // A clone shares the tape; reading entries as values makes them once,
+    // for every clone.
+    let copy = entries.clone();
+    assert_eq!(
+        entries.value_of_str("b"),
+        Some(&Value::EnumVariant(EnumVariantValue {
+            enum_name: RuntimeName::from_static("json.Value"),
+            variant_name: RuntimeName::from_static("String"),
+            payloads: VariantPayloads::Json(JsonNode {
+                tape: Arc::clone(node.tape()),
+                index: 4,
+            }),
+        }))
+    );
+    assert!(entries.unrealized_json().is_none());
+    assert!(copy.unrealized_json().is_none());
+    assert_eq!(entries.len(), 3);
+    assert_eq!(entries.capacity(), 3);
+    assert_eq!(entries.as_ptr(), copy.as_ptr());
+    assert!(entries.is_shared());
+
+    // A write takes storage of its own and leaves the other handle as it was.
+    let mut written = copy.clone();
+    written.insert(Value::String(Text::from("d")), root("null").into_value());
+    assert_eq!(written.len(), 4);
+    assert_eq!(copy.len(), 3);
+    assert_ne!(written.as_ptr(), copy.as_ptr());
+    let mut fresh = object_entries_of(r#"{"k": 1}"#);
+    fresh.try_reserve(4).expect("room");
+    assert!(fresh.unrealized_json().is_none());
+    assert_eq!(object_entries_of(r#"{"k": 1}"#).into_vec().len(), 1);
+    let mut cleared = object_entries_of(r#"{"k": 1}"#);
+    cleared.clear();
+    assert!(cleared.is_empty());
+
+    // An object past the index threshold reads its entries by hash.
+    let many: Vec<String> = (0..12).map(|key| format!("\"k{key}\": {key}")).collect();
+    let large = object_entries_of(&format!("{{{}}}", many.join(",")));
+    assert_eq!(large.len(), 12);
+    assert!(large.value_of_str("k11").is_some());
+    assert!(large.value_of_str("k12").is_none());
+}

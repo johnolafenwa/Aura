@@ -304,23 +304,55 @@ impl JsonNode {
                     str_view: Default::default(),
                 })
             }
-            JsonTag::Object => {
-                let mut entries = Vec::with_capacity(node.a as usize);
-                let mut index = self.index + 1;
-                for _ in 0..node.a {
-                    let key = Value::String(Text::from(self.tape.str_at(self.tape.node(index))));
-                    entries.push((key, self.child(index + 1)));
-                    index = self.tape.next(index + 1);
-                }
-                Value::Map(MapValue {
-                    key_type: str_type(),
-                    value_type: json_value_type(),
-                    // The parse took no object that repeats a key.
-                    entries: DictEntries::from(entries),
-                })
-            }
+            JsonTag::Object => Value::Map(MapValue {
+                key_type: str_type(),
+                value_type: json_value_type(),
+                entries: DictEntries::from_json_object(self.clone()),
+            }),
             _ => return self.scalar(),
         })
+    }
+
+    /// The entries of an object node as values: each key a `str` and each
+    /// value a tape value.
+    pub fn object_entries(&self) -> Vec<(Value, Value)> {
+        let node = self.tape.node(self.index);
+        let mut entries = Vec::with_capacity(node.a as usize);
+        if node.tag != JsonTag::Object {
+            return entries;
+        }
+        let mut index = self.index + 1;
+        for _ in 0..node.a {
+            let key = Value::String(Text::from(self.tape.str_at(self.tape.node(index))));
+            entries.push((key, self.child(index + 1)));
+            index = self.tape.next(index + 1);
+        }
+        entries
+    }
+
+    /// How many elements an array node holds, or entries an object node.
+    pub fn entry_count(&self) -> usize {
+        let node = self.tape.node(self.index);
+        match node.tag {
+            JsonTag::Array | JsonTag::Object => node.a as usize,
+            _ => 0,
+        }
+    }
+
+    /// The value under `key` in an object node, read from the tape.
+    pub fn lookup_str(&self, key: &str) -> Option<Value> {
+        let node = self.tape.node(self.index);
+        if node.tag != JsonTag::Object {
+            return None;
+        }
+        let mut index = self.index + 1;
+        for _ in 0..node.a {
+            if self.tape.str_at(self.tape.node(index)) == key {
+                return Some(self.child(index + 1));
+            }
+            index = self.tape.next(index + 1);
+        }
+        None
     }
 
     /// The number of nodes this value spans, keys included.

@@ -1079,3 +1079,75 @@ fn a_variant_of_one_scalar_keeps_its_block_in_itself() {
     };
     assert_eq!(typed_copy.into_vec(), vec![Value::Float(0.0)]);
 }
+
+#[test]
+fn dict_lookups_read_a_parsed_objects_entries_in_its_tape() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get, aura_direct_map_get_lent,
+        aura_direct_map_get_payload, aura_direct_map_get_shadow, aura_direct_map_get_str,
+        aura_direct_map_get_str_lent, aura_direct_map_get_str_payload,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let tape =
+                crate::json_tape::JsonTape::parse(r#"{"a": 1, "b": "x"}"#, 8, 100).expect("parses");
+            let node = crate::json_tape::JsonNode::root(tape);
+            let Some(fields @ Value::Map(_)) = node.payload() else {
+                panic!("a dict");
+            };
+            let map = boxed_value(fields);
+            let unrealized = || match unsafe { value_ref(map) } {
+                Value::Map(map) => map.entries.unrealized_json().is_some(),
+                _ => false,
+            };
+            let variant_of = |boxed: *mut crate::native_runtime::OpaqueValue| {
+                assert!(!boxed.is_null());
+                let value = unsafe { value_ref(boxed) };
+                unsafe { aura_direct_release_value(boxed) };
+                match value {
+                    Value::EnumVariant(variant) => variant.variant_name.as_str().to_string(),
+                    other => panic!("a variant, not {other:?}"),
+                }
+            };
+            let key_a = boxed_value(text("a"));
+            let key_z = boxed_value(text("z"));
+            let key_int = boxed_value(int64(1));
+            unsafe {
+                assert_eq!(variant_of(aura_direct_map_get_lent(map, key_a)), "Int");
+                assert!(aura_direct_map_get_lent(map, key_z).is_null());
+                assert_eq!(
+                    variant_of(aura_direct_map_get_str_lent(map, "b".as_ptr(), 1)),
+                    "String"
+                );
+                assert!(aura_direct_map_get_str_lent(map, "q".as_ptr(), 1).is_null());
+                let shadow = aura_direct_map_get_shadow(map, key_a);
+                assert!(!shadow.is_null());
+                aura_direct_end_shadow(shadow);
+                assert!(aura_direct_map_get_shadow(map, key_z).is_null());
+                assert_eq!(variant_of(aura_direct_map_get(map, key_a)), "Found");
+                assert_eq!(variant_of(aura_direct_map_get(map, key_z)), "Missing");
+                assert_eq!(
+                    variant_of(aura_direct_map_get_str(map, "b".as_ptr(), 1)),
+                    "Found"
+                );
+                assert_eq!(variant_of(aura_direct_map_get_payload(map, key_a)), "Int");
+                assert_eq!(
+                    variant_of(aura_direct_map_get_str_payload(map, "b".as_ptr(), 1)),
+                    "String"
+                );
+            }
+            // Every lookup so far read the tape; a key that is not a `str`
+            // looks the entries up as values.
+            assert!(unrealized());
+            assert!(unsafe { aura_direct_map_get_lent(map, key_int) }.is_null());
+            assert!(!unrealized());
+            // A realized confined dict lends the entry itself.
+            assert!(!unsafe { aura_direct_map_get_lent(map, key_a) }.is_null());
+            for boxed in [key_a, key_z, key_int, map] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the lookups run");
+}
