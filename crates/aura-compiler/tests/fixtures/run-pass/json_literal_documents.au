@@ -1,0 +1,225 @@
+import json
+
+
+def field_int(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return "?"
+                case Lookup.Missing:
+                    return "-"
+        case _:
+            return "!"
+
+
+def field_len(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Array(items):
+                            return items.len()
+                        case _:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+# Every part is spelled where the document is: one compact document.
+def make_doc(i: int64, ratio: float64, names: list[str]) -> json.Value:
+    tags = [json.Value.String(f"t{i % 7}"), json.Value.String(f"t{i % 5}")]
+    return json.Value.Object(
+        {
+            "id": json.Value.Int(i),
+            "name": json.Value.String(f"user-{i}"),
+            "age": json.Value.Int(18 + i % 60),
+            "city": json.Value.String(names[i % 3].clone()),
+            "ratio": json.Value.Float(ratio / 4.0),
+            "active": json.Value.Bool(i % 3 != 0),
+            "tags": json.Value.Array(tags),
+        }
+    )
+
+
+def every_kind(n: int64, flag: bool, ratio: float64, word: own str) -> json.Value:
+    return json.Value.Object(
+        {
+            "": json.Value.Null,
+            "quote\"d\\key": json.Value.String("line\nbreak \"quoted\" é世"),
+            "big": json.Value.Int(9223372036854775807),
+            "small": json.Value.Int(-9223372036854775807 - 1),
+            "n": json.Value.Int(n),
+            "flag": json.Value.Bool(flag),
+            "no": json.Value.Bool(false),
+            "ratio": json.Value.Float(ratio),
+            "tiny": json.Value.Float(-0.000001),
+            "word": json.Value.String(word),
+            "empty_list": json.Value.Array([]),
+            "empty_object": json.Value.Object({}),
+            "deep": json.Value.Array(
+                [
+                    json.Value.Array([json.Value.Array([json.Value.Int(n + 1)])]),
+                    json.Value.Object(
+                        {"in": json.Value.Object({"most": json.Value.String("x")})}
+                    ),
+                    json.Value.Null,
+                ]
+            ),
+        }
+    )
+
+
+# A part made elsewhere keeps the document a tree; the list inside is
+# still compact.
+def holding(other: own json.Value, n: int64) -> json.Value:
+    return json.Value.Object(
+        {
+            "list": json.Value.Array([json.Value.Int(n), json.Value.String("s")]),
+            "other": other,
+        }
+    )
+
+
+def branched(n: int64) -> json.Value:
+    if n % 2 == 0:
+        return json.Value.Array([json.Value.Int(n), json.Value.Bool(true)])
+    return json.Value.Object({"odd": json.Value.Int(n)})
+
+
+def parsed(text: str) -> json.Value:
+    match own json.parse(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return json.Value.Null
+
+
+def in_task(i: int64) -> str:
+    names = ["Lagos", "Accra", "Cairo"]
+    mut out = ""
+    for k in range(3):
+        doc = make_doc(i * 10 + k, 1.5, names)
+        out += f"{field_int(doc, "id")}:{field_str(doc, "city")} "
+    return out
+
+
+def main():
+    names = ["Lagos", "Accra", "Cairo"]
+    doc = make_doc(7, 1.5, names)
+    print(json.dumps(doc))
+    print(json.dumps(doc, indent=2))
+    print(
+        f"{field_int(doc, "id")} {field_int(doc, "age")} {field_str(doc, "name")} {field_str(doc, "city")} {field_len(doc, "tags")} {field_int(doc, "missing")} {field_str(doc, "id")}"
+    )
+
+    all = every_kind(5, true, 2.5, f"w{5}")
+    print(json.dumps(all))
+    print(json.dumps(holding(make_doc(1, 1.5, names), 3)))
+    print(json.dumps(holding(json.Value.Null, 4)))
+    print(f"{json.dumps(branched(2))} {json.dumps(branched(3))}")
+
+    # A compact document equals the same document parsed or built in parts.
+    text = json.dumps(doc)
+    again = parsed(text)
+    print(f"{doc == again} {doc == make_doc(7, 1.5, names)} {doc == make_doc(8, 1.5, names)}")
+    inner = json.Value.Int(3)
+    parts = json.Value.Array([inner, json.Value.String("s")])
+    match holding(json.Value.Null, 3):
+        case json.Value.Object(fields):
+            match fields.lookup("list"):
+                case Lookup.Found(list):
+                    print(f"{list == parts} {list == doc}")
+                case Lookup.Missing:
+                    print("no list")
+        case _:
+            print("no object")
+
+    # Changed in place, a compact document reads as changed.
+    mut docs: dict[int64, json.Value] = {}
+    for i in range(6):
+        docs[i] = make_doc(i, 1.5, names)
+    mut id = 0
+    while id < 6:
+        match mut docs.lookup(id):
+            case Lookup.Found(found):
+                match mut found:
+                    case json.Value.Object(fields):
+                        fields["age"] = json.Value.Int(100 + id)
+                        fields["new"] = json.Value.Object({"at": json.Value.Int(id)})
+                        match mut fields.lookup("tags"):
+                            case Lookup.Found(tags):
+                                match mut tags:
+                                    case json.Value.Array(items):
+                                        items.append(json.Value.String("updated"))
+                                    case _:
+                                        pass
+                            case Lookup.Missing:
+                                pass
+                    case _:
+                        pass
+            case Lookup.Missing:
+                pass
+        id += 2
+    mut sum = 0
+    for i in range(6):
+        sum += field_int(docs[i], "age") * 10 + field_len(docs[i], "tags")
+    print(sum)
+    print(json.dumps(docs[0]))
+    print(json.dumps(docs[1]))
+
+    # A document's parts outlive it.
+    mut kept: list[str] = []
+    mut lists: list[json.Value] = []
+    for i in range(3):
+        made = make_doc(i, 1.5, names)
+        kept.append(field_str(made, "name"))
+        match own made:
+            case json.Value.Object(fields):
+                match own fields.remove("tags"):
+                    case Lookup.Found(tags):
+                        lists.append(tags)
+                    case Lookup.Missing:
+                        pass
+            case _:
+                pass
+    print(f"{kept} {json.dumps(json.Value.Array(lists))}")
+
+    # Each thread builds its own documents.
+    with TaskGroup() as group:
+        first = group.start(in_task, 1)
+        second = group.start(in_task, 2)
+        match own first.result():
+            case TaskResult.Ready(out):
+                print(out)
+            case _:
+                print("failed")
+        match own second.result():
+            case TaskResult.Ready(out):
+                print(out)
+            case _:
+                print("failed")
+    print(json.dumps(doc))

@@ -99,6 +99,9 @@ pub const NODE_SCALAR_OFFSET: i32 = std::mem::offset_of!(Node, b) as i32;
 /// The most nodes a thread keeps buffer room for between parses.
 const SCRATCH_NODES_KEPT: usize = 1 << 16;
 
+/// The most text a thread keeps buffer room for between built documents.
+const SCRATCH_TEXT_KEPT: usize = 1 << 20;
+
 /// A parse's node buffer and its open objects' keys (see [`TapeParser`]).
 type ScratchBuffers = (Vec<Node>, Vec<(u64, u32)>);
 
@@ -195,6 +198,106 @@ impl JsonTape {
             JsonTag::Array | JsonTag::Object => node.b as u32,
             _ => index + 1,
         }
+    }
+}
+
+/// A tape under construction from the values of a `json.Value` literal,
+/// which generated code hands over in document order (see
+/// [`TapeBuilder::with`]).
+#[derive(Default)]
+pub struct TapeBuilder {
+    nodes: Vec<Node>,
+    text: String,
+    /// The nodes of the containers that are still open.
+    open: Vec<u32>,
+}
+
+thread_local! {
+    static BUILDER: std::cell::RefCell<TapeBuilder> =
+        std::cell::RefCell::new(TapeBuilder::default());
+}
+
+impl TapeBuilder {
+    /// Runs `build` on the calling thread's builder, which keeps its
+    /// buffers between documents.
+    pub fn with<T>(build: impl FnOnce(&mut Self) -> T) -> T {
+        BUILDER.with(|builder| build(&mut builder.borrow_mut()))
+    }
+
+    /// Drops whatever a build that never finished left behind.
+    pub fn clear(&mut self) {
+        self.nodes.clear();
+        self.text.clear();
+        self.open.clear();
+    }
+
+    fn push(&mut self, tag: JsonTag, a: u32, b: u64) {
+        self.nodes.push(Node { tag, a, b });
+    }
+
+    fn push_text(&mut self, text: &str) {
+        let len = u32::try_from(text.len()).expect("a json string holds less than 4 GiB");
+        let start = self.text.len() as u64;
+        self.text.push_str(text);
+        self.push(JsonTag::String, len, start);
+    }
+
+    /// Appends the key of the object entry whose value comes next.
+    pub fn key(&mut self, key: &str) {
+        self.push_text(key);
+    }
+
+    pub fn null(&mut self) {
+        self.push(JsonTag::Null, 0, 0);
+    }
+
+    pub fn bool(&mut self, value: bool) {
+        self.push(if value { JsonTag::True } else { JsonTag::False }, 0, 0);
+    }
+
+    pub fn int(&mut self, value: i64) {
+        self.push(JsonTag::Int, 0, value as u64);
+    }
+
+    pub fn float(&mut self, value: f64) {
+        self.push(JsonTag::Float, 0, value.to_bits());
+    }
+
+    pub fn string(&mut self, text: &str) {
+        self.push_text(text);
+    }
+
+    /// Opens an array of `count` elements or an object of `count` entries,
+    /// which follow until the matching [`Self::close`].
+    pub fn open(&mut self, object: bool, count: u32) {
+        self.open.push(self.nodes.len() as u32);
+        let tag = if object {
+            JsonTag::Object
+        } else {
+            JsonTag::Array
+        };
+        self.push(tag, count, 0);
+    }
+
+    /// Closes the container opened last.
+    pub fn close(&mut self) {
+        let container = self.open.pop().expect("a container is open");
+        self.nodes[container as usize].b = self.nodes.len() as u64;
+    }
+
+    /// The document built, whose root is the first value appended.
+    pub fn finish(&mut self) -> JsonNode {
+        let tape = Arc::new(JsonTape {
+            nodes: Box::from(self.nodes.as_slice()),
+            text: Box::from(self.text.as_str()),
+        });
+        // Buffers a huge document grew are not kept.
+        if self.nodes.capacity() > SCRATCH_NODES_KEPT || self.text.capacity() > SCRATCH_TEXT_KEPT {
+            *self = Self::default();
+        } else {
+            self.clear();
+        }
+        JsonNode::root(tape)
     }
 }
 
@@ -434,7 +537,11 @@ fn write_node(
         JsonTag::False => output.push_str("false").ok()?,
         JsonTag::True => output.push_str("true").ok()?,
         JsonTag::Int => json_codec::write_int(output, node.b as i64).ok()?,
-        JsonTag::Float => json_codec::write_float(output, f64::from_bits(node.b)).ok()?,
+        JsonTag::Float => {
+            // A parse keeps no number json cannot spell, but a literal may.
+            let value = Some(f64::from_bits(node.b)).filter(|value| value.is_finite())?;
+            json_codec::write_float(output, value).ok()?
+        }
         JsonTag::String => json_codec::write_string(output, tape.str_at(node)).ok()?,
         JsonTag::Array => {
             let child_depth = depth + 1;
