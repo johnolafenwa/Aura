@@ -800,11 +800,32 @@ fn json_parses_build_typed_variants_that_dump_and_read_in_place() {
     use crate::native_runtime::aura_direct_json_as_scalar;
     use crate::runtime_value::json_dumps_runtime;
     let layout = json_layout(FIRST_TEST_ACCESS + 68);
-    // A parse keeps every variant in the layout, scalars in place.
+    // A parse keeps a document in a tape, but one whose object repeats a
+    // key builds a tree, every variant in the layout, scalars in place.
     let source = r#"{"a":null,"b":true,"c":-3,"d":2.5,"e":"x","f":[1,[2,false]],"g":{"h":"y"}}"#;
-    let value = parsed_json(source);
+    let taped = parsed_json(source);
+    let Value::EnumVariant(variant) = &taped else {
+        panic!("a variant");
+    };
+    assert!(variant.payloads.json().is_some());
+    assert_eq!(json_dumps_runtime(&taped, None).expect("dumps"), source);
+    let repeated = format!("{},\"a\":null}}", &source[..source.len() - 1]);
+    let value = parsed_json(&repeated);
     assert!(std::ptr::eq(typed_payloads(&value).layout(), layout));
     assert_eq!(json_dumps_runtime(&value, None).expect("dumps"), source);
+    assert_eq!(value, taped);
+    // A source too long to parse on the task is kept in a tape too, and one
+    // that repeats a key is not.
+    let long = format!("[{}]", vec![r#"{"k":1}"#; 3000].join(","));
+    let Value::EnumVariant(variant) = parsed_json(&long) else {
+        panic!("a variant");
+    };
+    assert_eq!(variant.payloads.json().map(|node| node.span()), Some(9001));
+    let long = format!("[{}]", vec![r#"{"k":1,"k":2}"#; 3000].join(","));
+    let Value::EnumVariant(variant) = parsed_json(&long) else {
+        panic!("a variant");
+    };
+    assert!(variant.payloads.json().is_none());
     let indented = json_dumps_runtime(&value, Some(1)).expect("dumps");
     assert!(indented.starts_with("{\n \"a\": null,\n"), "{indented}");
     for scalar in ["7", "-1.25", "true", "null", "\"s\"", "[]", "{}"] {
