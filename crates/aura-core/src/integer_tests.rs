@@ -857,3 +857,95 @@ fn returned_view_types_have_no_integer_bounds() {
     }));
     assert_eq!(integer_type_bounds(&view), None);
 }
+
+const EVERY_KIND: [IntegerKind; 12] = [
+    IntegerKind::Int8,
+    IntegerKind::Int16,
+    IntegerKind::Int32,
+    IntegerKind::Int64,
+    IntegerKind::Int128,
+    IntegerKind::IntSize,
+    IntegerKind::Uint8,
+    IntegerKind::Uint16,
+    IntegerKind::Uint32,
+    IntegerKind::Uint64,
+    IntegerKind::Uint128,
+    IntegerKind::UintSize,
+];
+
+#[test]
+fn every_kind_does_width_bitwise_and_shift_arithmetic() {
+    for kind in EVERY_KIND {
+        let value = |n: u128| {
+            match kind.bounds() {
+                IntegerBounds::Signed { .. } => IntegerValue::from_typed_signed(n as i128, kind),
+                IntegerBounds::Unsigned { .. } => IntegerValue::from_typed_unsigned(n, kind),
+            }
+            .expect("fits every kind")
+        };
+        assert_eq!(
+            IntegerKind::from_runtime_type_name(kind.runtime_type_name()),
+            Some(kind)
+        );
+        assert!(kind.bit_width() >= 8);
+        let (six, three) = (value(6), value(3));
+        assert_eq!(six.wrapping_add(three), Some(value(9)));
+        assert_eq!(six.wrapping_sub(three), Some(value(3)));
+        assert_eq!(six.wrapping_mul(three), Some(value(18)));
+        assert_eq!(six.saturating_add(three), Some(value(9)));
+        assert_eq!(six.saturating_sub(three), Some(value(3)));
+        assert_eq!(six.saturating_mul(three), Some(value(18)));
+        assert_eq!(six.checked_bitand(three), Some(value(2)));
+        assert_eq!(six.checked_bitor(three), Some(value(7)));
+        assert_eq!(six.checked_bitxor(three), Some(value(5)));
+        assert_eq!(six.bitnot().and_then(IntegerValue::bitnot), Some(six));
+        assert_eq!(six.checked_shl(value(1)), Ok(value(12)));
+        assert_eq!(six.checked_shr(value(1)), Ok(value(3)));
+        assert_eq!(six.wrapping_shl(value(1)), Ok(value(12)));
+        assert_eq!(six.wrapping_shr(value(1)), Ok(value(3)));
+        assert_eq!(six.saturating_shl(value(1)), Ok(value(12)));
+        assert_eq!(six.saturating_shr(value(1)), Ok(value(3)));
+        assert_eq!(six.checked_rem(value(4)), Some(value(2)));
+        assert_eq!(six.checked_rem(value(0)), None);
+        // A shift that leaves the type saturates at the bound on its side.
+        let top = match kind.bounds() {
+            IntegerBounds::Signed { min, max } => {
+                let low = IntegerValue::from_typed_signed(-2, kind).expect("fits");
+                assert_eq!(
+                    low.saturating_shl(value(u128::from(kind.bit_width()) - 1)),
+                    Ok(IntegerValue::from_typed_signed(min, kind).expect("the bound fits")),
+                );
+                IntegerValue::from_typed_signed(max, kind)
+            }
+            IntegerBounds::Unsigned { max } => IntegerValue::from_typed_unsigned(max, kind),
+        }
+        .expect("the bound fits");
+        assert_eq!(
+            six.saturating_shl(value(u128::from(kind.bit_width()) - 1)),
+            Ok(top)
+        );
+    }
+}
+
+#[test]
+fn remainders_keep_the_sign_of_the_left_operand_and_equal_values_hash_alike() {
+    use std::hash::{Hash, Hasher};
+    let rem = |a: i128, b: i128| {
+        IntegerValue::from_signed(a)
+            .checked_rem(IntegerValue::from_signed(b))
+            .and_then(IntegerValue::as_i128)
+    };
+    assert_eq!(rem(-7, 2), Some(-1));
+    assert_eq!(rem(7, -2), Some(1));
+    assert_eq!(rem(7, 0), None);
+    let hash = |value: IntegerValue| {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        value.hash(&mut hasher);
+        hasher.finish()
+    };
+    let typed = IntegerValue::from_typed_signed(9, IntegerKind::Int8).expect("fits");
+    assert_eq!(hash(typed), hash(IntegerValue::from_literal(9)));
+    assert_ne!(hash(typed), hash(IntegerValue::from_signed(-9)));
+    // Both wide forms keep their payload at one offset, which native code reads.
+    assert!(IntegerValue::wide_payload_offset().is_some());
+}
