@@ -69,7 +69,7 @@ const _: () = assert!(std::mem::size_of::<Node>() == 16);
 const SCRATCH_NODES_KEPT: usize = 1 << 16;
 
 thread_local! {
-    static SCRATCH: std::cell::Cell<(Vec<Node>, Vec<u32>)> =
+    static SCRATCH: std::cell::Cell<(Vec<Node>, Vec<(u64, u32)>)> =
         const { std::cell::Cell::new((Vec::new(), Vec::new())) };
 }
 
@@ -446,11 +446,28 @@ struct TapeParser<'a> {
     max_nodes: usize,
     nodes: Vec<Node>,
     text: String,
-    /// The key nodes of every object still open, innermost last.
-    keys: Vec<u32>,
+    /// The key nodes of every object still open, innermost last, each
+    /// with its [`key_print`].
+    keys: Vec<(u64, u32)>,
+}
+
+/// A key's length and first bytes in one word, which two equal keys share.
+fn key_print(key: &str) -> u64 {
+    let bytes = key.as_bytes();
+    let mut head = [0u8; 8];
+    let take = bytes.len().min(7);
+    head[..take].copy_from_slice(&bytes[..take]);
+    head[7] = bytes.len() as u8;
+    u64::from_le_bytes(head)
 }
 
 impl TapeParser<'_> {
+    /// The text of the string node at `key`.
+    fn str_of(&self, key: u32) -> &str {
+        let node = self.nodes[key as usize];
+        &self.text[node.b as usize..node.b as usize + node.a as usize]
+    }
+
     fn skip_whitespace(&mut self) {
         while let Some(b' ' | b'\t' | b'\n' | b'\r') = self.bytes.get(self.index) {
             self.index += 1;
@@ -546,7 +563,8 @@ impl TapeParser<'_> {
                 }
                 let key = self.string()?;
                 self.keys.try_reserve(1).ok()?;
-                self.keys.push(key);
+                let print = key_print(self.str_of(key));
+                self.keys.push((print, key));
                 self.skip_whitespace();
                 if self.bytes.get(self.index) != Some(&b':') {
                     return None;
@@ -581,17 +599,16 @@ impl TapeParser<'_> {
     /// object is left to the tree parse.
     fn repeats_a_key(&self, base: usize) -> bool {
         let keys = &self.keys[base..];
-        let text = |key: u32| {
-            let node = self.nodes[key as usize];
-            &self.text[node.b as usize..node.b as usize + node.a as usize]
-        };
         if keys.len() <= 16 {
-            return keys
-                .iter()
-                .enumerate()
-                .any(|(at, &key)| keys[..at].iter().any(|&earlier| text(earlier) == text(key)));
+            // Keys that differ almost always differ in their prints, so the
+            // texts are compared only when two prints are equal.
+            return keys.iter().enumerate().any(|(at, &(print, key))| {
+                keys[..at].iter().any(|&(earlier_print, earlier)| {
+                    earlier_print == print && self.str_of(earlier) == self.str_of(key)
+                })
+            });
         }
-        let mut sorted: Vec<&str> = keys.iter().map(|&key| text(key)).collect();
+        let mut sorted: Vec<&str> = keys.iter().map(|&(_, key)| self.str_of(key)).collect();
         sorted.sort_unstable();
         sorted.windows(2).any(|pair| pair[0] == pair[1])
     }

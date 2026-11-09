@@ -104,6 +104,9 @@ fn a_tape_refuses_what_it_leaves_to_the_tree_parse() {
     ] {
         assert!(JsonTape::parse(source, max, nodes).is_none(), "{source:?}");
     }
+    // Keys that share a length and their first bytes are told apart.
+    assert!(JsonTape::parse(r#"{"abcdefgX": 1, "abcdefgY": 2}"#, max, nodes).is_some());
+    assert!(JsonTape::parse(r#"{"abcdefgX": 1, "abcdefgX": 2}"#, max, nodes).is_none());
     let many: Vec<String> = (0..20).map(|key| format!("\"k{key}\": {key}")).collect();
     let large = format!("{{{}}}", many.join(","));
     assert!(JsonTape::parse(&large, max, nodes).is_some());
