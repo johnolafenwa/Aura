@@ -294,3 +294,18 @@ blocks fall in other size classes than the boxes freed before them.
 json_roundtrip, 10 rounds: 589M -> 513M instructions (callgrind). Wall
 time on the cloud box, 50 rounds, median of 11: 228 -> 208 ms (Python
 377 ms on the same run).
+
+## Compact JSON storage, step 3: dict reads in the tape (2026-11-09)
+
+- A dict made from a parsed object keeps its entries unbuilt
+  (`IndexedEntries` storage `Lazy`: the object's node and a build
+  function). Its length comes from the node, and it counts as shared, so
+  any write builds its own entries first.
+- A lookup with a `str` key (get, get_str and their payload, lent and
+  shadow forms) reads the key in the tape and builds only the value it
+  finds. Any other read builds the entries once and keeps them.
+
+docdb, 10k docs: 801M -> 695M instructions (callgrind). Wall time on the
+cloud box, 50k docs, median of 11: 667 ms (after step 2: 694 ms) ->
+589 ms. Python took 433 ms on an earlier run on this box. json_roundtrip
+does not change (218 ms, within noise).
