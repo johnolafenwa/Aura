@@ -876,6 +876,32 @@ fn json_parses_build_typed_variants_that_dump_and_read_in_place() {
         payloads: vec![int64(5)].into(),
     });
     assert_eq!(read(&loose, 0), (1, 5));
+    // A value in a tape reads its node, and its box shows the node.
+    for (source, kind, expected) in [
+        ("-9", 0, (1, -9)),
+        ("0.5", 1, (1, 0.5_f64.to_bits() as i64)),
+        ("true", 2, (1, 1)),
+        ("false", 2, (1, 0)),
+        ("1", 1, (0, 0)),
+        ("\"s\"", 0, (0, 0)),
+    ] {
+        let value = parsed_json(source);
+        assert_eq!(read(&value, kind), expected, "{source}");
+        let boxed = boxed_value(value.clone());
+        let header = unsafe { &*boxed };
+        let Value::EnumVariant(variant) = &value else {
+            panic!("a variant");
+        };
+        let node = variant.payloads.json().expect("a tape value");
+        assert_eq!(
+            header
+                .list_access
+                .load(std::sync::atomic::Ordering::Relaxed),
+            crate::native_runtime::JSON_TAPE_ACCESS
+        );
+        assert_eq!(header.list_elements.get(), node.address());
+        unsafe { aura_direct_release_value(boxed) };
+    }
 
     // Typed payloads made one at a time, by name or by index.
     let by_name = TypedPayloads::from_value(layout, "Int", int64(2)).expect("fits");

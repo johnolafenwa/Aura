@@ -47,6 +47,9 @@ pub(super) struct EnumRecord {
     pub(super) access: i64,
     table: Rc<LayoutTable>,
     variants: Rc<VariantPayloadPlaces>,
+    /// Whether this is `json.Value`, whose variants may also lie in a
+    /// parsed document's tape (see `aura_runtime::json_tape`).
+    json: bool,
 }
 
 impl EnumRecord {
@@ -184,6 +187,7 @@ impl PlainRecords {
                     access: access as i64,
                     table: Rc::new(table),
                     variants: Rc::new(variants),
+                    json: matches!(ty, Type::Named(name, args) if name == "json.Value" && args.is_empty()),
                 })
             }
             None => None,
@@ -226,19 +230,69 @@ impl FunctionCompiler<'_> {
             .load(types::I64, MemFlags::trusted(), variant, layout.len_offset)
     }
 
+    /// The tags of the tape nodes that are `json.Value` variant `name`, as
+    /// an inclusive range.
+    fn json_tape_tags(name: &str) -> Option<(i64, i64)> {
+        use aura_runtime::json_tape::JsonTag;
+        let tags = match name {
+            "Null" => (JsonTag::Null, JsonTag::Null),
+            "Bool" => (JsonTag::False, JsonTag::True),
+            "Int" => (JsonTag::Int, JsonTag::Int),
+            "Float" => (JsonTag::Float, JsonTag::Float),
+            "String" => (JsonTag::String, JsonTag::String),
+            "Array" => (JsonTag::Array, JsonTag::Array),
+            "Object" => (JsonTag::Object, JsonTag::Object),
+            _ => return None,
+        };
+        Some((tags.0 as i64, tags.1 as i64))
+    }
+
+    /// Branches to `tape_block` when the box `variant` holds a `json.Value`
+    /// in a tape, and to `slow_block` otherwise.
+    fn emit_json_tape_check(&mut self, variant: Val, slow_block: Blk, tape_block: Blk) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let access = self.emit_list_access(variant, &layout);
+        let in_tape = self.builder.icmp_imm(
+            IntCC::Equal,
+            access,
+            i64::from(aura_runtime::native_runtime::JSON_TAPE_ACCESS),
+        );
+        self.builder.brif(in_tape, tape_block, &[], slow_block, &[]);
+    }
+
+    /// Whether the node of a checked tape box `variant` has a tag in
+    /// `tags`, as a flag.
+    fn json_tape_tag_in(&mut self, variant: Val, tags: (i64, i64)) -> Val {
+        let node = self.class_block(variant);
+        let tag = self.builder.uload8(
+            types::I64,
+            MemFlags::trusted(),
+            node,
+            aura_runtime::json_tape::NODE_TAG_OFFSET,
+        );
+        if tags.0 == tags.1 {
+            return self.builder.icmp_imm(IntCC::Equal, tag, tags.0);
+        }
+        let from_first = self.builder.iadd_imm(tag, -tags.0);
+        self.builder
+            .icmp_imm(IntCC::UnsignedLessThanOrEqual, from_first, tags.1 - tags.0)
+    }
+
     /// Branches to `fast_block` when the variant box `variant` keeps its
     /// payloads in `record`'s layout and is variant `index`, and to
-    /// `slow_block` otherwise.
+    /// `slow_block` otherwise: `untyped_block` when the box does not keep
+    /// its payloads in the layout at all.
     fn emit_variant_check(
         &mut self,
         variant: Val,
         record: &EnumRecord,
         index: usize,
         slow_block: Blk,
+        untyped_block: Blk,
         fast_block: Blk,
     ) {
         let checked = self.builder.create_block();
-        self.emit_class_check(variant, record.access, slow_block, checked);
+        self.emit_class_check(variant, record.access, untyped_block, checked);
         self.builder.switch_to_block(checked);
         self.builder.seal_block(checked);
         let actual = self.variant_index_of(variant);
@@ -338,7 +392,16 @@ impl FunctionCompiler<'_> {
         let slow_block = self.builder.create_block();
         let join_block = self.builder.create_block();
         self.builder.append_block_param(join_block, types::I64);
-        self.emit_class_check(variant, record.access, slow_block, checked);
+        // A `json.Value` in a tape is tested by its node's tag.
+        let tape_tags = record
+            .json
+            .then(|| Self::json_tape_tags(variant_name))
+            .flatten();
+        let untyped_block = match tape_tags {
+            Some(_) => self.builder.create_block(),
+            None => slow_block,
+        };
+        self.emit_class_check(variant, record.access, untyped_block, checked);
 
         self.builder.switch_to_block(checked);
         self.builder.seal_block(checked);
@@ -346,6 +409,18 @@ impl FunctionCompiler<'_> {
         let matches = self.builder.icmp_imm(IntCC::Equal, actual, index as i64);
         let matches = self.builder.uextend(types::I64, matches);
         self.builder.jump(join_block, &[matches]);
+
+        if let Some(tags) = tape_tags {
+            let tape_block = self.builder.create_block();
+            self.builder.switch_to_block(untyped_block);
+            self.builder.seal_block(untyped_block);
+            self.emit_json_tape_check(variant, slow_block, tape_block);
+            self.builder.switch_to_block(tape_block);
+            self.builder.seal_block(tape_block);
+            let matches = self.json_tape_tag_in(variant, tags);
+            let matches = self.builder.uextend(types::I64, matches);
+            self.builder.jump(join_block, &[matches]);
+        }
 
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
@@ -408,7 +483,69 @@ impl FunctionCompiler<'_> {
         if lend {
             self.builder.append_block_param(join_block, types::I64);
         }
-        self.emit_variant_check(object, &record, variant, slow_block, fast_block);
+        // A scalar payload of a `json.Value` in a tape is read from its
+        // node.
+        let tape_read = match (&slot.kind, record.json) {
+            (SlotKind::Leaves(leaves), true) => match leaves.as_slice() {
+                [leaf]
+                    if matches!(
+                        leaf.kind,
+                        ScalarKind::Int64 | ScalarKind::Float64 | ScalarKind::Bool
+                    ) =>
+                {
+                    Self::json_tape_tags(variant_name).map(|tags| (tags, leaf.kind))
+                }
+                _ => None,
+            },
+            _ => None,
+        };
+        let untyped_block = match tape_read {
+            Some(_) => self.builder.create_block(),
+            None => slow_block,
+        };
+        self.emit_variant_check(
+            object,
+            &record,
+            variant,
+            slow_block,
+            untyped_block,
+            fast_block,
+        );
+        if let Some((tags, kind)) = tape_read {
+            let tape_block = self.builder.create_block();
+            let tag_block = self.builder.create_block();
+            self.builder.switch_to_block(untyped_block);
+            self.builder.seal_block(untyped_block);
+            self.emit_json_tape_check(object, slow_block, tape_block);
+            self.builder.switch_to_block(tape_block);
+            self.builder.seal_block(tape_block);
+            let matches = self.json_tape_tag_in(object, tags);
+            self.builder.brif(matches, tag_block, &[], slow_block, &[]);
+            self.builder.switch_to_block(tag_block);
+            self.builder.seal_block(tag_block);
+            let node = self.class_block(object);
+            let flags = MemFlags::trusted();
+            let offset = aura_runtime::json_tape::NODE_SCALAR_OFFSET;
+            let value = match kind {
+                ScalarKind::Int64 => self.builder.load(types::I64, flags, node, offset),
+                ScalarKind::Float64 => self.builder.load(types::F64, flags, node, offset),
+                _ => {
+                    let tag = self.builder.uload8(
+                        types::I64,
+                        flags,
+                        node,
+                        aura_runtime::json_tape::NODE_TAG_OFFSET,
+                    );
+                    let truth = self.builder.icmp_imm(
+                        IntCC::Equal,
+                        tag,
+                        aura_runtime::json_tape::JsonTag::True as i64,
+                    );
+                    self.builder.uextend(types::I64, truth)
+                }
+            };
+            self.builder.jump(join_block, &[value]);
+        }
 
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
