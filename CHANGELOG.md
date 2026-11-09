@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` models `dict.get` and `dict.remove` as lookups of the
+  modeled dict: `Found` with the stored value when the key is there, else
+  `Missing`, and `remove` takes the key out.
+- A class field or function result whose type is a callable alias with a
+  contract has the contract: storing or returning a named function proves
+  it fits, and calls through the field or result rely on it.
+- Checks that read a float `/` or `sqrt` are first asked with facts true of
+  the rounded result, so bounds such as `x / y <= x` for `y >= 1.0` prove in
+  milliseconds instead of timing out. `sqrt(x)` is now modeled as well as
+  `x.sqrt()`.
+- A method can call a function stored in one of its own fields,
+  `self.step(n)`, which the compiler rejected before.
+
 ## VS Code extension 0.13.0 — 2026-11-08
 
 - Shows proof results inline: on open and save it runs `aura verify`,

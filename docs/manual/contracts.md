@@ -419,8 +419,9 @@ lemma call, a ghost `assert` that the verifier cannot prove keeps
 
 A type alias for a callable type can end with `:` and an indented block of
 `requires` and `ensures` clauses over the callable's named parameters and
-`result`. A parameter of that type has the contract: a call through it must
-meet the `requires`, and its result has the `ensures`.
+`result`. A parameter, a class field, or a function result of that type has
+the contract: a call through it must meet the `requires`, and its result has
+the `ensures`.
 
 ```aura
 type Step = def(n: int64) -> int64:
@@ -450,6 +451,38 @@ gives `Step`'s. A callable contract is for the verifier. The program checks
 it nowhere; each function still checks its own `requires` when it runs. A
 function value that is not a named function, such as a lambda, is reported
 as `AU5104` where it becomes a `Step`.
+
+The same holds where a function value is stored in a field of that type or
+returned as one. Each construction or assignment of the field, and each
+`return`, proves that the function fits, so every read of the field and
+every call's result can rely on the contract:
+
+```aura
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+class Stepper:
+    step: Step
+
+    def advance(self, n: int64) -> int64:
+        requires 0 <= n and n < 100
+        ensures result > n
+        return self.step(n)
+
+def make() -> Step:
+    return inc
+
+def main():
+    print(Stepper(step=inc).advance(1))
+    s = make()
+    print(s(5))
+```
 
 The callable type names each parameter and takes none as `mut`, and the
 alias has no type parameters.

@@ -15,6 +15,8 @@
 #[path = "verify_exec.rs"]
 mod exec;
 pub(crate) use exec::CHECK_FAILURE_SITE;
+#[path = "verify_float.rs"]
+mod float;
 #[path = "verify_smt.rs"]
 pub mod smt;
 #[path = "verify_spec.rs"]
@@ -228,6 +230,9 @@ pub(crate) struct VerifyContext<'a> {
     implemented: BTreeMap<String, &'a FunctionDecl>,
     /// The contract of each callable alias that states one, by name.
     callable_contracts: BTreeMap<String, &'a crate::sema::FunctionInfo>,
+    /// The callable alias with a contract that each class field declared
+    /// as one has, by class and field.
+    field_contracts: BTreeMap<(String, String), String>,
 }
 
 impl<'a> VerifyContext<'a> {
@@ -252,7 +257,16 @@ impl<'a> VerifyContext<'a> {
             }
         }
         let mut class_invariants = BTreeMap::new();
+        let mut field_contracts = BTreeMap::new();
         for class in program.classes.values() {
+            for field in &class.decl.fields {
+                if let crate::ast::TypeRefKind::Named { name, args } = &field.ty.kind {
+                    if args.is_empty() && callable_contracts.contains_key(name) {
+                        field_contracts
+                            .insert((class.decl.name.clone(), field.name.clone()), name.clone());
+                    }
+                }
+            }
             for (name, method) in &class.methods {
                 decls.insert(format!("{}.{name}", class.decl.name), &method.decl);
                 if method.decl.spec {
@@ -331,7 +345,25 @@ impl<'a> VerifyContext<'a> {
             trait_methods,
             implemented,
             callable_contracts,
+            field_contracts,
         }
+    }
+
+    /// The callable alias with a contract that field `field` of class
+    /// `class` is declared as.
+    pub(crate) fn field_contract(&self, class: &str, field: &str) -> Option<String> {
+        let class = class.rsplit("::").next().unwrap_or(class);
+        self.field_contracts
+            .get(&(class.to_string(), field.to_string()))
+            .cloned()
+    }
+
+    /// The callable alias with a contract that function `name` is declared
+    /// to return.
+    pub(crate) fn return_contract(&self, name: &str) -> Option<String> {
+        self.decl(name)
+            .and_then(|decl| self.callable_contract(&decl.return_type))
+            .map(|(alias, _)| alias)
     }
 
     /// The declaration of trait method `method` of `trait_name`.
@@ -533,6 +565,7 @@ pub fn verify_module(
     let mut erased_open = false;
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
+    let mut rough_solver: Option<smt::Solver> = None;
     let trace = options.trace;
     for function in &module.functions {
         if !verified_function(program, &cx, function) {
@@ -588,7 +621,23 @@ pub fn verify_module(
                             .map_err(|message| Diagnostic::coded("AU5103", message))?,
                     ),
                 };
-                let statuses = solve(solver, &exec, trace)
+                let rough = if exec.rounded.is_empty() {
+                    None
+                } else {
+                    match &mut rough_solver {
+                        Some(solver) => Some(solver),
+                        None => Some(
+                            rough_solver.insert(
+                                smt::Solver::start(
+                                    &command,
+                                    options.timeout_ms.min(ROUGH_TIMEOUT_MS),
+                                )
+                                .map_err(|message| Diagnostic::coded("AU5103", message))?,
+                            ),
+                        ),
+                    }
+                };
+                let statuses = solve(solver, rough, &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
                 if let Some(path) = &cache {
                     write_cache(path, &statuses);
@@ -713,8 +762,13 @@ fn write_cache(path: &std::path::Path, statuses: &[Status]) {
 }
 
 /// Checks each obligation of `exec` against its declarations and facts.
+/// The time limit of the first, weaker query of a check that reads a float
+/// `/` or `sqrt` (see `verify_float.rs`).
+const ROUGH_TIMEOUT_MS: u64 = 2_000;
+
 fn solve(
     solver: &mut smt::Solver,
+    mut rough: Option<&mut smt::Solver>,
     exec: &exec::Exec<'_>,
     trace: bool,
 ) -> std::result::Result<Vec<Status>, String> {
@@ -727,6 +781,27 @@ fn solve(
         eprintln!("; function {}\n{prelude}", exec.function.name);
     }
     solver.send(&prelude)?;
+    // The weaker problem has each float `/` and `sqrt` result's facts in
+    // place of the fact that defines it.
+    let mut replaced: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    if let Some(rough) = rough.as_deref_mut() {
+        rough.send(&prelude)?;
+        let literals =
+            float::literals(
+                exec.facts
+                    .iter()
+                    .map(String::as_str)
+                    .chain(exec.obligations.iter().filter_map(
+                        |obligation| match &obligation.goal {
+                            exec::Goal::Holds(goal) => Some(goal.as_str()),
+                            exec::Goal::Unsupported(_) => None,
+                        },
+                    )),
+            );
+        for rounded in &exec.rounded {
+            replaced.insert(rounded.fact, float::axioms(rounded, &literals));
+        }
+    }
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
     for obligation in &exec.obligations {
@@ -734,13 +809,25 @@ fn solve(
         // check sees only what holds before it.
         if obligation.facts > asserted {
             let mut text = String::new();
-            for fact in &exec.facts[asserted..obligation.facts] {
+            let mut rough_text = String::new();
+            for (index, fact) in exec.facts[asserted..obligation.facts].iter().enumerate() {
                 text.push_str(&format!("(assert {fact})\n"));
+                match replaced.get(&(asserted + index)) {
+                    Some(axioms) => {
+                        for axiom in axioms {
+                            rough_text.push_str(&format!("(assert {axiom})\n"));
+                        }
+                    }
+                    None => rough_text.push_str(&format!("(assert {fact})\n")),
+                }
             }
             if trace {
                 eprintln!("{text}");
             }
             solver.send(&text)?;
+            if let Some(rough) = rough.as_deref_mut() {
+                rough.send(&rough_text)?;
+            }
             asserted = obligation.facts;
         }
         let goal = match &obligation.goal {
@@ -759,6 +846,19 @@ fn solve(
                 "; {} at {}:{}\n{query}",
                 obligation.message, obligation.span.line, obligation.span.column
             );
+        }
+        // A check the weaker problem proves is proved.
+        if let Some(rough) = rough.as_deref_mut() {
+            rough.send(&query)?;
+            let answer = rough.check()?;
+            rough.send("(pop 1)")?;
+            if answer == smt::SatResult::Unsat {
+                if trace {
+                    eprintln!("; => Proved from the facts of float `/` and `sqrt`");
+                }
+                statuses.push(Status::Proved);
+                continue;
+            }
         }
         solver.send(&query)?;
         let status = match solver.check()? {
@@ -786,6 +886,9 @@ fn solve(
         solver.send("(pop 1)")?;
     }
     solver.send("(pop 1)")?;
+    if let Some(rough) = rough {
+        rough.send("(pop 1)")?;
+    }
     Ok(statuses)
 }
 

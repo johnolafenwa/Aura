@@ -2778,3 +2778,214 @@ def main():
     };
     assert_eq!(open_checks(&report), ["25 ensures failed"], "{report:#?}");
 }
+
+#[test]
+fn dict_get_and_remove_are_lookups_of_the_modeled_dict() {
+    assert_open(
+        r#"
+def price_or(prices: dict[str, int64], item: str) -> int64:
+    requires all([prices[k] >= 0 for k in prices.keys()])
+    ensures result >= 0
+    match prices.get(item):
+        case Lookup.Found(p):
+            return p
+        case Lookup.Missing:
+            return 0
+
+def found_when_present(m: dict[int64, int64], k: int64) -> bool:
+    requires k in m
+    ensures result
+    match m.get(k):
+        case Lookup.Found(v):
+            return true
+        case Lookup.Missing:
+            return false
+
+def take(m: dict[int64, int64], k: int64) -> int64:
+    requires k in m and len(m) == 3
+    ensures result == 2
+    mut mm = m.copy()
+    mm.remove(k)
+    assert not (k in mm)
+    return len(mm)
+
+def removed_value(k: int64) -> int64:
+    ensures result == 7
+    mut m: dict[int64, int64] = {}
+    m[k] = 7
+    match m.remove(k):
+        case Lookup.Found(v):
+            assert len(m) == 0
+            return v
+        case Lookup.Missing:
+            return 0
+
+def missing(m: dict[int64, int64], k: int64) -> int64:
+    ensures result > 0
+    match m.get(k):
+        case Lookup.Found(v):
+            return 1
+        case Lookup.Missing:
+            return 0
+
+def main():
+    print(price_or({"a": 1}, "a"))
+    print(found_when_present({1: 2}, 1))
+    print(take({1: 1, 2: 2, 3: 3}, 1))
+    print(removed_value(3))
+    print(missing({1: 1}, 1))
+"#,
+        &["40 ensures failed"],
+    );
+}
+
+#[test]
+fn callable_fields_and_results_carry_their_alias_contract() {
+    assert_open(
+        r#"
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+def dec(n: int64) -> int64:
+    requires n > -1000
+    ensures result == n - 1
+    return n - 1
+
+class Stepper:
+    step: Step
+    count: int64
+
+    def advance(self, n: int64) -> int64:
+        requires 0 <= n and n < 100
+        ensures result > n
+        return self.step(n)
+
+def make() -> Step:
+    return inc
+
+def make_bad() -> Step:
+    return dec
+
+def pass_on(f: Step) -> Step:
+    return f
+
+def unknown(f: def(n: int64) -> int64) -> Step:
+    return f
+
+def use_made() -> int64:
+    ensures result > 5
+    s = make()
+    return s(5)
+
+def build() -> Stepper:
+    return Stepper(step=inc, count=0)
+
+def build_bad() -> Stepper:
+    return Stepper(step=dec, count=0)
+
+def reset(s: mut Stepper):
+    s.step = dec
+
+def run(s: Stepper) -> int64:
+    ensures result > 3
+    return s.step(3)
+
+def main():
+    print(use_made())
+    print(build().advance(1))
+    print(run(build()))
+    print(make_bad()(1))
+    print(pass_on(inc)(1))
+    print(unknown(inc)(1))
+    print(build_bad().count)
+    mut s = build()
+    reset(s)
+"#,
+        &[
+            "29 ensures failed",
+            "35 requires unsupported",
+            "46 ensures failed",
+            "49 ensures failed",
+            "61 requires unsupported",
+        ],
+    );
+}
+
+#[test]
+fn float_division_and_square_roots_prove_from_their_rounding_facts() {
+    let started = std::time::Instant::now();
+    let Some(report) = assert_open(
+        r#"
+def ratio(x: float64, y: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    requires 1.0 <= y and y <= 10.0
+    ensures 0.0 <= result and result <= x
+    return x / y
+
+def share(part: float64, total: float64) -> float64:
+    requires 0.0 <= part and part <= total and total > 0.0 and total <= 1000000.0
+    ensures 0.0 <= result and result <= 1.0
+    return part / total
+
+def bounded(x: float64, y: float64) -> float64:
+    requires 0.0 <= x and x <= 8.0
+    requires 2.0 <= y and y <= 4.0
+    ensures 0.25 <= result or x < 1.0
+    ensures result <= 4.0
+    return x / y
+
+def negative(x: float64, y: float64) -> float64:
+    requires -8.0 <= x and x <= 0.0 and 2.0 <= y
+    ensures -4.0 <= result and result <= 0.0
+    return x / y
+
+def root(x: float64) -> float64:
+    requires 1.0 <= x and x <= 100.0
+    ensures 1.0 <= result and result <= 10.0 and result <= x
+    return x.sqrt()
+
+def small_root(x: float32) -> float32:
+    requires 0.0 <= x and x <= 1.0
+    ensures x <= result and result <= 1.0
+    return sqrt(x)
+
+def mean(total: float64, n: int64) -> float64:
+    requires 1 <= n and n <= 1000
+    requires 0.0 <= total and total <= 1000.0
+    ensures 0.0 <= result and result <= 1000.0
+    return total / n.to_float()
+
+def wrong(x: float64, y: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    requires 0.5 <= y and y <= 10.0
+    ensures result <= x
+    return x / y
+
+def main():
+    print(ratio(3.0, 2.0))
+    print(share(1.0, 2.0))
+    print(bounded(4.0, 2.0))
+    print(negative(-4.0, 2.0))
+    print(root(4.0))
+    print(small_root(0.25))
+    print(mean(10.0, 3))
+    print(wrong(1.0, 2.0))
+"#,
+        &["44 ensures failed"],
+    ) else {
+        return;
+    };
+    assert!(report.obligations.len() > 10);
+    // Each of these took the exact query past its time limit.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(60),
+        "{:?}",
+        started.elapsed()
+    );
+}
