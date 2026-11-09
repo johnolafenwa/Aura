@@ -195,17 +195,17 @@ booleans, with each integer type's range as a check:
   comparisons, `len`, `in`, `contains`, `starts_with`, and `ends_with`
 - `dict` and `set` with integer or `str` keys: which keys they hold, their
   length, and a `dict`'s values when those are integers, `bool`, or `str`;
-  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `keys`,
-  `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
+  literals, `d[k]`, `d[k] = v`, `in`, `len`, `is_empty`, `clear`, `get`,
+  `remove`, `keys`, `values`, and `items` of a `dict`, and `add`, `remove`, `discard`, and
   `clear` of a `set`, with `==` of whole collections
 - tuples, classes, enums, and unions such as `int64 | None`, field by field
 - `len`, `abs`, `min`, and `max` of integers, list `append`, `pop`, `clear`,
   element reads and writes, and `copy`
 - `spec def` helpers, `old`, and `result` in contracts, and `ghost` locals
-- parameters of a callable alias with a contract
-  ([Callable Contracts](/manual/contracts#callable-contracts)): calls
-  through them prove its `requires` and assume its `ensures`, and a named
-  function passed as one is proved to fit it
+- parameters, class fields, and function results of a callable alias with
+  a contract ([Callable Contracts](/manual/contracts#callable-contracts)):
+  calls through them prove its `requires` and assume its `ensures`, and a
+  named function passed, stored, or returned as one is proved to fit it
 - `extern "C"` functions with a trusted contract: an indented block of
   `requires` and `ensures` after the signature. Each call proves the
   `requires`, and the result and `mut` arguments have the `ensures`
@@ -225,7 +225,7 @@ booleans, with each integer type's range as a check:
 
 Anything else is a value the verifier knows nothing about: a `dict` or
 `set` of other keys, the result of float `//`, `%`, and `**`, the result of most library calls, such as
-`str.split` or `dict.get`, and what a call returns through a function value the verifier cannot
+`str.split`, and what a call returns through a function value the verifier cannot
 follow, such as one passed as an argument, stored in a collection, or
 chosen on different paths. Such a value's `requires` is reported as
 `AU5104` where it leaves the function, and stays checked when it is
@@ -268,9 +268,31 @@ def price(prices: dict[str, int64], item: str) -> int64:
 
 A float contract is about IEEE-754 values, so `x == x` fails for NaN, and a
 contract that needs `x / y` to be a number says so, as `requires y > 0.0`
-does about the divisor. Proofs about float division and square roots can
-take the solver longer than proofs about integers; one it cannot finish in
-time is reported as `AU5102`.
+does about the divisor.
+
+An exact float division or square root is slow for the solver, so a check
+that reads one is first tried with what is known about the rounded result:
+its sign, when it is NaN, zero, or infinite, how its size compares with its
+operands and with `1.0`, and its bounds when its operands lie between
+literals of the function. A check that follows from those is proved at once:
+
+```aura
+def ratio(x: float64, y: float64) -> float64:
+    requires 0.0 <= x and x <= 100.0
+    requires 1.0 <= y and y <= 10.0
+    ensures 0.0 <= result and result <= x
+    return x / y
+
+def root(x: float64) -> float64:
+    requires 1.0 <= x and x <= 100.0
+    ensures 1.0 <= result and result <= 10.0
+    return x.sqrt()
+```
+
+Any other check is asked of the exact problem, which also finds the
+counterexample of one that fails. One the solver cannot finish in time is
+reported as `AU5102`; a contract that bounds the operands by literals often
+turns it into one the first query proves.
 
 A quantifier over a `str`, or over a list of other elements, is reported as
 `AU5104`. See the

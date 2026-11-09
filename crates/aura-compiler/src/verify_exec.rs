@@ -465,6 +465,8 @@ pub(super) struct Exec<'a> {
     pub(super) prove_sites: bool,
     /// The block and position of the instruction being executed.
     position: (usize, usize),
+    /// Each float `/` and `sqrt` result, for the cheaper first query.
+    pub(super) rounded: Vec<super::float::Rounded>,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -503,6 +505,7 @@ impl<'a> Exec<'a> {
             labels,
             unsupported: None,
             captured: closure_captures(function),
+            rounded: Vec::new(),
             prove_sites: false,
             position: (0, 0),
         }
@@ -536,6 +539,23 @@ impl<'a> Exec<'a> {
         let name = self.fresh_const(sort, hint);
         self.facts.push(format!("(= {name} {term})"));
         name
+    }
+
+    /// A float `/` or `sqrt` result, defined by its own fact.
+    fn define_rounded(&mut self, float: FloatTy, op: super::float::RoundedOp) -> String {
+        let (hint, term) = match &op {
+            super::float::RoundedOp::Div(a, b) => ("arith", format!("(fp.div RNE {a} {b})")),
+            super::float::RoundedOp::Sqrt(a) => ("sqrt", format!("(fp.sqrt RNE {a})")),
+        };
+        let result = self.fresh_const(float.sort(), hint);
+        self.rounded.push(super::float::Rounded {
+            fact: self.facts.len(),
+            result: result.clone(),
+            op,
+            float,
+        });
+        self.facts.push(format!("(= {result} {term})"));
+        result
     }
 
     pub(super) fn fact(&mut self, term: String) {
@@ -717,7 +737,12 @@ impl<'a> Exec<'a> {
                     let fields = fields
                         .into_iter()
                         .map(|(field, ty)| {
-                            let value = self.fresh_at(&ty, &format!("{hint}_{field}"), depth + 1);
+                            // A field of a callable alias with a contract
+                            // has it: each write to one proves it.
+                            let value = match self.cx.field_contract(name, &field) {
+                                Some(alias) => Val::Contracted(alias),
+                                None => self.fresh_at(&ty, &format!("{hint}_{field}"), depth + 1),
+                            };
                             (field, value)
                         })
                         .collect();
@@ -869,18 +894,37 @@ impl<'a> Exec<'a> {
             .decl(callee)
             .and_then(|decl| decl.params.iter().find(|p| p.name == param))
             .and_then(|p| self.cx.callable_contract(&p.ty));
-        let pc = state.pc.clone();
-        match (value, contracted) {
-            (Val::Contracted(from), Some((alias, _))) if *from == alias => {}
-            (Val::Func(function), Some((alias, _))) if self.cx.decl(function).is_some() => {
-                self.prove_callable_refinement(state, function, &alias);
+        match contracted {
+            Some((alias, _)) => self.fit_callable(
+                state,
+                value,
+                &alias,
+                &format!("the value passed as `{param}`"),
+            ),
+            None => {
+                let pc = state.pc.clone();
+                self.oblige_escape(value, &pc);
             }
-            (_, Some((alias, _))) => {
+        }
+    }
+
+    /// What a function value needs where it becomes one of callable alias
+    /// `alias`, which has a contract: an argument, a field, or a result. A
+    /// named function is proved to meet the contract, and a value of the
+    /// same alias already does.
+    fn fit_callable(&mut self, state: &State, value: &Val, alias: &str, what: &str) {
+        match value {
+            Val::Contracted(from) if from == alias => {}
+            Val::Func(function) if self.cx.decl(function).is_some() => {
+                self.prove_callable_refinement(state, function, alias);
+            }
+            _ => {
                 let span = self.span;
+                let pc = state.pc.clone();
                 self.oblige(
                     ObligationKind::Requires,
                     span,
-                    format!("the value passed as `{param}` meets the contract of `{alias}`"),
+                    format!("{what} meets the contract of `{alias}`"),
                     &pc,
                     Goal::Unsupported(
                         "only a named function, or a value of the same alias, is checked against a callable contract"
@@ -888,7 +932,16 @@ impl<'a> Exec<'a> {
                     ),
                 );
             }
-            (value, None) => self.oblige_escape(value, &pc),
+        }
+    }
+
+    /// The callable alias with a contract that the field `path` names, when
+    /// it is a field of a class declared as one.
+    fn place_contract(&self, path: &str) -> Option<String> {
+        let (parent, field) = path.rsplit_once('.')?;
+        match self.place_type(parent)? {
+            Type::Named(class, _) => self.cx.field_contract(&class, field),
+            _ => None,
         }
     }
 
@@ -1669,7 +1722,14 @@ impl<'a> Exec<'a> {
         let target = |exec: &Self, label: &str| exec.labels[label];
         match &block.terminator {
             Terminator::Return(value) => {
-                let result = self.operand(&mut state, value, None);
+                let result = match self.cx.return_contract(&self.function.name) {
+                    Some(alias) => {
+                        let result = self.followed_operand(&mut state, value, None);
+                        self.fit_callable(&state, &result, &alias, "the returned value");
+                        result
+                    }
+                    None => self.operand(&mut state, value, None),
+                };
                 self.prove_return_invariants(&state, &result);
                 Vec::new()
             }
@@ -1975,6 +2035,15 @@ impl<'a> Exec<'a> {
             Instruction::Assign { target, value } => {
                 let hint = self.place_type(target).as_ref().and_then(IntTy::of);
                 let value = self.rvalue(state, Some(target), value, hint);
+                if let Some(alias) = self.place_contract(target) {
+                    let field = target.rsplit('.').next().unwrap_or(target);
+                    self.fit_callable(
+                        state,
+                        &value,
+                        &alias,
+                        &format!("the value stored in field `{field}`"),
+                    );
+                }
                 self.write_place(state, target, value);
             }
             Instruction::PopCleanup { place, run, .. } => {
@@ -2566,9 +2635,20 @@ impl<'a> Exec<'a> {
                 };
                 let mut values = Vec::new();
                 for (field, ty) in declared {
-                    let value = match fields.iter().find(|init| init.name == field) {
-                        Some(init) => self.operand(state, &init.value, IntTy::of(&ty)),
-                        None => self.fresh(&ty, &field),
+                    let contract = self.cx.field_contract(class_name, &field);
+                    let value = match (fields.iter().find(|init| init.name == field), contract) {
+                        (Some(init), Some(alias)) => {
+                            let value = self.followed_operand(state, &init.value, None);
+                            self.fit_callable(
+                                state,
+                                &value,
+                                &alias,
+                                &format!("the value of field `{field}`"),
+                            );
+                            value
+                        }
+                        (Some(init), None) => self.operand(state, &init.value, IntTy::of(&ty)),
+                        (None, _) => self.fresh(&ty, &field),
                     };
                     values.push((field, value));
                 }
@@ -2847,11 +2927,12 @@ impl<'a> Exec<'a> {
                             BinaryOp::Mul => "fp.mul",
                             _ => "fp.div",
                         };
-                        if op == BinaryOp::Div {
+                        let result = if op == BinaryOp::Div {
                             self.oblige_float_divisor(&pc, span, &b, trap);
-                        }
-                        let result =
-                            self.define(float.sort(), "arith", format!("({symbol} RNE {a} {b})"));
+                            self.define_rounded(float, super::float::RoundedOp::Div(a, b))
+                        } else {
+                            self.define(float.sort(), "arith", format!("({symbol} RNE {a} {b})"))
+                        };
                         Val::Float(result, float)
                     }
                     BinaryOp::FloorDiv | BinaryOp::Mod => {
@@ -3311,9 +3392,11 @@ impl<'a> Exec<'a> {
         self.erasing = self.cx.decl(name).is_some_and(|decl| decl.lemma);
         self.call_requires(state, name, &pre, span);
         self.erasing = false;
-        let result = match result_type {
-            Some(ty) => self.fresh(ty, hint.unwrap_or("result")),
-            None => match &callee.return_type {
+        let result = match (self.cx.return_contract(name), result_type) {
+            // A result of a callable alias with a contract has it.
+            (Some(alias), _) => Val::Contracted(alias),
+            (None, Some(ty)) => self.fresh(ty, hint.unwrap_or("result")),
+            (None, None) => match &callee.return_type {
                 Type::Unit => Val::Unit,
                 ty => self.fresh(ty, "result"),
             },
@@ -3593,6 +3676,51 @@ impl<'a> Exec<'a> {
                             None => self.fresh(&value, hint),
                         })
                     }
+                    DictOp::Get | DictOp::GetStr | DictOp::GetInt64 | DictOp::Remove => {
+                        // `Found(value)` when the key is there, else
+                        // `Missing`; `remove` also takes the key out.
+                        let k = key_arg(self, state)?;
+                        let present = format!("(select {keys} {k})");
+                        let hint = target.unwrap_or("value");
+                        let found = match &values {
+                            Some(values) => {
+                                let read = scalar_val(format!("(select {values} {k})"), &value);
+                                self.name_scalars(read, hint)
+                            }
+                            None => self.fresh(&value, hint),
+                        };
+                        let tag = self.define("Int", "lookup", format!("(ite {present} 0 1)"));
+                        if dict_op == DictOp::Remove {
+                            if let Some(place) = receiver_place {
+                                let new_len = self.define(
+                                    "Int",
+                                    "len",
+                                    format!("(ite {present} (- {len} 1) {len})"),
+                                );
+                                let new_keys = self.define(
+                                    &format!("(Array {sort} Bool)"),
+                                    "keys",
+                                    format!("(store {keys} {k} false)"),
+                                );
+                                self.write_place(
+                                    state,
+                                    place,
+                                    Val::Map {
+                                        len: new_len,
+                                        keys: new_keys,
+                                        values,
+                                        key,
+                                        value,
+                                    },
+                                );
+                            }
+                        }
+                        Some(Val::Enum(
+                            super::LOOKUP.to_string(),
+                            tag,
+                            vec![vec![found], Vec::new()],
+                        ))
+                    }
                     DictOp::SetIndex | DictOp::Set => {
                         let k = key_arg(self, state)?;
                         let stored = arg(self, state, 1, IntTy::of(&value));
@@ -3856,13 +3984,20 @@ impl<'a> Exec<'a> {
                 }
                 _ => None,
             },
-            RuntimeOp::Scalar(ScalarOp::Sqrt) => match receiver {
-                Some(Val::Float(term, float)) => Some(Val::Float(
-                    self.define(float.sort(), "sqrt", format!("(fp.sqrt RNE {term})")),
-                    float,
-                )),
-                _ => None,
-            },
+            RuntimeOp::Scalar(ScalarOp::Sqrt) | RuntimeOp::Function(FunctionOp::Sqrt) => {
+                // `x.sqrt()` reads its receiver, and `sqrt(x)` its argument.
+                let value = match receiver {
+                    Some(value) => value,
+                    None => arg(self, state, 0, None),
+                };
+                match value {
+                    Val::Float(term, float) => Some(Val::Float(
+                        self.define_rounded(float, super::float::RoundedOp::Sqrt(term)),
+                        float,
+                    )),
+                    _ => None,
+                }
+            }
             RuntimeOp::Value(ValueOp::Clone | ValueOp::Copy) => receiver,
             RuntimeOp::Print(_) => Some(Val::Unit),
             _ => None,
