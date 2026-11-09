@@ -10452,6 +10452,9 @@ fn direct_map_lookup_as(
     key: *mut OpaqueValue,
     boxed: fn(Option<&Value>) -> *mut OpaqueValue,
 ) -> *mut OpaqueValue {
+    if let Some(found) = tape_lookup_key(map, key) {
+        return boxed(found.as_ref());
+    }
     unsafe { with_value(key, |key| boxed(map.entries.value_of(key))) }
 }
 
@@ -10644,6 +10647,9 @@ pub extern "C-unwind" fn aura_direct_map_get_shadow(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_key(map, key)) } {
+            return found;
+        }
         shadow_map_lookup(map, |map| {
             unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
                 .map(|found| unsafe { &*found })
@@ -10798,11 +10804,54 @@ pub extern "C-unwind" fn aura_direct_map_get_lent(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_key(map, key)) } {
+            return found;
+        }
         lent_map_lookup(map, |map| {
             unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
                 .map(|found| unsafe { &*found })
         })
     })
+}
+
+/// A lookup in a dict whose entries are still read from a parsed
+/// document's tape (see [`DictEntries::unrealized_json`]): a box of the
+/// value `find` reads under the key, or null when the key is missing, with
+/// no entry made a value. `None` for any other dict, or when `find` cannot
+/// read the key in the tape, which the caller then looks up as usual.
+///
+/// # Safety
+///
+/// `map` is a live box.
+unsafe fn tape_map_lookup(
+    map: *mut OpaqueValue,
+    find: impl FnOnce(&MapValue) -> Option<Option<Value>>,
+) -> Option<*mut OpaqueValue> {
+    let found = unsafe {
+        with_lendable_value(map, false, |value, _| match value {
+            Value::Map(map) => find(map),
+            _ => None,
+        })
+    }?;
+    Some(found.map_or(std::ptr::null_mut(), boxed_value))
+}
+
+/// The value under the boxed key `key` in a dict whose entries are still
+/// read from a tape: `Some(None)` when the key is missing, and `None` for
+/// any other dict or a key that is not a `str`.
+fn tape_lookup_key(map: &MapValue, key: *mut OpaqueValue) -> Option<Option<Value>> {
+    let node = map.entries.unrealized_json()?;
+    unsafe {
+        with_value(key, |key| match key {
+            Value::String(text) => Some(node.lookup_str(text)),
+            _ => None,
+        })
+    }
+}
+
+/// [`tape_lookup_key`] for a `str` key the caller holds.
+fn tape_lookup_str(map: &MapValue, key: &str) -> Option<Option<Value>> {
+    Some(map.entries.unrealized_json()?.lookup_str(key))
 }
 
 /// `aura_direct_map_get_str_payload`, lending the found value where it can.
@@ -10814,6 +10863,9 @@ pub extern "C-unwind" fn aura_direct_map_get_str_lent(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let key = literal_str(key_ptr, key_len);
+        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_str(map, key)) } {
+            return found;
+        }
         lent_map_lookup(map, |map| map.entries.value_of_str(key))
     })
 }
@@ -10889,7 +10941,10 @@ pub extern "C-unwind" fn aura_direct_map_get_str(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let key = literal_str(key_ptr, key_len);
-        with_map(map, |map| boxed_map_lookup(map.entries.value_of_str(key)))
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            Some(found) => boxed_map_lookup(found.as_ref()),
+            None => boxed_map_lookup(map.entries.value_of_str(key)),
+        })
     })
 }
 
@@ -10911,7 +10966,10 @@ pub extern "C-unwind" fn aura_direct_map_get_str_payload(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let key = literal_str(key_ptr, key_len);
-        with_map(map, |map| boxed_map_payload(map.entries.value_of_str(key)))
+        with_map(map, |map| match tape_lookup_str(map, key) {
+            Some(found) => boxed_map_payload(found.as_ref()),
+            None => boxed_map_payload(map.entries.value_of_str(key)),
+        })
     })
 }
 

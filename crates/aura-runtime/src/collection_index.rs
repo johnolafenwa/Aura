@@ -482,8 +482,41 @@ pub struct IndexedEntries<T> {
 
 #[derive(Debug)]
 enum Storage<T> {
+    Eager(Eager<T>),
+    /// The entries of an object in a parsed JSON document's tape, made
+    /// values the first time a read needs them as values. A write first
+    /// takes them as eager storage of its own.
+    Lazy(Arc<LazyEntries<T>>),
+}
+
+#[derive(Debug)]
+enum Eager<T> {
     Small(Arc<Vec<T>>),
     Large(Arc<Large<T>>),
+}
+
+impl<T> Eager<T> {
+    /// The same storage, shared.
+    fn share(&self) -> Self {
+        match self {
+            Self::Small(entries) => Self::Small(Arc::clone(entries)),
+            Self::Large(large) => Self::Large(Arc::clone(large)),
+        }
+    }
+}
+
+/// See [`Storage::Lazy`].
+#[derive(Debug)]
+struct LazyEntries<T> {
+    source: crate::json_tape::JsonNode,
+    build: fn(&crate::json_tape::JsonNode) -> Eager<T>,
+    realized: OnceLock<Eager<T>>,
+}
+
+impl<T> LazyEntries<T> {
+    fn realized(&self) -> &Eager<T> {
+        self.realized.get_or_init(|| (self.build)(&self.source))
+    }
 }
 
 #[derive(Clone, Debug)]
@@ -597,7 +630,7 @@ pub type SetElements = IndexedEntries<Value>;
 impl<T> Default for IndexedEntries<T> {
     fn default() -> Self {
         Self {
-            storage: Storage::Small(Arc::new(Vec::new())),
+            storage: Storage::Eager(Eager::Small(Arc::new(Vec::new()))),
         }
     }
 }
@@ -606,8 +639,8 @@ impl<T> Clone for IndexedEntries<T> {
     /// Shares the storage. A later write copies it first.
     fn clone(&self) -> Self {
         let storage = match &self.storage {
-            Storage::Small(entries) => Storage::Small(Arc::clone(entries)),
-            Storage::Large(large) => Storage::Large(Arc::clone(large)),
+            Storage::Eager(eager) => Storage::Eager(eager.share()),
+            Storage::Lazy(lazy) => Storage::Lazy(Arc::clone(lazy)),
         };
         Self { storage }
     }
@@ -643,7 +676,7 @@ impl<T: Keyed + Clone> From<Vec<T>> for IndexedEntries<T> {
     /// keys, lookups find the first, as a scan of the same entries would.
     fn from(entries: Vec<T>) -> Self {
         let mut collection = Self {
-            storage: Storage::Small(Arc::new(entries)),
+            storage: Storage::Eager(Eager::Small(Arc::new(entries))),
         };
         collection.rebuild_index();
         collection
@@ -714,10 +747,44 @@ impl<T> DoubleEndedIterator for Iter<'_, T> {
 impl<T> ExactSizeIterator for Iter<'_, T> {}
 
 impl<T> IndexedEntries<T> {
-    pub fn len(&self) -> usize {
+    /// The storage, a tape's entries made values first.
+    #[inline(always)]
+    fn eager(&self) -> &Eager<T> {
         match &self.storage {
-            Storage::Small(entries) => entries.len(),
-            Storage::Large(large) => large.slots.len() - large.holes,
+            Storage::Eager(eager) => eager,
+            Storage::Lazy(lazy) => lazy.realized(),
+        }
+    }
+
+    /// The storage for a write: a tape's entries become storage of this
+    /// collection's own, shared with any other handle until it writes.
+    #[inline(always)]
+    fn eager_mut(&mut self) -> &mut Eager<T> {
+        if let Storage::Lazy(lazy) = &self.storage {
+            self.storage = Storage::Eager(lazy.realized().share());
+        }
+        match &mut self.storage {
+            Storage::Eager(eager) => eager,
+            Storage::Lazy(_) => unreachable!("the entries were made eager"),
+        }
+    }
+
+    fn into_eager(self) -> Eager<T> {
+        match self.storage {
+            Storage::Eager(eager) => eager,
+            Storage::Lazy(lazy) => lazy.realized().share(),
+        }
+    }
+
+    pub fn len(&self) -> usize {
+        if let Storage::Lazy(lazy) = &self.storage {
+            if lazy.realized.get().is_none() {
+                return lazy.source.entry_count();
+            }
+        }
+        match self.eager() {
+            Eager::Small(entries) => entries.len(),
+            Eager::Large(large) => large.slots.len() - large.holes,
         }
     }
 
@@ -727,9 +794,9 @@ impl<T> IndexedEntries<T> {
 
     /// The entries in order.
     pub fn iter(&self) -> Iter<'_, T> {
-        let slots = match &self.storage {
-            Storage::Small(entries) => Slots::Dense(entries.iter()),
-            Storage::Large(large) => Slots::Holes(large.slots.iter()),
+        let slots = match self.eager() {
+            Eager::Small(entries) => Slots::Dense(entries.iter()),
+            Eager::Large(large) => Slots::Holes(large.slots.iter()),
         };
         Iter {
             slots,
@@ -740,9 +807,9 @@ impl<T> IndexedEntries<T> {
     /// The entry `index` entries from the start. It takes constant time
     /// unless removals left holes in a large collection.
     pub fn get(&self, index: usize) -> Option<&T> {
-        match &self.storage {
-            Storage::Small(entries) => entries.get(index),
-            Storage::Large(large) => large
+        match self.eager() {
+            Eager::Small(entries) => entries.get(index),
+            Eager::Large(large) => large
                 .slot_of(index)
                 .and_then(|slot| large.slots[slot].as_ref()),
         }
@@ -762,18 +829,18 @@ impl<T> IndexedEntries<T> {
     ///
     /// Panics when no entry is in `slot`.
     pub fn at_slot(&self, slot: usize) -> &T {
-        let entry = match &self.storage {
-            Storage::Small(entries) => entries.get(slot),
-            Storage::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
+        let entry = match self.eager() {
+            Eager::Small(entries) => entries.get(slot),
+            Eager::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
         };
         entry.expect("a slot from a lookup holds an entry")
     }
 
     /// The entry in `slot`, or `None` for a hole or a slot past the end.
     pub fn slot(&self, slot: usize) -> Option<&T> {
-        match &self.storage {
-            Storage::Small(entries) => entries.get(slot),
-            Storage::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
+        match self.eager() {
+            Eager::Small(entries) => entries.get(slot),
+            Eager::Large(large) => large.slots.get(slot).and_then(Option::as_ref),
         }
     }
 
@@ -781,9 +848,9 @@ impl<T> IndexedEntries<T> {
     /// slot 0, each time from the slot after the last one found, visits the
     /// entries in order while the collection is unchanged.
     pub fn next_slot(&self, from: usize) -> Option<usize> {
-        match &self.storage {
-            Storage::Small(entries) => (from < entries.len()).then_some(from),
-            Storage::Large(large) => large
+        match self.eager() {
+            Eager::Small(entries) => (from < entries.len()).then_some(from),
+            Eager::Large(large) => large
                 .slots
                 .get(from..)?
                 .iter()
@@ -794,9 +861,9 @@ impl<T> IndexedEntries<T> {
 
     /// The slot of the first entry that `matches`, scanning in order.
     pub fn slot_where(&self, mut matches: impl FnMut(&T) -> bool) -> Option<usize> {
-        match &self.storage {
-            Storage::Small(entries) => entries.iter().position(matches),
-            Storage::Large(large) => large
+        match self.eager() {
+            Eager::Small(entries) => entries.iter().position(matches),
+            Eager::Large(large) => large
                 .slots
                 .iter()
                 .position(|slot| slot.as_ref().is_some_and(&mut matches)),
@@ -805,34 +872,38 @@ impl<T> IndexedEntries<T> {
 
     /// How many entries fit before the storage grows.
     pub fn capacity(&self) -> usize {
-        match &self.storage {
-            Storage::Small(entries) => entries.capacity(),
-            Storage::Large(large) => large.slots.capacity() - large.holes,
+        match self.eager() {
+            Eager::Small(entries) => entries.capacity(),
+            Eager::Large(large) => large.slots.capacity() - large.holes,
         }
     }
 
-    /// Whether another handle shares this storage.
+    /// Whether another handle shares this storage. Entries read from a
+    /// tape count as shared, so a write takes a copy first.
     pub fn is_shared(&self) -> bool {
-        match &self.storage {
-            Storage::Small(entries) => Arc::strong_count(entries) > 1,
-            Storage::Large(large) => Arc::strong_count(large) > 1,
+        if matches!(self.storage, Storage::Lazy(_)) {
+            return true;
+        }
+        match self.eager() {
+            Eager::Small(entries) => Arc::strong_count(entries) > 1,
+            Eager::Large(large) => Arc::strong_count(large) > 1,
         }
     }
 
     /// The address of the storage, which clones share until a write.
     pub fn as_ptr(&self) -> *const T {
-        match &self.storage {
-            Storage::Small(entries) => entries.as_ptr(),
-            Storage::Large(large) => large.slots.as_ptr().cast(),
+        match self.eager() {
+            Eager::Small(entries) => entries.as_ptr(),
+            Eager::Large(large) => large.slots.as_ptr().cast(),
         }
     }
 }
 
 impl<T: Clone> IndexedEntries<T> {
     pub fn into_vec(self) -> Vec<T> {
-        match self.storage {
-            Storage::Small(entries) => Arc::unwrap_or_clone(entries),
-            Storage::Large(large) => Arc::unwrap_or_clone(large)
+        match self.into_eager() {
+            Eager::Small(entries) => Arc::unwrap_or_clone(entries),
+            Eager::Large(large) => Arc::unwrap_or_clone(large)
                 .slots
                 .into_iter()
                 .flatten()
@@ -841,9 +912,9 @@ impl<T: Clone> IndexedEntries<T> {
     }
 
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
-        match &mut self.storage {
-            Storage::Small(entries) => Arc::make_mut(entries).try_reserve(additional),
-            Storage::Large(large) => Arc::make_mut(large).slots.try_reserve(additional),
+        match self.eager_mut() {
+            Eager::Small(entries) => Arc::make_mut(entries).try_reserve(additional),
+            Eager::Large(large) => Arc::make_mut(large).slots.try_reserve(additional),
         }
     }
 }
@@ -856,17 +927,17 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// Wraps a clone of `source`'s entries, in the same order, reusing its
     /// index instead of hashing every key again.
     pub fn cloned_from(entries: Vec<T>, source: &Self) -> Self {
-        match &source.storage {
-            Storage::Large(large) if entries.len() == source.len() => {
+        match source.eager() {
+            Eager::Large(large) if entries.len() == source.len() => {
                 let mut index = large.index.clone();
                 large.pack_index(&mut index);
                 Self {
-                    storage: Storage::Large(Arc::new(Large {
+                    storage: Storage::Eager(Eager::Large(Arc::new(Large {
                         slots: entries.into_iter().map(Some).collect(),
                         index,
                         holes: 0,
                         cursor: LookupCursor::default(),
-                    })),
+                    }))),
                 }
             }
             _ => Self::from(entries),
@@ -901,7 +972,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         hash: impl FnOnce() -> u64,
         matches: impl Fn(&Value) -> bool,
     ) -> Option<usize> {
-        if let Storage::Large(large) = &self.storage {
+        if let Eager::Large(large) = self.eager() {
             let start = large.cursor.get().wrapping_add(1);
             for slot in start..large.slots.len().min(start.saturating_add(3)) {
                 if let Some(entry) = &large.slots[slot] {
@@ -930,11 +1001,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
         hash: impl FnOnce() -> u64,
         matches: impl Fn(&Value) -> bool,
     ) -> (Option<usize>, Option<u64>) {
-        match &self.storage {
-            Storage::Small(entries) => {
-                (entries.iter().position(|entry| matches(entry.key())), None)
-            }
-            Storage::Large(large) => {
+        match self.eager() {
+            Eager::Small(entries) => (entries.iter().position(|entry| matches(entry.key())), None),
+            Eager::Large(large) => {
                 let hash = hash();
                 let position = large
                     .index
@@ -960,9 +1029,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// The entry in `slot`, for writing.
     fn at_slot_mut(&mut self, slot: usize) -> &mut T {
-        let entry = match &mut self.storage {
-            Storage::Small(entries) => Arc::make_mut(entries).get_mut(slot),
-            Storage::Large(large) => Arc::make_mut(large)
+        let entry = match self.eager_mut() {
+            Eager::Small(entries) => Arc::make_mut(entries).get_mut(slot),
+            Eager::Large(large) => Arc::make_mut(large)
                 .slots
                 .get_mut(slot)
                 .and_then(Option::as_mut),
@@ -977,15 +1046,15 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     /// [`Self::push_new`] with the key's hash when a probe already has it.
     fn push_new_hashed(&mut self, entry: T, hash: Option<u64>) {
-        match &mut self.storage {
-            Storage::Small(entries) => {
+        match self.eager_mut() {
+            Eager::Small(entries) => {
                 let entries = Arc::make_mut(entries);
                 entries.push(entry);
                 if entries.len() > INDEX_THRESHOLD {
                     self.rebuild_index();
                 }
             }
-            Storage::Large(large) => {
+            Eager::Large(large) => {
                 let large = Arc::make_mut(large);
                 let slot = large.slots.len();
                 let hash = hash.unwrap_or_else(|| hash_value(entry.key()));
@@ -1017,9 +1086,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// Removes the entry `index` entries from the start, as
     /// [`Self::shift_remove`] does.
     pub fn shift_remove_index(&mut self, index: usize) -> Option<T> {
-        let slot = match &self.storage {
-            Storage::Small(entries) => (index < entries.len()).then_some(index)?,
-            Storage::Large(large) => large.slot_of(index)?,
+        let slot = match self.eager() {
+            Eager::Small(entries) => (index < entries.len()).then_some(index)?,
+            Eager::Large(large) => large.slot_of(index)?,
         };
         Some(self.remove_slot(slot, None, true))
     }
@@ -1027,9 +1096,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// Removes the entry in `slot`, and closes every hole when `pack` is
     /// set. `hash` is its key's hash when a probe already has it.
     fn remove_slot(&mut self, slot: usize, hash: Option<u64>, pack: bool) -> T {
-        let removed = match &mut self.storage {
-            Storage::Small(entries) => return Arc::make_mut(entries).remove(slot),
-            Storage::Large(large) => {
+        let removed = match self.eager_mut() {
+            Eager::Small(entries) => return Arc::make_mut(entries).remove(slot),
+            Eager::Large(large) => {
                 let large = Arc::make_mut(large);
                 let hash = hash.unwrap_or_else(|| {
                     hash_value(
@@ -1053,18 +1122,18 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     }
 
     pub fn clear(&mut self) {
-        match &mut self.storage {
-            Storage::Small(entries) => match Arc::get_mut(entries) {
+        match self.eager_mut() {
+            Eager::Small(entries) => match Arc::get_mut(entries) {
                 Some(entries) => entries.clear(),
                 None => *entries = Arc::new(Vec::new()),
             },
-            Storage::Large(large) => {
+            Eager::Large(large) => {
                 // Clearing an unshared collection keeps its room.
                 let entries = match Arc::get_mut(large) {
                     Some(large) => Vec::with_capacity(large.slots.capacity()),
                     None => Vec::new(),
                 };
-                self.storage = Storage::Small(Arc::new(entries));
+                self.storage = Storage::Eager(Eager::Small(Arc::new(entries)));
             }
         }
     }
@@ -1078,15 +1147,15 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// Picks the storage that fits the current length and rebuilds the
     /// index from the entries.
     fn rebuild_index(&mut self) {
-        let entries = match &mut self.storage {
-            Storage::Small(entries) => std::mem::take(Arc::make_mut(entries)),
-            Storage::Large(large) => std::mem::take(&mut Arc::make_mut(large).slots)
+        let entries = match self.eager_mut() {
+            Eager::Small(entries) => std::mem::take(Arc::make_mut(entries)),
+            Eager::Large(large) => std::mem::take(&mut Arc::make_mut(large).slots)
                 .into_iter()
                 .flatten()
                 .collect(),
         };
         if entries.len() <= INDEX_THRESHOLD {
-            self.storage = Storage::Small(Arc::new(entries));
+            self.storage = Storage::Eager(Eager::Small(Arc::new(entries)));
             return;
         }
         let mut index = HashTable::with_capacity(entries.len());
@@ -1101,16 +1170,41 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 index.insert_unique(hash, (hash, position), |&(hash, _)| hash);
             }
         }
-        self.storage = Storage::Large(Arc::new(Large {
+        self.storage = Storage::Eager(Eager::Large(Arc::new(Large {
             slots: entries.into_iter().map(Some).collect(),
             index,
             holes: 0,
             cursor: LookupCursor::default(),
-        }));
+        })));
     }
 }
 
 impl DictEntries {
+    /// The entries of the object `node` in a tape, read from the tape until
+    /// a read needs them as values.
+    pub fn from_json_object(node: crate::json_tape::JsonNode) -> Self {
+        fn build(node: &crate::json_tape::JsonNode) -> Eager<(Value, Value)> {
+            // The parse took no object that repeats a key.
+            DictEntries::from(node.object_entries()).into_eager()
+        }
+        Self {
+            storage: Storage::Lazy(Arc::new(LazyEntries {
+                source: node,
+                build,
+                realized: OnceLock::new(),
+            })),
+        }
+    }
+
+    /// The tape object these entries are still read from, before any read
+    /// needed them as values.
+    pub fn unrealized_json(&self) -> Option<&crate::json_tape::JsonNode> {
+        match &self.storage {
+            Storage::Lazy(lazy) if lazy.realized.get().is_none() => Some(&lazy.source),
+            _ => None,
+        }
+    }
+
     pub fn value_of(&self, key: &Value) -> Option<&Value> {
         self.find(key).map(|(_, value)| value)
     }
@@ -1134,7 +1228,7 @@ impl DictEntries {
     /// original key, and the replaced value is returned.
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
         // A small dict scans and writes its one vector, made unshared once.
-        if let Storage::Small(entries) = &mut self.storage {
+        if let Eager::Small(entries) = self.eager_mut() {
             let entries = Arc::make_mut(entries);
             if let Some(entry) = entries
                 .iter_mut()
