@@ -2,13 +2,14 @@
 
 Last updated: 2026-11-08
 
-## Release 0.13.0-preview (in progress)
+## Release 0.13.0-preview (complete)
 
 - Cut from `main` @ `d95919d` after verification V4 (#237): Batch 8
   multicore runtime, Batch 9 generators and associated types, iterator
   and generator speed, verification V2 to V4, and the first JSON
   lean-values step. 30 programs 14.2 s -> 10.0 s against 0.12.0, 12%
-  fewer instructions. Details are in
+  fewer instructions. Published 2026-11-09 (tag `9760010f` on
+  `14f77d49`, release run `42593891467`). Details are in
   `2026-11-08-v0.13.0-preview-release.md`.
 
 ## Release 0.12.0-preview (complete)
