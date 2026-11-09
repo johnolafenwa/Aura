@@ -3,7 +3,7 @@ def worker_fast(value: int32) -> int32:
     return value * 2
 
 def worker_slow(value: int32) -> int32:
-    sleep(3ms)
+    sleep(50ms)
     return value * 2
 
 def announce(queue: Queue[str]) -> None:
@@ -89,9 +89,9 @@ def main() -> int32:
         mut task_list = list[Task[int32]]()
         task_list.append(group.start(worker_slow, 4))
         task_list.append(group.start(worker_fast, 3))
-        print_string_receive(started.get(timeout=20ms))
-        print_any(wait_any(task_list, timeout=20ms))
-        print_all(wait_all(task_list, timeout=20ms))
-        print_task_result(task_list[0].result(timeout=20ms))
+        print_string_receive(started.get(timeout=2s))
+        print_any(wait_any(task_list, timeout=2s))
+        print_all(wait_all(task_list, timeout=2s))
+        print_task_result(task_list[0].result(timeout=2s))
 
     return 0

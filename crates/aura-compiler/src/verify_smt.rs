@@ -111,6 +111,8 @@ pub struct Solver {
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
     marker: u64,
+    /// Whether a write to the process or a read from it found it gone.
+    stopped: bool,
 }
 
 impl Solver {
@@ -148,6 +150,7 @@ impl Solver {
             stdin,
             stdout,
             marker: 0,
+            stopped: false,
         };
         let mut setup = String::from("(set-option :print-success false)\n");
         if command.kind == SolverKind::Z3 {
@@ -161,11 +164,29 @@ impl Solver {
 
     /// Writes commands that print nothing.
     pub fn send(&mut self, text: &str) -> Result<(), String> {
-        self.stdin
-            .write_all(text.as_bytes())
-            .and_then(|()| self.stdin.write_all(b"\n"))
-            .and_then(|()| self.stdin.flush())
-            .map_err(|error| format!("the SMT solver stopped: {error}"))
+        let written = self
+            .stdin
+            .write_all(format!("{text}\n").as_bytes())
+            .and_then(|()| self.stdin.flush());
+        written.map_err(|error| {
+            let ended = self.ended();
+            format!("the SMT solver stopped: {error}{ended}")
+        })
+    }
+
+    /// Whether the process was found gone: it closed its input or its
+    /// output. Nothing more can be asked of it, whether or not it has
+    /// finished exiting.
+    pub fn stopped(&self) -> bool {
+        self.stopped
+    }
+
+    /// Records that the process is gone, and says how it ended when that
+    /// is known: ` (exit status: 3)`, or nothing.
+    fn ended(&mut self) -> String {
+        self.stopped = true;
+        self.exit_status()
+            .map_or(String::new(), |status| format!(" ({status})"))
     }
 
     /// Sends `text`, then reads everything the solver prints for it.
@@ -181,7 +202,8 @@ impl Solver {
                 .read_line(&mut line)
                 .map_err(|error| format!("could not read the SMT solver's answer: {error}"))?;
             if read == 0 {
-                return Err("the SMT solver exited before answering".to_string());
+                let ended = self.ended();
+                return Err(format!("the SMT solver exited before answering{ended}"));
             }
             if line.trim().trim_matches('"') == marker {
                 return Ok(output);
@@ -190,13 +212,29 @@ impl Solver {
         }
     }
 
+    /// How the solver process ended, once it has: its exit code or the
+    /// signal that stopped it. `None` while it still runs. A solver that
+    /// closed its output is given a moment to finish exiting.
+    pub fn exit_status(&mut self) -> Option<std::process::ExitStatus> {
+        for _ in 0..50 {
+            match self.child.try_wait() {
+                Ok(Some(status)) => return Some(status),
+                Ok(None) => std::thread::sleep(std::time::Duration::from_millis(10)),
+                Err(_) => return None,
+            }
+        }
+        None
+    }
+
     /// Runs `(check-sat)`.
     pub fn check(&mut self) -> Result<SatResult, String> {
         let answer = self.exchange("(check-sat)")?;
         let answer = answer.trim();
         // A query stopped at the time limit answers `unknown`, after an
-        // error that says so.
-        if answer.contains("canceled") && answer.ends_with("unknown") {
+        // error that says so. Z3's limit can also cancel a `push` or an
+        // `assert` sent before the query, under load, and then it answers
+        // for a different set of facts: that answer is not trusted either.
+        if answer.contains("canceled") {
             return Ok(SatResult::Unknown);
         }
         if answer.contains("(error") {

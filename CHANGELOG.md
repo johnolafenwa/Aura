@@ -25,6 +25,15 @@ in this file.
   `x.sqrt()`.
 - A method can call a function stored in one of its own fields,
   `self.step(n)`, which the compiler rejected before.
+- Fixed: `aura verify` could report a false `float32` claim as proved
+  when the function also named a float64 literal that is zero or infinite
+  as a float32, such as `1e-300` or `1e300`. The quick first pass for
+  float `+ - * /` took its bounds from those literals as written.
+  `aura build --remove-proved-checks` then removed a check that fails.
+- `aura verify` starts a fresh solver after a query that hits the time
+  limit, and after a solver process dies: Z3 sometimes crashed on the
+  query after a timeout, which ended the run with `AU5103`. A solver
+  that dies twice on the same query is still reported.
 
 ## VS Code extension 0.13.0 — 2026-11-08
 
