@@ -241,3 +241,42 @@ Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds, docdb
   from the head down to that mark. `share_half` was 2.5% of
   json_roundtrip's samples. docdb 50k: 670 -> 644 ms; json_roundtrip
   272 -> 267 ms.
+
+## Compact JSON storage, step 1: parsed documents in a tape (2026-11-09)
+
+Design: https://claude.ai/artifact/DdT7b3GDk6GRWAN9JpWteo (approved by
+John 2026-11-09).
+
+- `json.parse` keeps a document as one immutable tape
+  (`crates/aura-runtime/src/json_tape.rs`): 16-byte nodes in document
+  order, a container's node holding its count and the index past it, and
+  one text buffer (the source, then any unescaped string). A
+  `json.Value` in a tape is `VariantPayloads::Json(JsonNode)`: the tape,
+  shared by `Arc`, and a node index. Dropping or copying a document is
+  one count change.
+- Reading a payload gives a fresh value one level deep whose children are
+  tape values again, and a write (`values_mut`) turns that one level into
+  values first, so a change copies only the level it writes.
+- `json.dumps` writes a tape value (alone, or inside a tree) by scanning
+  its nodes, keys sorted as before.
+- A source the tape does not take (a parse error, nesting or value
+  limits, or an object that repeats a key) takes the tree parse it took
+  before, which reports what it reported. Only a program whose
+  `json.Value` has its layout parses into tapes.
+- No codegen change: generated code reads a tape value through the
+  runtime, as it reads a variant kept as values.
+
+Wall time on the cloud box, median of 5 (json_roundtrip 30 rounds,
+docdb 50k docs):
+
+| Program | Before | After | Python |
+| --- | --- | --- | --- |
+| json_roundtrip | 261 ms, 12 MB | 144 ms, 12 MB | 200 ms, 16 MB |
+| docdb | 687 ms, 146 MB | 677 ms, 163 MB | 433 ms, 117 MB |
+
+json_roundtrip now beats Python. docdb gains little: every field read of
+a reloaded document builds that document's dict again, which is what
+step 3 (lookups in the tape) removes, and its inserted documents are
+still trees until step 4. Its peak grows by about 17 MB during the
+reload: 50k tapes alone take 27 MB against 97 MB as trees, but their
+blocks fall in other size classes than the boxes freed before them.

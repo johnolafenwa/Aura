@@ -707,6 +707,31 @@ fn advance_byte_position(byte: u8, line: &mut usize, column: &mut usize) {
     }
 }
 
+/// A number a parse read, in the class [`classify_number`] gives it.
+pub(crate) enum JsonNumber {
+    Int(i64),
+    Float(f64),
+}
+
+/// The number `lexeme` spells, as the fast parser classifies it: `plain`
+/// when it has no fraction or exponent.
+pub(crate) fn json_number(lexeme: &str, plain: bool) -> Option<JsonNumber> {
+    // Up to 18 digits always fit an `int64`.
+    if plain && lexeme.len() <= 18 {
+        if let Ok(value) = lexeme.parse::<i64>() {
+            return Some(JsonNumber::Int(value));
+        }
+    }
+    if let Some(value) = exact_integral_i64(lexeme) {
+        return Some(JsonNumber::Int(value));
+    }
+    lexeme
+        .parse::<f64>()
+        .ok()
+        .filter(|value| value.is_finite())
+        .map(JsonNumber::Float)
+}
+
 fn classify_number<T: JsonTree>(lexeme: &str) -> Option<T> {
     if let Some(value) = exact_integral_i64(lexeme) {
         return Some(T::int(value));

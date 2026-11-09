@@ -19975,11 +19975,15 @@ fn runtime_json_parse_builds_the_value_the_tree_converts_to() {
     let source = r#"{"b": [1, 2.5, "x", null, true, {}], "a": {"k": false}, "b": "last"}"#;
     let direct = match super::json_parse_runtime(source, false).expect("the source parses") {
         super::ParsedJson::Runtime(value) => value,
-        super::ParsedJson::Tree(_) => panic!("an unhooked parse builds the value directly"),
+        super::ParsedJson::Tree(_) | super::ParsedJson::Tape(_) => {
+            panic!("an unhooked parse builds the value directly")
+        }
     };
     let tree = match super::json_parse_runtime(source, true).expect("the source parses") {
         super::ParsedJson::Tree(tree) => tree,
-        super::ParsedJson::Runtime(_) => panic!("a hooked parse keeps the tree"),
+        super::ParsedJson::Runtime(_) | super::ParsedJson::Tape(_) => {
+            panic!("a hooked parse keeps the tree")
+        }
     };
     assert_eq!(tree, json_codec::parse(source).expect("the source parses"));
     assert_eq!(
@@ -20343,4 +20347,71 @@ fn a_dict_shares_its_types_and_keeps_values_small() {
         "a Value takes {} bytes",
         std::mem::size_of::<Value>()
     );
+}
+
+fn tape_value(source: &str) -> Value {
+    let tape = crate::json_tape::JsonTape::parse(
+        source,
+        crate::json_codec::MAX_JSON_DEPTH,
+        crate::json_codec::MAX_JSON_VALUE_NODES,
+    )
+    .expect("the source parses into a tape");
+    crate::json_tape::JsonNode::root(tape).into_value()
+}
+
+fn json_list(elements: Vec<Value>) -> Value {
+    Value::EnumVariant(EnumVariantValue {
+        enum_name: super::RuntimeName::from_static("json.Value"),
+        variant_name: super::RuntimeName::from_static("Array"),
+        payloads: vec![Value::Vec(VecValue {
+            element_type: super::SharedType::named("json.Value"),
+            elements: elements.into(),
+            str_view: Default::default(),
+        })]
+        .into(),
+    })
+}
+
+#[test]
+fn json_tape_values_dump_convert_and_copy_inside_trees() {
+    // A tree that holds tape values writes them from their tapes.
+    let mixed = json_list(vec![
+        tape_value(r#"{"b": [1, 2.5], "a": "x"}"#),
+        tape_value("null"),
+        tape_value("7"),
+    ]);
+    let text = super::json_dumps_runtime(&mixed, None).expect("dumps");
+    assert_eq!(text, r#"[{"a":"x","b":[1,2.5]},null,7]"#);
+    let indented = super::json_dumps_runtime(&mixed, Some(1)).expect("dumps");
+    assert!(indented.contains("\n  \"a\": \"x\""), "{indented}");
+
+    // The conversion to a tree reads a tape value node by node, and counts
+    // each node against its budget.
+    let tree = super::runtime_value_to_json(&mixed).expect("converts");
+    assert_eq!(crate::json_codec::dumps(&tree, None).expect("dumps"), text);
+    let over = super::with_json_runtime_node_limit(4, || super::json_dumps_runtime(&mixed, None));
+    assert!(
+        over.as_ref()
+            .is_err_and(|error| error.message.contains("materialized node count")),
+        "{over:?}"
+    );
+    let fits = super::with_json_runtime_node_limit(8, || super::json_dumps_runtime(&mixed, None));
+    assert_eq!(fits.expect("fits"), text);
+
+    // A deep copy shares each tape.
+    let copied = super::try_clone_array_containing_value(&Value::Vec(VecValue {
+        element_type: super::SharedType::named("json.Value"),
+        elements: vec![tape_value("[1, {\"k\": true}]"), mixed.clone()].into(),
+        str_view: Default::default(),
+    }))
+    .expect("copies");
+    let Value::Vec(copied) = copied else {
+        panic!("a list");
+    };
+    let first = copied.elements.value_at(0).expect("an element");
+    let Value::EnumVariant(first) = first else {
+        panic!("a variant");
+    };
+    assert!(first.payloads.json().is_some());
+    assert_eq!(copied.elements.value_at(1), Some(&mixed));
 }

@@ -1,0 +1,31 @@
+type Step = def(n: int64) -> int64:
+    requires 0 <= n and n < 100
+    ensures result > n
+
+def inc(n: int64) -> int64:
+    requires n < 1000
+    ensures result == n + 1
+    return n + 1
+
+class Stepper:
+    step: Step
+    plain: def(n: int64) -> int64
+
+    def advance(self, n: int64) -> int64:
+        requires 0 <= n and n < 100
+        ensures result > n
+        return self.step(n)
+
+    def twice(self, n: int64) -> int64:
+        f = self.plain
+        return f(f(n))
+
+def make() -> Step:
+    return inc
+
+def main():
+    s = Stepper(step=inc, plain=inc)
+    print(s.advance(1))
+    print(s.twice(5))
+    g = make()
+    print(g(41))

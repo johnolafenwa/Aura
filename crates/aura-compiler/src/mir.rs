@@ -9568,6 +9568,21 @@ fn validate_function_loan_flow(
                 .insert(format!("{}{suffix}", param.name), callable);
         }
     }
+    // The receiver's callable fields have their declared contracts, as a
+    // parameter's do.
+    if function.receiver.is_some() {
+        if let Some(receiver) = function
+            .local_types
+            .iter()
+            .find(|local| local.name == "self")
+        {
+            for (suffix, callable) in callable_identities_in_type(&receiver.ty, context) {
+                entry_state
+                    .authoritative_callables
+                    .insert(format!("self{suffix}"), callable);
+            }
+        }
+    }
     incoming.insert(function.entry.clone(), entry_state);
     let mut pending = vec![function.entry.clone()];
     let mut budget = ValidatedLoanBudget::default();

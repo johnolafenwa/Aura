@@ -14,6 +14,7 @@ pub mod bytes_codec;
 pub mod collection_index;
 pub mod ffi;
 pub mod json_codec;
+pub mod json_tape;
 pub mod list_elements;
 pub mod list_sort;
 mod native_allocator;
