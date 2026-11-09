@@ -2961,11 +2961,10 @@ def mean(total: float64, n: int64) -> float64:
     ensures 0.0 <= result and result <= 1000.0
     return total / n.to_float()
 
-def wrong(x: float64, y: float64) -> float64:
-    requires 0.0 <= x and x <= 100.0
-    requires 0.5 <= y and y <= 10.0
-    ensures result <= x
-    return x / y
+def same(x: float64) -> float64:
+    requires 1.0 <= x and x <= 2.0
+    ensures result < x
+    return x / 1.0
 
 def main():
     print(ratio(3.0, 2.0))
@@ -2975,9 +2974,9 @@ def main():
     print(root(4.0))
     print(small_root(0.25))
     print(mean(10.0, 3))
-    print(wrong(1.0, 2.0))
+    print(same(1.5))
 "#,
-        &["44 ensures failed"],
+        &["43 ensures failed"],
     ) else {
         return;
     };
