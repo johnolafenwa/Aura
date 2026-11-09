@@ -75,7 +75,7 @@ fn concrete_values_retag_to_the_symbolic_parameter_member() {
     ]);
     let concrete = union(vec![Type::named("Dog"), Type::named("str"), Type::Unit]);
     let dog = Value::Instance(InstanceValue {
-        class_name: "Dog".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Dog".to_string()),
         fields: Default::default(),
     });
     let value = union_value(&concrete, &Type::named("Dog"), dog);
@@ -301,7 +301,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     );
     assert_eq!(
         runtime_member_type(&Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("str")),
             elements: Vec::new().into(),
             str_view: Default::default(),
         })),
@@ -316,7 +316,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     );
     assert_eq!(
         runtime_member_type(&Value::Set(SetValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: Vec::new().into(),
         })),
         Some(Type::Named("set".to_string(), vec![Type::named("int64")]))
@@ -377,7 +377,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
     );
     assert_eq!(
         runtime_member_type(&Value::Instance(InstanceValue {
-            class_name: "Dog".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Dog".to_string()),
             fields: Default::default(),
         })),
         Some(Type::named("Dog"))

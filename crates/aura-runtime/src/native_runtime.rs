@@ -1387,7 +1387,7 @@ fn int32_overflow_message(value: i64) -> String {
 /// Generated code reads the list view and the shared lock in place (see
 /// [`DirectListLayout`]), and the reference counts and ledger owner (see
 /// [`DirectOwnershipLayout`]), so the layout is `repr(C)`. The fields fill
-/// 208 bytes, the last 8 of them padding.
+/// 160 bytes, the last 8 of them padding.
 #[repr(C)]
 pub struct OpaqueValue {
     value: UnsafeCell<Value>,
@@ -2260,7 +2260,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         ))),
         Value::Vec(vector) => Some(canonical_runtime_type_name(&Type::Named(
             "list".to_string(),
-            vec![vector.element_type.clone()],
+            vec![Type::clone(&vector.element_type)],
         ))),
         Value::Array(array) => Some(canonical_runtime_type_name(&Type::Named(
             "Array".to_string(),
@@ -2268,7 +2268,7 @@ fn embedded_runtime_type_name(value: &Value) -> Option<String> {
         ))),
         Value::Set(set) => Some(canonical_runtime_type_name(&Type::Named(
             "set".to_string(),
-            vec![set.element_type.clone()],
+            vec![Type::clone(&set.element_type)],
         ))),
         Value::Map(map) => Some(canonical_runtime_type_name(&Type::Named(
             "dict".to_string(),
@@ -2837,6 +2837,11 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
             *slot = ty.clone();
         }
     }
+    fn assign_shared_type(slot: &mut SharedType, ty: &Type) {
+        if *slot != *ty {
+            *slot = ty.clone().into();
+        }
+    }
     match value {
         Value::Int(integer) => {
             if let Some(kind) = tag.integer_kind {
@@ -2848,7 +2853,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Vec(vector) => {
             if let Type::Named(name, args) = parsed {
                 if name == "list" && args.len() == 1 {
-                    assign_type(&mut vector.element_type, &args[0]);
+                    assign_shared_type(&mut vector.element_type, &args[0]);
                     if is_float32_element(&args[0]) {
                         vector.elements.narrow_to_float32();
                     }
@@ -2858,7 +2863,7 @@ fn retag_value(value: &mut Value, tag: &RuntimeTypeTag) {
         Value::Set(set) => {
             if let Type::Named(name, args) = parsed {
                 if name == "set" && args.len() == 1 {
-                    assign_type(&mut set.element_type, &args[0]);
+                    assign_shared_type(&mut set.element_type, &args[0]);
                 }
             }
         }
@@ -4349,7 +4354,7 @@ fn decode_direct_ffi_call_spec(bytes: &[u8]) -> std::result::Result<DirectFfiCal
 
 fn bytes_vec_value(bytes: Vec<u8>) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: SharedType::from(Type::named("uint8")),
         elements: ListElements::from_uint8(bytes),
         str_view: Default::default(),
     })
@@ -5322,9 +5327,11 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
         Value::Tuple(tuple) => Type::Tuple(tuple.element_types.clone()),
-        Value::Vec(vector) => Type::Named("list".to_string(), vec![vector.element_type.clone()]),
+        Value::Vec(vector) => {
+            Type::Named("list".to_string(), vec![Type::clone(&vector.element_type)])
+        }
         Value::Array(array) => Type::Named("Array".to_string(), vec![array.element_type()]),
-        Value::Set(set) => Type::Named("set".to_string(), vec![set.element_type.clone()]),
+        Value::Set(set) => Type::Named("set".to_string(), vec![Type::clone(&set.element_type)]),
         Value::Map(map) => Type::Named(
             "dict".to_string(),
             vec![Type::clone(&map.key_type), Type::clone(&map.value_type)],
@@ -7515,7 +7522,7 @@ pub extern "C-unwind" fn aura_direct_string_split(
         unsafe {
             with_value(value, |value| match value {
                 Value::String(text) => boxed_value(Value::Vec(VecValue {
-                    element_type: Type::named("str"),
+                    element_type: SharedType::from(Type::named("str")),
                     elements: split_text(text, separator.as_str()).into(),
                     str_view: Default::default(),
                 })),
@@ -8324,7 +8331,7 @@ fn normalize_vec_index(index: i64, len: usize) -> Option<usize> {
 pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Vec(VecValue {
-            element_type: Type::named("Unknown"),
+            element_type: SharedType::from(Type::named("Unknown")),
             elements: Vec::new().into(),
             str_view: Default::default(),
         }))
@@ -8353,7 +8360,7 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
         let elements = empty_elements_for(&element_type);
         let boxed = boxed_value_with_type(
             Value::Vec(VecValue {
-                element_type,
+                element_type: SharedType::from(element_type),
                 elements,
                 str_view: Default::default(),
             }),
@@ -8507,7 +8514,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
                     if is_unknown_runtime_type(&vector.element_type) {
                         let inferred = inferred_collection_type(element.value());
                         if !is_unknown_runtime_type(&inferred) {
-                            vector.element_type = inferred;
+                            vector.element_type = SharedType::from(inferred);
                         }
                     }
                     vector.elements.push_box(element);
@@ -8520,7 +8527,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_in_place(
             if is_unknown_runtime_type(&vector.element_type) {
                 let inferred = inferred_collection_type(&value);
                 if !is_unknown_runtime_type(&inferred) {
-                    vector.element_type = inferred;
+                    vector.element_type = SharedType::from(inferred);
                 }
             }
             vector.elements.push(value);
@@ -8607,7 +8614,7 @@ pub extern "C-unwind" fn aura_direct_vec_push_scalar(vec: *mut OpaqueValue, bits
             if is_unknown_runtime_type(&vector.element_type) {
                 let inferred = inferred_collection_type(&value);
                 if !is_unknown_runtime_type(&inferred) {
-                    vector.element_type = inferred;
+                    vector.element_type = SharedType::from(inferred);
                 }
             }
             vector.elements.push(value);
@@ -11203,7 +11210,7 @@ pub extern "C-unwind" fn aura_direct_map_keys(map: *mut OpaqueValue) -> *mut Opa
         });
         let (key_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: Type::clone(&key_type),
+            element_type: SharedType::from(Type::clone(&key_type)),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -11223,7 +11230,7 @@ pub extern "C-unwind" fn aura_direct_map_values(map: *mut OpaqueValue) -> *mut O
         });
         let (value_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type: Type::clone(&value_type),
+            element_type: SharedType::from(Type::clone(&value_type)),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -11253,7 +11260,7 @@ pub extern "C-unwind" fn aura_direct_map_items(map: *mut OpaqueValue) -> *mut Op
         });
         let (element_type, elements) = direct_array_result(result, 0, 0);
         boxed_value(Value::Vec(VecValue {
-            element_type,
+            element_type: SharedType::from(element_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -12096,7 +12103,7 @@ pub extern "C-unwind" fn aura_direct_element_path_push_scalar(
                         if is_unknown_runtime_type(&vector.element_type) {
                             let inferred = inferred_collection_type(&value);
                             if !is_unknown_runtime_type(&inferred) {
-                                vector.element_type = inferred;
+                                vector.element_type = SharedType::from(inferred);
                             }
                         }
                         vector.elements.push(value);
@@ -12280,7 +12287,7 @@ pub extern "C-unwind" fn aura_direct_map_extend_in_place(
 pub extern "C-unwind" fn aura_direct_set_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Set(SetValue {
-            element_type: Type::named("Unknown"),
+            element_type: SharedType::from(Type::named("Unknown")),
             elements: SetElements::new(),
         }))
     })
@@ -12334,7 +12341,7 @@ pub extern "C-unwind" fn aura_direct_set_insert_int64_in_place(
     task_runtime_boundary(|| {
         let inserted = with_set_mut(set, |set| {
             if is_unknown_runtime_type(&set.element_type) {
-                set.element_type = Type::named("int64");
+                set.element_type = SharedType::from(Type::named("int64"));
             }
             set.elements.insert_i64(value)
         });
@@ -12353,7 +12360,7 @@ pub extern "C-unwind" fn aura_direct_set_insert_in_place(
             if is_unknown_runtime_type(&set.element_type) {
                 let inferred = inferred_collection_type(&value);
                 if !is_unknown_runtime_type(&inferred) {
-                    set.element_type = inferred;
+                    set.element_type = SharedType::from(inferred);
                 }
             }
             set.elements.insert(value)
@@ -13950,7 +13957,7 @@ pub extern "C-unwind" fn aura_direct_instance_new(
             fields.insert(name, unsafe { take_value(values[index]) });
         }
         boxed_value(Value::Instance(InstanceValue {
-            class_name,
+            class_name: crate::runtime_value::RuntimeName::from(class_name),
             fields: fields.into(),
         }))
     })
@@ -13963,7 +13970,7 @@ pub extern "C-unwind" fn aura_direct_instance_empty(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Instance(InstanceValue {
-            class_name: decode_bytes(class_ptr, class_len),
+            class_name: crate::runtime_value::RuntimeName::from(decode_bytes(class_ptr, class_len)),
             fields: InstanceFields::default(),
         }))
     })
@@ -13986,7 +13993,7 @@ pub unsafe extern "C-unwind" fn aura_direct_instance_new_typed(
         let layout =
             unsafe { registered_class_layout(cell) }.unwrap_or_else(|error| runtime_error(error));
         boxed_value(Value::Instance(InstanceValue {
-            class_name: layout.class_name().to_string(),
+            class_name: crate::runtime_value::RuntimeName::from(layout.class_name().to_string()),
             fields: InstanceFields::Typed(TypedFields::new(layout)),
         }))
     })
@@ -16860,7 +16867,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
                 Some(&current_cancellation()),
             ) {
                 Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
-                    element_type: Type::named("str"),
+                    element_type: SharedType::from(Type::named("str")),
                     elements: names.into_iter().map(Value::string).collect(),
                     str_view: Default::default(),
                 }))),

@@ -1206,7 +1206,7 @@ unsafe fn visit(table: &LayoutTable, id: LayoutId, src: *mut u8, mode: Visit) ->
                 fields,
             } => {
                 let mut value = Value::Instance(InstanceValue {
-                    class_name: class.clone(),
+                    class_name: crate::runtime_value::RuntimeName::from(class.clone()),
                     fields: InstanceFields::Map(
                         fields
                             .iter()

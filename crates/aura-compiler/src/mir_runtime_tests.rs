@@ -120,7 +120,7 @@ fn adr0061_element_place_segments_round_trip_keys_and_refuse_invalid_encodings()
             payload: Value::String("x".to_string().into()),
         })),
         Value::Instance(InstanceValue {
-            class_name: "Point".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Point".to_string()),
             fields: [("x".to_string(), Value::Int(IntegerValue::from_i64(1)))]
                 .into_iter()
                 .collect(),
@@ -189,7 +189,7 @@ fn adr0061_element_place_walkers_report_missing_slots_without_changing_values() 
         "items",
         Type::Named("list".to_string(), vec![Type::named("int64")]),
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(IntegerValue::from_i64(3))].into(),
             str_view: Default::default(),
         }),
@@ -1317,7 +1317,7 @@ def main():
 fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors() {
     let pair_value = || {
         Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "nested".to_string(),
                 Value::Tuple(TupleValue {
@@ -1421,7 +1421,7 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
     let mut tuple_then_instance = Value::Tuple(TupleValue {
         element_types: vec![Type::named("Pair")],
         elements: vec![Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -1471,7 +1471,7 @@ fn adr0038_mir_loan_environment_covers_alias_resolution_and_nested_place_errors(
     let mut tuple_then_instance = Value::Tuple(TupleValue {
         element_types: vec![Type::named("Pair")],
         elements: vec![Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(6)),
@@ -2578,7 +2578,10 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
             vec![Type::Named("Array".to_string(), vec![Type::named("int32")])],
         ),
         Value::Vec(VecValue {
-            element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::Named(
+                "Array".to_string(),
+                vec![Type::named("int32")],
+            )),
             elements: vec![Value::Array(
                 ArrayValue::new(
                     vec![2].into_boxed_slice(),
@@ -3514,7 +3517,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         (
             Type::Named("list".to_string(), vec![Type::named("uint8")]),
             Value::Vec(VecValue {
-                element_type: Type::named("uint8"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
                 elements: vec![Value::Bool(true)].into(),
                 str_view: Default::default(),
             }),
@@ -3534,7 +3537,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let unsupported = shape_error(
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_i32(1))].into(),
             str_view: Default::default(),
         }),
@@ -3991,7 +3994,7 @@ fn mir_length_vec_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
         Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![
                 Value::String("first-vector-payload".repeat(64).into()),
                 Value::String("second-vector-payload".repeat(64).into()),
@@ -4038,7 +4041,7 @@ fn mir_length_set_len_borrows_receiver_without_snapshot_clone() {
     assert_mir_member_length_borrows_receiver(
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(SetValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![
                 Value::String("first-set-value".repeat(64).into()),
                 Value::String("second-set-value".repeat(64).into()),
@@ -4097,7 +4100,7 @@ def measure(values: list[str]) -> int64:
         "values",
         Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![
                 Value::String("first-free-len-payload".repeat(64).into()),
                 Value::String("second-free-len-payload".repeat(64).into()),
@@ -4405,7 +4408,7 @@ def main():
             place,
             Type::named(class_name),
             Value::Instance(InstanceValue {
-                class_name: class_name.to_string(),
+                class_name: aura_runtime::runtime_value::RuntimeName::from(class_name.to_string()),
                 fields: BTreeMap::from([("value".to_string(), Value::String(text.into()))]).into(),
             }),
         );
@@ -4612,7 +4615,9 @@ fn mir_json_into_accessors_move_payload_allocations_and_consume_places() {
         json_value(
             "Array",
             vec![Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named(
+                    "json.Value",
+                )),
                 elements: values.into(),
                 str_view: Default::default(),
             })],
@@ -4699,7 +4704,9 @@ fn mir_json_variant_construction_moves_owned_payload_allocations() {
             "Array",
             Type::Named("list".to_string(), vec![Type::named("json.Value")]),
             Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named(
+                    "json.Value",
+                )),
                 elements: values.into(),
                 str_view: Default::default(),
             }),
@@ -4784,7 +4791,7 @@ fn mir_json_owned_accessor_moves_a_nested_place_without_cloning_its_payload() {
         "holder",
         Type::named("Holder"),
         Value::Instance(InstanceValue {
-            class_name: "Holder".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Holder".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 json_value("String", vec![Value::String(text.into())]),
@@ -5324,7 +5331,7 @@ fn mir_json_adapters_reject_inexact_runtime_metadata() {
             "array_value",
             "Array",
             Value::Vec(VecValue {
-                element_type: Type::named("str"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
                 elements: Vec::new().into(),
                 str_view: Default::default(),
             }),
@@ -5672,12 +5679,14 @@ fn mir_failed_owned_place_moves_preserve_unmoved_state() {
         "outer",
         Type::named("Outer"),
         Value::Instance(InstanceValue {
-            class_name: "Outer".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Outer".to_string()),
             fields: BTreeMap::from([
                 (
                     "inner".to_string(),
                     Value::Instance(InstanceValue {
-                        class_name: "Inner".to_string(),
+                        class_name: aura_runtime::runtime_value::RuntimeName::from(
+                            "Inner".to_string(),
+                        ),
                         fields: BTreeMap::from([(
                             "payload".to_string(),
                             Value::EnumVariant(EnumVariantValue {
@@ -5796,7 +5805,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         let payload = format!("{method}-payload-").repeat(64);
         let payload_ptr = payload.as_ptr();
         let vector = VecValue {
-            element_type: string_type.clone(),
+            element_type: aura_runtime::runtime_value::SharedType::from(string_type.clone()),
             elements: if method == "set" || method == "__set_index" {
                 vec![Value::String("old".to_string().into())].into()
             } else {
@@ -5842,7 +5851,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let extended = "extended-vector-value".repeat(64);
     let extended_ptr = extended.as_ptr();
     let vector = VecValue {
-        element_type: string_type.clone(),
+        element_type: aura_runtime::runtime_value::SharedType::from(string_type.clone()),
         elements: Vec::new().into(),
         str_view: Default::default(),
     };
@@ -5851,7 +5860,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
         "other",
         vector_type.clone(),
         Value::Vec(VecValue {
-            element_type: string_type.clone(),
+            element_type: aura_runtime::runtime_value::SharedType::from(string_type.clone()),
             elements: vec![Value::String(extended.into())].into(),
             str_view: Default::default(),
         }),
@@ -5969,7 +5978,7 @@ fn mir_owned_collection_mutators_do_not_clone_inserted_values() {
     let added_ptr = added.as_ptr();
     let set_type = Type::Named("set".to_string(), vec![string_type.clone()]);
     let set = SetValue {
-        element_type: string_type.clone(),
+        element_type: aura_runtime::runtime_value::SharedType::from(string_type.clone()),
         elements: Vec::new().into(),
     };
     env.define_typed("set", set_type, Value::Set(set.clone()));
@@ -6012,7 +6021,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
         .collect::<Vec<_>>();
     let decoded_command = super::expect_owned_command_vec(
         Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: command.into(),
             str_view: Default::default(),
         }),
@@ -6058,7 +6067,7 @@ fn mir_owned_process_and_http_decoders_transfer_string_allocations() {
     assert_eq!(
         super::expect_owned_bytes_value(
             Value::Vec(VecValue {
-                element_type: Type::named("uint8"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
                 elements: vec![
                     Value::Int(
                         IntegerValue::from_typed_unsigned(1, IntegerKind::Uint8)
@@ -6097,7 +6106,7 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
         )
     };
     let non_signed_byte = Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
         elements: vec![uint128_max()].into(),
         str_view: Default::default(),
     });
@@ -6106,7 +6115,7 @@ fn mir_owned_runtime_decoders_reject_malformed_values_without_partial_conversion
         .message
         .contains("expects `list[uint8]`"));
     let oversized_byte = Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
         elements: vec![Value::Int(IntegerValue::from_signed(256))].into(),
         str_view: Default::default(),
     });
@@ -6271,7 +6280,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         "vector",
         vector_type,
         Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String(vector_text.into())].into(),
             str_view: Default::default(),
         }),
@@ -6301,7 +6310,7 @@ fn mir_owned_vec_and_set_iteration_take_elements_from_the_private_source() {
         "set",
         set_type,
         Value::Set(SetValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String(set_text.into())].into(),
         }),
     );
@@ -6417,7 +6426,7 @@ fn mir_secure_random_diagnostics_preserve_validation_and_host_failures() {
 
 fn string_vec_value(items: &[&str]) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("str"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
         elements: items
             .iter()
             .map(|item| Value::String((*item).to_string().into()))
@@ -6504,7 +6513,7 @@ fn env_place_helpers_cover_nested_reads_and_writes() {
         "counter",
         Type::named("Counter"),
         Value::Instance(InstanceValue {
-            class_name: "Counter".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Counter".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -6533,11 +6542,11 @@ fn env_place_helpers_cover_nested_reads_and_writes() {
         "outer",
         Type::named("Outer"),
         Value::Instance(InstanceValue {
-            class_name: "Outer".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Outer".to_string()),
             fields: BTreeMap::from([(
                 "inner".to_string(),
                 Value::Instance(InstanceValue {
-                    class_name: "Inner".to_string(),
+                    class_name: aura_runtime::runtime_value::RuntimeName::from("Inner".to_string()),
                     fields: BTreeMap::from([(
                         "value".to_string(),
                         Value::Int(IntegerValue::from_signed(8)),
@@ -6697,7 +6706,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
 
     let command_type_error = super::expect_command_vec(
         &Value::Vec(VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         }),
@@ -6710,7 +6719,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: Type::named("str"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
                 elements: vec![Value::String("echo".to_string().into())].into(),
                 str_view: Default::default(),
             }),
@@ -6721,7 +6730,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     );
     let malformed_command_error = super::expect_command_vec(
         &Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::Bool(true)].into(),
             str_view: Default::default(),
         }),
@@ -6735,7 +6744,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
     assert_eq!(
         super::expect_bytes_value(
             &Value::Vec(VecValue {
-                element_type: Type::named("Unknown"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("Unknown")),
                 elements: vec![
                     Value::Int(IntegerValue::from_signed(65)),
                     Value::Int(IntegerValue::from_signed(66)),
@@ -6756,7 +6765,7 @@ fn mir_runtime_helper_values_and_streams_cover_optional_result_and_diagnostics()
         .contains("`payload` expects `list[uint8]`"));
     let bytes_range_error = super::expect_bytes_value(
         &Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
             str_view: Default::default(),
         }),
@@ -6991,7 +7000,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
 
     let bytes_task = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(65)),
                 Value::Int(IntegerValue::from_literal(66)),
@@ -7009,7 +7018,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
 
     let non_byte_integer = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
             str_view: Default::default(),
         }))
@@ -7023,7 +7032,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
 
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
             elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
@@ -7037,7 +7046,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
 
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
@@ -7075,7 +7084,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let slow_capture = TaskValue::from_handle(thread::spawn(|| {
         thread::sleep(StdDuration::from_millis(50));
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("uint8")),
             elements: Vec::new().into(),
             str_view: Default::default(),
         }))
@@ -12278,7 +12287,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         "values",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
                 Value::Int(IntegerValue::from_signed(2)),
@@ -12307,7 +12316,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         "seen",
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String("ready".to_string().into())].into(),
         }),
     );
@@ -12332,7 +12341,7 @@ fn mir_runtime_member_call_dispatch_covers_builtin_runtime_and_trait_receivers()
         "widget",
         Type::named("Widget"),
         Value::Instance(InstanceValue {
-            class_name: "Widget".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Widget".to_string()),
             fields: Default::default(),
         }),
     );
@@ -12801,7 +12810,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         "values",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         }),
@@ -12810,7 +12819,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         "ghost",
         Type::named("Ghost"),
         Value::Instance(InstanceValue {
-            class_name: "Ghost".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Ghost".to_string()),
             fields: Default::default(),
         }),
     );
@@ -12818,7 +12827,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         "empty",
         Type::named("Empty"),
         Value::Instance(InstanceValue {
-            class_name: "Empty".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Empty".to_string()),
             fields: Default::default(),
         }),
     );
@@ -12826,7 +12835,7 @@ fn mir_runtime_member_error_surface_covers_remaining_dispatch_branches() {
         "broken",
         Type::named("Broken"),
         Value::Instance(InstanceValue {
-            class_name: "Broken".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Broken".to_string()),
             fields: Default::default(),
         }),
     );
@@ -13181,7 +13190,7 @@ fn mir_runtime_mutating_member_calls_write_back_receivers_and_params() {
         "counter",
         Type::named("Counter"),
         Value::Instance(InstanceValue {
-            class_name: "Counter".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Counter".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -13855,7 +13864,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
 
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         })),
@@ -13863,7 +13872,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     );
     assert_eq!(
         MirRuntime::infer_value_type(&Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String("ready".to_string().into())].into(),
         })),
         Some(Type::Named("set".to_string(), vec![Type::named("str")]))
@@ -13999,7 +14008,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     );
     assert_eq!(
         missing_entrypoint_runtime.infer_instance_type(&InstanceValue {
-            class_name: "Box".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Box".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(9)),
@@ -14039,7 +14048,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
         };
 
     let vector = VecValue {
-        element_type: Type::named("str"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
             .map(|value| Value::String(value.to_string().into()))
@@ -14155,7 +14164,7 @@ fn mir_owned_slice_runtime_uses_scalar_bounds_and_preserves_au4003_spans() {
     let reversed = runtime
         .evaluate_vec_method(
             VecValue {
-                element_type: Type::named("int32"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
                 elements: vec![
                     Value::Int(IntegerValue::from_signed(1)),
                     Value::Int(IntegerValue::from_signed(2)),
@@ -14315,7 +14324,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         "values",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
                 Value::Int(IntegerValue::from_signed(2)),
@@ -14328,7 +14337,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         "other",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(3))].into(),
             str_view: Default::default(),
         }),
@@ -14337,7 +14346,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         "texts",
         Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![
                 Value::String("one".to_string().into()),
                 Value::String("two".to_string().into()),
@@ -14382,7 +14391,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         "flags",
         Type::Named("set".to_string(), vec![Type::named("str")]),
         Value::Set(crate::runtime_value::SetValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String("ready".to_string().into())].into(),
         }),
     );
@@ -15623,7 +15632,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
         "non_string_parts",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         }),
@@ -15786,7 +15795,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         "values",
         vec_type,
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: [10, 20, 30, 40]
                 .into_iter()
                 .map(|value| Value::Int(IntegerValue::from_signed(value)))
@@ -15996,7 +16005,7 @@ fn mir_runtime_normalizes_negative_vec_indices_for_every_indexed_operation() {
         "empty",
         Type::Named("list".to_string(), vec![Type::named("int32")]),
         Value::Vec(crate::runtime_value::VecValue {
-            element_type: Type::named("int32"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
             elements: Vec::new().into(),
             str_view: Default::default(),
         }),
@@ -16061,7 +16070,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let vec_missing_place = runtime
         .evaluate_vec_method(
             crate::runtime_value::VecValue {
-                element_type: Type::named("int32"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             },
@@ -16119,7 +16128,9 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         let error = runtime
             .evaluate_vec_method(
                 crate::runtime_value::VecValue {
-                    element_type: Type::named("int32"),
+                    element_type: aura_runtime::runtime_value::SharedType::from(Type::named(
+                        "int32",
+                    )),
                     elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                     str_view: Default::default(),
                 },
@@ -16139,7 +16150,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let internal_index_oob = runtime
         .evaluate_vec_method(
             crate::runtime_value::VecValue {
-                element_type: Type::named("int32"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             },
@@ -16159,7 +16170,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let internal_set_oob = runtime
         .evaluate_vec_method(
             crate::runtime_value::VecValue {
-                element_type: Type::named("int32"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             },
@@ -16260,7 +16271,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
     let set_missing_place = runtime
         .evaluate_set_method(
             crate::runtime_value::SetValue {
-                element_type: Type::named("str"),
+                element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
                 elements: vec![].into(),
             },
             "add",
@@ -16274,7 +16285,7 @@ fn mir_runtime_index_helpers_cover_error_paths() {
         .contains("requires a mutable set place"));
 
     let set_value = || crate::runtime_value::SetValue {
-        element_type: Type::named("str"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
         elements: vec![Value::String("ready".to_string().into())].into(),
     };
     for (field, args, receiver_place, expected) in [
@@ -17600,7 +17611,10 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     let mut runtime = test_runtime();
     let ready_task = TaskValue::from_handle(std::thread::spawn(|| Ok(Value::Bool(true))));
     let task_list = Value::Vec(VecValue {
-        element_type: Type::Named("Task".to_string(), vec![Type::named("bool")]),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::Named(
+            "Task".to_string(),
+            vec![Type::named("bool")],
+        )),
         elements: vec![Value::Task(ready_task.clone())].into(),
         str_view: Default::default(),
     });
@@ -17616,7 +17630,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
         .expect_err("non-vector task lists should fail");
     assert!(non_vec.message.contains("expects `list[Task[T]]`"));
     let non_task_list = Value::Vec(VecValue {
-        element_type: Type::named("int32"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int32")),
         elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
         str_view: Default::default(),
     });
@@ -18171,7 +18185,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
 
     assert_eq!(
         runtime.infer_instance_type(&InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(9)),
@@ -18185,7 +18199,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     );
     assert_eq!(
         runtime.infer_instance_type(&InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: Default::default(),
         }),
         None
@@ -18224,7 +18238,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
             vec![Type::named("int32"), Type::named("bool")],
         ),
         Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -18247,7 +18261,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         Value::Tuple(TupleValue {
             element_types: vec![pair_type],
             elements: vec![Value::Instance(InstanceValue {
-                class_name: "Pair".to_string(),
+                class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
                 fields: BTreeMap::from([(
                     "left".to_string(),
                     Value::Int(IntegerValue::from_signed(3)),
@@ -18365,7 +18379,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
         .call_function(
             &borrow_mut,
             Some(Value::Instance(InstanceValue {
-                class_name: "Pair".to_string(),
+                class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
                 fields: BTreeMap::from([(
                     "left".to_string(),
                     Value::Int(IntegerValue::from_signed(8)),
@@ -18383,7 +18397,7 @@ fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     assert_eq!(
         outcome.updated_receiver,
         Some(Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: BTreeMap::from([(
                 "left".to_string(),
                 Value::Int(IntegerValue::from_signed(8)),
@@ -18518,7 +18532,7 @@ fn mir_runtime_env_helpers_cover_place_edges() {
         "pair",
         Type::named("Pair"),
         Value::Instance(InstanceValue {
-            class_name: "Pair".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Pair".to_string()),
             fields: Default::default(),
         }),
     );
@@ -18707,7 +18721,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "ghost",
         Type::named("Ghost"),
         Value::Instance(InstanceValue {
-            class_name: "Ghost".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Ghost".to_string()),
             fields: Default::default(),
         }),
     );
@@ -18725,7 +18739,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "worker",
         Type::named("Worker"),
         Value::Instance(InstanceValue {
-            class_name: "Worker".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Worker".to_string()),
             fields: Default::default(),
         }),
     );
@@ -18760,7 +18774,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "broken",
         Type::named("Broken"),
         Value::Instance(InstanceValue {
-            class_name: "Broken".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Broken".to_string()),
             fields: Default::default(),
         }),
     );
@@ -18780,7 +18794,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "managed",
         Type::named("Managed"),
         Value::Instance(InstanceValue {
-            class_name: "Managed".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Managed".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(3)),
@@ -18801,7 +18815,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "borrow_managed",
         Type::named("BorrowManaged"),
         Value::Instance(InstanceValue {
-            class_name: "BorrowManaged".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("BorrowManaged".to_string()),
             fields: Default::default(),
         }),
     );
@@ -19091,7 +19105,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
         "empty_instance",
         Type::named("Managed"),
         Value::Instance(InstanceValue {
-            class_name: "Managed".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Managed".to_string()),
             fields: Default::default(),
         }),
     );
@@ -19115,7 +19129,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
         "root",
         Type::named("Box"),
         Value::Instance(InstanceValue {
-            class_name: "Box".to_string(),
+            class_name: aura_runtime::runtime_value::RuntimeName::from("Box".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(4)),
@@ -20918,7 +20932,7 @@ def main():
         "values",
         Type::Named("list".to_string(), vec![Type::named("int64")]),
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         }),
@@ -20939,7 +20953,7 @@ def main():
         env.place_borrow("values")
             .expect("a rejected shuffle must preserve its input"),
         &Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
             str_view: Default::default(),
         })
@@ -21393,7 +21407,7 @@ fn owned_collection_methods_require_their_source_places() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
     let vector = || VecValue {
-        element_type: Type::named("int64"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
         str_view: Default::default(),
     };
@@ -21403,7 +21417,7 @@ fn owned_collection_methods_require_their_source_places() {
         entries: Vec::new().into(),
     };
     let set = || SetValue {
-        element_type: Type::named("int64"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
     };
     let index = [mir_arg(Some("index"), Operand::Int(0))];
@@ -21687,7 +21701,7 @@ fn builtin_argument_binding_skips_slots_taken_by_named_arguments() {
 #[test]
 fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
     let unknown_bytes = Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: vec![Value::Int(IntegerValue::from_literal(7))].into(),
         str_view: Default::default(),
     });
@@ -21706,7 +21720,7 @@ fn owned_argument_decoders_accept_unknown_byte_lists_and_option_strings() {
         error.message
     );
     let oversized = Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
+        element_type: aura_runtime::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: vec![Value::Int(IntegerValue::from_literal(u128::MAX))].into(),
         str_view: Default::default(),
     });
@@ -22909,7 +22923,7 @@ fn process_child_and_supervisor_methods_cover_optional_waits_and_missing_argumen
         "command",
         Type::Named("list".to_string(), vec![Type::named("str")]),
         Value::Vec(VecValue {
-            element_type: Type::named("str"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![Value::String("true".to_string().into())].into(),
             str_view: Default::default(),
         }),
@@ -23154,7 +23168,7 @@ fn member_calls_fall_through_length_and_byte_helpers_for_other_receivers() {
         "items",
         Type::Named("list".to_string(), vec![Type::named("int64")]),
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
             elements: (1..=4)
                 .map(|value| Value::Int(IntegerValue::from_i64(value)))
                 .collect(),
@@ -23262,7 +23276,7 @@ fn index_in_range_facts_are_checked_by_the_interpreter() {
         "values",
         Type::Named("list".to_string(), vec![Type::named("int64")]),
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![
                 Value::Int(IntegerValue::from_i64(3)),
                 Value::Int(IntegerValue::from_i64(4)),
@@ -23526,7 +23540,7 @@ fn mir_runtime_private_sort_members_sort_in_place_and_check_their_arguments() {
     let mut env = Env::default();
     let list = |element: &str, values: Vec<Value>| {
         Value::Vec(VecValue {
-            element_type: Type::named(element),
+            element_type: aura_runtime::runtime_value::SharedType::from(Type::named(element)),
             elements: values.into(),
             str_view: Default::default(),
         })

@@ -7,8 +7,8 @@
 use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::runtime_value::{
-    host_bytes_from_runtime, optional_kept, optional_named, TupleValue, Value, VecValue,
-    MAX_STRING_BYTES,
+    host_bytes_from_runtime, optional_kept, optional_named, SharedType, TupleValue, Value,
+    VecValue, MAX_STRING_BYTES,
 };
 use aura_core::types::Type;
 
@@ -71,7 +71,7 @@ fn int64_value(value: usize) -> Value {
 
 fn string_list<T: Into<crate::text::Text>>(parts: impl IntoIterator<Item = T>) -> Value {
     Value::Vec(VecValue {
-        element_type: str_type(),
+        element_type: SharedType::from(str_type()),
         elements: parts.into_iter().map(Value::string).collect(),
         str_view: Default::default(),
     })

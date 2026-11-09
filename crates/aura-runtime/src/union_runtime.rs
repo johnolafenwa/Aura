@@ -47,12 +47,12 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
         Value::Tuple(tuple) => Some(Type::Tuple(tuple.element_types.clone())),
         Value::Vec(vector) => Some(Type::Named(
             "list".to_string(),
-            vec![vector.element_type.clone()],
+            vec![Type::clone(&vector.element_type)],
         )),
         Value::Array(array) => Some(Type::Named("Array".to_string(), vec![array.element_type()])),
         Value::Set(set) => Some(Type::Named(
             "set".to_string(),
-            vec![set.element_type.clone()],
+            vec![Type::clone(&set.element_type)],
         )),
         Value::Map(map) => Some(Type::Named(
             "dict".to_string(),

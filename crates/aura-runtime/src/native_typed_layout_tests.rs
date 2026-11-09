@@ -86,7 +86,7 @@ fn string(text: &str) -> Value {
 
 fn instance(class: &str, fields: Vec<(&str, Value)>) -> Value {
     Value::Instance(InstanceValue {
-        class_name: class.to_string(),
+        class_name: crate::runtime_value::RuntimeName::from(class.to_string()),
         fields: fields
             .into_iter()
             .map(|(name, value)| (name.to_string(), value))

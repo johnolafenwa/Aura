@@ -782,7 +782,7 @@ impl PartialEq for FunctionValue {
 
 #[derive(Clone, Debug)]
 pub struct InstanceValue {
-    pub class_name: String,
+    pub class_name: RuntimeName,
     pub fields: InstanceFields,
 }
 
@@ -1187,24 +1187,89 @@ impl DoubleEndedIterator for VariantPayloadIter<'_> {
 /// An enum or variant name. A copy of a value shares its names' text
 /// instead of copying it, and a name the runtime spells in its own source
 /// is never allocated.
-#[derive(Clone)]
-pub struct RuntimeName(RuntimeNameText);
+///
+/// A name is one word, so a variant that carries two stays small. A static
+/// name keeps its address in the low 48 bits, its length in the next 15,
+/// and sets the top bit. A shared name is the address of an `Arc<String>`,
+/// whose top bit is clear.
+pub struct RuntimeName(std::num::NonZeroUsize);
 
-#[derive(Clone)]
-enum RuntimeNameText {
-    Static(&'static str),
-    Shared(Arc<str>),
-}
+const _: () = assert!(std::mem::size_of::<usize>() == 8);
+
+const RUNTIME_NAME_STATIC: usize = 1 << 63;
+const RUNTIME_NAME_LEN_SHIFT: u32 = 48;
+const RUNTIME_NAME_MAX_LEN: usize = (1 << 15) - 1;
+const RUNTIME_NAME_ADDRESS: usize = (1 << RUNTIME_NAME_LEN_SHIFT) - 1;
+
+// SAFETY: a name is either static text or an `Arc<String>`, both of which
+// may move to and be shared by other threads.
+unsafe impl Send for RuntimeName {}
+// SAFETY: as above.
+unsafe impl Sync for RuntimeName {}
 
 impl RuntimeName {
-    pub const fn from_static(name: &'static str) -> Self {
-        Self(RuntimeNameText::Static(name))
+    /// The name `name`, which shares the text. Text whose address or
+    /// length does not fit the word is copied once instead.
+    pub fn from_static(name: &'static str) -> Self {
+        let address = name.as_ptr() as usize;
+        if address <= RUNTIME_NAME_ADDRESS && name.len() <= RUNTIME_NAME_MAX_LEN && address != 0 {
+            let word = RUNTIME_NAME_STATIC | (name.len() << RUNTIME_NAME_LEN_SHIFT) | address;
+            // SAFETY: the top bit is set.
+            return Self(unsafe { std::num::NonZeroUsize::new_unchecked(word) });
+        }
+        Self::shared(name.to_owned())
     }
 
+    fn shared(name: String) -> Self {
+        let word = Arc::into_raw(Arc::new(name)) as usize;
+        debug_assert_eq!(word & RUNTIME_NAME_STATIC, 0);
+        // SAFETY: an `Arc` is never null.
+        Self(unsafe { std::num::NonZeroUsize::new_unchecked(word) })
+    }
+
+    #[inline]
+    fn is_static(&self) -> bool {
+        self.0.get() & RUNTIME_NAME_STATIC != 0
+    }
+
+    #[inline]
     pub fn as_str(&self) -> &str {
-        match &self.0 {
-            RuntimeNameText::Static(name) => name,
-            RuntimeNameText::Shared(name) => name,
+        let word = self.0.get();
+        if self.is_static() {
+            let len = (word & !RUNTIME_NAME_STATIC) >> RUNTIME_NAME_LEN_SHIFT;
+            // SAFETY: the word was made from static text of this address
+            // and length.
+            unsafe {
+                std::str::from_utf8_unchecked(std::slice::from_raw_parts(
+                    (word & RUNTIME_NAME_ADDRESS) as *const u8,
+                    len,
+                ))
+            }
+        } else {
+            // SAFETY: the word is the address of an `Arc<String>` this name
+            // holds a count of.
+            unsafe { (*(word as *const String)).as_str() }
+        }
+    }
+}
+
+impl Clone for RuntimeName {
+    #[inline]
+    fn clone(&self) -> Self {
+        if !self.is_static() {
+            // SAFETY: the name holds a count of the `Arc`, so it is live.
+            unsafe { Arc::increment_strong_count(self.0.get() as *const String) };
+        }
+        Self(self.0)
+    }
+}
+
+impl Drop for RuntimeName {
+    #[inline]
+    fn drop(&mut self) {
+        if !self.is_static() {
+            // SAFETY: the name gives up the count it holds.
+            unsafe { drop(Arc::from_raw(self.0.get() as *const String)) };
         }
     }
 }
@@ -1263,13 +1328,13 @@ impl std::hash::Hash for RuntimeName {
 
 impl From<&str> for RuntimeName {
     fn from(name: &str) -> Self {
-        Self(RuntimeNameText::Shared(Arc::from(name)))
+        Self::shared(name.to_owned())
     }
 }
 
 impl From<String> for RuntimeName {
     fn from(name: String) -> Self {
-        Self(RuntimeNameText::Shared(Arc::from(name)))
+        Self::shared(name)
     }
 }
 
@@ -1391,7 +1456,7 @@ impl PartialEq for EnumVariantValue {
 
 #[derive(Clone)]
 pub struct VecValue {
-    pub element_type: Type,
+    pub element_type: SharedType,
     pub elements: ListElements,
     /// Where a `list[str]`'s elements lie, which the native runtime builds
     /// for generated code. It is not part of the value.
@@ -1401,7 +1466,7 @@ pub struct VecValue {
 impl VecValue {
     pub fn new(element_type: Type, elements: ListElements) -> Self {
         Self {
-            element_type,
+            element_type: SharedType::from(element_type),
             elements,
             str_view: Default::default(),
         }
@@ -1411,7 +1476,7 @@ impl VecValue {
     /// digits.
     pub fn holds_float32(&self) -> bool {
         matches!(self.elements, ListElements::Float32(_))
-            || matches!(&self.element_type, Type::Named(name, args) if args.is_empty() && name == "float32")
+            || matches!(&*self.element_type, Type::Named(name, args) if args.is_empty() && name == "float32")
     }
 }
 
@@ -1651,7 +1716,7 @@ impl ArrayValue {
         elements: Vec<Value>,
     ) -> Result<Self> {
         let vector = VecValue {
-            element_type: element_type.clone(),
+            element_type: SharedType::from(element_type.clone()),
             elements: elements.into(),
             str_view: Default::default(),
         };
@@ -1742,7 +1807,7 @@ impl ArrayValue {
             ))
         }));
         Ok(Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: SharedType::from(Type::named("int64")),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -3924,7 +3989,7 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
 
 #[derive(Clone, Debug)]
 pub struct SetValue {
-    pub element_type: Type,
+    pub element_type: SharedType,
     pub elements: SetElements,
 }
 
@@ -3985,6 +4050,12 @@ impl std::ops::Deref for SharedType {
 impl AsRef<Type> for SharedType {
     fn as_ref(&self) -> &Type {
         &self.0
+    }
+}
+
+impl fmt::Display for SharedType {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        fmt::Display::fmt(&*self.0, formatter)
     }
 }
 
@@ -4147,8 +4218,13 @@ pub struct HttpExchangeValue {
     inner: Arc<HttpExchangeState>,
 }
 
+/// An HTTP response. Its parts live behind one pointer, since a response is
+/// rare and every [`Value`] is as large as its largest variant.
 #[derive(Clone, Debug, PartialEq)]
-pub struct HttpResponseValue {
+pub struct HttpResponseValue(Box<HttpResponseParts>);
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HttpResponseParts {
     status: i32,
     reason: String,
     headers: Vec<(String, String)>,
@@ -12310,12 +12386,12 @@ fn parse_http_response(
     headers: Vec<(String, String)>,
     body: Vec<u8>,
 ) -> HttpResponseValue {
-    HttpResponseValue {
+    HttpResponseValue(Box::new(HttpResponseParts {
         status,
         reason,
         headers,
         body,
-    }
+    }))
 }
 
 const MAX_HTTP_HEADERS: usize = 64;
@@ -16214,6 +16290,20 @@ impl HttpExchangeValue {
     }
 }
 
+impl std::ops::Deref for HttpResponseValue {
+    type Target = HttpResponseParts;
+
+    fn deref(&self) -> &HttpResponseParts {
+        &self.0
+    }
+}
+
+impl std::ops::DerefMut for HttpResponseValue {
+    fn deref_mut(&mut self) -> &mut HttpResponseParts {
+        &mut self.0
+    }
+}
+
 impl HttpResponseValue {
     pub fn request_text(
         method: &str,
@@ -17634,7 +17724,7 @@ fn runtime_uint8_elements<'a>(value: &'a Value, call: &str) -> Result<&'a ListEl
     };
     // Unboxed `uint8` elements are exact bytes by construction.
     if !matches!(
-        &value.element_type,
+        &*value.element_type,
         Type::Named(name, arguments) if name == "uint8" && arguments.is_empty()
     ) || (value.elements.as_uint8().is_none()
         && value
@@ -17743,7 +17833,10 @@ pub fn runtime_bytes_from_host(bytes: &[u8]) -> Result<Value> {
     bytes_runtime_try_reserve(&mut elements, bytes.len())?;
     elements.extend_from_slice(bytes);
     Ok(Value::Vec(VecValue {
-        element_type: Type::Named(bytes_runtime_owned_string("uint8")?, Vec::new()),
+        element_type: SharedType::from(Type::Named(
+            bytes_runtime_owned_string("uint8")?,
+            Vec::new(),
+        )),
         elements: ListElements::from_uint8(elements),
         str_view: Default::default(),
     }))
@@ -18421,7 +18514,7 @@ pub fn json_value_to_runtime(value: JsonValue) -> Result<Value> {
                             "json.Value",
                             "Array",
                             json_runtime_single_payload(Value::Vec(VecValue {
-                                element_type: json_runtime_type("json.Value")?,
+                                element_type: SharedType::from(json_runtime_type("json.Value")?),
                                 elements: elements.into(),
                                 str_view: Default::default(),
                             }))?,
@@ -18536,7 +18629,7 @@ impl json_codec::JsonTree for RuntimeJson {
             4,
             "Array",
             Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: SharedType::from(Type::named("json.Value")),
                 elements: elements.into(),
                 str_view: Default::default(),
             }),
@@ -19802,7 +19895,7 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("Ready"),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: Type::named("Unknown"),
+            element_type: SharedType::from(Type::named("Unknown")),
             elements: values.into(),
             str_view: Default::default(),
         })])

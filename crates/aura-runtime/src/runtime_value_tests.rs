@@ -715,7 +715,7 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
 #[test]
 fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis() {
     let source = VecValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: (0..6)
             .map(|value| Value::Int(IntegerValue::from_i32(value)))
             .collect(),
@@ -868,7 +868,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
 
     let mut int64_array = ArrayValue::from_vec(
         &VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: [-3_i64, 5, 9]
                 .into_iter()
                 .map(|value| Value::Int(IntegerValue::from_i64(value)))
@@ -906,7 +906,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
 
     let mut float32_array = ArrayValue::from_vec(
         &VecValue {
-            element_type: Type::named("float32"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("float32")),
             elements: [1.25, -2.5, 4.0].into_iter().map(Value::Float).collect(),
             str_view: Default::default(),
         },
@@ -936,7 +936,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
 
     let mut float64_array = ArrayValue::from_vec(
         &VecValue {
-            element_type: Type::named("float64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("float64")),
             elements: [1.5, 2.5, 3.5].into_iter().map(Value::Float).collect(),
             str_view: Default::default(),
         },
@@ -1007,7 +1007,7 @@ fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutati
 #[test]
 fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
     let malformed_source = VecValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
         str_view: Default::default(),
     };
@@ -1051,7 +1051,7 @@ fn array_from_vec_validates_shape_and_count_before_allocation_or_conversion() {
 #[test]
 fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     let unsupported = VecValue {
-        element_type: Type::named("str"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: vec![Value::String("one".to_string().into())].into(),
         str_view: Default::default(),
     };
@@ -1161,7 +1161,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
     let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
     let cases = vec![
         Value::Vec(VecValue {
-            element_type: array_type.clone(),
+            element_type: crate::runtime_value::SharedType::from(array_type.clone()),
             elements: vec![source_array(&[4, 9]), source_array(&[1, 7])].into(),
             str_view: Default::default(),
         }),
@@ -1189,7 +1189,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
             .into(),
         }),
         Value::Instance(InstanceValue {
-            class_name: "ArrayBox".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("ArrayBox".to_string()),
             fields: BTreeMap::from([
                 ("left".to_string(), source_array(&[11, 13])),
                 ("right".to_string(), source_array(&[17, 19])),
@@ -1266,7 +1266,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
     let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
     let empty_values = vec![
         Value::Vec(VecValue {
-            element_type: array_type.clone(),
+            element_type: crate::runtime_value::SharedType::from(array_type.clone()),
             elements: Vec::new().into(),
             str_view: Default::default(),
         }),
@@ -1275,7 +1275,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
             elements: Vec::new(),
         }),
         Value::Set(SetValue {
-            element_type: Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("str")),
             elements: Vec::new().into(),
         }),
         Value::Map(MapValue {
@@ -1284,7 +1284,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
             entries: Vec::new().into(),
         }),
         Value::Instance(InstanceValue {
-            class_name: "EmptyArrayBox".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("EmptyArrayBox".to_string()),
             fields: Default::default(),
         }),
         optional_absent(array_type),
@@ -1303,7 +1303,7 @@ fn array_containing_language_copies_preserve_empty_containers() {
 #[test]
 fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
     let source = Value::Set(SetValue {
-        element_type: Type::named("str"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: vec![
             Value::String("third".to_string().into()),
             Value::String("first".to_string().into()),
@@ -1333,7 +1333,7 @@ fn array_aware_language_copy_preserves_reachable_scalar_set_order() {
 fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_failures() {
     let array_type = Type::Named("Array".to_string(), vec![Type::named("int32")]);
     let vector = Value::Vec(VecValue {
-        element_type: array_type,
+        element_type: crate::runtime_value::SharedType::from(array_type),
         elements: vec![Value::Array(
             ArrayValue::new(
                 vec![2].into_boxed_slice(),
@@ -1410,11 +1410,17 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
             ],
             elements: vec![
                 Value::Vec(VecValue {
-                    element_type: Type::named("CleanupNode"),
+                    element_type: crate::runtime_value::SharedType::from(Type::named(
+                        "CleanupNode",
+                    )),
                     elements: vec![Value::Set(SetValue {
-                        element_type: Type::named("CleanupNode"),
+                        element_type: crate::runtime_value::SharedType::from(Type::named(
+                            "CleanupNode",
+                        )),
                         elements: vec![Value::Instance(InstanceValue {
-                            class_name: "CleanupNode".to_string(),
+                            class_name: crate::runtime_value::RuntimeName::from(
+                                "CleanupNode".to_string(),
+                            ),
                             fields: BTreeMap::from([(
                                 "payload".to_string(),
                                 Value::EnumVariant(EnumVariantValue {
@@ -1524,7 +1530,9 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
     };
     assert_failure_releases_partial_copies(
         Value::Set(SetValue {
-            element_type: Type::Tuple(vec![Type::named("Queue")]),
+            element_type: crate::runtime_value::SharedType::from(Type::Tuple(vec![Type::named(
+                "Queue",
+            )])),
             elements: vec![tuple_capture(), tuple_capture()].into(),
         }),
         &set_channel,
@@ -1579,7 +1587,7 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
     let instance_channel = ChannelValue::new();
     assert_failure_releases_partial_copies(
         Value::Instance(InstanceValue {
-            class_name: "CaptureState".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("CaptureState".to_string()),
             fields: BTreeMap::from([
                 ("a_state".to_string(), cleanup_tree(&instance_channel)),
                 ("z_values".to_string(), failing_array()),
@@ -1614,7 +1622,9 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                     enum_name: "Link".into(),
                     variant_name: "Next".into(),
                     payloads: (vec![Value::Instance(InstanceValue {
-                        class_name: "ArrayNode".to_string(),
+                        class_name: crate::runtime_value::RuntimeName::from(
+                            "ArrayNode".to_string(),
+                        ),
                         fields: BTreeMap::from([
                             ("next".to_string(), source),
                             (
@@ -1721,7 +1731,9 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                 source = optional_present(
                     node_type.clone(),
                     Value::Instance(InstanceValue {
-                        class_name: "ArrayNode".to_string(),
+                        class_name: crate::runtime_value::RuntimeName::from(
+                            "ArrayNode".to_string(),
+                        ),
                         fields: BTreeMap::from([
                             ("next".to_string(), source),
                             (
@@ -2438,7 +2450,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 #[test]
 fn owned_slice_helpers_normalize_once_reject_without_clamping_and_copy_values() {
     let vector = VecValue {
-        element_type: Type::named("str"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: ["zero", "one", "two", "three"]
             .into_iter()
             .map(|value| Value::String(value.to_string().into()))
@@ -2543,7 +2555,7 @@ fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
     }
     for values in lists {
         let vector = VecValue {
-            element_type: Type::named("T"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("T")),
             elements: values.clone().into(),
             str_view: Default::default(),
         };
@@ -2561,7 +2573,7 @@ fn list_slices_copy_only_the_slice_and_keep_the_scalar_form() {
         assert_eq!(error.message, "slice start `11` is outside `0..=10`");
     }
     let one = VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
         str_view: Default::default(),
     };
@@ -2957,7 +2969,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
 fn function_values_remain_observable_inside_structural_runtime_aggregates() {
     let signature = function_signature("value", false);
     let callbacks = Value::Vec(VecValue {
-        element_type: signature.clone(),
+        element_type: crate::runtime_value::SharedType::from(signature.clone()),
         elements: ["first", "second"]
             .into_iter()
             .enumerate()
@@ -3115,7 +3127,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
                 name: "items".to_string(),
                 ty: Type::named("list[int64]"),
                 value: Value::Vec(VecValue {
-                    element_type: Type::named("int64"),
+                    element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                     elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                     str_view: Default::default(),
                 }),
@@ -3144,7 +3156,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
         .write_back_mutable(
             0,
             Value::Vec(VecValue {
-                element_type: Type::named("int64"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                 elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
                 str_view: Default::default(),
             }),
@@ -3155,7 +3167,7 @@ fn adr0038_closure_environment_mutable_capture_helpers_cover_success_and_errors(
             .capture_value(0)
             .expect("a live capture can be observed"),
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(IntegerValue::from_signed(2))].into(),
             str_view: Default::default(),
         })
@@ -3291,7 +3303,7 @@ fn adr0038_closure_capture_access_recovers_poisoned_loan_bookkeeping() {
 fn p63_embedded_nominal_types_preserve_base_value_identity_and_rendering() {
     let instance = |class_name: &str, runtime_type: &str| {
         Value::Instance(super::InstanceValue {
-            class_name: class_name.to_string(),
+            class_name: crate::runtime_value::RuntimeName::from(class_name.to_string()),
             fields: BTreeMap::from([
                 (
                     super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
@@ -3386,7 +3398,7 @@ fn tuple_value_equality_uses_elements_not_runtime_type_metadata() {
 
 fn runtime_bytes(bytes: &[u8]) -> Value {
     Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: bytes
             .iter()
             .map(|byte| {
@@ -3458,17 +3470,17 @@ fn bytes_runtime_materialization_is_fallible_exact_and_non_consuming() {
 fn bytes_runtime_conversion_rejects_malformed_vec_uint8_values() {
     let not_a_vector = Value::String("not bytes".to_string().into());
     let wrong_type = Value::Vec(VecValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: Vec::new().into(),
         str_view: Default::default(),
     });
     let wrong_metadata = Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: vec![Value::Int(IntegerValue::from_literal(1))].into(),
         str_view: Default::default(),
     });
     let wrong_element = Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: vec![Value::Bool(true)].into(),
         str_view: Default::default(),
     });
@@ -5750,7 +5762,7 @@ fn float32_slots_render_named_fields_and_payloads_with_float32_digits() {
 
     let widened = f64::from(0.1f32);
     let reading = Value::Instance(InstanceValue {
-        class_name: "Reading".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Reading".to_string()),
         fields: BTreeMap::from([
             ("level".to_string(), Value::Float(widened)),
             ("exact".to_string(), Value::Float(widened)),
@@ -6352,7 +6364,7 @@ fn async_and_process_result_helpers_render_expected_variants() {
         "WaitAll",
         "Ready",
         vec![Value::Vec(VecValue {
-            element_type: Type::named("Unknown"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
             elements: all_ready.into(),
             str_view: Default::default(),
         })],
@@ -6684,7 +6696,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     assert_source_type(Value::String("Aura".to_string().into()), "str");
     assert_source_type(
         Value::Vec(VecValue {
-            element_type: Type::named("int32"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![].into(),
             str_view: Default::default(),
         }),
@@ -6692,7 +6704,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     );
     assert_source_type(
         Value::Set(SetValue {
-            element_type: Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("str")),
             elements: vec![].into(),
         }),
         "set",
@@ -6730,7 +6742,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     assert_source_type(Value::Unit, "None");
     assert_source_type(
         Value::Instance(super::InstanceValue {
-            class_name: "Widget".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Widget".to_string()),
             fields: Default::default(),
         }),
         "Widget",
@@ -6854,28 +6866,25 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         "net.UdpDatagram",
     );
     assert_eq!(
-        Value::HttpResponse(HttpResponseValue {
-            status: 200,
-            reason: "OK".to_string(),
-            headers: vec![],
-            body: vec![1, 2],
-        })
+        Value::HttpResponse(crate::runtime_value::parse_http_response(
+            200,
+            "OK".to_string(),
+            vec![],
+            vec![1, 2]
+        ))
         .render(),
         "<http-response 200 2 bytes>"
     );
-    assert_value_equals_clone(Value::HttpResponse(HttpResponseValue {
-        status: 200,
-        reason: "OK".to_string(),
-        headers: vec![],
-        body: vec![1, 2],
-    }));
+    assert_value_equals_clone(Value::HttpResponse(
+        crate::runtime_value::parse_http_response(200, "OK".to_string(), vec![], vec![1, 2]),
+    ));
     assert_source_type(
-        Value::HttpResponse(HttpResponseValue {
-            status: 200,
-            reason: "OK".to_string(),
-            headers: vec![],
-            body: vec![],
-        }),
+        Value::HttpResponse(crate::runtime_value::parse_http_response(
+            200,
+            "OK".to_string(),
+            vec![],
+            vec![],
+        )),
         "net.HttpResponse",
     );
 
@@ -7380,7 +7389,7 @@ fn flat_tuples_clone_like_their_elements() {
     let nested = Value::Tuple(TupleValue {
         element_types: vec![Type::named("list[int64]")],
         elements: vec![Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(IntegerValue::from_i64(1))].into(),
             str_view: Default::default(),
         })],
@@ -7806,7 +7815,7 @@ fn dynamic_json_runtime_conversion_rejects_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("str"),
+                    element_type: crate::runtime_value::SharedType::from(Type::named("str")),
                     elements: Vec::new().into(),
                     str_view: Default::default(),
                 }),
@@ -7902,7 +7911,7 @@ fn dynamic_json_accessors_reject_noncanonical_payload_metadata() {
             json_variant(
                 "Array",
                 Value::Vec(VecValue {
-                    element_type: Type::named("str"),
+                    element_type: crate::runtime_value::SharedType::from(Type::named("str")),
                     elements: Vec::new().into(),
                     str_view: Default::default(),
                 }),
@@ -8209,7 +8218,7 @@ fn dynamic_json_runtime_conversion_rejects_depth_before_building_an_unbounded_cl
             enum_name: "json.Value".into(),
             variant_name: "Array".into(),
             payloads: (vec![Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
                 elements: vec![value].into(),
                 str_view: Default::default(),
             })])
@@ -8232,7 +8241,7 @@ fn dynamic_json_runtime_conversion_fits_a_forced_512_kib_task_stack_at_the_depth
                 enum_name: "json.Value".into(),
                 variant_name: "Array".into(),
                 payloads: (vec![Value::Vec(VecValue {
-                    element_type: Type::named("json.Value"),
+                    element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
                     elements: vec![value].into(),
                     str_view: Default::default(),
                 })])
@@ -11837,7 +11846,7 @@ fn task_completion_clears_abandoned_join_dependencies() {
 #[test]
 fn value_equality_and_render_cover_collection_shapes() {
     let vec_value = Value::Vec(VecValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
             Value::Int(IntegerValue::from_signed(2)),
@@ -11848,7 +11857,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_eq!(vec_value.render(), "[1, 2]");
 
     let set_a = Value::Set(SetValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: vec![
             Value::Int(IntegerValue::from_signed(1)),
             Value::Int(IntegerValue::from_signed(2)),
@@ -11856,7 +11865,7 @@ fn value_equality_and_render_cover_collection_shapes() {
         .into(),
     });
     let set_b = Value::Set(SetValue {
-        element_type: Type::named("int32"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
         elements: vec![
             Value::Int(IntegerValue::from_signed(2)),
             Value::Int(IntegerValue::from_signed(1)),
@@ -11867,14 +11876,14 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_ne!(
         set_a,
         Value::Set(SetValue {
-            element_type: Type::named("int32"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
         })
     );
     assert_ne!(
         set_a,
         Value::Set(SetValue {
-            element_type: Type::named("int32"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int32")),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(1)),
                 Value::Int(IntegerValue::from_signed(3)),
@@ -11885,7 +11894,7 @@ fn value_equality_and_render_cover_collection_shapes() {
     assert_eq!(set_a.render(), "{1, 2}");
     assert_eq!(
         Value::Set(SetValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: Vec::new().into(),
         })
         .render(),
@@ -12011,12 +12020,12 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
             elements: vec![Value::Channel(queue_in_tuple.clone())],
         }),
         Value::Vec(VecValue {
-            element_type: Type::named("Queue"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("Queue")),
             elements: vec![Value::Channel(queue_in_vec.clone())].into(),
             str_view: Default::default(),
         }),
         Value::Set(SetValue {
-            element_type: Type::named("Queue"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("Queue")),
             elements: vec![Value::Channel(queue_in_set.clone())].into(),
         }),
         Value::Map(MapValue {
@@ -12029,7 +12038,7 @@ fn nested_queue_producer_registration_walks_tuples_collections_instances_and_var
             .into(),
         }),
         Value::Instance(super::InstanceValue {
-            class_name: "Envelope".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Envelope".to_string()),
             fields: BTreeMap::from([(
                 "queue".to_string(),
                 Value::Channel(queue_in_instance.clone()),
@@ -19011,7 +19020,7 @@ fn malformed_json_runtime_trees_fall_back_to_structural_clones() {
         coverage_json(
             "Array",
             vec![Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
                 elements: elements.into(),
                 str_view: Default::default(),
             })],
@@ -19462,7 +19471,10 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
     assert_eq!(original.entries.as_ptr(), shared.entries.as_ptr());
 
     let set = Value::Set(SetValue {
-        element_type: Type::Named("list".to_string(), vec![Type::named("int64")]),
+        element_type: crate::runtime_value::SharedType::from(Type::Named(
+            "list".to_string(),
+            vec![Type::named("int64")],
+        )),
         elements: vec![Value::Unit].into(),
     });
     let copy = super::try_clone_array_containing_value(&set).expect("clone");
@@ -19490,10 +19502,10 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
         assert_eq!(map, copy);
     }
     let documents = Value::Vec(VecValue {
-        element_type: Type::Named(
+        element_type: crate::runtime_value::SharedType::from(Type::Named(
             "dict".to_string(),
             vec![Type::named("str"), Type::named("json.Value")],
-        ),
+        )),
         elements: vec![map.clone()].into(),
         str_view: Default::default(),
     });
@@ -19503,7 +19515,7 @@ fn array_free_dicts_and_sets_clone_by_sharing() {
     };
     assert_eq!(original.elements.as_ptr(), shared.elements.as_ptr());
     let unknown_list = Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: vec![documents.clone()].into(),
         str_view: Default::default(),
     });
@@ -19710,7 +19722,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
         payloads: (vec![
             Value::String("left".to_string().into()),
             Value::Vec(VecValue {
-                element_type: Type::named("int64"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                 elements: vec![Value::Int(crate::integer::IntegerValue::from_i64(1))].into(),
                 str_view: Default::default(),
             }),
@@ -19883,7 +19895,7 @@ fn runtime_json_dumps_write_what_the_tree_writes_and_defer_every_failure_to_it()
             "json.Value",
             "Array",
             vec![Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
                 elements: vec![deep].into(),
                 str_view: Default::default(),
             })],
@@ -20314,7 +20326,10 @@ fn a_dict_shares_its_types_and_keeps_values_small() {
         format!("{:?}", map.key_type),
         format!("{:?}", Type::named("str"))
     );
-    let list = SharedType::from(Type::Named("list".to_string(), vec![Type::named("int64")]));
+    let list = crate::runtime_value::SharedType::from(Type::Named(
+        "list".to_string(),
+        vec![Type::named("int64")],
+    ));
     assert_eq!(
         *list,
         Type::Named("list".to_string(), vec![Type::named("int64")])

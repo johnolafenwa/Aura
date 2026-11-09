@@ -187,7 +187,7 @@ fn adr0038_direct_returned_view_projection_handoff_reports_invalid_state() {
 #[test]
 fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() {
     let mut nested = Value::Instance(InstanceValue {
-        class_name: "Outer".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Outer".to_string()),
         fields: BTreeMap::from([(
             "inner".to_string(),
             Value::Tuple(TupleValue {
@@ -208,7 +208,7 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
     let mut tuple_then_instance = Value::Tuple(TupleValue {
         element_types: vec![Type::named("Inner")],
         elements: vec![Value::Instance(InstanceValue {
-            class_name: "Inner".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Inner".to_string()),
             fields: BTreeMap::from([(
                 "value".to_string(),
                 Value::Int(IntegerValue::from_signed(1)),
@@ -265,11 +265,11 @@ fn adr0038_direct_nested_place_assignment_helper_covers_tuple_and_class_paths() 
 fn adr0038_direct_mutable_sink_updates_projected_cleanup_snapshot_before_return() {
     super::with_direct_task_runtime_scope(|| {
         let initial = Value::Instance(InstanceValue {
-            class_name: "Outer".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Outer".to_string()),
             fields: BTreeMap::from([(
                 "inner".to_string(),
                 Value::Instance(InstanceValue {
-                    class_name: "Inner".to_string(),
+                    class_name: crate::runtime_value::RuntimeName::from("Inner".to_string()),
                     fields: BTreeMap::from([(
                         "value".to_string(),
                         Value::Int(IntegerValue::from_signed(1)),
@@ -645,7 +645,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
 
 fn integer_vector(kind: IntegerKind, values: &[i64]) -> *mut OpaqueValue {
     boxed_value(Value::Vec(VecValue {
-        element_type: Type::named(kind.runtime_type_name()),
+        element_type: crate::runtime_value::SharedType::from(Type::named(kind.runtime_type_name())),
         elements: values
             .iter()
             .map(|value| {
@@ -694,7 +694,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
     assert_eq!(
         unsafe { take_value(shape_value) },
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![
                 Value::Int(IntegerValue::from_i64(2)),
                 Value::Int(IntegerValue::from_i64(2)),
@@ -845,7 +845,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
         )
     };
     let shape = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![tagged_literal(2, IntegerKind::Int64)].into(),
         str_view: Default::default(),
     }));
@@ -860,7 +860,7 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
     );
 
     let vector_coordinate = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![tagged_literal(0, IntegerKind::Int64)].into(),
         str_view: Default::default(),
     }));
@@ -927,7 +927,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     );
 
     let malformed_shape = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::String("one".to_string().into())].into(),
         str_view: Default::default(),
     }));
@@ -944,7 +944,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     );
 
     let wrong_kind_shape = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i32(1))].into(),
         str_view: Default::default(),
     }));
@@ -1133,7 +1133,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     );
 
     let malformed_coordinates = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::String("zero".to_string().into())].into(),
         str_view: Default::default(),
     }));
@@ -1155,7 +1155,7 @@ fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     );
 
     let wrong_kind_coordinates = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i32(0))].into(),
         str_view: Default::default(),
     }));
@@ -1488,7 +1488,10 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     }
 
     let vector = boxed_value(Value::Vec(VecValue {
-        element_type: Type::Named("Array".to_string(), vec![Type::named("int32")]),
+        element_type: crate::runtime_value::SharedType::from(Type::Named(
+            "Array".to_string(),
+            vec![Type::named("int32")],
+        )),
         elements: vec![array_value(7)].into(),
         str_view: Default::default(),
     }));
@@ -1535,7 +1538,7 @@ fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     assert!(diagnostic.message.contains("Array"));
 
     let instance = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Holder".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
         fields: BTreeMap::from([("array".to_string(), array_value(23))]).into(),
     }));
     let instance_address = instance as usize;
@@ -2386,7 +2389,7 @@ fn direct_ffi_mutable_bytes_write_back_before_return_validation_failure() {
     assert_eq!(
         unsafe { value_ref(bytes) },
         Value::Vec(VecValue {
-            element_type: Type::named("uint8"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
             elements: vec![
                 Value::Int(IntegerValue::from_typed_unsigned(2, IntegerKind::Uint8).unwrap()),
                 Value::Int(IntegerValue::from_typed_unsigned(3, IntegerKind::Uint8).unwrap()),
@@ -3720,7 +3723,7 @@ fn direct_json_parse_reserves_capacity_before_borrowing_and_copying_the_source()
 #[test]
 fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005() {
     let source = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: vec![Value::Int(
             IntegerValue::from_typed_unsigned(0xab, IntegerKind::Uint8)
                 .expect("the test byte fits uint8"),
@@ -3763,7 +3766,7 @@ fn direct_bytes_adapter_propagates_materialization_allocation_failure_as_au4005(
 #[test]
 fn direct_bytes_host_ffi_dispatches_without_consuming_borrowed_input() {
     let source = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: [0x00_u8, 0xab, 0xff]
             .into_iter()
             .map(|byte| {
@@ -3915,7 +3918,7 @@ fn direct_text_methods_dispatch_every_opcode_with_mir_semantics() {
 
 fn direct_byte_list(bytes: &[u8]) -> *mut OpaqueValue {
     boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: bytes
             .iter()
             .map(|byte| {
@@ -5117,7 +5120,9 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("Unknown"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("Unknown")
+                ),
                 elements: vec![Value::String("echo".to_string().into())].into(),
                 str_view: Default::default(),
             }),
@@ -5128,7 +5133,9 @@ fn native_runtime_timeout_and_option_decoders_cover_error_edges() {
     let message = capture_runtime_error_message(|| {
         let _ = super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("int32"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("int32"),
+                ),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             }),
@@ -5418,7 +5425,7 @@ fn debug_render_shows_values_as_print_does_with_strings_quoted() {
     assert_eq!(rendered(lent), "\"say \\\"hi\\\"\\n\\0\"");
     unsafe { release_value(word) };
     let list = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("str"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: vec![
             Value::String("a".to_string().into()),
             Value::String("b".to_string().into()),
@@ -5586,7 +5593,7 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
 
     // Lists, maps, and integers pick up the tagged types on every retag.
     let vector = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: Vec::new().into(),
         str_view: Default::default(),
     }));
@@ -5598,7 +5605,9 @@ fn direct_runtime_type_tags_are_interned_and_retagging_is_idempotent() {
     }
     unsafe {
         value_mut(vector, |value| match value {
-            Value::Vec(vector) => vector.element_type = Type::named("Unknown"),
+            Value::Vec(vector) => {
+                vector.element_type = crate::runtime_value::SharedType::from(Type::named("Unknown"))
+            }
             other => panic!("expected vector, found {other:?}"),
         });
     }
@@ -5693,7 +5702,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         enum_name: "Lookup".into(),
         variant_name: "Found".into(),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: vec![Value::Int(
                 IntegerValue::from_typed_signed(9, IntegerKind::Int64).expect("9 fits int64"),
             )]
@@ -5769,7 +5778,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let vector = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("Unknown"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: Vec::new().into(),
         str_view: Default::default(),
     }));
@@ -5788,7 +5797,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let set = boxed_value(Value::Set(SetValue {
-        element_type: Type::named("Unknown"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
         elements: Vec::new().into(),
     }));
     super::aura_direct_tag_value_type(set, b"set[int64]".as_ptr(), "set[int64]".len());
@@ -5805,7 +5814,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
     }
 
     let instance = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Marker".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Marker".to_string()),
         fields: Default::default(),
     }));
     super::aura_direct_tag_value_type(instance, b"Marker[int64]".as_ptr(), "Marker[int64]".len());
@@ -6592,7 +6601,9 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let bytes_task = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("uint8"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "uint8",
+            )),
             elements: vec![
                 Value::Int(IntegerValue::from_signed(65)),
                 Value::Int(IntegerValue::from_literal(66)),
@@ -6608,7 +6619,9 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let non_byte_integer = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("uint8"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "uint8",
+            )),
             elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
             str_view: Default::default(),
         }))
@@ -6620,7 +6633,9 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let wrong_payload = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("uint8"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "uint8",
+            )),
             elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
@@ -6632,7 +6647,9 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
 
     let wrong_result_type = TaskValue::from_handle(thread::spawn(|| {
         Ok(Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "str",
+            )),
             elements: vec![Value::String("bad".to_string().into())].into(),
             str_view: Default::default(),
         }))
@@ -6656,7 +6673,9 @@ fn native_runtime_process_capture_task_helper_covers_success_and_malformed_resul
         let cancelled_task = TaskValue::from_handle(thread::spawn(|| {
             thread::sleep(StdDuration::from_millis(50));
             Ok(Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("uint8"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("uint8"),
+                ),
                 elements: Vec::new().into(),
                 str_view: Default::default(),
             }))
@@ -11473,7 +11492,7 @@ fn direct_enum_owned_payload_buffer_moves_string_vec_and_map_allocations() {
         (
             "Array",
             Value::Vec(VecValue {
-                element_type: Type::named("json.Value"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("json.Value")),
                 elements: elements.into(),
                 str_view: Default::default(),
             }),
@@ -11534,11 +11553,11 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
     let text = "nested direct move".repeat(32);
     let text_ptr = text.as_ptr();
     let holder = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Holder".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
         fields: BTreeMap::from([(
             "inner".to_string(),
             Value::Instance(InstanceValue {
-                class_name: "Inner".to_string(),
+                class_name: crate::runtime_value::RuntimeName::from("Inner".to_string()),
                 fields: BTreeMap::from([("value".to_string(), Value::String(text.into()))]).into(),
             }),
         )])
@@ -11573,7 +11592,7 @@ fn direct_instance_take_field_moves_nested_value_and_preserves_container() {
 fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_failure() {
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
-            class_name: class_name.to_string(),
+            class_name: crate::runtime_value::RuntimeName::from(class_name.to_string()),
             fields: fields.into(),
         })
     }
@@ -11717,7 +11736,7 @@ fn direct_projected_instance_helpers_report_paths_precisely_without_mutating_on_
 fn direct_projected_instance_wrappers_preserve_targets_and_obey_owned_consumption() {
     fn instance(class_name: &str, fields: BTreeMap<String, Value>) -> Value {
         Value::Instance(InstanceValue {
-            class_name: class_name.to_string(),
+            class_name: crate::runtime_value::RuntimeName::from(class_name.to_string()),
             fields: fields.into(),
         })
     }
@@ -12148,7 +12167,7 @@ fn direct_task_producer_discovery_and_abandoned_args_do_not_clone_values() {
         enum_name: "Envelope".into(),
         variant_name: "Ready".into(),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: Type::named("Queue"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("Queue")),
             elements: vec![Value::Channel(queue)].into(),
             str_view: Default::default(),
         })])
@@ -12265,7 +12284,7 @@ fn direct_json_rejects_inexact_int_array_object_and_indent_metadata() {
         enum_name: "json.Value".into(),
         variant_name: "Array".into(),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: Type::named("Unknown"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("Unknown")),
             elements: vec![].into(),
             str_view: Default::default(),
         })])
@@ -12962,7 +12981,9 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_bytes_value(
             &Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("Unknown"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("Unknown")
+                ),
                 elements: vec![
                     Value::Int(IntegerValue::from_signed(65)),
                     Value::Int(IntegerValue::from_signed(66)),
@@ -13059,7 +13080,9 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
     assert_eq!(
         super::expect_command_vec(
             &Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("Unknown"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("Unknown")
+                ),
                 elements: vec![
                     Value::String("/bin/echo".to_string().into()),
                     Value::String("ok".to_string().into()),
@@ -13099,7 +13122,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "bytes-element-range" => {
                 super::expect_bytes_value(
                     &Value::Vec(VecValue {
-                        element_type: aura_core::types::Type::named("uint8"),
+                        element_type: crate::runtime_value::SharedType::from(
+                            aura_core::types::Type::named("uint8"),
+                        ),
                         elements: vec![Value::Int(IntegerValue::from_signed(300))].into(),
                         str_view: Default::default(),
                     }),
@@ -13159,7 +13184,9 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "command-element-type" => {
                 super::expect_command_vec(
                     &Value::Vec(VecValue {
-                        element_type: aura_core::types::Type::named("str"),
+                        element_type: crate::runtime_value::SharedType::from(
+                            aura_core::types::Type::named("str"),
+                        ),
                         elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                         str_view: Default::default(),
                     }),
@@ -15776,7 +15803,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::Instance(InstanceValue {
-            class_name: "Point".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Point".to_string()),
             fields: Default::default(),
         })),
         "Point"
@@ -15796,7 +15823,9 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(value_type_name(Value::Float(1.5)), "float64");
     assert_eq!(
         value_type_name(Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("int32"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "int32"
+            )),
             elements: Vec::new().into(),
             str_view: Default::default(),
         })),
@@ -15813,7 +15842,9 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         value_type_name(Value::Set(SetValue {
-            element_type: aura_core::types::Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "str"
+            )),
             elements: Vec::new().into(),
         })),
         "set"
@@ -15878,7 +15909,9 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Vec(VecValue {
-            element_type: aura_core::types::Type::named("int32"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "int32"
+            )),
             elements: Vec::new().into(),
             str_view: Default::default(),
         })),
@@ -15889,7 +15922,9 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Set(SetValue {
-            element_type: aura_core::types::Type::named("str"),
+            element_type: crate::runtime_value::SharedType::from(aura_core::types::Type::named(
+                "str"
+            )),
             elements: Vec::new().into(),
         })),
         aura_core::types::Type::Named(
@@ -15925,7 +15960,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     );
     assert_eq!(
         inferred_collection_type(&Value::Instance(InstanceValue {
-            class_name: "Point".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Point".to_string()),
             fields: Default::default(),
         })),
         aura_core::types::Type::named("Point")
@@ -16015,12 +16050,16 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
     assert_eq!(
         compare_values(
             Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("int32"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("int32")
+                ),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             }),
             Value::Vec(VecValue {
-                element_type: aura_core::types::Type::named("int32"),
+                element_type: crate::runtime_value::SharedType::from(
+                    aura_core::types::Type::named("int32")
+                ),
                 elements: vec![Value::Int(IntegerValue::from_signed(1))].into(),
                 str_view: Default::default(),
             }),
@@ -16299,7 +16338,7 @@ fn native_runtime_scalar_helpers_cover_comparisons_unary_ops_and_metadata() {
         path: "pkg.tools".to_string(),
     }));
     let instance_value = super::boxed_value(Value::Instance(InstanceValue {
-        class_name: "Point".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Point".to_string()),
         fields: Default::default(),
     }));
     let enum_value = super::boxed_value(Value::EnumVariant(EnumVariantValue {
@@ -16918,7 +16957,7 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     );
     assert_eq!(
         value_type_name(Value::Instance(InstanceValue {
-            class_name: "Counter".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Counter".to_string()),
             fields: Default::default(),
         })),
         "Counter"
@@ -23092,7 +23131,7 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
 
     let embedded_type = "Marker[int64]";
     let tagged_instance = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Marker".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Marker".to_string()),
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::String(embedded_type.to_string().into()),
@@ -23113,7 +23152,7 @@ fn coverage_native_runtime_decodes_closure_patterns_and_uses_type_fallbacks() {
     );
 
     let malformed_tag = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Marker".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Marker".to_string()),
         fields: BTreeMap::from([(
             super::DIRECT_RUNTIME_TYPE_FIELD.to_string(),
             Value::Bool(true),
@@ -24125,7 +24164,7 @@ fn direct_instance_field_access_follows_enum_and_union_payload_projections() {
 fn direct_owned_field_assignment_writes_through_enum_and_union_payloads() {
     fn holder(value: Value) -> Value {
         Value::Instance(InstanceValue {
-            class_name: "Holder".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
             fields: BTreeMap::from([("value".to_string(), value)]).into(),
         })
     }
@@ -25729,7 +25768,7 @@ fn element_store_trap(collection: usize, path: &'static str, selectors: Vec<i64>
 fn direct_element_path_take_and_probe_lend_entries_without_cloning() {
     fn bucket(items: &[i64]) -> Value {
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: items
                 .iter()
                 .map(|item| Value::Int(IntegerValue::from_i64(*item)))
@@ -25887,14 +25926,14 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
     use crate::list_elements::ListElements;
     fn list_of(elements: Vec<Value>, element_type: Type) -> *mut OpaqueValue {
         boxed_value(Value::Vec(VecValue {
-            element_type,
+            element_type: crate::runtime_value::SharedType::from(element_type),
             elements: elements.into(),
             str_view: Default::default(),
         }))
     }
     fn ints(items: &[i64]) -> Value {
         Value::Vec(VecValue {
-            element_type: Type::named("int64"),
+            element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
             elements: items
                 .iter()
                 .map(|item| Value::Int(IntegerValue::from_i64(*item)))
@@ -25979,7 +26018,7 @@ fn element_path_probes_move_loaned_lists_into_boxes_of_their_own() {
 fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
     fn profile(name: &str, visits: i64) -> Value {
         Value::Instance(InstanceValue {
-            class_name: "Profile".to_string(),
+            class_name: crate::runtime_value::RuntimeName::from("Profile".to_string()),
             fields: BTreeMap::from([
                 ("name".to_string(), Value::String(name.to_string().into())),
                 (
@@ -25997,7 +26036,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         }
     }
     let users = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("Profile"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Profile")),
         elements: vec![profile("ada", 1), profile("linus", 2)].into(),
         str_view: Default::default(),
     })) as usize;
@@ -26069,7 +26108,10 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
 
     // Tuple positions and non-projectable elements.
     let pairs = boxed_value(Value::Vec(VecValue {
-        element_type: Type::Tuple(vec![Type::named("int64"), Type::named("str")]),
+        element_type: crate::runtime_value::SharedType::from(Type::Tuple(vec![
+            Type::named("int64"),
+            Type::named("str"),
+        ])),
         elements: vec![Value::Tuple(TupleValue {
             element_types: vec![Type::named("int64"), Type::named("str")],
             elements: vec![
@@ -26098,7 +26140,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
             .contains(expected));
     }
     let numbers = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Int(IntegerValue::from_i64(3))].into(),
         str_view: Default::default(),
     })) as usize;
@@ -26117,7 +26159,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         entries: vec![(
             Value::String("a".to_string().into()),
             Value::Vec(VecValue {
-                element_type: Type::named("int64"),
+                element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                 elements: vec![
                     Value::Int(IntegerValue::from_i64(5)),
                     Value::Int(IntegerValue::from_i64(6)),
@@ -26191,7 +26233,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
 
     // Enum payloads and the active union member inside elements.
     let shapes = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("Shape"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("Shape")),
         elements: vec![Value::EnumVariant(EnumVariantValue {
             enum_name: "Shape".into(),
             variant_name: "Circle".into(),
@@ -26219,7 +26261,7 @@ fn adr0061_direct_element_path_helpers_read_and_write_inside_elements() {
         .message
         .contains("invalid enum payload projection"));
     let unions = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("int64"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
         elements: vec![Value::Union(Box::new(crate::runtime_value::UnionValue {
             union_type: Type::named("int64").into(),
             member_index: 0,
@@ -26311,19 +26353,19 @@ fn adr0061_direct_entry_paths_borrow_keys_and_check_selector_counts() {
 fn adr0061_direct_element_paths_keep_collection_field_and_tuple_storage() {
     let list_type = Type::Named("list".to_string(), vec![Type::named("int64")]);
     let root = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Shelves".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Shelves".to_string()),
         fields: BTreeMap::from([(
             "pairs".to_string(),
             Value::Tuple(TupleValue {
                 element_types: vec![list_type.clone(), list_type],
                 elements: vec![
                     Value::Vec(VecValue {
-                        element_type: Type::named("int64"),
+                        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                         elements: vec![Value::Int(IntegerValue::from_i64(5))].into(),
                         str_view: Default::default(),
                     }),
                     Value::Vec(VecValue {
-                        element_type: Type::named("int64"),
+                        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
                         elements: vec![Value::Int(IntegerValue::from_i64(7))].into(),
                         str_view: Default::default(),
                     }),
@@ -27867,8 +27909,11 @@ fn opaque_values_keep_their_box_size() {
     // and links take 24, and its count shares 8 with the room for
     // in-place appends. The shape tag that lets generated code skip a
     // repeated tag takes 8, and the value's 16-byte alignment pads 8.
+    // The value itself is 64 bytes.
     #[cfg(target_pointer_width = "64")]
-    assert_eq!(std::mem::size_of::<OpaqueValue>(), 192);
+    assert_eq!(std::mem::size_of::<Value>(), 64);
+    #[cfg(target_pointer_width = "64")]
+    assert_eq!(std::mem::size_of::<OpaqueValue>(), 160);
 }
 
 #[test]
@@ -28786,7 +28831,7 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     let changes = |value: &Value, ty: &Type| super::retag_changes(value, &tag(ty));
     let list = |element: &str| {
         Value::Vec(VecValue {
-            element_type: Type::named(element),
+            element_type: crate::runtime_value::SharedType::from(Type::named(element)),
             elements: ListElements::new(),
             str_view: Default::default(),
         })
@@ -28800,7 +28845,7 @@ fn direct_retags_skip_values_that_already_have_the_shape() {
     ));
     assert!(changes(&list("int64"), &named("set", vec![int64()])));
     let set = Value::Set(SetValue {
-        element_type: Type::named("str"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("str")),
         elements: SetElements::new(),
     });
     assert!(!changes(&set, &named("set", vec![Type::named("str")])));
@@ -29155,7 +29200,7 @@ fn registered_float32_slots_render_through_print_and_str() {
     let record = "f\tFloat32SlotsProbe\tlevel";
     unsafe { super::aura_direct_register_float32_slots(record.as_ptr(), record.len()) };
     let probe = boxed_value(Value::Instance(crate::runtime_value::InstanceValue {
-        class_name: "Float32SlotsProbe".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Float32SlotsProbe".to_string()),
         fields: std::collections::BTreeMap::from([(
             "level".to_string(),
             Value::Float(f64::from(0.1f32)),
@@ -29453,7 +29498,7 @@ fn text_from_a_byte_slice_reads_the_bytes_in_place() {
     expect_variant_value(unsafe { take_value(err) }, "Result", "Err");
     // A list that keeps its bytes as values goes through the `Result`.
     let values = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named("uint8"),
+        element_type: crate::runtime_value::SharedType::from(Type::named("uint8")),
         elements: [104, 105, 255]
             .into_iter()
             .map(|byte| {

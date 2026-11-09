@@ -43,7 +43,7 @@ fn record_env(name: &str) -> LayoutEnv {
 
 fn record(name: &str, id: i64, weight: f64) -> Value {
     Value::Instance(InstanceValue {
-        class_name: name.to_string(),
+        class_name: crate::runtime_value::RuntimeName::from(name.to_string()),
         fields: [
             (
                 "id".to_string(),
@@ -180,7 +180,7 @@ fn registered_records_live_in_lists_and_cross_with_one_call() {
     elements.values_mut();
     assert_eq!(elements.form(), ListForm::Values);
     let values = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named(name),
+        element_type: crate::runtime_value::SharedType::from(Type::named(name)),
         elements,
         str_view: Default::default(),
     }));
@@ -214,7 +214,7 @@ fn registered_records_live_in_lists_and_cross_with_one_call() {
     // A record field is read from an instance, an enum payload, or a
     // union's payload in place.
     let holder = boxed_value(Value::Instance(InstanceValue {
-        class_name: "Holder".to_string(),
+        class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
         fields: [("best".to_string(), record(name, 2, 4.0))].into(),
     }));
     let field = b"best";
@@ -352,7 +352,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
     let unregistered = Box::leak(Box::new(PlainLayoutCell::new())) as *const _ as usize;
     let list_of = move |ids: &[i64]| {
         boxed_value(Value::Vec(VecValue {
-            element_type: Type::named(name),
+            element_type: crate::runtime_value::SharedType::from(Type::named(name)),
             elements: ids
                 .iter()
                 .map(|id| record(name, *id, 0.0))
@@ -419,7 +419,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             "a `str` value does not fit the layout of `PlainTestErrors`",
             Box::new(move || unsafe {
                 let list = boxed_value(Value::Vec(VecValue {
-                    element_type: Type::named(name),
+                    element_type: crate::runtime_value::SharedType::from(Type::named(name)),
                     elements: vec![Value::String("x".to_string().into())].into(),
                     str_view: Default::default(),
                 }));
@@ -437,7 +437,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             "a `str` value does not fit the layout of `PlainTestErrors`",
             Box::new(move || unsafe {
                 let holder = boxed_value(Value::Instance(InstanceValue {
-                    class_name: "Holder".to_string(),
+                    class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
                     fields: [("best".to_string(), Value::String("x".to_string().into()))].into(),
                 }));
                 let field = b"best";
@@ -454,7 +454,7 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             "class `Holder` has no field `missing`",
             Box::new(move || unsafe {
                 let holder = boxed_value(Value::Instance(InstanceValue {
-                    class_name: "Holder".to_string(),
+                    class_name: crate::runtime_value::RuntimeName::from("Holder".to_string()),
                     fields: Default::default(),
                 }));
                 let field = b"missing";
@@ -650,7 +650,7 @@ fn records_pop_off_a_list_with_one_call() {
     let mut elements = ListElements::from(vec![record(name, 7, 0.25), record(name, 8, 0.5)]);
     elements.values_mut();
     let values = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named(name),
+        element_type: crate::runtime_value::SharedType::from(Type::named(name)),
         elements,
         str_view: Default::default(),
     }));
@@ -676,7 +676,7 @@ fn records_pop_off_a_list_with_one_call() {
         "{failure}"
     );
     let other = boxed_value(Value::Vec(VecValue {
-        element_type: Type::named(name),
+        element_type: crate::runtime_value::SharedType::from(Type::named(name)),
         elements: ListElements::from(vec![Value::Bool(true)]),
         str_view: Default::default(),
     })) as usize;
