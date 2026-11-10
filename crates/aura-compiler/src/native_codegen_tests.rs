@@ -3373,12 +3373,14 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                         passing: MirReceiverKind::Borrow,
                                         ty: Type::named("int32"),
                                         c_string: false,
+                                        pointer: false,
                                     },
                                     MirExternParam {
                                         name: "bytes".to_string(),
                                         passing: MirReceiverKind::BorrowMut,
                                         ty: bytes_ty.clone(),
                                         c_string: false,
+                                        pointer: false,
                                     },
                                 ],
                                 return_type: Type::named("int64"),
@@ -3410,6 +3412,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint64"),
                                     c_string: false,
+                                    pointer: false,
                                 }],
                                 return_type: handle_ty.clone(),
                                 c_string_result: false,
@@ -3433,6 +3436,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     passing: MirReceiverKind::Value,
                                     ty: handle_ty,
                                     c_string: false,
+                                    pointer: false,
                                 }],
                                 return_type: Type::Unit,
                                 c_string_result: false,
@@ -3456,6 +3460,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint16"),
                                     c_string: false,
+                                    pointer: false,
                                 }],
                                 return_type: Type::named("uint16"),
                                 c_string_result: false,
@@ -3531,6 +3536,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
                     c_string: false,
+                    pointer: false,
                 }],
                 return_type: Type::named("int32"),
                 c_string_result: false,
@@ -3555,6 +3561,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
                     c_string: false,
+                    pointer: false,
                 }],
                 return_type: Type::named("int32"),
                 c_string_result: false,
@@ -3620,6 +3627,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                                     passing: MirReceiverKind::BorrowMut,
                                     ty: bytes_ty,
                                     c_string: false,
+                                    pointer: false,
                                 }],
                                 return_type: Type::named("int64"),
                                 c_string_result: false,
@@ -16570,6 +16578,104 @@ def main() -> int32:
         crate::ffi::FfiType::NullableCString
     );
     assert!(!extern_call("divide").params[0].c_string);
+}
+
+#[test]
+fn direct_ffi_codegen_lowers_pointer_parameters_over_every_scalar_list() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reads(
+    a: ptr[bool], b: ptr[int8], c: ptr[int16], d: ptr[int32], e: ptr[int64],
+    f: ptr[uint8], g: ptr[uint16], h: ptr[uint32], i: ptr[uint64],
+    j: ptr[float32], k: ptr[float64]
+) -> None
+extern "C" def writes(flags: mut ptr[bool], values: mut ptr[float64], n: int64) -> None
+
+def main() -> int32:
+    a: list[bool] = [true]
+    b: list[int8] = [1]
+    c: list[int16] = [1]
+    d: list[int32] = [1]
+    e: list[int64] = [1]
+    f: list[uint8] = [1]
+    g: list[uint16] = [1]
+    h: list[uint32] = [1]
+    i: list[uint64] = [1]
+    j: list[float32] = [1.0]
+    k: list[float64] = [1.0]
+    reads(a, b, c, d, e, f, g, h, i, j, k)
+    mut flags: list[bool] = [false]
+    mut values: list[float64] = [1.0, 2.0]
+    writes(flags, values, 2)
+    print(flags)
+    print(values)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("pointer parameters should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "reads",
+        "writes",
+        "aura_direct_ffi_elements",
+        "aura_direct_ffi_elements_mut",
+        "aura_direct_ffi_check_flags",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::{FfiScalar, FfiType};
+    let reads = extern_call("reads");
+    assert!(reads.params.iter().all(|param| param.pointer));
+    assert_eq!(
+        super::foreign::foreign_param_type(&reads.params[3])
+            .expect("ptr[int32] is a boundary type")
+            .ffi_type,
+        FfiType::Pointer(FfiScalar::I32)
+    );
+    let writes = extern_call("writes");
+    assert!(writes.params[1].pointer && !writes.params[2].pointer);
+    assert_eq!(
+        super::foreign::foreign_param_type(&writes.params[1])
+            .expect("mut ptr[float64] is a boundary type")
+            .ffi_type,
+        FfiType::PointerMut(FfiScalar::F64)
+    );
+    for ty in [
+        Type::named("str"),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
+    ] {
+        let mut param = writes.params[1].clone();
+        param.ty = ty;
+        let error = super::foreign::foreign_param_type(&param)
+            .err()
+            .expect("a pointer needs a list of scalars");
+        assert!(error.contains("as an FFI pointer"), "{error}");
+    }
 }
 
 #[test]

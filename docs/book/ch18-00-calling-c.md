@@ -391,6 +391,55 @@ and give your callers a way to call it, typically through a class with a
 `close()` method that they can put in a `with` block, as
 [Chapter 14](/book/ch14-00-resources-and-cleanup) showed.
 
+## Arrays of numbers
+
+Numeric libraries take their data as a pointer to the first element of an
+array, with the count in a separate argument. The type `ptr[T]` is that
+pointer. Like `cstr`, it exists only in extern declarations: on the Aura
+side the argument is a `list[T]`, where `T` is one of the scalar types.
+`ptr[T]` is a `const T *` the function reads through, and `mut ptr[T]` is a
+`T *` it may also write through:
+
+*Filename: src/arrays.au*
+
+```aura fragment
+extern "C" def wcslen(text: ptr[int32]) -> uint64
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
+
+def main() -> int32:
+    wide: list[int32] = [72, 105, 0]
+    print(wcslen(wide))
+
+    mut averages: list[float64] = [-1.0, -1.0, -1.0]
+    print(getloadavg(averages, 3))
+    print(averages[0] >= 0.0)
+    return 0
+```
+
+<span class="caption">Listing 18-5: Passing lists of numbers to C as arrays</span>
+
+```console
+$ aura run src/arrays.au
+2
+3
+true
+```
+
+`wcslen` counts wide characters up to a zero, and on Linux and macOS a wide
+character is 32 bits, so a `list[int32]` that ends in `0` is a wide string.
+`getloadavg(double[], int)` fills an array with the system's load averages
+and returns how many it wrote. After the call, `averages` holds what C
+stored.
+
+No length crosses with the pointer, so nothing stops a C function from
+reading or writing past the end of the list. That is why `getloadavg` gets
+`3` as its own argument, and it is on us to pass a count that is no larger
+than the list. A list of scalars keeps its elements side by side in memory,
+exactly as a C array does, so a built program passes the address of the
+list's own storage and copies nothing. A million-element list costs the same
+to pass as a three-element one. That is the form to reach for when you wrap
+BLAS, an image codec, or a model runtime.
+
 ## When things go wrong at run time
 
 Some foreign failures Aura can catch. If no library defines the symbol, the
@@ -537,7 +586,8 @@ table, the diagnostics, and the backend contract.
 You can now call a C function from Aura: declare it with `extern "C" def`
 inside a package that opts in with `allow_ffi = true`, name its library
 under `[ffi]`, pass scalars by value,
-text and bytes as temporary views, C strings as `cstr`, and results through
+text and bytes as temporary views, C strings as `cstr`, lists of numbers as
+`ptr[T]` arrays, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the

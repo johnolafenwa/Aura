@@ -24,3 +24,5 @@ int32_t fc_out(int64_t value, int64_t *out) {
     *out += value;
     return 0;
 }
+double fc_floats(const double *values, int64_t count) { return values[count - 1]; }
+void fc_bump(double *values, int64_t count) { values[count - 1] += 1.0; }

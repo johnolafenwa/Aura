@@ -16,6 +16,8 @@ the time measured is the cost of crossing the boundary.
 | `cstr` | `uint64_t fc_cstr(const char *)` | a `cstr` argument made from a held string |
 | `name` | `const char *fc_name(void)` | a `cstr` result copied into a string |
 | `out` | `int32_t fc_out(int64_t, int64_t *)` | a `mut int64` out-parameter |
+| `floats` | `double fc_floats(const double *, int64_t)` | a `ptr[float64]` over a list of 8 |
+| `bump` | `void fc_bump(double *, int64_t)` | a `mut ptr[float64]` over the same list |
 
 ## Running
 
@@ -45,6 +47,8 @@ Linux x86-64 cloud container, 2026-11-10, nanoseconds per call:
 | `cstr` | 22 | 18 | 179 | 126 |
 | `name` | 38 | 20 | 155 | 248 |
 | `out` | 1.9 | 2.0 | 359 | 158 |
+| `floats` | 2.5 | 4.6 | 370 | 229 |
+| `bump` | 2.5 | 2.4 | 353 | 172 |
 
 The container is shared, so a number moves by a few tenths of a nanosecond
 between runs. A `str` argument asks the runtime for its bytes, which is the
@@ -55,3 +59,7 @@ in its runtime, Rust with `CString::new`. In `name` each side copies the
 result into an owned string: Rust with `CStr::to_str` and `to_owned`. Both
 cases are one allocation and one copy, and Aura's extra time in `name` is
 the box of the new `str`.
+
+In `floats` and `bump` every side passes the address of storage it already
+holds: Aura the list's own elements, Rust a `Vec<f64>`, and Python an array
+made once before the loop.

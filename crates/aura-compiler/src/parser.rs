@@ -816,6 +816,10 @@ impl Parser {
             .iter_mut()
             .map(|param| take_c_string(&mut param.ty))
             .collect();
+        let pointer_params = params
+            .iter_mut()
+            .map(|param| take_pointer(&mut param.ty))
+            .collect();
         let c_string_result = take_c_string(&mut return_type);
         let symbol = self.parse_extern_symbol_clause()?;
         // An indented block holds only the trusted contract.
@@ -835,6 +839,7 @@ impl Parser {
             params,
             return_type,
             c_string_params,
+            pointer_params,
             c_string_result,
             span,
             contracts,
@@ -5612,6 +5617,19 @@ pub(crate) fn mentions_ghost(expr: &Expr) -> bool {
     let mut found = false;
     visit(&mut expr.clone(), &mut found);
     found
+}
+
+/// Rewrites `ptr[T]` to `list[T]` in the type of an extern parameter, and
+/// reports whether it was there. `ptr[T]` is how a `list[T]` crosses as a
+/// pointer to its first element and names no type of its own.
+fn take_pointer(ty: &mut TypeRef) -> bool {
+    match &mut ty.kind {
+        TypeRefKind::Named { name, args } if name == "ptr" && args.len() == 1 => {
+            *name = "list".to_string();
+            true
+        }
+        _ => false,
+    }
 }
 
 /// Rewrites `cstr`, alone or as a member of a union, to `str` in the type

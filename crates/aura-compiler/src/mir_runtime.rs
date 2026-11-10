@@ -6359,7 +6359,10 @@ impl MirRuntime {
         let mut arguments = ordered
             .iter()
             .zip(&call.params)
-            .map(|(argument, param)| ffi_value_from_runtime(&argument.value, &param.ty))
+            .map(|(argument, param)| match param.pointer {
+                true => ffi_elements_from_runtime(&argument.value, &param.ty),
+                false => ffi_value_from_runtime(&argument.value, &param.ty),
+            })
             .collect::<Result<Vec<_>>>()?;
 
         let result = dispatch(&call.symbol, &signature, &mut arguments);
@@ -6375,6 +6378,9 @@ impl MirRuntime {
             }
             let written = match ffi_value {
                 FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                FfiValue::Elements(scalar, words) => {
+                    elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?
+                }
                 other => runtime_value_from_ffi(other, &param.ty).map_err(|error| {
                     Diagnostic::coded(
                         "AU4005",
@@ -10740,6 +10746,13 @@ enum BlockOutcome {
 }
 
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
+    if param.pointer {
+        let scalar = pointer_element(&param.ty)?.1;
+        return Ok(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::PointerMut(scalar),
+            _ => FfiType::Pointer(scalar),
+        });
+    }
     let by_value = ffi_type_for_extern_result(&param.ty, param.c_string)?;
     if param.passing != MirReceiverKind::BorrowMut {
         return Ok(by_value);
@@ -10904,6 +10917,76 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         .ok_or_else(mismatch),
         _ => Err(mismatch()),
     }
+}
+
+/// The element type of `ty`, the `list[T]` of a `ptr[T]` parameter, and the
+/// scalar it crosses as.
+fn pointer_element(ty: &Type) -> Result<(&Type, crate::ffi::FfiScalar)> {
+    let element = match ty {
+        Type::Named(_, args) => args.first(),
+        _ => None,
+    };
+    element
+        .and_then(|element| {
+            let by_value = ffi_type_for_extern_result(element, false).ok()?;
+            Some((element, crate::ffi::FfiScalar::of(by_value)?))
+        })
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4005",
+                format!("pointer FFI parameter type `{ty}` reached MIR execution"),
+            )
+        })
+}
+
+/// The scalars of the list `value` for a `ptr[T]` parameter of type `ty`.
+fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    let (element_type, scalar) = pointer_element(ty)?;
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI value for source type `{ty}` has incompatible runtime shape `{}`",
+                value.render()
+            ),
+        )
+    };
+    let Value::Vec(vector) = value else {
+        return Err(mismatch());
+    };
+    let words = vector
+        .elements
+        .iter()
+        .map(|element| {
+            let element = ffi_value_from_runtime(&element, element_type)?;
+            scalar.word(&element).ok_or_else(mismatch)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(FfiValue::Elements(scalar, words))
+}
+
+/// The list a `mut ptr[T]` argument of type `ty` holds after the call.
+fn elements_runtime_value(
+    scalar: crate::ffi::FfiScalar,
+    words: &[u64],
+    ty: &Type,
+    symbol: &str,
+) -> Result<Value> {
+    let element_type = pointer_element(ty)?.0.clone();
+    let elements = words
+        .iter()
+        .map(|word| {
+            let element = scalar
+                .value(*word)
+                .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
+            runtime_value_from_ffi(element, &element_type)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Value::Vec(VecValue {
+        element_type: aura_runtime::runtime_value::SharedType::from(element_type),
+        elements: elements.into_iter().collect(),
+        str_view: Default::default(),
+    }))
 }
 
 fn ffi_nullable_from_runtime(payload: &Value) -> Option<FfiValue> {

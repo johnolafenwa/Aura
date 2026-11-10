@@ -10,13 +10,14 @@ use super::super::{
 };
 use super::{
     aura_direct_ffi_bad_bool, aura_direct_ffi_bytes_view, aura_direct_ffi_bytes_view_mut,
-    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_handle,
+    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_check_flags,
+    aura_direct_ffi_elements, aura_direct_ffi_elements_mut, aura_direct_ffi_handle,
     aura_direct_ffi_handle_address, aura_direct_ffi_none, aura_direct_ffi_null_handle,
     aura_direct_ffi_nullable_handle_address, aura_direct_ffi_release_bytes,
     aura_direct_ffi_release_c_string, aura_direct_ffi_str_view, ForeignView,
 };
 use crate::integer::{IntegerKind, IntegerValue};
-use crate::list_elements::ListElements;
+use crate::list_elements::{ListElements, ListForm};
 use crate::runtime_value::{
     run_lightweight_root_task, shared_union_value, SharedType, Value, VecValue,
 };
@@ -445,4 +446,222 @@ fn a_c_string_result_is_copied_into_a_new_str() {
             "FFI call to `name` failed: FFI function returned a cstr that is not UTF-8"
         );
     }
+}
+
+fn float_values(values: &[f64]) -> ListElements {
+    ListElements::Values(
+        values
+            .iter()
+            .copied()
+            .map(Value::Float)
+            .collect::<Vec<_>>()
+            .into(),
+    )
+}
+
+fn scalar_floats(values: &[f64]) -> ListElements {
+    float_values(values)
+        .in_scalar_form(ListForm::Float64)
+        .expect("floats fit the float64 form")
+}
+
+fn scalar_flags(values: &[bool]) -> ListElements {
+    let values: Vec<Value> = values.iter().copied().map(Value::Bool).collect();
+    ListElements::Values(values.into())
+        .in_scalar_form(ListForm::Bool)
+        .expect("bools fit the bool form")
+}
+
+fn floats_of(list: *mut OpaqueValue) -> Vec<f64> {
+    unsafe {
+        with_value(list, |value| match value {
+            Value::Vec(vector) => vector
+                .elements
+                .iter()
+                .map(|element| match &*element {
+                    Value::Float(value) => *value,
+                    other => panic!("expected a float, found {other:?}"),
+                })
+                .collect(),
+            other => panic!("expected a list, found {other:?}"),
+        })
+    }
+}
+
+/// The list access codes generated code names scalar forms by.
+const FLOAT64: i64 = 3;
+const BOOL: i64 = 4;
+const FLOAT32: i64 = 13;
+
+#[test]
+fn pointer_elements_lend_a_scalar_list_and_copy_any_other() {
+    unsafe {
+        let list = list_value(scalar_floats(&[1.5, 2.5]));
+        let mut view = empty_view();
+        let copy = aura_direct_ffi_elements(list, FLOAT64, &mut view);
+        assert!(copy.is_null(), "a scalar list lends its own elements");
+        assert_eq!(view.length, 2);
+        assert_eq!(
+            slice::from_raw_parts(view.pointer.cast::<f64>(), 2),
+            [1.5, 2.5]
+        );
+        aura_direct_release_value(list);
+
+        let list = list_value(float_values(&[4.0, 5.0, 6.0]));
+        let mut view = empty_view();
+        let copy = aura_direct_ffi_elements(list, FLOAT64, &mut view);
+        assert!(!copy.is_null(), "boxed elements need a contiguous copy");
+        assert_eq!(
+            slice::from_raw_parts(view.pointer.cast::<f64>(), 3),
+            [4.0, 5.0, 6.0]
+        );
+        aura_direct_release_value(copy);
+        aura_direct_release_value(list);
+
+        // A `float32` list that keeps doubles is narrowed in the copy.
+        let list = list_value(float_values(&[0.5, 1.5]));
+        let mut view = empty_view();
+        let copy = aura_direct_ffi_elements(list, FLOAT32, &mut view);
+        assert!(!copy.is_null());
+        assert_eq!(
+            slice::from_raw_parts(view.pointer.cast::<f32>(), 2),
+            [0.5, 1.5]
+        );
+        aura_direct_release_value(copy);
+        aura_direct_release_value(list);
+
+        for empty in [
+            list_value(scalar_floats(&[])),
+            list_value(float_values(&[])),
+        ] {
+            let mut view = empty_view();
+            let copy = aura_direct_ffi_elements(empty, FLOAT64, &mut view);
+            assert!(copy.is_null());
+            assert!(view.pointer.is_null());
+            assert_eq!(view.length, 0);
+            aura_direct_release_value(empty);
+        }
+    }
+}
+
+#[test]
+fn mutable_pointer_elements_write_through_to_the_list() {
+    unsafe {
+        for list in [
+            list_value(scalar_floats(&[1.0, 2.0])),
+            list_value(float_values(&[1.0, 2.0])),
+        ] {
+            let mut view = empty_view();
+            aura_direct_ffi_elements_mut(list, FLOAT64, &mut view);
+            assert_eq!(view.length, 2);
+            slice::from_raw_parts_mut(view.pointer.cast_mut().cast::<f64>(), 2)
+                .copy_from_slice(&[7.5, 8.5]);
+            assert_eq!(floats_of(list), [7.5, 8.5]);
+            aura_direct_release_value(list);
+        }
+
+        let empty = list_value(float_values(&[]));
+        let mut view = empty_view();
+        aura_direct_ffi_elements_mut(empty, FLOAT64, &mut view);
+        assert!(view.pointer.is_null());
+        assert_eq!(view.length, 0);
+        aura_direct_release_value(empty);
+    }
+}
+
+#[test]
+fn pointer_elements_reject_values_that_are_not_lists_of_the_scalar() {
+    for (work, expected) in [
+        (
+            (|view: &mut ForeignView| unsafe {
+                aura_direct_ffi_elements(string_value("x"), FLOAT64, view);
+            }) as fn(&mut ForeignView),
+            "FFI argument expected a list for a pointer, but received",
+        ),
+        (
+            |view| unsafe {
+                aura_direct_ffi_elements_mut(string_value("x"), FLOAT64, view);
+            },
+            "FFI argument expected a list for a mut pointer, but received",
+        ),
+        (
+            |view| unsafe {
+                let list = list_value(ListElements::Values(vec![Value::Bool(true)].into()));
+                aura_direct_ffi_elements(list, FLOAT64, view);
+            },
+            "FFI argument expected a list for a pointer, but an element is another type",
+        ),
+        (
+            |view| unsafe {
+                let list = list_value(ListElements::Values(vec![Value::Bool(true)].into()));
+                aura_direct_ffi_elements_mut(list, FLOAT64, view);
+            },
+            "FFI argument expected a list for a mut pointer, but an element is another type",
+        ),
+        (
+            |view| unsafe {
+                aura_direct_ffi_elements(list_value(float_values(&[1.0])), 5, view);
+            },
+            "list access code 5 names no scalar form",
+        ),
+        (
+            |_| unsafe {
+                let list = list_value(scalar_floats(&[1.0]));
+                aura_direct_ffi_elements(list, FLOAT64, std::ptr::null_mut());
+            },
+            "a foreign call view has no place to go",
+        ),
+    ] {
+        let message = capture_diagnostic(move || {
+            let mut view = empty_view();
+            work(&mut view);
+        })
+        .message;
+        assert!(message.contains(expected), "{message}");
+    }
+}
+
+#[test]
+fn every_scalar_list_form_has_an_access_code() {
+    unsafe {
+        for access in [2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13] {
+            let empty = list_value(ListElements::Values(Vec::new().into()));
+            let mut view = empty_view();
+            assert!(aura_direct_ffi_elements(empty, access, &mut view).is_null());
+            assert_eq!(view.length, 0);
+            aura_direct_release_value(empty);
+        }
+    }
+}
+
+#[test]
+fn a_flag_list_with_a_byte_that_is_not_a_bool_ends_the_task() {
+    let symbol = "fill_flags";
+    unsafe {
+        let list = list_value(scalar_flags(&[true, false]));
+        aura_direct_ffi_check_flags(list, symbol.as_ptr(), symbol.len());
+        aura_direct_release_value(list);
+        // A value that is no flag list has nothing to check.
+        let text = string_value("x");
+        aura_direct_ffi_check_flags(text, symbol.as_ptr(), symbol.len());
+        aura_direct_release_value(text);
+        let floats = list_value(scalar_floats(&[1.0]));
+        aura_direct_ffi_check_flags(floats, symbol.as_ptr(), symbol.len());
+        aura_direct_release_value(floats);
+    }
+    let diagnostic = capture_diagnostic(move || unsafe {
+        let list = list_value(scalar_flags(&[true, false]));
+        let mut view = empty_view();
+        aura_direct_ffi_elements_mut(list, BOOL, &mut view);
+        view.pointer.cast_mut().add(1).write(7);
+        aura_direct_ffi_check_flags(list, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        format!(
+            "FFI call to `fill_flags` failed: {}",
+            crate::ffi::FfiError::NonCanonicalBoolReturn(7)
+        )
+    );
 }

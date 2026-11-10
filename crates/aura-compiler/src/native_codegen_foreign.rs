@@ -15,6 +15,8 @@
 //!   `Handle | None` argument passes null for `None`
 //! - a `cstr` argument passes a NUL-terminated copy of the text, freed when
 //!   the call returns, and a `cstr` result is copied into a new `str`
+//! - a `ptr[T]` argument passes the address of the first element of a
+//!   `list[T]`, with no length
 //! - a `mut` scalar or `mut Handle | None` argument passes the address of a
 //!   stack word that holds the value, and the word is stored back to the
 //!   argument's place when the call returns
@@ -70,7 +72,49 @@ pub(super) fn foreign_param_type(
     if param.c_string {
         return Ok(DirectFfiType::scalar(c_string_type(&param.ty)));
     }
+    if param.pointer {
+        // `ptr[T]` lowers to `list[T]`, and `T` is a scalar.
+        let element = match &param.ty {
+            Type::Named(_, args) => args.first(),
+            _ => None,
+        };
+        let scalar = element
+            .and_then(|element| {
+                direct_ffi_type_for_source(element, Some(MirReceiverKind::Borrow)).ok()
+            })
+            .and_then(|element| crate::ffi::FfiScalar::of(element.ffi_type))
+            .ok_or_else(|| {
+                format!(
+                    "direct backend cannot pass `{}` as an FFI pointer",
+                    param.ty
+                )
+            })?;
+        return Ok(DirectFfiType::scalar(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::PointerMut(scalar),
+            _ => FfiType::Pointer(scalar),
+        }));
+    }
     direct_ffi_type_for_source(&param.ty, Some(param.passing))
+}
+
+/// The list access code of a list that keeps `scalar` elements unboxed.
+fn scalar_list_access(scalar: crate::ffi::FfiScalar) -> i64 {
+    use crate::ffi::FfiScalar as Scalar;
+    use aura_runtime::native_runtime::DirectListAccess as Access;
+    let access = match scalar {
+        Scalar::Bool => Access::Bool,
+        Scalar::I8 => Access::Int8,
+        Scalar::I16 => Access::Int16,
+        Scalar::I32 => Access::Int32,
+        Scalar::I64 => Access::Int64,
+        Scalar::U8 => Access::Uint8,
+        Scalar::U16 => Access::Uint16,
+        Scalar::U32 => Access::Uint32,
+        Scalar::U64 => Access::Uint64,
+        Scalar::F32 => Access::Float32,
+        Scalar::F64 => Access::Float64,
+    };
+    access as i64
 }
 
 /// The boundary type of the result of a foreign call.
@@ -216,6 +260,8 @@ impl FunctionCompiler<'_> {
         };
         let mut copies = Vec::new();
         let mut text_copies = Vec::new();
+        let mut list_copies = Vec::new();
+        let mut flag_lists = Vec::new();
         let mut writebacks = Vec::new();
         for (index, (operand, place)) in loaded.into_iter().enumerate() {
             let (ffi, value) = match operand {
@@ -266,6 +312,20 @@ impl FunctionCompiler<'_> {
                     text_copies.push(copy.results[0]);
                     continue;
                 }
+                FfiType::Pointer(scalar) => {
+                    let (pointer, copy) = self.foreign_elements(word, scalar, false);
+                    arguments.push_word(pointer);
+                    list_copies.push(copy);
+                    continue;
+                }
+                FfiType::PointerMut(scalar) => {
+                    let (pointer, _) = self.foreign_elements(word, scalar, true);
+                    arguments.push_word(pointer);
+                    if scalar == crate::ffi::FfiScalar::Bool {
+                        flag_lists.push(word);
+                    }
+                    ForeignWriteback::Same(value)
+                }
                 ffi_type => {
                     self.push_foreign_argument(ffi_type, &value, &mut arguments, &mut copies);
                     ForeignWriteback::Same(value)
@@ -305,6 +365,17 @@ impl FunctionCompiler<'_> {
         for copy in text_copies {
             self.builder
                 .call(self.runtime[RuntimeFn::FfiReleaseCString], &[copy]);
+        }
+        for copy in list_copies {
+            self.release_foreign_list_copy(copy);
+        }
+        // A C function can leave any byte in a `bool` it writes through.
+        for list in flag_lists {
+            let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+            self.builder.call(
+                self.runtime[RuntimeFn::FfiCheckFlags],
+                &[list, symbol_ptr, symbol_len],
+            );
         }
         for (place, expected, writeback) in writebacks {
             let flags = MemFlags::trusted();
@@ -492,6 +563,89 @@ impl FunctionCompiler<'_> {
             return self.foreign_nullable(text.results[0], &call.return_type);
         }
         Ok(self.owned_opaque_result(text.results, call.return_type.clone()))
+    }
+
+    /// The address of the first element of the list `value`, laid out as a
+    /// C array of `scalar`, and the copy the runtime made of a list that
+    /// keeps its elements another way, or 0. A list that keeps them unboxed
+    /// shows them in its view, so the common case reads the address in
+    /// place. A `mut` pointer also needs room, which means no other list
+    /// shares the storage, and it never makes a copy.
+    fn foreign_elements(
+        &mut self,
+        value: Val,
+        scalar: crate::ffi::FfiScalar,
+        mutable: bool,
+    ) -> (Val, Val) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let code = scalar_list_access(scalar);
+        let access = self.builder.uload32(flags, value, layout.access_offset);
+        let mut lends = self.builder.icmp_imm(IntCC::Equal, access, code);
+        if mutable {
+            let room = self.builder.uload32(flags, value, layout.capacity_offset);
+            let unshared = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
+            lends = self.builder.band(lends, unshared);
+        }
+        let lent = self.builder.create_block();
+        let asked = self.builder.create_block();
+        let join = self.builder.create_block();
+        let pointer = self.builder.append_block_param(join, types::I64);
+        let copy = self.builder.append_block_param(join, types::I64);
+        self.builder.set_cold_block(asked);
+        self.builder.brif(lends, lent, &[], asked, &[]);
+
+        self.builder.switch_to_block(lent);
+        self.builder.seal_block(lent);
+        let length = self
+            .builder
+            .load(types::I64, flags, value, layout.len_offset);
+        let elements = self
+            .builder
+            .load(types::I64, flags, value, layout.elements_offset);
+        let null = self.builder.iconst(types::I64, 0);
+        let lent_pointer = self.builder.select(length, elements, null);
+        self.builder.jump(join, &[lent_pointer, null]);
+
+        self.builder.switch_to_block(asked);
+        self.builder.seal_block(asked);
+        let slot = self.builder.create_sized_stack_slot(16, 3);
+        let view = self.builder.stack_addr(types::I64, slot, 0);
+        let code = self.builder.iconst(types::I64, code);
+        let helper = match mutable {
+            true => RuntimeFn::FfiElementsMut,
+            false => RuntimeFn::FfiElements,
+        };
+        let taken = self
+            .builder
+            .call(self.runtime[helper], &[value, code, view]);
+        let asked_pointer = self.builder.load(types::I64, flags, view, 0);
+        let asked_copy = match taken.results.first() {
+            Some(copy) => *copy,
+            None => self.builder.iconst(types::I64, 0),
+        };
+        self.builder.jump(join, &[asked_pointer, asked_copy]);
+
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        (pointer, copy)
+    }
+
+    /// Releases the list the runtime made to lay a pointer argument's
+    /// elements out as a C array. A list that lent its own elements made
+    /// none, which is the common case, so the release sits on a cold path.
+    fn release_foreign_list_copy(&mut self, copy: Val) {
+        let release = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.set_cold_block(release);
+        self.builder.brif(copy, release, &[], done, &[]);
+        self.builder.switch_to_block(release);
+        self.builder.seal_block(release);
+        self.builder
+            .call(self.runtime[RuntimeFn::ReleaseValue], &[copy]);
+        self.builder.jump(done, &[]);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
     }
 
     /// Asks the runtime for the view of `value`: its pointer, its length,

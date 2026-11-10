@@ -5472,6 +5472,45 @@ fn extern_functions_read_cstr_as_str_and_mark_where_it_was() {
 }
 
 #[test]
+fn extern_functions_read_ptr_as_list_and_mark_where_it_was() {
+    let module = parse(concat!(
+        "extern \"C\" def dot(a: ptr[float64], out: mut ptr[float64], n: int64) -> float64\n",
+        "extern \"C\" def sum(bytes: list[uint8]) -> uint64\n",
+    ))
+    .expect("ptr[T] is a type an extern parameter can name");
+    let externs: Vec<&ExternFunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    let dot = externs[0];
+    assert_eq!(dot.pointer_params, [true, true, false]);
+    assert!(dot.pointer_param(1) && !dot.pointer_param(2) && !dot.pointer_param(3));
+    for param in &dot.params[..2] {
+        match &param.ty.kind {
+            TypeRefKind::Named { name, args } => {
+                assert_eq!(name, "list");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected a named type, found {other:?}"),
+        }
+    }
+    assert_eq!(dot.params[1].mode, ParamMode::BorrowMut);
+    let shape = shape_of(dot);
+    assert_eq!(
+        shape["pointer_params"],
+        serde_json::json!([true, true, false])
+    );
+    assert!(
+        shape_of(externs[1]).get("pointer_params").is_none(),
+        "a declaration without ptr serializes as before"
+    );
+}
+
+#[test]
 fn extern_symbol_clauses_reject_missing_and_malformed_names() {
     let missing = parse("extern \"C\" def f() -> int32 symbol abs\n")
         .expect_err("the symbol name must be a string");

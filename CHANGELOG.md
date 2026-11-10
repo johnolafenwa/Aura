@@ -66,6 +66,10 @@ in this file.
   `out: mut Handle | None` passes a pointer to a pointer, as
   `sqlite3_open` takes. A `mut` scalar in an extern declaration was
   `AU3004` before, and a `Handle | None` parameter was `AU2010`.
+- FFI passes lists of numbers as C arrays. A `ptr[float64]` parameter takes
+  a `list[float64]` and passes a pointer to its first element, with no
+  length and no copy. `mut ptr[T]` lets the C function write the elements.
+  `T` is any fixed-width scalar.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name

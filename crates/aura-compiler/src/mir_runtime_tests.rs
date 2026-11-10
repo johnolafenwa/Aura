@@ -2818,24 +2818,28 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int8"),
                 c_string: false,
+                pointer: false,
             },
             MirExternParam {
                 name: "maximum".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("uint64"),
                 c_string: false,
+                pointer: false,
             },
             MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 c_string: false,
+                pointer: false,
             },
             MirExternParam {
                 name: "handle".to_string(),
                 passing: MirReceiverKind::Value,
                 ty: Type::named("Token"),
                 c_string: false,
+                pointer: false,
             },
         ],
         return_type: Type::named("Token"),
@@ -3050,6 +3054,7 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
                 passing: MirReceiverKind::Borrow,
                 ty: ty.clone(),
                 c_string: false,
+                pointer: false,
             })
             .collect(),
         return_type: Type::Unit,
@@ -3291,6 +3296,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 c_string: false,
+                pointer: false,
             }],
             return_type: Type::named("int32"),
             c_string_result: false,
@@ -3416,6 +3422,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
         passing: MirReceiverKind::Borrow,
         ty: Type::named("int32"),
         c_string: false,
+        pointer: false,
     }];
 
     let unsupported_abi = runtime
@@ -3501,6 +3508,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                         passing: MirReceiverKind::Borrow,
                         ty: param_ty,
                         c_string: false,
+                        pointer: false,
                     }],
                     return_type: Type::Unit,
                     c_string_result: false,
@@ -3584,6 +3592,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     passing: MirReceiverKind::BorrowMut,
                     ty: bytes_type,
                     c_string: false,
+                    pointer: false,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
@@ -3619,6 +3628,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
                     c_string: false,
+                    pointer: false,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
@@ -3655,6 +3665,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     passing: MirReceiverKind::BorrowMut,
                     ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     c_string: false,
+                    pointer: false,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
@@ -21647,6 +21658,7 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         passing: MirReceiverKind::Value,
         ty: Type::Union(Box::new(nullable.clone())),
         c_string: false,
+        pointer: false,
     };
     assert_eq!(
         super::ffi_type_for_extern_param(&union_param).expect("a nullable handle is a pointer"),
@@ -21705,6 +21717,7 @@ fn ffi_conversions_cover_c_text_out_parameters_and_nullable_arguments() {
         passing,
         ty,
         c_string,
+        pointer: false,
     };
     let text = Type::named("str");
     let nullable_text = Type::Union(Box::new(coverage_union(vec![text.clone(), Type::Unit])));
@@ -21813,6 +21826,139 @@ fn ffi_conversions_cover_c_text_out_parameters_and_nullable_arguments() {
 }
 
 #[test]
+fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue};
+    let list_of = |element: &str| Type::Named("list".to_string(), vec![Type::named(element)]);
+    let list = |element: &str, elements: Vec<Value>| {
+        Value::Vec(VecValue {
+            element_type: Type::named(element).into(),
+            elements: elements.into_iter().collect(),
+            str_view: Default::default(),
+        })
+    };
+    let param = |name: &str, ty: Type, passing| MirExternParam {
+        name: name.to_string(),
+        passing,
+        ty,
+        c_string: false,
+        pointer: true,
+    };
+    let shared = MirReceiverKind::Borrow;
+    let mutable = MirReceiverKind::BorrowMut;
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param("a", list_of("float64"), shared))
+            .expect("a pointer parameter"),
+        FfiType::Pointer(FfiScalar::F64)
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param("a", list_of("int16"), mutable))
+            .expect("a mut pointer parameter"),
+        FfiType::PointerMut(FfiScalar::I16)
+    );
+    for ty in [Type::named("str"), list_of("str")] {
+        let error = super::ffi_type_for_extern_param(&param("a", ty.clone(), shared))
+            .expect_err("a pointer needs a list of scalars");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            format!("pointer FFI parameter type `{ty}` reached MIR execution")
+        );
+    }
+
+    let floats = list("float64", vec![Value::Float(1.5), Value::Float(-2.0)]);
+    assert_eq!(
+        super::ffi_elements_from_runtime(&floats, &list_of("float64")).expect("a float list"),
+        FfiValue::Elements(
+            FfiScalar::F64,
+            vec![1.5_f64.to_bits(), (-2.0_f64).to_bits()]
+        )
+    );
+    for (value, ty) in [
+        (Value::Bool(true), list_of("float64")),
+        (list("float64", vec![Value::Bool(true)]), list_of("float64")),
+        (floats.clone(), Type::named("str")),
+    ] {
+        let error = super::ffi_elements_from_runtime(&value, &ty)
+            .expect_err("only a list of the scalar crosses as a pointer");
+        assert_eq!(error.code, "AU4005", "{}", error.message);
+    }
+    assert_eq!(
+        super::elements_runtime_value(FfiScalar::Bool, &[1, 0], &list_of("bool"), "fill")
+            .expect("flags"),
+        list("bool", vec![Value::Bool(true), Value::Bool(false)])
+    );
+    let error = super::elements_runtime_value(FfiScalar::Bool, &[7], &list_of("bool"), "fill")
+        .expect_err("7 is not a bool");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("FFI call to `fill` failed"));
+    let error = super::elements_runtime_value(FfiScalar::Bool, &[1], &Type::Unit, "fill")
+        .expect_err("a pointer needs a list type");
+    assert_eq!(error.code, "AU4005");
+
+    let mut env = Env::default();
+    env.define_typed("xs", list_of("float64"), floats.clone());
+    env.define_typed(
+        "out",
+        list_of("int32"),
+        list(
+            "int32",
+            vec![
+                Value::Int(IntegerValue::from_i32(1)),
+                Value::Int(IntegerValue::from_i32(2)),
+            ],
+        ),
+    );
+    let call = MirExternCall {
+        symbol: "aura_test_pointers".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            param("xs", list_of("float64"), shared),
+            param("out", list_of("int32"), mutable),
+        ],
+        return_type: Type::Unit,
+        c_string_result: false,
+    };
+    let args = [
+        MirArg {
+            name: None,
+            value: Operand::Place("xs".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("out".to_string()),
+            writeback_place: Some("out".to_string()),
+        },
+    ];
+    let result = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, signature, arguments| {
+            assert_eq!(
+                signature.parameters(),
+                [
+                    FfiType::Pointer(FfiScalar::F64),
+                    FfiType::PointerMut(FfiScalar::I32)
+                ]
+            );
+            assert_eq!(arguments[1], FfiValue::Elements(FfiScalar::I32, vec![1, 2]));
+            arguments[1] = FfiValue::Elements(FfiScalar::I32, vec![u64::from(u32::MAX), 40]);
+            Ok(FfiValue::Unit)
+        })
+        .expect("the call returns");
+    assert_eq!(result, Value::Unit);
+    assert_eq!(env.read_place("xs").expect("xs is defined"), floats);
+    assert_eq!(
+        env.read_place("out").expect("out is defined"),
+        list(
+            "int32",
+            vec![
+                Value::Int(IntegerValue::from_i32(-1)),
+                Value::Int(IntegerValue::from_i32(40)),
+            ],
+        )
+    );
+}
+
+#[test]
 fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
     use crate::ffi::{FfiScalar, FfiType, FfiValue, OpaqueHandle};
     let nullable_handle = Type::Union(Box::new(coverage_union(vec![
@@ -21841,18 +21987,21 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("str"),
                 c_string: true,
+                pointer: false,
             },
             MirExternParam {
                 name: "count".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::named("int32"),
                 c_string: false,
+                pointer: false,
             },
             MirExternParam {
                 name: "slot".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: nullable_handle.clone(),
                 c_string: false,
+                pointer: false,
             },
         ],
         return_type: Type::named("str"),

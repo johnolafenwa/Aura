@@ -1405,6 +1405,10 @@ pub struct MirExternParam {
     /// `const char *`, and not as a pointer and a length.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub c_string: bool,
+    /// The `list[T]` of `ty` crosses as a pointer to its first element,
+    /// with no length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pointer: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12607,6 +12611,7 @@ impl<'a> Lowerer<'a> {
                     passing: lower_receiver_kind(*passing),
                     ty: ty.clone(),
                     c_string: function.decl.c_string_param(index),
+                    pointer: function.decl.pointer_param(index),
                 })
                 .collect(),
             return_type: function.signature.return_type.clone(),

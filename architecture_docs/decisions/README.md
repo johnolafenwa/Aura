@@ -100,3 +100,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
 75. [ADR-0075: FFI passes C text, out-parameters, and nullable handles](0075-ffi-c-text-and-out-parameters.md) — Accepted; `cstr`, `mut` scalar out-parameters, `Handle | None` parameters, and `mut Handle | None`
+76. [ADR-0076: FFI passes a list of scalars as an array pointer](0076-ffi-array-pointers.md) — Accepted; `ptr[T]` and `mut ptr[T]` parameters over the elements of a scalar list

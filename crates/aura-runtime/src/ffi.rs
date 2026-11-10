@@ -57,6 +57,11 @@ pub enum FfiType {
     /// A pointer to an opaque pointer that the foreign function may read
     /// and write, such as `sqlite3 **`. A null pointee is `None`.
     OpaqueHandleOut,
+    /// A pointer to the first of a run of scalars the foreign function
+    /// reads, such as `const double *`. No length crosses with it.
+    Pointer(FfiScalar),
+    /// A [`FfiType::Pointer`] the foreign function may also write through.
+    PointerMut(FfiScalar),
 }
 
 /// A scalar a foreign function reads and writes through a pointer.
@@ -111,9 +116,19 @@ impl FfiScalar {
         })
     }
 
+    /// The size of the scalar in bytes.
+    pub fn size(self) -> usize {
+        match self {
+            Self::Bool | Self::I8 | Self::U8 => 1,
+            Self::I16 | Self::U16 => 2,
+            Self::I32 | Self::U32 | Self::F32 => 4,
+            Self::I64 | Self::U64 | Self::F64 => 8,
+        }
+    }
+
     /// The bits of `value`, a scalar of this type, in the low bytes of a
     /// word, or `None` when `value` is another type.
-    fn word(self, value: &FfiValue) -> Option<u64> {
+    pub fn word(self, value: &FfiValue) -> Option<u64> {
         Some(match (self, value) {
             (Self::Bool, FfiValue::Bool(value)) => u64::from(*value),
             (Self::I8, FfiValue::I8(value)) => u64::from(*value as u8),
@@ -131,7 +146,7 @@ impl FfiScalar {
     }
 
     /// The scalar of this type in the low bytes of `word`.
-    fn value(self, word: u64) -> Result<FfiValue, FfiError> {
+    pub fn value(self, word: u64) -> Result<FfiValue, FfiError> {
         Ok(match self {
             Self::Bool => match word as u8 {
                 0 => FfiValue::Bool(false),
@@ -154,10 +169,10 @@ impl FfiScalar {
 
 impl fmt::Display for FfiType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
-        if let Self::Out(scalar) = self {
-            return write!(formatter, "mut {}", scalar.ffi_type());
-        }
         formatter.write_str(match self {
+            Self::Out(scalar) => return write!(formatter, "mut {}", scalar.ffi_type()),
+            Self::Pointer(scalar) => return write!(formatter, "ptr[{}]", scalar.ffi_type()),
+            Self::PointerMut(scalar) => return write!(formatter, "mut ptr[{}]", scalar.ffi_type()),
             Self::Unit => "None",
             Self::Bool => "bool",
             Self::I8 => "int8",
@@ -177,7 +192,6 @@ impl fmt::Display for FfiType {
             Self::NullableOpaqueHandle => "nullable opaque handle",
             Self::CString => "cstr",
             Self::NullableCString => "nullable cstr",
-            Self::Out(_) => "mut scalar",
             Self::OpaqueHandleOut => "mut nullable opaque handle",
         })
     }
@@ -242,6 +256,9 @@ pub enum FfiValue {
     String(String),
     Bytes(Vec<u8>),
     OpaqueHandle(OpaqueHandle),
+    /// The scalars a pointer argument points to, each as
+    /// [`FfiScalar::word`] gives it.
+    Elements(FfiScalar, Vec<u64>),
 }
 
 impl FfiValue {
@@ -262,6 +279,7 @@ impl FfiValue {
             Self::String(_) => FfiType::StringView,
             Self::Bytes(_) => FfiType::BytesView,
             Self::OpaqueHandle(_) => FfiType::OpaqueHandle,
+            Self::Elements(scalar, _) => FfiType::Pointer(*scalar),
         }
     }
 }
@@ -423,11 +441,49 @@ impl AbiArgument {
 struct CallStorage {
     strings: Vec<CString>,
     slots: Vec<(usize, Box<u64>)>,
+    /// The packed elements of each pointer argument, in storage aligned for
+    /// every scalar, with the index of the argument.
+    elements: Vec<(usize, Vec<u64>)>,
+}
+
+/// `words`, one scalar each, packed as C lays out an array of `scalar`.
+fn pack_elements(scalar: FfiScalar, words: &[u64]) -> Vec<u64> {
+    let size = scalar.size();
+    let mut packed = vec![0_u64; (words.len() * size).div_ceil(8)];
+    // SAFETY: the storage holds at least `words.len() * size` bytes, and a
+    // byte has no alignment.
+    let bytes = unsafe {
+        std::slice::from_raw_parts_mut(packed.as_mut_ptr().cast::<u8>(), words.len() * size)
+    };
+    for (chunk, word) in bytes.chunks_exact_mut(size).zip(words) {
+        chunk.copy_from_slice(&word.to_le_bytes()[..size]);
+    }
+    packed
+}
+
+/// The first `count` scalars of `packed`, one word each: the inverse of
+/// [`pack_elements`].
+fn unpack_elements(scalar: FfiScalar, packed: &[u64], count: usize) -> Vec<u64> {
+    let size = scalar.size();
+    // SAFETY: `packed` was made by `pack_elements` for `count` scalars.
+    let bytes = unsafe { std::slice::from_raw_parts(packed.as_ptr().cast::<u8>(), count * size) };
+    bytes
+        .chunks_exact(size)
+        .map(|chunk| {
+            let mut word = [0_u8; 8];
+            word[..size].copy_from_slice(chunk);
+            u64::from_le_bytes(word)
+        })
+        .collect()
 }
 
 fn type_accepts_value(expected: FfiType, value: &FfiValue) -> bool {
     match (expected, value) {
         (FfiType::BytesView | FfiType::BytesViewMut, FfiValue::Bytes(_)) => true,
+        (
+            FfiType::Pointer(expected) | FfiType::PointerMut(expected),
+            FfiValue::Elements(actual, _),
+        ) => expected == *actual,
         (FfiType::CString | FfiType::NullableCString, FfiValue::String(_)) => true,
         (FfiType::NullableCString | FfiType::NullableOpaqueHandle, FfiValue::Unit) => true,
         (FfiType::NullableOpaqueHandle, FfiValue::OpaqueHandle(_)) => true,
@@ -559,6 +615,19 @@ fn append_argument(
             values.push(AbiArgument::MutPointer((&raw mut *slot).cast()));
             storage.slots.push((index, slot));
         }
+        (FfiType::Pointer(scalar) | FfiType::PointerMut(scalar), FfiValue::Elements(_, words)) => {
+            let mut packed = pack_elements(scalar, words);
+            // An empty run passes a null pointer, as an empty view does.
+            let pointer = if words.is_empty() {
+                std::ptr::null_mut()
+            } else {
+                packed.as_mut_ptr().cast()
+            };
+            types.push(Type::pointer());
+            values.push(AbiArgument::MutPointer(pointer));
+            // Moving the `Vec` keeps its heap buffer where it is.
+            storage.elements.push((index, packed));
+        }
         (FfiType::OpaqueHandleOut, value) => {
             let address = match value {
                 FfiValue::OpaqueHandle(handle) => handle.as_ptr() as usize as u64,
@@ -597,7 +666,9 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         | FfiType::BytesView
         | FfiType::BytesViewMut
         | FfiType::Out(_)
-        | FfiType::OpaqueHandleOut => {
+        | FfiType::OpaqueHandleOut
+        | FfiType::Pointer(_)
+        | FfiType::PointerMut(_) => {
             return Err(FfiError::UnsupportedReturnType(ffi_type));
         }
     })
@@ -738,6 +809,14 @@ pub unsafe fn call_host_function(
                 unreachable!("mutable byte view was validated before invocation");
             };
             destination.copy_from_slice(&buffer);
+        }
+    }
+    // A `mut` pointer argument takes the scalars the function left.
+    for (index, packed) in storage.elements {
+        if let (FfiType::PointerMut(scalar), FfiValue::Elements(_, words)) =
+            (signature.parameters[index], &mut arguments[index])
+        {
+            *words = unpack_elements(scalar, &packed, words.len());
         }
     }
     // Each out-parameter takes what the function left in its word, even
@@ -1138,6 +1217,18 @@ mod tests {
         }
     }
 
+    /// Reverses the order of `count` elements of `size` bytes each.
+    unsafe extern "C" fn reverse_run(values: *mut u8, count: i64, size: i64) {
+        let (count, size) = (count as usize, size as usize);
+        let bytes = unsafe { std::slice::from_raw_parts_mut(values, count * size) };
+        let reversed: Vec<u8> = bytes.chunks_exact(size).rev().flatten().copied().collect();
+        bytes.copy_from_slice(&reversed);
+    }
+
+    unsafe extern "C" fn run_is_null(values: *const u8) -> bool {
+        values.is_null()
+    }
+
     #[allow(clippy::too_many_arguments)]
     unsafe extern "C" fn bump_scalars(
         flag: *mut bool,
@@ -1535,6 +1626,99 @@ mod tests {
                 invalid.to_string(),
                 "FFI function returned a cstr that is not UTF-8"
             );
+        }
+    }
+
+    #[test]
+    fn pointer_parameters_pass_a_c_array_and_read_a_mut_one_back() {
+        let runs = [
+            (FfiScalar::Bool, 1, vec![1, 0, 0]),
+            (FfiScalar::I8, 1, vec![0x80, 2, 3]),
+            (FfiScalar::U8, 1, vec![0xff, 2, 3]),
+            (FfiScalar::I16, 2, vec![0x8000, 2, 3]),
+            (FfiScalar::U16, 2, vec![0xffff, 2, 3]),
+            (FfiScalar::I32, 4, vec![0x8000_0000, 2, 3]),
+            (FfiScalar::U32, 4, vec![0xffff_ffff, 2, 3]),
+            (FfiScalar::F32, 4, vec![u64::from(1.5_f32.to_bits()), 2, 3]),
+            (FfiScalar::I64, 8, vec![1 << 63, 2, 3]),
+            (FfiScalar::U64, 8, vec![u64::MAX, 2, 3]),
+            (FfiScalar::F64, 8, vec![(-2.25_f64).to_bits(), 2, 3]),
+        ];
+        for (scalar, size, words) in runs {
+            assert_eq!(scalar.size(), size);
+            let packed = pack_elements(scalar, &words);
+            assert_eq!(unpack_elements(scalar, &packed, words.len()), words);
+            let value = || FfiValue::Elements(scalar, words.clone());
+            assert_eq!(value().ffi_type(), FfiType::Pointer(scalar));
+
+            let reversed: Vec<u64> = words.iter().rev().copied().collect();
+            let count = || FfiValue::I64(words.len() as i64);
+            let width = || FfiValue::I64(size as i64);
+            // The function writes through a `mut` pointer to the caller.
+            let mut arguments = [value(), count(), width()];
+            let result = call(
+                reverse_run as *const (),
+                FfiSignature::new(
+                    vec![FfiType::PointerMut(scalar), FfiType::I64, FfiType::I64],
+                    FfiType::Unit,
+                ),
+                &mut arguments,
+            );
+            assert_eq!(result, Ok(FfiValue::Unit));
+            assert_eq!(arguments[0], FfiValue::Elements(scalar, reversed));
+            // What it writes through a read pointer stays in the copy.
+            let mut arguments = [value(), count(), width()];
+            let result = call(
+                reverse_run as *const (),
+                FfiSignature::new(
+                    vec![FfiType::Pointer(scalar), FfiType::I64, FfiType::I64],
+                    FfiType::Unit,
+                ),
+                &mut arguments,
+            );
+            assert_eq!(result, Ok(FfiValue::Unit));
+            assert_eq!(arguments[0], value());
+        }
+        assert_eq!(FfiType::Pointer(FfiScalar::I16).to_string(), "ptr[int16]");
+        assert_eq!(
+            FfiType::PointerMut(FfiScalar::F64).to_string(),
+            "mut ptr[float64]"
+        );
+
+        for pointer in [
+            FfiType::Pointer(FfiScalar::F64),
+            FfiType::PointerMut(FfiScalar::F64),
+        ] {
+            let mut arguments = [FfiValue::Elements(FfiScalar::F64, Vec::new())];
+            let result = call(
+                run_is_null as *const (),
+                FfiSignature::new(vec![pointer], FfiType::Bool),
+                &mut arguments,
+            );
+            assert_eq!(result, Ok(FfiValue::Bool(true)), "an empty run is null");
+            assert_eq!(arguments[0], FfiValue::Elements(FfiScalar::F64, Vec::new()));
+
+            let error = call(
+                run_is_null as *const (),
+                FfiSignature::new(vec![pointer], FfiType::Bool),
+                &mut [FfiValue::Elements(FfiScalar::F32, vec![1])],
+            )
+            .expect_err("a pointer takes elements of its own scalar");
+            assert_eq!(
+                error,
+                FfiError::ArgumentTypeMismatch {
+                    index: 0,
+                    expected: pointer,
+                    actual: FfiType::Pointer(FfiScalar::F32),
+                }
+            );
+            let error = call(
+                run_is_null as *const (),
+                FfiSignature::new(Vec::new(), pointer),
+                &mut [],
+            )
+            .expect_err("a pointer is not a result");
+            assert_eq!(error, FfiError::UnsupportedReturnType(pointer));
         }
     }
 

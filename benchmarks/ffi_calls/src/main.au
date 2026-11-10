@@ -10,6 +10,8 @@ extern "C" def fc_fill(bytes: mut list[uint8]) -> None
 extern "C" def fc_cstr(text: cstr) -> uint64
 extern "C" def fc_name() -> cstr
 extern "C" def fc_out(value: int64, out: mut int64) -> int32
+extern "C" def fc_floats(values: ptr[float64], count: int64) -> float64
+extern "C" def fc_bump(values: mut ptr[float64], count: int64) -> None
 
 def report(name: str, started: int64, calls: int64) -> None:
     elapsed = sys.monotonic_time_ms() - started
@@ -101,6 +103,22 @@ def main() -> int32:
         i = i + 1
     report("out", started, calls)
 
+    mut floats: list[float64] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    mut floats_total: float64 = 0.0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        floats_total = floats_total + fc_floats(floats, 8)
+        i = i + 1
+    report("floats", started, calls)
+
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        fc_bump(floats, 8)
+        i = i + 1
+    report("bump", started, calls)
+
     print(f"checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {bytes[0]}")
-    print(f"checksum {cstr_total} {name_total} {out} {status}")
+    print(f"checksum {cstr_total} {name_total} {out} {status} {floats_total} {floats[7]}")
     return 0

@@ -373,6 +373,7 @@ fn validate_ffi_signature(
             param.mode,
             &ty,
             decl.c_string_param(index),
+            decl.pointer_param(index),
             param.span,
             opaque_handles,
         )?;
@@ -454,9 +455,37 @@ fn validate_ffi_parameter(
     mode: ParamMode,
     ty: &Type,
     c_string: bool,
+    pointer: bool,
     span: crate::diag::Span,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
 ) -> Result<()> {
+    // The parser writes `ptr[T]` as `list[T]`, so the type has one argument.
+    if let (true, Type::Named(_, elements)) = (pointer, ty) {
+        if !elements.iter().all(ffi_scalar_type) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "pointer parameter `{param_name}` must point to a fixed-width scalar type"
+                ),
+            )
+            .with_help(
+                "write `ptr[float64]`, `ptr[int32]`, or another scalar element type; the argument is a list of that type",
+            ));
+        }
+        if mode == ParamMode::Own {
+            return Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("pointer parameter `{param_name}` cannot be `own`"),
+            )
+            .with_help(
+                "write `ptr[T]` for a pointer the C function reads through, or `mut ptr[T]` for one it also writes through",
+            ));
+        }
+        return Ok(());
+    }
+
     if ffi_scalar_type(ty) {
         if mode == ParamMode::Own {
             return Err(Diagnostic::coded_at(
@@ -537,6 +566,9 @@ fn validate_ffi_parameter(
             format!(
                 "only `list[uint8]` is supported as an FFI byte view; parameter `{param_name}` has `{ty}`"
             ),
+        )
+        .with_help(
+            "a `ptr[T]` parameter passes a list of scalars as a pointer to its first element, with no length",
         ));
     }
 

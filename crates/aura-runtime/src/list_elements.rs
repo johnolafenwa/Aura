@@ -616,6 +616,42 @@ impl ListElements {
         }
     }
 
+    /// The address of the first element, when the list keeps its elements
+    /// in the scalar form `form`. The elements are laid out as a C array of
+    /// that scalar.
+    pub fn scalars(&self, form: ListForm) -> Option<*const u8> {
+        (self.form() == form).then(|| self.as_ptr() as *const u8)
+    }
+
+    /// A list of the same elements in the scalar form `form`, when the form
+    /// keeps every one exactly.
+    pub fn in_scalar_form(&self, form: ListForm) -> Option<Self> {
+        let mut copy = self.clone();
+        if form == ListForm::Float32 {
+            copy.narrow_to_float32();
+        }
+        if copy.form() != form {
+            let values: Vec<Value> = self.iter().map(Cow::into_owned).collect();
+            copy = Self::collect(form, &values)?;
+        }
+        Some(copy)
+    }
+
+    /// The address of the first element to change in place, when the
+    /// scalar form `form` keeps every element exactly. A list that keeps
+    /// them another way moves to that form first, and storage another list
+    /// shares is copied.
+    pub fn scalars_mut(&mut self, form: ListForm) -> Option<*mut u8> {
+        if self.form() != form {
+            *self = self.in_scalar_form(form)?;
+        }
+        each_scalar_form!(
+            self,
+            values => Some(values[..].as_mut_ptr().cast()),
+            _ => None,
+        )
+    }
+
     /// `values` in `form`, when the form keeps every one exactly.
     fn collect(form: ListForm, values: &[Value]) -> Option<Self> {
         Some(match form {

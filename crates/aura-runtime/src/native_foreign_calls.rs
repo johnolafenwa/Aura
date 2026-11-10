@@ -22,7 +22,8 @@ use super::{
     boxed_value, runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut,
     value_type_name, with_value, OpaqueValue,
 };
-use crate::runtime_value::{FfiHandleValue, Value};
+use crate::list_elements::ListForm;
+use crate::runtime_value::{FfiHandleValue, Value, VecValue};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -193,6 +194,127 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_handle_address(
                 "FFI argument expected opaque handle, but received `{}`",
                 value_type_name(other)
             )),
+        })
+    })
+}
+
+/// The scalar list form generated code names by its list access code.
+fn scalar_form(access: i64) -> ListForm {
+    match access {
+        2 => ListForm::Int64,
+        3 => ListForm::Float64,
+        4 => ListForm::Bool,
+        6 => ListForm::Int8,
+        7 => ListForm::Int16,
+        8 => ListForm::Int32,
+        9 => ListForm::Uint8,
+        10 => ListForm::Uint16,
+        11 => ListForm::Uint32,
+        12 => ListForm::Uint64,
+        13 => ListForm::Float32,
+        other => runtime_error(format!("list access code {other} names no scalar form")),
+    }
+}
+
+/// # Safety
+///
+/// `out` is null or points to a writable [`ForeignView`].
+unsafe fn write_elements(out: *mut ForeignView, pointer: *const u8, length: usize) {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        runtime_error("a foreign call view has no place to go");
+    };
+    out.pointer = if length == 0 {
+        std::ptr::null()
+    } else {
+        pointer
+    };
+    out.length = length;
+}
+
+/// Writes the address of the first element of the list `value` to `out`,
+/// laid out as a C array of the scalar that `access` names, with the
+/// element count. A list that keeps its elements in that form lends them
+/// and the result is null. Any other list is copied into a new list in that
+/// form, and the result is the copy, which the caller releases as a value
+/// once the foreign call returns.
+///
+/// # Safety
+///
+/// `value` is a live value and `out` points to a writable [`ForeignView`].
+/// Lent elements are valid while `value` is alive and unchanged.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_elements(
+    value: *mut OpaqueValue,
+    access: i64,
+    out: *mut ForeignView,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let form = scalar_form(access);
+        with_value(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            let length = vector.elements.len();
+            if let Some(pointer) = vector.elements.scalars(form) {
+                write_elements(out, pointer, length);
+                return std::ptr::null_mut();
+            }
+            let Some(copy) = vector.elements.in_scalar_form(form) else {
+                runtime_error(
+                    "FFI argument expected a list for a pointer, but an element is another type",
+                );
+            };
+            if length == 0 {
+                write_elements(out, std::ptr::null(), 0);
+                return std::ptr::null_mut();
+            }
+            // The elements are on the heap, so they stay where they are
+            // when the list moves into its box.
+            write_elements(out, copy.as_ptr() as *const u8, length);
+            boxed_value(Value::Vec(VecValue {
+                element_type: vector.element_type.clone(),
+                elements: copy,
+                str_view: Default::default(),
+            }))
+        })
+    })
+}
+
+/// Writes the address of the first element of the list `value` to `out`
+/// for a foreign function that may change the elements in place, laid out
+/// as a C array of the scalar that `access` names. The list keeps its
+/// length.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively, and `out` points to
+/// a writable [`ForeignView`]. The elements are valid until the caller next
+/// reaches the list.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_elements_mut(
+    value: *mut OpaqueValue,
+    access: i64,
+    out: *mut ForeignView,
+) {
+    task_runtime_boundary(|| unsafe {
+        let form = scalar_form(access);
+        value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a mut pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            let length = vector.elements.len();
+            match vector.elements.scalars_mut(form) {
+                Some(pointer) => write_elements(out, pointer, length),
+                None => runtime_error(
+                    "FFI argument expected a list for a mut pointer, but an element is another type",
+                ),
+            }
         })
     })
 }
@@ -379,6 +501,47 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bad_bool(
             "AU4001",
             crate::ffi::FfiError::NonCanonicalBoolReturn(byte as u8),
         )
+    })
+}
+
+/// Ends the task with `AU4001` when the foreign function `symbol` left a
+/// byte that is neither 0 nor 1 in the `list[bool]` `value` it wrote
+/// through a `mut ptr[bool]`. The byte becomes `true` first, so the list
+/// holds only values of its type while the task unwinds.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively, and the symbol
+/// name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
+    value: *mut OpaqueValue,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let bad = value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                return None;
+            };
+            let length = vector.elements.len();
+            let flags = vector.elements.scalars_mut(ListForm::Bool)?;
+            // SAFETY: a `bool` list keeps one byte per element, and the
+            // bytes are read and written as bytes.
+            let bytes = std::slice::from_raw_parts_mut(flags, length);
+            let bad = bytes.iter().copied().find(|byte| *byte > 1);
+            for byte in bytes.iter_mut().filter(|byte| **byte > 1) {
+                *byte = 1;
+            }
+            bad
+        });
+        if let Some(byte) = bad {
+            foreign_call_failure(
+                metadata_text(symbol, symbol_length),
+                "AU4001",
+                crate::ffi::FfiError::NonCanonicalBoolReturn(byte),
+            )
+        }
     })
 }
 

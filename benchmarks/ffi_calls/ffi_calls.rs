@@ -16,6 +16,8 @@ extern "C" {
     fn fc_cstr(text: *const c_char) -> u64;
     fn fc_name() -> *const c_char;
     fn fc_out(value: i64, out: *mut i64) -> i32;
+    fn fc_floats(values: *const f64, count: i64) -> f64;
+    fn fc_bump(values: *mut f64, count: i64);
 }
 
 fn report(name: &str, started: Instant, calls: i64) {
@@ -103,9 +105,26 @@ fn main() {
     }
     report("out", started, calls);
 
+    let mut floats: Vec<f64> = vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0];
+    let mut floats_total: f64 = 0.0;
+    let started = Instant::now();
+    for _ in 0..calls {
+        floats_total += unsafe { fc_floats(floats.as_ptr(), floats.len() as i64) };
+    }
+    report("floats", started, calls);
+
+    let started = Instant::now();
+    for _ in 0..calls {
+        unsafe { fc_bump(floats.as_mut_ptr(), floats.len() as i64) };
+    }
+    report("bump", started, calls);
+
     println!(
         "checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {}",
         bytes[0]
     );
-    println!("checksum {cstr_total} {name_total} {out} {status}");
+    println!(
+        "checksum {cstr_total} {name_total} {out} {status} {floats_total} {}",
+        floats[7]
+    );
 }

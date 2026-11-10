@@ -2086,6 +2086,88 @@ def main() -> int32:
 }
 
 #[test]
+fn ffi_admits_pointer_parameters_over_scalar_lists() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" def dot(a: ptr[float64], b: ptr[float64], n: int64) -> float64
+extern "C" def scale(v: mut ptr[float32], n: int64, k: float32) -> None
+extern "C" def flags(v: mut ptr[bool], w: ptr[uint16]) -> None
+
+def run() -> float64:
+    xs: list[float64] = [1.0, 2.0]
+    mut ys: list[float32] = [1.0]
+    scale(ys, 1, 2.0)
+    return dot(xs, xs, 2)
+"#,
+    )
+    .expect("pointer parameters over scalar lists should check");
+    let dot = &program.extern_functions["dot"];
+    assert_eq!(dot.decl.pointer_params, [true, true, false]);
+    assert_eq!(
+        dot.signature.params[0],
+        Type::Named("list".to_string(), vec![Type::named("float64")])
+    );
+
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: ptr[str]) -> None
+"#,
+            "pointer parameter `value` must point to a fixed-width scalar type",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" opaque class Handle
+extern "C" def bad(value: mut ptr[Handle]) -> None
+"#,
+            "pointer parameter `value` must point to a fixed-width scalar type",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: own ptr[int32]) -> None
+"#,
+            "pointer parameter `value` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"extern "C" def bad(value: list[float64]) -> None
+"#,
+            "only `list[uint8]` is supported as an FFI byte view",
+            "AU2002",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported FFI type must fail");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    // An argument is a list of the element type, not a list of another.
+    let diagnostic = check_ffi_source_for_test(
+        r#"
+extern "C" def dot(a: ptr[float64], n: int64) -> float64
+
+def run() -> float64:
+    xs: list[int32] = [1, 2]
+    return dot(xs, 2)
+"#,
+    )
+    .expect_err("a list of another element type is another type");
+    assert_eq!(diagnostic.code, "AU2002", "{}", diagnostic.message);
+    assert!(
+        diagnostic
+            .message
+            .contains("argument type mismatch for extern function `dot`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn ffi_v0_validates_views_and_opaque_handle_capabilities() {
     check_ffi_source_for_test(
         r#"
@@ -31081,6 +31163,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             contracts: Vec::new(),
             c_string_params: Vec::new(),
             c_string_result: false,
+            pointer_params: Vec::new(),
         };
     let opaque_handles = BTreeMap::new();
     let type_names = TypeDefinitions::default();

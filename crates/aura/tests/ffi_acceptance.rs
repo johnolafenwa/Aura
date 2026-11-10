@@ -463,6 +463,50 @@ void fx_clear(fx_box **slot) {
     if (*slot) fx_close(*slot);
     *slot = NULL;
 }
+double fx_dot(const double *a, const double *b, int64_t n) {
+    double total = 0.0;
+    for (int64_t i = 0; i < n; i++) total += a[i] * b[i];
+    return total;
+}
+void fx_scale(double *v, int64_t n, double k) {
+    for (int64_t i = 0; i < n; i++) v[i] *= k;
+}
+int64_t fx_sum_i32(const int32_t *v, int64_t n) {
+    int64_t total = 0;
+    for (int64_t i = 0; i < n; i++) total += v[i];
+    return total;
+}
+void fx_count_down(int16_t *v, int64_t n) {
+    for (int64_t i = 0; i < n; i++) v[i] = (int16_t)(v[i] - i - 1);
+}
+float fx_sum_f32(const float *v, int64_t n) {
+    float total = 0.0f;
+    for (int64_t i = 0; i < n; i++) total += v[i];
+    return total;
+}
+void fx_halve(float *v, int64_t n) {
+    for (int64_t i = 0; i < n; i++) v[i] /= 2.0f;
+}
+void fx_flip(bool *v, int64_t n) {
+    for (int64_t i = 0; i < n; i++) v[i] = !v[i];
+}
+int64_t fx_count_true(const bool *v, int64_t n) {
+    int64_t total = 0;
+    for (int64_t i = 0; i < n; i++) total += v[i];
+    return total;
+}
+uint64_t fx_max_u64(const uint64_t *v, int64_t n) {
+    uint64_t best = 0;
+    for (int64_t i = 0; i < n; i++) if (v[i] > best) best = v[i];
+    return best;
+}
+void fx_widen_all(const int8_t *a, const uint8_t *b, const uint16_t *c,
+                  const uint32_t *d, int64_t *out, int64_t n) {
+    for (int64_t i = 0; i < n; i++) out[i] = a[i] + b[i] + c[i] + (int64_t)d[i];
+}
+bool fx_is_null(const double *v) { return v == NULL; }
+bool fx_is_null_mut(int32_t *v) { return v == NULL; }
+void fx_bad_flags(bool *v) { *(uint8_t *)v = 7; }
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -521,6 +565,22 @@ extern "C" def fx_bad_flag(flag: mut bool) -> None
 extern "C" def fx_create(value: int64, out: mut Box | None) -> int32
 extern "C" def fx_read_or(box: Box | None, fallback: int64) -> int64
 extern "C" def fx_clear(slot: mut Box | None) -> None
+extern "C" def fx_dot(a: ptr[float64], b: ptr[float64], n: int64) -> float64
+extern "C" def fx_scale(v: mut ptr[float64], n: int64, k: float64) -> None
+extern "C" def fx_sum_i32(v: ptr[int32], n: int64) -> int64
+extern "C" def fx_count_down(v: mut ptr[int16], n: int64) -> None
+extern "C" def fx_sum_f32(v: ptr[float32], n: int64) -> float32
+extern "C" def fx_halve(v: mut ptr[float32], n: int64) -> None
+extern "C" def fx_flip(v: mut ptr[bool], n: int64) -> None
+extern "C" def fx_count_true(v: ptr[bool], n: int64) -> int64
+extern "C" def fx_max_u64(v: ptr[uint64], n: int64) -> uint64
+extern "C" def fx_widen_all(
+    a: ptr[int8], b: ptr[uint8], c: ptr[uint16], d: ptr[uint32],
+    out: mut ptr[int64], n: int64
+) -> None
+extern "C" def fx_is_null(v: ptr[float64]) -> bool
+extern "C" def fx_is_null_mut(v: mut ptr[int32]) -> bool
+extern "C" def fx_bad_flags(v: mut ptr[bool]) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -718,6 +778,97 @@ true\n0\n32767\n4294967295\n-9000000001\n18446744073709551615\n1.5\n2.5\n\
 }
 
 #[test]
+fn pointer_parameters_share_list_elements_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Samples:
+    values: list[float64]
+
+def squares(count: int32) -> list[int32]:
+    mut out: list[int32] = []
+    mut i: int32 = 0
+    while i < count:
+        out.append(i * i)
+        i += 1
+    return out
+
+def main() -> int32:
+    xs: list[float64] = [1.0, 2.0, 3.0]
+    ys: list[float64] = [4.0, 5.0, 6.0]
+    print(fx_dot(xs, ys, 3))
+    print(fx_dot(xs, xs, 2))
+    print(fx_dot([0.5, 0.5], [2.0, 4.0], 2))
+
+    mut zs: list[float64] = [1.0, 2.0, 3.0]
+    kept = zs.copy()
+    fx_scale(zs, 3, 2.5)
+    print(zs)
+    print(kept)
+    fx_scale(zs, 1, 2.0)
+    print(zs)
+
+    grown = squares(100)
+    print(fx_sum_i32(grown, len(grown)))
+    print(fx_sum_i32(grown, 4))
+    mut steps: list[int16] = [10, 20, 30, 40]
+    fx_count_down(steps, 4)
+    print(steps)
+    mut halves: list[float32] = [1.0, 3.0]
+    print(fx_sum_f32(halves, 2))
+    fx_halve(halves, 2)
+    print(halves)
+    mut flags: list[bool] = [true, false, false]
+    print(fx_count_true(flags, 3))
+    fx_flip(flags, 3)
+    print(flags)
+    print(fx_count_true(flags, 3))
+    big: list[uint64] = [3, 18446744073709551615, 7]
+    print(fx_max_u64(big, 3))
+
+    a: list[int8] = [-1, -128]
+    b: list[uint8] = [255, 1]
+    c: list[uint16] = [65535, 2]
+    d: list[uint32] = [4294967295, 3]
+    mut wide: list[int64] = [0, 0]
+    fx_widen_all(a, b, c, d, wide, 2)
+    print(wide)
+
+    empty: list[float64] = []
+    print(fx_is_null(empty))
+    print(fx_is_null(xs))
+    mut none: list[int32] = []
+    print(fx_is_null_mut(none))
+    none.append(1)
+    print(fx_is_null_mut(none))
+
+    mut samples = Samples(values=[1.0, 2.0])
+    fx_scale(samples.values, 2, 10.0)
+    print(samples.values)
+    print(fx_dot(samples.values, samples.values, 2))
+
+    mut round = 0
+    mut total = 0.0
+    while round < 2000:
+        fx_scale(zs, 3, 1.0)
+        total += fx_dot(zs, ys, 3)
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "forced MIR pointer fixture run");
+    assert_success(&direct, "direct pointer fixture run");
+    let expected = "\
+32.0\n5.0\n3.0\n[2.5, 5.0, 7.5]\n[1.0, 2.0, 3.0]\n[5.0, 5.0, 7.5]\n\
+328350\n14\n[9, 18, 27, 36]\n4.0\n[0.5, 1.5]\n1\n[false, true, true]\n2\n\
+18446744073709551615\n[4295033084, -122]\n\
+true\nfalse\ntrue\nfalse\n[10.0, 20.0]\n500.0\n180000.0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
 fn foreign_results_a_declaration_rules_out_trap_with_backend_parity() {
     for (main, code, detail) in [
         (
@@ -759,6 +910,11 @@ fn foreign_results_a_declaration_rules_out_trap_with_backend_parity() {
             "def main() -> int32:\n    mut flag = true\n    fx_bad_flag(flag)\n    print(flag)\n    return 0\n",
             "AU4001",
             "FFI call to `fx_bad_flag` failed",
+        ),
+        (
+            "def main() -> int32:\n    mut flags: list[bool] = [true, false]\n    fx_bad_flags(flags)\n    print(flags)\n    return 0\n",
+            "AU4001",
+            "FFI call to `fx_bad_flags` failed",
         ),
     ] {
         let (package, source) = fixture_package(main);

@@ -14,7 +14,7 @@ def report(name, started):
     print(f'{name} {(time.perf_counter_ns() - started) / CALLS}')
 
 
-def run(prefix, lib, text, data, buffer, out, as_text):
+def run(prefix, lib, text, data, buffer, out, as_text, floats):
     total = 0
     started = time.perf_counter_ns()
     for i in range(CALLS):
@@ -74,6 +74,17 @@ def run(prefix, lib, text, data, buffer, out, as_text):
         status += lib.fc_out(i, out)
     report(f'{prefix}out', started)
 
+    floats_total = 0.0
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        floats_total += lib.fc_floats(floats, 8)
+    report(f'{prefix}floats', started)
+
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        lib.fc_bump(floats, 8)
+    report(f'{prefix}bump', started)
+
 
 def ctypes_library(path):
     lib = ctypes.CDLL(path)
@@ -88,6 +99,8 @@ def ctypes_library(path):
     lib.fc_cstr.argtypes, lib.fc_cstr.restype = [ctypes.c_char_p], u64
     lib.fc_name.argtypes, lib.fc_name.restype = [], ctypes.c_char_p
     lib.fc_out.argtypes, lib.fc_out.restype = [i64, ctypes.POINTER(i64)], ctypes.c_int32
+    lib.fc_floats.argtypes, lib.fc_floats.restype = [ctypes.POINTER(f64), i64], f64
+    lib.fc_bump.argtypes, lib.fc_bump.restype = [ctypes.POINTER(f64), i64], None
     return lib
 
 
@@ -102,6 +115,8 @@ void fc_fill(uint8_t *bytes, uint64_t length);
 uint64_t fc_cstr(const char *text);
 const char *fc_name(void);
 int32_t fc_out(int64_t value, int64_t *out);
+double fc_floats(const double *values, int64_t count);
+void fc_bump(double *values, int64_t count);
 '''
 
 
@@ -112,6 +127,7 @@ def main():
     run(
         'ctypes_', ctypes_library(path), text, data, ctypes.create_string_buffer(8),
         ctypes.byref(ctypes.c_int64(0)), lambda name: name.decode(),
+        (ctypes.c_double * 8)(1, 2, 3, 4, 5, 6, 7, 8),
     )
     try:
         import cffi
@@ -122,6 +138,7 @@ def main():
     run(
         'cffi_', ffi.dlopen(path), text, data, ffi.new('uint8_t[8]'),
         ffi.new('int64_t *'), lambda name: ffi.string(name).decode(),
+        ffi.new('double[8]', [1, 2, 3, 4, 5, 6, 7, 8]),
     )
 
 

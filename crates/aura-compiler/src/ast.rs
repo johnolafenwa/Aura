@@ -546,6 +546,11 @@ pub struct ExternFunctionDecl {
     /// in `params` and crosses the boundary as NUL-terminated text.
     #[serde(skip_serializing_if = "no_c_strings")]
     pub c_string_params: Vec<bool>,
+    /// One entry for each parameter: whether it was written `ptr[T]`. Such
+    /// a parameter has the type `list[T]` in `params` and crosses the
+    /// boundary as a pointer to the first element, with no length.
+    #[serde(skip_serializing_if = "no_c_strings")]
+    pub pointer_params: Vec<bool>,
     /// Whether the result was written `cstr` or `cstr | None`.
     /// `return_type` then holds `str` or `str | None`.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
@@ -568,6 +573,12 @@ impl ExternFunctionDecl {
     /// text.
     pub fn c_string_param(&self, index: usize) -> bool {
         self.c_string_params.get(index).copied().unwrap_or(false)
+    }
+
+    /// Whether parameter `index` crosses the boundary as a pointer to the
+    /// first element of a list.
+    pub fn pointer_param(&self, index: usize) -> bool {
+        self.pointer_params.get(index).copied().unwrap_or(false)
     }
 }
 

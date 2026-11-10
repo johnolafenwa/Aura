@@ -30,8 +30,9 @@ Last updated: 2026-11-10
 - Done: library linking from `[ffi]`, direct native calls, and the `symbol`
   clause (ADR-0074). `cstr` arguments and results, `mut` scalar
   out-parameters, and `Handle | None` and `mut Handle | None` parameters
-  (ADR-0075).
-- Remaining: typed pointer views, structs, callbacks, handle destructors, a
+  (ADR-0075). `ptr[T]` and `mut ptr[T]` array pointers over scalar lists
+  (ADR-0076).
+- Remaining: structs, callbacks, handle destructors, a
   SQLite example, and the final benchmarks against Rust and Python.
 
 ## Evaluation of the work since 0.13.0-preview (complete)

@@ -110,6 +110,7 @@ extern "C" def inspect(label: str, data: list[uint8]) -> uint64
 extern "C" def update(data: mut list[uint8]) -> None
 extern "C" def getenv(name: cstr) -> cstr | None
 extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
 extern "C" def close(handle: own ProcessHandle) -> None
 
 def main() -> int32:
@@ -162,7 +163,8 @@ The accepted scalar types are fixed:
 | `None` | return-only void result |
 
 A bare scalar parameter passes its bits by value. A `mut` scalar parameter
-passes a pointer, as [Out-Parameters](#out-parameters) describes. These
+passes a pointer, as [Out-Parameters](#out-parameters) describes. A list of
+scalars passes as a C array, as [Array Pointers](#array-pointers) describes. These
 types have no FFI representation: `int128`, `uint128`, `intsize`,
 `uintsize`, `Duration`, tuples, user classes, enums, generic types, and
 arbitrary collection types.
@@ -256,6 +258,48 @@ This prints `0.75` and `6`. Every scalar type of the table above can be an
 out-parameter. The pointer is valid only during the call. A `mut bool` that
 comes back as a byte other than `0` or `1` fails with `AU4001`. The checker
 rejects an `own` scalar with `AU3004`.
+
+### Array Pointers
+
+`ptr[T]` is a pointer to the first of a run of scalars, such as
+`const double *` in C. The name is a type only in an extern parameter. The
+argument is a `list[T]`, and its elements are laid out as a C array of `T`.
+
+```aura fragment
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
+
+def main() -> int32:
+    mut averages: list[float64] = [0.0, 0.0, 0.0]
+    if getloadavg(averages, 3) != 3:
+        return 1
+    print(averages)
+    return 0
+```
+
+| Declaration | C type | Argument | Contract |
+| --- | --- | --- | --- |
+| `values: ptr[T]` | `const T *` | a `list[T]` | the function reads the elements |
+| `values: mut ptr[T]` | `T *` | a mutable `list[T]` | the function reads and writes the elements |
+
+`T` is any scalar type of the [Scalars](#scalars) table.
+
+- **No length.** Only the pointer crosses. Pass the count as an argument of
+  its own, the way the C function expects it. A function that reads or
+  writes past the end of the list has undefined behavior.
+- **Lifetime.** The pointer is valid only during the call. The callee must
+  not keep it.
+- **Empty lists.** An empty list passes a null pointer.
+- **Reads.** A function must not write through a `ptr[T]`. Declare the
+  parameter `mut ptr[T]` if it does.
+- **Writes.** What the function writes through a `mut ptr[T]` is in the list
+  when the call returns. The list keeps its length. A `mut ptr[bool]` list
+  that comes back with a byte other than `0` or `1` fails with `AU4001`.
+
+A built program passes the address of the list's own storage, with no copy,
+when the list keeps its elements unboxed. Lists of scalars do. The checker
+rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
+with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
+form for bytes with a length.
 
 ### Opaque Handles
 
@@ -371,6 +415,8 @@ match the declaration.
 | `mut list[uint8]` | Needs an exclusive mutable place. In-place byte updates are visible after return. |
 | `cstr` | Copied for the call. The caller keeps its `str`. |
 | `mut` scalar or `mut Handle \| None` | Needs an exclusive mutable place, which holds what the function stored after return. |
+| `ptr[T]` | The list stays owned by the caller and is usable after the call. |
+| `mut ptr[T]` | Needs an exclusive mutable list. In-place element updates are visible after return. |
 | `own` opaque handle | Moves before the call and cannot be used afterward. |
 
 The declared capability is exact. Aura inserts no implicit clone, ownership
@@ -392,15 +438,15 @@ never appears in source-visible output or diagnostics.
 | Code | Cause |
 | --- | --- |
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, C text, and opaque-handle tables, including a returned `str` or `list[uint8]` view and a `cstr` in a union other than `cstr \| None`. |
+| `AU2002` | A type outside the fixed scalar, view, C text, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, and a `ptr` to anything but a scalar. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
-| `AU3004` | An invalid scalar, view, C text, or handle capability. |
+| `AU3004` | An invalid scalar, view, C text, pointer, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
-| `AU4001` | A non-canonical C boolean: the byte a function returned, or stored through a `mut bool`, was neither `0` nor `1`. |
+| `AU4001` | A non-canonical C boolean: the byte a function returned, or stored through a `mut bool` or a `mut ptr[bool]`, was neither `0` nor `1`. |
 | `AU4005` | A recoverable runtime boundary failure: a null opaque-handle or `cstr` result, a `cstr` result that is not UTF-8, a `cstr` argument that holds a NUL byte, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
@@ -425,7 +471,8 @@ from C. A scalar call such as `labs` takes under a nanosecond more than the
 function itself. A `str` or `list[uint8]` argument adds a few nanoseconds to
 find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
-out-parameter costs a store and a load.
+out-parameter costs a store and a load. A `ptr[T]` argument costs a few
+loads to find the list's elements.
 
 Library loading and symbol lookup in the interpreter are implemented on
 Unix-family hosts. On other hosts, a call there fails with the runtime
@@ -439,7 +486,9 @@ FFI does not:
 - define C structs or unions, or pass enums
 - allocate foreign memory or expose pointer arithmetic
 - return views, or free a `cstr` result
-- pass typed pointers to anything but one scalar or one handle
+- pass typed pointers to anything but one scalar, one handle, or the
+  elements of a list of scalars
+- pass an `Array[T]` as a pointer
 - accept callbacks or variadics
 - offer asynchronous foreign calls
 
@@ -461,6 +510,7 @@ Implemented:
 - fixed-width scalars and pointer-length views
 - `cstr` arguments and results, and `cstr | None`
 - `mut` scalar out-parameters
+- `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 

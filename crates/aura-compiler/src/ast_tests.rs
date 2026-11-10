@@ -74,6 +74,7 @@ fn item_name_matches_decl_name() {
         contracts: Vec::new(),
         c_string_params: Vec::new(),
         c_string_result: false,
+        pointer_params: Vec::new(),
     });
     let extern_opaque_item = Item::ExternOpaqueClass(ExternOpaqueClassDecl {
         public: true,
