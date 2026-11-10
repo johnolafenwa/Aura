@@ -246,6 +246,7 @@ runtime_functions! {
     MapGetInt64 => ("aura_direct_map_get_int64", [I64, I64], Some(I64)),
     MapGetInt64Payload => ("aura_direct_map_get_int64_payload", [I64, I64], Some(I64)),
     MapGetLent => ("aura_direct_map_get_lent", [I64, I64], Some(I64)),
+    MapGetScalarLent => ("aura_direct_map_get_scalar_lent", [I64, I64], Some(I64)),
     MapGetStrLent => ("aura_direct_map_get_str_lent", [I64, I64, I64], Some(I64)),
     MapValueSlot => ("aura_direct_map_value_slot", [I64, I64, I64], Some(I64)),
     MapValueSlotInt64 => ("aura_direct_map_value_slot_int64", [I64, I64, I64], Some(I64)),

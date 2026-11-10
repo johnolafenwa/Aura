@@ -245,6 +245,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapGetStrPayload,
             RuntimeFn::MapGetInt64Payload,
             RuntimeFn::MapGetLent,
+            RuntimeFn::MapGetScalarLent,
             RuntimeFn::MapGetStrLent,
             RuntimeFn::MapValueSlot,
             RuntimeFn::MapValueSlotInt64,

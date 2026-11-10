@@ -65,6 +65,31 @@ struct Node {
 
 const _: () = assert!(std::mem::size_of::<Node>() == 16);
 
+impl Node {
+    /// The bits of an `Int` (`kind` 0), a `Float` (1), or a `Bool` (2) as
+    /// `json.as_int` and its kin read them, or `None` for a node of another
+    /// tag.
+    fn scalar_bits(self, kind: i64) -> Option<i64> {
+        match (kind, self.tag) {
+            (0, JsonTag::Int) | (1, JsonTag::Float) => Some(self.b as i64),
+            (2, JsonTag::False) => Some(0),
+            (2, JsonTag::True) => Some(1),
+            _ => None,
+        }
+    }
+}
+
+/// [`JsonNode::scalar_bits`] of the node at `address`.
+///
+/// # Safety
+///
+/// `address` is [`JsonNode::address`] or [`JsonNode::lookup_address`] of a
+/// value whose tape is alive.
+pub unsafe fn scalar_bits_at(address: usize, kind: i64) -> Option<i64> {
+    // SAFETY: the caller's contract.
+    unsafe { *(address as *const Node) }.scalar_bits(kind)
+}
+
 /// Where a node keeps its tag, which generated code reads to test a
 /// variant: a [`JsonTag`] as one byte.
 pub const NODE_TAG_OFFSET: i32 = std::mem::offset_of!(Node, tag) as i32;
@@ -264,17 +289,10 @@ impl JsonNode {
         })
     }
 
-    /// The bits of an `Int` (`kind` 0), a `Float` (1), or a `Bool` (2) as
-    /// `json.as_int` and its kin read them, or `None` for a node of another
-    /// tag.
+    /// The node's scalar as `json.as_int` and its kin read it (see
+    /// [`scalar_bits_at`]).
     pub fn scalar_bits(&self, kind: i64) -> Option<i64> {
-        let node = self.tape.node(self.index);
-        match (kind, node.tag) {
-            (0, JsonTag::Int) | (1, JsonTag::Float) => Some(node.b as i64),
-            (2, JsonTag::False) => Some(0),
-            (2, JsonTag::True) => Some(1),
-            _ => None,
-        }
+        self.tape.node(self.index).scalar_bits(kind)
     }
 
     /// The text of a string node.
@@ -341,6 +359,18 @@ impl JsonNode {
 
     /// The value under `key` in an object node, read from the tape.
     pub fn lookup_str(&self, key: &str) -> Option<Value> {
+        self.lookup_index(key).map(|index| self.child(index))
+    }
+
+    /// The address of the node under `key` in an object node, which lies
+    /// in the tape as [`Self::address`] does.
+    pub fn lookup_address(&self, key: &str) -> Option<usize> {
+        self.lookup_index(key)
+            .map(|index| std::ptr::from_ref(&self.tape.nodes[index as usize]) as usize)
+    }
+
+    /// The index of the node under `key` in an object node.
+    fn lookup_index(&self, key: &str) -> Option<u32> {
         let node = self.tape.node(self.index);
         if node.tag != JsonTag::Object {
             return None;
@@ -348,7 +378,7 @@ impl JsonNode {
         let mut index = self.index + 1;
         for _ in 0..node.a {
             if self.tape.str_at(self.tape.node(index)) == key {
-                return Some(self.child(index + 1));
+                return Some(index + 1);
             }
             index = self.tape.next(index + 1);
         }

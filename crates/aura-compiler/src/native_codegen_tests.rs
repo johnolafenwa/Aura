@@ -15386,6 +15386,59 @@ def main():
 }
 
 #[test]
+fn object_payloads_only_looked_up_read_their_scrutinee_s_box() {
+    let source = r#"
+import json
+
+def field_int(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return 0
+                case Lookup.Missing:
+                    return 0
+        case _:
+            return 0
+
+def field_text(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    return json.dumps(value)
+                case Lookup.Missing:
+                    return ""
+        case _:
+            return ""
+
+def main():
+    doc = json.Value.Object({"a": json.Value.Int(1)})
+    print(field_int(doc, "a"))
+    print(field_text(doc, "a"))
+"#;
+    let mir = lower_source_to_mir(source).expect("the lookups should lower");
+    let object = emit_host_object(&mir).expect("the lookups should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // The scalar read takes a node's address from an object in a tape, and
+    // the borrowed read a box that reads the value in place.
+    for required in [
+        "aura_direct_map_get_scalar_lent",
+        "aura_direct_map_get_shadow",
+        "aura_direct_end_shadow",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    for copied in ["aura_direct_map_get_lent", "aura_direct_map_get_payload"] {
+        assert!(!referenced.contains(copied), "{copied}: {referenced:?}");
+    }
+}
+
+#[test]
 fn lookups_copy_their_found_value_when_the_dict_can_change() {
     // Each program changes, hands on, or keeps the found value, so the
     // lookup copies it.

@@ -856,3 +856,143 @@ def main():
         assert!(found.payloads.contains_key(read), "{read}: {found:?}");
     }
 }
+
+const VIEWS: &str = r#"
+import json
+
+def looked_up(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return 0
+                case Lookup.Missing:
+                    return 0
+        case _:
+            return 0
+
+def each(docs: list[json.Value], name: str) -> int64:
+    mut sum = 0
+    for doc in docs:
+        match doc:
+            case json.Value.Object(fields):
+                match fields.lookup(name):
+                    case Lookup.Found(value):
+                        match json.as_int(value):
+                            case int64 as number:
+                                sum += number
+                            case None:
+                                pass
+                    case Lookup.Missing:
+                        pass
+            case _:
+                pass
+    return sum
+
+def main():
+    doc = json.Value.Object({"a": json.Value.Int(1)})
+    print(looked_up(doc, "a"))
+    print(each([json.Value.Object({"a": json.Value.Int(1)})], "a"))
+"#;
+
+fn view_function(name: &str) -> MirFunction {
+    lower_source_to_mir(VIEWS)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist")
+}
+
+/// The lent reads of `function` with the object views it adopts.
+fn adopted_views(function: &MirFunction) -> (LentElements, Vec<String>) {
+    use super::super::element_loans::{entry_copy_loans, fused_entry_probes};
+    use super::super::json_views::object_view_candidates;
+    let mut found = lent_element_reads(function, |place| place.starts_with("%t"), |_| Vec::new());
+    let views = object_view_candidates(
+        function,
+        &fused_entry_probes(function),
+        &entry_copy_loans(function),
+    );
+    let adopted = super::adopt_object_views(function, &mut found, &views, |_| Vec::new());
+    let mut adopted = adopted.into_iter().collect::<Vec<_>>();
+    adopted.sort();
+    (found, adopted)
+}
+
+#[test]
+fn an_object_view_holds_its_scrutinee_s_box() {
+    let function = view_function("looked_up");
+    let (found, adopted) = adopted_views(&function);
+    let [view] = &adopted[..] else {
+        panic!("the payload should be a view: {found:?}");
+    };
+    assert_eq!(found.payloads.get(view).map(String::as_str), Some("doc"));
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn an_object_view_of_a_lent_element_reads_the_element_s_box() {
+    let function = view_function("each");
+    let (found, adopted) = adopted_views(&function);
+    let [(element, list)] = found.lists.iter().collect::<Vec<_>>()[..] else {
+        panic!("the loop should lend its element: {found:?}");
+    };
+    assert_eq!(list, "docs");
+    let [view] = &adopted[..] else {
+        panic!("the payload should be a view: {found:?}");
+    };
+    assert_eq!(found.payloads.get(view), Some(element));
+    assert!(found.promotions.is_empty(), "{found:?}");
+}
+
+#[test]
+fn a_scrutinee_released_while_its_view_is_held_has_no_view() {
+    let function = view_function("looked_up");
+    let (_, adopted) = adopted_views(&function);
+    let (block, position) = definition(&function, &adopted[0]);
+    let release = Instruction::Release {
+        place: "doc".to_string(),
+    };
+
+    // A view cannot take a reference of its own, so it is not adopted.
+    let mut held = function.clone();
+    held.blocks[block]
+        .instructions
+        .insert(position + 1, release.clone());
+    assert_eq!(adopted_views(&held).1, Vec::<String>::new());
+
+    // Before the payload is read, nothing is held yet.
+    let mut before = function.clone();
+    before.blocks[block].instructions.insert(position, release);
+    assert_eq!(adopted_views(&before).1, adopted);
+}
+
+#[test]
+fn a_scrutinee_a_task_reaches_has_no_view() {
+    let mut function = view_function("looked_up");
+    function.blocks[0].instructions.insert(
+        0,
+        Instruction::Assign {
+            target: "%t_task".to_string(),
+            value: Rvalue::StartTask {
+                returns_handle: true,
+                result_is_copy: true,
+                stack_size: None,
+                task_group: Operand::Int(0),
+                function: Operand::Place("%t_function".to_string()),
+                args: vec![MirArg {
+                    name: None,
+                    value: Operand::Place("doc".to_string()),
+                    writeback_place: None,
+                }],
+                span: crate::diag::Span::new(1, 1),
+            },
+        },
+    );
+    assert_eq!(adopted_views(&function).1, Vec::<String>::new());
+}

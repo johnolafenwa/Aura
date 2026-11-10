@@ -369,3 +369,22 @@ fn an_objects_dict_reads_the_tape_until_a_read_needs_values() {
     assert!(large.value_of_str("k11").is_some());
     assert!(large.value_of_str("k12").is_none());
 }
+
+#[test]
+fn an_objects_scalars_are_read_at_their_nodes_addresses() {
+    let object = root(r#"{"n": 7, "f": 1.5, "t": true, "o": false, "s": "x"}"#);
+    let bits = |key: &str, kind: i64| {
+        let address = object.lookup_address(key).expect("the key is there");
+        // SAFETY: `object` keeps the tape alive.
+        unsafe { scalar_bits_at(address, kind) }
+    };
+    assert_eq!(bits("n", 0), Some(7));
+    assert_eq!(bits("f", 1), Some(1.5f64.to_bits() as i64));
+    assert_eq!(bits("t", 2), Some(1));
+    assert_eq!(bits("o", 2), Some(0));
+    assert_eq!(bits("s", 0), None);
+    assert_eq!(bits("n", 1), None);
+    assert_eq!(bits("n", 2), None);
+    assert!(object.lookup_address("missing").is_none());
+    assert!(root("[1]").lookup_address("a").is_none());
+}

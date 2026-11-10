@@ -1,0 +1,262 @@
+import json
+
+
+def field_int(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            return number
+                        case None:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+def field_bool(doc: json.Value, name: str) -> bool:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_bool(value):
+                        case bool as flag:
+                            return flag
+                        case None:
+                            return false
+                case Lookup.Missing:
+                    return false
+        case _:
+            return false
+
+
+def field_float(doc: json.Value, name: str) -> float64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match json.as_float(value):
+                        case float64 as number:
+                            return number
+                        case None:
+                            return -1.0
+                case Lookup.Missing:
+                    return -2.0
+        case _:
+            return -3.0
+
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return "?"
+                case Lookup.Missing:
+                    return "-"
+        case _:
+            return "!"
+
+
+def field_len(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Array(items):
+                            return items.len()
+                        case _:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+def field_text(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    return json.dumps(value)
+                case Lookup.Missing:
+                    return "missing"
+        case _:
+            return "none"
+
+
+# Reads two fields of one object: both lookups share the payload.
+def age_and_score(doc: json.Value) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            mut sum = 0
+            match fields.lookup("age"):
+                case Lookup.Found(value):
+                    match json.as_int(value):
+                        case int64 as number:
+                            sum += number
+                        case None:
+                            pass
+                case Lookup.Missing:
+                    pass
+            match fields.lookup("score"):
+                case Lookup.Found(value):
+                    match json.as_float(value):
+                        case float64 as number:
+                            if number > 1.0:
+                                sum += 1000
+                        case None:
+                            pass
+                case Lookup.Missing:
+                    pass
+            return sum
+        case _:
+            return 0
+
+
+def describe(doc: json.Value) -> str:
+    age = field_int(doc, "age")
+    active = field_bool(doc, "active")
+    score = field_float(doc, "score")
+    name = field_str(doc, "name")
+    tags = field_len(doc, "tags")
+    missing = field_int(doc, "missing")
+    wrong = field_str(doc, "age")
+    nested = field_text(doc, "nested")
+    both = age_and_score(doc)
+    return f"{age} {active} {score} {name} {tags} {missing} {wrong} {nested} {both}"
+
+
+def parsed(text: str) -> json.Value:
+    match own json.parse(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return json.Value.Null
+
+
+def total(docs: list[json.Value], name: str) -> int64:
+    mut sum = 0
+    for doc in docs:
+        match doc:
+            case json.Value.Object(fields):
+                match fields.lookup(name):
+                    case Lookup.Found(value):
+                        match json.as_int(value):
+                            case int64 as number:
+                                sum += number
+                            case None:
+                                sum += 10000
+                    case Lookup.Missing:
+                        sum += 100
+            case _:
+                sum += 1000
+    return sum
+
+
+def in_task(doc: json.Value) -> int64:
+    return field_int(doc, "age") + field_len(doc, "tags") + field_str(doc, "name").len()
+
+
+def built() -> json.Value:
+    return json.Value.Object(
+        {
+            "name": json.Value.String("Ada"),
+            "age": json.Value.Int(36),
+            "active": json.Value.Bool(true),
+            "score": json.Value.Float(1.5),
+            "tags": json.Value.Array([json.Value.String("a"), json.Value.String("b")]),
+            "nested": json.Value.Object({"age": json.Value.Int(7)}),
+        }
+    )
+
+
+def main():
+    text = "{\"name\": \"Ada\", \"age\": 36, \"active\": true, \"score\": 1.5, \"tags\": [\"a\", \"b\"], \"nested\": {\"age\": 7}}"
+    tape = parsed(text)
+    typed = built()
+    print(describe(tape))
+    print(describe(typed))
+    print(describe(json.Value.Int(3)))
+    print(describe(parsed("[1, 2]")))
+    print(describe(parsed("{}")))
+
+    # A nested object of a parsed document is read in its tape too.
+    match tape:
+        case json.Value.Object(fields):
+            match fields.lookup("nested"):
+                case Lookup.Found(inner):
+                    print(f"{field_int(inner, "age")} {field_int(inner, "name")}")
+                case Lookup.Missing:
+                    print("no nested")
+        case _:
+            print("no object")
+
+    # Documents a dict keeps are read where the dict keeps them.
+    mut docs: dict[int64, json.Value] = {}
+    docs[1] = parsed(text)
+    docs[2] = built()
+    docs[3] = parsed("{\"age\": \"old\", \"tags\": 5}")
+    docs[4] = json.Value.Array([json.Value.Int(1)])
+    mut sum = 0
+    mut names = ""
+    for id in [1, 2, 3, 4, 5]:
+        match docs.lookup(id):
+            case Lookup.Found(doc):
+                sum += field_int(doc, "age") + field_len(doc, "tags")
+                names += field_str(doc, "name")
+            case Lookup.Missing:
+                sum += 100000
+    print(f"{sum} {names} {field_int(docs[1], "age")} {field_text(docs[3], "age")}")
+
+    # A document changed in place is read as it is afterwards.
+    match mut docs.lookup(1):
+        case Lookup.Found(doc):
+            match mut doc:
+                case json.Value.Object(fields):
+                    fields["age"] = json.Value.Int(37)
+                    fields["extra"] = json.Value.Bool(true)
+                case _:
+                    pass
+        case Lookup.Missing:
+            pass
+    print(f"{field_int(docs[1], "age")} {field_bool(docs[1], "extra")} {field_str(docs[1], "name")}")
+    print(f"{field_int(tape, "age")} {field_bool(tape, "extra")}")
+
+    many = [
+        parsed(text),
+        built(),
+        json.Value.Null,
+        parsed("{\"age\": 4}"),
+        parsed("{\"age\": null}"),
+    ]
+    print(total(many, "age"))
+    print(total(many, "missing"))
+
+    # Another thread reads a document handed to it.
+    with TaskGroup() as group:
+        first = group.start(in_task, parsed(text))
+        second = group.start(in_task, built())
+        match own first.result():
+            case TaskResult.Ready(n):
+                print(n)
+            case _:
+                print("failed")
+        match own second.result():
+            case TaskResult.Ready(n):
+                print(n)
+            case _:
+                print("failed")
+
+    # Every document is still whole.
+    print(json.dumps(tape))
+    print(json.dumps(typed))
+    print(json.dumps(docs[1]))

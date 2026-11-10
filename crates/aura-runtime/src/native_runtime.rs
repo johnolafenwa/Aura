@@ -3945,30 +3945,15 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
             1 => ("json::as_float", "Float"),
             _ => ("json::as_bool", "Bool"),
         };
-        let bits = unsafe {
-            with_lent_value(value, |value| {
-                if let Some(bits) = typed_json_scalar_bits(value, variant, kind) {
-                    return bits;
-                }
-                match direct_json_exact_payload(value, variant, name)
-                    .as_ref()
-                    .map(|payload| payload.as_deref())
-                {
-                    Ok(None) => None,
-                    Ok(Some(payload @ Value::Int(number)))
-                        if kind == 0 && json_int_metadata_is_exact(number) =>
-                    {
-                        Some(unbox_int64_of(payload))
-                    }
-                    Ok(Some(Value::Float(number))) if kind == 1 => Some(number.to_bits() as i64),
-                    Ok(Some(Value::Bool(flag))) if kind == 2 => Some(i64::from(*flag)),
-                    Ok(Some(_)) => runtime_diagnostic_error(Diagnostic::coded(
-                        "AU4001",
-                        format!("malformed runtime `json.Value.{variant}` payload in `{name}`"),
-                    )),
-                    Err(diagnostic) => runtime_diagnostic_error(diagnostic.clone()),
-                }
-            })
+        let word = value as usize;
+        let bits = if word & LENT_NODE_BIT != 0 {
+            // SAFETY: a lent node is the address of a node in the tape of a
+            // document that generated code keeps alive while it reads the
+            // word (see `aura_direct_map_get_scalar_lent`).
+            unsafe { crate::json_tape::scalar_bits_at(word & !LENT_NODE_BIT, kind) }
+        } else {
+            // SAFETY: the caller passes a lent value or a live box.
+            unsafe { with_lent_value(value, |value| json_scalar_bits(value, variant, kind, name)) }
         };
         match bits {
             Some(bits) => {
@@ -3978,6 +3963,32 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
             None => 0,
         }
     })
+}
+
+/// The bits `aura_direct_json_as_scalar` writes for `value`, or `None` when
+/// `value` is not `variant`.
+fn json_scalar_bits(value: &Value, variant: &str, kind: i64, name: &str) -> Option<i64> {
+    if let Some(bits) = typed_json_scalar_bits(value, variant, kind) {
+        return bits;
+    }
+    match direct_json_exact_payload(value, variant, name)
+        .as_ref()
+        .map(|payload| payload.as_deref())
+    {
+        Ok(None) => None,
+        Ok(Some(payload @ Value::Int(number)))
+            if kind == 0 && json_int_metadata_is_exact(number) =>
+        {
+            Some(unbox_int64_of(payload))
+        }
+        Ok(Some(Value::Float(number))) if kind == 1 => Some(number.to_bits() as i64),
+        Ok(Some(Value::Bool(flag))) if kind == 2 => Some(i64::from(*flag)),
+        Ok(Some(_)) => runtime_diagnostic_error(Diagnostic::coded(
+            "AU4001",
+            format!("malformed runtime `json.Value.{variant}` payload in `{name}`"),
+        )),
+        Err(diagnostic) => runtime_diagnostic_error(diagnostic.clone()),
+    }
 }
 
 fn direct_json_as_float(args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
@@ -10518,6 +10529,13 @@ unsafe fn record_typed_variant_shape(boxed: *mut OpaqueValue) {
 /// eight bytes, so a value's address never has it set.
 const LENT_VALUE_BIT: usize = 1;
 
+/// The bit of a lent lookup result that is the address of a node in a
+/// parsed document's tape (see [`aura_direct_map_get_scalar_lent`]). A node
+/// is aligned to eight bytes, as a box is, so neither's address has it set.
+const LENT_NODE_BIT: usize = 2;
+
+const _: () = assert!(std::mem::align_of::<OpaqueValue>() >= 4);
+
 /// A lookup result for generated code that only reads it while nothing
 /// can change the collection: the found value's address with
 /// [`LENT_VALUE_BIT`] set, or what [`boxed_map_payload`] returns. Only a
@@ -10594,15 +10612,16 @@ pub(crate) const SHADOW_REFERENCE: u32 = 1 << 29;
 /// what [`boxed_map_payload`] returns. Only a dict confined to this thread
 /// whose entries no other dict shares lends, so nothing else reaches the
 /// value, and nothing names the dict while the loan lives. Only a variant
-/// kept in its enum's layout lends: the box's value is then the variant's
-/// block address and payload boxes, which the dict's entry owns, and a
-/// reader that changes a payload's form in place changes the entry's.
-/// [`aura_direct_end_shadow`] ends the loan.
+/// kept in its enum's layout or in a parsed document's tape lends. The
+/// box's value is then the variant's block address and payload boxes,
+/// which the dict's entry owns, and a reader that changes a payload's form
+/// in place changes the entry's; or it is the entry's reference to the
+/// tape, which nothing changes. [`aura_direct_end_shadow`] ends the loan.
 fn shadow_map_payload(map: &MapValue, found: Option<&Value>, confined: bool) -> *mut OpaqueValue {
     match found {
         Some(
             value @ Value::EnumVariant(EnumVariantValue {
-                payloads: VariantPayloads::Typed(_),
+                payloads: VariantPayloads::Typed(_) | VariantPayloads::Json(_),
                 ..
             }),
         ) if confined && !map.entries.is_shared() => {
@@ -10647,7 +10666,7 @@ pub extern "C-unwind" fn aura_direct_map_get_shadow(
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_key(map, key)) } {
+        if let Some(found) = unsafe { tape_map_lookup(map, |node| tape_node_lookup(node, key)) } {
             return found;
         }
         shadow_map_lookup(map, |map| {
@@ -10803,21 +10822,69 @@ pub extern "C-unwind" fn aura_direct_map_get_lent(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_key(map, key)) } {
-            return found;
-        }
-        lent_map_lookup(map, |map| {
-            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
-                .map(|found| unsafe { &*found })
-        })
+    task_runtime_boundary(|| map_get_lent(map, key))
+}
+
+fn map_get_lent(map: *mut OpaqueValue, key: *mut OpaqueValue) -> *mut OpaqueValue {
+    if let Some(found) = unsafe { tape_map_lookup(map, |node| tape_node_lookup(node, key)) } {
+        return found;
+    }
+    lent_map_lookup(map, |map| {
+        unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+            .map(|found| unsafe { &*found })
     })
 }
 
-/// A lookup in a dict whose entries are still read from a parsed
-/// document's tape (see [`DictEntries::unrealized_json`]): a box of the
-/// value `find` reads under the key, or null when the key is missing, with
-/// no entry made a value. `None` for any other dict, or when `find` cannot
+/// [`aura_direct_map_get_lent`] for a loan that only `json.as_int`,
+/// `json.as_float`, or `json.as_bool` reads, which
+/// [`aura_direct_json_as_scalar`] reads for it. A value found in a parsed
+/// document's tape is lent as its node's address with [`LENT_NODE_BIT`]
+/// set, so no box is made for it. Only an object confined to this thread
+/// lends a node, and generated code reads the word only while it keeps the
+/// object, and so the tape, alive.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_scalar_lent(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let node = unsafe {
+            with_lendable_value(map, false, |value, confined| {
+                let object = tape_object_of(value).filter(|_| confined)?;
+                with_value(key, |key| match key {
+                    Value::String(text) => Some(object.lookup_address(text)),
+                    _ => None,
+                })
+            })
+        };
+        match node {
+            Some(Some(address)) => (address | LENT_NODE_BIT) as *mut OpaqueValue,
+            Some(None) => std::ptr::null_mut(),
+            None => map_get_lent(map, key),
+        }
+    })
+}
+
+/// The tape object a lookup in `value` reads: the entries of a dict still
+/// read from a parsed document's tape (see
+/// [`DictEntries::unrealized_json`]), or a `json.Value.Object` that lies in
+/// one. Generated code hands a lookup such an object in place of the dict
+/// it would unpack from it, so a lookup that only reads a field makes no
+/// dict.
+fn tape_object_of(value: &Value) -> Option<&crate::json_tape::JsonNode> {
+    match value {
+        Value::Map(map) => map.entries.unrealized_json(),
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Json(node),
+            ..
+        }) if node.tag() == crate::json_tape::JsonTag::Object => Some(node),
+        _ => None,
+    }
+}
+
+/// A lookup in a tape object (see [`tape_object_of`]): a box of the value
+/// `find` reads under the key, or null when the key is missing, with no
+/// entry made a value. `None` for any other value, or when `find` cannot
 /// read the key in the tape, which the caller then looks up as usual.
 ///
 /// # Safety
@@ -10825,28 +10892,31 @@ pub extern "C-unwind" fn aura_direct_map_get_lent(
 /// `map` is a live box.
 unsafe fn tape_map_lookup(
     map: *mut OpaqueValue,
-    find: impl FnOnce(&MapValue) -> Option<Option<Value>>,
+    find: impl FnOnce(&crate::json_tape::JsonNode) -> Option<Option<Value>>,
 ) -> Option<*mut OpaqueValue> {
-    let found = unsafe {
-        with_lendable_value(map, false, |value, _| match value {
-            Value::Map(map) => find(map),
-            _ => None,
-        })
-    }?;
+    let found =
+        unsafe { with_lendable_value(map, false, |value, _| find(tape_object_of(value)?)) }?;
     Some(found.map_or(std::ptr::null_mut(), boxed_value))
 }
 
-/// The value under the boxed key `key` in a dict whose entries are still
-/// read from a tape: `Some(None)` when the key is missing, and `None` for
-/// any other dict or a key that is not a `str`.
-fn tape_lookup_key(map: &MapValue, key: *mut OpaqueValue) -> Option<Option<Value>> {
-    let node = map.entries.unrealized_json()?;
+/// The value under the boxed key `key` in a tape object: `Some(None)` when
+/// the key is missing, and `None` for a key that is not a `str`.
+fn tape_node_lookup(
+    node: &crate::json_tape::JsonNode,
+    key: *mut OpaqueValue,
+) -> Option<Option<Value>> {
     unsafe {
         with_value(key, |key| match key {
             Value::String(text) => Some(node.lookup_str(text)),
             _ => None,
         })
     }
+}
+
+/// [`tape_node_lookup`] in a dict whose entries are still read from a
+/// tape, and `None` for any other dict.
+fn tape_lookup_key(map: &MapValue, key: *mut OpaqueValue) -> Option<Option<Value>> {
+    tape_node_lookup(map.entries.unrealized_json()?, key)
 }
 
 /// [`tape_lookup_key`] for a `str` key the caller holds.
@@ -10863,7 +10933,7 @@ pub extern "C-unwind" fn aura_direct_map_get_str_lent(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let key = literal_str(key_ptr, key_len);
-        if let Some(found) = unsafe { tape_map_lookup(map, |map| tape_lookup_str(map, key)) } {
+        if let Some(found) = unsafe { tape_map_lookup(map, |node| Some(node.lookup_str(key))) } {
             return found;
         }
         lent_map_lookup(map, |map| map.entries.value_of_str(key))
@@ -10954,7 +11024,14 @@ pub extern "C-unwind" fn aura_direct_map_get_payload(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| with_map(map, |map| direct_map_lookup_as(map, key, boxed_map_payload)))
+    task_runtime_boundary(|| {
+        // A tape object is read where it lies, and may be a `json.Value`
+        // generated code passes in place of its dict.
+        if let Some(found) = unsafe { tape_map_lookup(map, |node| tape_node_lookup(node, key)) } {
+            return found;
+        }
+        with_map(map, |map| direct_map_lookup_as(map, key, boxed_map_payload))
+    })
 }
 
 /// `aura_direct_map_get_str`, as the found value's own box or null.
