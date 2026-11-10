@@ -17,6 +17,7 @@ fn public_object_codegen_reads_host_and_wait_result_types_from_mir() {
     let task_type = Type::Named("Task".to_string(), vec![Type::named("int32")]);
     let tasks_type = Type::Named("Vec".to_string(), vec![task_type.clone()]);
     let module = MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),

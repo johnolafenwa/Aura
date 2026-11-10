@@ -34,6 +34,9 @@ pub struct Program {
     /// initialization. The file loader replaces the local-only seed with the
     /// complete transitive plan for an entry program.
     pub constant_init_plan: Vec<ConstantInfo>,
+    /// The native libraries the program's packages name under `[ffi]`. The
+    /// file loader fills it in for an entry program in a package.
+    pub foreign_link: crate::package::ForeignLinkPlan,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
@@ -2132,6 +2135,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         functions,
         constants,
         constant_init_plan,
+        foreign_link: Default::default(),
         extern_functions,
         opaque_handles,
         traits,

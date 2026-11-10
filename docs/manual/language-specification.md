@@ -174,7 +174,7 @@ Read the normative core in this order:
 4. [Types](/manual/types) and [Static Semantics](/manual/static-semantics)
 5. [Ownership And Borrowing](/manual/ownership-and-borrowing)
 6. [Expressions](/manual/expressions), [Statements](/manual/statements),
-   [Closures](/manual/closures), [FFI v0](/manual/ffi), and the declaration
+   [Closures](/manual/closures), [FFI](/manual/ffi), and the declaration
    chapters
 7. [Execution Model](/manual/execution-model)
 8. the runtime and library chapters, and the [API Index](/manual/api-index)

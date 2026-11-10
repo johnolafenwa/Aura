@@ -134,7 +134,7 @@ and promises to explain each later.
 
 ## 18. Calling C
 
-- 18.1 FFI v0 (`ch18-00-calling-c.md` single page is fine)
+- 18.1 FFI (`ch18-00-calling-c.md` single page is fine)
 
 ## 19. Final project: a supervised job runner
 

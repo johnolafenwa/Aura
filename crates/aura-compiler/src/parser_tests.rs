@@ -5378,3 +5378,59 @@ fn quantifiers_old_values_and_spec_functions_parse() {
             .expect_err("lemma methods are rejected");
     assert_eq!(error.code, "AU2048");
 }
+
+#[test]
+fn extern_functions_take_a_symbol_clause_after_the_result() {
+    let module = parse(concat!(
+        "extern \"C\" def c_abs(x: int32) -> int32 symbol \"abs\"\n",
+        "extern \"C\" def getpid() -> int32\n",
+        "extern \"C\" def checked(x: int32) -> int32 symbol \"abs\":\n",
+        "    requires x > -100\n",
+        "def main():\n",
+        "    symbol = 1\n",
+        "    print(symbol)\n",
+    ))
+    .expect("a symbol clause should parse, and `symbol` stays an ordinary name");
+
+    let externs: Vec<&ExternFunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(externs.len(), 3);
+    assert_eq!(externs[0].symbol.as_deref(), Some("abs"));
+    assert_eq!(externs[0].link_name(), "abs");
+    assert_eq!(externs[1].symbol, None);
+    assert_eq!(externs[1].link_name(), "getpid");
+    assert_eq!(externs[2].link_name(), "abs");
+
+    let shape = shape_of(externs[1]);
+    assert!(
+        shape.get("symbol").is_none(),
+        "a declaration without the clause serializes as before: {shape}"
+    );
+    assert_eq!(shape_of(externs[0])["symbol"], "abs");
+}
+
+#[test]
+fn extern_symbol_clauses_reject_missing_and_malformed_names() {
+    let missing = parse("extern \"C\" def f() -> int32 symbol abs\n")
+        .expect_err("the symbol name must be a string");
+    assert_eq!(
+        missing.message,
+        "expected the C symbol name as a string after `symbol`, such as `symbol \"sqlite3_close\"`"
+    );
+
+    for name in ["", "two words", "tab\\tbed", "caf\u{e9}"] {
+        let source = format!("extern \"C\" def f() -> int32 symbol \"{name}\"\n");
+        let error = parse(&source).expect_err("the symbol name must be printable ASCII");
+        assert_eq!(
+            error.message,
+            "a C symbol name is one or more printable ASCII characters with no spaces",
+            "{name:?}"
+        );
+    }
+}

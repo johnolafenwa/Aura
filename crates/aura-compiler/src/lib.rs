@@ -109,15 +109,14 @@ pub fn sha256_hex(bytes: &[u8]) -> String {
 pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};
-pub use package::DependencyUpdateResult;
 use package::PackageGraph;
+pub use package::{is_valid_link_name, DependencyUpdateResult, ForeignLinkPlan};
 
 #[cfg(coverage)]
 #[doc(hidden)]
 pub mod native_runtime_coverage {
     pub use super::native_runtime::aura_direct_tag_value_type;
     pub use super::native_runtime::DirectScalarKind;
-    pub use super::native_runtime::DIRECT_FFI_SPEC_VERSION;
     pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
@@ -717,6 +716,9 @@ impl ModuleLoader {
             },
         );
         if is_entry_module {
+            if let Some(graph) = &self.package_graph {
+                program.foreign_link = graph.foreign_link_plan();
+            }
             program.constant_init_plan = self.build_constant_init_plan(&path)?;
             self.cache.insert(
                 path.clone(),

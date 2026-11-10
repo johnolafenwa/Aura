@@ -394,6 +394,7 @@ fn adr0038_direct_cfg_join_rejects_branch_dependent_view_identity() {
         block.instructions.clear();
     }
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -454,6 +455,7 @@ fn adr0038_direct_tuple_place_errors_reach_codegen_after_constructor_setup() {
             value: Rvalue::Use(Operand::Place(format!("pair.{projection}"))),
         }];
         let module = crate::mir::MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -573,6 +575,7 @@ def main() -> int32:
         }],
     };
     let constant_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: vec![crate::mir::MirConstant {
@@ -616,6 +619,7 @@ def main() -> int32:
             },
         });
     let reader_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -1386,6 +1390,7 @@ fn heterogeneous_match_arm_mutable_locals_keep_distinct_direct_slots() {
 fn tuple_native_symbols_keep_public_projection_separate_from_private_take() {
     let tuple_type = Type::Tuple(vec![Type::named("int64"), Type::named("str")]);
     let module = |instructions, local_types| crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -2415,6 +2420,7 @@ fn handbuilt_mir_safepoint_validates_and_emits_for_a_sequential_module() {
         .expect("a hand-built MIR safepoint is a valid backend instruction");
 
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -2497,6 +2503,7 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
         ],
     };
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -3240,6 +3247,7 @@ fn module_with_main_call(call: Rvalue) -> crate::mir::MirModule {
 
 fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -3274,7 +3282,7 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
 }
 
 #[test]
-fn direct_ffi_codegen_embeds_call_metadata_and_uses_only_the_runtime_adapter() {
+fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
     let call = Rvalue::Call {
         callee: CallTarget::Extern(MirExternCall {
             symbol: "getpid".to_string(),
@@ -3291,17 +3299,14 @@ fn direct_ffi_codegen_embeds_call_metadata_and_uses_only_the_runtime_adapter() {
     assert!(
         referenced
             .iter()
-            .any(|symbol| symbol.contains("aura_direct_ffi_call")),
-        "direct FFI must route through the shared runtime adapter: {referenced:?}"
+            .any(|symbol| symbol.trim_start_matches('_') == "getpid"),
+        "a foreign call must reference the C symbol for the linker to resolve: {referenced:?}"
     );
     assert!(
-        referenced.iter().all(|symbol| !symbol.contains("getpid")),
-        "generated objects must resolve process symbols at runtime: {referenced:?}"
-    );
-    assert!(
-        object.windows(4).any(|bytes| bytes == b"AUFI")
-            && object.windows(6).any(|bytes| bytes == b"getpid"),
-        "the validated serialized call spec must be embedded in the object"
+        referenced
+            .iter()
+            .all(|symbol| !symbol.contains("aura_direct_ffi")),
+        "a scalar foreign call needs no runtime helper: {referenced:?}"
     );
 }
 
@@ -3310,6 +3315,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
     let handle_ty = Type::named("ProcessHandle");
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -3464,10 +3470,26 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
     };
     let object = emit_host_object(&module)
         .expect("mutable byte views, opaque ownership, and narrow scalars should emit");
-    assert!(
-        object_referenced_symbol_occurrences(&object, "aura_direct_ffi_call") >= 4,
-        "each extern call must reference the shared runtime adapter"
-    );
+    let referenced = object_referenced_symbols(&object);
+    for symbol in ["read", "malloc", "free", "htons"] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object must call `{symbol}` itself: {referenced:?}"
+        );
+    }
+    for helper in [
+        "aura_direct_ffi_bytes_view_mut",
+        "aura_direct_ffi_handle",
+        "aura_direct_ffi_handle_address",
+        "aura_direct_ffi_null_handle",
+    ] {
+        assert!(
+            object_referenced_symbol_occurrences(&object, helper) >= 1,
+            "the object must reach `{helper}` for its views and handles"
+        );
+    }
 }
 
 #[test]
@@ -3539,6 +3561,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
 
     let bytes_ty = Type::Named("list".to_string(), vec![Type::named("uint8")]);
     let missing_mut_writeback = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -3733,6 +3756,7 @@ fn module_with_main_member_call_result_type(
     args: Vec<MirArg>,
 ) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -4026,6 +4050,7 @@ fn direct_backend_internal_collection_member_surface_compiles() {
 #[test]
 fn direct_backend_scalar_bool_range_and_coercion_paths_compile() {
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -7127,6 +7152,7 @@ def main() -> int32:
 fn direct_backend_rejects_a_wait_result_of_unknown_payload_type() {
     let string_vec = Type::Named("list".to_string(), vec![Type::named("str")]);
     let wait_all_unknown = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -7195,6 +7221,7 @@ fn direct_backend_rejects_a_wait_result_of_unknown_payload_type() {
 #[test]
 fn direct_backend_entry_thunk_handles_unit_parameters() {
     let unit_param_main = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -7902,6 +7929,7 @@ fn native_codegen_function_value_signature_errors_are_precise() {
 
     fn module(signature: Type, args: Vec<MirArg>) -> crate::mir::MirModule {
         crate::mir::MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -8675,6 +8703,7 @@ def main() -> int32:
 #[test]
 fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths() {
     let wildcard_match = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -8736,6 +8765,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let opaque_branch = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -8782,6 +8812,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
         .is_empty());
 
     let scalar_match = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -8823,6 +8854,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
     assert!(scalar_error.contains("expected enum matches to use opaque scrutinees"));
 
     let module_match = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -8873,6 +8905,7 @@ fn direct_backend_match_and_branch_terminator_edges_cover_enum_and_opaque_paths(
 #[test]
 fn direct_backend_for_range_and_spawn_error_surface_reports_expected_diagnostics() {
     let invalid_for_range = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10016,6 +10049,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     );
 
     let stray_pop_cleanup_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10066,6 +10100,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         copy: false,
     };
     let missing_field_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10117,6 +10152,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     assert!(non_class_construct_error.contains("could not construct non-class type `int32`"));
 
     let plain_cast_target_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10158,6 +10194,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
         .contains("direct backend only supports numeric casts, found target `Pair`"));
 
     let plain_cast_source_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10297,6 +10334,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
     }
 
     let missing_field_access_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10360,6 +10398,7 @@ fn direct_backend_operand_and_construct_error_surface_reports_expected_diagnosti
 #[test]
 fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
     let invalid_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10416,6 +10455,7 @@ fn native_codegen_reports_invalid_non_boolean_branch_conditions() {
 #[test]
 fn native_codegen_rejects_try_between_non_result_types() {
     let invalid_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -11816,6 +11856,7 @@ fn native_codegen_helper_utilities_cover_signatures_wildcards_and_metadata() {
     assert!(!object.is_empty());
 
     let invalid_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12064,6 +12105,7 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
         ],
     };
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12094,6 +12136,7 @@ fn direct_codegen_ignores_dead_cleanup_and_terminator_metadata_but_checks_cfg_st
 #[test]
 fn native_codegen_constructor_initializes_runtime_function_surface() {
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12236,6 +12279,7 @@ fn cleanup_test_function(local_name: &str, ty: Type, place: &str) -> MirFunction
 
 fn cleanup_test_module(functions: Vec<MirFunction>) -> crate::mir::MirModule {
     crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12339,6 +12383,7 @@ fn dead_assignments_do_not_poison_reachable_cleanup_type_inference() {
     };
     let close = close_function("Resource");
     let module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12407,6 +12452,7 @@ fn native_codegen_cleanup_thunks_cover_scalar_plain_opaque_and_metadata_errors()
 
     let plain_function = cleanup_test_function("resource", Type::named("Plain"), "resource");
     let plain_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12448,6 +12494,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
     );
     let resource_close = close_function("Resource");
     let plain_close_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12492,6 +12539,7 @@ fn native_codegen_cleanup_thunks_cover_class_close_success_and_missing_targets()
     );
     let managed_close = close_function("Managed");
     let opaque_close_module = crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12620,6 +12668,7 @@ fn direct_introspected_assertions_reference_the_detailed_failure_helper() {
 #[test]
 fn direct_validation_accepts_assert_fail_operands_and_rejects_unknown_places() {
     let make_module = |message, captures| crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -12745,6 +12794,7 @@ def main():
         .expect("dynamic returned-view projection selection should compile");
 
     let malformed_tuple_module = |projection: &str| crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -13178,6 +13228,7 @@ fn shape_test_module(main_value: Rvalue, helpers: Vec<MirFunction>) -> crate::mi
     let mut functions = vec![main];
     functions.extend(helpers);
     crate::mir::MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -16270,4 +16321,115 @@ def main():
         assert!(referenced.contains(made), "{made}: {referenced:?}");
     }
     assert!(!referenced.contains("aura_direct_json_tape_finish"));
+}
+
+fn lower_ffi_source_to_mir(source: &str) -> crate::mir::MirModule {
+    let module = crate::parse_source(source).expect("FFI source should parse");
+    let program =
+        crate::check_module_with_builtin_imports(module).expect("FFI source should type check");
+    crate::mir::lower(&program)
+}
+
+#[test]
+fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Handle
+
+extern "C" def scalars(
+    a: bool, b: int8, c: int16, d: int32, e: int64,
+    f: uint8, g: uint16, h: uint32, i: uint64, j: float32, k: float64
+) -> None
+extern "C" def r_bool() -> bool
+extern "C" def r_i8() -> int8
+extern "C" def r_i16() -> int16
+extern "C" def r_i32() -> int32
+extern "C" def r_i64() -> int64
+extern "C" def r_u8() -> uint8
+extern "C" def r_u16() -> uint16
+extern "C" def r_u32() -> uint32
+extern "C" def r_u64() -> uint64
+extern "C" def r_f32() -> float32
+extern "C" def r_f64() -> float64
+extern "C" def text(value: str, other: str, empty: str) -> uint64
+extern "C" def bytes(value: list[uint8]) -> uint64
+extern "C" def fill(value: mut list[uint8]) -> None
+extern "C" def open() -> Handle
+extern "C" def find() -> Handle | None
+extern "C" def use_handle(handle: Handle) -> int32
+extern "C" def close(handle: own Handle) -> None
+extern "C" def renamed(x: int32) -> int32 symbol "aura_test_renamed_symbol"
+
+def release(found: own Handle | None) -> None:
+    if found is None:
+        return
+    close(found)
+
+def main() -> int32:
+    scalars(true, 1, 2, 3, 4, 5, 6, 7, 8, 1.5, 2.5)
+    flag = r_bool()
+    total = (r_i8() as int64) + (r_i16() as int64) + (r_i32() as int64) + r_i64()
+    unsigned = (r_u8() as uint64) + (r_u16() as uint64) + (r_u32() as uint64) + r_u64()
+    floats = (r_f32() as float64) + r_f64()
+    held = "held"
+    length = text(held, "literal", "")
+    mut buffer: list[uint8] = [1, 2, 3]
+    count = bytes(buffer)
+    fill(buffer)
+    handle = open()
+    used = use_handle(handle)
+    close(handle)
+    release(find())
+    print(flag)
+    print(total)
+    print(unsigned)
+    print(floats)
+    print(length + count)
+    print(used)
+    return renamed(1)
+"#,
+    );
+    let object = emit_host_object(&module).expect("every FFI v1 boundary type should emit");
+    let referenced = object_referenced_symbols(&object);
+    let calls = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "scalars",
+        "r_bool",
+        "r_f32",
+        "text",
+        "bytes",
+        "fill",
+        "open",
+        "find",
+        "use_handle",
+        "close",
+        "aura_test_renamed_symbol",
+        "aura_direct_ffi_str_view",
+        "aura_direct_ffi_bytes_view",
+        "aura_direct_ffi_release_bytes",
+        "aura_direct_ffi_bytes_view_mut",
+        "aura_direct_ffi_handle_address",
+        "aura_direct_ffi_handle",
+        "aura_direct_ffi_none",
+        "aura_direct_ffi_null_handle",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            calls(symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+    assert!(
+        !calls("renamed"),
+        "a symbol clause replaces the declared name at the call: {referenced:?}"
+    );
+    assert_eq!(
+        object_referenced_symbol_occurrences(&object, "aura_direct_ffi_str_view"),
+        1,
+        "only the held string needs a view; literals lend constant bytes"
+    );
 }

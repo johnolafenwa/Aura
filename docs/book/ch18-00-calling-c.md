@@ -3,7 +3,7 @@
 Sooner or later you will want a function that Aura's standard modules do not
 have but the C library on your machine does. Most operating-system services
 are C functions underneath, and so are a great many libraries. Aura can call
-them through its foreign function interface, FFI v0. It is deliberately
+them through its foreign function interface, FFI. It is deliberately
 small: it lets you bind a handful of trusted C functions with simple
 signatures, and it does not let C code reach into Aura's memory in ways the
 compiler cannot see. This chapter shows what it can do, what it refuses to
@@ -76,11 +76,18 @@ true
 ```
 
 The call works on both backends. Notice what we did not do: we did not tell
-Aura which library `getpid` lives in. FFI v0 looks the name up in the
-symbols already loaded into the process at the moment of the call. The C
-library is always loaded, so its functions are available; a function from a
-library the process has not loaded is not. The Aura name of the declaration
-is the C symbol name, and there is no way to give it a different link name.
+Aura which library `getpid` lives in. Every program links the C library, so
+its functions are always available. A function from any other library needs
+one more line in the manifest, which we get to in
+[Linking a library](#linking-a-library).
+
+The Aura name of the declaration is the C symbol name. When that name is
+awkward, or is already taken in Aura the way `abs` is, give the C name in a
+`symbol` clause and pick your own name for the declaration:
+
+```aura fragment
+extern "C" def c_abs(x: int32) -> int32 symbol "abs"
+```
 
 Because the code examples in this chapter only check inside a package with
 `allow_ffi = true`, the listings below are shown as they appear in
@@ -280,8 +287,11 @@ and give your callers a way to call it, typically through a class with a
 
 ## When things go wrong at run time
 
-Some foreign failures Aura can catch. If the symbol does not exist in the
-process, the call fails with a trap before anything is called:
+Some foreign failures Aura can catch. If no library defines the symbol, the
+program cannot be linked, so `aura build` stops with the linker's "undefined
+reference" message. `aura run` then runs the program in its interpreter,
+which looks each symbol up at the call, and the call fails with a trap before
+anything is called:
 
 ```aura fragment
 extern "C" def no_such_function_anywhere() -> int32
@@ -299,7 +309,7 @@ error[AU4005]: FFI call to `no_such_function_anywhere` failed: FFI symbol `no_su
   = note: Aura call chain (innermost first): main at 3:1
 ```
 
-The program compiled, because lookup happens at the call. (The path in the
+The interpreter got as far as the call, because its lookup happens there. (The path in the
 message is the program the symbol was looked up in, here the `aura` command
 itself, so yours will differ.) A handle-returning
 function that returns a null pointer traps with `AU4005` too, and a `bool`
@@ -312,6 +322,70 @@ foreign call is synchronous: it runs on the current scheduler worker until it
 returns, without a scheduling point, so a C function that blocks for a second
 stalls every task on that worker for a second. Keep foreign calls short, or
 keep blocking work in a process you start with the `process` module.
+
+## Linking a library
+
+Most C code worth calling lives in a library of its own. To use one, name it
+in the `[ffi]` table of the manifest. This package calls zlib, the
+compression library, to checksum some text:
+
+*Filename: Aura.toml*
+
+```toml
+[package]
+name = "checksum"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["z"]
+```
+
+*Filename: src/main.au*
+
+```aura fragment
+extern "C" def crc32_z(seed: uint64, text: str) -> uint64
+
+def main():
+    print(crc32_z(0, "hello"))
+```
+
+```console
+$ aura run src/main.au
+907060870
+```
+
+`crc32_z` takes a starting value, a pointer, and a length, so the `str`
+parameter supplies its last two arguments.
+
+The name is the one a C programmer gives the linker: `z` for *libz.so* on
+Linux and *libz.dylib* on macOS. `aura build` passes it to the linker, and
+the built program loads the library when it starts, as a C program would.
+The call itself is an ordinary machine call, so calling `crc32_z` from Aura
+costs what it costs from C.
+
+Three more settings cover the cases that come up in practice. If the library
+is not in a directory the system searches, list the directory in
+`library_paths`. A relative path starts at the package. A macOS framework
+goes in `frameworks`. And when the name differs between systems, put the
+setting in a table for that system:
+
+```toml
+[ffi]
+library_paths = ["vendor/lib"]
+
+[ffi.linux]
+libraries = ["openblas"]
+
+[ffi.macos]
+frameworks = ["Accelerate"]
+```
+
+A library that is not installed is a link error from `aura build`, and the
+message names it. The library needs its development files for linking. On
+Debian and Ubuntu that is the package whose name ends in `-dev`, such as
+`zlib1g-dev`.
 
 ## Depending on an FFI package
 
@@ -338,27 +412,28 @@ The list must be exact: a missing, unknown, or duplicate entry is an error.
 That way, adding a dependency that quietly pulls in native code cannot happen
 without a change to your own manifest that a reviewer will see.
 
-## What FFI v0 leaves out
+## What FFI leaves out
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no callbacks from C into Aura, no
 variadic functions such as `printf`, no structs or unions passed by value, no
-raw pointers or pointer arithmetic, no returned views, no loading of
-libraries by path, and no asynchronous foreign calls. When you need one of
+raw pointers or pointer arithmetic, no returned views, and no asynchronous
+foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
-signature, linked into the process, or a separate helper program driven
+signature, built as a library the package links, or a separate helper program driven
 through `process`. The [Manual's FFI page](/manual/ffi) has the full ABI
 table, the diagnostics, and the backend contract.
 
 ## Summary
 
 You can now call a C function from Aura: declare it with `extern "C" def`
-inside a package that opts in with `allow_ffi = true`, pass scalars by value
+inside a package that opts in with `allow_ffi = true`, name its library
+under `[ffi]`, pass scalars by value
 and text and bytes as temporary views, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the
-boundary of the C code itself, and why FFI v0 keeps that boundary small.
+boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In
 [Chapter 19](/book/ch19-00-final-project) we put the pieces together in one
