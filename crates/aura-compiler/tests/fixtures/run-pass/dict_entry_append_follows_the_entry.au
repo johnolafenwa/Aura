@@ -1,0 +1,143 @@
+# A `match mut` lookup whose found arm only appends scalars finds its entry
+# once and appends to the list there: one append, several, or a loop of
+# them, to lists of integers, floats and bools, under str and int64 keys,
+# on a field, a local and a parameter. An arm that also reads the list, a
+# missing key, and a copy taken before behave as they always did. Values
+# stored under an int64 key replace the one before and leave copies alone.
+import json
+
+
+class Index:
+    by_city: dict[str, list[int64]] = {}
+    by_id: dict[int64, list[int64]] = {}
+    names: dict[int64, str] = {}
+    docs: dict[int64, json.Value] = {}
+
+    def add(mut self, city: own str, id: int64):
+        match mut self.by_city.lookup(city):
+            case Lookup.Found(ids):
+                ids.append(id)
+            case Lookup.Missing:
+                self.by_city[city] = [id]
+
+    def add_pair(mut self, key: int64, id: int64):
+        match mut self.by_id.lookup(key):
+            case Lookup.Found(ids):
+                ids.append(id)
+                ids.append(-id)
+            case Lookup.Missing:
+                self.by_id[key] = [id]
+
+    def name(mut self, id: int64, text: own str):
+        self.names[id] = text
+
+    def keep(mut self, id: int64, doc: own json.Value):
+        self.docs[id] = doc
+
+
+def fill(buckets: mut dict[int64, list[float64]], key: int64, count: int64):
+    match mut buckets.lookup(key):
+        case Lookup.Found(values):
+            for i in range(count):
+                values.append(0.25 * (i as float64))
+        case Lookup.Missing:
+            buckets[key] = []
+
+
+def flag(flags: mut dict[str, list[bool]], key: str, value: bool) -> int64:
+    match mut flags.lookup(key):
+        case Lookup.Found(values):
+            values.append(value)
+            return values.len()
+        case Lookup.Missing:
+            return -1
+
+
+def doc_city(doc: json.Value) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup("city"):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return "?"
+                case Lookup.Missing:
+                    return "-"
+        case _:
+            return "!"
+
+
+def main() -> int32:
+    mut index = Index()
+    cities = ["Lagos", "Abuja", "Accra"]
+    for i in range(9):
+        index.add(cities[i % 3].clone(), i)
+        index.add_pair(i % 2, i)
+    before = index.by_city.copy()
+    pairs_before = index.by_id.copy()
+    index.add("Lagos", 100)
+    index.add("Tunis", 200)
+    index.add_pair(1, 50)
+    index.add_pair(7, 70)
+    print(index.by_city["Lagos"])
+    print(before["Lagos"])
+    print(index.by_city["Tunis"])
+    print("Tunis" in before)
+    print(index.by_id[0])
+    print(index.by_id[1])
+    print(pairs_before[1])
+    print(index.by_id[7])
+
+    mut buckets: dict[int64, list[float64]] = {}
+    fill(buckets, 3, 2)
+    fill(buckets, 3, 3)
+    fill(buckets, -4, 1)
+    fill(buckets, 3, 1)
+    print(buckets[3])
+    print(buckets[-4])
+
+    mut flags: dict[str, list[bool]] = {"on": [true]}
+    print(flag(flags, "on", false))
+    print(flag(flags, "off", true))
+    print(flag(flags, "on", true))
+    print(flags["on"])
+
+    mut local: dict[int64, list[int64]] = {1: [], 2: [5]}
+    for round in range(3):
+        for key in range(4):
+            match mut local.lookup(key):
+                case Lookup.Found(values):
+                    values.append(round * 10 + key)
+                case Lookup.Missing:
+                    pass
+    print(local[1])
+    print(local[2])
+    print(local.len())
+
+    for i in range(6):
+        index.name(i % 4, f"name-{i}")
+    names_before = index.names.copy()
+    index.name(0, "renamed")
+    index.name(-1, "negative")
+    print(index.names[0])
+    print(names_before[0])
+    print(index.names[1])
+    print(index.names[3])
+    print(index.names[-1])
+    print(index.names.len())
+    print(names_before.len())
+
+    for i in range(4):
+        match own json.parse(f"{{\"city\": \"city-{i}\"}}"):
+            case Result.Ok(doc):
+                index.keep(i % 3, doc)
+            case Result.Err(_):
+                pass
+    index.keep(2, json.Value.Object({"city": json.Value.String("spelled")}))
+    index.keep(5, json.Value.Int(5))
+    for id in [0, 1, 2, 5]:
+        print(doc_city(index.docs[id]))
+    print(index.docs.len())
+    return 0

@@ -1,0 +1,18 @@
+from iter import IntoIterator
+
+
+trait Bag[T]: IntoIterator[T]:
+    def size(self) -> int64
+
+
+class Words:
+    items: list[str]
+
+
+impl Bag[str] for Words:
+    def size(self) -> int64:
+        return len(self.items)
+
+
+def main():
+    pass

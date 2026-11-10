@@ -486,8 +486,9 @@ These rules apply:
   arguments substituted (`AU2002`).
 - A generic implementation can fix an associated type in terms of its own
   type parameters, as in `type Iter = Generator[T]`.
-- An enum cannot bound a type parameter by a trait with associated types
-  yet (`AU2002`). A function, method, class, or implementation can.
+- A type alias cannot bound a type parameter by a trait with associated
+  types yet (`AU2002`). A function, method, class, enum, or implementation
+  can, and a trait can name one as a supertrait.
 
 A function or method bound writes only the trait's own arguments, as in
 `S: Source[int64]`. Each associated type then becomes a hidden type
@@ -588,9 +589,120 @@ def main():
     print(Holder(source=Numbers(values=[3, 4])).total())
 ```
 
+An enum bound follows the class rule. `Source[T, S]` keeps its two written
+arguments, and constructing a variant infers `S.Iter`, and a `T` that only
+the bound names, from the implementation for `S`:
+
+```aura
+from iter import IntoIterator
+
+
+enum Source[T, S: IntoIterator[T]]:
+    Ready(items: S)
+    Empty
+
+
+def drain[T, S: IntoIterator[T]](source: own Source[T, S]) -> int64:
+    mut count = 0
+    match own source:
+        case Ready(items):
+            for _ in items:
+                count += 1
+        case Empty:
+            pass
+    return count
+
+
+def main():
+    print(drain(Source.Ready([1, 2, 3])))
+```
+
+### Supertraits With Associated Types
+
+A trait can name a trait with associated types as a supertrait. It writes
+the supertrait's own arguments, and it inherits each associated type:
+
+```aura
+from iter import Generator, IntoIterator
+
+
+trait Bag[T]: IntoIterator[T]:
+    def size(self) -> int64
+
+
+class Words:
+    items: list[str]
+
+
+def each(items: own list[str]) -> Generator[str]:
+    for item in own items:
+        yield item
+
+
+impl IntoIterator[str] for Words:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Self.Iter:
+        return each(self.items)
+
+
+impl Bag[str] for Words:
+    def size(self) -> int64:
+        return len(self.items)
+
+
+def show[B: Bag[str]](bag: own B):
+    print(bag.size())
+    for word in bag:
+        print(word)
+
+
+def main():
+    show(Words(items=["a", "b"]))
+```
+
+`Bag` has `Iter` as an associated type of its own, with the bounds
+`IntoIterator` declares for it. These rules apply:
+
+- A bound `B: Bag[str]` names `B.Iter`, and a loop over a `B` value iterates
+  `into_iter()`. The methods of `Bag` can name `Self.Iter`.
+- `impl Bag[str] for Words` leaves out `type Iter`. The compiler takes it
+  from the implementation of `IntoIterator[str]` for `Words`, wherever in
+  the module that implementation is written.
+- An implementation of `Bag` may still write `type Iter = ...`. The type
+  must be the one the supertrait's implementation fixes.
+- Without an implementation of the supertrait for the type, the
+  implementation of `Bag` reports `AU2002`.
+- The same holds through several levels, as in
+  `trait SortedBag[T]: Bag[T]`.
+
 The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
 `for` loop can consume any value that turns into an iterator. See
 [Statements](/manual/statements#iterator-iteration).
+
+Every `list[T]` implements `IntoIterator[T]`, with `iter.ListIter[T]` as its
+`Iter`. A function bounded by `S: IntoIterator[T]` therefore takes a list, and
+`into_iter()` consumes the list and yields its items in order:
+
+```aura
+from iter import IntoIterator
+
+
+def count[T, S: IntoIterator[T]](source: own S) -> int64:
+    mut n = 0
+    for _ in source:
+        n += 1
+    return n
+
+
+def main():
+    print(count(["a", "b"]))
+    print([1, 2, 3].into_iter().collect())
+```
+
+A `for` loop, comprehension, `enumerate`, or `zip` written directly over a
+list still reads the items in place and leaves the list usable. A second
+`impl IntoIterator[...] for list[...]` is an error.
 
 ## Supertraits
 
@@ -607,6 +719,10 @@ The second colon ends the header. Separate multiple supertraits with commas.
 `impl Labelled for User` is valid only when `User` also satisfies `Named` through an applicable implementation. Implementing the child trait does not create the parent implementation. A child bound makes the supertrait methods available, and default child methods can call them.
 
 Supertrait types must name known traits with exact arity. Bound and dispatch checking closes the requirements transitively.
+
+A supertrait with associated types is written with its own arguments only. See [Supertraits With Associated Types](#supertraits-with-associated-types).
+
+A module that imports only the child trait can still call the supertrait's methods through a child bound. It does not need to import the supertrait.
 
 ## Trait Objects
 
@@ -864,8 +980,8 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- An enum cannot bound a type parameter by a trait with associated types.
 - A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
+- A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
 [Current Limits](/manual/current-limits) collects the observable syntax and implementation limits. [Static Semantics](/manual/static-semantics#generics-traits-and-implementations) has the cross-cutting type rules.

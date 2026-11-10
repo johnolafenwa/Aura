@@ -812,6 +812,7 @@ impl Parser {
                 "`extern` functions cannot return Aura views",
             ));
         }
+        let symbol = self.parse_extern_symbol_clause()?;
         // An indented block holds only the trusted contract.
         let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
             self.parse_signature_contract("an `extern` function")?
@@ -825,11 +826,41 @@ impl Parser {
             abi,
             name,
             name_span,
+            symbol,
             params,
             return_type,
             span,
             contracts,
         }))
+    }
+
+    /// The optional `symbol "name"` clause after an extern function's
+    /// return type: the C symbol the declaration binds, when it is not the
+    /// Aura name. `symbol` is a word only here.
+    fn parse_extern_symbol_clause(&mut self) -> Result<Option<String>> {
+        if !matches!(self.peek_kind_at(self.index), Some(TokenKind::Identifier(word)) if word == "symbol")
+        {
+            return Ok(None);
+        }
+        self.bump();
+        let token = self.bump();
+        let TokenKind::StringLiteral(symbol) = token.kind else {
+            return Err(parse_error(
+                token.span,
+                "expected the C symbol name as a string after `symbol`, such as `symbol \"sqlite3_close\"`",
+            ));
+        };
+        let valid = !symbol.is_empty()
+            && symbol
+                .chars()
+                .all(|character| character.is_ascii_graphic() && character != '"');
+        if !valid {
+            return Err(parse_error(
+                token.span,
+                "a C symbol name is one or more printable ASCII characters with no spaces",
+            ));
+        }
+        Ok(Some(symbol))
     }
 
     fn reject_reserved_ffi_signature_syntax(&self) -> Result<()> {

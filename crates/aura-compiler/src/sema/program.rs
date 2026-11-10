@@ -34,6 +34,9 @@ pub struct Program {
     /// initialization. The file loader replaces the local-only seed with the
     /// complete transitive plan for an entry program.
     pub constant_init_plan: Vec<ConstantInfo>,
+    /// The native libraries the program's packages name under `[ffi]`. The
+    /// file loader fills it in for an entry program in a package.
+    pub foreign_link: crate::package::ForeignLinkPlan,
     pub extern_functions: BTreeMap<String, ExternFunctionInfo>,
     pub opaque_handles: BTreeMap<String, OpaqueHandleInfo>,
     pub traits: BTreeMap<String, TraitInfo>,
@@ -936,6 +939,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     }
 
     let mut traits = imported_traits.clone();
+    bind_imported_supertraits(&mut traits, &module_name, &context.module_registry);
     for item in &module.items {
         let Item::Trait(trait_decl) = item else {
             continue;
@@ -1078,13 +1082,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         };
         validate_type_params(&enum_decl.type_params, enum_decl.span, "enum")?;
         let enum_type_param_scope = type_param_scope(&enum_decl.type_params);
+        let mut enum_bound_params = enum_decl.type_params.clone();
+        enum_bound_params.extend(super::assoc_bounds::hidden_bound_params(
+            &enum_decl.type_params,
+            &enum_decl.type_param_bounds,
+        ));
         let type_param_bounds = lower_trait_bounds(
             &enum_decl.type_param_bounds,
             &traits,
             &type_names,
             &type_arities,
             &canonical_type_names,
-            &enum_type_param_scope,
+            &type_param_scope(&enum_bound_params),
         )?;
         let mut variants = BTreeMap::new();
         for variant in &enum_decl.variants {
@@ -1653,10 +1662,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     inherit_trait_contracts(&mut module, &traits)?;
     let module = module;
     let mut trait_impls = Vec::new();
-    for item in &module.items {
-        let Item::Impl(impl_decl) = item else {
-            continue;
-        };
+    // An implementation that takes an associated type from a supertrait's
+    // implementation is lowered after the ones it reads.
+    let mut impl_decls = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Impl(impl_decl) => Some(impl_decl),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    impl_decls.sort_by_key(|impl_decl| inherited_assoc_depth(&impl_decl.trait_name, &traits, 16));
+    for impl_decl in impl_decls {
         validate_type_params(&impl_decl.type_params, impl_decl.span, "impl")?;
         for method in &impl_decl.methods {
             super::property_reads::reject_property_outside_class(
@@ -1670,7 +1687,9 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 format!("unknown trait `{}`", impl_decl.trait_name),
             )
         })?;
-        let impl_decl = &impl_with_assoc_type_args(impl_decl, trait_info)?;
+        let (impl_decl, open_assoc_types) =
+            impl_with_assoc_type_args(impl_decl, trait_info, &traits)?;
+        let impl_decl = &impl_decl;
         let mut implicit_type_params = BTreeSet::new();
         collect_type_ref_type_params(
             &impl_decl.for_type,
@@ -1732,6 +1751,57 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             &canonical_type_names,
             &impl_type_param_scope,
         )?;
+        let (trait_args, impl_type_params) = if open_assoc_types.is_empty() {
+            (trait_args, impl_type_params)
+        } else {
+            let checker = FunctionChecker::new(
+                &module_name,
+                &type_names,
+                &type_arities,
+                &canonical_type_names,
+                &classes,
+                &enums,
+                &functions,
+                &constants,
+                &traits,
+                &trait_impls,
+                &imported_modules,
+                &context.module_registry,
+            );
+            let found = checker.inherited_assoc_types(
+                trait_info,
+                &trait_args,
+                &for_type,
+                &open_assoc_types,
+            );
+            if let Some(missing) = open_assoc_types
+                .iter()
+                .find(|open| !found.contains_key(*open))
+            {
+                let name = missing.strip_prefix("Self.").unwrap_or(missing);
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    impl_decl.span,
+                    format!(
+                        "this implementation of `{}` must fix its associated type `{}`",
+                        trait_info.decl.name, name
+                    ),
+                )
+                .with_help(format!(
+                    "implement the supertrait that declares `{name}` for `{for_type}`, or add `type {name} = ...` before the methods"
+                )));
+            }
+            (
+                trait_args
+                    .iter()
+                    .map(|arg| substitute_type(arg, &found))
+                    .collect::<Vec<_>>(),
+                impl_type_params
+                    .into_iter()
+                    .filter(|param| !open_assoc_types.contains(param))
+                    .collect::<Vec<_>>(),
+            )
+        };
         let display = super::is_prelude_display(trait_info);
         if display {
             super::display::validate_display_target(
@@ -1782,6 +1852,22 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     impl_decl.trait_name, for_type
                 ),
             ));
+        }
+        // `list[T]` turns into an iterator through the `iter` module's own
+        // implementation, which a second one would overlap.
+        if module_name != super::iterator_loops::ITER_MODULE
+            && trait_info.module_name == super::iterator_loops::ITER_MODULE
+            && trait_info.decl.name == super::iterator_loops::INTO_ITERATOR_TRAIT
+            && matches!(&for_type, Type::Named(name, _) if name == "list")
+        {
+            return Err(Diagnostic::at(
+                impl_decl.span,
+                format!(
+                    "duplicate impl of trait `{}` for `{}`",
+                    impl_decl.trait_name, for_type
+                ),
+            )
+            .with_help("every `list[T]` implements `iter.IntoIterator[T]` already"));
         }
 
         let mut methods = BTreeMap::new();
@@ -2134,6 +2220,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         functions,
         constants,
         constant_init_plan,
+        foreign_link: Default::default(),
         extern_functions,
         opaque_handles,
         traits,
@@ -3034,7 +3121,48 @@ fn inherit_trait_contracts(
     Ok(())
 }
 
-fn impl_with_assoc_type_args(impl_decl: &ImplDecl, trait_info: &TraitInfo) -> Result<ImplDecl> {
+/// Binds the supertraits of each imported trait under their qualified
+/// names (`module.Name`), so a bound by an imported subtrait reaches the
+/// supertrait's methods without importing the supertrait as well.
+fn bind_imported_supertraits(
+    traits: &mut BTreeMap<String, TraitInfo>,
+    module_name: &str,
+    registry: &BTreeMap<String, ModuleNamespace>,
+) {
+    let mut pending = traits.values().cloned().collect::<Vec<_>>();
+    while let Some(info) = pending.pop() {
+        if info.module_name == module_name {
+            continue;
+        }
+        for supertrait in &info.supertraits {
+            let (owner, base) = match supertrait.trait_name.rsplit_once('.') {
+                Some((owner, base)) => (owner, base),
+                None => (info.module_name.as_str(), supertrait.trait_name.as_str()),
+            };
+            let Some(found) = registry
+                .get(owner)
+                .and_then(|namespace| namespace.all_traits.get(base))
+            else {
+                continue;
+            };
+            let qualified = format!("{owner}.{base}");
+            if let std::collections::btree_map::Entry::Vacant(entry) = traits.entry(qualified) {
+                entry.insert(found.clone());
+                pending.push(found.clone());
+            }
+        }
+    }
+}
+
+/// The implementation with its `type Name = T` lines as trailing trait
+/// arguments. An associated type that a supertrait fixes may be left out:
+/// it becomes a placeholder, named in the second result, for the
+/// supertrait's implementation to fill.
+fn impl_with_assoc_type_args(
+    impl_decl: &ImplDecl,
+    trait_info: &TraitInfo,
+    traits: &BTreeMap<String, TraitInfo>,
+) -> Result<(ImplDecl, Vec<String>)> {
     let declared = &trait_info.decl.assoc_types;
     for binding in &impl_decl.assoc_types {
         if !declared.iter().any(|assoc| assoc.name == binding.name) {
@@ -3048,27 +3176,59 @@ fn impl_with_assoc_type_args(impl_decl: &ImplDecl, trait_info: &TraitInfo) -> Re
             ));
         }
     }
+    let inherited = super::assoc_bounds::inherited_assoc_names(&trait_info.decl, traits);
+    let mut open = Vec::new();
     let mut impl_decl = impl_decl.clone();
     for assoc in declared {
-        let Some(binding) = impl_decl
+        let binding = impl_decl
             .assoc_types
             .iter()
-            .find(|binding| binding.name == assoc.name)
-        else {
-            return Err(Diagnostic::coded_at(
-                "AU2002",
-                impl_decl.span,
-                format!(
-                    "this implementation of `{}` must fix its associated type `{}`",
-                    trait_info.decl.name, assoc.name
-                ),
-            )
-            .with_help(format!(
-                "add `type {} = ...` before the methods",
-                assoc.name
-            )));
+            .find(|binding| binding.name == assoc.name);
+        let arg = match binding {
+            Some(binding) => binding.target.clone(),
+            None if inherited.contains(&assoc.name) => {
+                open.push(crate::ast::assoc_type_param_name(&assoc.name));
+                super::assoc_bounds::inherited_placeholder(&assoc.name, impl_decl.span)
+            }
+            None => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    impl_decl.span,
+                    format!(
+                        "this implementation of `{}` must fix its associated type `{}`",
+                        trait_info.decl.name, assoc.name
+                    ),
+                )
+                .with_help(format!(
+                    "add `type {} = ...` before the methods",
+                    assoc.name
+                )));
+            }
         };
-        impl_decl.trait_args.push(binding.target.clone());
+        impl_decl.trait_args.push(arg);
     }
-    Ok(impl_decl)
+    Ok((impl_decl, open))
+}
+
+/// How many supertrait implementations an implementation of `trait_name`
+/// may wait for before its own associated types are known.
+fn inherited_assoc_depth(
+    trait_name: &str,
+    traits: &BTreeMap<String, TraitInfo>,
+    fuel: usize,
+) -> usize {
+    let Some(info) = traits.get(trait_name).filter(|_| fuel > 0) else {
+        return 0;
+    };
+    if super::assoc_bounds::inherited_assoc_names(&info.decl, traits).is_empty() {
+        return 0;
+    }
+    1 + info
+        .decl
+        .supertraits
+        .iter()
+        .filter_map(|supertrait| supertrait.named_parts())
+        .map(|(name, _)| inherited_assoc_depth(name, traits, fuel - 1))
+        .max()
+        .unwrap_or(0)
 }

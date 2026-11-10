@@ -57,7 +57,7 @@ values. The binding package supplies their names and exact signatures.
 | Mutable byte view | `bytes: mut list[uint8]` | Copies into a same-length scratch buffer and back out. The writeback happens after the native call returns and before the result is validated. |
 | Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign call that closes or frees it. |
 
-[FFI v0](/manual/ffi) has the full scalar table, the manifest report, the
+[FFI](/manual/ffi) has the full scalar table, the manifest report, the
 safety boundary, diagnostics, and backend rules.
 
 ## Scalars And str

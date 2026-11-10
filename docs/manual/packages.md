@@ -63,8 +63,12 @@ The report lists every reachable FFI-enabled dependency by package name,
 including transitive dependencies. It does not list the root package. The
 resolver rejects duplicate, unknown, unreachable, and non-FFI entries. It also
 rejects a report that omits an FFI-enabled dependency. Every listed dependency
-must set its own `[package] allow_ffi = true`. See
-[FFI v0](/manual/ffi).
+must set its own `[package] allow_ffi = true`.
+
+The `[ffi]` table also names the native libraries the package links:
+`libraries`, `library_paths`, and `frameworks`, with `[ffi.linux]` and
+`[ffi.macos]` tables for one host. They require `allow_ffi = true`. See
+[FFI](/manual/ffi#linking-libraries).
 
 ### Source Roots
 

@@ -65,7 +65,7 @@ cannot normally be used as ordinary identifiers.
 Some of these words have further rules:
 
 - `extern` and `opaque` introduce the bodyless declarations described by
-  [FFI v0](/manual/ffi).
+  [FFI](/manual/ffi).
 - `own` is reserved everywhere. It marks consuming ordinary parameters,
   collection loops, and matches, and the consuming receiver spelling
   `own self`.

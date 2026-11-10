@@ -11,6 +11,7 @@ use crate::call::{
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
+use crate::package::ForeignLinkPlan;
 use crate::runtime_ops::RuntimeOp;
 use crate::sema::lookup_type;
 use crate::sema::{
@@ -670,6 +671,11 @@ pub struct MirModule {
     /// way. An implicit module's backends ignore them.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub borrowing: BTreeSet<String>,
+    /// The native libraries the program's `extern "C"` functions come from,
+    /// as its packages' manifests name them. The linker resolves them for a
+    /// built program, and the MIR runtime loads them before it runs one.
+    #[serde(default, skip_serializing_if = "ForeignLinkPlan::is_empty")]
+    pub foreign_link: ForeignLinkPlan,
 }
 
 /// How a module's MIR states ownership (Batch 7 step 8e).
@@ -10822,6 +10828,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     };
 
     MirModule {
+        foreign_link: program.foreign_link.clone(),
         constants,
         functions,
         classes,
@@ -12608,7 +12615,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
-            symbol: function.decl.name.clone(),
+            symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
             params: function
                 .decl
@@ -13147,6 +13154,14 @@ impl<'a> Lowerer<'a> {
                             .map(|arg| self.lower_type_ref_scoped(arg, type_params))
                             .collect(),
                     );
+                }
+                // The hidden `S.Iter` of a bound `S: IntoIterator[T]`,
+                // written as a local's type.
+                if args.is_empty()
+                    && source_name.contains('.')
+                    && self.type_param_bounds.contains_key(source_name)
+                {
+                    return Type::TypeParam(source_name.clone());
                 }
                 let source_name = match source_name.as_str() {
                     "str" => "str",
@@ -26560,6 +26575,18 @@ impl<'a> Lowerer<'a> {
                 &mut substitutions,
             );
         }
+        // A parameter that only a bound names, as `T` in
+        // `Source[T, S: IntoIterator[T]]`, comes from the implementation for `S`.
+        let mut bound_params = type_params;
+        bound_params.extend(crate::sema::hidden_bound_type_params(
+            &enum_info.decl.type_params,
+            &enum_info.type_param_bounds,
+        ));
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &enum_info.type_param_bounds,
+            &mut substitutions,
+        );
         enum_info
             .decl
             .type_params
@@ -27646,6 +27673,14 @@ impl<'a> Lowerer<'a> {
                                                 );
                                             }
                                         }
+                                        // A type parameter only a bound
+                                        // names, such as the `T` and hidden
+                                        // `S.Iter` of `S: IntoIterator[T]`.
+                                        self.infer_bound_only_type_args(
+                                            &type_params,
+                                            &function.type_param_bounds,
+                                            &mut substitutions,
+                                        );
                                         substitutions
                                     };
                                     return Some(substitute_type(

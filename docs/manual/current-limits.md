@@ -119,14 +119,13 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Foreign Functions
 
-The foreign function interface (FFI) is at version 0.
-
-- FFI v0 is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
-- Calls resolve already-loaded process-global symbols and run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte scratch copy-in/out, and non-null opaque handles. Empty views use `(NULL, 0)`.
-- There is no library-loading or link-name syntax, callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
-- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI v0](/manual/ffi).
-- Process-global lookup is supported on Unix-family hosts.
+- The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
+- Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
+- Calls run synchronously on the current worker.
+- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte views, and non-null opaque handles. Empty views use `(NULL, 0)`.
+- There is no callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
+- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI](/manual/ffi).
+- The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks

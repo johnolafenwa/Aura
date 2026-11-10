@@ -987,3 +987,62 @@ fn records_in_place_sort_only_by_positions() {
     assert_eq!(list.form(), ListForm::Typed(layout.access()));
     assert_eq!(exact_list(&list), exact(&[record(3), record(1), record(2)]));
 }
+
+#[test]
+fn to_uint8_copies_bytes_out_of_every_form_that_holds_them() {
+    let unboxed = ListElements::from_uint8(vec![1, 2, 255]);
+    assert_eq!(unboxed.to_uint8(), Some(vec![1, 2, 255]));
+
+    let int64 = ListElements::from(vec![int(0), int(7), int(255)]);
+    assert!(int64.as_uint8().is_none(), "the list keeps another form");
+    assert_eq!(int64.to_uint8(), Some(vec![0, 7, 255]));
+
+    let boxed = ListElements::Values(vec![typed(9, IntegerKind::Uint8)].into());
+    assert_eq!(boxed.to_uint8(), Some(vec![9]));
+
+    assert_eq!(ListElements::new().to_uint8(), Some(Vec::new()));
+}
+
+#[test]
+fn to_uint8_refuses_elements_that_are_not_bytes() {
+    for elements in [
+        ListElements::from(vec![int(256)]),
+        ListElements::from(vec![int(-1)]),
+        ListElements::Values(vec![Value::Bool(true)].into()),
+        ListElements::from(vec![Value::Float(1.0)]),
+    ] {
+        assert_eq!(elements.to_uint8(), None, "{elements:?}");
+    }
+}
+
+#[test]
+fn uint8_mut_lends_the_bytes_and_moves_other_forms_to_bytes_first() {
+    let mut unboxed = ListElements::from_uint8(vec![1, 2]);
+    unboxed.uint8_mut().expect("bytes")[0] = 9;
+    assert_eq!(unboxed.as_uint8(), Some(&[9, 2][..]));
+
+    let mut int64 = ListElements::from(vec![int(3), int(4)]);
+    int64.uint8_mut().expect("bytes")[1] = 8;
+    assert_eq!(int64.as_uint8(), Some(&[3, 8][..]));
+    assert_eq!(int64.len(), 2);
+
+    let mut empty = ListElements::new();
+    assert_eq!(empty.uint8_mut().map(|bytes| bytes.len()), Some(0));
+
+    let mut other = ListElements::from(vec![int(300)]);
+    assert!(other.uint8_mut().is_none());
+    assert_eq!(
+        other.to_vec(),
+        vec![int(300)],
+        "a refused list is unchanged"
+    );
+}
+
+#[test]
+fn uint8_mut_does_not_write_through_storage_another_list_shares() {
+    let mut first = ListElements::from_uint8(vec![1, 2, 3]);
+    let second = first.clone();
+    first.uint8_mut().expect("bytes")[0] = 7;
+    assert_eq!(first.as_uint8(), Some(&[7, 2, 3][..]));
+    assert_eq!(second.as_uint8(), Some(&[1, 2, 3][..]));
+}

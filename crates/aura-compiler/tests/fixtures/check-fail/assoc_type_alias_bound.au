@@ -1,0 +1,6 @@
+from iter import IntoIterator
+
+type Feed[T, S: IntoIterator[T]] = list[S]
+
+def main():
+    pass

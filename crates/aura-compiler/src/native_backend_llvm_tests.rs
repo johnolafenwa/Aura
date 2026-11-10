@@ -5,8 +5,9 @@ use object::{Object, ObjectSection, ObjectSymbol};
 use super::units::{Partition, Placement};
 use super::{host_target_machine, target_machine, LlvmModule};
 use crate::native_backend::{
-    types, AliasClass, CallConv, DataDescription, DefineError, FuncHandle, FunctionBackend, IntCC,
-    Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature, TrapCode, Var,
+    types, AliasClass, CallConv, DataDescription, DefineError, Extension, FuncHandle,
+    FunctionBackend, IntCC, Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature,
+    TrapCode, Var,
 };
 
 fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType]) -> Signature {
@@ -14,6 +15,7 @@ fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType])
         call_conv,
         params: params.to_vec(),
         returns: returns.to_vec(),
+        extensions: Vec::new(),
     }
 }
 
@@ -1271,4 +1273,65 @@ fn blocks_whose_values_are_used_after_them_keep_one_copy_and_the_false_side() {
     assert!(!ir.contains("select"), "{ir}");
     assert!(!ir.contains("icmp eq i64"), "{ir}");
     assert_eq!(ir.matches("icmp slt i64").count(), 1, "{ir}");
+}
+
+#[test]
+fn foreign_symbols_declare_once_and_calls_extend_narrow_arguments() {
+    let mut module = module();
+    let foreign = module
+        .declare_foreign_symbol("toupper")
+        .expect("a new foreign symbol should declare");
+    assert_eq!(module.declare_foreign_symbol("toupper"), Ok(foreign));
+    assert_eq!(
+        module.functions[foreign.0 as usize].linkage,
+        Linkage::Import
+    );
+
+    // A name the module already gives a function resolves to that function,
+    // whatever its signature, and a name it gives data is refused.
+    let sig = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let known = module
+        .declare_function("known", Linkage::Import, &sig)
+        .unwrap();
+    assert_eq!(module.declare_foreign_symbol("known"), Ok(known));
+    module.declare_data("table", Linkage::Local, false).unwrap();
+    assert_eq!(
+        module.declare_foreign_symbol("table"),
+        Err("Incompatible declaration of identifier: table".to_string())
+    );
+
+    let caller = signature(CallConv::C, &[types::I64], &[types::I64]);
+    define(
+        &mut module,
+        "caller",
+        Linkage::Export,
+        &caller,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            let word = builder.block_params(entry)[0];
+            let callee = builder.import_function(foreign);
+            let address = builder.func_addr(types::I64, callee);
+            let narrow = builder.ireduce(types::I32, word);
+            let byte = builder.ireduce(types::I8, word);
+            let mut foreign_signature = signature(
+                CallConv::C,
+                &[types::I32, types::I8, types::I64],
+                &[types::I32],
+            );
+            foreign_signature.extensions = vec![Extension::Sign, Extension::Zero, Extension::None];
+            let foreign_signature = builder.import_signature(foreign_signature);
+            let result = builder.call_indirect(foreign_signature, address, &[narrow, byte, word]);
+            let wide = builder.uextend(types::I64, result.results[0]);
+            builder.return_(&[wide]);
+        },
+    );
+
+    let ir = ir(&module);
+    assert!(ir.contains("declare void @toupper()"), "{ir}");
+    assert!(
+        ir.contains("(i32 signext %") && ir.contains(", i8 zeroext %"),
+        "narrow C arguments carry their extension: {ir}"
+    );
 }

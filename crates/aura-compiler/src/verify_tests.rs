@@ -433,6 +433,29 @@ fn solver_answers_parse() {
         smt::render_int("(fp #b1 #b10000000 #b10000000000000000000000)"),
         "-3"
     );
+    // A value with a long decimal expansion is written with an exponent.
+    let fp64 = |value: f64| {
+        let bits = value.to_bits();
+        format!(
+            "(fp #b{} #b{:011b} #b{:052b})",
+            bits >> 63,
+            (bits >> 52) & 0x7ff,
+            bits & ((1 << 52) - 1)
+        )
+    };
+    for (value, rendered) in [
+        (5e-324, "5e-324"),
+        (-2.5e300, "-2.5e300"),
+        (0.00001, "0.00001"),
+        (1234567.5, "1234567.5"),
+        (1e16, "1e16"),
+    ] {
+        assert_eq!(smt::render_int(&fp64(value)), rendered);
+    }
+    assert_eq!(
+        smt::render_int("(fp #b0 #b11111110 #b00000000000000000000000)"),
+        "1.7014118e38"
+    );
     for (special, rendered) in [
         ("(_ +zero 11 53)", "0.0"),
         ("(_ -zero 11 53)", "-0.0"),
@@ -3207,4 +3230,222 @@ def main():
     let report = verify_with(source, &sites).expect("a solver");
     assert_eq!(open_checks(&report), open, "{report:#?}");
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn false_float_claims_fail_with_inputs_the_program_can_have() {
+    // Each claim holds for many inputs and fails for many. The search for
+    // a failing input can outlast the time limit; an input tried directly
+    // shows the failure at once.
+    let Some(report) = assert_open(
+        r#"
+def roots(a: float64) -> float64:
+    requires a >= 1.0 and a <= 1000000.0
+    ensures result == a
+    return a.sqrt() * a.sqrt()
+
+def thirds(a: float64, b: float64) -> float64:
+    requires a >= 1.0 and a <= 1000.0 and b >= 1.0 and b <= 1000.0
+    ensures result == a
+    return a / b * b
+
+def narrow(a: float32) -> float32:
+    requires a >= 1.0 and a <= 1000.0
+    ensures result == a
+    return a / 3.0 * 3.0
+
+def branch(a: float64, n: int64) -> float64:
+    requires a >= 1.0 and a <= 1000.0 and n >= 1 and n <= 10
+    ensures result == a
+    if n > 5:
+        return a * 0.1 / 0.1
+    return a
+
+def main():
+    print(roots(4.0))
+    print(thirds(1.0, 2.0))
+    print(narrow(3.0))
+    print(branch(1.0, 1))
+"#,
+        &[
+            "4 ensures failed",
+            "9 ensures failed",
+            "14 ensures failed",
+            "19 ensures failed",
+        ],
+    ) else {
+        return;
+    };
+    let values = |line: usize| -> Vec<(String, String)> {
+        let obligation = report
+            .obligations
+            .iter()
+            .find(|obligation| obligation.span.line == line)
+            .expect("a check on the line");
+        let Status::Failed { counterexample } = &obligation.status else {
+            panic!("{obligation:?}");
+        };
+        counterexample.clone()
+    };
+    let float = |pairs: &[(String, String)], name: &str| -> f64 {
+        let (_, value) = pairs
+            .iter()
+            .find(|(input, _)| input == name)
+            .unwrap_or_else(|| panic!("no `{name}` in {pairs:?}"));
+        value.parse().expect("a float")
+    };
+    // Every reported input is inside the `requires` and breaks the claim.
+    let a = float(&values(4), "a");
+    assert!((1.0..=1e6).contains(&a) && a.sqrt() * a.sqrt() != a, "{a}");
+    let pairs = values(9);
+    let (a, b) = (float(&pairs, "a"), float(&pairs, "b"));
+    assert!((1.0..=1000.0).contains(&a) && (1.0..=1000.0).contains(&b));
+    assert!(a / b * b != a, "{a} {b}");
+    let a = float(&values(14), "a") as f32;
+    assert!((1.0..=1000.0).contains(&a) && a / 3.0 * 3.0 != a, "{a}");
+    let pairs = values(19);
+    let a = float(&pairs, "a");
+    let n: i64 = pairs
+        .iter()
+        .find(|(input, _)| input == "n")
+        .expect("n")
+        .1
+        .parse()
+        .expect("an integer");
+    assert!((1.0..=1000.0).contains(&a) && (6..=10).contains(&n));
+    assert!(a * 0.1 / 0.1 != a, "{a}");
+}
+
+/// A stand-in solver for checks whose float inputs are fixed. It answers
+/// `RANGE` when asked whether the function can have the inputs and `ANSWER`
+/// when asked a check with them, counts both in `LOG`, and answers every
+/// other check `unknown`.
+#[cfg(unix)]
+const SAMPLED_SOLVER: &str = r#"fixed=0
+range=0
+while IFS= read -r line; do
+  case "$line" in
+    *define-fun*) fixed=1 ;;
+    *"inputs the function can have"*) range=1 ;;
+  esac
+  case "$line" in
+    *check-sat*)
+      if [ "$fixed" = 0 ]; then echo unknown
+      elif [ "$range" = 1 ]; then echo range >> "LOG"; echo RANGE
+      else echo check >> "LOG"; echo ANSWER; fi
+      fixed=0
+      range=0 ;;
+    *get-value*) echo '(error "no model")' ;;
+    *echo*) echo "$line" | sed 's/.*echo "\(.*\)".*/\1/' ;;
+  esac
+done
+"#;
+
+#[cfg(unix)]
+#[test]
+fn a_float_check_is_tried_with_fixed_inputs_before_the_exact_search() {
+    let dir = script_dir("samples");
+    let program = crate::check_source(
+        "def thirds(a: float64) -> float64:\n    requires a >= 1.0 and a <= 8.0\n    ensures result == a\n    return a / 3.0 * 3.0\n\ndef whole(n: int64) -> int64:\n    requires n >= 0 and n <= 8\n    ensures result == n\n    return n + 0\n\ndef main():\n    print(thirds(3.0))\n    print(whole(1))\n",
+    )
+    .expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let run = |name: &str, range: &str, answer: &str, function: &str| {
+        let log = dir.join(format!("{name}.log"));
+        let body = SAMPLED_SOLVER
+            .replace("LOG", &log.to_string_lossy())
+            .replace("RANGE", range)
+            .replace("ANSWER", answer);
+        let options = Options {
+            solver: Some(script(&dir, "z3", &body, true)),
+            function_filter: Some(function.to_string()),
+            ..Options::default()
+        };
+        let report = verify_module(&program, &module, &options).expect("runs");
+        let log = std::fs::read_to_string(&log).unwrap_or_default();
+        let count = |kind: &str| log.lines().filter(|line| *line == kind).count();
+        (
+            open_checks(&report),
+            report.obligations.len(),
+            count("range"),
+            count("check"),
+        )
+    };
+    let all = |open: &[String], status: &str| open.iter().all(|check| check.ends_with(status));
+    // A check that fails with its inputs fixed has failed: the exact
+    // search, which this solver cannot finish, is not asked. The allowed
+    // inputs are found once for the function.
+    let (open, checks, ranged, fixed) = run("fails", "sat", "sat", "thirds");
+    assert!(checks > 0);
+    assert!(all(&open, "failed"), "{open:?}");
+    assert_eq!(
+        (open.len(), ranged, fixed),
+        (checks, float::SAMPLES, checks)
+    );
+    // Inputs that satisfy a check decide nothing: every allowed row is
+    // tried, up to the function's allowance, and the exact search answers.
+    let (open, checks, ranged, fixed) = run("holds", "sat", "unsat", "thirds");
+    assert!(all(&open, "unknown"), "{open:?}");
+    assert_eq!((open.len(), ranged), (checks, float::SAMPLES));
+    assert_eq!(
+        fixed,
+        (checks * float::SAMPLES).min(SAMPLE_CHECKS * float::SAMPLES)
+    );
+    // A solver that cannot compute a fixed check is not asked for another.
+    let (open, checks, ranged, fixed) = run("slow", "sat", "unknown", "thirds");
+    assert!(all(&open, "unknown"), "{open:?}");
+    assert_eq!((open.len(), ranged, fixed), (checks, float::SAMPLES, 1));
+    // When the function can have none of the candidates, no check is tried.
+    let (open, checks, ranged, fixed) = run("none", "unsat", "sat", "thirds");
+    assert!(all(&open, "unknown"), "{open:?}");
+    assert_eq!((open.len(), ranged, fixed), (checks, float::CANDIDATES, 0));
+    // Nor when the solver cannot say whether it can have one.
+    let (open, _, ranged, fixed) = run("undecided", "unknown", "sat", "thirds");
+    assert!(all(&open, "unknown"), "{open:?}");
+    assert_eq!((ranged, fixed), (1, 0));
+    // A function without float arithmetic has no fixed checks.
+    let (_, checks, ranged, fixed) = run("whole", "sat", "sat", "whole");
+    assert!(checks > 0);
+    assert_eq!((ranged, fixed), (0, 0));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn only_declared_float_inputs_are_fixed() {
+    let program = crate::check_source(
+        "def mix(a: float64, b: float32, n: int64, xs: list[float64]) -> float64:\n    requires len(xs) > 0 and b >= 0.0 and n >= 0\n    return a / 2.0 + xs[0]\n\ndef plain(n: int64) -> int64:\n    return n\n\ndef main():\n    print(mix(1.0, 1.0, 1, [1.0]))\n    print(plain(1))\n",
+    )
+    .expect("checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let cx = VerifyContext::new(&program, &module);
+    let preludes = |name: &str| {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name.ends_with(name))
+            .expect("the function");
+        let mut exec = exec::Exec::new(&cx, function);
+        let entry = exec.entry_state();
+        exec.assume_entry_requires(&entry);
+        exec.assume_entry_parameters(&entry);
+        exec.run(entry);
+        let fixed = sample_preludes(&exec, &[2.0]);
+        (fixed, exec.decls.len())
+    };
+    let (fixed, decls) = preludes("mix");
+    assert_eq!(fixed.len(), float::CANDIDATES);
+    for text in &fixed {
+        // Both float parameters are defined, each in its own type, and
+        // everything else is declared as before.
+        assert_eq!(text.lines().count(), decls, "{text}");
+        let defined: Vec<&str> = text
+            .lines()
+            .filter(|line| line.starts_with("(define-fun "))
+            .collect();
+        assert_eq!(defined.len(), 2, "{text}");
+        assert!(defined[0].contains("() Float64 (fp #b"), "{text}");
+        assert!(defined[1].contains("() Float32 (fp #b"), "{text}");
+    }
+    // No float input, no samples.
+    assert!(preludes("plain").0.is_empty());
 }

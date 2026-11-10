@@ -1,0 +1,58 @@
+parsed city: Lagos -1 text Lagos
+parsed tags: <other> 3 3 items
+parsed n: <other> -1 other
+parsed none: <other> -1 null
+parsed nested: <other> -1 other
+parsed empty: <other> 0 no items
+parsed absent: <missing> -2 missing
+parsed : blank -1 text blank
+changed city: Abuja -1 text Abuja
+changed tags: <other> 1 1 items
+changed n: <other> -1 other
+changed none: <other> -1 null
+changed nested: <other> -1 other
+changed empty: <other> 0 no items
+changed absent: now here -1 text now here
+changed : blank -1 text blank
+parsed again city: Lagos -1 text Lagos
+parsed again tags: <other> 3 3 items
+parsed again n: <other> -1 other
+parsed again none: <other> -1 null
+parsed again nested: <other> -1 other
+parsed again empty: <other> 0 no items
+parsed again absent: <missing> -2 missing
+parsed again : blank -1 text blank
+Lagos
+literal city: Accra -1 text Accra
+literal tags: <other> 2 2 items
+literal n: <other> -1 other
+literal none: <other> -1 null
+literal nested: <other> -1 other
+literal empty: <other> 0 no items
+literal absent: <missing> -2 missing
+literal : <missing> -2 missing
+built city: Cairo -1 text Cairo
+built tags: <other> 5 5 items
+built n: <other> -1 other
+built none: <other> -1 null
+built nested: <other> -1 other
+built empty: <other> 0 no items
+built absent: <missing> -2 missing
+built : <missing> -2 missing
+scalar city: <no object> -3 no object
+scalar tags: <no object> -3 no object
+scalar n: <no object> -3 no object
+scalar none: <no object> -3 no object
+scalar nested: <no object> -3 no object
+scalar empty: <no object> -3 no object
+scalar absent: <no object> -3 no object
+scalar : <no object> -3 no object
+array city: <no object> -3 no object
+array tags: <no object> -3 no object
+array n: <no object> -3 no object
+array none: <no object> -3 no object
+array nested: <no object> -3 no object
+array empty: <no object> -3 no object
+array absent: <no object> -3 no object
+array : <no object> -3 no object
+[city-0, city-1, city-2]

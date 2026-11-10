@@ -289,6 +289,24 @@ def root(x: float64) -> float64:
     return x.sqrt()
 ```
 
+A check those facts do not prove is then tried with sample values for the
+function's `float32` and `float64` parameters. The samples lie between the
+float literals the function names, and only samples the `requires` clauses
+allow are used. With its inputs known, the check is plain arithmetic, so a
+claim that many inputs break fails at once with one of them as the
+counterexample:
+
+```aura
+def round_trip(a: float64) -> float64:
+    requires 1.0 <= a and a <= 1000.0
+    ensures result == a
+    return a / 3.0 * 3.0
+```
+
+`aura verify` reports `AU5101` here with an input such as
+`a = 491.9299361266708`. Samples cannot prove a check, and they do not
+cover floats inside a list or a class field.
+
 Any other check is asked of the exact problem, which also finds the
 counterexample of one that fails. One the solver cannot finish in time is
 reported as `AU5102`; a contract that bounds the operands by literals often

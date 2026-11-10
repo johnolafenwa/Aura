@@ -1,0 +1,21 @@
+from iter import IntoIterator, Iterator, Step
+
+
+class Mine:
+    rest: list[int64]
+
+
+impl Iterator[int64] for Mine:
+    def next(mut self) -> Step[int64]:
+        return Step.End
+
+
+impl IntoIterator[int64] for list[int64]:
+    type Iter = Mine
+
+    def into_iter(own self) -> Mine:
+        return Mine(rest=self)
+
+
+def main():
+    print(1)

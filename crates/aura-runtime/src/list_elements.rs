@@ -585,6 +585,37 @@ impl ListElements {
         }
     }
 
+    /// A copy of the elements as bytes, when every one is an integer from 0
+    /// to 255, whatever form the list keeps them in.
+    pub fn to_uint8(&self) -> Option<Vec<u8>> {
+        if let Self::Uint8(bytes) = self {
+            return Some(bytes.to_vec());
+        }
+        self.iter()
+            .map(|element| match &*element {
+                Value::Int(integer) => integer.as_i128().and_then(|byte| u8::try_from(byte).ok()),
+                _ => None,
+            })
+            .collect()
+    }
+
+    /// The elements as bytes to change in place, when every one is an
+    /// integer from 0 to 255. A list that keeps them another way moves to
+    /// the unboxed form first, and storage another list shares is copied.
+    pub fn uint8_mut(&mut self) -> Option<&mut [u8]> {
+        if !matches!(self, Self::Uint8(_)) {
+            let bytes = self.to_uint8()?;
+            if bytes.is_empty() {
+                return Some(&mut []);
+            }
+            *self = Self::Uint8(bytes.into());
+        }
+        match self {
+            Self::Uint8(bytes) => Some(&mut bytes[..]),
+            _ => None,
+        }
+    }
+
     /// `values` in `form`, when the form keeps every one exactly.
     fn collect(form: ListForm, values: &[Value]) -> Option<Self> {
         Some(match form {

@@ -302,7 +302,7 @@ Foreign function interface (FFI) failures use these codes:
 | `AU4005` | A missing process-global symbol, a null opaque-handle result, or a runtime marshalling failure. |
 
 Native aborts, signals, memory faults, and foreign unwinds may terminate the
-process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
+process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 
 ### Ownership Codes
 

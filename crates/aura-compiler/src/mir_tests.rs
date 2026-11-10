@@ -2133,6 +2133,7 @@ def main():
 #[test]
 fn adr0038_loan_validator_rejects_alias_spelling_moves_and_use_after_end() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -2593,6 +2594,7 @@ fn adr0038_returned_contract_analysis_rejects_inconsistent_and_invalid_descripto
 #[test]
 fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
     let make_module = |instructions: Vec<Instruction>| MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -2714,6 +2716,7 @@ fn adr0038_public_mir_rejects_suspended_locked_and_overlapping_loan_accesses() {
 fn adr0038_malformed_mir_loan_instruction_diagnostics_are_specific() {
     let reject = |instructions: Vec<Instruction>, expected: &str| {
         let module = MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -2971,6 +2974,7 @@ fn adr0038_mir_reborrow_and_returned_projections_are_canonical_and_type_valid() 
                        child_ty: Type,
                        classes: Vec<MirClass>,
                        instructions: Vec<Instruction>| MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -15820,4 +15824,48 @@ fn source_locations_mark_each_statement_and_name_compiler_made_locals() {
     // The interpreter skips both markers.
     let output = crate::run_mir(&debug).expect("the debug module runs");
     assert_eq!(output.stdout, "3\n");
+}
+
+#[test]
+fn extern_calls_name_the_symbol_clause_and_modules_carry_the_link_plan() {
+    let module = lower_ffi_source(
+        r#"
+public extern "C" def c_abs(x: int32) -> int32 symbol "abs"
+public extern "C" def getpid() -> int32
+
+def main() -> int32:
+    return c_abs(getpid())
+"#,
+    );
+    let symbols: Vec<&str> = module
+        .functions
+        .iter()
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Extern(call),
+                        ..
+                    },
+                ..
+            } => Some(call.symbol.as_str()),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(symbols, ["getpid", "abs"]);
+
+    assert!(module.foreign_link.is_empty());
+    let encoded = serde_json::to_value(&module).expect("MIR serializes");
+    assert!(
+        encoded.get("foreign_link").is_none(),
+        "an empty link plan leaves serialized MIR as it was"
+    );
+    let mut linked = module.clone();
+    linked.foreign_link.libraries.push("sqlite3".to_string());
+    let encoded = serde_json::to_value(&linked).expect("MIR serializes");
+    assert_eq!(encoded["foreign_link"]["libraries"][0], "sqlite3");
+    let decoded: MirModule = serde_json::from_value(encoded).expect("MIR reads back");
+    assert_eq!(decoded.foreign_link, linked.foreign_link);
 }

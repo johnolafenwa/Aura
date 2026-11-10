@@ -21,12 +21,61 @@ in this file.
   callable on a trait object (`AU2051`). A bare trait name used as a type
   reports `AU2050`. `match` on the held type, `value as dyn Trait`, and
   trait objects in tasks come next.
+- An enum type parameter can be bounded by a trait with associated types,
+  as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
+  `S.Iter`, and a `T` named only by the bound, from the implementation for
+  `S`.
+- A trait can name a trait with associated types as a supertrait, as in
+  `trait Bag[T]: IntoIterator[T]`. `Bag` inherits `Iter`, a bound
+  `B: Bag[str]` names `B.Iter`, and a `for` loop takes a `B` value. An
+  implementation of `Bag` leaves out `type Iter`: it comes from the type's
+  implementation of `IntoIterator`. Both forms reported `AU2002` before.
+- A `for` loop takes a value whose type parameter is bounded by a subtrait
+  of `Iterator[T]` or `IntoIterator[T]`.
+- Fixed: a bound by an imported trait did not reach the methods of its
+  supertrait unless the module imported the supertrait too.
+- Fixed: a local annotated with a bound's associated type, as in
+  `items: S.Iter = source.into_iter()`, stopped the build with `AU4001`.
+- `aura verify` tries a check that reads float arithmetic with sample
+  values for the function's float parameters before the exact search. A
+  false claim that many inputs break, such as `a / 3.0 * 3.0 == a` or
+  `a.sqrt() * a.sqrt() == a`, now fails in about 0.1 s with a
+  counterexample. Before, it took 2 to 11 s or ended as `AU5102`.
+- Counterexamples print very large and very small floats with an
+  exponent, as `5e-324`.
+- Every `list[T]` implements `iter.IntoIterator[T]`, so a function bounded
+  by `S: IntoIterator[T]` takes a list. `into_iter()` consumes the list and
+  returns an `iter.ListIter[T]`. Loops written directly over a list still
+  read it in place. A program that wrote its own
+  `impl IntoIterator[...] for list[...]` now gets a duplicate-impl error
+  and can delete that implementation.
+- Fixed: a generic implementation or bound from another module rejected
+  the caller's own classes as type arguments, as in
+  `def total[I: Iterator[Box]]` called with a `Generator[Box]`, or
+  `type Iter = Generator[Box]` in an `IntoIterator[Box]` implementation.
+- Fixed: a call through a module name, such as `util.keep(items)`, lost a
+  type parameter that only a bound names, and the build stopped with
+  `AU4001`.
+- Fixed: `enumerate`, `zip`, and comprehensions over a list, set, `Span`,
+  `Range`, or `Queue` keep their builtin loop when the program also gives
+  that type an `IntoIterator` implementation.
+- FFI links native libraries. A package names them in its manifest, as in
+  `[ffi] libraries = ["sqlite3"]`, with `library_paths`, `frameworks`, and
+  `[ffi.linux]` and `[ffi.macos]` tables for one host. `aura build` passes
+  them to the linker and `aura run --backend mir` loads them.
+- A built program calls a foreign function directly, as C code does. A
+  scalar call that took about 380 ns takes under 1 ns, and a `str` or
+  `list[uint8]` argument adds a few nanoseconds. A symbol no library
+  defines is now a link error from `aura build` instead of `AU4005` at the
+  call. `aura run` still reports `AU4005`.
+- An extern function can name its C symbol:
+  `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name
   `S.Iter`; constructing the class, calling a method, or matching the impl
   infers it (and a `T` named only by the bound) from the implementation
-  for `S`. Enum bounds still report `AU2002`.
+  for `S`.
 - `aura verify` models `dict.get` and `dict.remove` as lookups of the
   modeled dict: `Found` with the stored value when the key is there, else
   `Missing`, and `remove` takes the key out.

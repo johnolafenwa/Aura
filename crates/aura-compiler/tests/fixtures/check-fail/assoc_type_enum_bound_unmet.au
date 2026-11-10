@@ -1,0 +1,10 @@
+from iter import IntoIterator
+
+
+enum Feed[S: IntoIterator[str]]:
+    Ready(items: S)
+    Empty
+
+
+def main():
+    feed = Feed.Ready(5)

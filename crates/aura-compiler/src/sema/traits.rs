@@ -159,10 +159,10 @@ pub(super) fn lower_trait_bounds(
     )
 }
 
-/// Enum and supertrait bounds cannot name a trait with associated types
-/// yet: a bound written with the trait's own type arguments would leave
-/// them unknown. Function, method, class, and impl bounds get the hidden
-/// arguments first (`assoc_bounds`).
+/// A type alias bound cannot name a trait with associated types yet: a
+/// bound written with the trait's own type arguments would leave them
+/// unknown. Function, method, class, enum, impl, and supertrait bounds get
+/// the hidden arguments first (`assoc_bounds`).
 fn reject_assoc_type_bound(
     trait_info: &TraitInfo,
     written_args: usize,
@@ -176,11 +176,11 @@ fn reject_assoc_type_bound(
         "AU2002",
         span,
         format!(
-            "only a function, method, class, or impl bound can name `{}` yet, because the trait has associated types",
+            "a type alias bound cannot name `{}` yet, because the trait has associated types",
             trait_info.decl.name
         ),
     )
-    .with_help("bound a function, class, or impl type parameter instead, or bound the iterator itself, as `I: Iterator[T]`"))
+    .with_help("bound a function, class, enum, or impl type parameter instead, or bound the iterator itself, as `I: Iterator[T]`"))
 }
 
 pub(super) fn lower_supertraits(
@@ -557,6 +557,64 @@ impl<'a> FunctionChecker<'a> {
             }
         }
         Ok(())
+    }
+
+    /// The associated types in `open` (each `Self.Name`) that an
+    /// implementation of `trait_info` for `for_type` leaves to a supertrait:
+    /// the implementation of that supertrait for `for_type` fixes them.
+    pub(super) fn inherited_assoc_types(
+        &self,
+        trait_info: &TraitInfo,
+        trait_args: &[Type],
+        for_type: &Type,
+        open: &[String],
+    ) -> HashMap<String, Type> {
+        let open = open.iter().cloned().collect::<BTreeSet<_>>();
+        let substitutions = self_type_substitutions(&trait_info.decl, trait_args, for_type.clone());
+        let name_only = |bound: &TraitBound, module: &str| {
+            self.trait_bound_identity(
+                &TraitBound {
+                    trait_name: bound.trait_name.clone(),
+                    trait_args: Vec::new(),
+                },
+                module,
+            )
+        };
+        let mut found = HashMap::new();
+        for supertrait in &trait_info.supertraits {
+            let wanted = substitute_trait_bound(supertrait, &substitutions);
+            let is_open = |arg: &Type| matches!(arg, Type::TypeParam(name) if open.contains(name));
+            if !wanted.trait_args.iter().any(is_open) {
+                continue;
+            }
+            let wanted_name = name_only(&wanted, &trait_info.module_name);
+            let matched = self.trait_impls_in_scope().find_map(|candidate| {
+                let inner = self.trait_impl_substitutions(candidate, for_type)?;
+                let implemented = self.resolved_trait_bound_for_impl(candidate, &inner);
+                self.trait_bound_closure(&implemented, for_type)
+                    .into_iter()
+                    .filter(|bound| {
+                        bound.trait_args.len() == wanted.trait_args.len()
+                            && (bound.trait_name == wanted.trait_name
+                                || name_only(bound, &candidate.module_name) == wanted_name)
+                    })
+                    .find_map(|bound| {
+                        let mut trial = found.clone();
+                        wanted
+                            .trait_args
+                            .iter()
+                            .zip(&bound.trait_args)
+                            .all(|(pattern, actual)| {
+                                type_pattern_matches(pattern, actual, &open, &mut trial)
+                            })
+                            .then_some(trial)
+                    })
+            });
+            if let Some(matched) = matched {
+                found = matched;
+            }
+        }
+        found
     }
 
     /// Checks that each associated type an implementation fixes satisfies
@@ -1062,7 +1120,21 @@ impl<'a> FunctionChecker<'a> {
         let substitutions =
             self_type_substitutions(&trait_info.decl, &bound.trait_args, self_ty.clone());
         for supertrait in &trait_info.supertraits {
-            let resolved = substitute_trait_bound(supertrait, &substitutions);
+            let mut resolved = substitute_trait_bound(supertrait, &substitutions);
+            // An imported trait names a supertrait of its own module bare:
+            // this module knows it by its qualified name.
+            if trait_info.module_name != self.module_name && !resolved.trait_name.contains('.') {
+                let qualified = format!("{}.{}", trait_info.module_name, resolved.trait_name);
+                let declared_there = self
+                    .module_registry
+                    .get(&trait_info.module_name)
+                    .is_some_and(|namespace| {
+                        namespace.all_traits.contains_key(&resolved.trait_name)
+                    });
+                if declared_there && self.traits.contains_key(&qualified) {
+                    resolved.trait_name = qualified;
+                }
+            }
             self.collect_trait_bound_closure(&resolved, self_ty, seen, closure);
         }
     }
@@ -1225,7 +1297,12 @@ impl<'a> FunctionChecker<'a> {
             info.map(|info| format!("{}.{}", info.module_name, info.decl.name))
                 .unwrap_or_else(|| format!("{module}.{}", bound.trait_name))
         };
-        Type::Named(name, bound.trait_args.clone()).canonical_key(module, self.canonical_type_names)
+        // The trait is named in `module`, and the arguments are types of
+        // this module: an imported trait or implementation has its own
+        // types qualified already, so a bare name left among the arguments
+        // came from a type this module wrote.
+        Type::Named(name, bound.trait_args.clone())
+            .canonical_key(self.module_name, self.canonical_type_names)
     }
 
     /// The trait an implementation provides, resolved in the

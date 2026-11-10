@@ -1,0 +1,6 @@
+error[AU2999]: duplicate impl of trait `IntoIterator` for `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/into_iterator_list_duplicate.au:13:1
+   |
+13 | impl IntoIterator[int64] for list[int64]:
+   | ^
+  = help: every `list[T]` implements `iter.IntoIterator[T]` already

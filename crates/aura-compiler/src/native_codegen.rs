@@ -15,10 +15,7 @@ use crate::native_backend::{
     Inst, IntCC, Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature, TrapCode, Val,
     Var,
 };
-use crate::native_runtime::{
-    encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
-    DIRECT_CALL_SAFEPOINT_INTERVAL,
-};
+use crate::native_runtime::{DirectFfiType, DIRECT_CALL_SAFEPOINT_INTERVAL};
 use crate::runtime_abi::{
     frame_stack_layout, ownership_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
 };
@@ -1784,6 +1781,68 @@ impl<'a> NativeCodegen<'a> {
             shadow_entry_copies.insert(loan);
             shadow_read_targets.insert(target);
         }
+        // A read of a `json.Value` whose payloads are a text cloned once or
+        // a list asked for its length may read a tape node instead (see
+        // `shadow_reads::node_read_loans`). A debugger shows each payload
+        // as the source names it, so a debug build makes them all.
+        let mut node_read_targets = HashSet::new();
+        let mut node_read_loans = HashSet::new();
+        let mut node_payloads = HashMap::new();
+        let node_reads = if debugged {
+            HashMap::new()
+        } else {
+            shadow_reads::node_read_loans(function, &entry_copy_loans, &lent_entry_copies)
+        };
+        for (loan, read) in node_reads {
+            let json = |local: &str| {
+                matches!(
+                    variable_types.get(local),
+                    Some(DirectType::Opaque(Type::Named(name, args)))
+                        if name == "json.Value" && args.is_empty()
+                )
+            };
+            let held = |local: &str| {
+                lookup_slots.contains(local)
+                    || lent_places.contains(local)
+                    || function.params.iter().any(|param| param.name == local)
+            };
+            if held(&read.target)
+                || lent_element_reads.payloads.contains_key(&read.target)
+                || !json(&loan)
+                || !json(&read.target)
+                || read
+                    .payloads
+                    .keys()
+                    .any(|payload| payload.contains('.') || held(payload))
+            {
+                continue;
+            }
+            shadow_entry_copies.insert(loan.clone());
+            shadow_read_targets.insert(read.target.clone());
+            node_read_targets.insert(read.target);
+            for (payload, made) in read.payloads {
+                node_payloads.insert(payload, (made, loan.clone()));
+            }
+            node_read_loans.insert(loan);
+        }
+        // What each payload read makes, and the dict each loan's test
+        // looked up, are kept in words of their own.
+        let mut node_words = |names: Vec<&String>| {
+            let mut names = names;
+            names.sort();
+            let mut words = HashMap::new();
+            for name in names {
+                let variable = Var(variable_index as u32);
+                variable_index += 1;
+                builder.declare_var(variable, types::I64);
+                let zero = builder.iconst(types::I64, 0);
+                builder.def_var(variable, zero);
+                words.insert(name.clone(), variable);
+            }
+            words
+        };
+        let node_payload_values = node_words(node_payloads.keys().collect());
+        let node_read_maps = node_words(node_read_loans.iter().collect());
         // A fused test reads a local dict where it lies, for a loan that
         // holds a box.
         let shadow_boxes = shadow_entry_copies
@@ -1928,6 +1987,7 @@ impl<'a> NativeCodegen<'a> {
             native_loan_uses,
             element_lend_temps,
             native_loans: HashMap::new(),
+            push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
             fused_entry_slots: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
@@ -1935,6 +1995,11 @@ impl<'a> NativeCodegen<'a> {
             shadow_read_targets,
             shadow_reads_taken: HashSet::new(),
             shadow_reads_released: HashSet::new(),
+            node_read_targets,
+            node_read_loans,
+            node_payloads,
+            node_payload_values,
+            node_read_maps,
             key_loops,
             key_loop_keys,
             lent_entry_copies,
@@ -3342,6 +3407,9 @@ struct FunctionCompiler<'a> {
     element_lend_temps: HashSet<String>,
     /// The element loans generated code followed when they began.
     native_loans: HashMap<String, element_loans::NativeLoan>,
+    /// The entry loans that only append scalars to their entry's list (see
+    /// `element_loans::push_entry_loans`).
+    push_entry_loans: HashSet<String>,
     /// The `contains_key` tests whose entry loan shares their probe, and
     /// the probes those tests made, by loan.
     fused_entry_probes: HashMap<String, element_loans::FusedEntryProbe>,
@@ -3371,6 +3439,19 @@ struct FunctionCompiler<'a> {
     /// The locals of `shadow_read_targets` released before any read took a
     /// shadow box, which then holds a copy of its own.
     shadow_reads_released: HashSet<String>,
+    /// The locals of `shadow_read_targets` that may hold a tape node's
+    /// address in place of a box (see `shadow_reads::node_read_loans`).
+    node_read_targets: HashSet<String>,
+    /// The loans those locals read.
+    node_read_loans: HashSet<String>,
+    /// The payload locals of those reads, each with what its read makes in
+    /// its place and its loan.
+    node_payloads: HashMap<String, (shadow_reads::NodePayload, String)>,
+    /// What each payload read made: the copy of a text or a length.
+    node_payload_values: HashMap<String, Var>,
+    /// The dict the fused test of each loan of `node_read_loans` looked
+    /// up, or null when the test asked for no node.
+    node_read_maps: HashMap<String, Var>,
     /// The loops over a dict's keys that walk its entries instead (see
     /// `key_loops`), by the keys copy they make no more, with the slot the
     /// walk is at and the slot it goes on from.
@@ -4598,6 +4679,19 @@ impl<'a> FunctionCompiler<'a> {
             Instruction::Release { place }
                 if self.key_loops.contains_key(place) || self.key_loop_keys.contains_key(place) => {
             }
+            // A payload of a node read is never made: its read makes the
+            // copy or the length its use takes (see `shadow_reads`).
+            Instruction::Assign {
+                target,
+                value:
+                    Rvalue::VariantPayload {
+                        scrutinee: Operand::Place(source),
+                        ..
+                    },
+            } if self.node_payloads.contains_key(target) => {
+                self.read_node_payload(target, source)?;
+            }
+            Instruction::Release { place } if self.node_payloads.contains_key(place) => {}
             // A shadow read holds the loan's box, which the loan's end takes
             // back.
             Instruction::Release { place } if self.shadow_reads_taken.contains(place) => {}
@@ -4885,9 +4979,16 @@ impl<'a> FunctionCompiler<'a> {
                             "direct backend cannot read shadow `{loan}` into `{target}` of another type"
                         ));
                     }
-                    // The local takes the loan's reference as it is.
-                    self.mark_temporary_opaque_owned(&loaded);
-                    self.store_place(target, loaded)?;
+                    if self.node_read_targets.contains(target.as_str()) {
+                        // The word may be a tape node's address, which
+                        // takes no tag, and only the match and the payload
+                        // reads see it.
+                        self.store_lent_word(target, loaded.values[0])?;
+                    } else {
+                        // The local takes the loan's reference as it is.
+                        self.mark_temporary_opaque_owned(&loaded);
+                        self.store_place(target, loaded)?;
+                    }
                 } else if self.lent_payloads.contains(target.as_str()) {
                     self.read_lent_union_payload(target, loan)?;
                 } else if !self.read_native_loan(target, loan)? {
@@ -5168,6 +5269,11 @@ impl<'a> FunctionCompiler<'a> {
                     scrutinee,
                     Operand::Place(place) if self.lent_places.contains(place.as_str())
                 );
+                // A node read's local may hold a tape node's address.
+                let node_read = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.node_read_targets.contains(place.as_str())
+                );
                 let scrutinee = self.load_scrutinee(scrutinee)?;
                 let DirectType::Opaque(scrutinee_ty) = &scrutinee.ty else {
                     return Err(
@@ -5206,18 +5312,35 @@ impl<'a> FunctionCompiler<'a> {
                         let enum_name = arm.enum_name.as_deref().unwrap_or(scrutinee_enum_name);
                         let variant_name = arm.variant_name.as_deref().unwrap_or_default();
                         let value = scrutinee.values[0];
-                        let typed = if lent || enum_name != scrutinee_enum_name {
-                            None
-                        } else {
-                            self.typed_variant_test(value, &scrutinee.ty, variant_name, |this| {
-                                this.variant_matches_with(test, value, enum_name, variant_name)
-                            })?
-                        };
-                        match typed {
-                            Some(matched) => matched,
-                            None => {
-                                self.variant_matches_with(test, value, enum_name, variant_name)?
+                        let boxed = |this: &mut Self| {
+                            let typed = if lent || enum_name != scrutinee_enum_name {
+                                None
+                            } else {
+                                this.typed_variant_test(
+                                    value,
+                                    &scrutinee.ty,
+                                    variant_name,
+                                    |this| {
+                                        this.variant_matches_with(
+                                            test,
+                                            value,
+                                            enum_name,
+                                            variant_name,
+                                        )
+                                    },
+                                )?
+                            };
+                            match typed {
+                                Some(matched) => Ok(matched),
+                                None => {
+                                    this.variant_matches_with(test, value, enum_name, variant_name)
+                                }
                             }
+                        };
+                        if node_read && enum_name == scrutinee_enum_name {
+                            self.node_read_variant_test(value, variant_name, boxed)?
+                        } else {
+                            boxed(self)?
                         }
                     };
                     let arm_block = self.compiled_block(&arm.label)?;
@@ -5592,6 +5715,11 @@ impl<'a> FunctionCompiler<'a> {
         rvalue: &Rvalue,
         target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
+        if !self.node_payloads.is_empty() {
+            if let Some(made) = self.take_node_payload(rvalue)? {
+                return Ok(made);
+            }
+        }
         match rvalue {
             Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
@@ -7607,110 +7735,6 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
-    fn compile_extern_call(
-        &mut self,
-        call: &MirExternCall,
-        args: &[MirArg],
-        target: &DirectType,
-    ) -> std::result::Result<ValueRef, String> {
-        if call.abi != "C" {
-            return Err(format!(
-                "direct backend received unsupported FFI ABI `{}`",
-                call.abi
-            ));
-        }
-        if args.len() != call.params.len() {
-            return Err(format!(
-                "direct backend expected {} argument(s) for extern `{}`, found {}",
-                call.params.len(),
-                call.symbol,
-                args.len()
-            ));
-        }
-
-        let mut spec_params = Vec::with_capacity(call.params.len());
-        let mut expected_types = Vec::with_capacity(call.params.len());
-        for param in &call.params {
-            spec_params.push(DirectFfiParam {
-                passing: match param.passing {
-                    MirReceiverKind::Value => ReceiverKind::Value,
-                    MirReceiverKind::Borrow => ReceiverKind::Borrow,
-                    MirReceiverKind::BorrowMut => ReceiverKind::BorrowMut,
-                },
-                ty: direct_ffi_type_for_source(&param.ty, Some(param.passing))?,
-            });
-            expected_types.push(ensure_direct_type(
-                &param.ty,
-                &self.classes,
-                &format!("extern parameter `{}`", param.name),
-            )?);
-        }
-        let result_spec = direct_ffi_type_for_source(&call.return_type, None)?;
-        let encoded_spec = encode_direct_ffi_call_spec(&DirectFfiCallSpec {
-            symbol: call.symbol.clone(),
-            params: spec_params,
-            result: result_spec,
-        });
-        let (spec_ptr, spec_len) = self.string_constant(&encoded_spec)?;
-        let buffer_size = match u32::try_from(args.len().max(1).saturating_mul(8)) {
-            Ok(buffer_size) => buffer_size,
-            Err(_) => return Err("direct backend FFI argument buffer is too large".to_string()),
-        };
-        let buffer_slot = self.builder.create_sized_stack_slot(buffer_size, 3);
-        let buffer = self.builder.stack_addr(types::I64, buffer_slot, 0);
-        let mut writebacks = Vec::new();
-        for (index, ((argument, param), expected)) in args
-            .iter()
-            .zip(&call.params)
-            .zip(&expected_types)
-            .enumerate()
-        {
-            let loaded = self.load_operand_for_target(&argument.value, expected)?;
-            let coerced = self.coerce_value(loaded, expected)?;
-            let boxed = self.ensure_opaque(coerced)?;
-            self.builder
-                .store(MemFlags::new(), boxed.values[0], buffer, (index as i32) * 8);
-            match (param.passing, argument.writeback_place.as_ref()) {
-                (MirReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((place.clone(), boxed, expected.clone()));
-                }
-                (MirReceiverKind::BorrowMut, None) => {
-                    return Err(format!(
-                        "direct backend extern mutable argument {} has no writeback place",
-                        index + 1
-                    ));
-                }
-                (_, Some(_)) => {
-                    return Err(format!(
-                        "direct backend extern argument {} unexpectedly requests writeback",
-                        index + 1
-                    ));
-                }
-                (_, None) => {}
-            }
-        }
-        let count = self.builder.iconst(types::I64, call.params.len() as i64);
-        let invocation = self.builder.call(
-            self.runtime[RuntimeFn::FfiCall],
-            &[spec_ptr, spec_len, buffer, count],
-        );
-        let raw_result = invocation.results[0];
-
-        for (place, boxed, expected) in writebacks {
-            let writeback = self.coerce_value(boxed, &expected)?;
-            self.store_place(&place, writeback)?;
-        }
-
-        let boxed_result = self.owned_opaque_result(vec![raw_result], call.return_type.clone());
-        let return_direct = ensure_direct_type(
-            &call.return_type,
-            &self.classes,
-            &format!("extern return from `{}`", call.symbol),
-        )?;
-        let result = self.coerce_value(boxed_result, &return_direct)?;
-        self.coerce_value(result, target)
-    }
-
     fn compile_function_value_call(
         &mut self,
         function: &Operand,
@@ -9324,10 +9348,18 @@ impl<'a> FunctionCompiler<'a> {
             || self
                 .lent_elements
                 .contains_key(place.split('.').next().unwrap_or(place))
-            || self.native_loans.contains_key(place.as_str())
         {
             return Ok(None);
         }
+        // A followed loan of a dict entry that only appends keeps the
+        // address of the entry's list (see `element_loans`).
+        let entry_list = match self.native_loans.get(place.as_str()) {
+            Some(loan) => match loan.entry_list() {
+                Some(address) => Some(address),
+                None => return Ok(None),
+            },
+            None => None,
+        };
         let resolved = self.resolve_view_place(place)?;
         let [alternative] = resolved.alternatives.as_slice() else {
             return Ok(None);
@@ -9360,8 +9392,6 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             value
         };
-        let (collection, projection) = self.load_element_path_root(&root_place)?;
-        let path = self.element_path_operands(&projection, &elements)?;
         let mut kind_words = Vec::new();
         self.push_runtime_call_words(op.runtime_call(), &mut kind_words);
         let [kind_word] = kind_words.as_slice() else {
@@ -9369,6 +9399,29 @@ impl<'a> FunctionCompiler<'a> {
                 "direct backend has no scalar kind for the push on `{place}`"
             ));
         };
+        let kind_word = *kind_word;
+        // The entry's list takes the bits where the dict keeps it. A loan
+        // that missed walks the path, as any other loan does.
+        let join_block = entry_list.map(|address| {
+            let slot_block = self.builder.create_block();
+            let walk_block = self.builder.create_block();
+            let join_block = self.builder.create_block();
+            let slot = self.builder.use_var(address);
+            self.builder.brif(slot, slot_block, &[], walk_block, &[]);
+            self.builder.switch_to_block(slot_block);
+            self.builder.seal_block(slot_block);
+            self.builder.call(
+                self.runtime[RuntimeFn::ValueSlotPushScalar],
+                &[slot, bits, kind_word],
+            );
+            self.builder.jump(join_block, &[]);
+            self.builder.switch_to_block(walk_block);
+            self.builder.seal_block(walk_block);
+            join_block
+        });
+        let caller_owned = self.layout_scratch.clone();
+        let (collection, projection) = self.load_element_path_root(&root_place)?;
+        let path = self.element_path_operands(&projection, &elements)?;
         self.builder.call(
             self.runtime[RuntimeFn::ElementPathPushScalar],
             &[
@@ -9378,11 +9431,18 @@ impl<'a> FunctionCompiler<'a> {
                 path.selectors_ptr,
                 path.count,
                 bits,
-                *kind_word,
+                kind_word,
                 path.line,
                 path.column,
             ],
         );
+        if let Some(join_block) = join_block {
+            // The walk's temporaries end in the block that made them.
+            self.release_temporary_owned_since(&caller_owned);
+            self.builder.jump(join_block, &[]);
+            self.builder.switch_to_block(join_block);
+            self.builder.seal_block(join_block);
+        }
         // As after any instruction, the temporaries the loads made end here.
         self.release_all_temporary_owned();
         self.cancel_unconsumed_retains();
@@ -15101,6 +15161,20 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            DictOp::SetIndex if key_direct_ty == DirectType::Scalar(ScalarKind::Int64) => {
+                // An `int64` key goes in as its word, with no box.
+                let loaded =
+                    self.load_operand_with_integer_hint(&args[0].value, Some(ScalarKind::Int64))?;
+                let key = self.coerce_value(loaded, &key_direct_ty)?.values[0];
+                let value = self.load_operand_as_opaque_direct(&args[1].value, &value_direct_ty)?;
+                let value = self.transfer_owned_opaque_value(&value);
+                self.builder.call(
+                    self.runtime[RuntimeFn::MapSetIndexInt64Key],
+                    &[map, key, value],
+                );
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             DictOp::Set | DictOp::SetIndex => {
                 let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
                 let value = self.load_operand_as_opaque_direct(&args[1].value, &value_direct_ty)?;
@@ -18528,6 +18602,8 @@ mod element_loans;
 mod elements;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_foreign.rs"]
+mod foreign;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

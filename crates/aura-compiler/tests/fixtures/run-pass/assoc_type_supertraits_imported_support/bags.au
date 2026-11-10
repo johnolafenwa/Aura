@@ -1,0 +1,56 @@
+from iter import IntoIterator, Generator
+
+
+public trait Bag[T]: IntoIterator[T]:
+    def size(self) -> int64
+
+
+public class Pair:
+    public left: int64
+    public right: int64
+
+
+def both(pair: own Pair) -> Generator[int64]:
+    yield pair.left
+    yield pair.right
+
+
+impl IntoIterator[int64] for Pair:
+    type Iter = Generator[int64]
+
+    def into_iter(own self) -> Generator[int64]:
+        return both(self)
+
+
+impl Bag[int64] for Pair:
+    def size(self) -> int64:
+        return 2
+
+
+public def total[B: Bag[int64]](bag: own B) -> int64:
+    mut sum = 0
+    for n in bag:
+        sum += n
+    return sum
+
+
+public trait Named:
+    def name(self) -> str
+
+
+public trait Pet: Named:
+    def legs(self) -> int64
+
+
+public class Dog:
+    public tag: str
+
+
+impl Named for Dog:
+    def name(self) -> str:
+        return self.tag.clone()
+
+
+impl Pet for Dog:
+    def legs(self) -> int64:
+        return 4
