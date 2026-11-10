@@ -1210,6 +1210,228 @@ fn scalar_entry_loans_read_a_parsed_objects_nodes_where_they_lie() {
 }
 
 #[test]
+fn matched_entry_loans_read_text_and_array_lengths_at_a_parsed_objects_nodes() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_json_array_len, aura_direct_json_string_copy,
+        aura_direct_map_get_node_shadow,
+    };
+    let layout = json_layout(FIRST_TEST_ACCESS + 68);
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let tape = crate::json_tape::JsonTape::parse(
+                r#"{"s": "caf\u00e9", "a": [1, [2], 3], "n": 7}"#,
+                8,
+                100,
+            )
+            .expect("parses");
+            let node = crate::json_tape::JsonNode::root(tape);
+            let fields = node.payload().expect("a dict");
+            let doc = boxed_value(node.into_value());
+            let map = boxed_value(fields);
+            let [key_s, key_a, key_n, key_z] =
+                ["s", "a", "n", "z"].map(|key| boxed_value(text(key)));
+            let key_int = boxed_value(int64(1));
+            let text_of = |boxed: *mut crate::native_runtime::OpaqueValue| {
+                let value = unsafe { value_ref(boxed) };
+                unsafe { aura_direct_release_value(boxed) };
+                match value {
+                    Value::String(text) => text.as_str().to_string(),
+                    other => panic!("a str, not {other:?}"),
+                }
+            };
+            // The value's own box and the dict over its tape lend the same
+            // nodes, which hold the text and the length.
+            for object in [doc, map] {
+                let lent = aura_direct_map_get_node_shadow(object, key_s);
+                assert_eq!(lent as usize & 3, 2, "a node's address");
+                assert_eq!(
+                    text_of(unsafe { aura_direct_json_string_copy(object, lent) }),
+                    "caf\u{e9}"
+                );
+                let lent = aura_direct_map_get_node_shadow(object, key_a);
+                assert_eq!(lent as usize & 3, 2, "a node's address");
+                assert_eq!(unsafe { aura_direct_json_array_len(lent) }, 3);
+                assert!(aura_direct_map_get_node_shadow(object, key_z).is_null());
+            }
+            // A key that is not a `str` looks the entries up as values, and
+            // the dict then hands out a box, which reads the same.
+            assert!(aura_direct_map_get_node_shadow(map, key_int).is_null());
+            for (key, read) in [(key_s, 0), (key_a, 1)] {
+                let shadow = aura_direct_map_get_node_shadow(map, key);
+                assert_eq!(shadow as usize & 3, 0, "a box");
+                if read == 0 {
+                    let copy =
+                        unsafe { aura_direct_json_string_copy(std::ptr::null_mut(), shadow) };
+                    assert_eq!(text_of(copy), "caf\u{e9}");
+                } else {
+                    assert_eq!(unsafe { aura_direct_json_array_len(shadow) }, 3);
+                }
+                unsafe { aura_direct_end_shadow(shadow) };
+            }
+            // A value another thread can reach hands out a box too.
+            unsafe { share_direct_value(doc) };
+            let boxed = aura_direct_map_get_node_shadow(doc, key_a);
+            assert_eq!(boxed as usize & 3, 0, "a box");
+            assert_eq!(unsafe { aura_direct_json_array_len(boxed) }, 3);
+            unsafe { aura_direct_end_shadow(boxed) };
+            assert!(aura_direct_map_get_node_shadow(doc, key_z).is_null());
+
+            // Variants kept in the layout, and as values, read the same.
+            let elements = vec![
+                json_typed(layout, "Int", vec![int64(1)]),
+                json_typed(layout, "Null", Vec::new()),
+            ];
+            let list = Value::Vec(crate::runtime_value::VecValue {
+                element_type: crate::runtime_value::SharedType::named("json.Value"),
+                elements: elements.into(),
+                str_view: Default::default(),
+            });
+            let plain = |name: &str, payload: Value| {
+                Value::EnumVariant(EnumVariantValue {
+                    enum_name: layout.enum_name().clone(),
+                    variant_name: RuntimeName::from(name),
+                    payloads: VariantPayloads::Values(vec![payload]),
+                })
+            };
+            for string in [
+                json_typed(layout, "String", vec![text("typed")]),
+                plain("String", text("typed")),
+            ] {
+                let boxed = boxed_value(string);
+                let copy = unsafe { aura_direct_json_string_copy(std::ptr::null_mut(), boxed) };
+                assert_eq!(text_of(copy), "typed");
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            for array in [
+                json_typed(layout, "Array", vec![list.clone()]),
+                plain("Array", list),
+            ] {
+                let boxed = boxed_value(array);
+                assert_eq!(unsafe { aura_direct_json_array_len(boxed) }, 2);
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            for boxed in [key_s, key_a, key_n, key_z, key_int, map, doc] {
+                unsafe { aura_direct_release_value(boxed) };
+            }
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the reads run");
+}
+
+#[test]
+fn a_shadow_of_a_parsed_document_has_the_shape_of_its_type() {
+    use crate::native_runtime::{
+        aura_direct_end_shadow, aura_direct_map_get_int64_shadow,
+        aura_direct_map_set_index_int64_key,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            // The thread that registers the layout reads it as `json.Value`'s.
+            let layout = json_layout(FIRST_TEST_ACCESS + 68);
+            let tape = crate::json_tape::JsonTape::parse(r#"{"s": "x"}"#, 8, 100).expect("parses");
+            let doc = boxed_value(crate::json_tape::JsonNode::root(tape).into_value());
+            let docs = crate::native_runtime::aura_direct_map_empty();
+            aura_direct_map_set_index_int64_key(docs, 4, doc);
+            // The tag of the static type that follows the read finds the
+            // shape already there.
+            let shadow = aura_direct_map_get_int64_shadow(docs, 4);
+            let header = unsafe { &*shadow };
+            assert_eq!(header.shape_tag.load(Ordering::Relaxed), layout.shape_tag());
+            unsafe { aura_direct_end_shadow(shadow) };
+            assert!(aura_direct_map_get_int64_shadow(docs, 5).is_null());
+            unsafe { aura_direct_release_value(docs) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the read runs");
+}
+
+#[test]
+fn a_matched_entry_read_of_another_variant_traps() {
+    use crate::native_runtime::{
+        aura_direct_json_array_len, aura_direct_json_string_copy, aura_direct_map_get_node_shadow,
+    };
+    let layout = json_layout(FIRST_TEST_ACCESS + 68);
+    fn parsed() -> *mut crate::native_runtime::OpaqueValue {
+        let tape = crate::json_tape::JsonTape::parse(r#"{"s": "x", "a": [1], "n": 7}"#, 8, 100)
+            .expect("parses");
+        boxed_value(crate::json_tape::JsonNode::root(tape).into_value())
+    }
+    // A node of another tag.
+    for key in ["a", "n"] {
+        let message = runtime_failure(move || {
+            let doc = parsed();
+            let lent = aura_direct_map_get_node_shadow(doc, boxed_value(text(key)));
+            unsafe { aura_direct_json_string_copy(doc, lent) };
+        });
+        assert!(
+            message.contains("expected a `json.Value.String`"),
+            "{message}"
+        );
+    }
+    for key in ["s", "n"] {
+        let message = runtime_failure(move || {
+            let doc = parsed();
+            let lent = aura_direct_map_get_node_shadow(doc, boxed_value(text(key)));
+            unsafe { aura_direct_json_array_len(lent) };
+        });
+        assert!(
+            message.contains("expected a `json.Value.Array`"),
+            "{message}"
+        );
+    }
+    // A node read through a value that is no document of its tape.
+    let message = runtime_failure(|| {
+        let doc = parsed();
+        let lent = aura_direct_map_get_node_shadow(doc, boxed_value(text("s")));
+        unsafe { aura_direct_json_string_copy(boxed_value(int64(1)), lent) };
+    });
+    assert!(
+        message.contains("expected a `json.Value.String`"),
+        "{message}"
+    );
+    // Boxes of other values.
+    fn other(layout: &'static EnumLayout, index: usize) -> Value {
+        let plain = |name: &str| {
+            Value::EnumVariant(EnumVariantValue {
+                enum_name: layout.enum_name().clone(),
+                variant_name: RuntimeName::from(name),
+                payloads: VariantPayloads::Values(vec![int64(1)]),
+            })
+        };
+        match index {
+            0 => int64(1),
+            1 => crate::json_tape::JsonNode::root(
+                crate::json_tape::JsonTape::parse("7", 8, 100).expect("parses"),
+            )
+            .into_value(),
+            2 => json_typed(layout, "Int", vec![int64(1)]),
+            3 => plain("String"),
+            _ => plain("Array"),
+        }
+    }
+    for index in 0..5 {
+        let message = runtime_failure(move || {
+            let boxed = boxed_value(other(layout, index));
+            unsafe { aura_direct_json_string_copy(std::ptr::null_mut(), boxed) };
+        });
+        assert!(
+            message.contains("expected a `json.Value.String`"),
+            "{message}"
+        );
+        let message = runtime_failure(move || {
+            let boxed = boxed_value(other(layout, index));
+            unsafe { aura_direct_json_array_len(boxed) };
+        });
+        assert!(
+            message.contains("expected a `json.Value.Array`"),
+            "{message}"
+        );
+    }
+}
+
+#[test]
 fn lookups_read_a_parsed_objects_own_box_as_its_dict() {
     use crate::native_runtime::{
         aura_direct_end_shadow, aura_direct_map_get_payload, aura_direct_map_get_shadow,

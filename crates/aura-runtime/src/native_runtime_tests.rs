@@ -29312,6 +29312,69 @@ fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
 }
 
 #[test]
+fn entry_loans_append_scalars_to_the_list_the_map_keeps() {
+    use super::DirectScalarKind as K;
+    let lists = super::aura_direct_map_empty();
+    for key in [1, 2] {
+        super::aura_direct_map_set_index_int64_key(lists, key, super::aura_direct_vec_empty());
+    }
+    // A store under a key the map holds replaces the value.
+    super::aura_direct_map_set_index_int64_key(lists, 2, string_value("text"));
+    let slot = super::aura_direct_map_value_slot_int64(lists, 1, 1);
+    assert!(!slot.is_null());
+    unsafe {
+        super::aura_direct_value_slot_push_scalar(slot, 7, K::Int64 as i64);
+        super::aura_direct_value_slot_push_scalar(slot, -8, K::Int64 as i64);
+    }
+    match unsafe { value_ref(lists) } {
+        Value::Map(map) => {
+            assert_eq!(map.entries.len(), 2);
+            match map.entries.value_of_i64(1) {
+                Some(Value::Vec(vector)) => {
+                    assert_eq!(vector.elements.len(), 2);
+                    assert_eq!(*vector.elements.at(0), K::Int64.value(7));
+                    assert_eq!(*vector.elements.at(1), K::Int64.value(-8));
+                }
+                other => panic!("expected a list, found {other:?}"),
+            }
+            assert_eq!(
+                map.entries.value_of_i64(2),
+                Some(&Value::String("text".into()))
+            );
+        }
+        other => panic!("expected a dict, found {other:?}"),
+    }
+    // A float32 narrows an empty list, as a push on the list's own box does.
+    let floats = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_key(floats, 0, super::aura_direct_vec_empty());
+    let slot = super::aura_direct_map_value_slot_int64(floats, 0, 1);
+    let bits = 1.5f64.to_bits() as i64;
+    unsafe { super::aura_direct_value_slot_push_scalar(slot, bits, K::Float32 as i64) };
+    match unsafe { value_ref(floats) } {
+        Value::Map(map) => match map.entries.value_of_i64(0) {
+            Some(Value::Vec(vector)) => {
+                assert_eq!(*vector.elements.at(0), K::Float32.value(bits));
+            }
+            other => panic!("expected a list, found {other:?}"),
+        },
+        other => panic!("expected a dict, found {other:?}"),
+    }
+    // An entry that holds no list reports what it holds.
+    let slot = super::aura_direct_map_value_slot_int64(lists, 2, 1) as usize;
+    let message = capture_direct_boundary_error_message(move || unsafe {
+        super::aura_direct_value_slot_push_scalar(slot as *mut Value, 1, K::Int64 as i64);
+    });
+    assert!(
+        message.contains("expected `list`, found `str`"),
+        "{message}"
+    );
+    unsafe {
+        release_value(lists);
+        release_value(floats);
+    }
+}
+
+#[test]
 fn entry_loans_read_and_write_values_where_the_map_keeps_them() {
     let ints = super::aura_direct_map_empty();
     for key in 0..3 {

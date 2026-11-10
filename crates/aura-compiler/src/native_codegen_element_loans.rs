@@ -413,6 +413,10 @@ enum LoanTarget {
     /// A box slot at the address, which the loan lends: an element of a
     /// list of boxes, or a field box of a class element.
     Slot,
+    /// The `list` value of a dict entry, in the runtime value at the
+    /// address, which the loan only appends scalars to (see
+    /// [`push_entry_loans`]).
+    EntryList,
 }
 
 #[derive(Clone, Debug)]
@@ -426,6 +430,118 @@ enum LoanPlace {
     /// The `int64` value of a dict entry, in the runtime value at the
     /// address (see `aura_direct_map_value_slot`).
     MapValue,
+}
+
+impl NativeLoan {
+    /// The address of the entry's list when the loan is of a dict entry
+    /// it only appends to.
+    pub(super) fn entry_list(&self) -> Option<Var> {
+        matches!(self.target, LoanTarget::EntryList).then_some(self.address)
+    }
+}
+
+/// `xs.append(x)` of a scalar through a loan, as its four instructions
+/// lower it: a mutable `Lend` of the loan, the push on the lent temporary,
+/// the `EndLend`, and the `Eval` of the push's unit result. Gives the loan
+/// when `instructions` start with them.
+fn scalar_push(instructions: &[Instruction]) -> Option<&str> {
+    let [Instruction::Lend {
+        place,
+        temp,
+        mutable: true,
+    }, Instruction::Assign {
+        target: pushed,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Runtime {
+                        op: RuntimeOp::List(ListOp::PushScalar(_)),
+                        receiver: Some(Operand::Place(receiver)),
+                        ..
+                    },
+                args,
+                ..
+            },
+    }, Instruction::EndLend {
+        place: ended,
+        temp: ended_temp,
+        mutable: true,
+    }, Instruction::Eval {
+        value: Operand::Place(evaluated),
+    }, ..] = instructions
+    else {
+        return None;
+    };
+    let [argument] = args.as_slice() else {
+        return None;
+    };
+    let names_loan = matches!(
+        &argument.value,
+        Operand::Place(named) | Operand::MovePlace(named) if root(named) == place || named == temp
+    );
+    (receiver == temp
+        && ended == place
+        && ended_temp == temp
+        && evaluated == pushed
+        && !place.contains('.')
+        && !names_loan)
+        .then_some(place.as_str())
+}
+
+/// The mutable entry loans of `function` that only append scalars to the
+/// list they reach: `match mut index.lookup(key): case Lookup.Found(ids):
+/// ids.append(id)` lowers to one. Besides its beginning and its end, each
+/// is named only by pushes as [`scalar_push`] reads them. Generated code
+/// finds such a loan's entry once, when the loan begins, and each push
+/// appends to the list there (see `aura_direct_value_slot_push_scalar`).
+pub(super) fn push_entry_loans(function: &MirFunction) -> HashSet<String> {
+    let mut loans = HashSet::new();
+    let mut rejected = HashSet::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::BeginElementLoan {
+                loan,
+                projection,
+                mutable,
+                ..
+            } = instruction
+            {
+                // A loan begun twice is two loans under one name.
+                if !(*mutable && projection.is_empty() && loans.insert(loan.as_str())) {
+                    rejected.insert(loan.as_str());
+                }
+            }
+        }
+    }
+    for block in &function.blocks {
+        let mut index = 0;
+        while index < block.instructions.len() {
+            let instruction = &block.instructions[index];
+            if scalar_push(&block.instructions[index..]).is_some_and(|loan| loans.contains(loan)) {
+                index += 4;
+                continue;
+            }
+            index += 1;
+            // Anything else that names a loan, besides its end, may read or
+            // change the list another way.
+            if matches!(instruction, Instruction::EndLoan { .. }) {
+                continue;
+            }
+            let mut mentions = Vec::new();
+            instruction_place_mentions(instruction, &mut mentions);
+            if let Instruction::Assign { target, .. } = instruction {
+                mentions.push(target);
+            }
+            rejected.extend(mentions.into_iter().map(root));
+        }
+        for mention in terminator_place_mentions(&block.terminator) {
+            rejected.insert(root(mention));
+        }
+    }
+    loans
+        .difference(&rejected)
+        .map(|loan| loan.to_string())
+        .collect()
 }
 
 /// Where the list a loan selects from lies.
@@ -519,7 +635,7 @@ impl FunctionCompiler<'_> {
         let list_box = self.load_loan_list(&list, slow_block)?;
         let index = self.builder.use_var(selector.variable);
         let place_address = match &target {
-            LoanTarget::Place(LoanPlace::MapValue) => {
+            LoanTarget::Place(LoanPlace::MapValue) | LoanTarget::EntryList => {
                 return Err(format!(
                     "direct backend followed list loan `{loan}` to a dict entry"
                 ));
@@ -747,6 +863,10 @@ impl FunctionCompiler<'_> {
             (
                 if lend {
                     RuntimeFn::MapGetScalarLent
+                } else if shadow && field.is_none() && self.node_read_loans.contains(&loan) {
+                    // A node read takes a tape node's address where the
+                    // dict reads a parsed document (see `shadow_reads`).
+                    RuntimeFn::MapGetNodeShadow
                 } else if shadow {
                     RuntimeFn::MapGetShadow
                 } else {
@@ -764,6 +884,10 @@ impl FunctionCompiler<'_> {
         let copy = match field {
             None => {
                 let map_box = self.load_root(map)?.values[0];
+                if find == RuntimeFn::MapGetNodeShadow {
+                    // A payload read finds a node's text through the dict.
+                    self.builder.def_var(self.node_read_maps[&loan], map_box);
+                }
                 self.builder
                     .call(self.runtime[find], &[map_box, key])
                     .results[0]
@@ -897,7 +1021,8 @@ impl FunctionCompiler<'_> {
             return;
         };
         let mut copy = self.builder.use_var(variable);
-        if self.lent_fused_copies.contains(loan) {
+        // A lent value and a tape node's address are no box to hand back.
+        if self.lent_fused_copies.contains(loan) || self.node_read_loans.contains(loan) {
             copy = self.owned_lent_word(copy);
         }
         let release_block = self.builder.create_block();
@@ -926,10 +1051,19 @@ impl FunctionCompiler<'_> {
         selector: &DirectElementSelector,
     ) -> std::result::Result<bool, String> {
         let fused = self.fused_entry_slots.remove(loan);
-        if usage.lends
-            || !selector.projection.is_empty()
-            || self.local_type(loan)? != DirectType::Scalar(ScalarKind::Int64)
-        {
+        // A loan that only appends scalars reaches its entry's list, and
+        // any other reads and writes its entry's `int64`.
+        let pushes = usage.lends && usage.mutable && self.push_entry_loans.contains(loan);
+        let reached = match self.local_type(loan)? {
+            DirectType::Scalar(ScalarKind::Int64) if !usage.lends => {
+                LoanTarget::Place(LoanPlace::MapValue)
+            }
+            DirectType::Opaque(Type::Named(name, _)) if pushes && name == "list" => {
+                LoanTarget::EntryList
+            }
+            _ => return Ok(false),
+        };
+        if !selector.projection.is_empty() {
             return Ok(false);
         }
         let find = match &selector.selector_ty {
@@ -988,7 +1122,7 @@ impl FunctionCompiler<'_> {
             loan.to_string(),
             NativeLoan {
                 address,
-                target: LoanTarget::Place(LoanPlace::MapValue),
+                target: reached,
             },
         );
         Ok(true)

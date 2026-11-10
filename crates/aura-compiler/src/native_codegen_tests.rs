@@ -15439,6 +15439,90 @@ def main():
 }
 
 #[test]
+fn matched_json_fields_read_their_node_and_entry_appends_follow_their_entry() {
+    let source = r#"
+import json
+
+class Database:
+    docs: dict[int64, json.Value] = {}
+    by_city: dict[str, list[int64]] = {}
+
+    def insert(mut self, id: int64, city: own str, doc: own json.Value):
+        match mut self.by_city.lookup(city):
+            case Lookup.Found(ids):
+                ids.append(id)
+            case Lookup.Missing:
+                self.by_city[city] = [id]
+        self.docs[id] = doc
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return ""
+                case Lookup.Missing:
+                    return ""
+        case _:
+            return ""
+
+def field_len(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Array(items):
+                            return items.len()
+                        case _:
+                            return 0
+                case Lookup.Missing:
+                    return 0
+        case _:
+            return 0
+
+def main():
+    mut db = Database()
+    doc = json.Value.Object({"city": json.Value.String("Lagos")})
+    print(field_len(doc, "tags"))
+    city = field_str(doc, "city")
+    db.insert(1, city, doc)
+"#;
+    let mir = lower_source_to_mir(source).expect("the reads should lower");
+    let object = emit_host_object(&mir).expect("the reads should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    // The field reads take a node's address and make the text's copy or
+    // the length from it, the append goes to the list its entry keeps, and
+    // the document is stored under its unboxed key.
+    let direct = [
+        "aura_direct_map_get_node_shadow",
+        "aura_direct_json_string_copy",
+        "aura_direct_json_array_len",
+        "aura_direct_value_slot_push_scalar",
+        "aura_direct_map_set_index_int64_key",
+    ];
+    for required in direct {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    assert!(!referenced.contains("aura_direct_map_get_shadow"));
+    // A debugger shows each payload the source names, so a debug build
+    // makes them.
+    let objects = super::emit_host_debug_objects_with_metadata(&mir, "reads.au", source)
+        .expect("the reads should compile for a debugger");
+    let referenced = objects
+        .iter()
+        .flat_map(|object| exact_referenced_symbols(object))
+        .collect::<BTreeSet<_>>();
+    for skipped in &direct[..3] {
+        assert!(!referenced.contains(*skipped), "{skipped}: {referenced:?}");
+    }
+}
+
+#[test]
 fn lookups_copy_their_found_value_when_the_dict_can_change() {
     // Each program changes, hands on, or keeps the found value, so the
     // lookup copies it.

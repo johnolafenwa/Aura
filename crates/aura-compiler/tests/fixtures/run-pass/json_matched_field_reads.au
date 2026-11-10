@@ -1,0 +1,130 @@
+# A field of a json object that is read only to be matched: its text is
+# cloned once, or its array is asked its length. The document is parsed,
+# spelled as a literal, built from parts, or changed after it was parsed,
+# and the answer is the same for each. A field of another variant and a
+# missing key take their own arms.
+import json
+
+
+def field_str(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return text.clone()
+                        case _:
+                            return "<other>"
+                case Lookup.Missing:
+                    return "<missing>"
+        case _:
+            return "<no object>"
+
+
+def field_len(doc: json.Value, name: str) -> int64:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.Array(items):
+                            return items.len()
+                        case _:
+                            return -1
+                case Lookup.Missing:
+                    return -2
+        case _:
+            return -3
+
+
+# Both payload reads in one match, and the length read twice.
+def describe(doc: json.Value, name: str) -> str:
+    match doc:
+        case json.Value.Object(fields):
+            match fields.lookup(name):
+                case Lookup.Found(value):
+                    match value:
+                        case json.Value.String(text):
+                            return f"text {text.clone()}"
+                        case json.Value.Array(items):
+                            if items.len() == 0:
+                                return "no items"
+                            return f"{items.len()} items"
+                        case json.Value.Null:
+                            return "null"
+                        case _:
+                            return "other"
+                case Lookup.Missing:
+                    return "missing"
+        case _:
+            return "no object"
+
+
+def report(label: str, doc: json.Value):
+    names = ["city", "tags", "n", "none", "nested", "empty", "absent", ""]
+    for name in names:
+        print(f"{label} {name}: {field_str(doc, name)} {field_len(doc, name)} {describe(doc, name)}")
+
+
+def built(city: str, count: int64) -> json.Value:
+    mut tags: list[json.Value] = []
+    for i in range(count):
+        tags.append(json.Value.Int(i))
+    mut fields: dict[str, json.Value] = {}
+    fields["city"] = json.Value.String(city.clone())
+    fields["tags"] = json.Value.Array(tags)
+    fields["n"] = json.Value.Float(1.5)
+    fields["none"] = json.Value.Null
+    fields["nested"] = json.Value.Object({"city": json.Value.String("inner")})
+    fields["empty"] = json.Value.Array([])
+    return json.Value.Object(fields)
+
+
+def parsed(text: str) -> json.Value:
+    match own json.parse(text):
+        case Result.Ok(doc):
+            return doc
+        case Result.Err(_):
+            return json.Value.Null
+
+
+def main() -> int32:
+    text = "{\"city\": \"Lagos\", \"tags\": [1, [2, 3], \"x\"], \"n\": 4, \"none\": null, \"nested\": {\"city\": \"inner\", \"tags\": []}, \"empty\": [], \"\": \"blank\"}"
+    doc = parsed(text)
+    report("parsed", doc)
+    # A second document that is changed reads its new fields.
+    mut changed = parsed(text)
+    match mut changed:
+        case json.Value.Object(fields):
+            fields["city"] = json.Value.String("Abuja")
+            fields["tags"] = json.Value.Array([json.Value.Bool(true)])
+            fields["absent"] = json.Value.String("now here")
+        case _:
+            pass
+    report("changed", changed)
+    report("parsed again", doc)
+    kept = field_str(doc, "city")
+    print(kept)
+
+    literal = json.Value.Object(
+        {
+            "city": json.Value.String("Accra"),
+            "tags": json.Value.Array([json.Value.Int(1), json.Value.Int(2)]),
+            "n": json.Value.Int(7),
+            "none": json.Value.Null,
+            "nested": json.Value.Object({"tags": json.Value.Array([])}),
+            "empty": json.Value.Array([]),
+        }
+    )
+    report("literal", literal)
+    report("built", built("Cairo", 5))
+    report("scalar", json.Value.String("city"))
+    report("array", json.Value.Array([json.Value.String("city")]))
+
+    # Texts read from one document outlive it.
+    mut names: list[str] = []
+    for i in range(3):
+        names.append(field_str(parsed(f"{{\"city\": \"city-{i}\", \"tags\": [{i}]}}"), "city"))
+    print(names)
+    return 0
