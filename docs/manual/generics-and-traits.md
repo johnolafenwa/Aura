@@ -592,6 +592,30 @@ The builtin `iter.IntoIterator[T]` trait uses an associated type so that a
 `for` loop can consume any value that turns into an iterator. See
 [Statements](/manual/statements#iterator-iteration).
 
+Every `list[T]` implements `IntoIterator[T]`, with `iter.ListIter[T]` as its
+`Iter`. A function bounded by `S: IntoIterator[T]` therefore takes a list, and
+`into_iter()` consumes the list and yields its items in order:
+
+```aura
+from iter import IntoIterator
+
+
+def count[T, S: IntoIterator[T]](source: own S) -> int64:
+    mut n = 0
+    for _ in source:
+        n += 1
+    return n
+
+
+def main():
+    print(count(["a", "b"]))
+    print([1, 2, 3].into_iter().collect())
+```
+
+A `for` loop, comprehension, `enumerate`, or `zip` written directly over a
+list still reads the items in place and leaves the list usable. A second
+`impl IntoIterator[...] for list[...]` is an error.
+
 ## Supertraits
 
 A trait can require one or more supertraits:
