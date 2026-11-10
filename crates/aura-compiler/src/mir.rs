@@ -23090,19 +23090,18 @@ impl<'a> Lowerer<'a> {
         let conversion = self
             .program
             .union_injection(self.module_name, expr.span, expected)?;
-        let source_union = match self.infer_expr_type(expr) {
-            Some(Type::Union(union)) => Some(Type::Union(union)),
-            Some(_) => None,
-            None => Some(conversion.member_type.clone()).filter(|ty| matches!(ty, Type::Union(_))),
-        };
+        // The type the value has here. A union narrowed to one member is
+        // that member.
+        let source = self.infer_expr_type(expr);
+        let source = source.unwrap_or_else(|| conversion.member_type.clone());
         let value = if owned {
             self.lower_expr_for_owned_value(expr, None)
         } else {
             self.lower_expr_with_expected(expr, None)
         };
         let target = self.new_typed_temp(expected.clone());
-        if let Some(union_ty) = source_union {
-            self.lower_union_to_trait_object(value, &union_ty, &target);
+        if let Type::Union(union) = &source {
+            self.lower_union_to_trait_object(value, &source, union, &target);
         } else {
             let held = self
                 .infer_expr_type_with_hint(expr, &conversion.member_type)
@@ -23133,10 +23132,13 @@ impl<'a> Lowerer<'a> {
     /// union's active member, never the union. `value` is the union, owned
     /// or a shared copy; each member's branch takes the payload out of it
     /// and moves that into `target`.
-    fn lower_union_to_trait_object(&mut self, value: Operand, union_ty: &Type, target: &str) {
-        let Type::Union(union) = union_ty else {
-            unreachable!("the caller passes a union type");
-        };
+    fn lower_union_to_trait_object(
+        &mut self,
+        value: Operand,
+        union_ty: &Type,
+        union: &crate::sema::UnionType,
+        target: &str,
+    ) {
         let source = self.new_typed_temp(union_ty.clone());
         self.emit(Instruction::Assign {
             target: source.clone(),

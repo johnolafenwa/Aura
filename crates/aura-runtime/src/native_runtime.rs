@@ -13336,10 +13336,7 @@ pub extern "C-unwind" fn aura_direct_trait_object_from(
                 let mut active = value;
                 let mut member = None;
                 while let Value::Union(union) = active {
-                    member = match &*union.union_type {
-                        Type::Union(union_type) => union_type.members.get(union.member_index),
-                        _ => None,
-                    };
+                    member = crate::union_runtime::active_member_type(union);
                     active = &union.payload;
                 }
                 (!std::ptr::eq(active, value)).then(|| {

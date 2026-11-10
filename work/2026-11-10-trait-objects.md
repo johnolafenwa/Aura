@@ -127,7 +127,7 @@ Also fixed here: an element of a list of trait objects can be passed to a
 
 ## Checked
 
-- 33 run-pass fixtures and 49 check-fail fixtures named `trait_object_*`.
+- 34 run-pass fixtures and 49 check-fail fixtures named `trait_object_*`.
   Each run-pass program prints the same on the interpreter and as a
   native binary, and the native binaries are clean under valgrind.
 - Unit tests in `aura-runtime` for the two new runtime entry points.

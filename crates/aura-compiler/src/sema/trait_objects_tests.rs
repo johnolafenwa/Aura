@@ -62,6 +62,7 @@ fn trait_object_programs_run() {
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
         run_pass!("trait_object_supertraits"),
+        run_pass!("trait_object_value_positions"),
         run_pass!("trait_object_views"),
     ];
     for (name, source, expected) in fixtures {

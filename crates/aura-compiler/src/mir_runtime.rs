@@ -3211,21 +3211,13 @@ impl MirRuntime {
         Some(Type::Named(instance.class_name.to_string(), resolved_args))
     }
 
-    /// Whether the trait object `value` holds a value of exactly `ty`. An
-    /// object that could not record its type is typed by its value.
-    fn trait_object_holds(&self, value: &Value, ty: &Type) -> bool {
-        let held = match value {
-            Value::TraitObject(object) => Some(Type::clone(&object.held)),
-            value => self.infer_runtime_value_type(value),
+    /// Whether the trait object `value` holds a value of exactly `ty`.
+    fn trait_object_holds(value: &Value, ty: &Type) -> bool {
+        let Value::TraitObject(object) = value else {
+            return false;
         };
-        held.is_some_and(|held| {
-            crate::sema::type_pattern_matches(
-                ty,
-                &held,
-                &std::collections::BTreeSet::new(),
-                &mut HashMap::new(),
-            )
-        })
+        let no_params = std::collections::BTreeSet::new();
+        crate::sema::type_pattern_matches(ty, &object.held, &no_params, &mut HashMap::new())
     }
 
     /// The trait object that holds `value`. `static_type` is the type the
@@ -3236,23 +3228,20 @@ impl MirRuntime {
             Value::TraitObject(_) => value,
             // A trait object holds the active member, never the union.
             Value::Union(union) => {
-                let member = match &*union.union_type {
-                    Type::Union(members) => members.members.get(union.member_index).cloned(),
-                    _ => None,
-                };
+                let member = crate::union_runtime::active_member_type(&union).cloned();
                 self.trait_object_value(union.payload, member)
             }
             value => {
+                // A value with no type to name cannot be dispatched on, and
+                // a call on it says so.
                 let held = static_type
                     .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)))
-                    .or_else(|| self.infer_runtime_value_type(&value));
-                match held {
-                    Some(held) => Value::TraitObject(Box::new(TraitObjectValue {
-                        held: Arc::new(held),
-                        value,
-                    })),
-                    None => value,
-                }
+                    .or_else(|| self.infer_runtime_value_type(&value))
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Value::TraitObject(Box::new(TraitObjectValue {
+                    held: Arc::new(held),
+                    value,
+                }))
             }
         }
     }
@@ -4545,9 +4534,11 @@ impl MirRuntime {
             Rvalue::TraitObjectHolds { value, ty } => {
                 let holds = match value {
                     Operand::Place(place) | Operand::MovePlace(place) => {
-                        self.trait_object_holds(&*env.place_ref(place)?, ty)
+                        Self::trait_object_holds(&*env.place_ref(place)?, ty)
                     }
-                    other => self.trait_object_holds(&self.evaluate_owned_operand(other, env)?, ty),
+                    other => {
+                        Self::trait_object_holds(&self.evaluate_owned_operand(other, env)?, ty)
+                    }
                 };
                 Ok(RvalueOutcome::Value(Value::Bool(holds)))
             }
