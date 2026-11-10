@@ -1112,6 +1112,7 @@ fn generator_frame(
         methods: vec![advance],
         span,
         doc: None,
+        c_layout: false,
     };
 
     // The builder takes the generator's parameters and starts every local

@@ -2695,6 +2695,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                             params: Vec::new(),
                             return_type: Type::named("int32"),
                             c_string_result: false,
+                            c_struct_result: None,
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),
@@ -2819,6 +2820,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 ty: Type::named("int8"),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "maximum".to_string(),
@@ -2826,6 +2828,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 ty: Type::named("uint64"),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "bytes".to_string(),
@@ -2833,6 +2836,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "handle".to_string(),
@@ -2840,10 +2844,12 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 ty: Type::named("Token"),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
         ],
         return_type: Type::named("Token"),
         c_string_result: false,
+        c_struct_result: None,
     };
     let args = vec![
         MirArg {
@@ -2929,6 +2935,7 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
         params: Vec::new(),
         return_type: Type::named("bool"),
         c_string_result: false,
+        c_struct_result: None,
     };
     let error = runtime
         .evaluate_extern_call_with(&call, &[], &mut env, |_, _, _| {
@@ -3055,10 +3062,12 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
                 ty: ty.clone(),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             })
             .collect(),
         return_type: Type::Unit,
         c_string_result: false,
+        c_struct_result: None,
     };
     let args = parameter_specs
         .iter()
@@ -3133,6 +3142,7 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
             params: Vec::new(),
             return_type: ty,
             c_string_result: false,
+            c_struct_result: None,
         };
         runtime
             .evaluate_extern_call_with(
@@ -3297,9 +3307,11 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             }],
             return_type: Type::named("int32"),
             c_string_result: false,
+            c_struct_result: None,
         }
     }
 
@@ -3423,6 +3435,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
         ty: Type::named("int32"),
         c_string: false,
         pointer: false,
+        c_struct: None,
     }];
 
     let unsupported_abi = runtime
@@ -3433,6 +3446,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 params: params.clone(),
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[MirArg {
                 name: None,
@@ -3457,6 +3471,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 params,
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3509,9 +3524,11 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                         ty: param_ty,
                         c_string: false,
                         pointer: false,
+                        c_struct: None,
                     }],
                     return_type: Type::Unit,
                     c_string_result: false,
+                    c_struct_result: None,
                 },
                 &[MirArg {
                     name: None,
@@ -3593,9 +3610,11 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     ty: bytes_type,
                     c_string: false,
                     pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[MirArg {
                 name: None,
@@ -3629,9 +3648,11 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     ty: Type::named("int32"),
                     c_string: false,
                     pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3666,9 +3687,11 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
                     c_string: false,
                     pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[MirArg {
                 name: None,
@@ -3700,6 +3723,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 params: Vec::new(),
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[],
             &mut Env::default(),
@@ -3719,6 +3743,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 params: Vec::new(),
                 return_type: Type::named("int32"),
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[],
             &mut Env::default(),
@@ -3738,6 +3763,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 params: Vec::new(),
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             },
             &[],
             &mut Env::default(),
@@ -21659,6 +21685,7 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         ty: Type::Union(Box::new(nullable.clone())),
         c_string: false,
         pointer: false,
+        c_struct: None,
     };
     assert_eq!(
         super::ffi_type_for_extern_param(&union_param).expect("a nullable handle is a pointer"),
@@ -21718,6 +21745,7 @@ fn ffi_conversions_cover_c_text_out_parameters_and_nullable_arguments() {
         ty,
         c_string,
         pointer: false,
+        c_struct: None,
     };
     let text = Type::named("str");
     let nullable_text = Type::Union(Box::new(coverage_union(vec![text.clone(), Type::Unit])));
@@ -21842,6 +21870,7 @@ fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
         ty,
         c_string: false,
         pointer: true,
+        c_struct: None,
     };
     let shared = MirReceiverKind::Borrow;
     let mutable = MirReceiverKind::BorrowMut;
@@ -21917,6 +21946,7 @@ fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
         ],
         return_type: Type::Unit,
         c_string_result: false,
+        c_struct_result: None,
     };
     let args = [
         MirArg {
@@ -21988,6 +22018,7 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
                 ty: Type::named("str"),
                 c_string: true,
                 pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "count".to_string(),
@@ -21995,6 +22026,7 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
                 ty: Type::named("int32"),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "slot".to_string(),
@@ -22002,10 +22034,12 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
                 ty: nullable_handle.clone(),
                 c_string: false,
                 pointer: false,
+                c_struct: None,
             },
         ],
         return_type: Type::named("str"),
         c_string_result: true,
+        c_struct_result: None,
     };
     let args = [
         MirArg {

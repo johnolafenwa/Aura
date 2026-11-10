@@ -186,6 +186,17 @@ impl Item {
             Item::Impl(impl_decl) => &impl_decl.trait_name,
         }
     }
+
+    /// Whether the item is an FFI declaration, which only a package that
+    /// opts in may hold: an extern function, an opaque handle, or an
+    /// `extern "C" class`.
+    pub fn declares_ffi(&self) -> bool {
+        match self {
+            Item::ExternFunction(_) | Item::ExternOpaqueClass(_) => true,
+            Item::Class(class_decl) => class_decl.c_layout,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -240,6 +251,11 @@ pub struct ClassDecl {
     pub span: Span,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
+    /// Whether the class was declared `extern "C" class`: a `copy` class of
+    /// fields only, which crosses the C boundary laid out as a C struct of
+    /// those fields in order.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub c_layout: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]

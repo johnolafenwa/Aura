@@ -7852,6 +7852,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         methods: Vec::new(),
         span: Span::new(1, 1),
         doc: None,
+        c_layout: false,
     }
 }
 
@@ -31183,6 +31184,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             type_ref("int32"),
         ),
         &opaque_handles,
+        &BTreeMap::new(),
         &type_names,
         &type_arities,
         &canonical_type_names,
@@ -31198,6 +31200,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
     let returned = validate_ffi_signature(
         &decl(Vec::new(), callback_type()),
         &opaque_handles,
+        &BTreeMap::new(),
         &type_names,
         &type_arities,
         &canonical_type_names,

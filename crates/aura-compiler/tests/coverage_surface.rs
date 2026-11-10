@@ -732,6 +732,7 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
                             params: Vec::new(),
                             return_type: Type::named("int32"),
                             c_string_result: false,
+                            c_struct_result: None,
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),

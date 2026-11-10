@@ -65,7 +65,7 @@ pub enum FfiType {
 }
 
 /// A scalar a foreign function reads and writes through a pointer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub enum FfiScalar {
     Bool,
     I8,

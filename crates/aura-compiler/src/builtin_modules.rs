@@ -401,6 +401,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
             methods: Vec::new(),
             span: builtin_span(),
             doc: None,
+            c_layout: false,
         },
         type_param_bounds: BTreeMap::new(),
         fields: BTreeMap::new(),

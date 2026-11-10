@@ -322,6 +322,7 @@ fn validate_params(receiver: Option<ReceiverKind>, params: &[Param], owner: &str
 fn validate_ffi_signature(
     decl: &crate::ast::ExternFunctionDecl,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+    classes: &BTreeMap<String, ClassInfo>,
     type_names: &TypeDefinitions,
     type_arities: &BTreeMap<String, usize>,
     canonical_type_names: &BTreeMap<String, String>,
@@ -377,6 +378,7 @@ fn validate_ffi_signature(
             decl.pointer_param(index),
             param.span,
             opaque_handles,
+            classes,
         )?;
     }
 
@@ -409,6 +411,7 @@ fn validate_ffi_signature(
         decl.c_string_result,
         decl.return_type.span,
         opaque_handles,
+        classes,
     )
 }
 
@@ -420,25 +423,7 @@ fn ffi_type_ref_is_raw_pointer(ty: &TypeRef) -> bool {
 }
 
 fn ffi_scalar_type(ty: &Type) -> bool {
-    matches!(
-        ty,
-        Type::Named(name, args)
-            if args.is_empty()
-                && matches!(
-                    name.as_str(),
-                    "bool"
-                        | "int8"
-                        | "int16"
-                        | "int32"
-                        | "int64"
-                        | "uint8"
-                        | "uint16"
-                        | "uint32"
-                        | "uint64"
-                        | "float32"
-                        | "float64"
-                )
-    )
+    ffi_scalar(ty).is_some()
 }
 
 fn ffi_opaque_handle(ty: &Type, handles: &BTreeMap<String, OpaqueHandleInfo>) -> bool {
@@ -451,6 +436,108 @@ fn ffi_opaque_handle(ty: &Type, handles: &BTreeMap<String, OpaqueHandleInfo>) ->
         })
 }
 
+/// The `extern "C" class` that `ty` names, when it names one: a class
+/// that crosses the C boundary laid out as a C struct.
+pub(crate) fn ffi_struct<'a>(
+    ty: &Type,
+    classes: &'a BTreeMap<String, ClassInfo>,
+) -> Option<&'a ClassInfo> {
+    let Type::Named(name, args) = ty else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    classes.iter().find_map(|(visible_name, class)| {
+        (class.decl.c_layout
+            && (name == visible_name
+                || name == &format!("{}.{}", class.module_name, class.decl.name)))
+            .then_some(class)
+    })
+}
+
+/// The scalar an FFI scalar type crosses as.
+fn ffi_scalar(ty: &Type) -> Option<crate::ffi::FfiScalar> {
+    use crate::ffi::FfiScalar as Scalar;
+    let Type::Named(name, args) = ty else {
+        return None;
+    };
+    if !args.is_empty() {
+        return None;
+    }
+    Some(match name.as_str() {
+        "bool" => Scalar::Bool,
+        "int8" => Scalar::I8,
+        "int16" => Scalar::I16,
+        "int32" => Scalar::I32,
+        "int64" => Scalar::I64,
+        "uint8" => Scalar::U8,
+        "uint16" => Scalar::U16,
+        "uint32" => Scalar::U32,
+        "uint64" => Scalar::U64,
+        "float32" => Scalar::F32,
+        "float64" => Scalar::F64,
+        _ => return None,
+    })
+}
+
+/// The C layout of the `extern "C" class` that `ty` names, when it names
+/// one whose fields all have a C layout.
+pub(crate) fn ffi_struct_layout(
+    ty: &Type,
+    classes: &BTreeMap<String, ClassInfo>,
+) -> Option<crate::c_layout::CStruct> {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    let class = ffi_struct(ty, classes)?;
+    let fields = class
+        .decl
+        .fields
+        .iter()
+        .map(|field| {
+            let ty = &class.fields.get(&field.name)?.ty;
+            let kind = match ffi_scalar(ty) {
+                Some(scalar) => CFieldKind::Scalar(scalar),
+                None => CFieldKind::Struct(ffi_struct_layout(ty, classes)?),
+            };
+            Some(CField {
+                name: field.name.clone(),
+                kind,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    Some(CStruct {
+        name: class.decl.name.clone(),
+        fields,
+    })
+}
+
+/// Checks that every field of the `extern "C" class` `class` has a type C
+/// can lay out: a fixed-width scalar or another `extern "C" class`.
+pub(crate) fn validate_ffi_struct_fields(
+    class: &ClassInfo,
+    classes: &BTreeMap<String, ClassInfo>,
+) -> Result<()> {
+    for field in &class.decl.fields {
+        let info = &class.fields[&field.name];
+        if ffi_scalar_type(&info.ty) || ffi_struct(&info.ty, classes).is_some() {
+            continue;
+        }
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            field.span,
+            format!(
+                "field `{}` of `extern \"C\"` class `{}` has type `{}`, which has no C layout",
+                field.name, class.decl.name, info.ty
+            ),
+        )
+        .with_help(
+            "a C struct holds fixed-width scalars and other `extern \"C\"` classes; keep a pointer to anything else in an opaque handle",
+        ));
+    }
+    Ok(())
+}
+
+#[allow(clippy::too_many_arguments)]
 fn validate_ffi_parameter(
     param_name: &str,
     mode: ParamMode,
@@ -459,6 +546,7 @@ fn validate_ffi_parameter(
     pointer: bool,
     span: crate::diag::Span,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+    classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
     // The parser writes `ptr[T]` as `list[T]`, so the type has one argument.
     if let (true, Type::Named(_, elements)) = (pointer, ty) {
@@ -587,6 +675,20 @@ fn validate_ffi_parameter(
         };
     }
 
+    if ffi_struct(ty, classes).is_some() {
+        return match mode {
+            ParamMode::Default | ParamMode::BorrowMut => Ok(()),
+            ParamMode::Own => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("C struct parameter `{param_name}` cannot be `own`"),
+            )
+            .with_help(
+                "write the bare class to pass the struct by value, or `mut` to pass a pointer to it",
+            )),
+        };
+    }
+
     if ffi_nullable_handle_member(ty, opaque_handles).is_some() {
         return match mode {
             ParamMode::Default | ParamMode::BorrowMut => Ok(()),
@@ -618,7 +720,7 @@ fn validate_ffi_parameter(
         format!("FFI v0 does not support parameter type `{ty}`"),
     )
     .with_help(
-        "use a fixed-width scalar, bare str, cstr, bare or mut list[uint8], or a declared opaque handle",
+        "use a fixed-width scalar, bare str, cstr, bare or mut list[uint8], an `extern \"C\"` class, or a declared opaque handle",
     ))
 }
 
@@ -662,6 +764,7 @@ fn validate_ffi_return(
     c_string: bool,
     span: crate::diag::Span,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
+    classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
     if c_string {
         if ffi_c_string_type(ty) {
@@ -673,7 +776,11 @@ fn validate_ffi_return(
             "a C text result must be exactly `cstr` or `cstr | None`",
         ));
     }
-    if *ty == Type::Unit || ffi_scalar_type(ty) || ffi_opaque_handle(ty, opaque_handles) {
+    if *ty == Type::Unit
+        || ffi_scalar_type(ty)
+        || ffi_opaque_handle(ty, opaque_handles)
+        || ffi_struct(ty, classes).is_some()
+    {
         return Ok(());
     }
     if let Type::Union(_) = ty {
@@ -711,7 +818,9 @@ fn validate_ffi_return(
         span,
         format!("FFI v0 does not support return type `{ty}`"),
     )
-    .with_help("return None, a fixed-width scalar, or a declared opaque handle"))
+    .with_help(
+        "return None, a fixed-width scalar, an `extern \"C\"` class, or a declared opaque handle",
+    ))
 }
 
 pub(crate) fn expr_references_name(expr: &Expr, name: &str) -> bool {

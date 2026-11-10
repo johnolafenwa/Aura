@@ -780,6 +780,10 @@ impl Parser {
             }));
         }
 
+        if self.at_simple(&TokenKind::KwClass) {
+            return Ok(Item::Class(self.parse_extern_class(public)?));
+        }
+
         self.expect_keyword(TokenKind::KwDef)?;
         let (name, name_span) = self.expect_identifier_with_span()?;
         if self.at_simple(&TokenKind::LBracket) {
@@ -1128,7 +1132,51 @@ impl Parser {
             methods,
             span,
             doc,
+            c_layout: false,
         })
+    }
+
+    /// Parses the class of an `extern "C" class` declaration: a `copy`
+    /// class of fields only, laid out as a C struct.
+    fn parse_extern_class(&mut self, public: bool) -> Result<ClassDecl> {
+        let mut class = self.parse_class(public)?;
+        let name = &class.name;
+        let rejected = if !class.type_params.is_empty() {
+            Some((
+                class.span,
+                format!("`extern \"C\"` class `{name}` cannot have type parameters"),
+            ))
+        } else if let Some(method) = class.methods.first() {
+            Some((
+                method.span,
+                format!(
+                    "`extern \"C\"` class `{name}` declares only fields; a C struct has no methods or invariants"
+                ),
+            ))
+        } else if let Some(field) = class.fields.iter().find(|field| field.default.is_some()) {
+            Some((
+                field.span,
+                format!(
+                    "field `{}` of `extern \"C\"` class `{name}` cannot have a default value",
+                    field.name
+                ),
+            ))
+        } else if class.fields.is_empty() {
+            Some((
+                class.span,
+                format!(
+                    "`extern \"C\"` class `{name}` needs at least one field; declare `extern \"C\" opaque class {name}` for a type whose layout C keeps to itself"
+                ),
+            ))
+        } else {
+            None
+        };
+        if let Some((span, message)) = rejected {
+            return Err(parse_error(span, message));
+        }
+        class.copy = true;
+        class.c_layout = true;
+        Ok(class)
     }
 
     fn parse_enum(&mut self, public: bool) -> Result<EnumDecl> {

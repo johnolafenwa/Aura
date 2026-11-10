@@ -306,6 +306,7 @@ fn calls_consume_arguments_except_extern_and_runtime_borrows() {
                 params: Vec::new(),
                 return_type: Type::Unit,
                 c_string_result: false,
+                c_struct_result: None,
             }),
             vec![arg(None, "a")]
         )),

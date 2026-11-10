@@ -51,6 +51,7 @@ fn item_name_matches_decl_name() {
         methods: vec![],
         span: Span::new(1, 1),
         doc: None,
+        c_layout: false,
     });
     let enum_item = Item::Enum(EnumDecl {
         public: true,

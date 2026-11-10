@@ -408,6 +408,11 @@ pub struct ExternFunctionInfo {
     /// The declaration's trusted contract as a bodyless function, which
     /// the checker and `aura verify` read like any other contract.
     pub contract_decl: Option<FunctionDecl>,
+    /// One entry for each parameter: the C layout of an `extern "C" class`
+    /// parameter, which crosses by value, or by pointer when it is `mut`.
+    pub c_struct_params: Vec<Option<crate::c_layout::CStruct>>,
+    /// The C layout of an `extern "C" class` result.
+    pub c_struct_result: Option<crate::c_layout::CStruct>,
 }
 
 #[derive(Clone, Debug)]
@@ -1585,6 +1590,14 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         register_public_namespace_opaque_handles(namespace, &mut ffi_signature_opaque_handles);
     }
 
+    for item in &module.items {
+        if let Item::Class(class_decl) = item {
+            if class_decl.c_layout {
+                super::validate_ffi_struct_fields(&classes[&class_decl.name], &classes)?;
+            }
+        }
+    }
+
     let mut extern_functions = imported_extern_functions;
     for item in &module.items {
         let Item::ExternFunction(extern_decl) = item else {
@@ -1593,6 +1606,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         validate_ffi_signature(
             extern_decl,
             &ffi_signature_opaque_handles,
+            &classes,
             &type_names,
             &type_arities,
             &canonical_type_names,
@@ -1627,6 +1641,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         extern_functions.insert(
             extern_decl.name.clone(),
             ExternFunctionInfo {
+                c_struct_params: params
+                    .iter()
+                    .map(|param| super::ffi_struct_layout(param, &classes))
+                    .collect(),
+                c_struct_result: super::ffi_struct_layout(&return_type, &classes),
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
                 contract_decl: (!extern_decl.contracts.is_empty()).then(|| FunctionDecl {

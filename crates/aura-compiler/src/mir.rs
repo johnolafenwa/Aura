@@ -1394,6 +1394,10 @@ pub struct MirExternCall {
     /// `str` or `str | None` of `return_type`.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub c_string_result: bool,
+    /// The C layout of an `extern "C" class` result, which the function
+    /// returns by value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct_result: Option<crate::c_layout::CStruct>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1409,6 +1413,10 @@ pub struct MirExternParam {
     /// with no length.
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub pointer: bool,
+    /// The C layout of an `extern "C" class` argument: passed by value, or
+    /// by pointer when `passing` is mutable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct: Option<crate::c_layout::CStruct>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12647,10 +12655,12 @@ impl<'a> Lowerer<'a> {
                     ty: ty.clone(),
                     c_string: function.decl.c_string_param(index),
                     pointer: function.decl.pointer_param(index),
+                    c_struct: function.c_struct_params.get(index).cloned().flatten(),
                 })
                 .collect(),
             return_type: function.signature.return_type.clone(),
             c_string_result: function.decl.c_string_result,
+            c_struct_result: function.c_struct_result.clone(),
         }
     }
 
