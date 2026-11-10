@@ -1,0 +1,7 @@
+error[AU2002]: `dyn Shape` has no field `side`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_no_fields.au:55:13
+   |
+55 |     print(a.side)
+   |             ^
+  = note: a trait object exposes the methods of its trait, not the fields of the type it holds
+  = help: add a method to the trait that returns the value

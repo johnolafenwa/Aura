@@ -1,0 +1,23 @@
+from trait_object_support.shapes import Shape, Square, Rect, unit, total, Scene
+
+
+class Dot:
+    weight: int64
+
+
+impl Shape for Dot:
+    def area(self) -> int64:
+        return self.weight
+    def name(self) -> str:
+        return "dot"
+
+
+def main() -> None:
+    mut shapes: list[dyn Shape] = [Square(side=2), Rect(w=2, h=3), Dot(weight=7)]
+    shapes.append(unit())
+    print(total(shapes))
+    for shape in shapes:
+        print(shape.name())
+    scene = Scene(shapes=[Dot(weight=1), Square(side=3)])
+    print(total(scene.shapes))
+    print(scene.shapes[1].name())

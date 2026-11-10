@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `dyn Sink` out of a dict index; trait object `dyn Sink` cannot be cloned, so use `view value = table[key]` for shared access or `remove(key)` to transfer ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_entry_bind.au:41:9
+   |
+41 |     x = table["a"]
+   |         ^

@@ -1,0 +1,7 @@
+error[AU3007]: cannot clone `dyn Shape` because a trait object cannot be cloned
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_no_clone.au:55:11
+   |
+55 |     b = a.clone()
+   |           ^
+  = note: the type behind a trait object is not known here, so nothing says a copy of it is safe
+  = help: borrow it with `view`, or move it; to copy on purpose, add a method to the trait that returns a new value

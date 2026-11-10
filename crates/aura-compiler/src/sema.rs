@@ -27,6 +27,7 @@ mod property_reads;
 mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
+mod trait_objects;
 mod traits;
 pub(crate) use traits::{
     binary_operator_trait, hidden_bound_type_params, merge_trait_bounds, self_type_substitutions,
@@ -129,7 +130,7 @@ struct UnionTraitMethod {
     array_equality_safe_type_params: BTreeSet<String>,
     substitutions: HashMap<String, Type>,
 }
-pub use aura_core::types::{ReturnedViewType, TraitBound, Type};
+pub use aura_core::types::{ReturnedViewType, TraitBound, Type, TRAIT_OBJECT_TYPE_NAME};
 pub use types::TypeDefinitions;
 pub(crate) use types::TypeSourceRef;
 use types::{
@@ -1222,6 +1223,14 @@ struct FunctionChecker<'a> {
     /// element is a place read through a contextual element loan (ADR-0061,
     /// 2026-09-21 section, A1).
     index_owned_read: Rc<std::cell::Cell<Option<crate::diag::Span>>>,
+    /// The index expressions of this function that are a method receiver
+    /// or the argument of a shared or `mut` parameter, by line and column.
+    /// A trait object element is borrowed in place there, since it cannot
+    /// be copied. An expression is typed more than once, so the mark stays.
+    index_borrowed_reads: Rc<RefCell<BTreeSet<(usize, usize)>>>,
+    /// How many expression typings are in progress. The outermost one marks
+    /// the method receivers of its whole expression first.
+    expr_typing_depth: Rc<std::cell::Cell<usize>>,
     /// Calls that return a `Span[T]` view in a position that binds the
     /// view: `view part = f(...)` and `return view f(...)`.
     bound_span_calls: Rc<RefCell<Vec<crate::diag::Span>>>,
@@ -1504,6 +1513,7 @@ impl<'a> FunctionChecker<'a> {
     fn element_read_is_clone_safe(&self, ty: &Type) -> bool {
         self.nonrepeatable_task_result_in(ty).is_none()
             && self.host_resource_in_type(ty).is_none()
+            && self.trait_object_in_type(ty).is_none()
             && matches!(self.rng_clone_safety(ty), RngCloneSafety::Safe)
     }
 
@@ -1532,6 +1542,16 @@ impl<'a> FunctionChecker<'a> {
             };
             return format!(
                 "cannot implicitly copy `{ty}` out of a {container} index; resource `{resource_ty}` has one owner, so use `{view}` for shared access or `{transfer}` to transfer ownership"
+            );
+        }
+        if let Some(object_ty) = self.trait_object_in_type(ty) {
+            let view = if container == "dict" {
+                "view value = table[key]"
+            } else {
+                "view value = items[index]"
+            };
+            return format!(
+                "cannot implicitly copy `{ty}` out of a {container} index; trait object `{object_ty}` cannot be cloned, so use `{view}` for shared access or `{transfer}` to transfer ownership"
             );
         }
         match self.rng_clone_safety(ty) {
@@ -1646,6 +1666,60 @@ impl<'a> FunctionChecker<'a> {
         self.stored_type_in(ty, is_resource, &mut BTreeSet::new())
     }
 
+    /// Whether `expr`, an index expression that selects an element of type
+    /// `element`, is a method receiver or a borrowed argument that borrows
+    /// a trait object in place. A trait object has no copy, so the one way
+    /// to call a method on `tools[i]` is to lend the element for the call.
+    fn borrows_trait_object_element(&self, expr: &Expr, element: &Type) -> bool {
+        element.is_trait_object()
+            && self
+                .index_borrowed_reads
+                .borrow()
+                .contains(&(expr.span.line, expr.span.column))
+    }
+
+    /// Marks `expr` as borrowed in place when it selects an element: it
+    /// is a method receiver, or the argument of a shared or `mut`
+    /// parameter. A use that takes the element (an `own self` method, an
+    /// `own` parameter) is an owned read, which is refused first.
+    pub(super) fn mark_borrowed_element(&self, expr: &Expr) {
+        let mut selected = expr;
+        while let ExprKind::Group(inner) = &selected.kind {
+            selected = inner;
+        }
+        if matches!(selected.kind, ExprKind::Index { .. }) {
+            self.index_borrowed_reads
+                .borrow_mut()
+                .insert((selected.span.line, selected.span.column));
+        }
+    }
+
+    /// Marks every method receiver in `expr` that selects an element. The
+    /// checks that run before a call is typed (argument overlap, loans)
+    /// type the receiver on their own, so the marks are made for the whole
+    /// expression before any of it is typed.
+    fn mark_borrowed_receivers(&self, expr: &Expr) {
+        init::visit_expr(expr, &mut |expr| {
+            if let ExprKind::Call { callee, .. } = &expr.kind {
+                if let ExprKind::Member { object, .. } = &callee.kind {
+                    self.mark_borrowed_element(object);
+                }
+            }
+        });
+    }
+
+    /// A trait object stored in `ty`. The type behind a trait object is not
+    /// known where it is used, so nothing can say that a copy of it is
+    /// safe: it has one owner and no clone, and it does not define
+    /// equality.
+    fn trait_object_in_type(&self, ty: &Type) -> Option<Type> {
+        self.stored_type_in(
+            ty,
+            |_: &Self, ty: &Type| ty.is_trait_object(),
+            &mut BTreeSet::new(),
+        )
+    }
+
     fn require_array_equality_eligible(
         &self,
         ty: &Type,
@@ -1662,6 +1736,17 @@ impl<'a> FunctionChecker<'a> {
             .with_note(NO_IDENTITY_EQUALITY_NOTE)
             .with_help(
                 "compare explicit results or a stable discriminant; callable identity is not value equality",
+            ));
+        }
+        if let Some(object_ty) = self.trait_object_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2008",
+                span,
+                format!("{operation} because trait object `{object_ty}` does not define equality"),
+            )
+            .with_note("the two values may hold different types, and the trait does not say how to compare them")
+            .with_help(
+                "compare what the trait exposes, such as a method result, or add a comparison method to the trait",
             ));
         }
         if self.rng_clone_safety(ty) == RngCloneSafety::ContainsRng {
@@ -1718,6 +1803,10 @@ impl<'a> FunctionChecker<'a> {
     ) -> Option<Type> {
         if found(self, ty) {
             return Some(ty.clone());
+        }
+        // A trait object stores a handle, not its trait's type arguments.
+        if ty.is_trait_object() {
+            return None;
         }
         match ty {
             Type::Union(union) => union
@@ -1860,6 +1949,19 @@ impl<'a> FunctionChecker<'a> {
             )
             .with_help(
                 "a resource has one owner: borrow it with `view` or `match mut`, or take it out of a collection with `pop` or `remove`",
+            ));
+        }
+        if let Some(object_ty) = self.trait_object_in_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU3007",
+                span,
+                format!(
+                    "cannot use {operation} because trait object `{object_ty}` cannot be cloned"
+                ),
+            )
+            .with_note("the type behind a trait object is not known here, so nothing says a copy of it is safe")
+            .with_help(
+                "borrow it with `view`, or take it out of a collection with `pop` or `remove`; to copy on purpose, add a method to the trait that returns a new value",
             ));
         }
         let qualifier = match self.rng_clone_safety(ty) {
@@ -2282,6 +2384,8 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: Rc::new(RefCell::new(BTreeSet::new())),
             index_place_read: Rc::new(std::cell::Cell::new(None)),
             index_owned_read: Rc::new(std::cell::Cell::new(None)),
+            index_borrowed_reads: Rc::new(RefCell::new(BTreeSet::new())),
+            expr_typing_depth: Rc::new(std::cell::Cell::new(0)),
             bound_span_calls: Rc::new(RefCell::new(Vec::new())),
             with_task_group_call: Rc::new(std::cell::Cell::new(None)),
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
@@ -2344,6 +2448,8 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            index_borrowed_reads: self.index_borrowed_reads.clone(),
+            expr_typing_depth: self.expr_typing_depth.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
             with_task_group_call: self.with_task_group_call.clone(),
         }
@@ -2391,6 +2497,8 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            index_borrowed_reads: self.index_borrowed_reads.clone(),
+            expr_typing_depth: self.expr_typing_depth.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
             with_task_group_call: self.with_task_group_call.clone(),
         }
@@ -2434,6 +2542,8 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            index_borrowed_reads: self.index_borrowed_reads.clone(),
+            expr_typing_depth: self.expr_typing_depth.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
             with_task_group_call: self.with_task_group_call.clone(),
         }
@@ -2477,6 +2587,8 @@ impl<'a> FunctionChecker<'a> {
             mutated_captures: self.mutated_captures.clone(),
             index_place_read: self.index_place_read.clone(),
             index_owned_read: self.index_owned_read.clone(),
+            index_borrowed_reads: self.index_borrowed_reads.clone(),
+            expr_typing_depth: self.expr_typing_depth.clone(),
             bound_span_calls: self.bound_span_calls.clone(),
             with_task_group_call: self.with_task_group_call.clone(),
         }
@@ -4765,12 +4877,16 @@ impl<'a> FunctionChecker<'a> {
                         ));
                     }
                     if &ty != return_type {
-                        return Err(Diagnostic::at(
-                            return_stmt.span,
-                            format!(
-                                "return type mismatch: expected `{}`, found `{}`",
-                                return_type, ty
+                        return Err(self.with_trait_object_mismatch_help(
+                            Diagnostic::at(
+                                return_stmt.span,
+                                format!(
+                                    "return type mismatch: expected `{}`, found `{}`",
+                                    return_type, ty
+                                ),
                             ),
+                            return_type,
+                            &ty,
                         ));
                     }
                     if view_contract.is_none() {
@@ -6099,12 +6215,16 @@ impl<'a> FunctionChecker<'a> {
                     function_type_mismatch_message(&final_ty, &value_ty),
                 ));
             }
-            return Err(Diagnostic::at(
-                assign.span,
-                format!(
-                    "binding `{}` has annotated type `{}`, but value has type `{}`",
-                    binding_name, final_ty, value_ty
+            return Err(self.with_trait_object_mismatch_help(
+                Diagnostic::at(
+                    assign.span,
+                    format!(
+                        "binding `{}` has annotated type `{}`, but value has type `{}`",
+                        binding_name, final_ty, value_ty
+                    ),
                 ),
+                &final_ty,
+                &value_ty,
             ));
         }
 
@@ -7406,12 +7526,36 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        let depth = self.expr_typing_depth.get();
+        if depth == 0 {
+            self.mark_borrowed_receivers(expr);
+        }
+        self.expr_typing_depth.set(depth + 1);
+        let result = self.type_of_expr_hint_marked(expr, locals, expected);
+        self.expr_typing_depth.set(depth);
+        result
+    }
+
+    fn type_of_expr_hint_marked(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
         if let Some(Type::Union(union)) = expected {
             if !matches!(
                 expr.kind,
                 ExprKind::Group(_) | ExprKind::Conditional { .. } | ExprKind::Match { .. }
             ) {
                 return self.type_union_injection(expr, locals, union);
+            }
+        }
+        if let Some(trait_object) = expected.filter(|expected| expected.is_trait_object()) {
+            if !matches!(
+                expr.kind,
+                ExprKind::Group(_) | ExprKind::Conditional { .. } | ExprKind::Match { .. }
+            ) {
+                return self.type_trait_object_conversion(expr, locals, trait_object);
             }
         }
         if Self::result_consumption_needs_replay(expr) {
@@ -9089,7 +9233,8 @@ impl<'a> FunctionChecker<'a> {
                     if !self.is_copy_type(&element_ty)
                         && self.index_place_read.get() != Some(expr.span)
                         && (self.index_owned_read.get() == Some(expr.span)
-                            || !self.element_read_is_clone_safe(&element_ty))
+                            || !(self.element_read_is_clone_safe(&element_ty)
+                                || self.borrows_trait_object_element(expr, &element_ty)))
                     {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
@@ -9137,7 +9282,8 @@ impl<'a> FunctionChecker<'a> {
                     if !self.is_copy_type(value_ty)
                         && self.index_place_read.get() != Some(expr.span)
                         && (self.index_owned_read.get() == Some(expr.span)
-                            || !self.element_read_is_clone_safe(value_ty))
+                            || !(self.element_read_is_clone_safe(value_ty)
+                                || self.borrows_trait_object_element(expr, value_ty)))
                     {
                         return Err(Diagnostic::coded_at(
                             "AU3005",
@@ -15788,6 +15934,38 @@ impl<'a> FunctionChecker<'a> {
                             .map(|checked| checked.return_type);
                     }
                 }
+                if receiver_ty.is_trait_object() {
+                    if let Some(method) = self.trait_object_method(&receiver_ty, field, span)? {
+                        let receiver_borrows = self.prepare_method_receiver_borrows(
+                            field,
+                            method.decl.receiver,
+                            object,
+                            span,
+                            locals,
+                        )?;
+                        return self
+                            .type_check_callable_args_seeded(
+                                &format!("method `{}`", field),
+                                &method.decl.type_params,
+                                &method.decl.params,
+                                &method.signature.param_passings,
+                                &method.signature.params,
+                                &method.signature.return_type,
+                                &method.type_param_bounds,
+                                &method.signature.rng_clone_safe_type_params,
+                                &method.signature.array_equality_safe_type_params,
+                                args,
+                                span,
+                                locals,
+                                expected,
+                                HashMap::new(),
+                                receiver_borrows,
+                                ClosureArgumentPolicy::Reject,
+                            )
+                            .map(|checked| checked.return_type);
+                    }
+                    return Err(self.trait_object_missing_method(&receiver_ty, field, span));
+                }
                 if let Type::TypeParam(type_param_name) = &receiver_ty {
                     if let Ok(method) = self.trait_method_from_type_param(type_param_name, field) {
                         self.enforce_resolved_rng_clone_obligations_before_method_inference(
@@ -16416,6 +16594,10 @@ impl<'a> FunctionChecker<'a> {
                     field, object_ty
                 ),
             ));
+        }
+
+        if object_ty.is_trait_object() {
+            return Err(self.trait_object_missing_field(object_ty, field, span));
         }
 
         let Some(class_info) = self.resolve_class_info(name) else {

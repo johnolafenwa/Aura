@@ -1,0 +1,7 @@
+error[AU2001]: `dyn Shape` has no method `volume`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_unknown_method.au:55:13
+   |
+55 |     print(a.volume())
+   |             ^
+  = note: a trait object exposes the methods of its trait, not the methods of the type it holds
+  = help: its methods are `area`, `describe`, `grow`, `name`

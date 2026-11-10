@@ -2485,6 +2485,27 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
             }
+            if *passing == ReceiverKind::BorrowMut && hinted_expected.is_trait_object() {
+                if let Some(argument) = argument {
+                    // A `mut` trait object parameter can be given a value of
+                    // another type, so its argument must be a trait object
+                    // place already: a conversion would lend a temporary.
+                    let actual =
+                        self.type_of_expr_without_move_state(&argument.value, locals, None)?;
+                    if actual != hinted_expected {
+                        return Err(Diagnostic::coded_at(
+                            "AU2051",
+                            argument.value.span,
+                            format!(
+                                "a `mut` parameter of type `{hinted_expected}` takes a `{hinted_expected}` variable, found `{actual}`"
+                            ),
+                        )
+                        .with_help(format!(
+                            "the callee may store a value of another type there; bind the value first, as `mut name: {hinted_expected} = ...`, and pass that"
+                        )));
+                    }
+                }
+            }
             // A callable contract is enforced against the parameter type once
             // the call has inferred it (below), not against a hint that still
             // names this callee's unresolved type parameters.
@@ -2494,6 +2515,9 @@ impl<'a> FunctionChecker<'a> {
                 named.iter().any(|name| callee_type_params.contains(name))
             };
             let actual = if let Some(argument) = argument {
+                if *passing != ReceiverKind::Value {
+                    self.mark_borrowed_element(&argument.value);
+                }
                 let typed = if hint_names_callee_params {
                     self.type_of_expr_hint_uncontracted(
                         &argument.value,
@@ -2590,9 +2614,13 @@ impl<'a> FunctionChecker<'a> {
                     .written_alias_type(&param_decl.ty, &hinted_expected)
                     .map(|expected| format!("expected {expected}, found {actual}"))
                     .unwrap_or(error.message);
-                let mismatch = Diagnostic::at(
-                    span,
-                    format!("argument type mismatch for {}: {}", callee_name, detail),
+                let mismatch = self.with_trait_object_mismatch_help(
+                    Diagnostic::at(
+                        span,
+                        format!("argument type mismatch for {}: {}", callee_name, detail),
+                    ),
+                    &hinted_expected,
+                    &actual,
                 );
                 if super::types::span_element_type(&actual).is_some() {
                     return Err(mismatch.with_help(
@@ -2913,12 +2941,16 @@ impl<'a> FunctionChecker<'a> {
                 let span = argument
                     .map(|argument| argument.span)
                     .unwrap_or(param_decl.span);
-                let mismatch = Diagnostic::at(
-                    span,
-                    format!(
-                        "argument type mismatch for {}: expected `{}`, found `{}`",
-                        callee_name, expected, actual
+                let mismatch = self.with_trait_object_mismatch_help(
+                    Diagnostic::at(
+                        span,
+                        format!(
+                            "argument type mismatch for {}: expected `{}`, found `{}`",
+                            callee_name, expected, actual
+                        ),
                     ),
+                    &expected,
+                    &actual,
                 );
                 if super::types::span_element_type(&actual).is_some() {
                     return Err(mismatch.with_help(

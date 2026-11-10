@@ -1363,6 +1363,30 @@ impl TypeRef {
         }
     }
 
+    /// The trait object type `dyn Trait[args]`: the reserved name `dyn`
+    /// applied to the trait reference.
+    pub fn trait_object(trait_ref: TypeRef, span: Span) -> Self {
+        Self::named(
+            crate::sema::TRAIT_OBJECT_TYPE_NAME,
+            vec![trait_ref],
+            false,
+            span,
+        )
+    }
+
+    /// The trait reference of a trait object type.
+    pub fn as_trait_object(&self) -> Option<&TypeRef> {
+        match &self.kind {
+            TypeRefKind::Named { name, args } if name == crate::sema::TRAIT_OBJECT_TYPE_NAME => {
+                match args.as_slice() {
+                    [trait_ref] => Some(trait_ref),
+                    _ => None,
+                }
+            }
+            _ => None,
+        }
+    }
+
     pub fn tuple(elements: Vec<TypeRef>, indirect: bool, span: Span) -> Self {
         Self {
             kind: TypeRefKind::Tuple(elements),

@@ -1,0 +1,7 @@
+error[AU2008]: cannot use `dyn Shape` as a dict key because trait object `dyn Shape` does not define equality
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_no_dict_key.au:54:33
+   |
+54 |     a: dict[dyn Shape, int64] = {}
+   |                                 ^
+  = note: the two values may hold different types, and the trait does not say how to compare them
+  = help: compare what the trait exposes, such as a method result, or add a comparison method to the trait

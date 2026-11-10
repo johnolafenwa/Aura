@@ -239,3 +239,129 @@ fn canonical_keys_match_the_persisted_json_format() {
         }
     }
 }
+
+#[test]
+fn a_trait_object_type_is_dyn_over_one_trait() {
+    let tool = Type::trait_object("Tool", Vec::new());
+    assert_eq!(tool.to_string(), "dyn Tool");
+    assert_eq!(tool.as_trait_object(), Some(("Tool", &[][..])));
+    assert!(tool.is_trait_object());
+    let reader = Type::trait_object("io.Reader", vec![Type::named("int64")]);
+    assert_eq!(reader.to_string(), "dyn io.Reader[int64]");
+    assert_eq!(
+        reader.trait_object_bound(),
+        Some(TraitBound {
+            trait_name: "io.Reader".to_string(),
+            trait_args: vec![Type::named("int64")],
+        })
+    );
+
+    // A class named like the marker with any other shape is no trait object.
+    for other in [
+        Type::named("Tool"),
+        Type::named(TRAIT_OBJECT_TYPE_NAME),
+        Type::Named(
+            TRAIT_OBJECT_TYPE_NAME.to_string(),
+            vec![Type::TypeParam("T".to_string())],
+        ),
+        Type::Unit,
+    ] {
+        assert!(!other.is_trait_object(), "{other:?}");
+        assert_eq!(other.trait_object_bound(), None);
+    }
+
+    // The marker is no nominal of any module: two modules that name the
+    // same trait agree on the key.
+    let names = BTreeMap::new();
+    let imported = Type::trait_object("shapes.Shape", Vec::new());
+    assert_eq!(
+        imported.canonical_key("main", &names),
+        imported.canonical_key("other", &names)
+    );
+    assert_ne!(
+        tool.canonical_key("main", &names),
+        tool.canonical_key("other", &names),
+        "a bare trait name belongs to the module that reads it"
+    );
+}
+
+#[test]
+fn names_trait_object_finds_one_anywhere_in_a_type() {
+    let tool = Type::trait_object("Tool", Vec::new());
+    for plain in descriptor_corpus() {
+        assert!(!plain.names_trait_object(), "{plain:?}");
+    }
+    let param = |ty: Type| FunctionParamContract {
+        keyword_only: false,
+        name: "value".to_string(),
+        ty,
+        passing: ReceiverKind::Borrow,
+        has_default: false,
+    };
+    let holders = [
+        tool.clone(),
+        Type::Named("list".to_string(), vec![tool.clone()]),
+        Type::Named(
+            "dict".to_string(),
+            vec![
+                Type::named("str"),
+                Type::Named("list".to_string(), vec![tool.clone()]),
+            ],
+        ),
+        Type::Tuple(vec![Type::named("int64"), tool.clone()]),
+        Type::normalize_union(vec![tool.clone(), Type::Unit], "main", &BTreeMap::new())
+            .expect("a union with a trait object member"),
+        Type::Function {
+            params: vec![param(tool.clone())],
+            return_type: Box::new(Type::Unit),
+        },
+        Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(tool.clone()),
+        },
+        Type::Callable(Box::new(CallableType {
+            task: false,
+            call_kind: ClosureCallKind::Repeatable,
+            params: vec![param(tool.clone())],
+            return_type: Type::Unit,
+        })),
+        Type::Callable(Box::new(CallableType {
+            task: false,
+            call_kind: ClosureCallKind::Repeatable,
+            params: Vec::new(),
+            return_type: tool.clone(),
+        })),
+        Type::ReturnedView(Box::new(ReturnedViewType {
+            mutable: false,
+            pointee: tool.clone(),
+            origin: 0,
+        })),
+        Type::Closure {
+            params: Box::new(vec![param(tool.clone())]),
+            return_type: Box::new(Type::Unit),
+            captures: Box::new(Vec::new()),
+            call_kind: ClosureCallKind::Repeatable,
+        },
+        Type::Closure {
+            params: Box::new(Vec::new()),
+            return_type: Box::new(tool.clone()),
+            captures: Box::new(Vec::new()),
+            call_kind: ClosureCallKind::Repeatable,
+        },
+        Type::Closure {
+            params: Box::new(Vec::new()),
+            return_type: Box::new(Type::Unit),
+            captures: Box::new(vec![ClosureCapture {
+                name: "tool".to_string(),
+                ty: tool.clone(),
+                mode: ClosureCaptureMode::Move,
+                span: Span::new(1, 1),
+                mutated: false,
+            }]),
+            call_kind: ClosureCallKind::Repeatable,
+        },
+    ];
+    for holder in holders {
+        assert!(holder.names_trait_object(), "{holder:?}");
+    }
+}

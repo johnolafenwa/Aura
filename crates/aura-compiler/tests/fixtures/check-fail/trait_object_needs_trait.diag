@@ -1,0 +1,6 @@
+error[AU2050]: `dyn` needs a trait, and `Square` is not a trait
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_needs_trait.au:54:12
+   |
+54 |     a: dyn Square = Square(side=1)
+   |            ^
+  = help: a trait object holds a value of any type that implements one trait; name that trait after `dyn`
