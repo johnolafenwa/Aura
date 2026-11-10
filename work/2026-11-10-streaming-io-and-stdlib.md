@@ -65,3 +65,35 @@ How the batch read got there, from a first version at 480 ms:
 ## Verification
 
 Recorded with the pull request.
+
+## Step 2a: `regex` (work completed)
+
+- The `regex` module (ADR-0075): `regex.compile`, `regex.escape`,
+  `regex.Regex` with `is_match`, `count`, `find`, `find_all`, `matches`,
+  `captures`, `replace`, `replace_all`, `split`, `pattern`, and `copy`,
+  `regex.Match`, `regex.Captures`, and `regex.Error`, on both backends.
+- Example `examples/strings/regex_log.au`, the manual's Regex page, and the
+  `regex_scan` cross-language program.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `regex_scan` at 200,000 lines | 1.19 s | 1.63 s | 0.30 s |
+
+How it got there, from a first version at 9.8 s:
+
+- The compiled program is shared, not cloned, on each call. A clone starts
+  with empty scratch space (49 microseconds per search). 9.8 s to 1.97 s.
+- No copy of the pattern per call, a short list of recent patterns in
+  front of the map, and a group-name lookup in the runtime. 1.83 s.
+- A `Regex` holds a pattern number, not the text. Reading a `str` or a
+  class-typed field out of a class instance costs about 2,000 instructions
+  and a release, and every method read one. 1.19 s.
+
+## Gaps found in step 2a, left for later
+
+- A non-scalar field read (`str`, a list, or a class instance held by
+  another class) goes through `aura_direct_instance_get_field`, which
+  copies the field. Scalar fields are inline loads. This is the largest
+  cost left in programs that keep text in objects.
+- A small host call costs about 1,900 instructions around its work: an
+  argument buffer, boxed scalar arguments, and a boxed result.

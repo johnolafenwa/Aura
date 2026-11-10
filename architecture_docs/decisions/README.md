@@ -100,3 +100,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
 73. [ADR-0073: Streaming file reads, gzip, and HMAC](0073-streaming-reads-gzip-and-hmac.md) — Accepted; `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip` module, and `bytes.hmac_sha256`
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
+75. [ADR-0075: Regular expressions](0075-regular-expressions.md) — Accepted; the `regex` module on a linear-time engine, with a `Regex` that holds a pattern number

@@ -69,3 +69,29 @@ fn imports_source_part_sees_module_and_from_imports() {
     assert!(!imports_source_part(&module("import math\n")));
     assert!(!imports_source_part(&module("from math import sqrt\n")));
 }
+
+#[test]
+fn regex_source_part_adds_the_typed_api_to_the_host_searches() {
+    let host = builtin_module_namespace(&path("regex")).expect("regex is builtin");
+    let part = source_part("regex").expect("regex has a source part");
+    for name in part.functions.keys() {
+        assert!(
+            !host.functions.contains_key(name),
+            "source function `{name}` must not shadow a host function"
+        );
+    }
+    let merged = importable_builtin_namespace(&path("regex")).expect("regex is importable");
+    for name in ["compile", "escape", "__aura_is_match", "__aura_compile"] {
+        assert!(
+            merged.functions.contains_key(name),
+            "missing `regex.{name}`"
+        );
+    }
+    for name in ["Regex", "Match", "Captures"] {
+        assert!(merged.classes.contains_key(name), "missing `regex.{name}`");
+    }
+    assert!(merged.enums.contains_key("Error"));
+    assert!(imports_source_part(
+        &crate::parse_source("import regex\n").expect("source parses")
+    ));
+}

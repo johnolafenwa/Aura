@@ -28874,3 +28874,69 @@ fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
     };
     unsafe { release_value(map) };
 }
+
+#[test]
+fn direct_regex_reads_its_number_and_texts_through_borrowed_handles() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"\d+")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let number = compiled.elements[0].clone();
+    let handles = |texts: &[&str]| super::DirectHostArgBuffer {
+        handles: std::iter::once(boxed_value(number.clone()) as i64)
+            .chain(
+                texts
+                    .iter()
+                    .map(|text| boxed_value(Value::string(*text)) as i64),
+            )
+            .collect(),
+    };
+    let search = handles(&["a12b3"]);
+    assert_eq!(
+        super::direct_regex("regex::__aura_count", &search).expect("count"),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+    let replace = handles(&["a12b3", "#"]);
+    assert_eq!(
+        super::direct_regex("regex::__aura_replace_all", &replace).expect("replace"),
+        Value::string("a#b#")
+    );
+
+    let bad_pattern = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(Value::Bool(true)) as i64,
+            boxed_value(Value::string("text")) as i64,
+        ],
+    };
+    let error = super::direct_regex("regex::__aura_count", &bad_pattern)
+        .expect_err("a bool is not a pattern number");
+    assert!(error.message.contains("pattern number"), "{error:?}");
+    let bad_text = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(number.clone()) as i64,
+            boxed_value(Value::Bool(true)) as i64,
+        ],
+    };
+    let error =
+        super::direct_regex("regex::__aura_count", &bad_text).expect_err("a bool is not a text");
+    assert!(
+        error.message.contains("argument 2 to be `str`"),
+        "{error:?}"
+    );
+    let bad_replacement = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(number.clone()) as i64,
+            boxed_value(Value::string("a1")) as i64,
+            boxed_value(Value::Bool(true)) as i64,
+        ],
+    };
+    let error = super::direct_regex("regex::__aura_replace", &bad_replacement)
+        .expect_err("a bool is not a replacement");
+    assert!(
+        error.message.contains("argument 3 to be `str`"),
+        "{error:?}"
+    );
+}

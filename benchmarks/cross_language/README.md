@@ -62,6 +62,7 @@ every sample with the commit.
 | `pubsub_broker` | A publish/subscribe broker with topic fan-out and mailboxes, over loopback TCP |
 | `raytracer` | A ray tracer with shadows and reflections |
 | `regex_match` | A regular-expression compiler and Pike VM run over generated log lines |
+| `regex_scan` | The `regex` module over generated log lines: a test, groups, every match with its position, a rewrite, and a split |
 | `sort_records` | Built-in sorts, key sorts, string sorts, and hand-written quicksort and merge sort |
 | `spreadsheet` | Formulas, a dependency graph in topological order, and recalculation after edits |
 | `sql_engine` | A SQL tokenizer, parser, planner, and executor with an id index, range scans, updates, deletes, and `GROUP BY` |
@@ -151,6 +152,13 @@ programs. It is slower on `csv_aggregate`, `docdb`, `file_io`,
 takes 766 ms in Aura, 938 ms in Python, and 430 ms in Rust: 0.82 times
 Python's time and 1.8 times Rust's. It is not in the table or the totals
 above.
+
+`regex_scan` was added the same day with the `regex` module. At 200,000
+lines it takes 1.19 s in Aura, 1.63 s in Python, and 0.30 s in Rust: 0.73
+times Python's time and 3.9 times Rust's. Rust's `regex` crate is the engine
+under both the Aura and the Rust program, so the difference is the cost of
+handing each result to the program as Aura values. It is not in the table or
+the totals above either.
 
 0.13.0 brings the Batch 8 multicore runtime and the first JSON steps of
 the lean-values work:

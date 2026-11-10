@@ -244,6 +244,19 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::constant_time_eq",
         "gzip::compress",
         "gzip::decompress",
+        "regex::__aura_compile",
+        "regex::__aura_pattern",
+        "regex::__aura_escape",
+        "regex::__aura_is_match",
+        "regex::__aura_count",
+        "regex::__aura_find",
+        "regex::__aura_matches",
+        "regex::__aura_find_all",
+        "regex::__aura_captures",
+        "regex::__aura_group_index",
+        "regex::__aura_split",
+        "regex::__aura_replace",
+        "regex::__aura_replace_all",
     ] {
         assert!(
             host_builtin_metadata(name).is_some(),
@@ -974,4 +987,68 @@ def unpack(data: list[uint8]) -> str:
     )
     .expect_err("gzip.compress takes bytes, not text");
     assert!(error.message.contains("list[uint8]"), "{}", error.message);
+}
+
+#[test]
+fn regex_module_type_checks_its_whole_api_and_keeps_regex_construction_private() {
+    assert!(super::is_builtin_root_module("regex"));
+    assert!(super::builtin_module_registry().contains_key("regex"));
+    let find = host_builtin_metadata("regex::__aura_find").expect("regex find metadata");
+    assert_eq!(find.params.len(), 2);
+
+    crate::check_source(
+        r#"import regex
+
+def scan(pattern: regex.Regex, line: str) -> int64:
+    mut total = pattern.count(line)
+    if pattern.is_match(line):
+        total += 1
+    match pattern.find(line):
+        case regex.Match as found:
+            total += found.end - found.start + found.text.len()
+        case None:
+            pass
+    for found in pattern.matches(line):
+        total += found.start
+    match pattern.captures(line):
+        case regex.Captures as groups:
+            total += groups.len()
+            match groups.get(1):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+            match groups.name("key"):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+        case None:
+            pass
+    total += pattern.find_all(line).len() + pattern.split(line).len()
+    total += pattern.replace(line, "$1").len() + pattern.replace_all(line, "").len()
+    other = pattern.copy()
+    return total + other.pattern().len() + regex.escape(line).len()
+
+def build(text: str) -> Result[regex.Regex, regex.Error]:
+    return regex.compile(text)
+
+def reason(error: regex.Error) -> str:
+    match error:
+        case regex.Error.Invalid(message):
+            return message.clone()
+"#,
+    )
+    .expect("the regex API should type-check");
+
+    let error = crate::check_source(
+        "import regex\n\ndef forge() -> regex.Regex:\n    return regex.Regex(number=0)\n",
+    )
+    .expect_err("only regex.compile builds a Regex");
+    assert!(error.message.contains("number"), "{}", error.message);
+    let error = crate::check_source(
+        "import regex\n\ndef bad(pattern: regex.Regex) -> bool:\n    return pattern.is_match(3)\n",
+    )
+    .expect_err("a search takes text");
+    assert!(error.message.contains("str"), "{}", error.message);
 }

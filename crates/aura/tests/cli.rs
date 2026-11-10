@@ -11952,6 +11952,28 @@ fn run_and_direct_backends_run_sign_and_compress_example() {
 }
 
 #[test]
+fn run_and_direct_backends_run_regex_log_example() {
+    let expected = "true\n3\n[took=120ms, user=7, retries=3]\ntook=120ms at 9..19\n4\ntook\n120\nms\nNone\n9: took=120ms\n20: user=7\n27: retries=3\ncafé up: took:120 user=7 retries=3\ncafé up: 120 7 3\n[café up: ,  ,  , ]\ninvalid pattern\ntrue\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/strings/regex_log.au"))
+        .output()
+        .expect("failed to run aura run on regex log example");
+    assert!(
+        output.status.success(),
+        "run should succeed for regex log example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/strings/regex_log.au",
+        "regex-log-direct",
+        expected,
+    );
+}
+
+#[test]
 fn run_executes_tcp_echo_example() {
     let fixture = repo_root().join("examples/io/tcp_echo.au");
     let output = Command::new(aura_bin())

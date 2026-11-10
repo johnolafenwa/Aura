@@ -1691,6 +1691,83 @@ fn iter_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// The host part of `regex`: the searches themselves, keyed by the number
+/// the runtime gave the pattern. `Regex`, `Match`, `Captures`, and `compile`
+/// are Aura source in `std/regex.au`.
+fn regex_namespace() -> ModuleNamespace {
+    let text = || type_ref("str", Vec::new());
+    let int64 = || type_ref("int64", Vec::new());
+    let list_of = |item: TypeRef| type_ref("list", vec![item]);
+    let pair =
+        |left: TypeRef, right: TypeRef| TypeRef::tuple(vec![left, right], false, builtin_span());
+    let search = |name: &str, result: TypeRef| {
+        function_info(
+            "regex",
+            name,
+            vec![
+                value_param("pattern", int64()),
+                borrow_param("text", text()),
+            ],
+            result,
+        )
+    };
+    let substitute = |name: &str| {
+        function_info(
+            "regex",
+            name,
+            vec![
+                value_param("pattern", int64()),
+                borrow_param("text", text()),
+                borrow_param("replacement", text()),
+            ],
+            text(),
+        )
+    };
+    function_only_namespace(
+        "regex",
+        vec![
+            function_info(
+                "regex",
+                "__aura_compile",
+                vec![value_param("pattern", text())],
+                pair(int64(), text()),
+            ),
+            function_info(
+                "regex",
+                "__aura_pattern",
+                vec![value_param("pattern", int64())],
+                text(),
+            ),
+            function_info(
+                "regex",
+                "__aura_escape",
+                vec![value_param("text", text())],
+                text(),
+            ),
+            search("__aura_is_match", type_ref("bool", Vec::new())),
+            search("__aura_count", int64()),
+            search(
+                "__aura_find",
+                optional_type_ref(TypeRef::tuple(
+                    vec![text(), int64(), int64()],
+                    false,
+                    builtin_span(),
+                )),
+            ),
+            search("__aura_matches", pair(list_of(text()), list_of(int64()))),
+            search("__aura_find_all", list_of(text())),
+            search(
+                "__aura_captures",
+                pair(list_of(text()), list_of(type_ref("bool", Vec::new()))),
+            ),
+            search("__aura_group_index", int64()),
+            search("__aura_split", list_of(text())),
+            substitute("__aura_replace"),
+            substitute("__aura_replace_all"),
+        ],
+    )
+}
+
 fn control_namespace() -> ModuleNamespace {
     let result_type = type_ref(
         "Result",
@@ -2486,6 +2563,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "math" => Some(math_namespace()),
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
+        "regex" => Some(regex_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2498,8 +2576,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "gzip", "json", "iter", "toml", "metrics", "log", "trace",
-    "random",
+    "sys", "path", "math", "bytes", "gzip", "regex", "json", "iter", "toml", "metrics", "log",
+    "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2623,6 +2701,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "math"
             | "bytes"
             | "gzip"
+            | "regex"
             | "json"
             | "iter"
             | "prelude"
@@ -2643,7 +2722,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
-        "json", "iter", "prelude", "toml", "log", "metrics", "trace",
+        "regex", "json", "iter", "prelude", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

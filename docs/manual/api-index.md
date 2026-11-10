@@ -230,6 +230,27 @@ limit, and the error variants.
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
 
+## Regex
+
+[Regex Module](/manual/regex) covers the pattern syntax, positions, groups,
+replacement text, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `regex.compile` | `compile(pattern: str) -> Result[regex.Regex, regex.Error]` | Compiles a pattern. An invalid pattern returns `regex.Error.Invalid(message)`. |
+| `regex.escape` | `escape(text: str) -> str` | Escapes every pattern metacharacter in `text`. |
+| `Regex.is_match` | `is_match(self, text: str) -> bool` | Whether the pattern matches anywhere in `text`. |
+| `Regex.count` | `count(self, text: str) -> int64` | The number of non-overlapping matches. |
+| `Regex.find` | `find(self, text: str) -> regex.Match \| None` | The leftmost match, with `text`, `start`, and `end` in Unicode scalar values. |
+| `Regex.find_all` | `find_all(self, text: str) -> list[str]` | The text of every match. |
+| `Regex.matches` | `matches(self, text: str) -> list[regex.Match]` | Every match with its position. |
+| `Regex.captures` | `captures(self, text: str) -> regex.Captures \| None` | The groups of the leftmost match, read with `get(index)`, `name(name)`, and `len()`. |
+| `Regex.replace` | `replace(self, text: str, replacement: str) -> str` | Replaces the leftmost match. `$1`, `${name}`, and `$$` are expanded. |
+| `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | Replaces every match. |
+| `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
+| `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
+| `Regex.copy` | `copy(self) -> regex.Regex` | Another `Regex` for the same compiled pattern. |
+
 ## Collections
 
 [Collections](/manual/collections) covers ownership and iteration.

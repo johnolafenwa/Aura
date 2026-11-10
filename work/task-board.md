@@ -10,8 +10,9 @@ Last updated: 2026-11-10
   Rust. Details are in `2026-11-10-streaming-io-and-stdlib.md`.
 - Done: `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip`
   module, `bytes.hmac_sha256`, and `bytes.constant_time_eq` (ADR-0073).
-- Remaining: `regex` and `time` modules, the `http` client module, and
-  the streaming reference agent.
+- Done: the `regex` module (ADR-0075).
+- Remaining: the `time` module, the `http` client module, and the
+  streaming reference agent.
 
 ## Trait objects (in progress)
 

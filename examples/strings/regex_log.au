@@ -1,0 +1,61 @@
+# Regular expressions: compile a pattern once, then search, capture,
+# replace, and split with it.
+import regex
+
+
+def main():
+    match regex.compile(r"(?P<key>[a-z]+)=(\d+)(ms)?"):
+        case Result.Ok(pair):
+            report(pair)
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+
+    # A pattern that does not compile is a value, not a trap.
+    match regex.compile("(unclosed"):
+        case Result.Ok(_):
+            print("compiled")
+        case Result.Err(regex.Error.Invalid(_)):
+            print("invalid pattern")
+
+    # `escape` makes a pattern that matches a text exactly.
+    match regex.compile(regex.escape("1+1=2")):
+        case Result.Ok(exact):
+            print(exact.is_match("so 1+1=2 holds"))
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+
+
+def report(pair: regex.Regex):
+    line = "café up: took=120ms user=7 retries=3"
+    print(pair.is_match(line))
+    print(pair.count(line))
+    print(pair.find_all(line))
+
+    # Positions count Unicode scalar values, as `str` indexes do.
+    match pair.find(line):
+        case regex.Match as found:
+            print(f"{found.text} at {found.start}..{found.end}")
+        case None:
+            print("no match")
+
+    # Group 0 is the whole match. A group that took no part is `None`.
+    match pair.captures(line):
+        case regex.Captures as groups:
+            print(groups.len())
+            print(groups.name("key"))
+            print(groups.get(2))
+            print(groups.get(3))
+        case None:
+            print("no match")
+    match pair.captures("user=7"):
+        case regex.Captures as groups:
+            print(groups.get(3))
+        case None:
+            print("no match")
+
+    for found in pair.matches(line):
+        print(f"{found.start}: {found.text}")
+
+    print(pair.replace(line, "$key:$2"))
+    print(pair.replace_all(line, "${2}"))
+    print(pair.split(line))

@@ -65,6 +65,8 @@ use aura_core::types::Type;
 mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
+#[path = "regex_host.rs"]
+pub mod regex_host;
 pub use generator::{
     generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,

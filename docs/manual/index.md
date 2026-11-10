@@ -93,6 +93,8 @@ scope, terminology, authority, and conformance language.
   SHA-256, and HMAC-SHA256.
 - [Gzip Module](/manual/gzip): gzip compression and bounded decompression of
   byte lists, with typed errors.
+- [Regex Module](/manual/regex): compiled regular expressions with
+  linear-time search, groups, replacement, and splitting.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
   exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact

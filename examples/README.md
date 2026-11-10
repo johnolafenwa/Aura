@@ -354,6 +354,7 @@ printed-output order unless they coordinate that order explicitly.
 | `borrow_str.au` | Borrowed string parameters with `str` | `Hello, Aura` |
 | `f_strings.au` | Interpolated `f"..."` strings that produce owned `str` values | `Hello, Aura 42` |
 | `literal_forms_and_formatting.au` | Exact triple-quoted prompts, raw backslash-heavy paths, and statically checked width, sign-aware zero padding, grouping, and percentage formatting. Shows Unicode-aware formatting through the f-string grammar. | |
+| `regex_log.au` | `regex.compile(...)`, `is_match`, `count`, `find`, `find_all`, `matches`, `captures`, `replace`, `replace_all`, `split`, and `regex.escape(...)` | `true`, `3`, the three matches, `took=120ms at 9..19`, the groups, each match with its start, two rewritten lines, the split pieces, `invalid pattern`, `true` |
 
 ## Top-Level Examples
 

@@ -656,7 +656,10 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "bytes::constant_time_eq" => host_bytes_constant_time_eq,
         "gzip::compress" => host_gzip_compress,
         "gzip::decompress" => host_gzip_decompress,
-        _ => return None,
+        "regex::__aura_compile" => regex_host::host_regex_compile,
+        "regex::__aura_pattern" => regex_host::host_regex_pattern,
+        "regex::__aura_escape" => regex_host::host_regex_escape,
+        other => return regex_host::regex_host_function(other),
     };
     Some(function)
 }
