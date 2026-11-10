@@ -1,0 +1,6 @@
+error[AU2051]: method `map` of trait `Merge` cannot be called on `dyn Merge`: it has type parameters of its own, and a trait object carries one implementation per method
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_method_not_callable.au:74:13
+   |
+74 |     print(a.map(3))
+   |             ^
+  = help: call it on a value whose type is known, or through a type parameter bounded by the trait

@@ -1,0 +1,95 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+class Crate[T]:
+    item: T
+    label: str
+
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+
+def wrap[T: Shape](item: own T) -> dyn Shape:
+    return item
+
+
+def unwrap_area(value: Maybe[dyn Shape]) -> int64:
+    match value:
+        case Maybe.Some(shape):
+            return shape.area()
+        case Maybe.Nothing:
+            return -1
+
+
+def largest[T: Shape](items: list[T]) -> int64:
+    mut best = 0
+    for item in items:
+        if item.area() > best:
+            best = item.area()
+    return best
+
+
+def main() -> None:
+    wrapped = wrap(Square(side=3))
+    print(wrapped.area())
+    crate: Crate[dyn Shape] = Crate(item=Rect(w=2, h=2), label="crate")
+    print(f"{crate.label} {crate.item.area()}")
+    some: Maybe[dyn Shape] = Maybe.Some(Square(side=4))
+    print(unwrap_area(some))
+    nothing: Maybe[dyn Shape] = Maybe.Nothing
+    print(unwrap_area(nothing))
+    shapes: list[dyn Shape] = [Square(side=2), Rect(w=5, h=5), Label(text="x", hits=[])]
+    print(largest(shapes))
+    squares: list[Square] = [Square(side=2), Square(side=3)]
+    print(largest(squares))

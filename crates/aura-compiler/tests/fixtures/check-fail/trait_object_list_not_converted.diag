@@ -1,0 +1,6 @@
+error[AU2002]: argument type mismatch for function `total`: expected `dyn Shape`, found `Square`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_list_not_converted.au:59:17
+   |
+59 |     print(total(squares))
+   |                 ^
+  = help: a `list[Square]` is not a `list[dyn Shape]`: a value converts to a trait object one at a time, where it is stored; build the collection with the annotation `list[dyn Shape]`

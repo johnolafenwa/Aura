@@ -1,0 +1,115 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def build(count: int64) -> list[dyn Shape]:
+    mut out: list[dyn Shape] = []
+    for i in range(count):
+        if i % 2 == 0:
+            out.append(Square(side=i))
+        else:
+            out.append(Rect(w=i, h=i + 1))
+    return out
+
+
+def choose(code: int64) -> dyn Shape:
+    return match code:
+        case 0: Square(side=5)
+        case 1: Rect(w=2, h=2)
+        case _: Label(text="other", hits=[])
+
+
+def first_big(shapes: list[dyn Shape], floor: int64) -> str:
+    for shape in shapes:
+        if shape.area() >= floor:
+            return shape.name()
+    return "none"
+
+
+def pair() -> (dyn Shape, int64):
+    return (Square(side=6), 7)
+
+
+def parse(text: str) -> Result[dyn Shape, str]:
+    if text == "square":
+        return Result.Ok(Square(side=1))
+    if text == "rect":
+        return Result.Ok(Rect(w=1, h=2))
+    return Result.Err(f"unknown shape {text}")
+
+
+def area_of_named(text: str) -> Result[int64, str]:
+    shape = try parse(text)
+    return Result.Ok(shape.area())
+
+
+def main() -> None:
+    shapes = build(5)
+    print(len(shapes))
+    print(first_big(shapes, 10))
+    print(choose(0).area())
+    print(choose(1).describe())
+    print(choose(9).describe())
+    picked: dyn Shape = Square(side=1) if len(shapes) > 9 else Rect(w=4, h=4)
+    print(picked.area())
+    (shape, extra) = pair()
+    print(shape.area() + extra)
+    made: list[dyn Shape] = [Square(side=i) for i in range(3)]
+    print(len(made))
+    print(made[2].area())
+    mixed: dict[str, dyn Shape] = {"a": Square(side=2), "b": Rect(w=1, h=1)}
+    print(mixed["a"].area() + mixed["b"].area())
+    print(area_of_named("rect"))
+    print(area_of_named("blob"))
+    areas = [each.area() for each in shapes]
+    print(areas)
+    names = ", ".join([other.name() for other in shapes])
+    print(names)

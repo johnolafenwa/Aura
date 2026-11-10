@@ -1,0 +1,6 @@
+error[AU2050]: trait `Extra` cannot be implemented for the trait object type `dyn Shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_impl_target.au:57:1
+   |
+57 | impl Extra for dyn Shape:
+   | ^
+  = help: implement the trait for each type the trait object holds, or make it a supertrait of the object's trait

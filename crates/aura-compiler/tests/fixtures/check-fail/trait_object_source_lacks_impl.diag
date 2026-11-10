@@ -1,0 +1,6 @@
+error[AU2002]: binding `a` has annotated type `dyn Shape`, but value has type `Other`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_source_lacks_impl.au:58:5
+   |
+58 |     a: dyn Shape = Other(x=1)
+   |     ^
+  = help: `Other` does not implement trait `Shape`; add `impl Shape for Other:`

@@ -1,0 +1,6 @@
+error[AU2051]: a `mut` parameter of type `dyn Shape` takes a `dyn Shape` variable, found `Square`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_mut_parameter_needs_object.au:59:10
+   |
+59 |     bump(square)
+   |          ^
+  = help: the callee may store a value of another type there; bind the value first, as `mut name: dyn Shape = ...`, and pass that

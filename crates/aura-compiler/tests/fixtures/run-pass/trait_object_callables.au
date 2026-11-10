@@ -1,0 +1,85 @@
+from iter import Generator
+
+
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def apply(shape: dyn Shape, measure: def(dyn Shape) -> int64) -> int64:
+    return measure(shape)
+
+
+def double_area(shape: dyn Shape) -> int64:
+    return shape.area() * 2
+
+
+def maker() -> def() -> dyn Shape:
+    make: def() -> dyn Shape = lambda: Square(side=9)
+    return make
+
+
+def shapes_gen(count: int64) -> Generator[dyn Shape]:
+    for i in range(count):
+        if i % 2 == 0:
+            yield Square(side=i + 1)
+        else:
+            yield Rect(w=i, h=2)
+
+
+def main() -> None:
+    square: dyn Shape = Square(side=3)
+    print(apply(square, double_area))
+    triple: def(dyn Shape) -> int64 = lambda shape: shape.area() * 3
+    print(apply(square, triple))
+    make = maker()
+    print(make().area())
+    for shape in shapes_gen(4):
+        print(shape.describe())

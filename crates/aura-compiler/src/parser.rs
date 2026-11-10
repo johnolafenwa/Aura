@@ -3047,6 +3047,11 @@ impl Parser {
             }
         } else {
             let name = self.parse_identifier_path()?.join(".");
+            if name == crate::sema::TRAIT_OBJECT_TYPE_NAME {
+                if let Some(trait_object) = self.parse_trait_object_type(span, indirect)? {
+                    return Ok(trait_object);
+                }
+            }
             if matches!(name.as_str(), "Callable" | "TaskCallable")
                 && self.eat_simple(&TokenKind::LBracket).is_some()
             {
@@ -3085,6 +3090,44 @@ impl Parser {
             }
         };
         Ok(ty)
+    }
+
+    /// The rest of a trait object type after `dyn`: a trait name and its
+    /// type arguments, as in `dyn Tool` and `dyn Mapper[int64]`. `dyn` is a
+    /// keyword only here, before a trait name in a type position. `None`
+    /// when `dyn` stands alone and is an ordinary name.
+    fn parse_trait_object_type(&mut self, span: Span, indirect: bool) -> Result<Option<TypeRef>> {
+        if self.at_simple(&TokenKind::LBracket) {
+            return Err(parse_error(
+                self.current_span(),
+                "a trait object type is written `dyn Trait`, without brackets",
+            ));
+        }
+        if !matches!(self.current_kind(), TokenKind::Identifier(_)) {
+            return Ok(None);
+        }
+        if indirect {
+            return Err(parse_error(
+                span,
+                "`indirect` is not valid on a trait object type; a trait object already holds its value behind a handle",
+            ));
+        }
+        let trait_span = self.current_span();
+        let trait_name = self.parse_identifier_path()?.join(".");
+        let mut args = Vec::new();
+        if self.eat_simple(&TokenKind::LBracket).is_some() {
+            loop {
+                args.push(self.parse_type()?);
+                if !self.eat_list_comma(&TokenKind::RBracket) {
+                    break;
+                }
+            }
+            self.expect_simple(TokenKind::RBracket)?;
+        }
+        Ok(Some(TypeRef::trait_object(
+            TypeRef::named(trait_name, args, false, trait_span),
+            span,
+        )))
     }
 
     fn parse_function_type(&mut self, span: Span) -> Result<TypeRef> {
@@ -4762,6 +4805,14 @@ impl Parser {
 
         if !self.is_contextual_identifier_at(idx) {
             return idx;
+        }
+        // `dyn Trait` spends two names.
+        if matches!(
+            self.peek_kind_at(idx),
+            Some(TokenKind::Identifier(name)) if name == crate::sema::TRAIT_OBJECT_TYPE_NAME
+        ) && matches!(self.peek_kind_at(idx + 1), Some(TokenKind::Identifier(_)))
+        {
+            idx += 1;
         }
         idx += 1;
         while matches!(self.peek_kind_at(idx), Some(TokenKind::Dot))

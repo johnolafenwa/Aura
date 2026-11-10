@@ -134,7 +134,88 @@ impl<'de> Deserialize<'de> for UnionType {
     }
 }
 
+/// The reserved constructor name of a trait object type. `dyn Tool` is
+/// `Named("dyn", [Named("Tool", [])])`: the one argument names the trait,
+/// with the trait's own type arguments. No class, enum, alias, or trait can
+/// take the name, and the source spelling `dyn[...]` does not parse.
+pub const TRAIT_OBJECT_TYPE_NAME: &str = "dyn";
+
 impl Type {
+    /// The trait object type `dyn trait_name[trait_args]`.
+    pub fn trait_object(trait_name: impl Into<String>, trait_args: Vec<Type>) -> Type {
+        Type::Named(
+            TRAIT_OBJECT_TYPE_NAME.to_string(),
+            vec![Type::Named(trait_name.into(), trait_args)],
+        )
+    }
+
+    /// The trait and trait arguments of a trait object type.
+    pub fn as_trait_object(&self) -> Option<(&str, &[Type])> {
+        let Type::Named(name, args) = self else {
+            return None;
+        };
+        if name != TRAIT_OBJECT_TYPE_NAME {
+            return None;
+        }
+        match args.as_slice() {
+            [Type::Named(trait_name, trait_args)] => Some((trait_name, trait_args)),
+            _ => None,
+        }
+    }
+
+    pub fn is_trait_object(&self) -> bool {
+        self.as_trait_object().is_some()
+    }
+
+    /// The bound a trait object type stands for: `dyn Tool` holds a value
+    /// of some type that implements `Tool`.
+    pub fn trait_object_bound(&self) -> Option<TraitBound> {
+        self.as_trait_object()
+            .map(|(trait_name, trait_args)| TraitBound {
+                trait_name: trait_name.to_string(),
+                trait_args: trait_args.to_vec(),
+            })
+    }
+
+    /// Whether a trait object type appears anywhere in `self`.
+    pub fn names_trait_object(&self) -> bool {
+        match self {
+            Type::Named(_, args) => {
+                self.is_trait_object() || args.iter().any(Type::names_trait_object)
+            }
+            Type::Tuple(elements) => elements.iter().any(Type::names_trait_object),
+            Type::Union(union) => union.members.iter().any(Type::names_trait_object),
+            Type::Function {
+                params,
+                return_type,
+            } => {
+                params.iter().any(|param| param.ty.names_trait_object())
+                    || return_type.names_trait_object()
+            }
+            Type::Closure {
+                params,
+                return_type,
+                captures,
+                ..
+            } => {
+                params.iter().any(|param| param.ty.names_trait_object())
+                    || return_type.names_trait_object()
+                    || captures
+                        .iter()
+                        .any(|capture| capture.ty.names_trait_object())
+            }
+            Type::Callable(callable) => {
+                callable
+                    .params
+                    .iter()
+                    .any(|param| param.ty.names_trait_object())
+                    || callable.return_type.names_trait_object()
+            }
+            Type::ReturnedView(view) => view.pointee.names_trait_object(),
+            Type::TypeParam(_) | Type::Module(_) | Type::Unit => false,
+        }
+    }
+
     pub fn canonical_key(
         &self,
         module_name: &str,
@@ -514,6 +595,9 @@ impl fmt::Display for Type {
                 write_return_contract(f, params, return_type)
             }
             Type::Named(name, args) if args.is_empty() => write!(f, "{}", name),
+            Type::Named(name, args) if name == TRAIT_OBJECT_TYPE_NAME && args.len() == 1 => {
+                write!(f, "dyn {}", args[0])
+            }
             Type::Named(name, args) => {
                 write!(f, "{}[", name)?;
                 for (index, arg) in args.iter().enumerate() {
@@ -600,12 +684,15 @@ fn push_canonical_key(out: &mut String, ty: &Type, module: &str, names: &BTreeMa
         }
         Type::Named(name, args) => {
             let resolved = names.get(name).unwrap_or(name);
-            let nominal =
-                if is_builtin_type(resolved) || resolved.contains('.') || module.is_empty() {
-                    resolved.clone()
-                } else {
-                    format!("{module}.{resolved}")
-                };
+            let nominal = if is_builtin_type(resolved)
+                || resolved == TRAIT_OBJECT_TYPE_NAME
+                || resolved.contains('.')
+                || module.is_empty()
+            {
+                resolved.clone()
+            } else {
+                format!("{module}.{resolved}")
+            };
             out.push_str("[\"named\",");
             json_text::push_string(out, &nominal);
             out.push(',');

@@ -1,0 +1,6 @@
+error[AU2002]: binding `b` has annotated type `Square`, but value has type `dyn Shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_no_downcast.au:55:5
+   |
+55 |     b: Square = a
+   |     ^
+  = help: a trait object does not convert back to the type it holds; call the methods of its trait on `dyn Shape`

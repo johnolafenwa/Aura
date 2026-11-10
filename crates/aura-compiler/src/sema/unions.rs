@@ -217,12 +217,48 @@ impl FunctionChecker<'_> {
         if actual == expected {
             return Ok(expected);
         }
-        let Some(member_index) = union.members.iter().position(|member| member == &actual) else {
-            return Err(Diagnostic::coded_at(
-                "AU2010",
-                expr.span,
-                format!("'{actual}' is not a member of '{expected}'"),
-            ));
+        let exact = union.members.iter().position(|member| member == &actual);
+        let (member_index, actual) = match exact {
+            Some(member_index) => (member_index, actual),
+            None => {
+                // A value of a type that implements a trait converts to the
+                // union's trait object member, then injects as that member.
+                let trait_objects = union
+                    .members
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, member)| self.converts_to_trait_object(&actual, member))
+                    .map(|(index, _)| index)
+                    .collect::<Vec<_>>();
+                match trait_objects.as_slice() {
+                    [member_index] => {
+                        let member = union.members[*member_index].clone();
+                        self.record_trait_object_conversion(expr, &member, actual);
+                        (*member_index, member)
+                    }
+                    [] => {
+                        return Err(Diagnostic::coded_at(
+                            "AU2010",
+                            expr.span,
+                            format!("'{actual}' is not a member of '{expected}'"),
+                        ))
+                    }
+                    several => {
+                        return Err(Diagnostic::coded_at(
+                            "AU2011",
+                            expr.span,
+                            format!(
+                                "'{actual}' converts to multiple members of '{expected}': {}; bind it to one member's type before injection",
+                                several
+                                    .iter()
+                                    .map(|index| union.members[*index].to_string())
+                                    .collect::<Vec<_>>()
+                                    .join(", ")
+                            ),
+                        ))
+                    }
+                }
+            }
         };
         if !contracted {
             // The selected member is this value's bare destination.

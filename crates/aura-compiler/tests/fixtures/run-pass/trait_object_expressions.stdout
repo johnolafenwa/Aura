@@ -1,0 +1,14 @@
+5
+rect
+25
+rect of area 4
+label other
+16
+43
+3
+4
+5
+Result.Ok(2)
+Result.Err(unknown shape blob)
+[0, 2, 4, 12, 16]
+square, rect, square, rect, square
