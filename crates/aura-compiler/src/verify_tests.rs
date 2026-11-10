@@ -3154,3 +3154,57 @@ def main():
         started.elapsed()
     );
 }
+
+#[test]
+fn steps_outside_the_model_stay_open_with_site_proofs_and_in_the_cache() {
+    let dir = std::env::temp_dir().join(format!("aura-verify-open-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    let source = r#"
+def invert(a: int64) -> int64:
+    return ~a
+
+def power(a: float64, b: float64) -> float64:
+    return a ** b
+
+def shift(a: int64, b: int64) -> int64:
+    return a << b
+
+def int_power(a: int64, b: int64) -> int64:
+    return a ** b
+
+def main():
+    print(invert(1))
+    print(power(2.0, 2.0))
+    print(shift(3, 1))
+    print(int_power(3, 1))
+"#;
+    let plain = Options {
+        cache_dir: Some(dir.clone()),
+        ..Options::default()
+    };
+    let Some(first) = verify_with(source, &plain) else {
+        return;
+    };
+    let open = open_checks(&first);
+    assert_eq!(
+        open,
+        [
+            "6 overflow unsupported",
+            "9 overflow unsupported",
+            "12 overflow unsupported"
+        ],
+        "{first:#?}"
+    );
+    // An open step is part of the function's cache key, and its answer is
+    // never stored as a proof.
+    let again = verify_with(source, &plain).expect("a solver");
+    assert_eq!(open_checks(&again), open);
+    // Asking for site proofs, as a build does, leaves the same steps open.
+    let sites = Options {
+        prove_sites: true,
+        ..Options::default()
+    };
+    let report = verify_with(source, &sites).expect("a solver");
+    assert_eq!(open_checks(&report), open, "{report:#?}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
