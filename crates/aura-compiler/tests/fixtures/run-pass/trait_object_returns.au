@@ -1,0 +1,80 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def make(kind: int64) -> dyn Shape:
+    if kind == 0:
+        return Square(side=3)
+    if kind == 1:
+        return Rect(w=2, h=5)
+    return Label(text="made", hits=[kind])
+
+
+def pick(flag: bool) -> dyn Shape:
+    return Square(side=1) if flag else Label(text="no", hits=[])
+
+
+def total(shapes: list[dyn Shape]) -> int64:
+    mut sum = 0
+    for shape in shapes:
+        sum += shape.area()
+    return sum
+
+
+def main() -> None:
+    mut made: list[dyn Shape] = []
+    for kind in range(4):
+        made.append(make(kind))
+    print(total(made))
+    print(pick(true).describe())
+    print(pick(false).describe())
+    shape = make(1)
+    print(shape.name())

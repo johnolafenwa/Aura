@@ -1,0 +1,74 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+trait Merge:
+    def merge(self, other: Self) -> Self
+    def make() -> Self
+    def map[T](self, value: T) -> T
+    def size(self) -> int64
+
+
+impl Merge for Square:
+    def merge(self, other: Square) -> Square:
+        return Square(side=self.side + other.side)
+    def make() -> Square:
+        return Square(side=0)
+    def map[T](self, value: T) -> T:
+        return value
+    def size(self) -> int64:
+        return self.side
+
+
+def main() -> None:
+    a: dyn Merge = Square(side=1)
+    print(a.size())
+    print(a.map(3))

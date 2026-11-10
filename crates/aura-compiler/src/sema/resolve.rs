@@ -7,7 +7,7 @@ use super::{
 };
 
 pub(super) fn reject_reserved_type_name(name: &str, span: crate::diag::Span) -> Result<()> {
-    if is_builtin_type(name) {
+    if is_builtin_type(name) || name == super::TRAIT_OBJECT_TYPE_NAME {
         return Err(Diagnostic::at(
             span,
             format!("`{}` is a reserved built-in type name", name),

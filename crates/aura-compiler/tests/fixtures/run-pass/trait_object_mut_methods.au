@@ -1,0 +1,74 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def main() -> None:
+    mut shapes: list[dyn Shape] = [
+        Square(side=1),
+        Rect(w=2, h=3),
+        Label(text="ab", hits=[]),
+    ]
+    shapes.append(Square(side=10))
+    for shape in mut shapes:
+        shape.grow(1)
+    mut total = 0
+    for shape in shapes:
+        total += shape.area()
+        print(shape.describe())
+    print(total)
+    mut first: dyn Shape = Rect(w=1, h=1)
+    first.grow(2)
+    print(first.area())
+    first = Label(text="swap", hits=[1])
+    print(first.describe())
+    shapes[0].grow(4)
+    print(shapes[0].area())
+    print(len(shapes))

@@ -192,6 +192,7 @@ seven real loopback requests.
 | `specialized_trait_dispatch.au` | Bounded generic dispatch over specialized generic trait impls | `7`, `hi` |
 | `generic_trait_impl.au` | Generic trait declarations and generic impl headers with `own T` inputs | `11` |
 | `default_trait_methods.au` | Default trait method bodies with per-impl overrides | `name=aura`, `team=infra` |
+| `trait_objects.au` | Trait objects: a `list[dyn Tool]` and a `dict[str, dyn Tool]` that hold values of three types, conversion where a value is stored or returned, calls that run the held value's method, and a call on an element that borrows it in place | `echo: you said hello`, `counter: call 1 with 5 characters`, `shout: HELLO`, `echo: you said again`, `counter: call 2 with 5 characters`, `shout: AGAIN`, `tool counter, called 2 times`, `> typed`, `tool shout` |
 | `operator_traits.au` | Operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]` | `6`, `8`, `-6`, `-8` |
 | `ordering_traits.au` | Ordering traits with shared right-hand operands and an explicitly consuming generic selector | `true`, `true`, `true`, `true`, `2` |
 | `trait_associated_factory.au` | Associated trait methods called through the implementing type name | `7` |

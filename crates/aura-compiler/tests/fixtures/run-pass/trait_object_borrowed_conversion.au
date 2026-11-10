@@ -1,0 +1,46 @@
+import random
+
+
+trait Named:
+    def name(self) -> str
+    def roll(mut self) -> int64
+
+
+class Echo:
+    label: str
+    hits: list[int64]
+
+
+class Dice:
+    rng: random.Rng
+
+
+impl Named for Echo:
+    def name(self) -> str:
+        return self.label.clone()
+    def roll(mut self) -> int64:
+        self.hits.append(1)
+        return len(self.hits)
+
+
+impl Named for Dice:
+    def name(self) -> str:
+        return "dice"
+    def roll(mut self) -> int64:
+        return self.rng.next_int(1, 2)
+
+
+def show(item: dyn Named) -> None:
+    print(item.name())
+
+
+def main() -> None:
+    mut echo = Echo(label="echo", hits=[])
+    show(echo)
+    show(echo)
+    print(echo.roll())
+    print(echo.label)
+    mut dice = Dice(rng=random.Rng(7))
+    show(dice)
+    print(dice.roll())
+    show(dice)

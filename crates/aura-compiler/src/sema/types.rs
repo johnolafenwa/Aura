@@ -18,6 +18,9 @@ pub struct TypeDefinitions {
     pub(super) checked_aliases: BTreeMap<String, super::AliasInfo>,
     pub(super) imported_aliases: BTreeMap<String, super::AliasInfo>,
     pub(super) non_value_names: BTreeSet<String>,
+    /// Every trait a `dyn` type can name here, by each name it is visible
+    /// under.
+    pub(super) traits: BTreeMap<String, TraitTypeName>,
     alias_templates: std::cell::RefCell<BTreeMap<String, Type>>,
     budget: super::type_budget::ExpansionBudget,
     pub(crate) union_injections:
@@ -30,6 +33,29 @@ pub struct TypeDefinitions {
     /// computed once from `type_param_calls` and every imported module's.
     pub(crate) specialized_functions: std::rc::Rc<std::cell::OnceCell<BTreeSet<(String, String)>>>,
     pub(super) union_probe_work: std::rc::Rc<std::cell::Cell<usize>>,
+}
+
+/// What a `dyn Trait` type needs to know about the trait it names.
+#[derive(Clone, Debug)]
+pub(super) struct TraitTypeName {
+    /// The name a trait object type carries: the bare name for a trait of
+    /// the module being checked, and `module.Name` for an imported one.
+    pub(super) canonical: String,
+    /// The type parameters the trait declares in brackets.
+    pub(super) type_params: usize,
+    /// The associated types the trait declares.
+    pub(super) assoc_types: usize,
+}
+
+impl TraitTypeName {
+    fn of(decl: &crate::ast::TraitDecl, canonical: String) -> Self {
+        let assoc_types = decl.assoc_types.len();
+        Self {
+            canonical,
+            type_params: decl.type_params.len().saturating_sub(assoc_types),
+            assoc_types,
+        }
+    }
 }
 
 impl std::ops::Deref for TypeDefinitions {
@@ -54,6 +80,7 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
             checked_aliases: BTreeMap::new(),
             imported_aliases: BTreeMap::new(),
             non_value_names: BTreeSet::new(),
+            traits: BTreeMap::new(),
             alias_templates: std::cell::RefCell::new(BTreeMap::new()),
             budget: Default::default(),
             union_injections: Default::default(),
@@ -66,6 +93,27 @@ impl From<BTreeMap<String, crate::diag::Span>> for TypeDefinitions {
 }
 
 impl TypeDefinitions {
+    /// Records a trait the checked module declares.
+    pub(super) fn register_local_trait(&mut self, decl: &crate::ast::TraitDecl) {
+        self.traits.insert(
+            decl.name.clone(),
+            TraitTypeName::of(decl, decl.name.clone()),
+        );
+    }
+
+    /// Records an imported trait under the name it is visible as.
+    pub(super) fn register_imported_trait(&mut self, visible: &str, info: &super::TraitInfo) {
+        let canonical = if info.module_name.is_empty() {
+            info.decl.name.clone()
+        } else {
+            format!("{}.{}", info.module_name, info.decl.name)
+        };
+        self.traits.insert(
+            visible.to_string(),
+            TraitTypeName::of(&info.decl, canonical),
+        );
+    }
+
     pub(crate) fn expansion_budget(&self) -> &super::type_budget::ExpansionBudget {
         &self.budget
     }
@@ -665,6 +713,32 @@ pub(super) fn lower_type_with_self(
         return Ok(Type::Unit);
     }
 
+    if let Some(trait_ref) = type_ref.as_trait_object() {
+        return lower_trait_object_type(
+            trait_ref,
+            type_names,
+            type_arities,
+            canonical_type_names,
+            type_params,
+            self_type,
+        );
+    }
+    if type_names.traits.contains_key(type_name) {
+        let written = if type_args.is_empty() {
+            name.clone()
+        } else {
+            format!("{name}[...]")
+        };
+        return Err(Diagnostic::coded_at(
+            "AU2050",
+            type_ref.span,
+            format!("`{name}` is a trait, not a type"),
+        )
+        .with_help(format!(
+            "write `dyn {written}` to hold a value of any type that implements it, or bound a type parameter, as `T: {written}`"
+        )));
+    }
+
     let args = type_args
         .iter()
         .map(|arg| {
@@ -904,6 +978,74 @@ pub(super) fn lower_type_with_self(
             format!("unknown type `{}`", name),
         ))
     }
+}
+
+/// Lowers the trait reference of `dyn Trait[args]` to a trait object type
+/// that carries the trait's canonical name.
+fn lower_trait_object_type(
+    trait_ref: &TypeRef,
+    type_names: &TypeDefinitions,
+    type_arities: &BTreeMap<String, usize>,
+    canonical_type_names: &BTreeMap<String, String>,
+    type_params: &BTreeMap<String, ()>,
+    self_type: Option<&Type>,
+) -> Result<Type> {
+    let Some((trait_name, trait_type_args)) = trait_ref.named_parts() else {
+        return Err(Diagnostic::coded_at(
+            "AU2050",
+            trait_ref.span,
+            "`dyn` needs a trait name",
+        ));
+    };
+    let Some(trait_type) = type_names.traits.get(trait_name) else {
+        return Err(Diagnostic::coded_at(
+            "AU2050",
+            trait_ref.span,
+            format!("`dyn` needs a trait, and `{trait_name}` is not a trait"),
+        )
+        .with_help(
+            "a trait object holds a value of any type that implements one trait; name that trait after `dyn`",
+        ));
+    };
+    if trait_type.assoc_types > 0 {
+        return Err(Diagnostic::coded_at(
+            "AU2050",
+            trait_ref.span,
+            format!("trait `{trait_name}` has associated types, so it cannot be a trait object"),
+        )
+        .with_help(format!(
+            "bound a type parameter instead, as `T: {trait_name}`"
+        )));
+    }
+    if trait_type_args.len() != trait_type.type_params {
+        return Err(Diagnostic::coded_at(
+            "AU2050",
+            trait_ref.span,
+            format!(
+                "trait `{}` expects {} type argument{}, found {}",
+                trait_name,
+                trait_type.type_params,
+                if trait_type.type_params == 1 { "" } else { "s" },
+                trait_type_args.len()
+            ),
+        ));
+    }
+    let trait_args = trait_type_args
+        .iter()
+        .map(|arg| {
+            let lowered = lower_type_with_self(
+                arg,
+                type_names,
+                type_arities,
+                canonical_type_names,
+                type_params,
+                self_type,
+            )?;
+            reject_nested_span_type(&lowered, arg.span)?;
+            Ok(lowered)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Type::trait_object(trait_type.canonical.clone(), trait_args))
 }
 
 pub(super) fn type_param_scope(type_params: &[String]) -> BTreeMap<String, ()> {

@@ -108,6 +108,11 @@ pub(super) fn rng_clone_safety_in_context_inner(
     module_registry: &BTreeMap<String, ModuleNamespace>,
     visiting: &mut BTreeSet<String>,
 ) -> RngCloneSafety {
+    // The type behind a trait object is not known, so no copy of it is
+    // known to be safe.
+    if ty.is_trait_object() {
+        return RngCloneSafety::ContainsRng;
+    }
     let Type::Named(name, args) = ty else {
         return match ty {
             Type::Union(union) => {
@@ -321,6 +326,9 @@ pub(super) fn collect_rng_clone_obligation_params_in_context_inner(
     visiting: &mut BTreeSet<String>,
     params: &mut BTreeSet<String>,
 ) {
+    if ty.is_trait_object() {
+        return;
+    }
     match ty {
         Type::Union(union) => {
             for member in &union.members {
@@ -722,6 +730,10 @@ pub(super) fn type_is_copy_in_context_inner(
 }
 
 pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
+    // A trait object stores a handle; the trait it names is not a field.
+    if ty.is_trait_object() {
+        return false;
+    }
     match ty {
         Type::Union(union) => union
             .members
@@ -751,6 +763,9 @@ pub(super) fn type_contains_named(ty: &Type, target: &str) -> bool {
 }
 
 pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
+    if ty.is_trait_object() {
+        return false;
+    }
     match ty {
         Type::Union(union) => union.members.iter().any(type_contains_closure_value),
         Type::Closure { .. } => true,
@@ -769,6 +784,9 @@ pub(super) fn type_contains_closure_value(ty: &Type) -> bool {
 }
 
 pub(super) fn type_contains_loan_closure(ty: &Type) -> bool {
+    if ty.is_trait_object() {
+        return false;
+    }
     match ty {
         Type::Union(union) => union.members.iter().any(type_contains_loan_closure),
         Type::Callable(_) => false,
@@ -795,6 +813,10 @@ pub(super) fn type_reaches_class_through_non_indirect_fields(
     classes: &BTreeMap<String, ClassInfo>,
     visiting: &mut BTreeSet<String>,
 ) -> bool {
+    // A trait object holds its value behind a handle.
+    if ty.is_trait_object() {
+        return false;
+    }
     match ty {
         Type::Union(union) => union.members.iter().any(|member| {
             type_reaches_class_through_non_indirect_fields(member, target, classes, visiting)
@@ -1015,6 +1037,9 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         nominals: &mut BTreeMap<String, TransferNominal>,
     ) {
+        if ty.is_trait_object() {
+            return;
+        }
         let Type::Named(name, args) = ty else {
             match ty {
                 Type::Tuple(elements) => {
@@ -1249,6 +1274,12 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
+            Type::Named(_, _) if ty.is_trait_object() => TransferSummary {
+                failure: Some(format!(
+                    "`{ty}` is a trait object, and the type it holds is not known to be Transfer"
+                )),
+                requirements: Vec::new(),
+            },
             Type::Named(name, args) if name == "str" && args.is_empty() => {
                 TransferSummary::default()
             }
@@ -1490,7 +1521,11 @@ impl<'a> FunctionChecker<'a> {
     }
 
     pub(super) fn non_cloneable_rng_reason(ty: &Type) -> String {
-        if matches!(ty, Type::Named(name, args) if name == "random.Rng" && args.is_empty()) {
+        if ty.is_trait_object() {
+            format!("trait object `{ty}` cannot be cloned")
+        } else if ty.names_trait_object() {
+            format!("`{ty}` holds a trait object, which cannot be cloned")
+        } else if matches!(ty, Type::Named(name, args) if name == "random.Rng" && args.is_empty()) {
             format!("`{ty}` is directly non-cloneable")
         } else {
             format!("`{ty}` contains non-cloneable `random.Rng` state")
@@ -1557,6 +1592,9 @@ impl<'a> FunctionChecker<'a> {
         formals: &BTreeMap<String, usize>,
         summaries: &BTreeMap<String, TaskObservationSummary>,
     ) -> TaskObservationSummary {
+        if ty.is_trait_object() {
+            return TaskObservationSummary::default();
+        }
         match ty {
             Type::Union(union) => {
                 let mut result = TaskObservationSummary::default();
@@ -1758,6 +1796,10 @@ impl<'a> FunctionChecker<'a> {
             Type::Tuple(elements) => {
                 self.combine_symbolic_copy_shapes(elements.iter(), formals, visiting)
             }
+            Type::Named(_, _) if ty.is_trait_object() => SymbolicCopyShape {
+                intrinsic_noncopy: true,
+                noncopy_formals: Vec::new(),
+            },
             Type::Named(name, args) if is_builtin_copy_named_type(name, args) => {
                 SymbolicCopyShape::default()
             }
@@ -1891,6 +1933,9 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
+        if ty.is_trait_object() {
+            return None;
+        }
         match ty {
             Type::Union(union) => union
                 .members
@@ -1955,6 +2000,9 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
+        if ty.is_trait_object() {
+            return None;
+        }
         match ty {
             Type::Union(union) => union
                 .members
@@ -2030,6 +2078,9 @@ impl<'a> FunctionChecker<'a> {
         visiting: &mut BTreeSet<String>,
         params: &mut BTreeSet<String>,
     ) {
+        if ty.is_trait_object() {
+            return;
+        }
         match ty {
             Type::Union(union) => {
                 for member in &union.members {
@@ -2106,6 +2157,9 @@ impl<'a> FunctionChecker<'a> {
         ty: &Type,
         visiting: &mut BTreeSet<String>,
     ) -> Option<Type> {
+        if ty.is_trait_object() {
+            return None;
+        }
         match ty {
             Type::Union(union) => union
                 .members

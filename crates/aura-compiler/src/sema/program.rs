@@ -700,6 +700,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
             ImportedBinding::Trait(trait_info) => {
                 type_names.non_value_names.insert(name.clone());
+                type_names.register_imported_trait(name, trait_info);
                 canonical_type_names.insert(
                     name.clone(),
                     format!("{}.{}", trait_info.module_name, trait_info.decl.name),
@@ -856,6 +857,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
             Item::Trait(trait_decl) => {
                 type_names.non_value_names.insert(trait_decl.name.clone());
+                type_names.register_local_trait(trait_decl);
                 reject_reserved_type_name(&trait_decl.name, trait_decl.span)?;
                 if let Some((kind, existing)) =
                     item_names.insert(trait_decl.name.clone(), ("trait", trait_decl.span))
@@ -1820,6 +1822,22 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             return Err(Diagnostic::at(
                 impl_decl.span,
                 "trait impl target must name a concrete or generic outer type",
+            ));
+        }
+        // A trait object already answers for its own trait and supertraits
+        // by calling the value it holds. A second impl for the object itself
+        // would give one call two answers.
+        if for_type.is_trait_object() {
+            return Err(Diagnostic::coded_at(
+                "AU2050",
+                impl_decl.span,
+                format!(
+                    "trait `{}` cannot be implemented for the trait object type `{for_type}`",
+                    impl_decl.trait_name
+                ),
+            )
+            .with_help(
+                "implement the trait for each type the trait object holds, or make it a supertrait of the object's trait",
             ));
         }
         if trait_impls.iter().any(|existing: &TraitImplInfo| {
@@ -2877,7 +2895,8 @@ fn register_visible_namespace_types(
         definitions.insert(visible.clone(), span);
         arities.insert(visible.clone(), arity);
         canonical_names.insert(visible.clone(), format!("{module}.{original}"));
-        if namespace.traits.contains_key(name) {
+        if let Some(trait_info) = namespace.traits.get(name) {
+            definitions.register_imported_trait(&visible, trait_info);
             definitions.non_value_names.insert(visible);
         }
     }
@@ -2937,6 +2956,7 @@ pub(super) fn register_module_namespace_types(
     }
     for trait_info in namespace.traits.values() {
         let qualified_name = format!("{}.{}", namespace.path, trait_info.decl.name);
+        type_names.register_imported_trait(&qualified_name, trait_info);
         type_names.non_value_names.insert(qualified_name.clone());
         type_names.insert(qualified_name.clone(), trait_info.decl.span);
         type_arities.insert(qualified_name, trait_info.decl.type_params.len());
@@ -2960,6 +2980,7 @@ pub(super) fn register_module_namespace_types(
     for trait_info in namespace.all_traits.values() {
         if !trait_info.module_name.is_empty() && trait_info.module_name != namespace.path {
             let qualified_name = format!("{}.{}", trait_info.module_name, trait_info.decl.name);
+            type_names.register_imported_trait(&qualified_name, trait_info);
             type_names.non_value_names.insert(qualified_name.clone());
             type_names.insert(qualified_name.clone(), trait_info.decl.span);
             type_arities.insert(qualified_name, trait_info.decl.type_params.len());

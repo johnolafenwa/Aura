@@ -1,0 +1,31 @@
+import trait_object_support.shapes as shapes
+
+
+class Dot:
+    weight: int64
+
+
+impl shapes.Shape for Dot:
+    def area(self) -> int64:
+        return self.weight
+    def name(self) -> str:
+        return "dot"
+
+
+def biggest(items: list[dyn shapes.Shape]) -> str:
+    mut best = 0
+    mut name = "none"
+    for item in items:
+        if item.area() > best:
+            best = item.area()
+            name = item.name()
+    return name
+
+
+def main() -> None:
+    mut items: list[dyn shapes.Shape] = [shapes.Square(side=2), Dot(weight=7)]
+    items.append(shapes.unit())
+    print(shapes.total(items))
+    print(biggest(items))
+    one: dyn shapes.Shape = shapes.unit()
+    print(one.name())

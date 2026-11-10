@@ -317,6 +317,7 @@ impl Specializer<'_, '_> {
             substitutions: type_args.clone().into_iter().collect(),
             template,
             copy: &name,
+            erase: false,
         };
         let family = self
             .module
@@ -464,13 +465,29 @@ struct Substitution<'a> {
     substitutions: HashMap<String, Type>,
     template: &'a str,
     copy: &'a str,
+    /// Erase each trait object type instead of replacing type parameters
+    /// (`erase_trait_objects`). No function is renamed.
+    erase: bool,
+}
+
+/// Rewrites every type of `function` with its trait object types erased
+/// (see `mir::trait_objects`).
+pub(super) fn erase_function_trait_objects(function: &MirFunction) -> MirFunction {
+    Substitution {
+        substitutions: HashMap::new(),
+        template: "",
+        copy: "",
+        erase: true,
+    }
+    .function(function)
+    .expect("erasing trait objects keeps every union member apart")
 }
 
 impl Substitution<'_> {
     /// The copy of `function`, the template or a function it owns.
     fn function(&self, function: &MirFunction) -> std::result::Result<MirFunction, String> {
         let mut out = function.clone();
-        out.name = if function.name == self.template {
+        out.name = if function.name == self.template && !self.erase {
             self.copy.to_string()
         } else {
             self.rename(&function.name)
@@ -489,7 +506,7 @@ impl Substitution<'_> {
         // parameter, as `None`. The checker proves it unreachable for a
         // non-`None` result, but the copy still has to type-check, so it
         // returns the default the copy's own result type lowers to.
-        let generic_result = matches!(function.return_type, Type::TypeParam(_));
+        let generic_result = !self.erase && matches!(function.return_type, Type::TypeParam(_));
         for block in &mut out.blocks {
             self.block(block)?;
             if generic_result && out.return_type != Type::Unit {
@@ -502,6 +519,9 @@ impl Substitution<'_> {
     }
 
     fn ty(&self, ty: &Type) -> Type {
+        if self.erase {
+            return super::trait_objects::erased(ty);
+        }
         substitute_type(ty, &self.substitutions)
     }
 
@@ -509,7 +529,7 @@ impl Substitution<'_> {
     /// call to the template itself keeps its name: the copy's calls are
     /// pointed at copies for their own type arguments afterwards.
     fn rename(&self, name: &str) -> String {
-        if owned_by(name, self.template) {
+        if !self.erase && owned_by(name, self.template) {
             format!("{}{}", self.copy, &name[self.template.len()..])
         } else {
             name.to_string()

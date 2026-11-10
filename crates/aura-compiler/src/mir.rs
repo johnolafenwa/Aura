@@ -10843,6 +10843,8 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
 
 /// Names the runtime operation each call runs and plans every union.
 fn resolve_runtime_ops_and_unions(program: &Program, module: &mut MirModule) {
+    // From here on a trait object is a value of an erased type.
+    trait_objects::erase_trait_objects(module);
     runtime_ops::resolve_runtime_ops(module);
     // Every union the module holds or operates on gets one explicit-tag
     // layout and drop plan (ADR-0052 A9).
@@ -11998,6 +12000,39 @@ impl<'a> Lowerer<'a> {
         })
     }
 
+    /// The trait a trait object type names. The type carries the trait's
+    /// canonical name: the bare name of a trait of the program's own module,
+    /// or `module.Name` with the module's full path, which an import alias
+    /// does not change.
+    fn trait_info_by_canonical_name(&self, canonical: &str) -> Option<&crate::sema::TraitInfo> {
+        let Some((module, leaf)) = canonical.rsplit_once('.') else {
+            return self.program.traits.get(canonical).or_else(|| {
+                self.program
+                    .module_registry
+                    .values()
+                    .find_map(|namespace| namespace.all_traits.get(canonical))
+            });
+        };
+        let names_it =
+            |info: &&crate::sema::TraitInfo| info.module_name == module && info.decl.name == leaf;
+        self.trait_info_in_scope(canonical)
+            .filter(names_it)
+            .or_else(|| self.program.traits.values().find(names_it))
+            .or_else(|| {
+                Self::find_namespace_in_modules(&self.program.module_registry, module)
+                    .or_else(|| {
+                        Self::find_namespace_in_modules(&self.program.imported_modules, module)
+                    })
+                    .and_then(|namespace| {
+                        namespace
+                            .all_traits
+                            .get(leaf)
+                            .or_else(|| namespace.traits.get(leaf))
+                    })
+                    .filter(names_it)
+            })
+    }
+
     fn find_namespace_in_modules<'b>(
         modules: &'b BTreeMap<String, ModuleNamespace>,
         path: &str,
@@ -13011,6 +13046,32 @@ impl<'a> Lowerer<'a> {
             .or_else(|| self.find_imported_enum_info(name))
     }
 
+    /// The name a trait object type carries for the trait written as
+    /// `name` in the module being lowered: the checker's canonical name,
+    /// bare for a trait of the program's own module and `module.Name` for
+    /// any other.
+    fn trait_object_trait_name(&self, name: &str) -> String {
+        let name = self.canonical_module_alias_name(name);
+        let info = self
+            .current_module_namespace()
+            .and_then(|namespace| {
+                namespace
+                    .all_traits
+                    .get(name)
+                    .or_else(|| namespace.traits.get(name))
+            })
+            .or_else(|| self.trait_info_in_scope(name));
+        match info {
+            Some(info)
+                if info.module_name.is_empty() || info.module_name == self.program.module_name =>
+            {
+                info.decl.name.clone()
+            }
+            Some(info) => format!("{}.{}", info.module_name, info.decl.name),
+            None => name.to_string(),
+        }
+    }
+
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
         self.lower_type_ref_scoped(type_ref, &BTreeSet::new())
     }
@@ -13081,6 +13142,18 @@ impl<'a> Lowerer<'a> {
                 }
                 if args.is_empty() && type_params.contains(source_name) {
                     return Type::TypeParam(source_name.clone());
+                }
+                if let Some((trait_name, trait_args)) = type_ref
+                    .as_trait_object()
+                    .and_then(|trait_ref| trait_ref.named_parts())
+                {
+                    return Type::trait_object(
+                        self.trait_object_trait_name(trait_name),
+                        trait_args
+                            .iter()
+                            .map(|arg| self.lower_type_ref_scoped(arg, type_params))
+                            .collect(),
+                    );
                 }
                 // The hidden `S.Iter` of a bound `S: IntoIterator[T]`,
                 // written as a local's type.
@@ -15955,7 +16028,7 @@ impl<'a> Lowerer<'a> {
                         }
                     }
                 }
-                if matches!(receiver_ty, Type::TypeParam(_)) {
+                if matches!(receiver_ty, Type::TypeParam(_)) || receiver_ty.is_trait_object() {
                     let (trait_name, trait_info, method, substitutions) =
                         self.bounded_trait_method_for_receiver(&receiver_ty, field)?;
                     let mut type_param_bounds = self.type_param_bounds.clone();
@@ -22309,6 +22382,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_union_injection(expr, expected, false) {
             return value;
         }
+        if let Some(value) = self.lower_trait_object_conversion(expr, expected, false) {
+            return value;
+        }
         if let Some(expected @ Type::Function { .. }) = expected {
             if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
                 // Contextual typing is what gives a generic named function
@@ -22705,6 +22781,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_union_injection(expr, expected, true) {
             return value;
         }
+        if let Some(value) = self.lower_trait_object_conversion(expr, expected, true) {
+            return value;
+        }
         if let ExprKind::Match {
             scrutinee,
             capability,
@@ -22826,6 +22905,43 @@ impl<'a> Lowerer<'a> {
                 member_type: injection.member_type,
                 member_index: injection.member_index,
             },
+        });
+        Some(if owned {
+            self.move_place_for_type(target, expected)
+        } else {
+            Operand::Place(target)
+        })
+    }
+
+    /// Converts a value to the trait object type `expected` where the
+    /// checker recorded the conversion: the value is lowered as its own
+    /// type and stored in a place of the trait object type. The backends
+    /// box it there, in the box its own type gives it, so the trait object
+    /// holds the value behind one handle.
+    fn lower_trait_object_conversion(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+        owned: bool,
+    ) -> Option<Operand> {
+        let expected = expected.filter(|expected| expected.is_trait_object())?;
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_trait_object_conversion(inner, Some(expected), owned);
+        }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
+        self.program
+            .union_injection(self.module_name, expr.span, expected)?;
+        let value = if owned {
+            self.lower_expr_for_owned_value(expr, None)
+        } else {
+            self.lower_expr_with_expected(expr, None)
+        };
+        let target = self.new_typed_temp(expected.clone());
+        self.emit(Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::Use(value),
         });
         Some(if owned {
             self.move_place_for_type(target, expected)
@@ -25893,20 +26009,27 @@ impl<'a> Lowerer<'a> {
         &crate::sema::TraitMethodInfo,
         HashMap<String, Type>,
     )> {
-        let Type::TypeParam(type_param) = receiver_type else {
-            return None;
+        // A trait object stands for a value bounded by its one trait.
+        let mut pending = match receiver_type {
+            Type::TypeParam(type_param) => self.type_param_bounds.get(type_param)?.clone(),
+            other => vec![other.trait_object_bound()?],
         };
-        let self_ty = Type::TypeParam(type_param.clone());
-        let mut pending = self.type_param_bounds.get(type_param)?.clone();
+        let self_ty = receiver_type.clone();
         let mut seen = Vec::new();
         let mut matches = Vec::new();
 
+        let mut object_trait = receiver_type.is_trait_object();
         while let Some(bound) = pending.pop() {
             if seen.contains(&bound) {
                 continue;
             }
             seen.push(bound.clone());
-            let Some(trait_info) = self.trait_info_in_scope(&bound.trait_name) else {
+            let trait_info = if std::mem::take(&mut object_trait) {
+                self.trait_info_by_canonical_name(&bound.trait_name)
+            } else {
+                self.trait_info_in_scope(&bound.trait_name)
+            };
+            let Some(trait_info) = trait_info else {
                 continue;
             };
             let substitutions = crate::sema::self_type_substitutions(
@@ -29429,6 +29552,9 @@ mod sort;
 
 #[path = "mir_type_param_calls.rs"]
 mod type_param_calls;
+
+#[path = "mir_trait_objects.rs"]
+mod trait_objects;
 
 #[path = "mir_local_types.rs"]
 mod local_types;

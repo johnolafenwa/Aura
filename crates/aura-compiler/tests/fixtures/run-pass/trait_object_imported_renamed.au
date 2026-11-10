@@ -1,0 +1,9 @@
+from trait_object_support.shapes import Shape as Form, Square as Box4, unit
+
+
+def main() -> None:
+    forms: list[dyn Form] = [Box4(side=2), unit()]
+    for form in forms:
+        print(form.area())
+    one: dyn Form = Box4(side=5)
+    print(one.name())

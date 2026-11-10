@@ -1,0 +1,41 @@
+public trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+
+
+public class Square:
+    public side: int64
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+
+
+public class Rect:
+    public w: int64
+    public h: int64
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+
+
+public def unit() -> dyn Shape:
+    return Square(side=1)
+
+
+public def total(shapes: list[dyn Shape]) -> int64:
+    mut sum = 0
+    for shape in shapes:
+        sum += shape.area()
+    return sum
+
+
+public class Scene:
+    public shapes: list[dyn Shape]

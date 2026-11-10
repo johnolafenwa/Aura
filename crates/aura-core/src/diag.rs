@@ -257,6 +257,16 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid generator",
     },
     DiagnosticCodeInfo {
+        code: "AU2050",
+        band: "names/types",
+        title: "invalid trait object type",
+    },
+    DiagnosticCodeInfo {
+        code: "AU2051",
+        band: "names/types",
+        title: "invalid trait object use",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

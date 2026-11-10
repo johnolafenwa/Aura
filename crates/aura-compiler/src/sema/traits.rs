@@ -327,6 +327,61 @@ pub(super) struct ResolvedTraitMethodInfo {
     pub(super) array_equality_safe_types: Vec<Type>,
 }
 
+/// A trait method as a receiver of type `self_ty` sees it, for the trait
+/// applied to `trait_args`: `Self` and the trait's type parameters are
+/// replaced throughout the signature and the method's own bounds.
+pub(super) fn resolved_trait_method(
+    trait_info: &TraitInfo,
+    method: &TraitMethodInfo,
+    trait_args: &[Type],
+    self_ty: &Type,
+) -> ResolvedTraitMethodInfo {
+    let trait_substitutions =
+        self_type_substitutions(&trait_info.decl, trait_args, self_ty.clone());
+    ResolvedTraitMethodInfo {
+        module_name: trait_info.module_name.clone(),
+        decl: method.decl.clone(),
+        signature: FunctionSignature {
+            params: method
+                .signature
+                .params
+                .iter()
+                .map(|param| substitute_type(param, &trait_substitutions))
+                .collect(),
+            param_passings: method.signature.param_passings.clone(),
+            return_type: substitute_type(&method.signature.return_type, &trait_substitutions),
+            rng_clone_safe_type_params: method
+                .signature
+                .rng_clone_safe_type_params
+                .iter()
+                .filter(|name| method.decl.type_params.contains(name))
+                .cloned()
+                .collect(),
+            array_equality_safe_type_params: method
+                .signature
+                .array_equality_safe_type_params
+                .iter()
+                .filter(|name| method.decl.type_params.contains(name))
+                .cloned()
+                .collect(),
+        },
+        type_param_bounds: substitute_trait_bounds(&method.type_param_bounds, &trait_substitutions),
+        rng_clone_safe_types: method
+            .signature
+            .rng_clone_safe_type_params
+            .iter()
+            .map(|name| substitute_type(&Type::TypeParam(name.clone()), &trait_substitutions))
+            .collect(),
+        array_equality_safe_types: method
+            .signature
+            .array_equality_safe_type_params
+            .iter()
+            .filter(|name| !method.decl.type_params.contains(name))
+            .map(|name| substitute_type(&Type::TypeParam(name.clone()), &trait_substitutions))
+            .collect(),
+    }
+}
+
 impl<'a> FunctionChecker<'a> {
     pub(super) fn check_trait_method(
         &self,
@@ -1220,7 +1275,7 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
-    fn trait_bound_identity(&self, bound: &TraitBound, module: &str) -> String {
+    pub(super) fn trait_bound_identity(&self, bound: &TraitBound, module: &str) -> String {
         let local_qualified = (module == self.module_name)
             .then(|| self.traits.get(&bound.trait_name))
             .flatten()
@@ -1340,6 +1395,10 @@ impl<'a> FunctionChecker<'a> {
         if matches!(ty, Type::TypeParam(_)) {
             return self.type_satisfies_bound_of_module(ty, bound, self.module_name);
         }
+        // A trait object stands for its trait and that trait's supertraits.
+        if ty.is_trait_object() && self.trait_object_satisfies_bound(ty, bound) {
+            return true;
+        }
         self.trait_impls_in_scope().any(|trait_impl| {
             let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
                 return false;
@@ -1429,6 +1488,18 @@ impl<'a> FunctionChecker<'a> {
                 }
                 _ => {
                     if !self.type_implements_trait_bound(ty, bound) {
+                        if let Some(obstacle) = self.trait_object_bound_obstacle(ty, bound) {
+                            return Err(Diagnostic::coded_at(
+                                "AU2051",
+                                span,
+                                format!(
+                                    "`{ty}` cannot stand for a type parameter bounded by `{presentation}`: {obstacle}"
+                                ),
+                            )
+                            .with_help(
+                                "pass a value whose type is known, or take the trait object itself as the parameter type",
+                            ));
+                        }
                         return Err(Diagnostic::at(
                             span,
                             format!("type `{}` does not implement trait `{}`", ty, presentation),
@@ -1490,71 +1561,9 @@ impl<'a> FunctionChecker<'a> {
                 };
                 if let Some(trait_info) = trait_info {
                     if let Some(method) = trait_info.methods.get(method_name) {
-                        let trait_substitutions = self_type_substitutions(
-                            &trait_info.decl,
-                            &bound.trait_args,
-                            self_ty.clone(),
-                        );
                         matches.push((
                             trait_info.decl.name.clone(),
-                            ResolvedTraitMethodInfo {
-                                module_name: trait_info.module_name.clone(),
-                                decl: method.decl.clone(),
-                                signature: FunctionSignature {
-                                    params: method
-                                        .signature
-                                        .params
-                                        .iter()
-                                        .map(|param| substitute_type(param, &trait_substitutions))
-                                        .collect(),
-                                    param_passings: method.signature.param_passings.clone(),
-                                    return_type: substitute_type(
-                                        &method.signature.return_type,
-                                        &trait_substitutions,
-                                    ),
-                                    rng_clone_safe_type_params: method
-                                        .signature
-                                        .rng_clone_safe_type_params
-                                        .iter()
-                                        .filter(|name| method.decl.type_params.contains(name))
-                                        .cloned()
-                                        .collect(),
-                                    array_equality_safe_type_params: method
-                                        .signature
-                                        .array_equality_safe_type_params
-                                        .iter()
-                                        .filter(|name| method.decl.type_params.contains(name))
-                                        .cloned()
-                                        .collect(),
-                                },
-                                type_param_bounds: substitute_trait_bounds(
-                                    &method.type_param_bounds,
-                                    &trait_substitutions,
-                                ),
-                                rng_clone_safe_types: method
-                                    .signature
-                                    .rng_clone_safe_type_params
-                                    .iter()
-                                    .map(|name| {
-                                        substitute_type(
-                                            &Type::TypeParam(name.clone()),
-                                            &trait_substitutions,
-                                        )
-                                    })
-                                    .collect(),
-                                array_equality_safe_types: method
-                                    .signature
-                                    .array_equality_safe_type_params
-                                    .iter()
-                                    .filter(|name| !method.decl.type_params.contains(name))
-                                    .map(|name| {
-                                        substitute_type(
-                                            &Type::TypeParam(name.clone()),
-                                            &trait_substitutions,
-                                        )
-                                    })
-                                    .collect(),
-                            },
+                            resolved_trait_method(trait_info, method, &bound.trait_args, &self_ty),
                         ));
                     }
                 }

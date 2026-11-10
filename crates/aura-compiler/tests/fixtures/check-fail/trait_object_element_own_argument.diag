@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `dyn Sink` out of a list index; trait object `dyn Sink` cannot be cloned, so use `view value = items[index]` for shared access or `pop(index)` to transfer ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_element_own_argument.au:41:16
+   |
+41 |     print(take(sinks[0]))
+   |                ^

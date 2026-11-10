@@ -24,6 +24,20 @@ in this file.
 - A 31st [cross-language program](benchmarks/cross_language/README.md),
   `stream_io`, reads a log in line batches and 64 KiB chunks with gzip and
   HMAC on each chunk: Aura 766 ms, Python 938 ms, Rust 430 ms.
+- Trait objects. `dyn Trait` is the type of a value of any type that
+  implements `Trait`, so `list[dyn Tool]` holds values of many types and a
+  function can return `dyn Tool` without naming one. A value converts where
+  the trait object type is expected: a typed binding, an argument, a
+  `return`, a field, an element of a typed collection. A method call runs
+  the implementation of the type the value holds, on both backends, and
+  supertrait methods are callable too. A `dyn Tool` converts to `dyn Named`
+  when `Named` is a supertrait, and satisfies a `T: Tool` bound. A trait
+  object is owned and never copied: it has no `clone()` and no `==`, and
+  `tools[i].run()` borrows the element in place. A method that takes no
+  `self`, has type parameters, or names `Self` in its signature is not
+  callable on a trait object (`AU2051`). A bare trait name used as a type
+  reports `AU2050`. `match` on the held type, `value as dyn Trait`, and
+  trait objects in tasks come next.
 - An enum type parameter can be bounded by a trait with associated types,
   as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
   `S.Iter`, and a `T` named only by the bound, from the implementation for

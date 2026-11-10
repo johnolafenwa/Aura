@@ -417,6 +417,8 @@ trait Named:
     def name(self) -> str
 ```
 
+A trait is not a type. `dyn Named` is: the type of a value of any type that implements `Named`, chosen at run time. A value converts to it where the type is expected. A trait object is owned, is never copied, and does not define equality. See [Trait Objects](/manual/generics-and-traits#trait-objects).
+
 ## Recursive Fields
 
 Direct recursive fields are not implemented. Mark a recursive class field `indirect`:

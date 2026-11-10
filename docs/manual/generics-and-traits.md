@@ -724,6 +724,123 @@ A supertrait with associated types is written with its own arguments only. See [
 
 A module that imports only the child trait can still call the supertrait's methods through a child bound. It does not need to import the supertrait.
 
+## Trait Objects
+
+`dyn Trait` is the type of a value of any type that implements `Trait`. A type parameter is one type chosen at each call. A trait object is chosen at run time, so one list can hold values of many types:
+
+```aura
+trait Tool:
+    def name(self) -> str
+    def run(mut self, input: str) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+    def run(mut self, input: str) -> str:
+        return f"{self.prefix}{input}"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+    def run(mut self, input: str) -> str:
+        self.calls += 1
+        return f"call {self.calls}"
+
+def newest() -> dyn Tool:
+    return Counter(calls=0)
+
+def main():
+    mut tools: list[dyn Tool] = [Echo(prefix="> "), Counter(calls=0)]
+    tools.append(newest())
+    for tool in mut tools:
+        print(f"{tool.name()}: {tool.run("hello")}")
+    print(tools[0].name())
+```
+
+A trait object type is valid wherever a type is: a binding, a parameter, a result, a field, an enum payload, a tuple element, a union member, a list element, a dictionary value, and a generic argument such as `Box[dyn Tool]`. It cannot be a dictionary key or a set element, because it does not define equality.
+
+`dyn` is followed by one trait, with the trait's type arguments when it has them: `dyn Reader[int64]`. A trait with associated types cannot be a trait object. A bare trait name is not a type:
+
+```aura check-fail:AU2050
+trait Tool:
+    def name(self) -> str
+
+def show(tool: Tool):
+    print(tool.name())
+```
+
+### Conversion
+
+A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
+
+The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
+
+A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
+
+A `mut` parameter of a trait object type takes a variable that already has exactly that type, because the function may store a value of another type there:
+
+```aura check-fail:AU2051
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def replace(tool: mut dyn Tool):
+    tool = Counter(calls=0)
+
+def main():
+    mut echo = Echo(prefix="> ")
+    replace(echo)
+```
+
+### Calls
+
+A method call on a trait object runs the method of the type the value holds. A default method of the trait runs when that type's `impl` omits the method. The methods of the trait's supertraits are callable too.
+
+A method can be called on a trait object when one call can serve every implementing type:
+
+- it takes `self`, `mut self`, or `own self`
+- it declares no type parameters of its own
+- `Self` appears nowhere else in its signature
+
+The trait can declare other methods. They stay callable on a value whose type is known and through a type parameter. Calling one on a trait object reports `AU2051`.
+
+A trait object exposes the methods of its trait and its supertraits only. It has no fields, and the methods of the held type that the trait does not declare are not reachable.
+
+A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
+
+### Ownership
+
+A trait object is an owned value. It moves on assignment and it is never copied:
+
+- It has no `clone()`, and a collection of trait objects has no `copy()`. To copy on purpose, declare a method in the trait that returns a new value.
+- It does not define `==`.
+- Reading an element out of a collection would copy it, so `tool = tools[0]` reports `AU3005`. Use `view tool = tools[0]`, or take the element out with `pop` or `remove`.
+- A method call on an element, `tools[0].run(input)`, borrows the element where it is. So does passing an element to a shared or `mut` parameter.
+- A trait object is not Transfer, so it cannot cross a task boundary.
+
+### Representation
+
+A trait object is one handle to a box that holds the value together with its type. A call reads the type from the box and runs that type's implementation. A conversion from a value that is already boxed, such as another erased value, reuses its box.
+
 ## Operator Traits
 
 When no builtin numeric or string operator rule applies, an operator requests a trait method:
@@ -863,6 +980,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
+- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -895,7 +1013,7 @@ Trait member calls and operator calls invoke the statically selected implementat
 
 `try` invokes the selected `From[Source]` conversion before it constructs the enclosing `Result.Err`.
 
-Traits do not create runtime reflection, dynamic method dictionaries, or implicit conversions.
+A call on a [trait object](#trait-objects) reads the held value's type and runs that type's implementation. No other call is resolved at run time, and traits create no runtime reflection. The one implicit conversion is from a value to a trait object of a trait its type implements, at a place that expects the trait object type.
 
 ## Ownership And Evaluation Order
 
@@ -918,13 +1036,16 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
 | `AU3002` | A borrow conflict, or storing through a bare shared generic parameter. |
 | `AU3003` | A mutable receiver call through an immutable place. |
 | `AU3004` | An invalid ownership mode. |
-| `AU3007` | An unsafe concrete clone specialization, an unprovable concrete requirement, or an implementation that would strengthen its trait method's clone-safety contract. |
+| `AU3005` | Reading a trait object element out of a collection. Borrow it with `view`, or take it out with `pop` or `remove`. |
+| `AU3007` | `clone()` on a trait object or `copy()` on a collection of trait objects. Also an unsafe concrete clone specialization, an unprovable concrete requirement, or an implementation that would strengthen its trait method's clone-safety contract. |
 
 A selected body keeps its own runtime diagnostics:
 
@@ -938,7 +1059,7 @@ A selected body keeps its own runtime diagnostics:
 
 ## Backend Support
 
-MIR execution and direct native generation both implement generic functions, classes, enums, and methods, traits, supertraits, default trait bodies, generic and specialized implementations, operator dispatch, `Self`, and `From` conversion. MIR is the compiler's mid-level intermediate representation.
+MIR execution and direct native generation both implement generic functions, classes, enums, and methods, traits, supertraits, default trait bodies, generic and specialized implementations, trait objects, operator dispatch, `Self`, and `From` conversion. MIR is the compiler's mid-level intermediate representation.
 
 Both backends maintain user-trait dispatch on builtin values for noncolliding method names. That includes `Queue[T]`, `Task[T]`, `TaskGroup`, `random.Rng`, `str`, and the builtin collections. Builtin target members always keep builtin dispatch.
 
@@ -948,8 +1069,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 Aura 0.13 has none of the following:
 
-- trait objects or dynamic dispatch
-- associated types or constants
+- associated constants
 - higher-kinded parameters
 - default type arguments
 - `where` clauses
@@ -971,12 +1091,13 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
+- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 
 Ordinary `-> T` return values are owned. Generic functions and methods can instead declare `-> view [mut] T from origin`. Trait implementations preserve the trait declaration's origin slot as well as its specialized pointee type.
 
-Trait objects, dynamic dispatch, associated types, higher-kinded types, general subtyping, and arbitrary blanket implementation targets are unavailable.
+Higher-kinded types, general subtyping, and arbitrary blanket implementation targets are unavailable.
 
 ## Design Record
 
