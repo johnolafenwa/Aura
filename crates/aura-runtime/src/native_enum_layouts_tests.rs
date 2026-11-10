@@ -1278,3 +1278,80 @@ fn a_dict_lends_a_parsed_document_it_keeps_to_a_borrowing_loan() {
     })
     .expect("the loans run");
 }
+
+#[test]
+fn a_literal_documents_tape_is_built_value_by_value() {
+    use crate::native_runtime::{
+        aura_direct_json_tape_bool, aura_direct_json_tape_close, aura_direct_json_tape_finish,
+        aura_direct_json_tape_float, aura_direct_json_tape_int, aura_direct_json_tape_null,
+        aura_direct_json_tape_open, aura_direct_json_tape_string, aura_direct_json_tape_text,
+        json_dumps_runtime,
+    };
+    run_lightweight_root_task(|| {
+        with_direct_task_runtime_scope(|| {
+            let none = (std::ptr::null(), -1_isize);
+            let key = |key: &'static str| (key.as_ptr(), key.len() as isize);
+            // A build that stopped part way leaves nothing in the next one.
+            aura_direct_json_tape_open(none.0, none.1, 3, 1);
+            aura_direct_json_tape_int("stale".as_ptr(), 5, 1);
+            aura_direct_json_tape_open(none.0, none.1, 3, 7);
+            let (ptr, len) = key("n");
+            aura_direct_json_tape_int(ptr, len, -7);
+            let (ptr, len) = key("f");
+            aura_direct_json_tape_float(ptr, len, 1.5);
+            let (ptr, len) = key("t");
+            aura_direct_json_tape_bool(ptr, len, 1);
+            let (ptr, len) = key("z");
+            aura_direct_json_tape_null(ptr, len);
+            let (ptr, len) = key("s");
+            aura_direct_json_tape_text(ptr, len, "lit".as_ptr(), 3);
+            // An entry may be keyed by the empty string.
+            let (ptr, len) = key("");
+            let made = boxed_value(text("made"));
+            unsafe { aura_direct_json_tape_string(ptr, len, made) };
+            let (ptr, len) = key("list");
+            aura_direct_json_tape_open(ptr, len, 0, 3);
+            aura_direct_json_tape_bool(none.0, none.1, 0);
+            aura_direct_json_tape_open(none.0, none.1, 1, 0);
+            aura_direct_json_tape_close();
+            aura_direct_json_tape_text(none.0, none.1, "x".as_ptr(), 1);
+            aura_direct_json_tape_close();
+            aura_direct_json_tape_close();
+            let doc = aura_direct_json_tape_finish();
+            let value = unsafe { value_ref(doc) };
+            let Value::EnumVariant(variant) = &value else {
+                panic!("a variant, not {value:?}");
+            };
+            assert_eq!(variant.variant_name.as_str(), "Object");
+            assert!(variant.payloads.json().is_some());
+            assert_eq!(
+                json_dumps_runtime(&value, None).expect("dumps"),
+                r#"{"":"made","f":1.5,"list":[false,{},"x"],"n":-7,"s":"lit","t":true,"z":null}"#
+            );
+            unsafe { aura_direct_release_value(doc) };
+
+            // A float json cannot spell is reported as a tree's is.
+            aura_direct_json_tape_open(none.0, none.1, 2, 1);
+            aura_direct_json_tape_float(none.0, none.1, f64::NAN);
+            aura_direct_json_tape_close();
+            let doc = aura_direct_json_tape_finish();
+            let error = json_dumps_runtime(&unsafe { value_ref(doc) }, None)
+                .expect_err("no json spells the number");
+            assert!(error.message.contains("finite"), "{}", error.message);
+            unsafe { aura_direct_release_value(doc) };
+            Ok(Value::Unit)
+        })
+    })
+    .expect("the builds run");
+}
+
+#[test]
+fn a_literal_documents_string_must_be_a_str() {
+    use crate::native_runtime::{aura_direct_json_tape_open, aura_direct_json_tape_string};
+    let message = runtime_failure(|| {
+        aura_direct_json_tape_open(std::ptr::null(), -1, 2, 1);
+        let number = boxed_value(int64(1));
+        unsafe { aura_direct_json_tape_string(std::ptr::null(), -1, number) };
+    });
+    assert!(message.contains("expected `str`"), "{message}");
+}

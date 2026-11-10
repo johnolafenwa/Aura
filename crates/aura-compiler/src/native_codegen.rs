@@ -1687,6 +1687,46 @@ impl<'a> NativeCodegen<'a> {
                 })
             },
         );
+        // A `json.Value` literal whose every part is spelled in place is
+        // built as one tape (see `json_literals`). A debugger shows each
+        // part as the source names it, so a debug build makes them all.
+        let debugged = self.debug_info;
+        let json_nests = json_literals::json_literal_nests(function, |target, nest| {
+            let holds = |local: &str| {
+                owns_its_word(local)
+                    && explicit_locals.tracked.contains(local)
+                    && !lent_element_reads.lists.contains_key(local)
+                    && !lent_element_reads.payloads.contains_key(local)
+            };
+            let named = |local: &str, name: &str| {
+                matches!(
+                    variable_types.get(local),
+                    Some(DirectType::Opaque(Type::Named(found, args)))
+                        if found == name && args.is_empty()
+                )
+            };
+            let scalar = |payload: &Operand, kind: ScalarKind| match payload {
+                Operand::Place(local) => {
+                    variable_types.get(local.as_str()) == Some(&DirectType::Scalar(kind))
+                }
+                Operand::Int(value) => i64::try_from(*value).is_ok(),
+                _ => true,
+            };
+            !debugged
+                && holds(target)
+                && named(target, "json.Value")
+                && nest.leaves().into_iter().all(|leaf| match leaf {
+                    json_literals::NestValue::Bool(payload) => scalar(payload, ScalarKind::Bool),
+                    json_literals::NestValue::Int(payload) => scalar(payload, ScalarKind::Int64),
+                    json_literals::NestValue::Float(payload) => {
+                        scalar(payload, ScalarKind::Float64)
+                    }
+                    json_literals::NestValue::String(Operand::MovePlace(text)) => {
+                        holds(text) && named(text, "str")
+                    }
+                    _ => true,
+                })
+        });
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
             lookup_slots.contains(local)
                 || lent_places.contains(local)
@@ -1876,6 +1916,7 @@ impl<'a> NativeCodegen<'a> {
             lend_element: false,
             json_views,
             lend_json_view: false,
+            json_nests,
             lent_element_flag: None,
             lookup_payload: None,
             emptied_store_root: None,
@@ -1944,6 +1985,14 @@ impl<'a> NativeCodegen<'a> {
             &self.classes,
             &format!("return type of `{}`", function.name),
         )?;
+        // A tape holds a `json.Value` only in a program that keeps the enum
+        // in its layout.
+        let json_value = DirectType::Opaque(Type::named("json.Value"));
+        let tapes =
+            compiler.json_nests.roots.is_empty() || compiler.enum_record_of(&json_value)?.is_some();
+        compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
+            .filter(|_| tapes)
+            .unwrap_or_default();
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
         compiler.builder.seal_all_blocks();
@@ -3256,6 +3305,10 @@ struct FunctionCompiler<'a> {
     json_views: HashSet<String>,
     /// Set while the payload read for one of `json_views` compiles.
     lend_json_view: bool,
+    /// The `json.Value` literals that are built as tapes, and the
+    /// assignments of their parts, which emit nothing. See
+    /// `json_literals::json_literal_nests`.
+    json_nests: json_literals::JsonNests,
     /// The lent flag of the element read that just compiled, when it could
     /// lend.
     lent_element_flag: Option<Val>,
@@ -4507,6 +4560,31 @@ impl<'a> FunctionCompiler<'a> {
         instruction_index: usize,
         instruction: &Instruction,
     ) -> std::result::Result<(), String> {
+        if let Instruction::Assign { target, .. } = instruction {
+            // A part of a `json.Value` literal that is built as a tape
+            // emits nothing, and the literal's root builds the tape.
+            let at = |nests: &HashMap<String, HashSet<usize>>| {
+                nests
+                    .get(block_label)
+                    .is_some_and(|indices| indices.contains(&instruction_index))
+            };
+            if at(&self.json_nests.deferred) {
+                return Ok(());
+            }
+            let nest = self
+                .json_nests
+                .roots
+                .get(block_label)
+                .and_then(|roots| roots.get(&instruction_index))
+                .cloned();
+            if let Some(nest) = nest {
+                self.mark_emptied_store_root(target);
+                let target_ty = self.type_of_place(target)?;
+                let built = self.compile_json_nest(&nest)?;
+                let coerced = self.coerce_value(built, &target_ty)?;
+                return self.store_place(target, coerced);
+            }
+        }
         match instruction {
             // A fact emits nothing: the accesses it covers say so. A retain
             // pays for the consumer that follows. The consumer adds the
@@ -18450,6 +18528,8 @@ mod element_loans;
 mod elements;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_json_literals.rs"]
+mod json_literals;
 #[path = "native_codegen_json_views.rs"]
 mod json_views;
 #[path = "native_codegen_key_loops.rs"]

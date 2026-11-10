@@ -3965,6 +3965,139 @@ pub extern "C-unwind" fn aura_direct_json_as_scalar(
     })
 }
 
+/// Runs `append` on the tape the calling thread builds for a `json.Value`
+/// literal, after the key of the entry it appends: the `key_len` bytes at
+/// `key_ptr`, or none when `key_len` is negative. Generated code makes
+/// every call of one build back to back, with no call in between that
+/// could yield, so the thread's builder holds one document at a time.
+fn append_to_json_tape(
+    key_ptr: *const u8,
+    key_len: isize,
+    append: impl FnOnce(&mut crate::json_tape::TapeBuilder),
+) {
+    crate::json_tape::TapeBuilder::with(|builder| {
+        if let Ok(key_len) = usize::try_from(key_len) {
+            builder.key(literal_str(key_ptr, key_len));
+        }
+        append(builder);
+    });
+}
+
+/// Opens an array (`kind` bit 0 clear) or an object (set) of `count`
+/// elements or entries in the tape of a `json.Value` literal. `kind` bit 1
+/// marks the literal's root, which starts a new tape.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_open(
+    key_ptr: *const u8,
+    key_len: isize,
+    kind: i64,
+    count: i64,
+) {
+    task_runtime_boundary(|| {
+        append_to_json_tape(key_ptr, key_len, |builder| {
+            if kind & 2 != 0 {
+                builder.clear();
+            }
+            builder.open(kind & 1 != 0, count as u32);
+        });
+    })
+}
+
+/// Closes the container [`aura_direct_json_tape_open`] opened last.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_close() {
+    task_runtime_boundary(|| crate::json_tape::TapeBuilder::with(|builder| builder.close()))
+}
+
+/// Appends `json.Value.Null` to the tape of a `json.Value` literal.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_null(key_ptr: *const u8, key_len: isize) {
+    task_runtime_boundary(|| append_to_json_tape(key_ptr, key_len, |builder| builder.null()))
+}
+
+/// Appends `json.Value.Bool(value)` to the tape of a `json.Value` literal.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_bool(
+    key_ptr: *const u8,
+    key_len: isize,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        append_to_json_tape(key_ptr, key_len, |builder| builder.bool(value != 0));
+    })
+}
+
+/// Appends `json.Value.Int(value)` to the tape of a `json.Value` literal.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_int(key_ptr: *const u8, key_len: isize, value: i64) {
+    task_runtime_boundary(|| append_to_json_tape(key_ptr, key_len, |builder| builder.int(value)))
+}
+
+/// Appends `json.Value.Float(value)` to the tape of a `json.Value` literal.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_float(
+    key_ptr: *const u8,
+    key_len: isize,
+    value: f64,
+) {
+    task_runtime_boundary(|| append_to_json_tape(key_ptr, key_len, |builder| builder.float(value)))
+}
+
+/// Appends `json.Value.String` of the `text_len` bytes at `text_ptr`, which
+/// the source spells, to the tape of a `json.Value` literal.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_text(
+    key_ptr: *const u8,
+    key_len: isize,
+    text_ptr: *const u8,
+    text_len: usize,
+) {
+    task_runtime_boundary(|| {
+        append_to_json_tape(key_ptr, key_len, |builder| {
+            builder.string(literal_str(text_ptr, text_len));
+        });
+    })
+}
+
+/// Appends `json.Value.String(text)` to the tape of a `json.Value`
+/// literal, and releases `text`, which the caller hands over.
+///
+/// # Safety
+///
+/// `text` is a live box the caller owns a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_json_tape_string(
+    key_ptr: *const u8,
+    key_len: isize,
+    text: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        // SAFETY: the caller's contract.
+        unsafe {
+            with_value(text, |value| match value {
+                Value::String(text) => {
+                    append_to_json_tape(key_ptr, key_len, |builder| builder.string(text));
+                }
+                other => runtime_error(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                )),
+            });
+            aura_direct_release_value(text);
+        }
+    })
+}
+
+/// The `json.Value` whose tape the calling thread built since the last
+/// root [`aura_direct_json_tape_open`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_json_tape_finish() -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let root = crate::json_tape::TapeBuilder::with(|builder| builder.finish());
+        boxed_value(root.into_value())
+    })
+}
+
 /// The bits `aura_direct_json_as_scalar` writes for `value`, or `None` when
 /// `value` is not `variant`.
 fn json_scalar_bits(value: &Value, variant: &str, kind: i64, name: &str) -> Option<i64> {

@@ -339,3 +339,32 @@ parsed document about 400. Wall time on the cloud box, 50k docs, median
 of 9: 704 -> 645 ms (Python 524 ms on the same run). json_roundtrip
 290 ms (Python 419 ms). Per phase the program still loses most where it
 builds documents from literals: insert 186M against Python's 77 ms.
+
+## Literal documents built as tapes (2026-11-09)
+
+Step 4 of the compact storage: `make_doc` in docdb built each document as
+a box per value, a dict, and a list (about 9,000 instructions and 20
+allocations a document), which the reads then walked as a tree.
+
+- A `json.Value.Array` or `json.Value.Object` whose every part is spelled
+  where it is (variants of constants and of locals nothing writes before
+  the root, list and dict literals of those, string keys spelled once) is
+  one tape. `native_codegen_json_literals.rs` finds them in MIR: the
+  assignments of the parts emit nothing, and the root's assignment hands
+  the payloads to the runtime's builder in document order
+  (`aura_direct_json_tape_open`, `_int`, `_text`, `_string`, ..,
+  `_finish`).
+- `json_tape::TapeBuilder` is a scratch tape per thread. Generated code
+  makes one literal's calls back to back, so a thread builds one document
+  at a time, and the root's open drops what a build that stopped left.
+- A literal that takes a `json.Value` made elsewhere, a computed key, or a
+  key spelled twice is built as before.
+- `json.dumps` of a tape reports a non-finite float through the general
+  path, as a tree's is reported: a parse never keeps one, a literal may.
+
+docdb, 10k docs: 614M -> 499M instructions (insert 186M -> 101M, dumps
+with teardown 131M -> 99M; aggregate 49M -> 61M, since `field_str` now
+walks a tape's keys). Wall time on the cloud box, 50k docs, median of 9:
+671 -> 407 ms against Python's 545 ms on the same run, peak memory 163 ->
+66 MB. json_roundtrip 277 ms against Python's 399 ms. Both programs are
+now faster than Python.

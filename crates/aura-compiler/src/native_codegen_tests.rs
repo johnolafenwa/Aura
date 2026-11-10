@@ -16211,3 +16211,63 @@ def main() -> None:
         .expect("keep lowers");
     assert!(super::classes::confined_instances(keep, &classes).is_empty());
 }
+
+#[test]
+fn a_json_literal_spelled_whole_is_built_as_one_tape() {
+    let source = r#"
+import json
+
+def whole(i: int64, flag: bool, ratio: float64, word: own str) -> json.Value:
+    tags = [json.Value.String(f"t{i}"), json.Value.String("fixed")]
+    return json.Value.Object(
+        {
+            "id": json.Value.Int(i),
+            "flag": json.Value.Bool(flag),
+            "ratio": json.Value.Float(ratio),
+            "none": json.Value.Null,
+            "word": json.Value.String(word),
+            "tags": json.Value.Array(tags),
+        }
+    )
+
+def main():
+    print(json.dumps(whole(1, true, 0.5, "w")))
+"#;
+    let mir = lower_source_to_mir(source).expect("the literal should lower");
+    let object = emit_host_object(&mir).expect("the literal should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for required in [
+        "aura_direct_json_tape_open",
+        "aura_direct_json_tape_close",
+        "aura_direct_json_tape_null",
+        "aura_direct_json_tape_bool",
+        "aura_direct_json_tape_int",
+        "aura_direct_json_tape_float",
+        "aura_direct_json_tape_string",
+        "aura_direct_json_tape_text",
+        "aura_direct_json_tape_finish",
+    ] {
+        assert!(referenced.contains(required), "{required}: {referenced:?}");
+    }
+    // No variant, list, or dict is made on the way.
+    let parts = [
+        "aura_direct_enum_new_typed",
+        "aura_direct_map_literal_str_entry",
+        "aura_direct_map_with_capacity",
+    ];
+    for made in parts {
+        assert!(!referenced.contains(made), "{made}: {referenced:?}");
+    }
+    // A debugger shows each part the source names, so a debug build makes
+    // them.
+    let objects = super::emit_host_debug_objects_with_metadata(&mir, "whole.au", source)
+        .expect("the literal should compile for a debugger");
+    let referenced = objects
+        .iter()
+        .flat_map(|object| exact_referenced_symbols(object))
+        .collect::<BTreeSet<_>>();
+    for made in parts {
+        assert!(referenced.contains(made), "{made}: {referenced:?}");
+    }
+    assert!(!referenced.contains("aura_direct_json_tape_finish"));
+}

@@ -388,3 +388,67 @@ fn an_objects_scalars_are_read_at_their_nodes_addresses() {
     assert!(object.lookup_address("missing").is_none());
     assert!(root("[1]").lookup_address("a").is_none());
 }
+
+#[test]
+fn a_builder_makes_the_tape_a_parse_makes() {
+    let built = TapeBuilder::with(|builder| {
+        // A build that never finished leaves nothing behind.
+        builder.open(true, 1);
+        builder.key("stale");
+        builder.clear();
+        builder.open(true, 7);
+        builder.key("n");
+        builder.int(-7);
+        builder.key("f");
+        builder.float(1.5);
+        builder.key("t");
+        builder.bool(true);
+        builder.key("o");
+        builder.bool(false);
+        builder.key("z");
+        builder.null();
+        builder.key("s");
+        builder.string("a\"b");
+        builder.key("list");
+        builder.open(false, 2);
+        builder.string("x");
+        builder.open(true, 0);
+        builder.close();
+        builder.close();
+        builder.close();
+        builder.finish()
+    });
+    let source =
+        r#"{"n": -7, "f": 1.5, "t": true, "o": false, "z": null, "s": "a\"b", "list": ["x", {}]}"#;
+    let parsed = root(source);
+    assert_eq!(tree(&built), tree(&parsed));
+    assert_eq!(dumps(&built, None), dumps(&parsed, None));
+    assert_eq!(built.tape().node_count(), parsed.tape().node_count());
+    assert_eq!(built.span(), parsed.span());
+    assert_eq!(built.entry_count(), 7);
+    assert!(matches!(
+        built.lookup_str("list"),
+        Some(Value::EnumVariant(variant)) if variant.variant_name.as_str() == "Array"
+    ));
+    assert_eq!(
+        built
+            .lookup_address("n")
+            .and_then(|address| unsafe { scalar_bits_at(address, 0) }),
+        Some(-7)
+    );
+
+    // The next document starts from nothing, and a huge one's buffers go.
+    let next = TapeBuilder::with(|builder| {
+        builder.open(false, 1);
+        builder.string(&"y".repeat(SCRATCH_TEXT_KEPT + 1));
+        builder.close();
+        builder.finish()
+    });
+    assert_eq!(next.entry_count(), 1);
+    assert_eq!(next.tape().node_count(), 2);
+    TapeBuilder::with(|builder| {
+        assert_eq!(builder.text.capacity(), 0);
+        builder.int(1);
+        assert_eq!(tree(&builder.finish()), tree(&root("1")));
+    });
+}
