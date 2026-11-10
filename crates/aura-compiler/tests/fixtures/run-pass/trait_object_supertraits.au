@@ -1,0 +1,142 @@
+trait Named:
+    def name(self) -> str
+
+
+trait Sized:
+    def size(self) -> int64
+
+
+trait Tool: Named, Sized:
+    def run(mut self, input: str) -> str
+    def summary(self) -> str:
+        return f"{self.name()} of size {self.size()}"
+
+
+trait Source[T]:
+    def next_value(mut self) -> T
+    def peek(self) -> T
+
+
+trait Counting: Source[int64]:
+    def total(self) -> int64
+
+
+class Echo:
+    count: int64
+
+
+class Upper:
+    seen: list[str]
+
+
+class Steps:
+    at: int64
+
+
+class Words:
+    items: list[str]
+    at: int64
+
+
+impl Named for Echo:
+    def name(self) -> str:
+        return "echo"
+
+
+impl Sized for Echo:
+    def size(self) -> int64:
+        return self.count
+
+
+impl Tool for Echo:
+    def run(mut self, input: str) -> str:
+        self.count += 1
+        return input.clone()
+
+
+impl Named for Upper:
+    def name(self) -> str:
+        return "upper"
+
+
+impl Sized for Upper:
+    def size(self) -> int64:
+        return len(self.seen)
+
+
+impl Tool for Upper:
+    def run(mut self, input: str) -> str:
+        self.seen.append(input.clone())
+        return input.to_upper()
+    def summary(self) -> str:
+        return f"upper saw {len(self.seen)}"
+
+
+impl Source[int64] for Steps:
+    def next_value(mut self) -> int64:
+        self.at += 1
+        return self.at
+    def peek(self) -> int64:
+        return self.at + 1
+
+
+impl Counting for Steps:
+    def total(self) -> int64:
+        return self.at
+
+
+impl Source[str] for Words:
+    def next_value(mut self) -> str:
+        self.at += 1
+        return self.items[self.at - 1].clone()
+    def peek(self) -> str:
+        return self.items[self.at].clone()
+
+
+def label(item: dyn Named) -> str:
+    return item.name()
+
+
+def weigh(item: dyn Sized) -> int64:
+    return item.size()
+
+
+def as_named(tool: own dyn Tool) -> dyn Named:
+    return tool
+
+
+def drain(source: mut dyn Source[int64], count: int64) -> int64:
+    mut sum = 0
+    for _ in range(count):
+        sum += source.next_value()
+    return sum
+
+
+def first_word[S: Source[str]](source: mut S) -> str:
+    return source.next_value()
+
+
+def main() -> None:
+    mut tools: list[dyn Tool] = [Echo(count=0), Upper(seen=[])]
+    for tool in mut tools:
+        print(tool.run("hi"))
+    for tool in tools:
+        print(tool.summary())
+        print(label(tool))
+        print(weigh(tool))
+    print(tools[0].name())
+    print(label(tools[1]))
+    named: list[dyn Named] = [as_named(tools.pop()), Echo(count=9)]
+    for item in named:
+        print(item.name())
+    mut steps: dyn Source[int64] = Steps(at=0)
+    print(drain(steps, 3))
+    print(steps.peek())
+    mut words: dyn Source[str] = Words(items=["a", "b"], at=0)
+    print(words.next_value())
+    print(first_word(words))
+    mut counting: dyn Counting = Steps(at=10)
+    print(counting.next_value())
+    print(counting.total())
+    mut sources: list[dyn Source[int64]] = [Steps(at=100), counting]
+    print(sources[0].next_value() + sources[1].peek())

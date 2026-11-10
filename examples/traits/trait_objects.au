@@ -1,0 +1,70 @@
+trait Tool:
+    def name(self) -> str
+    def run(mut self, input: str) -> str
+    def describe(self) -> str:
+        return f"tool {self.name()}"
+
+
+class Echo:
+    prefix: str
+
+
+class Counter:
+    calls: int64
+
+
+class Shout:
+    pass
+
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+    def run(mut self, input: str) -> str:
+        return f"{self.prefix}{input}"
+
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+    def run(mut self, input: str) -> str:
+        self.calls += 1
+        return f"call {self.calls} with {len(input)} characters"
+    def describe(self) -> str:
+        return f"tool counter, called {self.calls} times"
+
+
+impl Tool for Shout:
+    def name(self) -> str:
+        return "shout"
+    def run(mut self, input: str) -> str:
+        return input.to_upper()
+
+
+def pick(loud: bool) -> dyn Tool:
+    if loud:
+        return Shout()
+    return Echo(prefix="> ")
+
+
+def run_all(tools: mut list[dyn Tool], input: str) -> None:
+    for tool in mut tools:
+        print(f"{tool.name()}: {tool.run(input)}")
+
+
+def main() -> None:
+    # One list holds values of three types. Each value converts to
+    # `dyn Tool` where it is stored.
+    mut tools: list[dyn Tool] = [Echo(prefix="you said "), Counter(calls=0)]
+    tools.append(pick(true))
+    run_all(tools, "hello")
+    run_all(tools, "again")
+
+    # A call on an element borrows it where it is.
+    print(tools[1].describe())
+
+    mut registry: dict[str, dyn Tool] = {}
+    registry["quiet"] = pick(false)
+    registry["loud"] = pick(true)
+    print(registry["quiet"].run("typed"))
+    print(registry["loud"].describe())

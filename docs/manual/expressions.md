@@ -1125,8 +1125,9 @@ Contextually typed `lambda parameters: expression` values use the same
 callable contract and may capture owned outer locals by value. See
 [Closures](/manual/closures). `receiver.method` outside call position is a
 bound method closure, and `Class.method` is an associated function value. See
-[Closures](/manual/closures#bound-methods). Interactions with trait objects
-are unavailable.
+[Closures](/manual/closures#bound-methods). A function value does not
+implement a trait, so it does not convert to a
+[trait object](/manual/generics-and-traits#trait-objects).
 
 ## Fixed-Width Numeric Example
 

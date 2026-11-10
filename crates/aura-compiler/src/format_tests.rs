@@ -495,3 +495,11 @@ fn statement_yield_of_a_tuple_keeps_its_space() {
         "def pairs(n: int64) -> Generator[(int64, int64)]:\n    yield (n, n)\n    yield -n\n",
     );
 }
+
+#[test]
+fn trait_object_types_keep_one_space_after_dyn() {
+    assert_formats(
+        "def total(shapes:list[dyn   Shape],extra:dyn Shape|None)->dyn Shape:\n    first:dyn Shape=pick(shapes)\n    return first\n",
+        "def total(shapes: list[dyn Shape], extra: dyn Shape | None) -> dyn Shape:\n    first: dyn Shape = pick(shapes)\n    return first\n",
+    );
+}

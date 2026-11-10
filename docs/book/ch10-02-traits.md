@@ -234,9 +234,17 @@ The second call is more interesting. `order` is a list of `Book | Coffee`, a
 union of two types. A union satisfies a bound when every member implements the
 trait with the same method signatures, so `print_receipt` accepts it, and each
 `item.label()` call runs the implementation for whichever type that element
-actually is. That's how you put different kinds of items in one list. Aura has
-no "trait object" type that means "any `Priced` thing"; the union names the
-exact set of types, and the compiler checks every one of them.
+actually is. That's one way to put different kinds of items in one list: the
+union names the exact set of types, and the compiler checks every one of them.
+
+When the set of types is open, so that code written later can add its own,
+name the trait instead. `dyn Priced` is the type of a value of any type that
+implements `Priced`, so a `list[dyn Priced]` holds books, coffees, and
+whatever else implements the trait. A value converts where it is stored, and
+each `item.label()` call still runs the implementation for the type that
+element actually is. A trait object gives up what the compiler can no longer
+know: it has no `==` and no `clone()`, and you reach only the methods the
+trait declares.
 
 ### Traits are nominal
 
@@ -561,11 +569,13 @@ error[AU2006]: trait method `len` collides with builtin method `str.len`
 ```
 
 A few features you may know from other languages don't exist in Aura today:
-trait objects and dynamic dispatch, associated types and constants, and `where`
-clauses. Every trait call is resolved at compile time to one implementation.
-When you need a list of mixed types, use a union, as Listing 10-6 did. The
-[Manual](/manual/generics-and-traits) has the complete rules for
-implementations, overlap, and dispatch.
+associated constants and `where` clauses. A trait call is resolved at compile
+time to one implementation, except on a union or a `dyn Trait` value, where it
+runs the implementation for the type the value holds. When you need a list of
+mixed types, use a union for a fixed set, as Listing 10-6 did, or
+`list[dyn Trait]` for an open one. The
+[Manual](/manual/generics-and-traits#trait-objects) has the complete rules for
+trait objects, implementations, overlap, and dispatch.
 
 There's one more kind of trait method we haven't used: a method with no `self`,
 called on the type instead of on a value. It's how you write "make a `Money`

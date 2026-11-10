@@ -5378,3 +5378,78 @@ fn quantifiers_old_values_and_spec_functions_parse() {
             .expect_err("lemma methods are rejected");
     assert_eq!(error.code, "AU2048");
 }
+
+#[test]
+fn trait_object_types_name_one_trait_after_dyn() {
+    let Item::Function(function) = parse_item_from(
+        "def run(tool: dyn Tool, readers: list[dyn io.Reader[int64]]) -> dyn Tool | None:\n    pass\n",
+    )
+    .expect("trait object types parse") else {
+        panic!("expected a function");
+    };
+    let (tool, tool_args) = function.params[0]
+        .ty
+        .as_trait_object()
+        .and_then(TypeRef::named_parts)
+        .expect("`dyn Tool` is a trait object type");
+    assert_eq!(tool, "Tool");
+    assert!(tool_args.is_empty());
+    let (list, elements) = function.params[1].ty.named_parts().expect("a list type");
+    assert_eq!(list, "list");
+    let (reader, reader_args) = elements[0]
+        .as_trait_object()
+        .and_then(TypeRef::named_parts)
+        .expect("a qualified generic trait");
+    assert_eq!(reader, "io.Reader");
+    assert_eq!(reader_args.len(), 1);
+    let TypeRefKind::Union(members) = &function.return_type.kind else {
+        panic!("expected a union result");
+    };
+    assert!(members
+        .iter()
+        .any(|member| member.as_trait_object().is_some()));
+
+    // An annotated binding starts with a type, and the type may start with
+    // `dyn`.
+    let Stmt::Assign(assign) =
+        parse_stmt_from("first: dyn Tool = make()\n").expect("an annotated binding")
+    else {
+        panic!("expected a binding");
+    };
+    assert!(assign
+        .annotation
+        .as_ref()
+        .is_some_and(|annotation| annotation.as_trait_object().is_some()));
+
+    // Outside that position `dyn` is an ordinary name.
+    assert!(parse_stmt_from("dyn = 3\n").is_ok());
+    let plain = parse_item_from("def run(tool: dyn) -> None:\n    pass\n").expect("a plain name");
+    let Item::Function(plain) = plain else {
+        panic!("expected a function");
+    };
+    assert!(plain.params[0].ty.as_trait_object().is_none());
+    assert_eq!(
+        plain.params[0].ty.named_parts().map(|(name, _)| name),
+        Some("dyn")
+    );
+}
+
+#[test]
+fn trait_object_types_reject_brackets_and_indirect() {
+    let brackets = parse_item_from("def run(tool: dyn[Tool]) -> None:\n    pass\n")
+        .expect_err("`dyn[Tool]` is not a type");
+    assert!(
+        brackets
+            .message
+            .contains("a trait object type is written `dyn Trait`, without brackets"),
+        "{brackets:?}"
+    );
+    let indirect = parse_item_from("class Node:\n    next: indirect dyn Tool\n")
+        .expect_err("a trait object is already behind a handle");
+    assert!(
+        indirect
+            .message
+            .contains("`indirect` is not valid on a trait object type"),
+        "{indirect:?}"
+    );
+}

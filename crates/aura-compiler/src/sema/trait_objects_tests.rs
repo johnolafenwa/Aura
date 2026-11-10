@@ -34,6 +34,7 @@ fn normalized(text: &str) -> String {
 fn trait_object_programs_run() {
     let fixtures = [
         run_pass!("trait_object_assignment"),
+        run_pass!("trait_object_borrowed_conversion"),
         run_pass!("trait_object_builtin_impls"),
         run_pass!("trait_object_callables"),
         run_pass!("trait_object_containers"),
@@ -46,6 +47,8 @@ fn trait_object_programs_run() {
         run_pass!("trait_object_mut_methods"),
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
+        run_pass!("trait_object_supertraits"),
+        run_pass!("trait_object_views"),
     ];
     for (name, source, expected) in fixtures {
         let output = run_source(source).unwrap_or_else(|error| panic!("{name}: {error:?}"));
@@ -370,4 +373,57 @@ fn a_trait_object_is_an_ordinary_value_elsewhere() {
             .unwrap_or_else(|error| panic!("{body}: {error:?}"));
         assert_eq!(output.stdout, expected, "{body}");
     }
+}
+
+#[test]
+fn a_method_two_supertraits_declare_has_no_one_answer() {
+    let error = rejected(
+        "trait A:\n    def f(self) -> int64\n\ntrait B:\n    def f(self) -> int64\n\ntrait C: A, B:\n    def g(self) -> int64\n\nimpl A for Square:\n    def f(self) -> int64:\n        return 1\n\nimpl B for Square:\n    def f(self) -> int64:\n        return 2\n\nimpl C for Square:\n    def g(self) -> int64:\n        return 3\n\ndef main() -> None:\n    x: dyn C = Square(side=1)\n    print(x.g())\n    print(x.f())\n",
+    );
+    assert_eq!(error.code, "AU2051", "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("method `f` is ambiguous on `dyn C`: traits `A` and `B` both declare it"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_trait_object_converts_to_its_supertraits_only() {
+    let traits = "trait Named:\n    def name(self) -> str\n\ntrait Tool: Named:\n    def run(self) -> int64\n\ntrait Other:\n    def other(self) -> int64\n\nimpl Named for Square:\n    def name(self) -> str:\n        return \"square\"\n\nimpl Tool for Square:\n    def run(self) -> int64:\n        return self.side\n\nimpl Other for Square:\n    def other(self) -> int64:\n        return 0\n\n";
+    let output = run_source(&format!(
+        "{SQUARE}{traits}def label(item: dyn Named) -> str:\n    return item.name()\n\ndef main() -> None:\n    tool: dyn Tool = Square(side=3)\n    print(tool.name())\n    print(label(tool))\n"
+    ))
+    .expect("a supertrait call and an upcast");
+    assert_eq!(output.stdout, "square\nsquare\n");
+
+    // Up, never down or sideways.
+    for (binding, help) in [
+        (
+            "    named: dyn Named = Square(side=3)\n    tool: dyn Tool = named\n",
+            "`dyn Named` converts to `dyn Tool` only when `Tool` is its trait or one of its supertraits",
+        ),
+        (
+            "    tool: dyn Tool = Square(side=3)\n    other: dyn Other = tool\n",
+            "`dyn Tool` converts to `dyn Other` only when `Other` is its trait or one of its supertraits",
+        ),
+    ] {
+        let error = rejected(&format!("{traits}def main() -> None:\n{binding}    print(1)\n"));
+        assert_eq!(error.code, "AU2002", "{error:?}");
+        assert!(error.help.iter().any(|line| line.contains(help)), "{error:?}");
+    }
+
+    // A `mut` parameter needs the exact type, so the callee cannot store a
+    // value the caller's type does not admit.
+    let error = rejected(&format!(
+        "{traits}def swap(item: mut dyn Named) -> None:\n    item = Square(side=0)\n\ndef main() -> None:\n    mut tool: dyn Tool = Square(side=3)\n    swap(tool)\n"
+    ));
+    assert_eq!(error.code, "AU2051", "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("takes a `dyn Named` variable, found `dyn Tool`"),
+        "{error:?}"
+    );
 }

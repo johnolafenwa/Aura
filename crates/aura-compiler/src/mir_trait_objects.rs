@@ -178,3 +178,157 @@ fn names_trait_object(module: &MirModule) -> bool {
         .chain(constant_types)
         .any(Type::names_trait_object)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::ast::ReceiverKind;
+    use crate::sema::ClosureCallKind;
+
+    const SHAPES: &str = "trait Shape:\n    def area(self) -> int64\n\nclass Square:\n    side: int64\n\nimpl Shape for Square:\n    def area(self) -> int64:\n        return self.side * self.side\n\n";
+
+    fn lowered(body: &str) -> MirModule {
+        let program = crate::check_source(&format!("{SHAPES}{body}")).expect("the program checks");
+        crate::mir::lower_implicit(&program)
+    }
+
+    fn param(ty: Type) -> FunctionParamContract {
+        FunctionParamContract {
+            keyword_only: false,
+            name: "value".to_string(),
+            ty,
+            passing: ReceiverKind::Borrow,
+            has_default: false,
+        }
+    }
+
+    #[test]
+    fn a_trait_object_type_erases_to_a_parameter_named_after_it() {
+        let shape = Type::trait_object("Shape", Vec::new());
+        let erased_shape = Type::TypeParam("dyn Shape".to_string());
+        assert_eq!(erased(&shape), erased_shape);
+        // Each list of arguments is its own erased type, and an argument
+        // that is a trait object is erased inside the name.
+        let reader = Type::trait_object("io.Reader", vec![Type::named("int64"), shape.clone()]);
+        assert_eq!(
+            erased(&reader),
+            Type::TypeParam("dyn io.Reader[int64, dyn Shape]".to_string())
+        );
+
+        let list = |element: Type| Type::Named("list".to_string(), vec![element]);
+        assert_eq!(erased(&list(shape.clone())), list(erased_shape.clone()));
+        assert_eq!(
+            erased(&Type::Tuple(vec![Type::named("int64"), shape.clone()])),
+            Type::Tuple(vec![Type::named("int64"), erased_shape.clone()])
+        );
+        let optional =
+            Type::normalize_union(vec![shape.clone(), Type::Unit], "main", &BTreeMap::new())
+                .expect("a union");
+        let Type::Union(union) = erased(&optional) else {
+            panic!("a union stays a union");
+        };
+        assert!(union.members.contains(&erased_shape));
+        assert!(union.members.contains(&Type::Unit));
+
+        assert_eq!(
+            erased(&Type::Function {
+                params: vec![param(shape.clone())],
+                return_type: Box::new(shape.clone()),
+            }),
+            Type::Function {
+                params: vec![param(erased_shape.clone())],
+                return_type: Box::new(erased_shape.clone()),
+            }
+        );
+        assert_eq!(
+            erased(&Type::Closure {
+                params: Box::new(vec![param(shape.clone())]),
+                return_type: Box::new(shape.clone()),
+                captures: Box::new(Vec::new()),
+                call_kind: ClosureCallKind::Repeatable,
+            }),
+            Type::Closure {
+                params: Box::new(vec![param(erased_shape.clone())]),
+                return_type: Box::new(erased_shape.clone()),
+                captures: Box::new(Vec::new()),
+                call_kind: ClosureCallKind::Repeatable,
+            }
+        );
+        assert_eq!(
+            erased(&Type::Callable(Box::new(CallableType {
+                task: false,
+                call_kind: ClosureCallKind::Repeatable,
+                params: vec![param(shape.clone())],
+                return_type: shape.clone(),
+            }))),
+            Type::Callable(Box::new(CallableType {
+                task: false,
+                call_kind: ClosureCallKind::Repeatable,
+                params: vec![param(erased_shape.clone())],
+                return_type: erased_shape.clone(),
+            }))
+        );
+        assert_eq!(
+            erased(&Type::ReturnedView(Box::new(ReturnedViewType {
+                mutable: true,
+                pointee: shape,
+                origin: 1,
+            }))),
+            Type::ReturnedView(Box::new(ReturnedViewType {
+                mutable: true,
+                pointee: erased_shape,
+                origin: 1,
+            }))
+        );
+
+        // A type that names no trait object is returned as it is.
+        for plain in [
+            Type::Unit,
+            Type::TypeParam("T".to_string()),
+            list(Type::named("str")),
+        ] {
+            assert_eq!(erased(&plain), plain);
+        }
+    }
+
+    #[test]
+    fn a_lowered_module_names_no_trait_object() {
+        let module = lowered(
+            "class Scene:\n    hero: dyn Shape\n    shapes: list[dyn Shape]\n\nenum Slot:\n    Full(dyn Shape)\n    Empty\n\nUNIT: dyn Shape = Square(side=1)\n\ndef total(shapes: list[dyn Shape]) -> int64:\n    mut sum = 0\n    for shape in shapes:\n        sum += shape.area()\n    return sum\n\ndef pick() -> dyn Shape:\n    return Square(side=2)\n\ndef main() -> None:\n    scene = Scene(hero=pick(), shapes=[Square(side=3)])\n    slot = Slot.Full(Square(side=4))\n    measure: def(dyn Shape) -> int64 = lambda shape: shape.area()\n    print(total(scene.shapes) + measure(scene.hero) + UNIT.area())\n",
+        );
+        assert!(!names_trait_object(&module));
+        let erased_shape = Type::TypeParam("dyn Shape".to_string());
+        let pick = module
+            .functions
+            .iter()
+            .find(|function| function.name == "pick")
+            .expect("`pick` is lowered");
+        assert_eq!(pick.return_type, erased_shape);
+        let scene = module
+            .classes
+            .iter()
+            .find(|class| class.name == "Scene")
+            .expect("`Scene` is lowered");
+        assert_eq!(scene.fields[0].ty, erased_shape);
+        assert!(module
+            .enums
+            .iter()
+            .flat_map(|layout| layout.variants.iter().flat_map(|variant| &variant.payloads))
+            .any(|payload| *payload == erased_shape));
+        assert!(module
+            .constants
+            .iter()
+            .any(|constant| constant.ty == erased_shape));
+    }
+
+    #[test]
+    fn a_module_without_trait_objects_is_left_as_it_is() {
+        let mut module = lowered(
+            "def twice[T: Shape](item: T) -> int64:\n    return item.area() * 2\n\ndef main() -> None:\n    print(twice(Square(side=2)))\n",
+        );
+        assert!(!names_trait_object(&module));
+        let before = format!("{module:?}");
+        erase_trait_objects(&mut module);
+        assert_eq!(format!("{module:?}"), before);
+    }
+}
