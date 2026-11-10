@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-10
 
-## Iterator bound and float64 gaps (in progress)
+## Iterator bound and float64 gaps (complete)
 
 - Target: the three gaps the 0.13 evaluation left. Details are in
   `2026-11-10-iterator-bound-and-float64-gaps.md`.
@@ -11,8 +11,10 @@ Last updated: 2026-11-10
   module-qualified calls lost bound-only type parameters).
 - Done: false float claims fail fast in `aura verify` through sampled
   inputs.
-- Remaining: enum and supertrait bounds that name a trait with associated
-  types.
+- Done: enum and supertrait bounds name a trait with associated types. A
+  subtrait inherits the associated types, and its implementation reads
+  them from the supertrait's. Imported subtraits reach their supertrait's
+  methods.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

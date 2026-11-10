@@ -1,0 +1,49 @@
+# Only the subtraits are imported: `Bag` brings `IntoIterator` with its
+# `Iter`, and `Pet` brings the methods of `Named`.
+from assoc_type_supertraits_imported_support.bags import Bag, Dog, Pair, Pet, total
+import iter
+
+
+class Tags:
+    names: list[str]
+
+
+impl iter.IntoIterator[str] for Tags:
+    type Iter = iter.ListIter[str]
+
+    def into_iter(own self) -> iter.ListIter[str]:
+        return self.names.into_iter()
+
+
+# An implementation may still spell the inherited type.
+impl Bag[str] for Tags:
+    type Iter = iter.ListIter[str]
+
+    def size(self) -> int64:
+        return len(self.names)
+
+
+def describe[B: Bag[str]](bag: own B) -> str:
+    mut out = f"{bag.size()}:"
+    for name in bag:
+        out += name
+    return out
+
+
+def twice[B: Bag[int64]](bag: own B) -> int64:
+    mut sum = 0
+    for n in bag:
+        sum += n * 2
+    return sum
+
+
+def show[P: Pet](pet: P):
+    print(pet.name())
+    print(pet.legs())
+
+
+def main():
+    print(total(Pair(left=3, right=4)))
+    print(twice(Pair(left=3, right=4)))
+    print(describe(Tags(names=["a", "b"])))
+    show(Dog(tag="rex"))

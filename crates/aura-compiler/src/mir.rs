@@ -13075,6 +13075,14 @@ impl<'a> Lowerer<'a> {
                 if args.is_empty() && type_params.contains(source_name) {
                     return Type::TypeParam(source_name.clone());
                 }
+                // The hidden `S.Iter` of a bound `S: IntoIterator[T]`,
+                // written as a local's type.
+                if args.is_empty()
+                    && source_name.contains('.')
+                    && self.type_param_bounds.contains_key(source_name)
+                {
+                    return Type::TypeParam(source_name.clone());
+                }
                 let source_name = match source_name.as_str() {
                     "str" => "str",
                     "int" => "int64",
@@ -26437,6 +26445,18 @@ impl<'a> Lowerer<'a> {
                 &mut substitutions,
             );
         }
+        // A parameter that only a bound names, as `T` in
+        // `Source[T, S: IntoIterator[T]]`, comes from the implementation for `S`.
+        let mut bound_params = type_params;
+        bound_params.extend(crate::sema::hidden_bound_type_params(
+            &enum_info.decl.type_params,
+            &enum_info.type_param_bounds,
+        ));
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &enum_info.type_param_bounds,
+            &mut substitutions,
+        );
         enum_info
             .decl
             .type_params

@@ -1,0 +1,5 @@
+error[AU2002]: type `int64` does not implement trait `IntoIterator[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/assoc_type_enum_bound_unmet.au:10:17
+   |
+10 |     feed = Feed.Ready(5)
+   |                 ^

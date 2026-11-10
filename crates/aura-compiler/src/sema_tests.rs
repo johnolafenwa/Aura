@@ -32752,6 +32752,46 @@ fn class_and_impl_bounds_may_name_associated_type_traits() {
 }
 
 #[test]
+fn enum_and_supertrait_bounds_may_name_associated_type_traits() {
+    let source = include_str!("../tests/fixtures/run-pass/assoc_type_supertraits.au");
+    crate::check_source(source).expect("enum and supertrait IntoIterator bounds type-check");
+    let unmet = include_str!("../tests/fixtures/check-fail/assoc_type_enum_bound_unmet.au");
+    let error = crate::check_source(unmet).expect_err("int64 is no IntoIterator");
+    assert_eq!(error.code, "AU2002", "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("type `int64` does not implement trait `IntoIterator[str]`"),
+        "{error:?}"
+    );
+    // The subtrait's implementation reads `Iter` from the supertrait's, so
+    // without one it has nothing to read.
+    let missing =
+        include_str!("../tests/fixtures/check-fail/assoc_type_supertrait_impl_missing.au");
+    let error = crate::check_source(missing).expect_err("Words has no IntoIterator impl");
+    assert_eq!(error.code, "AU2002", "{error:?}");
+    assert!(
+        error
+            .message
+            .contains("this implementation of `Bag` must fix its associated type `Iter`"),
+        "{error:?}"
+    );
+    // A written `type Iter` must agree with the supertrait's implementation.
+    let disagrees = "from iter import Generator, IntoIterator, ListIter\n\ntrait Bag[T]: IntoIterator[T]:\n    def size(self) -> int64\n\nclass Words:\n    items: list[str]\n\nimpl IntoIterator[str] for Words:\n    type Iter = ListIter[str]\n    def into_iter(own self) -> ListIter[str]:\n        return self.items.into_iter()\n\nimpl Bag[str] for Words:\n    type Iter = Generator[str]\n    def size(self) -> int64:\n        return len(self.items)\n\ndef main():\n    print(1)\n";
+    let error = crate::check_source(disagrees).expect_err("Iter differs from the supertrait's");
+    assert!(
+        error
+            .message
+            .contains("requires supertrait `iter.IntoIterator[str, "),
+        "{error:?}"
+    );
+    // A trait that declares the type itself and passes it on is the same
+    // case, and a subtrait's method may name the inherited type.
+    let spelled = "from iter import IntoIterator, Iterator, ListIter\n\ntrait Bag[T]: IntoIterator[T, Self.Iter]:\n    type Iter: Iterator[T]\n    def size(self) -> int64\n\ntrait Shelf[T]: IntoIterator[T]:\n    def open(own self) -> Self.Iter\n\nclass Words:\n    items: list[str]\n\nimpl IntoIterator[str] for Words:\n    type Iter = ListIter[str]\n    def into_iter(own self) -> ListIter[str]:\n        return self.items.into_iter()\n\nimpl Bag[str] for Words:\n    def size(self) -> int64:\n        return len(self.items)\n\nimpl Shelf[str] for Words:\n    def open(own self) -> ListIter[str]:\n        return self.items.into_iter()\n\ndef count[B: Bag[str]](bag: own B) -> int64:\n    mut n = bag.size()\n    for _ in bag:\n        n += 1\n    return n\n\ndef start[S: Shelf[str]](shelf: own S) -> S.Iter:\n    return shelf.open()\n\ndef main():\n    print(count(Words(items=[\"a\"])))\n    mut rest = start(Words(items=[\"b\"]))\n    print(rest.collect())\n";
+    crate::check_source(spelled).expect("a spelled inherited type is fixed by the supertrait");
+}
+
+#[test]
 fn associated_type_misuse_reports_clear_diagnostics() {
     let cases = [
         (
@@ -32771,8 +32811,8 @@ fn associated_type_misuse_reports_clear_diagnostics() {
             "a `for` loop consumes an `IntoIterator` source",
         ),
         (
-            "from iter import IntoIterator\n\nenum Holder[S: IntoIterator[int64]]:\n    Full(S)\n\ndef main():\n    print(1)\n",
-            "only a function, method, class, or impl bound can name `IntoIterator` yet",
+            include_str!("../tests/fixtures/check-fail/assoc_type_alias_bound.au"),
+            "a type alias bound cannot name `IntoIterator` yet",
         ),
         (
             "trait Source:\n    def open(self) -> int64\n    type Iter\n\ndef main():\n    print(1)\n",

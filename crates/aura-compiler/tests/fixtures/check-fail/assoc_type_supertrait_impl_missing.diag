@@ -1,0 +1,6 @@
+error[AU2002]: this implementation of `Bag` must fix its associated type `Iter`
+ --> crates/aura-compiler/tests/fixtures/check-fail/assoc_type_supertrait_impl_missing.au:12:1
+   |
+12 | impl Bag[str] for Words:
+   | ^
+  = help: implement the supertrait that declares `Iter` for `Words`, or add `type Iter = ...` before the methods

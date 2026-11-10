@@ -53,6 +53,33 @@ Making a list satisfy the bound exposed two older bugs, both fixed:
 - Not covered: floats inside a list or a class field are not fixed, so
   `xs[0] * k / k == xs[0]` still runs to the limit.
 
+### Enum and supertrait bounds
+
+- `sema/assoc_bounds.rs` expands an enum bound as it does a class bound:
+  the enum keeps its written arity, and a variant construction infers the
+  hidden `S.Iter` and any parameter only the bound names.
+- A trait inherits the associated types of its supertraits in the same
+  pass. `trait Bag[T]: IntoIterator[T]` becomes
+  `IntoIterator[T, Self.Iter]`, and `Bag` gains `Iter` as a trailing hidden
+  parameter with the supertrait's bounds. Bounds by `Bag` then expand like
+  any other.
+- An implementation of the subtrait leaves the inherited type out. The
+  impl loop in `sema/program.rs` lowers such implementations after the
+  ones they read, and `inherited_assoc_types` takes the type from the
+  supertrait's implementation for the same type. A written `type Iter`
+  still works and must agree.
+- A `for` loop reads the bound closure of a type parameter, so a bound by
+  a subtrait of `Iterator` or `IntoIterator` iterates.
+- Only a type alias bound still reports `AU2002` for such a trait.
+
+Two older bugs showed up and are fixed:
+
+- A bound by an imported trait did not reach its supertrait's methods
+  unless the module imported the supertrait as well. The supertraits of
+  imported traits are now bound under their qualified names.
+- A local annotated with a hidden parameter, `items: S.Iter = ...`, was
+  lowered as a named type in `mir.rs` and the build stopped with `AU4001`.
+
 ## Verification
 
 - `cargo test -p aura-compiler --lib`: 1939 passed. The one failure,
@@ -61,12 +88,17 @@ Making a list satisfy the bound exposed two older bugs, both fixed:
 - `cargo test -p aura-compiler --test fixtures`.
 - New fixtures: `run-pass/into_iterator_list.au`,
   `run-pass/into_iterator_list_imported.au`,
-  `check-fail/into_iterator_list_duplicate.au`. Both run on the MIR and
-  the native backend.
+  `check-fail/into_iterator_list_duplicate.au`,
+  `run-pass/assoc_type_supertraits.au`,
+  `run-pass/assoc_type_supertraits_imported.au`, and three
+  `check-fail/assoc_type_*.au` cases. The run-pass fixtures run on the MIR
+  and the native backend.
 
 ## Follow-up
 
-- Item 2 of the goal.
+- A trait that imports its supertrait and has no associated types still
+  needs the importing module to import that supertrait.
+- A type alias bound cannot name a trait with associated types.
 - `set[T]`, `dict[K, V]`, and `Range` do not implement `IntoIterator`.
 - A comprehension over an `IntoIterator` type parameter binds borrowed
   items, so `[x for x in source]` cannot move non-copy items out
