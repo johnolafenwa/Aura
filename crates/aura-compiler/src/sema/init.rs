@@ -502,7 +502,7 @@ fn expr_mentions_self(expr: &Expr) -> bool {
     found
 }
 
-fn visit_expr(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
+pub(super) fn visit_expr(expr: &Expr, visit: &mut dyn FnMut(&Expr)) {
     visit(expr);
     match &expr.kind {
         ExprKind::Name(_)

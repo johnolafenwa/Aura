@@ -1315,7 +1315,7 @@ values. The binding package supplies their names and exact signatures.
 | Mutable byte view | `bytes: mut list[uint8]` | Copies into a same-length scratch buffer and back out. The writeback happens after the native call returns and before the result is validated. |
 | Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign call that closes or frees it. |
 
-[FFI v0](/manual/ffi) has the full scalar table, the manifest report, the
+[FFI](/manual/ffi) has the full scalar table, the manifest report, the
 safety boundary, diagnostics, and backend rules.
 
 ## Scalars And str
@@ -5842,7 +5842,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Delimiter continuation, ignored continuation indentation, expression-match layout islands, trailing-comma/backslash/single-line-string boundaries, and pairing diagnostics | focused lexer/parser tests; `newline_continuation*` and delimiter parse/run fixtures; `examples/basics/multiline_expressions.au`; compiler-bridge and extension indentation tests; and the MIR/direct parity matrix |
 | Parenthesized tuple values/types, recursive assignment/loop targets and patterns, function returns, left-to-right capture, recursive Copy, whole-source non-Copy moves, shared leaf provenance, copy-only constant indexing, canonical rendering, same-type recursive structural `==`/`!=` with non-consuming reads, retained ordering rejection, and mutable-writeback rejections | focused lexer/parser/sema/MIR/native/runtime tests; the `tuple_structural_equality`, `tuple_equality_contextual_literals`, and retained `tuple_ordering_rejected` fixtures; other `tuple_*` parse/check/run fixtures; `examples/basics/tuples.au`; the compiler-bridge tuple equality/ordering regression; and the MIR/direct parity matrix |
 | grammar and parser limits | `crates/aura-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
-| [FFI v0](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
+| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
 | `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` and `iteration_element_loan_write_through` for write-through on fallthrough, `continue`, `break`, and explicit return; the maintained example; and the MIR/direct parity matrix |
@@ -7013,6 +7013,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - An ordinary `-> T` return value is always owned. A Copy result is an ordinary copy. A non-Copy result must be constructed, cloned when clone-safe, moved from owned input, or produced by an owner operation.
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
 - A union value passed through a generic bound dispatches its trait methods on the active member on both backends, `mut self` methods included, because native code compiles a copy of the generic function for the union type. A call keeps the generic function instead when the module already has 4,096 copies, when a type argument nests deeper than a layout can, or when the copy would merge union members, as `T | int64` does with `T = int64`. Such a call still runs a `mut self` method on the interpreter only. There the direct backend reports `AU4001` because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before such a call.
+- A trait object, `dyn Trait`, has no `clone()`, no `==`, and no copy, so it cannot be a dictionary key or a set element, and `value = items[index]` is rejected for a collection of trait objects. Borrow the element with `view`, call a method on it in place, or take it out with `pop` or `remove`.
+- `match` cannot yet select on the type a trait object holds, the explicit conversion `value as dyn Trait` is not yet available, and a trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
 - The MIR interpreter allocates a box for each union payload and closure environment. MIR is Aura's mid-level intermediate representation. The direct backend stores unions and callables inline, as [Performance](/manual/performance#representation) describes. Aura makes no foreign-function or application binary interface (ABI) stability claim for these layouts.
 
 ### Strings And Bytes
@@ -7096,14 +7098,13 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Foreign Functions
 
-The foreign function interface (FFI) is at version 0.
-
-- FFI v0 is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
-- Calls resolve already-loaded process-global symbols and run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte scratch copy-in/out, and non-null opaque handles. Empty views use `(NULL, 0)`.
-- There is no library-loading or link-name syntax, callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
-- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI v0](/manual/ffi).
-- Process-global lookup is supported on Unix-family hosts.
+- The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
+- Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
+- Calls run synchronously on the current worker.
+- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte views, and non-null opaque handles. Empty views use `(NULL, 0)`.
+- There is no callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
+- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI](/manual/ffi).
+- The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
@@ -7386,6 +7387,8 @@ String and format-specification diagnostics are described under
 | `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
+| `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
+| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, and a `mut` argument whose type is not already the parameter's trait object type. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7587,7 +7590,7 @@ Foreign function interface (FFI) failures use these codes:
 | `AU4005` | A missing process-global symbol, a null opaque-handle result, or a runtime marshalling failure. |
 
 Native aborts, signals, memory faults, and foreign unwinds may terminate the
-process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
+process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 
 ### Ownership Codes
 
@@ -9343,7 +9346,7 @@ Byte views pass as follows:
 
 The callee must not retain a pointer, and must not read or write outside the supplied length.
 
-Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI v0](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
+Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
 
 ## Operators
 
@@ -10929,8 +10932,9 @@ Contextually typed `lambda parameters: expression` values use the same
 callable contract and may capture owned outer locals by value. See
 [Closures](/manual/closures). `receiver.method` outside call position is a
 bound method closure, and `Class.method` is an associated function value. See
-[Closures](/manual/closures#bound-methods). Interactions with trait objects
-are unavailable.
+[Closures](/manual/closures#bound-methods). A function value does not
+implement a trait, so it does not convert to a
+[trait object](/manual/generics-and-traits#trait-objects).
 
 ## Fixed-Width Numeric Example
 
@@ -11145,12 +11149,12 @@ Design record:
 
 ## Source: docs/manual/ffi.md
 
-# Foreign Function Interface (FFI) v0
+# Foreign Function Interface (FFI)
 
-Aura FFI v0 calls a small, fixed subset of the platform C ABI. It is an unsafe
-package capability for binding trusted native symbols that the process has
-already loaded. It is not a general system for dynamic libraries, pointers, or
-callbacks.
+Aura FFI calls C functions through a fixed subset of the platform C ABI. A
+package declares each function it calls and names the native libraries they
+come from. It is an unsafe package capability for binding trusted native
+code. It is not a general system for pointers or callbacks.
 
 ## Package Opt-In
 
@@ -11194,6 +11198,58 @@ The root application is still responsible for reviewing the declarations and
 the native code they call. [Packages](/manual/packages) documents the manifest
 fields.
 
+## Linking Libraries
+
+A package names the native libraries its extern functions come from in the
+`[ffi]` table of its manifest:
+
+```toml
+[package]
+name = "store"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["sqlite3"]
+library_paths = ["native/lib"]
+
+[ffi.macos]
+frameworks = ["Accelerate"]
+
+[ffi.linux]
+libraries = ["openblas"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. |
+| `frameworks` | macOS frameworks. Other hosts ignore them. |
+
+`[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
+host only. The settings of every package in the graph apply to the program:
+each dependency's first, then the root package's.
+
+The functions of the platform C library, such as `getpid` and `malloc`, need
+no entry.
+
+A package that names a library must set `allow_ffi = true`. A library or
+framework name is a bare name of ASCII letters, digits, `_`, `+`, `.`, and
+`-` that starts with a letter, digit, `_`, or `+`. The resolver rejects any
+other entry with `AU2999`, so a manifest cannot pass options to the linker.
+
+`aura build` and `aura run` pass the settings to the C linker. A program
+that names a library the linker cannot find does not build, and the linker's
+message names the library. The built program records each `library_paths`
+directory as a run-time search path, so it finds a library there when it
+starts. To move the program to another machine, install the library where
+that machine's loader looks.
+
+`aura run --backend mir` loads the same libraries into the interpreter
+before the program starts. A library it cannot load stops the run with
+`AU4005`.
+
 ## Grammar
 
 FFI accepts only bodyless C declarations:
@@ -11213,9 +11269,12 @@ def main() -> int32:
 The rules for these declarations:
 
 - **ABI string.** It must be exactly `"C"`.
-- **Symbol name.** The Aura declaration name is the C symbol name. There is no
-  source spelling for a separate link name, library name, calling convention,
-  symbol version, or variadic tail.
+- **Symbol name.** The Aura declaration name is the C symbol name unless a
+  `symbol` clause after the return type gives another:
+  `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`. Use the clause when
+  the C name is long, or is already an Aura name. `symbol` is an ordinary
+  name everywhere else. There is no source spelling for a calling
+  convention, symbol version, or variadic tail.
 - **Visibility.** `public` has its ordinary module meaning. Another module can
   import a public declaration. A private declaration is local to its module.
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
@@ -11252,7 +11311,7 @@ The accepted scalar types are fixed:
 | `None` | return-only void result |
 
 Scalar parameters must be bare, because their bits are passed by value. These
-types have no FFI v0 representation: `int128`, `uint128`, `intsize`,
+types have no FFI representation: `int128`, `uint128`, `intsize`,
 `uintsize`, `Duration`, tuples, user classes, enums, generic types, and
 arbitrary collection types.
 
@@ -11271,13 +11330,13 @@ callee must not keep it.
 
 - An empty `str` or byte view passes a null pointer and length zero.
 - A non-empty view passes a valid pointer and its exact byte length.
-- A mutable byte view uses a same-length scratch buffer. Aura copies the list's
-  bytes in, then copies exactly that length back after the foreign function
-  returns. The writeback happens even if later result validation reports an
-  Aura error. Foreign code cannot change the list's length or capacity.
+- A mutable byte view lends exactly the list's bytes. What the foreign
+  function writes is in the list when it returns, even if later result
+  validation reports an Aura error. Foreign code cannot change the list's
+  length or capacity.
 
 The checker rejects `own str`, `mut str`, and `own list[uint8]`. An extern
-function cannot return a text or byte view, because v0 has no foreign
+function cannot return a text or byte view, because FFI has no foreign
 allocator or lifetime contract.
 
 ### Opaque Handles
@@ -11323,38 +11382,41 @@ classes, enum payloads, and generic specializations.
   diagnostics. Raw pointer arithmetic and ordering by foreign address are not
   language capabilities.
 
-FFI v0 does not expose foreign addresses. It does not assume that address
+FFI does not expose foreign addresses. It does not assume that address
 identity is the native API's identity. When callers need to compare foreign
 objects, a binding should expose reviewed extern operations or a stable scalar
 or `str` key.
 
 ## Runtime Semantics
 
-The runtime resolves the declaration name in the process-global symbol table
-at the moment of the call. FFI v0 does not open a dynamic library or search a
-user-specified path. The symbol must already be visible to the process. It
-usually comes from the platform C runtime or is linked into the executable.
+A built program calls a foreign function the way C code does. The call is
+one machine call instruction, with each argument in the register or stack
+slot the C ABI gives it. The linker resolves the symbol when the program is
+built, from the platform C library and the libraries the manifest names. A
+symbol that no library defines is a link error, not a run-time failure.
+
+The interpreter, `aura run --backend mir`, looks the symbol up when the call
+runs, among the libraries loaded into the process. A missing symbol there is
+`AU4005`. `aura run` with the default backend falls back to the interpreter
+when the program does not link, so it reports the same `AU4005`.
 
 A call runs in this order:
 
 1. Aura evaluates the arguments left to right under ordinary call rules.
-2. Aura marshals the arguments to the C ABI. A missing symbol or a marshalling
-   failure prevents the foreign call.
+2. Aura passes the arguments by the C ABI.
 3. The foreign function runs.
-4. Aura writes back each mutable byte scratch buffer.
-5. Aura validates the result, including canonical booleans and non-null opaque
+4. Aura validates the result, including canonical booleans and non-null opaque
    handles.
 
-A result validation failure cannot roll back foreign side effects or completed
-byte writeback.
+A result validation failure cannot roll back foreign side effects or bytes
+the function wrote.
 
 Every foreign call is synchronous. It occupies the current Aura worker until
 the native function returns. It does not move to the blocking I/O pool and
 does not create an implicit scheduling point. A long or blocking native call
 can delay other tasks pinned to that worker.
 
-FFI declarations are unsafe contracts. At compile time, Aura cannot verify
-that a process-global symbol exists. It cannot verify that the real C
+FFI declarations are unsafe contracts. Aura cannot verify that the real C
 signature, pointer retention, allocation, thread safety, and mutation behavior
 match the declaration.
 
@@ -11390,17 +11452,17 @@ never appears in source-visible output or diagnostics.
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
 | `AU2010` | A union result or parameter other than the `Handle \| None` result form. |
-| `AU2999` | Missing package opt-in, an inaccurate root dependency report, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
+| `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
 | `AU3004` | An invalid scalar, view, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
 | `AU4001` | A non-canonical C boolean result: the returned byte was neither `0` nor `1`. |
-| `AU4005` | A recoverable runtime boundary failure, such as a missing process-global symbol, a null opaque-handle result, or a marshalling failure. |
+| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle result, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
 stop before entry, and post-call failures are raised after return.
 
-FFI v0 cannot catch or translate a native abort, signal, memory fault, or
+FFI cannot catch or translate a native abort, signal, memory fault, or
 foreign unwind. Foreign code must not unwind across the C ABI. Such a native
 failure may terminate the process instead of producing an Aura diagnostic.
 Out-of-bounds writes, a mismatched C signature, and keeping a temporary view
@@ -11408,22 +11470,26 @@ are outside Aura's memory-safety guarantees.
 
 ## Backend Support
 
-The MIR and direct native backends share one validated ABI description and one
-host-call engine. They must agree on argument layout, ownership, mutable-view
-writeback, results, and Aura diagnostics. The maintained
-`examples/packages/ffi_getpid` package and the FFI acceptance test run the same
-`getpid` declaration on both backends.
+The native backend and the interpreter share one validated ABI description.
+The native backend emits the C call itself. The interpreter builds each call
+at run time. They agree on argument layout, ownership, mutable views,
+results, and Aura diagnostics. The maintained `examples/packages/ffi_getpid`
+package and the FFI acceptance tests run the same declarations on both.
 
-Process-global symbol lookup is implemented on Unix-family hosts. On other
-hosts, a call fails with the runtime boundary diagnostic. Aura does not
-silently select a different ABI. The declaration must still name the host's
-actual C symbol.
+A foreign call from a built program costs about what the same call costs
+from C. A scalar call such as `labs` takes under a nanosecond more than the
+function itself. A `str` or `list[uint8]` argument adds a few nanoseconds to
+find its bytes, and a `str` literal adds nothing.
+
+Library loading and symbol lookup in the interpreter are implemented on
+Unix-family hosts. On other hosts, a call there fails with the runtime
+boundary diagnostic. Aura does not silently select a different ABI. The
+declaration must still name the host's actual C symbol.
 
 ## Limits And Implementation-Defined Behavior
 
-FFI v0 does not:
+FFI does not:
 
-- load libraries or select symbols by link name
 - define C structs or unions, or pass enums
 - allocate foreign memory or expose pointer arithmetic
 - return views
@@ -11441,17 +11507,18 @@ terminate the process, and no backend can make it safe.
 
 ## Status
 
-Implemented in Aura 0.13:
+Implemented:
 
-- FFI v0 package opt-in and the root dependency report
-- bodyless `extern "C"` functions and opaque handles
+- package opt-in and the root dependency report
+- library, search path, and framework settings in `[ffi]`, with host tables
+- bodyless `extern "C"` functions, the `symbol` clause, and opaque handles
 - fixed-width scalars and pointer-length views
-- Unix process-global symbol lookup
+- direct calls from built programs, and library loading in the interpreter
 - the `Handle | None` result form
 
 Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
-other nullable shapes, explicit library loading or link configuration, and
-foreign aggregate layout. Aura does not infer them from current syntax.
+other nullable shapes, and foreign aggregate layout. Aura does not infer them
+from current syntax.
 
 Design record:
 [anonymous closed union types](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0052-anonymous-closed-union-types.md)
@@ -12334,7 +12401,7 @@ The contracts described above are implemented for functions, methods, generics, 
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 
-Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI v0](/manual/ffi) specifies their restricted signatures.
+Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI](/manual/ffi) specifies their restricted signatures.
 
 Design record: supplied and default argument evaluation and capture follow `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`, which is Accepted. By-value expression closures follow Accepted ADR-0037.
 
@@ -13040,6 +13107,123 @@ A supertrait with associated types is written with its own arguments only. See [
 
 A module that imports only the child trait can still call the supertrait's methods through a child bound. It does not need to import the supertrait.
 
+## Trait Objects
+
+`dyn Trait` is the type of a value of any type that implements `Trait`. A type parameter is one type chosen at each call. A trait object is chosen at run time, so one list can hold values of many types:
+
+```aura
+trait Tool:
+    def name(self) -> str
+    def run(mut self, input: str) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+    def run(mut self, input: str) -> str:
+        return f"{self.prefix}{input}"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+    def run(mut self, input: str) -> str:
+        self.calls += 1
+        return f"call {self.calls}"
+
+def newest() -> dyn Tool:
+    return Counter(calls=0)
+
+def main():
+    mut tools: list[dyn Tool] = [Echo(prefix="> "), Counter(calls=0)]
+    tools.append(newest())
+    for tool in mut tools:
+        print(f"{tool.name()}: {tool.run("hello")}")
+    print(tools[0].name())
+```
+
+A trait object type is valid wherever a type is: a binding, a parameter, a result, a field, an enum payload, a tuple element, a union member, a list element, a dictionary value, and a generic argument such as `Box[dyn Tool]`. It cannot be a dictionary key or a set element, because it does not define equality.
+
+`dyn` is followed by one trait, with the trait's type arguments when it has them: `dyn Reader[int64]`. A trait with associated types cannot be a trait object. A bare trait name is not a type:
+
+```aura check-fail:AU2050
+trait Tool:
+    def name(self) -> str
+
+def show(tool: Tool):
+    print(tool.name())
+```
+
+### Conversion
+
+A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
+
+The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
+
+A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
+
+A `mut` parameter of a trait object type takes a variable that already has exactly that type, because the function may store a value of another type there:
+
+```aura check-fail:AU2051
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def replace(tool: mut dyn Tool):
+    tool = Counter(calls=0)
+
+def main():
+    mut echo = Echo(prefix="> ")
+    replace(echo)
+```
+
+### Calls
+
+A method call on a trait object runs the method of the type the value holds. A default method of the trait runs when that type's `impl` omits the method. The methods of the trait's supertraits are callable too.
+
+A method can be called on a trait object when one call can serve every implementing type:
+
+- it takes `self`, `mut self`, or `own self`
+- it declares no type parameters of its own
+- `Self` appears nowhere else in its signature
+
+The trait can declare other methods. They stay callable on a value whose type is known and through a type parameter. Calling one on a trait object reports `AU2051`.
+
+A trait object exposes the methods of its trait and its supertraits only. It has no fields, and the methods of the held type that the trait does not declare are not reachable.
+
+A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
+
+### Ownership
+
+A trait object is an owned value. It moves on assignment and it is never copied:
+
+- It has no `clone()`, and a collection of trait objects has no `copy()`. To copy on purpose, declare a method in the trait that returns a new value.
+- It does not define `==`.
+- Reading an element out of a collection would copy it, so `tool = tools[0]` reports `AU3005`. Use `view tool = tools[0]`, or take the element out with `pop` or `remove`.
+- A method call on an element, `tools[0].run(input)`, borrows the element where it is. So does passing an element to a shared or `mut` parameter.
+- A trait object is not Transfer, so it cannot cross a task boundary.
+
+### Representation
+
+A trait object is one handle to a box that holds the value together with its type. A call reads the type from the box and runs that type's implementation. A conversion from a value that is already boxed, such as another erased value, reuses its box.
+
 ## Operator Traits
 
 When no builtin numeric or string operator rule applies, an operator requests a trait method:
@@ -13179,6 +13363,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
+- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -13211,7 +13396,7 @@ Trait member calls and operator calls invoke the statically selected implementat
 
 `try` invokes the selected `From[Source]` conversion before it constructs the enclosing `Result.Err`.
 
-Traits do not create runtime reflection, dynamic method dictionaries, or implicit conversions.
+A call on a [trait object](#trait-objects) reads the held value's type and runs that type's implementation. No other call is resolved at run time, and traits create no runtime reflection. The one implicit conversion is from a value to a trait object of a trait its type implements, at a place that expects the trait object type.
 
 ## Ownership And Evaluation Order
 
@@ -13234,13 +13419,16 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
 | `AU3002` | A borrow conflict, or storing through a bare shared generic parameter. |
 | `AU3003` | A mutable receiver call through an immutable place. |
 | `AU3004` | An invalid ownership mode. |
-| `AU3007` | An unsafe concrete clone specialization, an unprovable concrete requirement, or an implementation that would strengthen its trait method's clone-safety contract. |
+| `AU3005` | Reading a trait object element out of a collection. Borrow it with `view`, or take it out with `pop` or `remove`. |
+| `AU3007` | `clone()` on a trait object or `copy()` on a collection of trait objects. Also an unsafe concrete clone specialization, an unprovable concrete requirement, or an implementation that would strengthen its trait method's clone-safety contract. |
 
 A selected body keeps its own runtime diagnostics:
 
@@ -13254,7 +13442,7 @@ A selected body keeps its own runtime diagnostics:
 
 ## Backend Support
 
-MIR execution and direct native generation both implement generic functions, classes, enums, and methods, traits, supertraits, default trait bodies, generic and specialized implementations, operator dispatch, `Self`, and `From` conversion. MIR is the compiler's mid-level intermediate representation.
+MIR execution and direct native generation both implement generic functions, classes, enums, and methods, traits, supertraits, default trait bodies, generic and specialized implementations, trait objects, operator dispatch, `Self`, and `From` conversion. MIR is the compiler's mid-level intermediate representation.
 
 Both backends maintain user-trait dispatch on builtin values for noncolliding method names. That includes `Queue[T]`, `Task[T]`, `TaskGroup`, `random.Rng`, `str`, and the builtin collections. Builtin target members always keep builtin dispatch.
 
@@ -13264,8 +13452,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 Aura 0.13 has none of the following:
 
-- trait objects or dynamic dispatch
-- associated types or constants
+- associated constants
 - higher-kinded parameters
 - default type arguments
 - `where` clauses
@@ -13287,12 +13474,13 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
+- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 
 Ordinary `-> T` return values are owned. Generic functions and methods can instead declare `-> view [mut] T from origin`. Trait implementations preserve the trait declaration's origin slot as well as its specialized pointee type.
 
-Trait objects, dynamic dispatch, associated types, higher-kinded types, general subtyping, and arbitrary blanket implementation targets are unavailable.
+Higher-kinded types, general subtyping, and arbitrary blanket implementation targets are unavailable.
 
 ## Design Record
 
@@ -13401,6 +13589,7 @@ Several words are contextual:
 | `view` | Special in complete local-view, returned-view, and `return view` forms. |
 | `type` | At module level, `type` followed by an identifier, optional type parameters, and `=` declares a type alias. Elsewhere it is an ordinary identifier. |
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
+| `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -13625,7 +13814,7 @@ Parsing requires the extern ABI string to be exactly `"C"`. Extern
 declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
 contract.
-[FFI v0](/manual/ffi) restricts their parameter modes and types.
+[FFI](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
 
@@ -13639,10 +13828,14 @@ type-atom
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
+    | trait-object-type
     | grouped-type
     | tuple-type
     | function-type
     | owned-callable-type ;
+
+trait-object-type
+    = "dyn", identifier-path, [ "[", type-list, "]" ] ;
 
 grouped-type = "(", type, ")" ;
 
@@ -15489,7 +15682,7 @@ Read the normative core in this order:
 4. [Types](/manual/types) and [Static Semantics](/manual/static-semantics)
 5. [Ownership And Borrowing](/manual/ownership-and-borrowing)
 6. [Expressions](/manual/expressions), [Statements](/manual/statements),
-   [Closures](/manual/closures), [FFI v0](/manual/ffi), and the declaration
+   [Closures](/manual/closures), [FFI](/manual/ffi), and the declaration
    chapters
 7. [Execution Model](/manual/execution-model)
 8. the runtime and library chapters, and the [API Index](/manual/api-index)
@@ -15569,7 +15762,7 @@ cannot normally be used as ordinary identifiers.
 Some of these words have further rules:
 
 - `extern` and `opaque` introduce the bodyless declarations described by
-  [FFI v0](/manual/ffi).
+  [FFI](/manual/ffi).
 - `own` is reserved everywhere. It marks consuming ordinary parameters,
   collection loops, and matches, and the consuming receiver spelling
   `own self`.
@@ -17864,7 +18057,7 @@ An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper fo
 
 Aura does not call a foreign destructor automatically, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
 
-See [FFI v0](/manual/ffi) for the complete ABI and failure boundary.
+See [FFI](/manual/ffi) for the complete ABI and failure boundary.
 
 ## Tasks And Borrowing
 
@@ -18141,8 +18334,12 @@ The report lists every reachable FFI-enabled dependency by package name,
 including transitive dependencies. It does not list the root package. The
 resolver rejects duplicate, unknown, unreachable, and non-FFI entries. It also
 rejects a report that omits an FFI-enabled dependency. Every listed dependency
-must set its own `[package] allow_ffi = true`. See
-[FFI v0](/manual/ffi).
+must set its own `[package] allow_ffi = true`.
+
+The `[ffi]` table also names the native libraries the package links:
+`libraries`, `library_paths`, and `frameworks`, with `[ffi.linux]` and
+`[ffi.macos]` tables for one host. They require `allow_ffi = true`. See
+[FFI](/manual/ffi#linking-libraries).
 
 ### Source Roots
 
@@ -22048,7 +22245,7 @@ An extern declaration joins the module namespace but has no Aura body. Its rules
 - Its complete signature must belong to the fixed FFI v0 scalar/view/opaque-handle table. FFI is the foreign function interface.
 - Extern functions are direct-call-only. Referencing one without immediately calling it is rejected. It does not produce a function value.
 
-An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI v0](/manual/ffi).
+An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI](/manual/ffi).
 
 ## Bindings And Assignment
 
@@ -23296,6 +23493,8 @@ Traits define shared behavior:
 trait Named:
     def name(self) -> str
 ```
+
+A trait is not a type. `dyn Named` is: the type of a value of any type that implements `Named`, chosen at run time. A value converts to it where the type is expected. A trait object is owned, is never copied, and does not define equality. See [Trait Objects](/manual/generics-and-traits#trait-objects).
 
 ## Recursive Fields
 
@@ -36764,9 +36963,17 @@ The second call is more interesting. `order` is a list of `Book | Coffee`, a
 union of two types. A union satisfies a bound when every member implements the
 trait with the same method signatures, so `print_receipt` accepts it, and each
 `item.label()` call runs the implementation for whichever type that element
-actually is. That's how you put different kinds of items in one list. Aura has
-no "trait object" type that means "any `Priced` thing"; the union names the
-exact set of types, and the compiler checks every one of them.
+actually is. That's one way to put different kinds of items in one list: the
+union names the exact set of types, and the compiler checks every one of them.
+
+When the set of types is open, so that code written later can add its own,
+name the trait instead. `dyn Priced` is the type of a value of any type that
+implements `Priced`, so a `list[dyn Priced]` holds books, coffees, and
+whatever else implements the trait. A value converts where it is stored, and
+each `item.label()` call still runs the implementation for the type that
+element actually is. A trait object gives up what the compiler can no longer
+know: it has no `==` and no `clone()`, and you reach only the methods the
+trait declares.
 
 ### Traits are nominal
 
@@ -37091,11 +37298,13 @@ error[AU2006]: trait method `len` collides with builtin method `str.len`
 ```
 
 A few features you may know from other languages don't exist in Aura today:
-trait objects and dynamic dispatch, associated types and constants, and `where`
-clauses. Every trait call is resolved at compile time to one implementation.
-When you need a list of mixed types, use a union, as Listing 10-6 did. The
-[Manual](/manual/generics-and-traits) has the complete rules for
-implementations, overlap, and dispatch.
+associated constants and `where` clauses. A trait call is resolved at compile
+time to one implementation, except on a union or a `dyn Trait` value, where it
+runs the implementation for the type the value holds. When you need a list of
+mixed types, use a union for a fixed set, as Listing 10-6 did, or
+`list[dyn Trait]` for an open one. The
+[Manual](/manual/generics-and-traits#trait-objects) has the complete rules for
+trait objects, implementations, overlap, and dispatch.
 
 There's one more kind of trait method we haven't used: a method with no `self`,
 called on the type instead of on a value. It's how you write "make a `Money`
@@ -48356,7 +48565,7 @@ calls C, and why it keeps that door deliberately narrow.
 Sooner or later you will want a function that Aura's standard modules do not
 have but the C library on your machine does. Most operating-system services
 are C functions underneath, and so are a great many libraries. Aura can call
-them through its foreign function interface, FFI v0. It is deliberately
+them through its foreign function interface, FFI. It is deliberately
 small: it lets you bind a handful of trusted C functions with simple
 signatures, and it does not let C code reach into Aura's memory in ways the
 compiler cannot see. This chapter shows what it can do, what it refuses to
@@ -48429,11 +48638,18 @@ true
 ```
 
 The call works on both backends. Notice what we did not do: we did not tell
-Aura which library `getpid` lives in. FFI v0 looks the name up in the
-symbols already loaded into the process at the moment of the call. The C
-library is always loaded, so its functions are available; a function from a
-library the process has not loaded is not. The Aura name of the declaration
-is the C symbol name, and there is no way to give it a different link name.
+Aura which library `getpid` lives in. Every program links the C library, so
+its functions are always available. A function from any other library needs
+one more line in the manifest, which we get to in
+[Linking a library](#linking-a-library).
+
+The Aura name of the declaration is the C symbol name. When that name is
+awkward, or is already taken in Aura the way `abs` is, give the C name in a
+`symbol` clause and pick your own name for the declaration:
+
+```aura fragment
+extern "C" def c_abs(x: int32) -> int32 symbol "abs"
+```
 
 Because the code examples in this chapter only check inside a package with
 `allow_ffi = true`, the listings below are shown as they appear in
@@ -48633,8 +48849,11 @@ and give your callers a way to call it, typically through a class with a
 
 ## When things go wrong at run time
 
-Some foreign failures Aura can catch. If the symbol does not exist in the
-process, the call fails with a trap before anything is called:
+Some foreign failures Aura can catch. If no library defines the symbol, the
+program cannot be linked, so `aura build` stops with the linker's "undefined
+reference" message. `aura run` then runs the program in its interpreter,
+which looks each symbol up at the call, and the call fails with a trap before
+anything is called:
 
 ```aura fragment
 extern "C" def no_such_function_anywhere() -> int32
@@ -48652,7 +48871,7 @@ error[AU4005]: FFI call to `no_such_function_anywhere` failed: FFI symbol `no_su
   = note: Aura call chain (innermost first): main at 3:1
 ```
 
-The program compiled, because lookup happens at the call. (The path in the
+The interpreter got as far as the call, because its lookup happens there. (The path in the
 message is the program the symbol was looked up in, here the `aura` command
 itself, so yours will differ.) A handle-returning
 function that returns a null pointer traps with `AU4005` too, and a `bool`
@@ -48665,6 +48884,70 @@ foreign call is synchronous: it runs on the current scheduler worker until it
 returns, without a scheduling point, so a C function that blocks for a second
 stalls every task on that worker for a second. Keep foreign calls short, or
 keep blocking work in a process you start with the `process` module.
+
+## Linking a library
+
+Most C code worth calling lives in a library of its own. To use one, name it
+in the `[ffi]` table of the manifest. This package calls zlib, the
+compression library, to checksum some text:
+
+*Filename: Aura.toml*
+
+```toml
+[package]
+name = "checksum"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["z"]
+```
+
+*Filename: src/main.au*
+
+```aura fragment
+extern "C" def crc32_z(seed: uint64, text: str) -> uint64
+
+def main():
+    print(crc32_z(0, "hello"))
+```
+
+```console
+$ aura run src/main.au
+907060870
+```
+
+`crc32_z` takes a starting value, a pointer, and a length, so the `str`
+parameter supplies its last two arguments.
+
+The name is the one a C programmer gives the linker: `z` for *libz.so* on
+Linux and *libz.dylib* on macOS. `aura build` passes it to the linker, and
+the built program loads the library when it starts, as a C program would.
+The call itself is an ordinary machine call, so calling `crc32_z` from Aura
+costs what it costs from C.
+
+Three more settings cover the cases that come up in practice. If the library
+is not in a directory the system searches, list the directory in
+`library_paths`. A relative path starts at the package. A macOS framework
+goes in `frameworks`. And when the name differs between systems, put the
+setting in a table for that system:
+
+```toml
+[ffi]
+library_paths = ["vendor/lib"]
+
+[ffi.linux]
+libraries = ["openblas"]
+
+[ffi.macos]
+frameworks = ["Accelerate"]
+```
+
+A library that is not installed is a link error from `aura build`, and the
+message names it. The library needs its development files for linking. On
+Debian and Ubuntu that is the package whose name ends in `-dev`, such as
+`zlib1g-dev`.
 
 ## Depending on an FFI package
 
@@ -48691,27 +48974,28 @@ The list must be exact: a missing, unknown, or duplicate entry is an error.
 That way, adding a dependency that quietly pulls in native code cannot happen
 without a change to your own manifest that a reviewer will see.
 
-## What FFI v0 leaves out
+## What FFI leaves out
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no callbacks from C into Aura, no
 variadic functions such as `printf`, no structs or unions passed by value, no
-raw pointers or pointer arithmetic, no returned views, no loading of
-libraries by path, and no asynchronous foreign calls. When you need one of
+raw pointers or pointer arithmetic, no returned views, and no asynchronous
+foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
-signature, linked into the process, or a separate helper program driven
+signature, built as a library the package links, or a separate helper program driven
 through `process`. The [Manual's FFI page](/manual/ffi) has the full ABI
 table, the diagnostics, and the backend contract.
 
 ## Summary
 
 You can now call a C function from Aura: declare it with `extern "C" def`
-inside a package that opts in with `allow_ffi = true`, pass scalars by value
+inside a package that opts in with `allow_ffi = true`, name its library
+under `[ffi]`, pass scalars by value
 and text and bytes as temporary views, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the
-boundary of the C code itself, and why FFI v0 keeps that boundary small.
+boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In
 [Chapter 19](/book/ch19-00-final-project) we put the pieces together in one

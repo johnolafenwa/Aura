@@ -2,6 +2,20 @@
 
 Last updated: 2026-11-10
 
+## Trait objects (in progress)
+
+- `dyn Trait`: a value of any type that implements a trait, so a list can
+  hold an open set of types. The ratified design is in
+  `architecture_docs/27-trait-objects-design-checkpoint.md`; details and
+  the remaining steps are in `2026-11-10-trait-objects.md`.
+- Step 1 is done: the type, conversion at typed sites, calls dispatched
+  on the held value, supertrait calls and upcasts, bounds, and the
+  ownership rules, on both backends.
+- Next: `value as dyn Trait` and `dyn Iterator[T]` in `for`, `match` type
+  arms, `trait Tool: Transfer:`, element lends, fast dispatch with
+  probes against Rust and Python, then `aura verify`, the language
+  server, the book chapter, and the ADR.
+
 ## Iterator bound and float64 gaps (complete)
 
 - Target: the three gaps the 0.13 evaluation left. Details are in

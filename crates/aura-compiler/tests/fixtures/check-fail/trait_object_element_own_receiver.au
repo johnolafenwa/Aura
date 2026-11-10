@@ -1,0 +1,41 @@
+trait Sink:
+    def size(self) -> int64
+    def finish(own self) -> str
+
+
+class Counter:
+    n: int64
+
+
+impl Sink for Counter:
+    def size(self) -> int64:
+        return self.n
+    def finish(own self) -> str:
+        return f"count {self.n}"
+
+
+class Holder:
+    sink: dyn Sink
+
+
+enum Slot:
+    Full(dyn Sink)
+    Empty
+
+
+def take(sink: own dyn Sink) -> str:
+    return sink.finish()
+
+
+def peek(sink: dyn Sink) -> int64:
+    return sink.size()
+
+
+def take_any[T: Sink](sink: own T) -> str:
+    return sink.finish()
+
+
+def main() -> None:
+    sinks: list[dyn Sink] = [Counter(n=1), Counter(n=2)]
+    table: dict[str, dyn Sink] = {"a": Counter(n=3)}
+    print(sinks[0].finish())

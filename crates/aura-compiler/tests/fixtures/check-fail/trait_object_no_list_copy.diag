@@ -1,0 +1,7 @@
+error[AU3007]: cannot use `list.copy` because trait object `dyn Shape` cannot be cloned
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_no_list_copy.au:55:11
+   |
+55 |     b = a.copy()
+   |           ^
+  = note: the type behind a trait object is not known here, so nothing says a copy of it is safe
+  = help: borrow it with `view`, or take it out of a collection with `pop` or `remove`; to copy on purpose, add a method to the trait that returns a new value

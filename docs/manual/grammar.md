@@ -99,6 +99,7 @@ Several words are contextual:
 | `view` | Special in complete local-view, returned-view, and `return view` forms. |
 | `type` | At module level, `type` followed by an identifier, optional type parameters, and `=` declares a type alias. Elsewhere it is an ordinary identifier. |
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
+| `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -337,10 +338,14 @@ type-atom
 
 type-primary
     = identifier-path, [ "[", type-list, "]" ]
+    | trait-object-type
     | grouped-type
     | tuple-type
     | function-type
     | owned-callable-type ;
+
+trait-object-type
+    = "dyn", identifier-path, [ "[", type-list, "]" ] ;
 
 grouped-type = "(", type, ")" ;
 
