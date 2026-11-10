@@ -779,6 +779,72 @@ def show(tool: Tool):
 
 A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
 
+`value as dyn Trait` names the conversion where nothing else supplies the type. It gives a binding, a list literal, or a generic call its trait object type without an annotation:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def last[T](items: own list[T]) -> T:
+    mut rest = items
+    return rest.pop()
+
+def main():
+    tools = [Echo(prefix="> ") as dyn Tool, Counter(calls=0)]
+    print(len(tools))
+    tool = last([Counter(calls=0) as dyn Tool, Echo(prefix="")])
+    print(tool.name())
+    echo = Echo(prefix="> ")
+    print((echo as dyn Tool).name())
+    print(echo.prefix)
+```
+
+The explicit form converts exactly as the implicit one does. Bound to a name, stored, or passed to an `own` parameter, it moves the value. As the receiver of a `self` method or as a shared argument, it borrows the value for the call, so `echo` above is still usable. The converted value is a new value, so it cannot be a `mut` receiver or a `mut` argument (`AU2051`), and it cannot be the source of a `view`. A type that does not implement the trait reports `AU2002`.
+
+A value of a union type converts when every member implements the trait. The trait object then holds the union's active member. A value of a type parameter converts when a bound of the parameter promises the trait:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def boxed[T: Tool](tool: own T) -> dyn Tool:
+    return tool
+
+def main():
+    either: Echo | Counter = Counter(calls=0)
+    tool: dyn Tool = either
+    print(tool.name())
+    print(boxed(Echo(prefix="")).name())
+```
+
 The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
 
 A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
@@ -826,6 +892,50 @@ The trait can declare other methods. They stay callable on a value whose type is
 A trait object exposes the methods of its trait and its supertraits only. It has no fields, and the methods of the held type that the trait does not declare are not reachable.
 
 A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
+
+### Iteration
+
+`dyn Iterator[T]` is a `for` source, and so is a trait object of a trait that extends `Iterator[T]`. A function can return any of several iterator types behind it, and a list can hold iterators of different types:
+
+```aura
+from iter import Iterator, Step
+
+class Count:
+    next_value: int64
+    stop: int64
+
+class Repeat:
+    value: int64
+    left: int64
+
+impl Iterator[int64] for Count:
+    def next(mut self) -> Step[int64]:
+        if self.next_value >= self.stop:
+            return Step.End
+        self.next_value += 1
+        return Step.Item(self.next_value - 1)
+
+impl Iterator[int64] for Repeat:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.value)
+
+def numbers(repeat: bool) -> dyn Iterator[int64]:
+    if repeat:
+        return Repeat(value=7, left=2)
+    return Count(next_value=0, stop=3)
+
+def main():
+    for value in numbers(false):
+        print(value)
+    sources: list[dyn Iterator[int64]] = [numbers(true), numbers(false)]
+    for source in own sources:
+        print(source.collect())
+```
+
+This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
 
 ### Ownership
 
@@ -1037,7 +1147,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
-| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |

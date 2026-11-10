@@ -2518,6 +2518,9 @@ impl<'a> FunctionChecker<'a> {
                 if *passing != ReceiverKind::Value {
                     self.mark_borrowed_element(&argument.value);
                 }
+                if *passing == ReceiverKind::BorrowMut {
+                    self.reject_mutable_trait_object_cast(&argument.value)?;
+                }
                 let typed = if hint_names_callee_params {
                     self.type_of_expr_hint_uncontracted(
                         &argument.value,

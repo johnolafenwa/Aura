@@ -322,6 +322,52 @@ impl<'a> FunctionChecker<'a> {
         Ok(expected.clone())
     }
 
+    /// Types `value as dyn Trait`: the conversion a typed boundary makes,
+    /// written where no boundary supplies the type.
+    pub(super) fn type_trait_object_cast(
+        &self,
+        expr: &Expr,
+        value: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        target: &Type,
+    ) -> Result<Type> {
+        let actual = self.type_trait_object_conversion(value, locals, target)?;
+        if &actual != target {
+            return Err(self.with_trait_object_mismatch_help(
+                Diagnostic::coded_at(
+                    "AU2002",
+                    expr.span,
+                    format!("cannot convert `{actual}` to `{target}`"),
+                ),
+                target,
+                &actual,
+            ));
+        }
+        Ok(actual)
+    }
+
+    /// Rejects `value as dyn Trait` where a `mut` receiver or parameter
+    /// needs a place: the conversion makes a new value, so a change made
+    /// through it would not reach `value`.
+    pub(super) fn reject_mutable_trait_object_cast(&self, expr: &Expr) -> Result<()> {
+        let mut selected = expr;
+        while let ExprKind::Group(inner) = &selected.kind {
+            selected = inner;
+        }
+        let ExprKind::Cast { ty: target, .. } = &selected.kind else {
+            return Ok(());
+        };
+        if target.as_trait_object().is_none() {
+            return Ok(());
+        }
+        Err(Diagnostic::coded_at(
+            "AU2051",
+            selected.span,
+            "a conversion to a trait object makes a new value, so it cannot be changed in place",
+        )
+        .with_help("bind the converted value to a `mut` name first, and use that"))
+    }
+
     pub(super) fn record_trait_object_conversion(
         &self,
         expr: &Expr,

@@ -20626,6 +20626,9 @@ impl<'a> Lowerer<'a> {
                 Operand::Place(temp)
             }
             ExprKind::Cast { expr: value, ty } => {
+                if let Some(converted) = self.lower_trait_object_cast(expr, false) {
+                    return converted;
+                }
                 let value = self.lower_expr(value);
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
@@ -22385,6 +22388,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_trait_object_conversion(expr, expected, false) {
             return value;
         }
+        if let Some(value) = self.lower_trait_object_cast(expr, false) {
+            return value;
+        }
         if let Some(expected @ Type::Function { .. }) = expected {
             if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
                 // Contextual typing is what gives a generic named function
@@ -22784,6 +22790,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_trait_object_conversion(expr, expected, true) {
             return value;
         }
+        if let Some(value) = self.lower_trait_object_cast(expr, true) {
+            return value;
+        }
         if let ExprKind::Match {
             scrutinee,
             capability,
@@ -22931,22 +22940,109 @@ impl<'a> Lowerer<'a> {
         if Self::injects_per_arm(expr) {
             return None;
         }
-        self.program
+        let conversion = self
+            .program
             .union_injection(self.module_name, expr.span, expected)?;
+        let source_union = match self.infer_expr_type(expr) {
+            Some(Type::Union(union)) => Some(Type::Union(union)),
+            Some(_) => None,
+            None => Some(conversion.member_type).filter(|ty| matches!(ty, Type::Union(_))),
+        };
         let value = if owned {
             self.lower_expr_for_owned_value(expr, None)
         } else {
             self.lower_expr_with_expected(expr, None)
         };
         let target = self.new_typed_temp(expected.clone());
-        self.emit(Instruction::Assign {
-            target: target.clone(),
-            value: Rvalue::Use(value),
-        });
+        if let Some(union_ty) = source_union {
+            self.lower_union_to_trait_object(value, &union_ty, &target);
+        } else {
+            self.emit(Instruction::Assign {
+                target: target.clone(),
+                value: Rvalue::Use(value),
+            });
+        }
         Some(if owned {
             self.move_place_for_type(target, expected)
         } else {
             Operand::Place(target)
+        })
+    }
+
+    /// Converts a union value to a trait object: the object holds the
+    /// union's active member, never the union. `value` is the union, owned
+    /// or a shared copy; each member's branch takes the payload out of it
+    /// and moves that into `target`.
+    fn lower_union_to_trait_object(&mut self, value: Operand, union_ty: &Type, target: &str) {
+        let Type::Union(union) = union_ty else {
+            unreachable!("the caller passes a union type");
+        };
+        let source = self.new_typed_temp(union_ty.clone());
+        self.emit(Instruction::Assign {
+            target: source.clone(),
+            value: Rvalue::Use(value),
+        });
+        let done = self.new_block("trait_object_from_union_done");
+        let last = union.members.len() - 1;
+        for (member_index, member_type) in union.members.iter().enumerate() {
+            let next = (member_index < last).then(|| {
+                let condition = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: condition.clone(),
+                    value: Rvalue::UnionTagTest {
+                        place: source.clone(),
+                        union_type: union_ty.clone(),
+                        member_index,
+                    },
+                });
+                let selected = self.new_block("trait_object_from_union_member");
+                let next = self.new_block("trait_object_from_union_next");
+                self.terminate(Terminator::Branch {
+                    condition: Operand::Place(condition),
+                    then_label: self.label(selected),
+                    else_label: self.label(next),
+                });
+                self.switch_to(selected);
+                next
+            });
+            let payload = self.new_typed_temp(member_type.clone());
+            self.emit(Instruction::Assign {
+                target: payload.clone(),
+                value: Rvalue::UnionTakePayload {
+                    place: source.clone(),
+                    union_type: union_ty.clone(),
+                    member_type: member_type.clone(),
+                    member_index,
+                },
+            });
+            let payload = self.move_place_for_type(payload, member_type);
+            self.emit(Instruction::Assign {
+                target: target.to_string(),
+                value: Rvalue::Use(payload),
+            });
+            self.terminate(Terminator::Goto(self.label(done)));
+            if let Some(next) = next {
+                self.switch_to(next);
+            }
+        }
+        self.switch_to(done);
+    }
+
+    /// Lowers `value as dyn Trait`. The checker recorded the conversion
+    /// for `value`; a value that already has the type is used as it is.
+    fn lower_trait_object_cast(&mut self, expr: &Expr, owned: bool) -> Option<Operand> {
+        let ExprKind::Cast { expr: value, ty } = &expr.kind else {
+            return None;
+        };
+        ty.as_trait_object()?;
+        let target = self.lower_type_ref_with_provenance(ty);
+        if let Some(converted) = self.lower_trait_object_conversion(value, Some(&target), owned) {
+            return Some(converted);
+        }
+        Some(if owned {
+            self.lower_expr_for_owned_value(value, None)
+        } else {
+            self.lower_expr_with_expected(value, None)
         })
     }
 

@@ -35,6 +35,27 @@ What is refused, each with its own message:
   `clone()` and `list.copy()`. `AU3005` for `value = items[i]`.
   `AU3008` at a task boundary.
 
+## Step 2: `as dyn`, iterators, and conversion sources
+
+- `value as dyn Trait` names the conversion where nothing supplies the
+  type: `tools = [Echo() as dyn Tool, Counter()]`. It converts exactly as
+  the implicit form does in the same place: it moves the value when it is
+  bound, stored, or passed to an `own` parameter, and it borrows the value
+  as a `self` receiver or a shared argument. A cast is a new value, so it
+  is refused as a `mut` receiver or `mut` argument (`AU2051`) and as a
+  `view` source (`AU3004`).
+- `dyn Iterator[T]`, and a trait object of a trait that extends
+  `Iterator[T]`, is a `for` source, in `for`, `for ... in mut`,
+  `for ... in own`, comprehensions, `enumerate`, and `zip`. It satisfies
+  an `Iterator[T]` bound.
+- A value of a union type converts when every member implements the
+  trait. The trait object holds the union's active member, not the union:
+  lowering branches on the tag and moves that member's payload in. A
+  value of a bounded type parameter converts too, including when the
+  parameter is itself a trait object.
+- The parser reads `as dyn Name` as a cast. `with group() as dyn:` still
+  binds a name called `dyn`.
+
 ## How it is built
 
 - The checker and MIR before specialization use
@@ -59,7 +80,7 @@ What is refused, each with its own message:
 
 ## Checked
 
-- 20 run-pass fixtures and 24 check-fail fixtures named `trait_object_*`.
+- 24 run-pass fixtures and 32 check-fail fixtures named `trait_object_*`.
   Each run-pass program prints the same on the interpreter and as a
   native binary, and the native binaries are clean under valgrind.
 - `cargo test -p aura-compiler --lib`: 1,951 pass. The one failure,
@@ -69,8 +90,12 @@ What is refused, each with its own message:
 
 ## Known gaps, for the next steps
 
-- `value as dyn Trait`, `dyn Iterator[T]` in `for`, `match` type arms,
-  and `trait Tool: Transfer:` are not built yet.
+- `match` type arms and `trait Tool: Transfer:` are not built yet.
+- A generic function that converts its `T` to a trait object, called
+  with a union for `T`, still boxes the union value as it is. Calls on it
+  work, except that the native backend refuses a `mut self` call on it at
+  run time (the older "generic receiver holding a union" limit). Step 6
+  gives the conversion its own run-time step, which will unwrap it.
 - A call still tries the trait's implementations one by one against the
   box's type, and a `for` over a list copies each element that holds a
   heap value. Steps 5 and 6 remove both, with probes against Rust and
@@ -78,3 +103,7 @@ What is refused, each with its own message:
 - A lambda whose body calls a method on a list element it captured,
   `lambda: items[0].area()`, fails with `AU4001` (loan flow). This is
   older than trait objects: it happens with `list[Label]` too.
+- In a shared `match` on a union, binding an arm's value to a new owned
+  name, `case Square as square:` then `other: Square = square`, fails
+  with `AU4001` (moves through an active loan). This is older than trait
+  objects too. `match own value:` works.

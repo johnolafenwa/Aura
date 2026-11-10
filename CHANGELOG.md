@@ -19,8 +19,11 @@ in this file.
   `tools[i].run()` borrows the element in place. A method that takes no
   `self`, has type parameters, or names `Self` in its signature is not
   callable on a trait object (`AU2051`). A bare trait name used as a type
-  reports `AU2050`. `match` on the held type, `value as dyn Trait`, and
-  trait objects in tasks come next.
+  reports `AU2050`. `value as dyn Trait` names the conversion where no
+  annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
+  `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
+  so one function can return any of several iterator types. `match` on the
+  held type and trait objects in tasks come next.
 - An enum type parameter can be bounded by a trait with associated types,
   as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
   `S.Iter`, and a `T` named only by the bound, from the implementation for

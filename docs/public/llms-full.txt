@@ -7014,7 +7014,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
 - A union value passed through a generic bound dispatches its trait methods on the active member on both backends, `mut self` methods included, because native code compiles a copy of the generic function for the union type. A call keeps the generic function instead when the module already has 4,096 copies, when a type argument nests deeper than a layout can, or when the copy would merge union members, as `T | int64` does with `T = int64`. Such a call still runs a `mut self` method on the interpreter only. There the direct backend reports `AU4001` because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before such a call.
 - A trait object, `dyn Trait`, has no `clone()`, no `==`, and no copy, so it cannot be a dictionary key or a set element, and `value = items[index]` is rejected for a collection of trait objects. Borrow the element with `view`, call a method on it in place, or take it out with `pop` or `remove`.
-- `match` cannot yet select on the type a trait object holds, the explicit conversion `value as dyn Trait` is not yet available, and a trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
+- `match` cannot yet select on the type a trait object holds, and a trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
 - The MIR interpreter allocates a box for each union payload and closure environment. MIR is Aura's mid-level intermediate representation. The direct backend stores unions and callables inline, as [Performance](/manual/performance#representation) describes. Aura makes no foreign-function or application binary interface (ABI) stability claim for these layouts.
 
 ### Strings And Bytes
@@ -7388,7 +7388,7 @@ String and format-specification diagnostics are described under
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
-| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, and a `mut` argument whose type is not already the parameter's trait object type. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
+| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -9834,6 +9834,7 @@ Three pages hold the normative detail:
 | `is None`, `is not None` | [None Tests](#none-tests) |
 | `in`, `not in`, `a < b < c` | [Membership And Comparison Chains](#membership-and-comparison-chains) |
 | `value as int64` | [Numeric Casts](#numeric-casts) |
+| `value as dyn Trait` | [Trait Objects](/manual/generics-and-traits#conversion) |
 | `f(x)`, `f(name=x)` | [Calls And Argument Binding](#calls-and-argument-binding) |
 | `Box[int32](...)` | [Explicit Generic Specialization](#explicit-generic-specialization) |
 | `object.member` | [Member Access](#member-access) |
@@ -13162,6 +13163,72 @@ def show(tool: Tool):
 
 A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
 
+`value as dyn Trait` names the conversion where nothing else supplies the type. It gives a binding, a list literal, or a generic call its trait object type without an annotation:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def last[T](items: own list[T]) -> T:
+    mut rest = items
+    return rest.pop()
+
+def main():
+    tools = [Echo(prefix="> ") as dyn Tool, Counter(calls=0)]
+    print(len(tools))
+    tool = last([Counter(calls=0) as dyn Tool, Echo(prefix="")])
+    print(tool.name())
+    echo = Echo(prefix="> ")
+    print((echo as dyn Tool).name())
+    print(echo.prefix)
+```
+
+The explicit form converts exactly as the implicit one does. Bound to a name, stored, or passed to an `own` parameter, it moves the value. As the receiver of a `self` method or as a shared argument, it borrows the value for the call, so `echo` above is still usable. The converted value is a new value, so it cannot be a `mut` receiver or a `mut` argument (`AU2051`), and it cannot be the source of a `view`. A type that does not implement the trait reports `AU2002`.
+
+A value of a union type converts when every member implements the trait. The trait object then holds the union's active member. A value of a type parameter converts when a bound of the parameter promises the trait:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def boxed[T: Tool](tool: own T) -> dyn Tool:
+    return tool
+
+def main():
+    either: Echo | Counter = Counter(calls=0)
+    tool: dyn Tool = either
+    print(tool.name())
+    print(boxed(Echo(prefix="")).name())
+```
+
 The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
 
 A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
@@ -13209,6 +13276,50 @@ The trait can declare other methods. They stay callable on a value whose type is
 A trait object exposes the methods of its trait and its supertraits only. It has no fields, and the methods of the held type that the trait does not declare are not reachable.
 
 A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
+
+### Iteration
+
+`dyn Iterator[T]` is a `for` source, and so is a trait object of a trait that extends `Iterator[T]`. A function can return any of several iterator types behind it, and a list can hold iterators of different types:
+
+```aura
+from iter import Iterator, Step
+
+class Count:
+    next_value: int64
+    stop: int64
+
+class Repeat:
+    value: int64
+    left: int64
+
+impl Iterator[int64] for Count:
+    def next(mut self) -> Step[int64]:
+        if self.next_value >= self.stop:
+            return Step.End
+        self.next_value += 1
+        return Step.Item(self.next_value - 1)
+
+impl Iterator[int64] for Repeat:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.value)
+
+def numbers(repeat: bool) -> dyn Iterator[int64]:
+    if repeat:
+        return Repeat(value=7, left=2)
+    return Count(next_value=0, stop=3)
+
+def main():
+    for value in numbers(false):
+        print(value)
+    sources: list[dyn Iterator[int64]] = [numbers(true), numbers(false)]
+    for source in own sources:
+        print(source.collect())
+```
+
+This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
 
 ### Ownership
 
@@ -13420,7 +13531,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
 | `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
-| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
@@ -14484,7 +14595,8 @@ postfix-expression
       | index-suffix
       | member-suffix
       | call-suffix
-      | numeric-cast-suffix } ;
+      | numeric-cast-suffix
+      | trait-object-cast-suffix } ;
 
 index-suffix
     = "[", expression, { ",", expression }, "]"
@@ -14494,6 +14606,8 @@ call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
 
 numeric-cast-suffix = "as", numeric-type ;
+
+trait-object-cast-suffix = "as", trait-object-type ;
 
 numeric-type
     = "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize"
@@ -36973,7 +37087,8 @@ whatever else implements the trait. A value converts where it is stored, and
 each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
-trait declares.
+trait declares. Where nothing names the type, say it yourself with `as`:
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`.
 
 ### Traits are nominal
 

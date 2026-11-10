@@ -33,17 +33,21 @@ fn normalized(text: &str) -> String {
 #[test]
 fn trait_object_programs_run() {
     let fixtures = [
+        run_pass!("trait_object_as_cast"),
         run_pass!("trait_object_assignment"),
         run_pass!("trait_object_borrowed_conversion"),
         run_pass!("trait_object_builtin_impls"),
         run_pass!("trait_object_callables"),
         run_pass!("trait_object_containers"),
+        run_pass!("trait_object_conversion_sources"),
         run_pass!("trait_object_display"),
         run_pass!("trait_object_element_borrows"),
         run_pass!("trait_object_expressions"),
         run_pass!("trait_object_fields"),
         run_pass!("trait_object_generic_arguments"),
         run_pass!("trait_object_generic_bounds"),
+        run_pass!("trait_object_iterator_adapters"),
+        run_pass!("trait_object_iterators"),
         run_pass!("trait_object_mut_methods"),
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
@@ -75,6 +79,46 @@ fn trait_objects_cross_module_boundaries() {
 #[test]
 fn trait_object_misuse_is_rejected() {
     let fixtures = [
+        check_fail!(
+            "trait_object_cast_borrowed_parameter",
+            "AU3002",
+            "parameter `square` is borrowed; declare it as `own Square` to take ownership"
+        ),
+        check_fail!(
+            "trait_object_cast_element",
+            "AU3005",
+            "cannot implicitly copy `Square` out of a list index"
+        ),
+        check_fail!(
+            "trait_object_cast_lacks_impl",
+            "AU2002",
+            "cannot convert `Other` to `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_cast_moves",
+            "AU3001",
+            "use of moved value `square`"
+        ),
+        check_fail!(
+            "trait_object_cast_mut_argument",
+            "AU2051",
+            "a conversion to a trait object makes a new value, so it cannot be changed in place"
+        ),
+        check_fail!(
+            "trait_object_cast_mut_receiver",
+            "AU2051",
+            "a conversion to a trait object makes a new value, so it cannot be changed in place"
+        ),
+        check_fail!(
+            "trait_object_cast_needs_trait",
+            "AU2050",
+            "`dyn` needs a trait, and `Square` is not a trait"
+        ),
+        check_fail!(
+            "trait_object_cast_view_source",
+            "AU3004",
+            "a view source must be an addressable local"
+        ),
         check_fail!(
             "trait_object_element_append",
             "AU3005",

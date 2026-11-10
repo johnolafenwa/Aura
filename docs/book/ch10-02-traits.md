@@ -244,7 +244,8 @@ whatever else implements the trait. A value converts where it is stored, and
 each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
-trait declares.
+trait declares. Where nothing names the type, say it yourself with `as`:
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`.
 
 ### Traits are nominal
 

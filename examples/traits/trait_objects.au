@@ -68,3 +68,8 @@ def main() -> None:
     registry["loud"] = pick(true)
     print(registry["quiet"].run("typed"))
     print(registry["loud"].describe())
+
+    # `as dyn Tool` names the conversion where no annotation does.
+    spare = [Echo(prefix="spare ") as dyn Tool, Counter(calls=10)]
+    print(len(spare))
+    print(spare[1].describe())

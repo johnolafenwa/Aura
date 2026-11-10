@@ -994,7 +994,8 @@ postfix-expression
       | index-suffix
       | member-suffix
       | call-suffix
-      | numeric-cast-suffix } ;
+      | numeric-cast-suffix
+      | trait-object-cast-suffix } ;
 
 index-suffix
     = "[", expression, { ",", expression }, "]"
@@ -1004,6 +1005,8 @@ call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
 
 numeric-cast-suffix = "as", numeric-type ;
+
+trait-object-cast-suffix = "as", trait-object-type ;
 
 numeric-type
     = "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize"

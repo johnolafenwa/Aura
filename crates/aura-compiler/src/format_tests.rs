@@ -497,6 +497,14 @@ fn statement_yield_of_a_tuple_keeps_its_space() {
 }
 
 #[test]
+fn trait_object_casts_keep_one_space_around_as_and_dyn() {
+    assert_formats(
+        "def main()->None:\n    shapes=[Square(side=1)  as   dyn   Shape,Rect(w=1,h=2)]\n    print((shapes[0]  as dyn Shape).area())\n",
+        "def main() -> None:\n    shapes = [Square(side=1) as dyn Shape, Rect(w=1, h=2)]\n    print((shapes[0] as dyn Shape).area())\n",
+    );
+}
+
+#[test]
 fn trait_object_types_keep_one_space_after_dyn() {
     assert_formats(
         "def total(shapes:list[dyn   Shape],extra:dyn Shape|None)->dyn Shape:\n    first:dyn Shape=pick(shapes)\n    return first\n",

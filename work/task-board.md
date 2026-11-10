@@ -11,7 +11,9 @@ Last updated: 2026-11-10
 - Step 1 is done: the type, conversion at typed sites, calls dispatched
   on the held value, supertrait calls and upcasts, bounds, and the
   ownership rules, on both backends.
-- Next: `value as dyn Trait` and `dyn Iterator[T]` in `for`, `match` type
+- Step 2 is done: `value as dyn Trait`, `dyn Iterator[T]` as a `for`
+  source, and conversion from union values and bounded type parameters.
+- Next: `match` type
   arms, `trait Tool: Transfer:`, element lends, fast dispatch with
   probes against Rust and Python, then `aura verify`, the language
   server, the book chapter, and the ADR.

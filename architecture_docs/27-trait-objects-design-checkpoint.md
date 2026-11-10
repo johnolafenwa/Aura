@@ -174,6 +174,16 @@ boundary.
   of the trait object type. Supertrait calls, upcasts, and bounds already
   work in this step.
 
+- **Step 2 (2026-11-10).** `value as dyn Trait` is a cast whose target
+  is a trait object type. The checker records the same conversion for the
+  cast's operand that a typed site records, so the cast lowers through
+  the same path and borrows or moves as its context does. A cast is
+  refused where a place is needed: a `mut` receiver, a `mut` argument, a
+  `view` source. `dyn Iterator[T]` and a trait object of any trait that
+  extends it are `for` sources. A union value converts when every member
+  implements the trait; lowering branches on the union's tag, so the
+  trait object holds the active member and never the union.
+
 ## Ratification Record
 
 - 2026-11-10 09:22 UTC: the owner chose "Approve all defaults" on the
