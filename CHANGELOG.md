@@ -7,6 +7,60 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.14.0 — 2026-11-10
+
+- Bundles language server 0.14.0. The semantic interface version stays 20.
+
+## 0.14.0 — 2026-11-10 (technical preview)
+
+Aura 0.14.0 makes JSON documents compact and finishes the iterator and
+verification work that 0.13.0 began. A parsed document, and a `json.Value`
+literal spelled whole, is now one flat block of memory that `match`, key
+lookups, and `json.dumps` read in place, so the two JSON programs of the
+[cross-language suite](benchmarks/cross_language/README.md) are faster than
+Python for the first time: `docdb` takes 309 ms instead of 977, against
+Python's 554, and `json_roundtrip` 287 ms instead of 673, against Python's
+415. Measured against 0.13.0 on the Linux measurement host, the 30
+programs take 11.3 seconds instead of 13.1 and run the same number of
+instructions, and the median program takes 3.2 times Rust's time, down
+from 3.5. Every `list[T]` implements `iter.IntoIterator[T]`, and classes,
+enums, implementations, and supertraits can name traits with associated
+types. `aura verify` models `dict.get` and `dict.remove`, follows
+contracts on callable fields and results, proves float division and `sqrt`
+bounds in milliseconds, and rejects false float claims in about 0.1 s. It
+also fixes a soundness bug: a false `float32` claim could be reported as
+proved. The first step of FFI v1 is in: a package links native libraries
+from its manifest, and a built program calls a C function directly, in
+under a nanosecond for scalars instead of about 380. Struct arguments,
+callbacks, and C strings are not in this release, and neither are the
+streaming I/O and trait object work now under way. Breaking: a program
+that wrote its own `impl IntoIterator[...] for list[...]` now gets a
+duplicate-impl error and can delete that implementation, and a foreign
+symbol that no library defines is a link error from `aura build` instead
+of `AU4005` at the call. Linux hello world grows from 1,080,264 to about
+1,163,000 bytes. The semantic interface stays 20, and the native cache
+format stays `v10`.
+
+- A parsed JSON document is kept as one flat tape instead of a box for
+  every value, a dict for every object, and a list for every array. A
+  `match` on a `json.Value` tests the node's tag, `Int`, `Float`, and
+  `Bool` payloads are read from the node, key lookups and `len` read the
+  tape, and `json.dumps` writes from it. A dict or list is built from the
+  tape only when the program first changes it or reads it as a value.
+- A `json.Value.Array` or `json.Value.Object` literal whose parts are all
+  spelled where it is built is made as one tape too. A document database
+  of 50,000 such documents peaks at 66 MB instead of 163 MB.
+- A field of a JSON object that is only looked up, matched, or passed to
+  `json.as_int`, `json.as_float`, `json.as_bool`, `json.is_null`, or
+  `json.dumps` is read where it lies, with no copy.
+- Runtime values are 64 bytes instead of 96, and a box header is smaller,
+  so lists and dictionaries of boxed values use less memory.
+- A loop over a list of class instances reads the list's length and
+  storage once instead of on every element read. On the operation probes,
+  reading a field of a class held in a list takes 1.4 times Rust's
+  instructions and writing one 2.6 times, down from about 15 and 4 times.
+- A loop that appends scalars to a list held in a dictionary entry, as in
+  `index[key].append(n)`, finds the entry once instead of on every append.
 - An enum type parameter can be bounded by a trait with associated types,
   as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
   `S.Iter`, and a `T` named only by the bound, from the implementation for

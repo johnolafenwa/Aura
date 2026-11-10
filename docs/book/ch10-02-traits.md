@@ -561,9 +561,11 @@ error[AU2006]: trait method `len` collides with builtin method `str.len`
 ```
 
 A few features you may know from other languages don't exist in Aura today:
-trait objects and dynamic dispatch, associated types and constants, and `where`
-clauses. Every trait call is resolved at compile time to one implementation.
-When you need a list of mixed types, use a union, as Listing 10-6 did. The
+trait objects and dynamic dispatch, associated constants, and `where` clauses.
+Every trait call is resolved at compile time to one implementation. When you
+need a list of mixed types, use a union, as Listing 10-6 did. Associated
+types do exist, and [Chapter 10.4](/book/ch10-04-iterators-and-generators)
+introduces them. The
 [Manual](/manual/generics-and-traits) has the complete rules for
 implementations, overlap, and dispatch.
 

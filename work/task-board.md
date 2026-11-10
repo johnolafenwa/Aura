@@ -2,6 +2,16 @@
 
 Last updated: 2026-11-10
 
+## Release 0.14.0-preview (in progress)
+
+- Cut from `main` @ `2206fe9` after the first FFI v1 step (#259): compact
+  JSON storage, the rest of lean values, associated-type bounds on
+  classes, implementations, enums, and supertraits, `IntoIterator` for
+  lists, the verification leftovers, and the `float32` soundness fix. 30
+  programs 13.1 s -> 11.3 s against 0.13.0 with the same instruction
+  count; `docdb` and `json_roundtrip` now beat Python. Details are in
+  `2026-11-10-v0.14.0-preview-release.md`.
+
 ## Iterator bound and float64 gaps (complete)
 
 - Target: the three gaps the 0.13 evaluation left. Details are in
