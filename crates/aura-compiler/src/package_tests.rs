@@ -1045,6 +1045,7 @@ fn package_resolver_reports_graph_limit_and_workspace_lookup_edges() {
                 external_prefix: None,
                 dependencies: BTreeMap::new(),
                 ffi_dependencies: BTreeSet::new(),
+                foreign_link: Default::default(),
                 origin: PackageOrigin::Path,
             },
         );
@@ -2305,6 +2306,7 @@ fn dependency_paths_skip_revisited_packages_and_backtrack_dead_ends() {
             .map(|dependency| (dependency.to_string(), dependency.to_string()))
             .collect(),
         ffi_dependencies: BTreeSet::new(),
+        foreign_link: Default::default(),
         origin: PackageOrigin::Path,
     };
     let packages = BTreeMap::from([
@@ -2322,4 +2324,229 @@ fn dependency_paths_skip_revisited_packages_and_backtrack_dead_ends() {
         ])
     );
     assert_eq!(dependency_path(&packages, "alpha", "missing"), None);
+}
+
+fn ffi_section(source: &str) -> RawFfiSection {
+    toml::from_str(source).expect("the test `[ffi]` section should parse")
+}
+
+fn host_link_plan(source: &str, allow_ffi: bool, os: &str) -> Result<ForeignLinkPlan> {
+    foreign_link_plan_for_host(
+        Path::new("/pkg/Aura.toml"),
+        Path::new("/pkg"),
+        allow_ffi,
+        &ffi_section(source),
+        os,
+    )
+}
+
+#[test]
+fn ffi_link_settings_resolve_for_the_host_they_name() {
+    let source = r#"
+libraries = ["sqlite3", "z"]
+library_paths = ["native/lib", "/opt/vendor/lib"]
+frameworks = ["Accelerate"]
+
+[linux]
+libraries = ["m", "z"]
+library_paths = ["native/linux"]
+
+[macos]
+libraries = ["objc"]
+frameworks = ["CoreFoundation", "Accelerate"]
+"#;
+    let linux = host_link_plan(source, true, "linux").expect("the settings are valid");
+    assert_eq!(linux.libraries, ["sqlite3", "z", "m"]);
+    assert_eq!(
+        linux.library_paths,
+        [
+            PathBuf::from("/pkg/native/lib"),
+            PathBuf::from("/opt/vendor/lib"),
+            PathBuf::from("/pkg/native/linux"),
+        ]
+    );
+    assert_eq!(linux.frameworks, ["Accelerate"]);
+
+    let macos = host_link_plan(source, true, "macos").expect("the settings are valid");
+    assert_eq!(macos.libraries, ["sqlite3", "z", "objc"]);
+    assert_eq!(
+        macos.library_paths,
+        [
+            PathBuf::from("/pkg/native/lib"),
+            PathBuf::from("/opt/vendor/lib"),
+        ]
+    );
+    assert_eq!(macos.frameworks, ["Accelerate", "CoreFoundation"]);
+
+    let other = host_link_plan(source, true, "freebsd").expect("the settings are valid");
+    assert_eq!(other.libraries, ["sqlite3", "z"]);
+
+    let empty = host_link_plan("dependencies = []\n", false, "linux")
+        .expect("a section without link settings needs no opt-in");
+    assert!(empty.is_empty());
+    assert!(!linux.is_empty());
+}
+
+#[test]
+fn ffi_link_settings_require_the_manifest_opt_in_on_every_host() {
+    for (source, table) in [
+        ("libraries = [\"sqlite3\"]\n", "[ffi]"),
+        ("library_paths = [\"native\"]\n", "[ffi]"),
+        ("frameworks = [\"Accelerate\"]\n", "[ffi]"),
+        ("[linux]\nlibraries = [\"m\"]\n", "[ffi.linux]"),
+        ("[macos]\nframeworks = [\"Accelerate\"]\n", "[ffi.macos]"),
+    ] {
+        for os in ["linux", "macos"] {
+            let error = expect_diag(
+                host_link_plan(source, false, os),
+                "link settings without the opt-in should be rejected",
+            );
+            assert_eq!(error.code, "AU2999");
+            assert_eq!(
+                error.message,
+                format!(
+                    "manifest `/pkg/Aura.toml` names native libraries in `{table}` but does not opt in to FFI; add `allow_ffi = true` to `[package]`"
+                )
+            );
+        }
+    }
+}
+
+#[test]
+fn ffi_link_settings_reject_names_that_are_not_bare_library_names() {
+    for name in [
+        "",
+        "-lfoo",
+        "-Wl,-rpath,/tmp",
+        ".hidden",
+        "a b",
+        "../x",
+        "a/b",
+        "a;b",
+        "é",
+    ] {
+        assert!(!is_valid_link_name(name), "{name:?}");
+        for (key, table, source) in [
+            ("libraries", "[ffi]", format!("libraries = [{name:?}]\n")),
+            ("frameworks", "[ffi]", format!("frameworks = [{name:?}]\n")),
+            (
+                "libraries",
+                "[ffi.macos]",
+                format!("[macos]\nlibraries = [{name:?}]\n"),
+            ),
+        ] {
+            let error = expect_diag(
+                host_link_plan(&source, true, "linux"),
+                "an invalid link name should be rejected on every host",
+            );
+            assert_eq!(error.code, "AU2999");
+            assert_eq!(
+                error.message,
+                format!(
+                    "manifest `/pkg/Aura.toml` has invalid entry `{}` in `{table} {key}`; write the bare name, such as `sqlite3` for `libsqlite3`, using only ASCII letters, digits, `_`, `+`, `.`, and `-`",
+                    name.escape_default()
+                )
+            );
+        }
+    }
+    for name in ["sqlite3", "stdc++", "llama", "gfortran-13", "c_api", "z.1"] {
+        assert!(is_valid_link_name(name), "{name:?}");
+    }
+}
+
+#[test]
+fn ffi_link_settings_reject_empty_and_control_character_paths() {
+    for (toml, path) in [
+        (r#""""#, ""),
+        (r#""native\nlib""#, "native\nlib"),
+        (r#""native\u0000""#, "native\u{0}"),
+    ] {
+        let error = expect_diag(
+            host_link_plan(&format!("library_paths = [{toml}]\n"), true, "linux"),
+            "an invalid library path should be rejected",
+        );
+        assert_eq!(error.code, "AU2999");
+        assert_eq!(
+            error.message,
+            format!(
+                "manifest `/pkg/Aura.toml` has invalid entry `{}` in `[ffi] library_paths`; write a directory path without control characters",
+                path.escape_default()
+            )
+        );
+    }
+}
+
+#[test]
+fn package_graph_link_plan_lists_dependencies_before_the_root_once_each() {
+    let temp = TempDir::new("aura-packages-ffi-link-plan");
+    let main_path = temp.write(
+        "app/src/main.au",
+        "import native.sys\n\ndef main():\n    pass\n",
+    );
+    temp.write(
+        "app/Aura.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+native = { path = "../native" }
+
+[ffi]
+dependencies = ["native"]
+libraries = ["app_only", "shared"]
+library_paths = ["vendor"]
+"#,
+    );
+    temp.write(
+        "native/src/sys.au",
+        "public extern \"C\" def getpid() -> int32\n",
+    );
+    temp.write(
+        "native/Aura.toml",
+        r#"[package]
+name = "native"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["shared", "native_only"]
+library_paths = ["lib"]
+"#,
+    );
+
+    let graph = PackageGraph::discover_for_entry(&main_path)
+        .expect("the package graph should resolve")
+        .expect("package graph should exist");
+    let plan = graph.foreign_link_plan();
+    assert_eq!(plan.libraries, ["shared", "native_only", "app_only"]);
+    let root = fs::canonicalize(&temp.path).expect("the fixture root should canonicalize");
+    assert_eq!(
+        plan.library_paths,
+        [root.join("native/lib"), root.join("app/vendor")]
+    );
+    assert!(plan.frameworks.is_empty());
+
+    let encoded = serde_json::to_string(&plan).expect("a link plan serializes");
+    let decoded: ForeignLinkPlan = serde_json::from_str(&encoded).expect("and reads back");
+    assert_eq!(decoded, plan);
+
+    temp.write(
+        "native/Aura.toml",
+        "[package]\nname = \"native\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n\n[ffi]\nlibraries = [\"-lbad\"]\n",
+    );
+    let error = expect_diag(
+        PackageGraph::discover_for_entry(&main_path),
+        "a dependency's invalid link name should fail discovery",
+    );
+    assert!(
+        error
+            .message
+            .contains("has invalid entry `-lbad` in `[ffi] libraries`"),
+        "{}",
+        error.message
+    );
 }

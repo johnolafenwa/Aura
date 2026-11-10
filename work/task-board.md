@@ -13,15 +13,35 @@ Last updated: 2026-11-10
 - Remaining: `regex` and `time` modules, the `http` client module, and
   the streaming reference agent.
 
-## Iterator bound and float64 gaps (in progress)
+## Iterator bound and float64 gaps (complete)
 
 - Target: the three gaps the 0.13 evaluation left. Details are in
   `2026-11-10-iterator-bound-and-float64-gaps.md`.
 - Done: `list[T]` implements `IntoIterator[T]`, with two older bugs fixed
   on the way (imported generic impls rejected the caller's own classes;
   module-qualified calls lost bound-only type parameters).
-- Remaining: enum and supertrait bounds that name a trait with associated
-  types, and fast failure of false float64 claims in `aura verify`.
+- Done: false float claims fail fast in `aura verify` through sampled
+  inputs.
+- Done: enum and supertrait bounds name a trait with associated types. A
+  subtrait inherits the associated types, and its implementation reads
+  them from the supertrait's. Imported subtraits reach their supertrait's
+  methods.
+
+## docdb margin over Python (complete)
+
+- Matched json field reads take the entry's tape node, entry loans that
+  only append find their entry once, and `int64` dict keys are stored
+  unboxed. docdb at 50k documents: 401 -> 334 ms against Python's 521 ms.
+  Details are in `2026-10-30-beat-python.md`.
+
+## FFI v1 (in progress)
+
+- Target: wrap real C libraries. Plan and measurements are in
+  `2026-11-10-ffi-v1.md`.
+- Done: library linking from `[ffi]`, direct native calls, and the `symbol`
+  clause (ADR-0074).
+- Remaining: C strings and out-parameters, structs, callbacks, handle
+  destructors, a SQLite example, and benchmarks against Rust and Python.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

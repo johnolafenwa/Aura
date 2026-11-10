@@ -371,9 +371,26 @@ fn render_float(value: &str) -> Option<String> {
     let (sign, _) = bits(sign)?;
     let (exponent, exponent_width) = bits(exponent)?;
     let (significand, significand_width) = bits(significand)?;
+    // A very large or very small value reads better with an exponent than
+    // as hundreds of digits.
+    let plain = |size: f64| size == 0.0 || (1e-5..1e16).contains(&size) || !size.is_finite();
     let rendered = match (exponent_width, significand_width) {
-        (11, 52) => f64::from_bits(sign << 63 | exponent << 52 | significand).to_string(),
-        (8, 23) => f32::from_bits((sign << 31 | exponent << 23 | significand) as u32).to_string(),
+        (11, 52) => {
+            let value = f64::from_bits(sign << 63 | exponent << 52 | significand);
+            if plain(value.abs()) {
+                value.to_string()
+            } else {
+                format!("{value:e}")
+            }
+        }
+        (8, 23) => {
+            let value = f32::from_bits((sign << 31 | exponent << 23 | significand) as u32);
+            if plain(f64::from(value.abs())) {
+                value.to_string()
+            } else {
+                format!("{value:e}")
+            }
+        }
         _ => return None,
     };
     Some(rendered)

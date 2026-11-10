@@ -978,6 +978,7 @@ fn adr0038_cfg_view_module(reverse_branch_storage: bool, include_dead_loan: bool
     };
 
     MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         functions: vec![main, update],
@@ -1207,6 +1208,7 @@ fn adr0038_closure_branch_module(flag: bool, reverse_branch_storage: bool) -> Mi
     });
     let main = adr0038_closure_main(blocks, locals);
     MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         functions: vec![main, adr0038_set_capture_function()],
@@ -1421,6 +1423,7 @@ fn adr0038_selector_reuse_module() -> MirModule {
         locals,
     );
     MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         functions: vec![

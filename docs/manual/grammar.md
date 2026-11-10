@@ -323,7 +323,7 @@ Parsing requires the extern ABI string to be exactly `"C"`. Extern
 declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
 contract.
-[FFI v0](/manual/ffi) restricts their parameter modes and types.
+[FFI](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
 

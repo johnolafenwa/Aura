@@ -4391,6 +4391,14 @@ fn link_direct_native_binary(
     for arg in &native_runtime.native_link_args {
         command.arg(arg);
     }
+    match foreign_link_args(&mir.foreign_link, std::env::consts::OS) {
+        Ok(args) => command.args(args),
+        Err(error) => {
+            let _ = fs::remove_file(&temp_staticlib);
+            remove_temp_objects();
+            return Err(error);
+        }
+    };
     if debug {
         command.args(debug_binary_link_args(std::env::consts::OS));
     } else {
@@ -4480,6 +4488,50 @@ fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
         "macos" => &["-Wl,-u,_aura_debug_render"],
         _ => &["-Wl,-u,aura_debug_render"],
     }
+}
+
+/// The linker arguments for the native libraries a program's packages name
+/// under `[ffi]`: each search path, also recorded as a run path so the
+/// program finds a library there when it starts, then each library, then
+/// each macOS framework. The names are checked again here, so nothing but
+/// a library name follows `-l`.
+fn foreign_link_args(
+    plan: &aura_compiler::ForeignLinkPlan,
+    os: &str,
+) -> std::result::Result<Vec<std::ffi::OsString>, String> {
+    let mut args = Vec::new();
+    for path in &plan.library_paths {
+        args.push("-L".into());
+        args.push(path.clone().into_os_string());
+        // `-Xlinker` passes the path as its own argument, so a comma in it
+        // cannot split a `-Wl,` option.
+        for part in ["-Xlinker", "-rpath", "-Xlinker"] {
+            args.push(part.into());
+        }
+        args.push(path.clone().into_os_string());
+    }
+    for (kind, names) in [
+        ("library", &plan.libraries),
+        ("framework", &plan.frameworks),
+    ] {
+        for name in names {
+            if !aura_compiler::is_valid_link_name(name) {
+                return Err(format!(
+                    "cannot link native {kind} `{}`: the name is not a plain {kind} name",
+                    name.escape_default()
+                ));
+            }
+            match kind {
+                "library" => args.push(format!("-l{name}").into()),
+                _ if os == "macos" => {
+                    args.push("-framework".into());
+                    args.push(name.into());
+                }
+                _ => {}
+            }
+        }
+    }
+    Ok(args)
 }
 
 fn user_binary_link_args(os: &str) -> &'static [&'static str] {
@@ -6117,5 +6169,71 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let resolved = parse_static_library_artifact_path(stdout)
             .expect("cargo artifact output should expose a static archive");
         assert_eq!(resolved, PathBuf::from("/tmp/libaura_runtime-abc123.a"));
+    }
+
+    #[test]
+    fn foreign_link_args_name_paths_libraries_and_macos_frameworks() {
+        let plan = aura_compiler::ForeignLinkPlan {
+            libraries: vec!["sqlite3".to_string(), "stdc++".to_string()],
+            library_paths: vec![PathBuf::from("/pkg/native,lib")],
+            frameworks: vec!["Accelerate".to_string()],
+        };
+        let text = |args: Vec<std::ffi::OsString>| {
+            args.into_iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let shared = [
+            "-L",
+            "/pkg/native,lib",
+            "-Xlinker",
+            "-rpath",
+            "-Xlinker",
+            "/pkg/native,lib",
+            "-lsqlite3",
+            "-lstdc++",
+        ];
+        assert_eq!(
+            text(super::foreign_link_args(&plan, "linux").expect("the plan is valid")),
+            shared
+        );
+        let mut macos = shared.to_vec();
+        macos.extend(["-framework", "Accelerate"]);
+        assert_eq!(
+            text(super::foreign_link_args(&plan, "macos").expect("the plan is valid")),
+            macos
+        );
+        assert_eq!(
+            super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux"),
+            Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn foreign_link_args_refuse_names_that_could_be_linker_options() {
+        for (libraries, frameworks, message) in [
+            (
+                vec!["-Wl,--version".to_string()],
+                Vec::new(),
+                "cannot link native library `-Wl,--version`: the name is not a plain library name",
+            ),
+            (
+                Vec::new(),
+                vec!["a b".to_string()],
+                "cannot link native framework `a b`: the name is not a plain framework name",
+            ),
+        ] {
+            let plan = aura_compiler::ForeignLinkPlan {
+                libraries,
+                library_paths: Vec::new(),
+                frameworks,
+            };
+            for os in ["linux", "macos"] {
+                assert_eq!(
+                    super::foreign_link_args(&plan, os),
+                    Err(message.to_string())
+                );
+            }
+        }
     }
 }

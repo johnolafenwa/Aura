@@ -17,6 +17,7 @@ use libffi::middle::{Arg, Cif, CodePtr, Type};
 use std::error::Error;
 use std::ffi::{c_void, CString};
 use std::fmt;
+use std::path::{Path, PathBuf};
 use std::ptr::NonNull;
 
 /// A source-level value's representation at Aura's C ABI boundary.
@@ -177,6 +178,10 @@ pub enum FfiError {
         detail: String,
     },
     UnsupportedProcessLookupPlatform,
+    LibraryNotFound {
+        library: String,
+        detail: String,
+    },
     ArityMismatch {
         expected: usize,
         actual: usize,
@@ -206,6 +211,12 @@ impl fmt::Display for FfiError {
             }
             Self::UnsupportedProcessLookupPlatform => formatter
                 .write_str("process-global FFI symbol lookup is unavailable on this platform"),
+            Self::LibraryNotFound { library, detail } => {
+                write!(
+                    formatter,
+                    "FFI library `{library}` could not be loaded: {detail}"
+                )
+            }
             Self::ArityMismatch { expected, actual } => write!(
                 formatter,
                 "FFI call expected {expected} argument(s), but received {actual}"
@@ -574,6 +585,171 @@ fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
         Err(FfiError::InvalidSymbolName)
     } else {
         Err(FfiError::UnsupportedProcessLookupPlatform)
+    }
+}
+
+/// The file names a library called `name` may have on this host, most
+/// specific first.
+fn library_file_names(name: &str) -> Vec<String> {
+    if cfg!(target_os = "macos") {
+        vec![format!("lib{name}.dylib"), format!("lib{name}.so")]
+    } else {
+        vec![format!("lib{name}.so")]
+    }
+}
+
+/// The directories the linker searches for a library by default, where a
+/// library may sit only under a versioned name such as `libsqlite3.so.0`.
+#[cfg(unix)]
+fn system_library_directories() -> Vec<PathBuf> {
+    let arch = std::env::consts::ARCH;
+    let mut directories = std::env::var_os("LD_LIBRARY_PATH")
+        .map(|paths| std::env::split_paths(&paths).collect::<Vec<_>>())
+        .unwrap_or_default();
+    directories.push(PathBuf::from("/usr/local/lib"));
+    directories.push(PathBuf::from(format!("/usr/lib/{arch}-linux-gnu")));
+    directories.push(PathBuf::from(format!("/lib/{arch}-linux-gnu")));
+    directories.extend(["/usr/lib64", "/lib64", "/usr/lib", "/lib"].map(PathBuf::from));
+    directories
+}
+
+/// The files in `directory` that are versions of `file_name`, such as
+/// `libsqlite3.so.0` for `libsqlite3.so`, in name order.
+#[cfg(unix)]
+fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
+    let prefix = format!("{file_name}.");
+    let mut files = std::fs::read_dir(directory)
+        .map(|entries| {
+            entries
+                .filter_map(|entry| entry.ok())
+                .filter(|entry| entry.file_name().to_string_lossy().starts_with(&prefix))
+                .map(|entry| entry.path())
+                .collect::<Vec<_>>()
+        })
+        .unwrap_or_default();
+    files.sort();
+    files
+}
+
+#[cfg(unix)]
+fn open_library(path: &Path) -> Result<(), String> {
+    use std::os::unix::ffi::OsStrExt;
+    let c_path = CString::new(path.as_os_str().as_bytes())
+        .map_err(|_| "the path contains a NUL byte".to_string())?;
+    // SAFETY: `c_path` is NUL terminated. The handle is never closed, so the
+    // library stays loaded for the life of the process.
+    let handle = unsafe {
+        libc::dlerror();
+        libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL)
+    };
+    if !handle.is_null() {
+        return Ok(());
+    }
+    // SAFETY: dlerror returns null or a loader-owned NUL-terminated string
+    // that stays valid until this thread's next loader call.
+    let reason = unsafe {
+        let error = libc::dlerror();
+        (!error.is_null()).then(|| {
+            std::ffi::CStr::from_ptr(error)
+                .to_string_lossy()
+                .into_owned()
+        })
+    };
+    Err(reason.unwrap_or_else(|| "the dynamic loader gave no reason".to_owned()))
+}
+
+/// The files to try for the library `name`, in order: each of
+/// `search_paths`, then the loader's own search, then a versioned file in
+/// the system's library directories.
+#[cfg(unix)]
+fn library_candidates(name: &str, search_paths: &[PathBuf]) -> Vec<PathBuf> {
+    let file_names = library_file_names(name);
+    let mut candidates = Vec::new();
+    for directory in search_paths {
+        for file_name in &file_names {
+            candidates.push(directory.join(file_name));
+            candidates.extend(versioned_library_files(directory, file_name));
+        }
+    }
+    candidates.extend(file_names.iter().map(PathBuf::from));
+    for directory in system_library_directories() {
+        for file_name in &file_names {
+            candidates.extend(versioned_library_files(&directory, file_name));
+        }
+    }
+    candidates
+}
+
+/// The files to try for the macOS framework `name`.
+#[cfg(unix)]
+fn framework_candidates(name: &str) -> Vec<PathBuf> {
+    ["/System/Library/Frameworks", "/Library/Frameworks"]
+        .map(|root| PathBuf::from(format!("{root}/{name}.framework/{name}")))
+        .to_vec()
+}
+
+/// Loads the first of `candidates` the loader accepts into the process, so
+/// [`call_process_symbol`] finds its symbols. The failure names `library`
+/// and gives the loader's reason for the first candidate.
+#[cfg(unix)]
+fn load_first(library: &str, candidates: &[PathBuf]) -> Result<(), FfiError> {
+    let mut first_failure = None;
+    for candidate in candidates {
+        match open_library(candidate) {
+            Ok(()) => return Ok(()),
+            Err(detail) => first_failure = first_failure.or(Some(detail)),
+        }
+    }
+    Err(FfiError::LibraryNotFound {
+        library: library.to_owned(),
+        detail: first_failure.unwrap_or_else(|| "there is no file to try".to_owned()),
+    })
+}
+
+/// Loads every library and framework a program links into this process,
+/// once each, so the symbols resolve as they do in a built program. The
+/// libraries stay loaded. Frameworks exist only on macOS and are skipped
+/// elsewhere.
+#[cfg(unix)]
+pub fn load_libraries(
+    libraries: &[String],
+    search_paths: &[PathBuf],
+    frameworks: &[String],
+) -> Result<(), FfiError> {
+    static LOADED: std::sync::Mutex<std::collections::BTreeSet<String>> =
+        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    let frameworks = frameworks.iter().filter(|_| cfg!(target_os = "macos"));
+    let wanted = libraries
+        .iter()
+        .map(|name| {
+            (
+                format!("l{name}"),
+                name,
+                library_candidates(name, search_paths),
+            )
+        })
+        .chain(frameworks.map(|name| (format!("f{name}"), name, framework_candidates(name))));
+    let mut loaded = LOADED
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (key, name, candidates) in wanted {
+        if !loaded.contains(&key) {
+            load_first(name, &candidates)?;
+            loaded.insert(key);
+        }
+    }
+    Ok(())
+}
+
+#[cfg(not(unix))]
+pub fn load_libraries(
+    libraries: &[String],
+    _search_paths: &[PathBuf],
+    frameworks: &[String],
+) -> Result<(), FfiError> {
+    match libraries.first().or(frameworks.first()) {
+        Some(_) => Err(FfiError::UnsupportedProcessLookupPlatform),
+        None => Ok(()),
     }
 }
 
@@ -1132,5 +1308,172 @@ mod tests {
             invalid_name.to_string(),
             "FFI symbol names cannot contain a NUL byte"
         );
+    }
+
+    /// A directory of this test's own under the system's temporary one.
+    #[cfg(unix)]
+    fn scratch_directory(label: &str) -> PathBuf {
+        let unique = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .expect("the clock follows the Unix epoch")
+            .as_nanos();
+        let path =
+            std::env::temp_dir().join(format!("aura-ffi-{label}-{}-{unique}", std::process::id()));
+        std::fs::create_dir_all(&path).expect("the scratch directory should be creatable");
+        path
+    }
+
+    /// Builds a shared library at `file` whose one function, `symbol`,
+    /// returns `answer`.
+    #[cfg(unix)]
+    fn build_fixture_library(file: &Path, symbol: &str, answer: i32) {
+        use std::io::Write;
+        let kind = if cfg!(target_os = "macos") {
+            "-dynamiclib"
+        } else {
+            "-shared"
+        };
+        let mut compiler = std::process::Command::new("cc")
+            .args([kind, "-fPIC", "-x", "c", "-", "-o"])
+            .arg(file)
+            .stdin(std::process::Stdio::piped())
+            .spawn()
+            .expect("the C compiler should start");
+        compiler
+            .stdin
+            .take()
+            .expect("the compiler reads its source from a pipe")
+            .write_all(format!("int {symbol}(void) {{ return {answer}; }}\n").as_bytes())
+            .expect("the source should reach the compiler");
+        let status = compiler.wait().expect("the C compiler should finish");
+        assert!(status.success(), "the fixture library should build");
+    }
+
+    #[cfg(unix)]
+    fn call_fixture(symbol: &str) -> Result<FfiValue, FfiError> {
+        let signature = FfiSignature::new(vec![], FfiType::I32);
+        // SAFETY: every fixture function is `int f(void)`.
+        unsafe { call_process_symbol(symbol, &signature, &mut []) }
+    }
+
+    #[test]
+    fn library_names_follow_the_host_convention() {
+        let names = library_file_names("sqlite3");
+        if cfg!(target_os = "macos") {
+            assert_eq!(names, ["libsqlite3.dylib", "libsqlite3.so"]);
+        } else {
+            assert_eq!(names, ["libsqlite3.so"]);
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_loads_from_a_search_path_once() {
+        let directory = scratch_directory("load");
+        let file = directory.join(&library_file_names("aura_ffi_fixture_load")[0]);
+        build_fixture_library(&file, "aura_ffi_fixture_load_answer", 41);
+        assert!(matches!(
+            call_fixture("aura_ffi_fixture_load_answer"),
+            Err(FfiError::SymbolNotFound { .. })
+        ));
+
+        let libraries = ["aura_ffi_fixture_load".to_owned()];
+        load_libraries(&libraries, std::slice::from_ref(&directory), &[])
+            .expect("the library is in the search path");
+        assert_eq!(
+            call_fixture("aura_ffi_fixture_load_answer"),
+            Ok(FfiValue::I32(41))
+        );
+
+        // A loaded library is not searched for again.
+        std::fs::remove_dir_all(&directory).expect("the scratch directory should be removable");
+        load_libraries(&libraries, &[], &[]).expect("the library is already loaded");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_finds_a_library_that_has_only_a_versioned_file() {
+        let directory = scratch_directory("versioned");
+        let file = directory.join("libaura_ffi_fixture_versioned.so.3");
+        build_fixture_library(&file, "aura_ffi_fixture_versioned_answer", 43);
+        assert_eq!(
+            versioned_library_files(&directory, "libaura_ffi_fixture_versioned.so"),
+            [file]
+        );
+        assert!(versioned_library_files(&directory.join("missing"), "libx.so").is_empty());
+
+        load_libraries(
+            &["aura_ffi_fixture_versioned".to_owned()],
+            std::slice::from_ref(&directory),
+            &[],
+        )
+        .expect("the versioned file is in the search path");
+        assert_eq!(
+            call_fixture("aura_ffi_fixture_versioned_answer"),
+            Ok(FfiValue::I32(43))
+        );
+        std::fs::remove_dir_all(&directory).expect("the scratch directory should be removable");
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_finds_a_system_library_by_its_bare_name() {
+        load_libraries(&["m".to_owned()], &[], &[]).expect("the C math library is installed");
+        assert!(system_library_directories().ends_with(&[PathBuf::from("/lib")]));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_reports_a_library_it_cannot_load() {
+        let directory = scratch_directory("missing");
+        let not_a_library = directory.join(&library_file_names("aura_ffi_fixture_garbage")[0]);
+        std::fs::write(&not_a_library, "not a library").expect("the file should be writable");
+
+        for name in ["aura_ffi_fixture_absent", "aura_ffi_fixture_garbage"] {
+            let error = load_libraries(&[name.to_owned()], std::slice::from_ref(&directory), &[])
+                .expect_err("the library cannot be loaded");
+            let FfiError::LibraryNotFound { library, detail } = &error else {
+                panic!("expected a library failure, found {error:?}");
+            };
+            assert_eq!(library, name);
+            assert!(!detail.is_empty());
+            assert_eq!(
+                error.to_string(),
+                format!("FFI library `{name}` could not be loaded: {detail}")
+            );
+        }
+        std::fs::remove_dir_all(&directory).expect("the scratch directory should be removable");
+
+        assert_eq!(
+            load_first("nothing", &[]),
+            Err(FfiError::LibraryNotFound {
+                library: "nothing".to_owned(),
+                detail: "there is no file to try".to_owned(),
+            })
+        );
+        assert_eq!(
+            open_library(Path::new("lib\0.so")),
+            Err("the path contains a NUL byte".to_owned())
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn frameworks_load_on_macos_and_are_skipped_elsewhere() {
+        assert_eq!(
+            framework_candidates("Accelerate"),
+            [
+                PathBuf::from("/System/Library/Frameworks/Accelerate.framework/Accelerate"),
+                PathBuf::from("/Library/Frameworks/Accelerate.framework/Accelerate"),
+            ]
+        );
+        let missing = load_libraries(&[], &[], &["AuraNoSuchFramework".to_owned()]);
+        if cfg!(target_os = "macos") {
+            load_libraries(&[], &[], &["CoreFoundation".to_owned()])
+                .expect("CoreFoundation ships with macOS");
+            assert!(matches!(missing, Err(FfiError::LibraryNotFound { .. })));
+        } else {
+            assert_eq!(missing, Ok(()));
+        }
     }
 }

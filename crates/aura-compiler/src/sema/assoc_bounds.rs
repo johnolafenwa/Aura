@@ -90,6 +90,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) {
         return;
     }
     let mut needed = Vec::new();
+    inherit_assoc_types(module, &mut traits, &context.module_registry, &mut needed);
     for item in &mut module.items {
         let methods = match item {
             Item::Function(function) => std::slice::from_mut(function),
@@ -154,6 +155,24 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) {
                 );
                 impl_decl.methods.as_mut_slice()
             }
+            Item::Enum(enum_decl) => {
+                // An enum keeps its written arity, as a class does: a
+                // variant construction infers the hidden `S.Iter` to check
+                // the bound.
+                let hidden = expand_bounds(
+                    &mut enum_decl.type_params,
+                    &mut enum_decl.type_param_bounds,
+                    &traits,
+                    &context.module_registry,
+                    &mut needed,
+                );
+                let written = enum_decl.type_params.len() - hidden.len();
+                enum_decl.type_params.truncate(written);
+                for hidden_name in hidden.iter().map(|(name, _)| name) {
+                    enum_decl.type_param_bounds.remove(hidden_name);
+                }
+                &mut []
+            }
             Item::Trait(trait_decl) => trait_decl.methods.as_mut_slice(),
             _ => &mut [],
         };
@@ -176,6 +195,132 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) {
             .entry(qualified)
             .or_insert(ImportedBinding::Trait(info));
     }
+}
+
+/// Gives each trait the associated types of its supertraits. A supertrait
+/// written with its own arguments only, as in `trait Bag[T]: IntoIterator[T]`,
+/// becomes `IntoIterator[T, Self.Iter]`, and `Bag` gains `Iter` as an
+/// associated type of its own with the bounds `IntoIterator` gives it. A
+/// bound `B: Bag[T]` then names `B.Iter` like any other, and an
+/// implementation of `Bag` takes `Iter` from the type's implementation of
+/// `IntoIterator`.
+fn inherit_assoc_types(
+    module: &mut Module,
+    traits: &mut BTreeMap<String, AssocTrait>,
+    registry: &BTreeMap<String, ModuleNamespace>,
+    needed: &mut Vec<(String, TraitInfo)>,
+) {
+    // A supertrait declared later in the module may inherit in turn, so
+    // repeat until no trait changes.
+    loop {
+        let mut changed = false;
+        for item in &mut module.items {
+            let Item::Trait(decl) = item else {
+                continue;
+            };
+            for index in 0..decl.supertraits.len() {
+                let supertrait = decl.supertraits[index].clone();
+                let Some((name, args, found)) =
+                    supertrait.named_parts().and_then(|(name, args)| {
+                        traits
+                            .get(name)
+                            .filter(|found| args.len() == found.written_params.len())
+                            .map(|found| (name.to_string(), args.to_vec(), found.clone()))
+                    })
+                else {
+                    continue;
+                };
+                let mut substitutions = BTreeMap::new();
+                for (written, arg) in found.written_params.iter().zip(&args) {
+                    substitutions.insert(written.clone(), arg.clone());
+                }
+                let mut args = args;
+                for (assoc, assoc_bounds) in &found.assoc {
+                    let hidden_name = crate::ast::assoc_type_param_name(assoc);
+                    args.push(named(&hidden_name, supertrait.span));
+                    if decl.assoc_types.iter().any(|own| own.name == *assoc) {
+                        continue;
+                    }
+                    let bounds = assoc_bounds
+                        .iter()
+                        .map(|assoc_bound| {
+                            let mut lowered =
+                                substitute(assoc_bound, &substitutions, supertrait.span);
+                            qualify(&mut lowered, found.module.as_deref(), registry, needed);
+                            lowered
+                        })
+                        .collect();
+                    decl.type_params.push(hidden_name);
+                    decl.assoc_types.push(crate::ast::AssocTypeDecl {
+                        name: assoc.clone(),
+                        bounds,
+                        span: supertrait.span,
+                    });
+                }
+                // An imported supertrait is named by its module, so a module
+                // that imports only this trait still resolves it.
+                let mut expanded = TypeRef {
+                    kind: TypeRefKind::Named { name, args },
+                    indirect: supertrait.indirect,
+                    span: supertrait.span,
+                };
+                if found.module.is_some() {
+                    qualify(&mut expanded, found.module.as_deref(), registry, needed);
+                }
+                decl.supertraits[index] = expanded;
+                changed = true;
+            }
+            if changed {
+                if let Some(found) = AssocTrait::from_decl(decl, None) {
+                    traits.insert(decl.name.clone(), found);
+                }
+            }
+        }
+        if !changed {
+            break;
+        }
+    }
+}
+
+/// The associated types of `decl` that a supertrait fixes: each is passed
+/// to a supertrait as one of its own associated types, as `Self.Iter` in
+/// `IntoIterator[T, Self.Iter]`, so the type's implementation of that
+/// supertrait decides it.
+pub(super) fn inherited_assoc_names(
+    decl: &TraitDecl,
+    traits: &BTreeMap<String, TraitInfo>,
+) -> Vec<String> {
+    let mut names = Vec::new();
+    for supertrait in &decl.supertraits {
+        let Some((name, args)) = supertrait.named_parts() else {
+            continue;
+        };
+        let Some(info) = traits.get(name) else {
+            continue;
+        };
+        let written = args.len().saturating_sub(info.decl.assoc_types.len());
+        for arg in &args[written..] {
+            let TypeRefKind::Named { name, args } = &arg.kind else {
+                continue;
+            };
+            let Some(assoc) = name.strip_prefix("Self.") else {
+                continue;
+            };
+            if args.is_empty()
+                && decl.assoc_types.iter().any(|own| own.name == assoc)
+                && !names.iter().any(|known| known == assoc)
+            {
+                names.push(assoc.to_string());
+            }
+        }
+    }
+    names
+}
+
+/// The placeholder an implementation's trait arguments carry for an
+/// associated type it leaves to a supertrait's implementation.
+pub(super) fn inherited_placeholder(name: &str, span: crate::diag::Span) -> TypeRef {
+    named(&crate::ast::assoc_type_param_name(name), span)
 }
 
 /// Rewrites the bounds of `type_params` that leave out a trait's
@@ -227,19 +372,7 @@ fn expand_bounds(
                     .iter()
                     .map(|assoc_bound| {
                         let mut lowered = substitute(assoc_bound, &substitutions, bound.span);
-                        if let TypeRefKind::Named { name, .. } = &mut lowered.kind {
-                            let owned = found.module.as_ref().and_then(|owner| {
-                                registry
-                                    .get(owner)
-                                    .filter(|_| !name.contains('.'))
-                                    .and_then(|namespace| namespace.all_traits.get(name.as_str()))
-                                    .map(|info| (format!("{owner}.{name}"), info.clone()))
-                            });
-                            if let Some((qualified, info)) = owned {
-                                *name = qualified.clone();
-                                needed.push((qualified, info));
-                            }
-                        }
+                        qualify(&mut lowered, found.module.as_deref(), registry, needed);
                         lowered
                     })
                     .collect::<Vec<_>>();
@@ -263,6 +396,36 @@ fn expand_bounds(
         }
     }
     added
+}
+
+/// Spells the trait an associated-type bound names so that a module
+/// importing only the bounded trait resolves it: a bare name is a trait of
+/// the declaring module `owner`, and a dotted one names its module already.
+fn qualify(
+    bound: &mut TypeRef,
+    owner: Option<&str>,
+    registry: &BTreeMap<String, ModuleNamespace>,
+    needed: &mut Vec<(String, TraitInfo)>,
+) {
+    let TypeRefKind::Named { name, .. } = &mut bound.kind else {
+        return;
+    };
+    let (module, base) = match name.rsplit_once('.') {
+        Some((module, base)) => (Some(module.to_string()), base.to_string()),
+        None => (owner.map(str::to_string), name.clone()),
+    };
+    let Some(module) = module else {
+        return;
+    };
+    let Some(info) = registry
+        .get(&module)
+        .and_then(|namespace| namespace.all_traits.get(base.as_str()))
+    else {
+        return;
+    };
+    let qualified = format!("{module}.{base}");
+    *name = qualified.clone();
+    needed.push((qualified, info.clone()));
 }
 
 fn named(name: &str, span: crate::diag::Span) -> TypeRef {

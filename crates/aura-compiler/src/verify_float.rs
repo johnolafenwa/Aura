@@ -12,6 +12,12 @@
 //! check proved this way is proved. A check the weaker problem does not
 //! prove is asked again of the exact one, which also finds the
 //! counterexample of a check that fails.
+//!
+//! Between the two, a check is tried with each float input fixed to a
+//! sampled value (`candidates`). With its inputs fixed, the exact problem
+//! is plain arithmetic the solver computes at once, so a false claim that
+//! many inputs refute, such as `a / 3.0 * 3.0 == a`, fails in milliseconds
+//! where the search for a counterexample can outlast the time limit.
 
 use super::exec::FloatTy;
 use std::collections::BTreeSet;
@@ -39,8 +45,9 @@ pub(super) enum RoundedOp {
 /// stays small.
 const MAX_LITERALS: usize = 8;
 
-/// Each finite, non-negative `float64` literal in `texts`, smallest first.
-pub(super) fn literals<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<f64> {
+/// Each finite `float64` literal in `texts`, of either sign, smallest
+/// first.
+pub(super) fn all_literals<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<f64> {
     let mut found = BTreeSet::new();
     for text in texts {
         let mut rest = text;
@@ -48,7 +55,7 @@ pub(super) fn literals<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<f64>
             rest = &rest[at..];
             let end = rest.find(')').unwrap_or(rest.len());
             if let Some(value) = parse_literal(&rest[..end]) {
-                if value.is_finite() && value >= 0.0 {
+                if value.is_finite() {
                     found.insert(value.to_bits());
                 }
             }
@@ -57,6 +64,13 @@ pub(super) fn literals<'t>(texts: impl IntoIterator<Item = &'t str>) -> Vec<f64>
     }
     let mut values: Vec<f64> = found.into_iter().map(f64::from_bits).collect();
     values.sort_by(f64::total_cmp);
+    values
+}
+
+/// The finite, non-negative values of `all`, smallest first, up to the
+/// number each result is related to.
+pub(super) fn literals(all: &[f64]) -> Vec<f64> {
+    let mut values: Vec<f64> = all.iter().copied().filter(|value| *value >= 0.0).collect();
     values.truncate(MAX_LITERALS);
     values
 }
@@ -80,7 +94,7 @@ fn parse_literal(text: &str) -> Option<f64> {
 }
 
 /// The SMT literal of `value` rounded to `float`.
-fn literal(float: FloatTy, value: f64) -> String {
+pub(super) fn literal(float: FloatTy, value: f64) -> String {
     match float {
         FloatTy::F64 => FloatTy::literal(value),
         FloatTy::F32 => {
@@ -298,6 +312,99 @@ fn values_in(float: FloatTy, literals: &[f64]) -> Vec<f64> {
     values
 }
 
+/// How many assignments of its float inputs a check is tried with.
+pub(super) const SAMPLES: usize = 32;
+
+/// How many assignments are drawn to find `SAMPLES` that the function's
+/// `requires` allow.
+pub(super) const CANDIDATES: usize = 512;
+
+/// The most literal sizes the candidates are drawn between.
+const MAX_SAMPLE_BOUNDS: usize = 6;
+
+/// Values for `inputs` float inputs to try, one row for each attempt.
+/// `literals` are the float literals the function names, of either sign.
+///
+/// A function mostly bounds its inputs by its literals, as in
+/// `requires 1.0 <= a and a <= 1000.0`, so each row draws from the range
+/// between two literal sizes: mostly a value inside, sometimes an end of
+/// the range or the value next to it. Half the rows give every input the
+/// same range. The same arguments give the same rows.
+///
+/// A row proves nothing by itself: the solver decides whether the function's
+/// facts allow it and whether a check fails there.
+pub(super) fn candidates(inputs: usize, literals: &[f64]) -> Vec<Vec<f64>> {
+    let mut sizes: Vec<f64> = literals
+        .iter()
+        .map(|value| value.abs())
+        .filter(|size| size.is_finite() && *size > 0.0)
+        .collect();
+    sizes.sort_by(f64::total_cmp);
+    sizes.dedup();
+    if sizes.len() > MAX_SAMPLE_BOUNDS {
+        // The smallest and the largest: the outer bounds of the inputs.
+        let half = MAX_SAMPLE_BOUNDS / 2;
+        let large = sizes.split_off(sizes.len() - half);
+        sizes.truncate(half);
+        sizes.extend(large);
+    }
+    let beyond = sizes.last().map_or(1.0, |largest| largest * 2.0);
+    let mut bounds = vec![0.0];
+    bounds.extend(sizes);
+    if beyond.is_finite() {
+        bounds.push(beyond);
+    }
+    let mut ranges = Vec::new();
+    for (index, &low) in bounds.iter().enumerate() {
+        for &high in &bounds[index + 1..] {
+            ranges.push((low, high));
+        }
+    }
+    let negative = if literals.iter().any(|value| *value < 0.0) {
+        2
+    } else {
+        8
+    };
+    let mut state = 0x9e37_79b9_7f4a_7c15u64;
+    let mut next = move || {
+        // SplitMix64.
+        state = state.wrapping_add(0x9e37_79b9_7f4a_7c15);
+        let mut z = state;
+        z = (z ^ (z >> 30)).wrapping_mul(0xbf58_476d_1ce4_e5b9);
+        z = (z ^ (z >> 27)).wrapping_mul(0x94d0_49bb_1331_11eb);
+        z ^ (z >> 31)
+    };
+    let mut rows = Vec::with_capacity(CANDIDATES);
+    for row_index in 0..CANDIDATES {
+        let shared = ranges[(row_index / 2) % ranges.len()];
+        let mut row = Vec::with_capacity(inputs);
+        for _ in 0..inputs {
+            let (low, high) = if row_index % 2 == 0 {
+                shared
+            } else {
+                ranges[next() as usize % ranges.len()]
+            };
+            let inside = low + (high - low) * ((next() >> 11) as f64 / (1u64 << 53) as f64);
+            let value = match next() % 16 {
+                0 => low,
+                1 => high,
+                // The value next to a bound. Next to zero is a subnormal,
+                // which says little about an ordinary input.
+                2 if low > 0.0 => f64::from_bits(low.to_bits() + 1),
+                3 => f64::from_bits(high.to_bits() - 1),
+                _ => inside,
+            };
+            row.push(if next() % negative == 0 {
+                -value
+            } else {
+                value
+            });
+        }
+        rows.push(row);
+    }
+    rows
+}
+
 /// Each ordered pair of `literals`.
 fn bound_pairs(literals: &[f64]) -> impl Iterator<Item = (f64, f64)> + '_ {
     literals
@@ -331,7 +438,51 @@ mod tests {
             FloatTy::literal(100.0),
             FloatTy::literal(-2.5)
         );
-        assert_eq!(literals([text.as_str(), "(fp #b0 #b01)"]), vec![0.0, 100.0]);
+        let all = all_literals([text.as_str(), "(fp #b0 #b01)"]);
+        assert_eq!(all, vec![-2.5, 0.0, 100.0]);
+        assert_eq!(literals(&all), vec![0.0, 100.0]);
+    }
+
+    #[test]
+    fn candidates_are_repeatable_and_drawn_between_the_literals() {
+        let rows = candidates(2, &[1.0, 1000.0]);
+        assert_eq!(rows, candidates(2, &[1.0, 1000.0]));
+        assert_eq!(rows.len(), CANDIDATES);
+        assert!(rows.iter().all(|row| row.len() == 2));
+        let within = |value: &f64| (1.0..=1000.0).contains(value);
+        // Many rows have both inputs inside the bounds the literals give.
+        let inside = rows.iter().filter(|row| row.iter().all(within)).count();
+        assert!(inside >= SAMPLES, "{inside} of {rows:?}");
+        let values: Vec<f64> = rows.into_iter().flatten().collect();
+        assert!(values.iter().all(|value| value.is_finite()), "{values:?}");
+        // A bound, the value next to it, and no subnormal next to zero.
+        assert!(values.contains(&1000.0), "{values:?}");
+        assert!(values.contains(&f64::from_bits(1000f64.to_bits() - 1)));
+        assert!(values
+            .iter()
+            .all(|value| *value == 0.0 || value.abs() > 1e-300));
+        // Without a negative literal, few values are negative.
+        let negative = values.iter().filter(|value| **value < 0.0).count();
+        assert!(negative > 0 && negative < values.len() / 4, "{negative}");
+    }
+
+    #[test]
+    fn candidates_follow_the_signs_and_the_number_of_literals() {
+        // A negative literal makes about half the values negative.
+        let values: Vec<f64> = candidates(1, &[-5.0, 5.0]).into_iter().flatten().collect();
+        let negative = values.iter().filter(|value| **value < 0.0).count();
+        assert!(negative > values.len() / 4, "{negative}");
+        // No literal at all leaves the range from 0 to 1.
+        let bare: Vec<f64> = candidates(1, &[]).into_iter().flatten().collect();
+        assert!(bare.iter().all(|value| value.abs() <= 1.0), "{bare:?}");
+        assert!(candidates(0, &[1.0]).iter().all(Vec::is_empty));
+        // Of many literals, the smallest and the largest bound the rows,
+        // and a largest one whose double is infinite adds no range.
+        let many = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, f64::MAX];
+        let values: Vec<f64> = candidates(1, &many).into_iter().flatten().collect();
+        assert!(values.iter().all(|value| value.is_finite()), "{values:?}");
+        assert!(values.iter().any(|value| value.abs() > 7.0), "{values:?}");
+        assert!(values.iter().any(|value| value.abs() < 1.0), "{values:?}");
     }
 
     #[test]

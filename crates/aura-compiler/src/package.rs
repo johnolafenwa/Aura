@@ -16,7 +16,7 @@ use std::{
     os::unix::ffi::OsStrExt,
 };
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 
 use crate::diag::{Diagnostic, Result};
@@ -117,11 +117,48 @@ impl GitSelector {
     }
 }
 
+/// The native libraries a program's `extern "C"` functions come from, as
+/// its packages' manifests name them under `[ffi]`. The linker resolves
+/// them for a built program, and the MIR runtime loads them before it runs
+/// one.
+#[derive(Clone, Debug, Default, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ForeignLinkPlan {
+    /// Library names as the linker's `-l` option takes them: `sqlite3` for
+    /// `libsqlite3.so` or `libsqlite3.dylib`.
+    pub libraries: Vec<String>,
+    /// Directories searched for the libraries before the system's own.
+    pub library_paths: Vec<PathBuf>,
+    /// macOS frameworks, such as `Accelerate`.
+    pub frameworks: Vec<String>,
+}
+
+impl ForeignLinkPlan {
+    pub fn is_empty(&self) -> bool {
+        self.libraries.is_empty() && self.library_paths.is_empty() && self.frameworks.is_empty()
+    }
+
+    /// Adds what `other` names and this plan does not, keeping the order.
+    fn merge(&mut self, other: &ForeignLinkPlan) {
+        fn extend<T: Clone + PartialEq>(into: &mut Vec<T>, from: &[T]) {
+            for entry in from {
+                if !into.contains(entry) {
+                    into.push(entry.clone());
+                }
+            }
+        }
+        extend(&mut self.libraries, &other.libraries);
+        extend(&mut self.library_paths, &other.library_paths);
+        extend(&mut self.frameworks, &other.frameworks);
+    }
+}
+
 #[derive(Clone, Debug)]
 pub struct PackageSource {
     pub name: String,
     pub version: String,
     pub allow_ffi: bool,
+    /// The package's own `[ffi]` link settings for this host.
+    pub foreign_link: ForeignLinkPlan,
     pub manifest_dir: PathBuf,
     pub source_root: PathBuf,
     canonical_source_root: PathBuf,
@@ -234,6 +271,20 @@ impl PackageGraph {
         self.source_for_path(path)
             .map(|package| package.dependencies.keys().cloned().collect())
             .unwrap_or_default()
+    }
+
+    /// The libraries every package of the program links, dependencies
+    /// first in package-name order and the root package's own after them.
+    pub fn foreign_link_plan(&self) -> ForeignLinkPlan {
+        let mut plan = ForeignLinkPlan::default();
+        let (dependencies, roots): (Vec<_>, Vec<_>) = self
+            .packages
+            .values()
+            .partition(|package| package.external_prefix.is_some());
+        for package in dependencies.into_iter().chain(roots) {
+            plan.merge(&package.foreign_link);
+        }
+        plan
     }
 
     pub fn ensure_ffi_allowed_for_path(&self, path: &Path) -> Result<()> {
@@ -735,6 +786,7 @@ impl PackageResolver {
             name: manifest.package.name.clone(),
             version: manifest.package.version,
             allow_ffi: manifest.package.allow_ffi,
+            foreign_link: manifest.foreign_link,
             manifest_dir: manifest_dir.clone(),
             source_root,
             canonical_source_root,
@@ -779,6 +831,28 @@ struct RawPackageSection {
 struct RawFfiSection {
     #[serde(default)]
     dependencies: Vec<String>,
+    #[serde(flatten)]
+    link: RawFfiLinkSection,
+    linux: Option<RawFfiLinkSection>,
+    macos: Option<RawFfiLinkSection>,
+}
+
+/// The link settings of `[ffi]`, or of `[ffi.linux]` or `[ffi.macos]`,
+/// which apply on that host only.
+#[derive(Default, Deserialize)]
+struct RawFfiLinkSection {
+    #[serde(default)]
+    libraries: Vec<String>,
+    #[serde(default)]
+    library_paths: Vec<String>,
+    #[serde(default)]
+    frameworks: Vec<String>,
+}
+
+impl RawFfiLinkSection {
+    fn is_empty(&self) -> bool {
+        self.libraries.is_empty() && self.library_paths.is_empty() && self.frameworks.is_empty()
+    }
 }
 
 #[derive(Deserialize)]
@@ -825,6 +899,7 @@ struct ParsedPackageManifest {
     package: RawPackageSection,
     dependencies: BTreeMap<String, RawDependency>,
     ffi_dependencies: BTreeSet<String>,
+    foreign_link: ForeignLinkPlan,
 }
 
 fn find_enclosing_package_manifest_dir(entry_path: &Path) -> Result<Option<PathBuf>> {
@@ -1047,9 +1122,9 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
         )));
     }
     let mut ffi_dependencies = BTreeSet::new();
-    if let Some(ffi) = raw.ffi {
-        for dependency in ffi.dependencies {
-            if !is_valid_package_name(&dependency) {
+    if let Some(ffi) = &raw.ffi {
+        for dependency in &ffi.dependencies {
+            if !is_valid_package_name(dependency) {
                 return Err(Diagnostic::coded(
                     "AU2999",
                     format!(
@@ -1071,11 +1146,101 @@ fn load_package_manifest(manifest_dir: &Path) -> Result<ParsedPackageManifest> {
             }
         }
     }
+    let foreign_link = match &raw.ffi {
+        Some(ffi) => foreign_link_plan_for_host(
+            &manifest_path,
+            manifest_dir,
+            package.allow_ffi,
+            ffi,
+            std::env::consts::OS,
+        )?,
+        None => ForeignLinkPlan::default(),
+    };
     Ok(ParsedPackageManifest {
         package,
         dependencies: raw.dependencies,
         ffi_dependencies,
+        foreign_link,
     })
+}
+
+/// A name the linker takes after `-l` or `-framework`: letters, digits,
+/// `_`, `+`, `.`, and `-`, and no leading `-` or `.`, so a manifest cannot
+/// spell a linker option or a path.
+pub fn is_valid_link_name(name: &str) -> bool {
+    !name.is_empty()
+        && !name.starts_with(['-', '.'])
+        && name
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || "_+.-".contains(character))
+}
+
+/// The `[ffi]` link settings that apply on `os`: the section's own, then
+/// its `[ffi.linux]` or `[ffi.macos]` table. A relative library path is
+/// resolved against the manifest's directory.
+fn foreign_link_plan_for_host(
+    manifest_path: &Path,
+    manifest_dir: &Path,
+    allow_ffi: bool,
+    ffi: &RawFfiSection,
+    os: &str,
+) -> Result<ForeignLinkPlan> {
+    let sections = [
+        ("[ffi]", Some(&ffi.link), true),
+        ("[ffi.linux]", ffi.linux.as_ref(), os == "linux"),
+        ("[ffi.macos]", ffi.macos.as_ref(), os == "macos"),
+    ];
+    let mut plan = ForeignLinkPlan::default();
+    for (table, section, applies) in sections {
+        let Some(section) = section else {
+            continue;
+        };
+        if !section.is_empty() && !allow_ffi {
+            return Err(Diagnostic::coded(
+                "AU2999",
+                format!(
+                    "manifest `{}` names native libraries in `{table}` but does not opt in to FFI; add `allow_ffi = true` to `[package]`",
+                    manifest_path.display()
+                ),
+            ));
+        }
+        let mut host = ForeignLinkPlan::default();
+        for (key, names, into) in [
+            ("libraries", &section.libraries, &mut host.libraries),
+            ("frameworks", &section.frameworks, &mut host.frameworks),
+        ] {
+            for name in names {
+                if !is_valid_link_name(name) {
+                    return Err(Diagnostic::coded(
+                        "AU2999",
+                        format!(
+                            "manifest `{}` has invalid entry `{}` in `{table} {key}`; write the bare name, such as `sqlite3` for `libsqlite3`, using only ASCII letters, digits, `_`, `+`, `.`, and `-`",
+                            manifest_path.display(),
+                            name.escape_default()
+                        ),
+                    ));
+                }
+                into.push(name.clone());
+            }
+        }
+        for path in &section.library_paths {
+            if path.is_empty() || path.chars().any(char::is_control) {
+                return Err(Diagnostic::coded(
+                    "AU2999",
+                    format!(
+                        "manifest `{}` has invalid entry `{}` in `{table} library_paths`; write a directory path without control characters",
+                        manifest_path.display(),
+                        path.escape_default()
+                    ),
+                ));
+            }
+            host.library_paths.push(manifest_dir.join(path));
+        }
+        if applies {
+            plan.merge(&host);
+        }
+    }
+    Ok(plan)
 }
 
 fn load_raw_manifest(manifest_path: &Path) -> Result<RawManifest> {

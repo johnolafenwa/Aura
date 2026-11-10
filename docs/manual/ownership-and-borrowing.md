@@ -476,7 +476,7 @@ An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper fo
 
 Aura does not call a foreign destructor automatically, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
 
-See [FFI v0](/manual/ffi) for the complete ABI and failure boundary.
+See [FFI](/manual/ffi) for the complete ABI and failure boundary.
 
 ## Tasks And Borrowing
 

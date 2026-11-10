@@ -1648,6 +1648,7 @@ fn adr0038_mir_returned_loan_instruction_reports_handoff_errors_and_root_project
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -2666,6 +2667,7 @@ def main():
 #[test]
 fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
     let forged = MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -7068,6 +7070,7 @@ fn mir_runtime_process_capture_helpers_cover_success_and_malformed_results() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     let cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -9328,6 +9331,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
         terminator,
     };
     let module_with_blocks = |blocks: Vec<BasicBlock>| MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -9351,6 +9355,7 @@ fn mir_runtime_complexity_guard_rejects_excessive_instruction_counts() {
     };
 
     let module = MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -9740,6 +9745,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(super::function_uses_lightweight_tasks(&process_run));
 
     let without_tasks = MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -9753,6 +9759,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
     assert!(!super::module_uses_lightweight_tasks(&without_tasks));
 
     let with_top_level_process_run = MirModule {
+        foreign_link: Default::default(),
         unions: Vec::new(),
         enums: Vec::new(),
         constants: Vec::new(),
@@ -10567,6 +10574,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -11075,6 +11083,7 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -12240,6 +12249,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -13734,6 +13744,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
 
     let lookup_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -13810,6 +13821,7 @@ fn mir_runtime_try_error_conversion_helpers_cover_context_and_from_paths() {
     };
     let mut converting_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -13856,6 +13868,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
     };
     let runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -14051,6 +14064,7 @@ fn trait_impl_lookup_and_top_level_run_helpers_cover_runtime_paths() {
 
     let mut missing_entrypoint_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -15072,6 +15086,7 @@ fn mir_runtime_collection_string_and_task_helpers_cover_remaining_paths() {
     cancellation_group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17034,6 +17049,7 @@ fn mir_runtime_task_result_or_helpers_cover_nonblocking_shortcuts() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17167,6 +17183,7 @@ fn mir_runtime_single_consumer_task_results_claim_every_observing_attempt() {
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17477,6 +17494,7 @@ fn mir_runtime_select_adapter_distinguishes_child_and_current_task_cancellation(
         .expect("queue should accept the ready value");
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17824,6 +17842,7 @@ fn mir_runtime_wait_helpers_cover_task_lists_ready_error_timeout_and_cancel_path
     group.cancel();
     let mut cancelled_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17889,6 +17908,7 @@ fn mir_runtime_print_tolerates_poisoned_stdout_lock() {
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -17936,6 +17956,7 @@ fn mir_runtime_io_write_streams_to_stdout_sink() {
     });
     let mut runtime = MirRuntime::new_with_stdout_sink(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -18227,6 +18248,7 @@ fn mir_runtime_terminator_and_cleanup_helpers_cover_branch_and_error_paths() {
 fn mir_runtime_entrypoint_call_and_type_helpers_cover_remaining_edges() {
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -18695,6 +18717,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -19232,6 +19255,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let typed_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -19261,6 +19285,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let mut no_top_level = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -19313,6 +19338,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let mut needs_receiver = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -19354,6 +19380,7 @@ fn mir_runtime_env_and_entry_helpers_cover_additional_branch_paths() {
 
     let missing_main_runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -19930,6 +19957,7 @@ fn mir_function_value_runtime_moves_owned_args_writes_back_mut_args_and_traps_ba
 
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -20070,6 +20098,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
     let worker = function("worker", Vec::new());
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -20384,6 +20413,7 @@ fn mir_runtime_closure_environment_is_by_value_repeatable_and_one_shot_when_cons
     };
     let mut runtime = MirRuntime::new(
         MirModule {
+            foreign_link: Default::default(),
             unions: Vec::new(),
             enums: Vec::new(),
             constants: Vec::new(),
@@ -23868,4 +23898,47 @@ def main() -> int32:
     sequential.call_depth = 2;
     sequential.call_safepoint(&fib);
     assert!(sequential.recursive_functions.is_none());
+}
+
+#[test]
+fn mir_runtime_loads_the_link_plan_and_reports_a_library_it_cannot_load() {
+    let source = r#"
+public extern "C" def getpid() -> int32
+
+def main() -> int32:
+    return getpid()
+"#;
+    let mut module = lower_ffi_runtime_source(source);
+    module.foreign_link.libraries.push("m".to_string());
+    super::run_trusted(&module).expect("the C math library loads before the program starts");
+
+    let mut missing = lower_ffi_runtime_source(source);
+    missing
+        .foreign_link
+        .libraries
+        .push("aura_no_such_library_for_tests".to_string());
+    let error = super::run_trusted(&missing).expect_err("a missing library stops the program");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.starts_with(
+            "cannot start the program: FFI library `aura_no_such_library_for_tests` could not be loaded: "
+        ),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn public_mir_execution_rejects_a_caller_supplied_link_plan() {
+    let mut forged = crate::lower_source_to_mir("def main():\n    pass\n")
+        .expect("a program without FFI should lower");
+    crate::run_mir(&forged).expect("the program runs without a link plan");
+    forged.foreign_link.libraries.push("m".to_string());
+    let error = crate::run_mir(&forged)
+        .expect_err("public MIR execution must not load a library the caller names");
+    assert_eq!(error.code, "AU4001");
+    assert_eq!(
+        error.message,
+        "MIR that names native libraries can run only through a package-checked path API"
+    );
 }

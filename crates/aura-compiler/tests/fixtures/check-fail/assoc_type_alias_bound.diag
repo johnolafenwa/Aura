@@ -1,0 +1,6 @@
+error[AU2002]: a type alias bound cannot name `IntoIterator` yet, because the trait has associated types
+ --> crates/aura-compiler/tests/fixtures/check-fail/assoc_type_alias_bound.au:3:17
+  |
+3 | type Feed[T, S: IntoIterator[T]] = list[S]
+  |                 ^
+  = help: bound a function, class, enum, or impl type parameter instead, or bound the iterator itself, as `I: Iterator[T]`

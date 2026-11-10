@@ -67,6 +67,7 @@ fn item_name_matches_decl_name() {
         abi: "C".to_string(),
         name: "getpid".to_string(),
         name_span: Span::new(1, 16),
+        symbol: None,
         params: vec![],
         return_type: dummy_type("int32"),
         span: Span::new(1, 1),

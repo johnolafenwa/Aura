@@ -390,6 +390,27 @@ fn an_objects_scalars_are_read_at_their_nodes_addresses() {
 }
 
 #[test]
+fn an_objects_text_and_array_length_are_read_at_their_nodes_addresses() {
+    let object = root(r#"{"s": "caf\u00e9", "e": "", "a": [1, [2, 3], "x"], "n": 7}"#);
+    let address = |key: &str| object.lookup_address(key).expect("the key is there");
+    assert_eq!(object.str_at_address(address("s")), Some("caf\u{e9}"));
+    assert_eq!(object.str_at_address(address("e")), Some(""));
+    assert_eq!(object.str_at_address(address("a")), None);
+    assert_eq!(object.str_at_address(address("n")), None);
+    // An address outside the tape, or inside a node, names no node.
+    assert_eq!(object.str_at_address(address("s") + 1), None);
+    assert_eq!(object.str_at_address(8), None);
+    assert_eq!(object.str_at_address(address("s") + (1 << 20)), None);
+    // SAFETY: `object` keeps the tape alive.
+    unsafe {
+        assert_eq!(array_len_at(address("a")), Some(3));
+        assert_eq!(array_len_at(address("s")), None);
+        assert_eq!(array_len_at(address("n")), None);
+        assert_eq!(array_len_at(object.address()), None);
+    }
+}
+
+#[test]
 fn a_builder_makes_the_tape_a_parse_makes() {
     let built = TapeBuilder::with(|builder| {
         // A build that never finished leaves nothing behind.
@@ -451,4 +472,20 @@ fn a_builder_makes_the_tape_a_parse_makes() {
         builder.int(1);
         assert_eq!(tree(&builder.finish()), tree(&root("1")));
     });
+}
+
+#[test]
+fn a_key_is_found_among_keys_of_its_length_and_others() {
+    let object = root(r#"{"ab": 1, "abc": 2, "ac": 3, "": 4, "a": [5, {"ac": 6}], "ad": 7}"#);
+    let int_at = |key: &str| {
+        let address = object.lookup_address(key).expect("the key is there");
+        // SAFETY: `object` keeps the tape alive.
+        unsafe { scalar_bits_at(address, 0) }
+    };
+    for (key, expected) in [("ab", 1), ("abc", 2), ("ac", 3), ("", 4), ("ad", 7)] {
+        assert_eq!(int_at(key), Some(expected), "{key}");
+    }
+    for missing in ["b", "abd", "ae", "abcd"] {
+        assert!(object.lookup_address(missing).is_none(), "{missing}");
+    }
 }

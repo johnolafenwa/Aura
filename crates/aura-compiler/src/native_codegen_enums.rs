@@ -232,7 +232,7 @@ impl FunctionCompiler<'_> {
 
     /// The tags of the tape nodes that are `json.Value` variant `name`, as
     /// an inclusive range.
-    fn json_tape_tags(name: &str) -> Option<(i64, i64)> {
+    pub(super) fn json_tape_tags(name: &str) -> Option<(i64, i64)> {
         use aura_runtime::json_tape::JsonTag;
         let tags = match name {
             "Null" => (JsonTag::Null, JsonTag::Null),
@@ -287,18 +287,7 @@ impl FunctionCompiler<'_> {
     /// `tags`, as a flag.
     fn json_tape_tag_in(&mut self, variant: Val, tags: (i64, i64)) -> Val {
         let node = self.class_block(variant);
-        let tag = self.builder.uload8(
-            types::I64,
-            MemFlags::trusted(),
-            node,
-            aura_runtime::json_tape::NODE_TAG_OFFSET,
-        );
-        if tags.0 == tags.1 {
-            return self.builder.icmp_imm(IntCC::Equal, tag, tags.0);
-        }
-        let from_first = self.builder.iadd_imm(tag, -tags.0);
-        self.builder
-            .icmp_imm(IntCC::UnsignedLessThanOrEqual, from_first, tags.1 - tags.0)
+        self.json_node_tag_in(node, tags)
     }
 
     /// Branches to `fast_block` when the variant box `variant` keeps its

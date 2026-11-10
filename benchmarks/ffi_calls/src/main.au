@@ -1,0 +1,77 @@
+import sys
+
+extern "C" def fc_add(a: int64, b: int64) -> int64
+extern "C" def fc_narrow(a: int32, b: uint8) -> int32
+extern "C" def fc_scale(value: float64, factor: float32) -> float64
+extern "C" def fc_six(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64) -> int64
+extern "C" def fc_text(text: str) -> uint64
+extern "C" def fc_bytes(bytes: list[uint8]) -> uint64
+extern "C" def fc_fill(bytes: mut list[uint8]) -> None
+
+def report(name: str, started: int64, calls: int64) -> None:
+    elapsed = sys.monotonic_time_ms() - started
+    per_call = (elapsed as float64) * 1000000.0 / (calls as float64)
+    print(f"{name} {per_call}")
+
+def main() -> int32:
+    calls: int64 = 50000000
+
+    mut total: int64 = 0
+    mut i: int64 = 0
+    mut started = sys.monotonic_time_ms()
+    while i < calls:
+        total = fc_add(total, i)
+        i = i + 1
+    report("add", started, calls)
+
+    mut narrow: int32 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        narrow = fc_narrow(narrow % 1000, 3)
+        i = i + 1
+    report("narrow", started, calls)
+
+    mut scaled: float64 = 1.0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        scaled = fc_scale(scaled, 1.0)
+        i = i + 1
+    report("scale", started, calls)
+
+    mut six: int64 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        six = fc_six(six, i, 1, 2, 3, 4)
+        i = i + 1
+    report("six", started, calls)
+
+    text = "hello, world"
+    mut text_total: uint64 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        text_total = text_total + fc_text(text)
+        i = i + 1
+    report("text", started, calls)
+
+    mut bytes: list[uint8] = [1, 2, 3, 4, 5, 6, 7, 8]
+    mut bytes_total: uint64 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        bytes_total = bytes_total + fc_bytes(bytes)
+        i = i + 1
+    report("bytes", started, calls)
+
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        fc_fill(bytes)
+        i = i + 1
+    report("fill", started, calls)
+
+    print(f"checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {bytes[0]}")
+    return 0

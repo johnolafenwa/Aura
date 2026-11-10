@@ -10261,6 +10261,18 @@ impl<'a> FunctionChecker<'a> {
             self.consume_value_expr(&argument.value, locals)?;
         }
 
+        // A type parameter that only a bound names, as `T` in
+        // `Source[T, S: IntoIterator[T]]`, comes from the implementation for `S`.
+        let mut bound_params = enum_info.decl.type_params.clone();
+        bound_params.extend(hidden_bound_type_params(
+            &enum_info.decl.type_params,
+            &enum_info.type_param_bounds,
+        ));
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &enum_info.type_param_bounds,
+            &mut substitutions,
+        );
         let mut resolved_args = Vec::with_capacity(enum_info.decl.type_params.len());
         for type_param in &enum_info.decl.type_params {
             let Some(resolved) = substitutions.get(type_param).cloned() else {
@@ -10274,8 +10286,15 @@ impl<'a> FunctionChecker<'a> {
             };
             resolved_args.push(resolved);
         }
-        let resolved_substitutions =
+        let mut resolved_substitutions =
             substitutions_from_decl_type_args(&enum_info.decl.type_params, &resolved_args);
+        // An enum bound such as `S: IntoIterator[T]` names a hidden `S.Iter`
+        // that the implementation for the resolved `S` fixes.
+        self.infer_bound_only_type_args(
+            &bound_params,
+            &enum_info.type_param_bounds,
+            &mut resolved_substitutions,
+        );
         for (index, type_param) in enum_info.decl.type_params.iter().enumerate() {
             let Some(bounds) = enum_info.type_param_bounds.get(type_param) else {
                 continue;

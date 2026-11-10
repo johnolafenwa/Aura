@@ -535,6 +535,10 @@ pub struct ExternFunctionDecl {
     pub abi: String,
     pub name: String,
     pub name_span: Span,
+    /// The C symbol a trailing `symbol "..."` clause names, when the
+    /// declaration has one. Without it the symbol is `name`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub symbol: Option<String>,
     pub params: Vec<Param>,
     pub return_type: TypeRef,
     pub span: Span,
@@ -543,6 +547,13 @@ pub struct ExternFunctionDecl {
     /// call and assumes the `ensures`, and no run checks either.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contracts: Vec<ContractClause>,
+}
+
+impl ExternFunctionDecl {
+    /// The C symbol a call of this function resolves.
+    pub fn link_name(&self) -> &str {
+        self.symbol.as_deref().unwrap_or(&self.name)
+    }
 }
 
 /// A bodyless, layout-opaque foreign handle type declaration.

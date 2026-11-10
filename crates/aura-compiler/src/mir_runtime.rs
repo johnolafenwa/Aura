@@ -187,6 +187,7 @@ fn run_resolved_entry(
         }
     })?;
     crate::runtime_config::validate_runtime_configuration()?;
+    load_foreign_libraries(&module.foreign_link)?;
     let entry = entry.map(|name| name.to_string());
     let program_args = Arc::new(program_args);
     let handle = match thread::Builder::new()
@@ -250,7 +251,22 @@ fn run_resolved_entry(
     result
 }
 
+/// Loads the libraries a package-checked program links, so its extern
+/// calls find their symbols here as they do in a built program.
+fn load_foreign_libraries(plan: &crate::package::ForeignLinkPlan) -> Result<()> {
+    crate::ffi::load_libraries(&plan.libraries, &plan.library_paths, &plan.frameworks)
+        .map_err(|error| Diagnostic::coded("AU4005", format!("cannot start the program: {error}")))
+}
+
 fn reject_untrusted_extern_calls(module: &MirModule) -> Result<()> {
+    // Loading a library runs its initializers, so only MIR lowered from a
+    // package whose manifest opted in may name one.
+    if !module.foreign_link.is_empty() {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            "MIR that names native libraries can run only through a package-checked path API",
+        ));
+    }
     let symbol = module
         .functions
         .iter()

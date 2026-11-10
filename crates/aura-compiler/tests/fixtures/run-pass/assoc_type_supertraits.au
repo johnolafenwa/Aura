@@ -1,0 +1,175 @@
+from iter import IntoIterator, Iterator, Generator, Step
+
+
+trait Bag[T]: IntoIterator[T]:
+    def size(self) -> int64
+
+    # Default methods use the inherited `Iter` and loop over `self`.
+    def tally(own self) -> int64:
+        mut n = 0
+        for _ in self:
+            n += 1
+        return n
+
+    def start(own self) -> Self.Iter:
+        return self.into_iter()
+
+
+trait SortedBag[T]: Bag[T]:
+    def smallest(self) -> T
+
+
+trait Counter: Iterator[int64]:
+    def label(self) -> str
+
+
+class Words:
+    items: list[str]
+
+
+class Box[T]:
+    items: list[T]
+
+
+class Down:
+    left: int64
+
+
+def each[T](items: own list[T]) -> Generator[T]:
+    for item in own items:
+        yield item
+
+
+# The implementation of the subtrait comes first: it reads `Iter` from the
+# implementation of `IntoIterator` below.
+impl Bag[str] for Words:
+    def size(self) -> int64:
+        return len(self.items)
+
+
+impl IntoIterator[str] for Words:
+    type Iter = Generator[str]
+
+    def into_iter(own self) -> Generator[str]:
+        return each(self.items)
+
+
+impl[T] Bag[T] for Box[T]:
+    def size(self) -> int64:
+        return len(self.items)
+
+
+impl[T] IntoIterator[T] for Box[T]:
+    type Iter = Generator[T]
+
+    def into_iter(own self) -> Generator[T]:
+        return each(self.items)
+
+
+impl SortedBag[int64] for Box[int64]:
+    def smallest(self) -> int64:
+        mut best = self.items[0]
+        for item in self.items:
+            if item < best:
+                best = item
+        return best
+
+
+impl Bag[int64] for list[int64]:
+    def size(self) -> int64:
+        return len(self)
+
+
+impl Iterator[int64] for Down:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.left)
+
+
+impl Counter for Down:
+    def label(self) -> str:
+        return "down"
+
+
+enum Source[T, S: IntoIterator[T]]:
+    Ready(items: S)
+    Empty
+
+
+class Shelf[B: Bag[str]]:
+    bag: B
+
+    def count(self) -> int64:
+        return self.bag.size()
+
+    def drain(own self) -> list[str]:
+        return self.bag.into_iter().collect()
+
+
+def show[B: Bag[str]](bag: own B):
+    print(bag.size())
+    for word in bag:
+        print(word)
+
+
+def total[B: Bag[int64]](bag: own B) -> int64:
+    mut sum = 0
+    for n in bag:
+        sum += n
+    return sum
+
+
+def first[T, B: Bag[T]](bag: own B) -> T | None:
+    mut items: B.Iter = bag.into_iter()
+    match own items.next():
+        case Item(value):
+            return value
+        case End:
+            return None
+
+
+def least[B: SortedBag[int64]](bag: own B) -> int64:
+    low = bag.smallest()
+    mut seen = 0
+    for _ in bag:
+        seen += 1
+    return low * 100 + seen
+
+
+def run[C: Counter](counter: own C) -> int64:
+    print(counter.label())
+    mut sum = 0
+    for n in counter:
+        sum += n
+    return sum
+
+
+def drain[T, S: IntoIterator[T]](source: own Source[T, S]) -> int64:
+    mut n = 0
+    match own source:
+        case Ready(items):
+            for _ in items:
+                n += 1
+        case _:
+            pass
+    return n
+
+
+def main():
+    show(Words(items=["a", "b"]))
+    print(total(Box(items=[1, 2, 3])))
+    print(total([4, 5, 6]))
+    print(first(Box(items=["x", "y"])))
+    print(least(Box(items=[7, 3, 9])))
+    print(run(Down(left=4)))
+    print(drain(Source.Ready([1, 2, 3])))
+    print(drain(Source.Ready(Words(items=["p"]))))
+    empty: Source[int64, list[int64]] = Source.Empty
+    print(drain(empty))
+    shelf = Shelf(bag=Words(items=["m", "n", "o"]))
+    print(shelf.count())
+    print(shelf.drain())
+    print(Words(items=["a", "b"]).tally())
+    print(Words(items=["z"]).start().collect())
