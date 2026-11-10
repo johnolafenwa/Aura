@@ -235,12 +235,27 @@ pub(crate) enum CallConv {
     C,
 }
 
+/// How a call widens an integer parameter narrower than a register, as the
+/// platform's C ABI asks of the caller. A C callee may read the whole
+/// register, so a foreign call states the extension of every `I8` and `I16`
+/// parameter.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+pub(crate) enum Extension {
+    #[default]
+    None,
+    Sign,
+    Zero,
+}
+
 /// A function signature.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Signature {
     pub(crate) call_conv: CallConv,
     pub(crate) params: Vec<ScalarType>,
     pub(crate) returns: Vec<ScalarType>,
+    /// The extension of each parameter of a foreign C signature, in order.
+    /// A signature that leaves it empty extends nothing.
+    pub(crate) extensions: Vec<Extension>,
 }
 
 impl Signature {
@@ -249,6 +264,7 @@ impl Signature {
             call_conv,
             params: Vec::new(),
             returns: Vec::new(),
+            extensions: Vec::new(),
         }
     }
 }
@@ -332,6 +348,13 @@ pub(crate) trait ModuleBackend {
         linkage: Linkage,
         writable: bool,
     ) -> Result<DataHandle, String>;
+
+    /// Declares `name` as a symbol another object or a library defines,
+    /// whatever its C signature. A call goes through its address with
+    /// `call_indirect` and the signature the caller declares, so two
+    /// declarations of one symbol never disagree here. A name the module
+    /// already declares as a function keeps that declaration.
+    fn declare_foreign_symbol(&mut self, name: &str) -> Result<FuncHandle, String>;
 
     fn define_data(&mut self, data: DataHandle, contents: DataDescription) -> Result<(), String>;
     /// Makes the object a debug build: unoptimized, with DWARF for the

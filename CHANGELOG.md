@@ -45,6 +45,17 @@ in this file.
 - Fixed: `enumerate`, `zip`, and comprehensions over a list, set, `Span`,
   `Range`, or `Queue` keep their builtin loop when the program also gives
   that type an `IntoIterator` implementation.
+- FFI links native libraries. A package names them in its manifest, as in
+  `[ffi] libraries = ["sqlite3"]`, with `library_paths`, `frameworks`, and
+  `[ffi.linux]` and `[ffi.macos]` tables for one host. `aura build` passes
+  them to the linker and `aura run --backend mir` loads them.
+- A built program calls a foreign function directly, as C code does. A
+  scalar call that took about 380 ns takes under 1 ns, and a `str` or
+  `list[uint8]` argument adds a few nanoseconds. A symbol no library
+  defines is now a link error from `aura build` instead of `AU4005` at the
+  call. `aura run` still reports `AU4005`.
+- An extern function can name its C symbol:
+  `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name

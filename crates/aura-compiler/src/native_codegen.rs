@@ -15,10 +15,7 @@ use crate::native_backend::{
     Inst, IntCC, Linkage, MemFlags, ModuleBackend, NoWrapOp, ScalarType, Signature, TrapCode, Val,
     Var,
 };
-use crate::native_runtime::{
-    encode_direct_ffi_call_spec, DirectFfiCallSpec, DirectFfiParam, DirectFfiType,
-    DIRECT_CALL_SAFEPOINT_INTERVAL,
-};
+use crate::native_runtime::{DirectFfiType, DIRECT_CALL_SAFEPOINT_INTERVAL};
 use crate::runtime_abi::{
     frame_stack_layout, ownership_layout, AbiType, RuntimeFn, RuntimeTable, FRAME_STACK_ENTRY_BYTES,
 };
@@ -7736,110 +7733,6 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_dispatch(object, field, dispatch, receiver_place.as_deref(), args)
             }
         }
-    }
-
-    fn compile_extern_call(
-        &mut self,
-        call: &MirExternCall,
-        args: &[MirArg],
-        target: &DirectType,
-    ) -> std::result::Result<ValueRef, String> {
-        if call.abi != "C" {
-            return Err(format!(
-                "direct backend received unsupported FFI ABI `{}`",
-                call.abi
-            ));
-        }
-        if args.len() != call.params.len() {
-            return Err(format!(
-                "direct backend expected {} argument(s) for extern `{}`, found {}",
-                call.params.len(),
-                call.symbol,
-                args.len()
-            ));
-        }
-
-        let mut spec_params = Vec::with_capacity(call.params.len());
-        let mut expected_types = Vec::with_capacity(call.params.len());
-        for param in &call.params {
-            spec_params.push(DirectFfiParam {
-                passing: match param.passing {
-                    MirReceiverKind::Value => ReceiverKind::Value,
-                    MirReceiverKind::Borrow => ReceiverKind::Borrow,
-                    MirReceiverKind::BorrowMut => ReceiverKind::BorrowMut,
-                },
-                ty: direct_ffi_type_for_source(&param.ty, Some(param.passing))?,
-            });
-            expected_types.push(ensure_direct_type(
-                &param.ty,
-                &self.classes,
-                &format!("extern parameter `{}`", param.name),
-            )?);
-        }
-        let result_spec = direct_ffi_type_for_source(&call.return_type, None)?;
-        let encoded_spec = encode_direct_ffi_call_spec(&DirectFfiCallSpec {
-            symbol: call.symbol.clone(),
-            params: spec_params,
-            result: result_spec,
-        });
-        let (spec_ptr, spec_len) = self.string_constant(&encoded_spec)?;
-        let buffer_size = match u32::try_from(args.len().max(1).saturating_mul(8)) {
-            Ok(buffer_size) => buffer_size,
-            Err(_) => return Err("direct backend FFI argument buffer is too large".to_string()),
-        };
-        let buffer_slot = self.builder.create_sized_stack_slot(buffer_size, 3);
-        let buffer = self.builder.stack_addr(types::I64, buffer_slot, 0);
-        let mut writebacks = Vec::new();
-        for (index, ((argument, param), expected)) in args
-            .iter()
-            .zip(&call.params)
-            .zip(&expected_types)
-            .enumerate()
-        {
-            let loaded = self.load_operand_for_target(&argument.value, expected)?;
-            let coerced = self.coerce_value(loaded, expected)?;
-            let boxed = self.ensure_opaque(coerced)?;
-            self.builder
-                .store(MemFlags::new(), boxed.values[0], buffer, (index as i32) * 8);
-            match (param.passing, argument.writeback_place.as_ref()) {
-                (MirReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((place.clone(), boxed, expected.clone()));
-                }
-                (MirReceiverKind::BorrowMut, None) => {
-                    return Err(format!(
-                        "direct backend extern mutable argument {} has no writeback place",
-                        index + 1
-                    ));
-                }
-                (_, Some(_)) => {
-                    return Err(format!(
-                        "direct backend extern argument {} unexpectedly requests writeback",
-                        index + 1
-                    ));
-                }
-                (_, None) => {}
-            }
-        }
-        let count = self.builder.iconst(types::I64, call.params.len() as i64);
-        let invocation = self.builder.call(
-            self.runtime[RuntimeFn::FfiCall],
-            &[spec_ptr, spec_len, buffer, count],
-        );
-        let raw_result = invocation.results[0];
-
-        for (place, boxed, expected) in writebacks {
-            let writeback = self.coerce_value(boxed, &expected)?;
-            self.store_place(&place, writeback)?;
-        }
-
-        let boxed_result = self.owned_opaque_result(vec![raw_result], call.return_type.clone());
-        let return_direct = ensure_direct_type(
-            &call.return_type,
-            &self.classes,
-            &format!("extern return from `{}`", call.symbol),
-        )?;
-        let result = self.coerce_value(boxed_result, &return_direct)?;
-        self.coerce_value(result, target)
     }
 
     fn compile_function_value_call(
@@ -18709,6 +18602,8 @@ mod element_loans;
 mod elements;
 #[path = "native_codegen_enums.rs"]
 mod enums;
+#[path = "native_codegen_foreign.rs"]
+mod foreign;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

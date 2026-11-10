@@ -128,7 +128,7 @@ An extern declaration joins the module namespace but has no Aura body. Its rules
 - Its complete signature must belong to the fixed FFI v0 scalar/view/opaque-handle table. FFI is the foreign function interface.
 - Extern functions are direct-call-only. Referencing one without immediately calling it is rejected. It does not produce a function value.
 
-An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI v0](/manual/ffi).
+An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI](/manual/ffi).
 
 ## Bindings And Assignment
 

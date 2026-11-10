@@ -11,6 +11,7 @@ use crate::call::{
 };
 use crate::diag::Span;
 use crate::integer::{minimal_signed_type_for_negative_literal, IntegerValue};
+use crate::package::ForeignLinkPlan;
 use crate::runtime_ops::RuntimeOp;
 use crate::sema::lookup_type;
 use crate::sema::{
@@ -670,6 +671,11 @@ pub struct MirModule {
     /// way. An implicit module's backends ignore them.
     #[serde(default, skip_serializing_if = "BTreeSet::is_empty")]
     pub borrowing: BTreeSet<String>,
+    /// The native libraries the program's `extern "C"` functions come from,
+    /// as its packages' manifests name them. The linker resolves them for a
+    /// built program, and the MIR runtime loads them before it runs one.
+    #[serde(default, skip_serializing_if = "ForeignLinkPlan::is_empty")]
+    pub foreign_link: ForeignLinkPlan,
 }
 
 /// How a module's MIR states ownership (Batch 7 step 8e).
@@ -10822,6 +10828,7 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     };
 
     MirModule {
+        foreign_link: program.foreign_link.clone(),
         constants,
         functions,
         classes,
@@ -12573,7 +12580,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
-            symbol: function.decl.name.clone(),
+            symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
             params: function
                 .decl

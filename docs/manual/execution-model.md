@@ -162,7 +162,7 @@ Byte views pass as follows:
 
 The callee must not retain a pointer, and must not read or write outside the supplied length.
 
-Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI v0](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
+Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
 
 ## Operators
 

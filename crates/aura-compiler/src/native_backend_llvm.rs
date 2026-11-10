@@ -46,9 +46,9 @@ use units::{Partition, Placement};
 
 use super::{
     AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
-    DebugEncoding, DebugRecord, DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef,
-    FunctionBackend, FunctionBody, FunctionSource, Inst, IntCC, Linkage, MemFlags, ModuleBackend,
-    NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    DebugEncoding, DebugRecord, DebugVariable, DefineError, Extension, FloatCC, FuncHandle,
+    FuncRef, FunctionBackend, FunctionBody, FunctionSource, Inst, IntCC, Linkage, MemFlags,
+    ModuleBackend, NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -218,6 +218,14 @@ impl ModuleBackend for LlvmModule {
                 self.names.insert(name.to_string(), Symbol::Function(id));
                 Ok(FuncHandle(id))
             }
+        }
+    }
+
+    fn declare_foreign_symbol(&mut self, name: &str) -> Result<FuncHandle, String> {
+        match self.names.get(name) {
+            Some(Symbol::Function(id)) => Ok(FuncHandle(*id)),
+            Some(Symbol::Data(_)) => Err(format!("Incompatible declaration of identifier: {name}")),
+            None => self.declare_function(name, Linkage::Import, &Signature::new(CallConv::C)),
         }
     }
 
@@ -2783,6 +2791,17 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     &self.args(args)?,
                     "",
                 ))?;
+                for (index, extension) in signature.extensions.iter().enumerate() {
+                    let name = match extension {
+                        Extension::None => continue,
+                        Extension::Sign => "signext",
+                        Extension::Zero => "zeroext",
+                    };
+                    call.add_attribute(
+                        AttributeLoc::Param(index as u32),
+                        context.create_enum_attribute(Attribute::get_named_enum_kind_id(name), 0),
+                    );
+                }
                 self.call_results(inst, call)?;
             }
             Op::UseVar(var) => {

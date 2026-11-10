@@ -645,6 +645,6 @@ The contracts described above are implemented for functions, methods, generics, 
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 
-Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI v0](/manual/ffi) specifies their restricted signatures.
+Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI](/manual/ffi) specifies their restricted signatures.
 
 Design record: supplied and default argument evaluation and capture follow `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`, which is Accepted. By-value expression closures follow Accepted ADR-0037.

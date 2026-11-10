@@ -23,6 +23,15 @@ Last updated: 2026-11-10
   unboxed. docdb at 50k documents: 401 -> 334 ms against Python's 521 ms.
   Details are in `2026-10-30-beat-python.md`.
 
+## FFI v1 (in progress)
+
+- Target: wrap real C libraries. Plan and measurements are in
+  `2026-11-10-ffi-v1.md`.
+- Done: library linking from `[ffi]`, direct native calls, and the `symbol`
+  clause (ADR-0074).
+- Remaining: C strings and out-parameters, structs, callbacks, handle
+  destructors, a SQLite example, and benchmarks against Rust and Python.
+
 ## Evaluation of the work since 0.13.0-preview (complete)
 
 - #245 to #250 checked by hand; details and the gaps left are in

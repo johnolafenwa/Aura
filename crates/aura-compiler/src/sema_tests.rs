@@ -30995,6 +30995,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             abi: "C".to_string(),
             name: "visit".to_string(),
             name_span: span,
+            symbol: None,
             params,
             return_type,
             span,
