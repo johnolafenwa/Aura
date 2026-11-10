@@ -368,3 +368,38 @@ walks a tape's keys). Wall time on the cloud box, 50k docs, median of 9:
 671 -> 407 ms against Python's 545 ms on the same run, peak memory 163 ->
 66 MB. json_roundtrip 277 ms against Python's 399 ms. Both programs are
 now faster than Python.
+
+## Matched field reads and entry appends (2026-11-10)
+
+The margin left in docdb after the literal tapes: `field_str` and
+`field_len` made a shadow box, a payload box, and a clone for each field
+they read (about 1,900 and 2,300 instructions a call), and
+`Database.insert` walked `self.by_city` a second time to append the id
+and boxed the id to store the document under it.
+
+- A loan read into a `json.Value` local that is only matched, whose
+  payloads are a `String` cloned once or an `Array` only asked its
+  length, is a node read (`shadow_reads::node_read_loans`). The fused
+  test calls `aura_direct_map_get_node_shadow`, which lends the address
+  of the entry's tape node (low bits 2), a shadow box, or null. The
+  match tests the node's tag inline, and each payload read makes what
+  its one use asks for with one call (`aura_direct_json_string_copy`,
+  `aura_direct_json_array_len`). The payload local itself is never
+  made. The word of such a local is never given a type tag, since it
+  may be no box. A debug build reads as before.
+- A mutable entry loan that only appends scalars
+  (`element_loans::push_entry_loans`) finds its entry once, when it
+  begins, and each append goes to the list there
+  (`aura_direct_value_slot_push_scalar`). A loan that missed walks the
+  path, as before.
+- `d[k] = v` under an `int64` key passes the key as its word
+  (`aura_direct_map_set_index_int64_key`).
+- A shadow box of a tape value has the shape of `json.Value` from the
+  start, so the tag of the static type that follows costs one compare.
+- A tape object's key lookup compares lengths before bytes.
+
+docdb, 10k docs: 499M -> 398M instructions (`field_str` 1,875 -> 690 a
+call, `Database.insert` 5,530 -> 2,890). Wall time on the cloud box, 50k
+docs, median of 15: 401 -> 334 ms against Python's 521 ms on the same
+run (the box was busy; fastest runs 349 -> 286 ms, Python 424 ms).
+json_roundtrip is unchanged at 272 ms against Python's 391 ms.

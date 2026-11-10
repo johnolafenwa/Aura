@@ -1,6 +1,13 @@
 # Task Board
 
-Last updated: 2026-11-09
+Last updated: 2026-11-10
+
+## docdb margin over Python (complete)
+
+- Matched json field reads take the entry's tape node, entry loans that
+  only append find their entry once, and `int64` dict keys are stored
+  unboxed. docdb at 50k documents: 401 -> 334 ms against Python's 521 ms.
+  Details are in `2026-10-30-beat-python.md`.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

@@ -90,6 +90,18 @@ pub unsafe fn scalar_bits_at(address: usize, kind: i64) -> Option<i64> {
     unsafe { *(address as *const Node) }.scalar_bits(kind)
 }
 
+/// How many elements the `Array` node at `address` holds, or `None` for a
+/// node of another tag.
+///
+/// # Safety
+///
+/// As for [`scalar_bits_at`].
+pub unsafe fn array_len_at(address: usize) -> Option<usize> {
+    // SAFETY: the caller's contract.
+    let node = unsafe { *(address as *const Node) };
+    (node.tag == JsonTag::Array).then_some(node.a as usize)
+}
+
 /// Where a node keeps its tag, which generated code reads to test a
 /// variant: a [`JsonTag`] as one byte.
 pub const NODE_TAG_OFFSET: i32 = std::mem::offset_of!(Node, tag) as i32;
@@ -472,16 +484,36 @@ impl JsonNode {
             .map(|index| std::ptr::from_ref(&self.tape.nodes[index as usize]) as usize)
     }
 
+    /// The text of the `String` node at `address` in this value's tape, or
+    /// `None` when no such node lies there. `address` is what
+    /// [`Self::lookup_address`] gave for an object of the same tape.
+    pub fn str_at_address(&self, address: usize) -> Option<&str> {
+        let first = self.tape.nodes.as_ptr() as usize;
+        let offset = address.checked_sub(first)?;
+        if offset % std::mem::size_of::<Node>() != 0 {
+            return None;
+        }
+        let node = *self.tape.nodes.get(offset / std::mem::size_of::<Node>())?;
+        (node.tag == JsonTag::String).then(|| self.tape.str_at(node))
+    }
+
     /// The index of the node under `key` in an object node.
     fn lookup_index(&self, key: &str) -> Option<u32> {
         let node = self.tape.node(self.index);
         if node.tag != JsonTag::Object {
             return None;
         }
+        // Most keys differ from `key` in length, which a key's node holds,
+        // so the text is read only for a key as long as `key`.
+        let text = self.tape.text.as_bytes();
         let mut index = self.index + 1;
         for _ in 0..node.a {
-            if self.tape.str_at(self.tape.node(index)) == key {
-                return Some(index + 1);
+            let candidate = self.tape.node(index);
+            if candidate.a as usize == key.len() {
+                let start = candidate.b as usize;
+                if text.get(start..start + key.len()) == Some(key.as_bytes()) {
+                    return Some(index + 1);
+                }
             }
             index = self.tape.next(index + 1);
         }

@@ -10630,10 +10630,10 @@ fn boxed_map_payload(found: Option<&Value>) -> *mut OpaqueValue {
     })
 }
 
-/// Gives a new box that holds an enum variant kept in its layout the type
-/// tag and shape a variant box generated code builds has, so the tag of
-/// its static type that follows costs one compare. Any other box keeps
-/// what it has.
+/// Gives a new box that holds an enum variant kept in its layout, or a
+/// `json.Value` kept in a tape, the type tag and shape a variant box
+/// generated code builds has, so the tag of its static type that follows
+/// costs one compare. Any other box keeps what it has.
 ///
 /// # Safety
 ///
@@ -10643,14 +10643,22 @@ unsafe fn record_typed_variant_shape(boxed: *mut OpaqueValue) {
     let header = unsafe { &*boxed };
     // SAFETY: as above; nothing else reads the box yet.
     let held = unsafe { &*header.value.get() };
-    let Value::EnumVariant(EnumVariantValue {
-        payloads: VariantPayloads::Typed(typed),
-        ..
-    }) = held
-    else {
-        return;
+    let layout = match held {
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Typed(typed),
+            ..
+        }) => typed.layout(),
+        // A `json.Value` in a tape is read by its node, under the type
+        // its layout names.
+        Value::EnumVariant(EnumVariantValue {
+            payloads: VariantPayloads::Json(_),
+            ..
+        }) => match json_value_layout() {
+            Some(layout) => layout,
+            None => return,
+        },
+        _ => return,
     };
-    let layout = typed.layout();
     // SAFETY: as above.
     unsafe { *header.runtime_type_name.get() = Some(layout.runtime_type().clone()) };
     header
@@ -10798,14 +10806,16 @@ pub extern "C-unwind" fn aura_direct_map_get_shadow(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        if let Some(found) = unsafe { tape_map_lookup(map, |node| tape_node_lookup(node, key)) } {
-            return found;
-        }
-        shadow_map_lookup(map, |map| {
-            unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
-                .map(|found| unsafe { &*found })
-        })
+    task_runtime_boundary(|| map_get_shadow(map, key))
+}
+
+fn map_get_shadow(map: *mut OpaqueValue, key: *mut OpaqueValue) -> *mut OpaqueValue {
+    if let Some(found) = unsafe { tape_map_lookup(map, |node| tape_node_lookup(node, key)) } {
+        return found;
+    }
+    shadow_map_lookup(map, |map| {
+        unsafe { with_value(key, |key| map.entries.value_of(key).map(std::ptr::from_ref)) }
+            .map(|found| unsafe { &*found })
     })
 }
 
@@ -10980,22 +10990,146 @@ pub extern "C-unwind" fn aura_direct_map_get_scalar_lent(
     map: *mut OpaqueValue,
     key: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let node = unsafe {
-            with_lendable_value(map, false, |value, confined| {
-                let object = tape_object_of(value).filter(|_| confined)?;
-                with_value(key, |key| match key {
-                    Value::String(text) => Some(object.lookup_address(text)),
-                    _ => None,
-                })
+    task_runtime_boundary(|| match unsafe { tape_node_address(map, key) } {
+        Some(Some(address)) => (address | LENT_NODE_BIT) as *mut OpaqueValue,
+        Some(None) => std::ptr::null_mut(),
+        None => map_get_lent(map, key),
+    })
+}
+
+/// The address of the node under the boxed `str` key `key` in the tape
+/// object `map` reads (see [`tape_object_of`]): `Some(None)` when the
+/// object holds no such key, and `None` when `map` is no tape object
+/// confined to this thread or `key` is not a `str`.
+///
+/// # Safety
+///
+/// `map` and `key` are live boxes.
+unsafe fn tape_node_address(map: *mut OpaqueValue, key: *mut OpaqueValue) -> Option<Option<usize>> {
+    unsafe {
+        with_lendable_value(map, false, |value, confined| {
+            let object = tape_object_of(value).filter(|_| confined)?;
+            with_value(key, |key| match key {
+                Value::String(text) => Some(object.lookup_address(text)),
+                _ => None,
             })
+        })
+    }
+}
+
+/// [`aura_direct_map_get_shadow`] for a loan read into a local that is
+/// only matched, and whose payloads [`aura_direct_json_string_copy`] and
+/// [`aura_direct_json_array_len`] read (see `shadow_reads::node_read_loans`
+/// in the compiler). A value found in a parsed document's tape is lent as
+/// its node's address with [`LENT_NODE_BIT`] set, as
+/// [`aura_direct_map_get_scalar_lent`] lends it, so no box is made for it.
+/// Any other value is a shadow box, or a copy, as before.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_get_node_shadow(
+    map: *mut OpaqueValue,
+    key: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match unsafe { tape_node_address(map, key) } {
+        Some(Some(address)) => (address | LENT_NODE_BIT) as *mut OpaqueValue,
+        Some(None) => std::ptr::null_mut(),
+        None => map_get_shadow(map, key),
+    })
+}
+
+/// A new `str` box with the text of the `json.Value.String` that `word`
+/// reads: a box, or a node [`aura_direct_map_get_node_shadow`] lent from
+/// the tape object `map` reads. Generated code calls it only after it
+/// matched the value as a `String`.
+///
+/// # Safety
+///
+/// `word` is a live box, or a lent node of the document `map` reads, which
+/// is a live box too.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_json_string_copy(
+    map: *mut OpaqueValue,
+    word: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let address = word as usize;
+        let text = if address & LENT_NODE_BIT != 0 {
+            // SAFETY: the caller's contract.
+            unsafe {
+                with_lendable_value(map, false, |value, _| {
+                    tape_object_of(value)
+                        .and_then(|object| object.str_at_address(address & !LENT_NODE_BIT))
+                        .map(crate::text::Text::from)
+                })
+            }
+        } else {
+            // SAFETY: the caller's contract.
+            unsafe { with_unlisted_value(word, json_string_text) }
         };
-        match node {
-            Some(Some(address)) => (address | LENT_NODE_BIT) as *mut OpaqueValue,
-            Some(None) => std::ptr::null_mut(),
-            None => map_get_lent(map, key),
+        match text {
+            Some(text) => boxed_value(Value::String(text)),
+            None => runtime_error("expected a `json.Value.String`"),
         }
     })
+}
+
+/// The text of a `json.Value.String`, copied.
+fn json_string_text(value: &Value) -> Option<crate::text::Text> {
+    let Value::EnumVariant(variant) = value else {
+        return None;
+    };
+    if let Some(node) = variant.payloads.json() {
+        return node.as_str().map(crate::text::Text::from);
+    }
+    if variant.variant_name.as_str() != "String" {
+        return None;
+    }
+    match variant.payloads.get(0)?.as_ref() {
+        Value::String(text) => Some(text.clone()),
+        _ => None,
+    }
+}
+
+/// How many elements the `json.Value.Array` that `word` reads holds:
+/// a box, or a node [`aura_direct_map_get_node_shadow`] lent. Generated
+/// code calls it only after it matched the value as an `Array`, in place
+/// of reading the list out to ask its length.
+///
+/// # Safety
+///
+/// `word` is a live box, or a lent node of a document that is alive.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_json_array_len(word: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        let address = word as usize;
+        let len = if address & LENT_NODE_BIT != 0 {
+            // SAFETY: the caller's contract.
+            unsafe { crate::json_tape::array_len_at(address & !LENT_NODE_BIT) }
+        } else {
+            // SAFETY: the caller's contract.
+            unsafe { with_unlisted_value(word, json_array_len) }
+        };
+        match len.map(i64::try_from) {
+            Some(Ok(len)) => len,
+            _ => runtime_error("expected a `json.Value.Array`"),
+        }
+    })
+}
+
+/// The length of the list a `json.Value.Array` carries.
+fn json_array_len(value: &Value) -> Option<usize> {
+    let Value::EnumVariant(variant) = value else {
+        return None;
+    };
+    if let Some(node) = variant.payloads.json() {
+        return (node.tag() == crate::json_tape::JsonTag::Array).then(|| node.entry_count());
+    }
+    if variant.variant_name.as_str() != "Array" {
+        return None;
+    }
+    match variant.payloads.get(0)?.as_ref() {
+        Value::Vec(vector) => Some(vector.elements.len()),
+        _ => None,
+    }
 }
 
 /// The tape object a lookup in `value` reads: the entries of a dict still
@@ -11607,6 +11741,23 @@ pub extern "C-unwind" fn aura_direct_map_set_index_in_place(
             map.entries.insert(key, value);
         });
         std::ptr::null_mut()
+    })
+}
+
+/// `map[key] = value` for an `int64` key, which generated code passes as
+/// its word instead of a box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_key(
+    map: *mut OpaqueValue,
+    key: i64,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        with_map_mut(map, |map| {
+            map.entries
+                .insert(Value::Int(IntegerValue::from_i64(key)), value);
+        });
     })
 }
 
@@ -12380,25 +12531,7 @@ pub extern "C-unwind" fn aura_direct_element_path_push_scalar(
             value_mut(collection, |value| {
                 direct_element_walk_mut(value, &steps, &mut selectors, |current, selectors| {
                     selectors.finish()?;
-                    let Value::Vec(vector) = current else {
-                        runtime_error(format!(
-                            "expected `list`, found `{}`",
-                            value_type_name(current)
-                        ));
-                    };
-                    if kind == DirectScalarKind::Float32 {
-                        vector.elements.narrow_to_float32();
-                    }
-                    if !push_scalar_bits(&mut vector.elements, kind, bits) {
-                        let value = kind.value(bits);
-                        if is_unknown_runtime_type(&vector.element_type) {
-                            let inferred = inferred_collection_type(&value);
-                            if !is_unknown_runtime_type(&inferred) {
-                                vector.element_type = SharedType::from(inferred);
-                            }
-                        }
-                        vector.elements.push(value);
-                    }
+                    push_scalar_to_list(current, kind, bits);
                     Ok(())
                 })?
             })
@@ -12406,6 +12539,51 @@ pub extern "C-unwind" fn aura_direct_element_path_push_scalar(
         if let Err(error) = result {
             direct_element_path_failure(error, line, column);
         }
+    })
+}
+
+/// Appends a scalar given as its bits to the list `value` holds, which
+/// lies inside a collection: an element path or an entry loan reached it.
+fn push_scalar_to_list(value: &mut Value, kind: DirectScalarKind, bits: i64) {
+    let Value::Vec(vector) = value else {
+        runtime_error(format!(
+            "expected `list`, found `{}`",
+            value_type_name(value)
+        ));
+    };
+    if kind == DirectScalarKind::Float32 {
+        vector.elements.narrow_to_float32();
+    }
+    if !push_scalar_bits(&mut vector.elements, kind, bits) {
+        let value = kind.value(bits);
+        if is_unknown_runtime_type(&vector.element_type) {
+            let inferred = inferred_collection_type(&value);
+            if !is_unknown_runtime_type(&inferred) {
+                vector.element_type = SharedType::from(inferred);
+            }
+        }
+        vector.elements.push(value);
+    }
+}
+
+/// [`aura_direct_element_path_push_scalar`] for the list at a slot a
+/// mutable [`aura_direct_map_value_slot`] found: the entry loan of `match
+/// mut d.lookup(k): case Found(xs): xs.append(x)` finds the entry once,
+/// and each append goes to it directly instead of walking the path again.
+///
+/// # Safety
+///
+/// As for [`aura_direct_value_slot_int64`].
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_value_slot_push_scalar(
+    slot: *mut Value,
+    bits: i64,
+    kind: i64,
+) {
+    task_runtime_boundary(|| {
+        let kind = DirectScalarKind::of_code(kind);
+        // SAFETY: the caller's contract.
+        push_scalar_to_list(unsafe { &mut *slot }, kind, bits);
     })
 }
 
