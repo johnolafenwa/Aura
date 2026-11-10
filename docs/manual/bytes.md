@@ -1,7 +1,7 @@
 # Bytes, Text Codecs, And SHA-256
 
 This page covers byte data, UTF-8 conversion, byte search, hexadecimal and
-base64 codecs, and SHA-256 hashing.
+base64 codecs, SHA-256 hashing, and HMAC-SHA256 message authentication.
 
 Aura represents an owned sequence of bytes as `list[uint8]`. There is no
 separate `Bytes` type and no implicit conversion between text and bytes.
@@ -20,6 +20,8 @@ and SHA-256 live in the built-in `bytes` module.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict canonical RFC 4648 decoding. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | The raw 32-byte SHA-256 digest of `value`. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | The raw SHA-256 digest of the exact UTF-8 bytes of the text. |
+| `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | The raw 32-byte HMAC-SHA256 of `message` under `key`. |
+| `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | `true` when the two lists hold the same bytes, in time that does not depend on where they differ. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | `true` when `value` begins with `prefix`. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | `true` when `value` ends with `suffix`. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | The byte index of the first occurrence of `needle`, or `None`. |
@@ -108,6 +110,40 @@ a valid prefix while discarding a malformed suffix. On success it keeps the
 byte sequence exactly, including embedded NUL and a leading UTF-8 U+FEFF. So
 when you match `str.from_bytes(text.to_bytes())`, the
 `case Result.Ok(decoded):` branch always has `decoded == text`.
+
+## Message Authentication
+
+`bytes.hmac_sha256` computes HMAC (RFC 2104) with SHA-256. Use it to sign a
+request or a webhook payload with a shared secret, and to check a signature
+you receive:
+
+```aura
+import bytes
+
+def main():
+    secret = "Jefe".to_bytes()
+    body = "what do ya want for nothing?".to_bytes()
+    signature = bytes.hmac_sha256(secret, body)
+    print(bytes.hex_encode(signature))
+
+    received = signature
+    print(bytes.constant_time_eq(bytes.hmac_sha256(secret, body), received))
+```
+
+The program prints
+`5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843`, which is
+test case 2 of RFC 4231, and `true`.
+
+- The key may have any length, including zero. A key longer than 64 bytes is
+  hashed with SHA-256 first, as the RFC says.
+- The result is always 32 bytes. Encode it with `bytes.hex_encode` or
+  `bytes.base64_encode` to put it in a header.
+- Compare a received signature with `bytes.constant_time_eq`, not with `==`.
+  `==` stops at the first byte that differs, so the time it takes tells an
+  attacker how much of a forged signature was right. `constant_time_eq` reads
+  every byte of two lists of equal length before it answers. Lists of
+  different lengths compare unequal at once, so the lengths themselves are
+  not secret.
 
 ## Byte Search
 

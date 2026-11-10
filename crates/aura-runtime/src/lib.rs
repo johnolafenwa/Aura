@@ -13,6 +13,7 @@ pub mod array_kernel_corpus;
 pub mod bytes_codec;
 pub mod collection_index;
 pub mod ffi;
+pub mod gzip_codec;
 pub mod json_codec;
 pub mod json_tape;
 pub mod list_elements;

@@ -652,9 +652,132 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "log::warn" => host_log_warn,
         "log::error" => host_log_error,
         "trace::event" => host_trace_event,
+        "bytes::hmac_sha256" => host_bytes_hmac_sha256,
+        "bytes::constant_time_eq" => host_bytes_constant_time_eq,
+        "gzip::compress" => host_gzip_compress,
+        "gzip::decompress" => host_gzip_decompress,
         _ => return None,
     };
     Some(function)
+}
+
+/// The bytes of a `list[uint8]` argument, borrowed when the list keeps
+/// them unboxed.
+fn host_bytes_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Result<Cow<'a, [u8]>> {
+    let elements = runtime_uint8_elements(&args[index], &call.replace("::", "."))?;
+    match elements.as_uint8() {
+        Some(bytes) => Ok(Cow::Borrowed(bytes)),
+        None => host_bytes_from_runtime_elements(elements).map(Cow::Owned),
+    }
+}
+
+/// An `int64` argument of a host builtin.
+fn host_int64_arg(args: &[Value], index: usize, call: &str) -> Result<i64> {
+    match &args[index] {
+        Value::Int(value) => value.as_i128().and_then(|value| i64::try_from(value).ok()),
+        _ => None,
+    }
+    .ok_or_else(|| {
+        Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`{}` expects argument {} to be `int64`",
+                call.replace("::", "."),
+                index + 1
+            ),
+        )
+    })
+}
+
+pub fn host_bytes_hmac_sha256(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    let name = "bytes::hmac_sha256";
+    host_expect_arity(name, &args, 2)?;
+    let key = host_bytes_arg(&args, 0, name)?;
+    let message = host_bytes_arg(&args, 1, name)?;
+    bytes_resource_only(bytes_codec::hmac_sha256(&key, &message), name)
+        .and_then(|digest| runtime_bytes_from_host(&digest))
+}
+
+pub fn host_bytes_constant_time_eq(
+    args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> Result<Value> {
+    let name = "bytes::constant_time_eq";
+    host_expect_arity(name, &args, 2)?;
+    let left = host_bytes_arg(&args, 0, name)?;
+    let right = host_bytes_arg(&args, 1, name)?;
+    Ok(Value::Bool(bytes_codec::constant_time_eq(&left, &right)))
+}
+
+/// A byte list value that takes `bytes` without copying them.
+fn host_bytes_value(bytes: Vec<u8>, call: &str) -> Result<Value> {
+    if bytes.len() > bytes_codec::MAX_CODEC_OUTPUT_LEN {
+        return Err(Diagnostic::coded(
+            "AU4005",
+            format!(
+                "`{}` result exceeds the maintained {}-byte limit",
+                call.replace("::", "."),
+                bytes_codec::MAX_CODEC_OUTPUT_LEN
+            ),
+        ));
+    }
+    Ok(Value::Vec(VecValue {
+        element_type: SharedType::named("uint8"),
+        elements: ListElements::from_uint8(bytes),
+        str_view: Default::default(),
+    }))
+}
+
+pub fn host_gzip_compress(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    let name = "gzip::compress";
+    host_expect_arity(name, &args, 2)?;
+    let data = host_bytes_arg(&args, 0, name)?;
+    let level = host_int64_arg(&args, 1, name)?;
+    let Some(level) = u32::try_from(level).ok().filter(|level| *level <= 9) else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`gzip.compress` requires a level from 0 to 9, found `{level}`"),
+        ));
+    };
+    let packed = crate::gzip_codec::gzip_compress(&data, level)
+        .map_err(|error| Diagnostic::coded("AU4005", format!("`gzip.compress` failed: {error}")))?;
+    host_bytes_value(packed, name)
+}
+
+pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    use crate::gzip_codec::GzipError;
+    let name = "gzip::decompress";
+    host_expect_arity(name, &args, 2)?;
+    let data = host_bytes_arg(&args, 0, name)?;
+    let max_bytes = host_int64_arg(&args, 1, name)?;
+    let Some(limit) = usize::try_from(max_bytes)
+        .ok()
+        .filter(|limit| *limit <= bytes_codec::MAX_CODEC_OUTPUT_LEN)
+    else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "`gzip.decompress` requires a byte limit from 0 to {}, found `{max_bytes}`",
+                bytes_codec::MAX_CODEC_OUTPUT_LEN
+            ),
+        ));
+    };
+    let error = match crate::gzip_codec::gzip_decompress(&data, limit) {
+        Ok(bytes) => return host_bytes_value(bytes, name).map(result_ok),
+        Err(error) => error,
+    };
+    let (variant_name, payload) = match error {
+        GzipError::InvalidData(message) => ("InvalidData", Value::string(message)),
+        GzipError::OutputTooLarge { .. } => (
+            "OutputTooLarge",
+            Value::Int(IntegerValue::from_i64(max_bytes)),
+        ),
+    };
+    Ok(result_err(Value::EnumVariant(EnumVariantValue {
+        enum_name: RuntimeName::from_static("gzip.Error"),
+        variant_name: RuntimeName::from_static(variant_name),
+        payloads: vec![payload].into(),
+    })))
 }
 
 pub fn host_bytes_hex_encode_ref(value: &Value) -> Result<Value> {

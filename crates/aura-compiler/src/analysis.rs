@@ -4412,6 +4412,27 @@ impl<'a> AnalysisBuilder<'a> {
                         Type::Named("io.Error".to_string(), Vec::new()),
                     ],
                 )),
+                BuiltinMember::FileReadLine => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        optional_type(Type::named("str")),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::FileReadLines => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::Named("list".to_string(), vec![Type::named("str")]),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
+                BuiltinMember::FileReadChunk => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        optional_type(Type::Named("list".to_string(), vec![Type::named("uint8")])),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
                 BuiltinMember::FileWriteAll
                 | BuiltinMember::FileWriteBytes
                 | BuiltinMember::FileFlush
@@ -7901,6 +7922,9 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ArraySaturatingMul,
         BuiltinMember::FileReadAll,
         BuiltinMember::FileReadBytes,
+        BuiltinMember::FileReadLine,
+        BuiltinMember::FileReadLines,
+        BuiltinMember::FileReadChunk,
         BuiltinMember::FileWriteAll,
         BuiltinMember::FileWriteBytes,
         BuiltinMember::FileFlush,

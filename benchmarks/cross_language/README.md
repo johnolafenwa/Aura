@@ -1,6 +1,6 @@
 # Cross-language programs
 
-Thirty complete programs, each written in Aura, Python, and Rust, that do the
+Thirty-one complete programs, each written in Aura, Python, and Rust, that do the
 same work and print the same summary line. They cover the kinds of software
 people write: databases, servers, a web browser, compilers and interpreters,
 text and data processing, graphics, simulations, and concurrent pipelines.
@@ -65,6 +65,7 @@ every sample with the commit.
 | `sort_records` | Built-in sorts, key sorts, string sorts, and hand-written quicksort and merge sort |
 | `spreadsheet` | Formulas, a dependency graph in topological order, and recalculation after edits |
 | `sql_engine` | A SQL tokenizer, parser, planner, and executor with an id index, range scans, updates, deletes, and `GROUP BY` |
+| `stream_io` | Reads a log in line batches and in 64 KiB chunks, with gzip and HMAC-SHA256 on each chunk |
 | `task_pool` | A worker pool on bounded queues, a three-stage pipeline, and a fan-out of tasks |
 | `template_render` | A Mustache-style template engine producing HTML pages |
 | `text_diff` | A line diff with the Myers O(ND) algorithm, checked against an LCS table |
@@ -74,8 +75,8 @@ every sample with the commit.
 
 - Every program makes its own input from a seeded MINSTD generator,
   `state * 48271 % 2147483647`, so all three versions see the same data and no
-  data files are needed. `file_io` and `docdb` also take a work directory,
-  which the script creates fresh for each run.
+  data files are needed. `file_io`, `stream_io`, and `docdb` also take a work
+  directory, which the script creates fresh for each run.
 - The three versions use the same algorithms and data layout, written the way
   each language is usually written. Each uses its own standard library for
   collections, strings, JSON, files, and sockets.
@@ -143,6 +144,13 @@ median program takes 0.37 times Python's time and 3.4 times Rust's, down
 from 0.42 and 3.6 times with 0.12.0. Aura is faster than Python on 25
 programs. It is slower on `csv_aggregate`, `docdb`, `file_io`,
 `json_roundtrip`, and `template_render`. No program is above 8x Rust.
+
+`stream_io` was added on 10 November 2026, after these passes, with
+`fs.File.read_lines`, `read_chunk`, the `gzip` module, and
+`bytes.hmac_sha256`. On the same kind of container, at 400,000 lines, it
+takes 766 ms in Aura, 938 ms in Python, and 430 ms in Rust: 0.82 times
+Python's time and 1.8 times Rust's. It is not in the table or the totals
+above.
 
 0.13.0 brings the Batch 8 multicore runtime and the first JSON steps of
 the lean-values work:

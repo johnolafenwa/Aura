@@ -249,6 +249,50 @@ fn sha256_returns_raw_standard_digest_bytes() {
 }
 
 #[test]
+fn hmac_sha256_matches_the_rfc_4231_test_vectors() {
+    let hmac =
+        |key: &[u8], message: &[u8]| hex_encode(&hmac_sha256(key, message).unwrap()).unwrap();
+    assert_eq!(
+        hmac(&[0x0b; 20], b"Hi There"),
+        "b0344c61d8db38535ca8afceaf0bf12b881dc200c9833da726e9376c2e32cff7"
+    );
+    assert_eq!(
+        hmac(b"Jefe", b"what do ya want for nothing?"),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+    // A key longer than one block is hashed first.
+    assert_eq!(
+        hmac(
+            &[0xaa; 131],
+            b"Test Using Larger Than Block-Size Key - Hash Key First"
+        ),
+        "60e431591ee0b67f0d8a26aacbf5b77f8e0bc6213728c5140546040f0ee37f54"
+    );
+    assert_eq!(
+        hmac(&[0xaa; 64], b"exactly one block of key"),
+        "6b86dff4b91fe689c94291f9648c1f7cea871c24c0aaee8b7b0f295528e85fe3"
+    );
+    assert_eq!(
+        hmac(b"", b""),
+        "b613679a0814d9ec772f95d778c35fc5ff1697c493715653c6c712144292c5ad"
+    );
+    assert!(matches!(
+        with_allocation_budget(0, || hmac_sha256(b"key", b"message")),
+        Err(BytesCodecError::Resource(_))
+    ));
+}
+
+#[test]
+fn constant_time_eq_compares_whole_byte_strings() {
+    assert!(constant_time_eq(b"", b""));
+    assert!(constant_time_eq(b"same bytes", b"same bytes"));
+    assert!(!constant_time_eq(b"same bytes", b"same bytez"));
+    assert!(!constant_time_eq(b"Same bytes", b"same bytes"));
+    assert!(!constant_time_eq(b"short", b"shorter"));
+    assert!(!constant_time_eq(b"", b"x"));
+}
+
+#[test]
 fn hashing_a_string_uses_its_utf8_representation() {
     let text = "café 🌌";
 

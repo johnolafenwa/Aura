@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-10
 
+## Streaming I/O and a deeper standard library (in progress)
+
+- Target: streamed HTTP bodies, line and chunk file reads, redirects,
+  connection pooling, gzip, regex, date and time, HMAC, and a reference
+  agent that streams a model reply, each measured against Python and
+  Rust. Details are in `2026-11-10-streaming-io-and-stdlib.md`.
+- Done: `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip`
+  module, `bytes.hmac_sha256`, and `bytes.constant_time_eq` (ADR-0073).
+- Remaining: `regex` and `time` modules, the `http` client module, and
+  the streaming reference agent.
+
 ## Iterator bound and float64 gaps (in progress)
 
 - Target: the three gaps the 0.13 evaluation left. Details are in

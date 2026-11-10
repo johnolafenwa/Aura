@@ -1,0 +1,5 @@
+error[AU2999]: `read_chunk` expects `int64`, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/file_read_chunk_text_count.au:6:33
+  |
+6 |     chunk = try file.read_chunk("4096")
+  |                                 ^

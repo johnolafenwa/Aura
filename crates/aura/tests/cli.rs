@@ -11909,6 +11909,46 @@ fn run_and_direct_backends_run_atomic_save_example() {
 }
 
 #[test]
+fn run_and_direct_backends_run_read_lines_example() {
+    let expected = "4 lines, 9 words\nthe quick brown fox\n24\n3\ntrue\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/io/read_lines.au"))
+        .output()
+        .expect("failed to run aura run on read lines example");
+    assert!(
+        output.status.success(),
+        "run should succeed for read lines example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs("examples/io/read_lines.au", "read-lines-direct", expected);
+}
+
+#[test]
+fn run_and_direct_backends_run_sign_and_compress_example() {
+    let expected = "true\n64\ntrue\nbad signature\nmore than 4096 bytes\nnot gzip\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/io/sign_and_compress.au"))
+        .output()
+        .expect("failed to run aura run on sign and compress example");
+    assert!(
+        output.status.success(),
+        "run should succeed for sign and compress example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/io/sign_and_compress.au",
+        "sign-and-compress-direct",
+        expected,
+    );
+}
+
+#[test]
 fn run_executes_tcp_echo_example() {
     let fixture = repo_root().join("examples/io/tcp_echo.au");
     let output = Command::new(aura_bin())

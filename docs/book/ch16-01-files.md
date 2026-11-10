@@ -93,9 +93,52 @@ string early. The variant is information your control flow can use; a string
 is only information a person can read.
 
 Whole-file reads are capped at 256 MiB. A read over the cap fails with
-`io.Error.InvalidData` instead of quietly eating all your memory. Aura 0.13 has
-no chunked read API, so a tool that must process larger files has to split
-them first. For configuration files and reports, the cap is far away.
+`io.Error.InvalidData` instead of quietly eating all your memory. For
+configuration files and reports, the cap is far away.
+
+### Reading a file in pieces
+
+A log that grows all day is a different matter. Reading it whole costs its
+whole size in memory, and past the cap it cannot be read whole at all. For
+files like that, open a handle and ask for a piece at a time. `read_lines`
+returns the next batch of lines:
+
+```aura
+import fs
+import io
+
+def count_errors(path: str) -> Result[int64, io.Error]:
+    mut errors = 0
+    with file = try fs.open(path):
+        while true:
+            batch = try file.read_lines(1024)
+            if batch.is_empty():
+                break
+            for line in batch:
+                if line.contains("ERROR"):
+                    errors += 1
+    return Result.Ok(errors)
+
+def main():
+    match count_errors("service.log"):
+        case Result.Ok(errors):
+            print(f"{errors} errors")
+        case Result.Err(error):
+            print(error)
+```
+
+Each call hands back up to 1,024 lines, without their line endings, and an
+empty list once the file has run out. The loop never holds more than one
+batch, so it uses the same memory on a 10 KiB file and a 10 GiB one. The
+`with` block closes the file on every way out of the function, including the
+early return hidden in each `try`.
+
+Two relatives cover the other cases. `read_line()` returns one line, or `None`
+at the end, which is handy for a header before the body. `read_chunk(max_bytes)`
+returns the next bytes as a `list[uint8]`, or `None` at the end, for data that
+is not text. All of them continue from where the last read stopped. In a loop
+over a whole file, prefer `read_lines`: one call that returns a thousand lines
+is several times faster than a thousand calls that return one each.
 
 ## Turning lines into checks
 
