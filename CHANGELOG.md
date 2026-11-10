@@ -7,6 +7,28 @@ in this file.
 
 ## Unreleased
 
+- An enum type parameter can be bounded by a trait with associated types,
+  as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
+  `S.Iter`, and a `T` named only by the bound, from the implementation for
+  `S`.
+- A trait can name a trait with associated types as a supertrait, as in
+  `trait Bag[T]: IntoIterator[T]`. `Bag` inherits `Iter`, a bound
+  `B: Bag[str]` names `B.Iter`, and a `for` loop takes a `B` value. An
+  implementation of `Bag` leaves out `type Iter`: it comes from the type's
+  implementation of `IntoIterator`. Both forms reported `AU2002` before.
+- A `for` loop takes a value whose type parameter is bounded by a subtrait
+  of `Iterator[T]` or `IntoIterator[T]`.
+- Fixed: a bound by an imported trait did not reach the methods of its
+  supertrait unless the module imported the supertrait too.
+- Fixed: a local annotated with a bound's associated type, as in
+  `items: S.Iter = source.into_iter()`, stopped the build with `AU4001`.
+- `aura verify` tries a check that reads float arithmetic with sample
+  values for the function's float parameters before the exact search. A
+  false claim that many inputs break, such as `a / 3.0 * 3.0 == a` or
+  `a.sqrt() * a.sqrt() == a`, now fails in about 0.1 s with a
+  counterexample. Before, it took 2 to 11 s or ended as `AU5102`.
+- Counterexamples print very large and very small floats with an
+  exponent, as `5e-324`.
 - Every `list[T]` implements `iter.IntoIterator[T]`, so a function bounded
   by `S: IntoIterator[T]` takes a list. `into_iter()` consumes the list and
   returns an `iter.ListIter[T]`. Loops written directly over a list still
@@ -28,7 +50,7 @@ in this file.
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name
   `S.Iter`; constructing the class, calling a method, or matching the impl
   infers it (and a `T` named only by the bound) from the implementation
-  for `S`. Enum bounds still report `AU2002`.
+  for `S`.
 - `aura verify` models `dict.get` and `dict.remove` as lookups of the
   modeled dict: `Found` with the stored value when the key is there, else
   `Missing`, and `remove` takes the key out.

@@ -189,11 +189,14 @@ impl FunctionChecker<'_> {
     pub(super) fn iterator_item_type(&self, ty: &Type) -> Option<Type> {
         // A type parameter bounded by `Iterator[T]` iterates its `T`.
         if let Type::TypeParam(name) = ty {
-            return self.type_param_bounds.get(name)?.iter().find_map(|bound| {
-                let short = bound.trait_name.rsplit(['.', ':']).next();
-                (short == Some(ITERATOR_TRAIT) && bound.trait_args.len() == 1)
-                    .then(|| bound.trait_args[0].clone())
-            });
+            return self
+                .type_param_bound_closure(name, ty)
+                .iter()
+                .find_map(|bound| {
+                    let short = bound.trait_name.rsplit(['.', ':']).next();
+                    (short == Some(ITERATOR_TRAIT) && bound.trait_args.len() == 1)
+                        .then(|| bound.trait_args[0].clone())
+                });
         }
         if !matches!(ty, Type::Named(..)) {
             return None;
@@ -209,6 +212,17 @@ impl FunctionChecker<'_> {
         })
     }
 
+    /// The bounds of the type parameter `name` with their supertraits, so a
+    /// bound by a subtrait of `Iterator[T]` or `IntoIterator[T]` iterates too.
+    fn type_param_bound_closure(&self, name: &str, ty: &Type) -> Vec<super::TraitBound> {
+        self.type_param_bounds
+            .get(name)
+            .into_iter()
+            .flatten()
+            .flat_map(|bound| self.trait_bound_closure(bound, ty))
+            .collect()
+    }
+
     /// Whether `ty` implements the builtin `iter.IntoIterator[T]`, so a loop
     /// over it iterates `ty.into_iter()`.
     pub(super) fn implements_into_iterator(&self, ty: &Type) -> bool {
@@ -221,11 +235,9 @@ impl FunctionChecker<'_> {
         // A type parameter bounded by `IntoIterator[T]` (with its hidden
         // associated `Iter` argument) iterates its `into_iter()`.
         if let Type::TypeParam(name) = ty {
-            return self.type_param_bounds.get(name).is_some_and(|bounds| {
-                bounds.iter().any(|bound| {
-                    bound.trait_name.rsplit(['.', ':']).next() == Some(INTO_ITERATOR_TRAIT)
-                        && bound.trait_args.len() == 2
-                })
+            return self.type_param_bound_closure(name, ty).iter().any(|bound| {
+                bound.trait_name.rsplit(['.', ':']).next() == Some(INTO_ITERATOR_TRAIT)
+                    && bound.trait_args.len() == 2
             });
         }
         self.trait_impls_in_scope().any(|trait_impl| {

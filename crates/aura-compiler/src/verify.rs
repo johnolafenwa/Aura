@@ -566,6 +566,7 @@ pub fn verify_module(
     // The solver starts at the first function the cache cannot answer.
     let mut solver: Option<smt::Solver> = None;
     let mut rough_solver: Option<smt::Solver> = None;
+    let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
     for function in &module.functions {
         if !verified_function(program, &cx, function) {
@@ -623,7 +624,14 @@ pub fn verify_module(
                 } else {
                     Some(Lane::new(&mut rough_solver, &rough_start))
                 };
-                let statuses = solve(main_lane, rough, &exec, trace)
+                let sample_start =
+                    || smt::Solver::start(&command, options.timeout_ms.min(SAMPLE_TIMEOUT_MS));
+                let sample = if exec.rounded.is_empty() {
+                    None
+                } else {
+                    Some(Lane::new(&mut sample_solver, &sample_start))
+                };
+                let statuses = solve(main_lane, rough, sample, &exec, trace)
                     .map_err(|message| Diagnostic::coded("AU5103", message))?;
                 if let Some(path) = &cache {
                     write_cache(path, &statuses);
@@ -690,7 +698,7 @@ fn cache_key(version: &str, options: &Options, exec: &exec::Exec<'_>) -> String 
         hasher.update(text.len().to_le_bytes());
         hasher.update(text.as_bytes());
     };
-    part("aura-verify-cache-1");
+    part("aura-verify-cache-2");
     part(version);
     part(&options.timeout_ms.to_string());
     for decl in &exec.decls {
@@ -750,6 +758,93 @@ fn write_cache(path: &std::path::Path, statuses: &[Status]) {
 /// The time limit of the first, weaker query of a check that reads a float
 /// `/` or `sqrt` (see `verify_float.rs`).
 const ROUGH_TIMEOUT_MS: u64 = 2_000;
+
+/// The time limit of a check asked with each float input fixed to a
+/// sampled value.
+const SAMPLE_TIMEOUT_MS: u64 = 2_000;
+
+/// How many checks of one function can be tried with every sample.
+const SAMPLE_CHECKS: usize = 8;
+
+/// The first `float::SAMPLES` of `candidates` that the facts on entry
+/// allow, so each one tried against a check is an input the function can
+/// have. `None` when the solver could not decide one in time.
+fn allowed_samples(
+    lane: &mut Lane<'_>,
+    exec: &exec::Exec<'_>,
+    candidates: Vec<String>,
+    trace: bool,
+) -> std::result::Result<Option<Vec<String>>, String> {
+    let mut entry = String::from("; inputs the function can have\n");
+    for fact in &exec.facts[..exec.entry_facts] {
+        entry.push_str(&format!("(assert {fact})\n"));
+    }
+    let mut allowed = Vec::new();
+    let mut tried = 0usize;
+    for fixed in candidates {
+        if allowed.len() == float::SAMPLES {
+            break;
+        }
+        tried += 1;
+        match lane.ask(&format!("(push 1)\n{fixed}{entry}"), None)? {
+            Status::Failed { .. } => allowed.push(fixed),
+            Status::Proved => {}
+            _ => return Ok(None),
+        }
+    }
+    if trace {
+        eprintln!(
+            "; {} of {tried} candidate float inputs are allowed on entry",
+            allowed.len()
+        );
+    }
+    Ok(Some(allowed))
+}
+
+/// The declarations of `exec` with each float input fixed to a value, one
+/// text for each row of candidate values. Empty when no input is a float.
+///
+/// A fixed input is defined, not declared and constrained, so the solver
+/// computes every operation on it while it reads the problem.
+fn sample_preludes(exec: &exec::Exec<'_>, literals: &[f64]) -> Vec<String> {
+    let mut fixed: Vec<(usize, &str, exec::FloatTy)> = Vec::new();
+    for (_, term) in &exec.inputs {
+        for float in [exec::FloatTy::F32, exec::FloatTy::F64] {
+            let decl = format!("(declare-const {term} {})", float.sort());
+            if let Some(at) = exec.decls.iter().position(|existing| *existing == decl) {
+                if !fixed.iter().any(|(index, _, _)| *index == at) {
+                    fixed.push((at, term, float));
+                }
+            }
+        }
+    }
+    if fixed.is_empty() {
+        return Vec::new();
+    }
+    float::candidates(fixed.len(), literals)
+        .into_iter()
+        .map(|row| {
+            let mut text = String::new();
+            for (index, decl) in exec.decls.iter().enumerate() {
+                match fixed.iter().position(|(at, _, _)| *at == index) {
+                    Some(slot) => {
+                        let (_, term, float) = fixed[slot];
+                        text.push_str(&format!(
+                            "(define-fun {term} () {} {})\n",
+                            float.sort(),
+                            float::literal(float, row[slot])
+                        ));
+                    }
+                    None => {
+                        text.push_str(decl);
+                        text.push('\n');
+                    }
+                }
+            }
+            text
+        })
+        .collect()
+}
 
 /// A solver process for one function's queries, with everything sent at
 /// the function's own scope kept so a fresh process can be brought to the
@@ -888,6 +983,7 @@ fn ask_once(
 fn solve(
     mut solver: Lane<'_>,
     mut rough: Option<Lane<'_>>,
+    mut sample: Option<Lane<'_>>,
     exec: &exec::Exec<'_>,
     trace: bool,
 ) -> std::result::Result<Vec<Status>, String> {
@@ -903,10 +999,13 @@ fn solve(
     // The weaker problem has each float `/` and `sqrt` result's facts in
     // place of the fact that defines it.
     let mut replaced: BTreeMap<usize, Vec<String>> = BTreeMap::new();
+    // Candidate inputs until a check needs samples, then the allowed ones.
+    let mut candidates = Vec::new();
+    let mut samples: Option<Vec<String>> = None;
     if let Some(rough) = rough.as_mut() {
         rough.send(&prelude)?;
-        let literals =
-            float::literals(
+        let all_literals =
+            float::all_literals(
                 exec.facts
                     .iter()
                     .map(String::as_str)
@@ -917,10 +1016,14 @@ fn solve(
                         },
                     )),
             );
+        let literals = float::literals(&all_literals);
         for rounded in &exec.rounded {
             replaced.insert(rounded.fact, float::axioms(rounded, &literals));
         }
+        candidates = sample_preludes(exec, &all_literals);
     }
+    // Samples are cheap, not free: a function gets this many attempts.
+    let mut attempts = SAMPLE_CHECKS * float::SAMPLES;
     let mut statuses = Vec::new();
     let mut asserted = 0usize;
     for obligation in &exec.obligations {
@@ -975,6 +1078,43 @@ fn solve(
                 statuses.push(Status::Proved);
                 continue;
             }
+        }
+        // A check that fails with its float inputs fixed fails.
+        let mut refuted = None;
+        if let Some(lane) = sample.as_mut() {
+            if samples.is_none() {
+                let drawn = std::mem::take(&mut candidates);
+                samples = Some(allowed_samples(lane, exec, drawn, trace)?.unwrap_or_default());
+            }
+            let rows = samples.as_mut().expect("the samples were just drawn");
+            let mut facts = String::from("; the check with its float inputs fixed\n");
+            for fact in &exec.facts[..obligation.facts] {
+                facts.push_str(&format!("(assert {fact})\n"));
+            }
+            let goal = &query["(push 1)\n".len()..];
+            for fixed in rows.iter().take(attempts) {
+                attempts -= 1;
+                match lane.ask(&format!("(push 1)\n{fixed}{facts}{goal}"), Some(exec))? {
+                    Status::Proved => {}
+                    status @ Status::Failed { .. } => {
+                        refuted = Some(status);
+                        break;
+                    }
+                    // The solver could not compute this one in time, so
+                    // the rest of the function goes without samples.
+                    _ => {
+                        attempts = 0;
+                        break;
+                    }
+                }
+            }
+        }
+        if let Some(status) = refuted {
+            if trace {
+                eprintln!("; => {status:?} with the float inputs fixed");
+            }
+            statuses.push(status);
+            continue;
         }
         let status = solver.ask(&query, Some(exec))?;
         if trace {
