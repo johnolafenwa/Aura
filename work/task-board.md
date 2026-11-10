@@ -13,8 +13,13 @@ Last updated: 2026-11-10
   ownership rules, on both backends.
 - Step 2 is done: `value as dyn Trait`, `dyn Iterator[T]` as a `for`
   source, and conversion from union values and bounded type parameters.
-- Next: `match` type
-  arms, `trait Tool: Transfer:`, element lends, fast dispatch with
+- The held type is exact: a conversion is its own MIR rvalue, so
+  `float32` and `float64`, and `Cell[int64]` and `Cell[str]`, dispatch to
+  their own implementations on both backends.
+- Step 3 is done: `match` on a trait object with `case Type as name:`
+  arms and a required catch-all, under a bare `match`, `match mut`, and
+  `match own`.
+- Next: `trait Tool: Transfer:`, element lends, fast dispatch with
   probes against Rust and Python, then `aura verify`, the language
   server, the book chapter, and the ADR.
 

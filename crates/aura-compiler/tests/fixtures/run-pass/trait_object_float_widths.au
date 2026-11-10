@@ -1,0 +1,56 @@
+trait Named:
+    def name(self) -> str
+
+
+impl Named for float32:
+    def name(self) -> str:
+        return "float32"
+
+
+impl Named for float64:
+    def name(self) -> str:
+        return "float64"
+
+
+def show(item: dyn Named) -> None:
+    print(item.name())
+
+
+def main() -> None:
+    x: float64 = 2.5
+    y: float32 = 1.5
+    a: dyn Named = x
+    print(a.name())
+    b: dyn Named = 3.5
+    print(b.name())
+    c: dyn Named = y
+    print(c.name())
+    show(x)
+    show(y)
+    items: list[dyn Named] = [x, y, 2.5]
+    for item in items:
+        print(item.name())
+    pair: (dyn Named, dyn Named) = (x, y)
+    first, second = pair
+    print(first.name())
+    print(second.name())
+    maybe: dyn Named | None = x
+    if maybe is not None:
+        print(maybe.name())
+    table: dict[str, dyn Named] = {"x": x, "y": y}
+    print(table["x"].name())
+    print(table["y"].name())
+    match items[0]:
+        case float32 as single:
+            print(f"single {single}")
+        case float64 as double:
+            print(f"double {double + 1.0}")
+        case _:
+            print("other")
+    match items[1]:
+        case float64 as double:
+            print(f"double {double}")
+        case float32 as single:
+            print(f"single {single}")
+        case _:
+            print("other")

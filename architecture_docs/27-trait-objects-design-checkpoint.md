@@ -96,8 +96,11 @@ function is then compiled for `T = dyn Tool` like any other type.
 ## F. Getting The Type Back
 
 - **F1. `match` type arms with a required catch-all (default).**
-  `case Echo(echo):` selects on the held type. The set of types is open,
-  so the match needs `case _`.
+  `case Echo as echo:` selects on the held type. The set of types is open,
+  so the match needs `case _`. The ratified text spelled the arm
+  `case Echo(echo):`. Step 3 uses `case Echo as echo:` instead, because
+  that is how a union type arm is already spelled, and `Echo(...)` is a
+  class pattern over fields.
 - F2. A downcast method returning `T | None`. Rejected: it adds a
   reflective call where `match` already reads naturally.
 
@@ -183,6 +186,27 @@ boundary.
   extends it are `for` sources. A union value converts when every member
   implements the trait; lowering branches on the union's tag, so the
   trait object holds the active member and never the union.
+
+- **Exact held type (2026-11-10).** A conversion is now its own MIR
+  rvalue, `TraitObject { value, held }`, which records the static type of
+  the value. Step 1 lowered it as a plain move, and the backends then
+  guessed the held type from the shape of the value, which is not exact: a
+  float does not say its width, and an interpreter value does not carry
+  its type arguments. The interpreter wraps the value with `held`. The
+  native runtime needs the wrapper only for a float, because every other
+  boxed value already carries its exact type. A value known by a type
+  parameter or a union gives its active member at run time
+  (`aura_direct_trait_object_from`).
+
+- **Step 3 (2026-11-10).** `match` on a trait object takes type arms,
+  `case Type as name:`, and needs a final catch-all (`AU2013`). An arm's
+  type must implement the trait and cannot be a trait object. Lowering
+  uses two rvalues: `TraitObjectHolds { value, ty }` tests the held type,
+  and `TraitObjectTake { value, ty }` copies the held value out for a
+  shared or `mut` binding, or moves it out for `match own`. `match mut`
+  writes the binding back through the write-back path `match mut` on a
+  union already uses, so `return`, `break`, and `continue` write back too.
+  A shared or `mut` match on `items[i]` inspects the element in place.
 
 ## Ratification Record
 

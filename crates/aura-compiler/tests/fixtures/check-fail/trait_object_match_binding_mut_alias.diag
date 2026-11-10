@@ -1,0 +1,5 @@
+error[AU3002]: shared values cannot be bound with `mut`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_binding_mut_alias.au:48:32
+   |
+48 |             mut other: Label = label
+   |                                ^

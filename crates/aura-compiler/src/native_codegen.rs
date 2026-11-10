@@ -4184,6 +4184,21 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// Converts `value`, whose type may be a union at run time, to the
+    /// value a trait object holds (see `aura_direct_trait_object_from`).
+    fn trait_object_from_runtime_value(
+        &mut self,
+        value: ValueRef,
+        held: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxed = self.ensure_opaque(value)?;
+        let transferred = self.transfer_owned_opaque_value(&boxed);
+        let call = self
+            .builder
+            .call(self.runtime[RuntimeFn::TraitObjectFrom], &[transferred]);
+        Ok(self.owned_opaque_result(call.results, held.clone()))
+    }
+
     fn owned_opaque_result(&mut self, values: Vec<Val>, ty: Type) -> ValueRef {
         let value = ValueRef {
             values,
@@ -5724,6 +5739,42 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
+            }
+            Rvalue::TraitObject { value, held } => {
+                let source = ensure_direct_type(held, &self.classes, "trait object source")?;
+                let loaded = self.load_operand_for_target(value, &source)?;
+                let loaded = self.coerce_value(loaded, &source)?;
+                match held {
+                    Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(), "float32" | "float64") =>
+                    {
+                        self.float_trait_object(loaded, name == "float32")
+                    }
+                    // A value known here only by a type parameter, or a
+                    // union a specialized copy substituted for one, may be
+                    // a union at run time. The trait object holds its
+                    // active member.
+                    Type::Union(_) => self.trait_object_from_runtime_value(loaded, held),
+                    Type::TypeParam(name) if !name.starts_with("dyn ") => {
+                        self.trait_object_from_runtime_value(loaded, held)
+                    }
+                    _ => Ok(loaded),
+                }
+            }
+            Rvalue::TraitObjectHolds { value, ty } => {
+                let loaded = self.load_operand(value)?;
+                let raw = self.ensure_opaque(loaded)?;
+                let holds = self.value_matches_runtime_type(raw.values[0], ty)?;
+                self.release_all_temporary_owned();
+                Ok(ValueRef {
+                    values: vec![holds],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            Rvalue::TraitObjectTake { value, ty } => {
+                let loaded = self.load_operand(value)?;
+                let held = ensure_direct_type(ty, &self.classes, "trait object member")?;
+                self.coerce_value(loaded, &held)
             }
             Rvalue::NoneTest { value } => {
                 // Lowering tests a union's `None` member through
@@ -14143,9 +14194,44 @@ impl<'a> FunctionCompiler<'a> {
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
-        let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
+        let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
+        if mutable_receiver {
+            // The receiver's place comes first. A float a trait object
+            // holds goes back into it with its width.
+            if let (Some(place), Some(updated)) = (writeback_places.first(), writebacks.first()) {
+                let single = match updated.ty {
+                    DirectType::Scalar(ScalarKind::Float32) => Some(true),
+                    DirectType::Scalar(ScalarKind::Float64) => Some(false),
+                    _ => None,
+                };
+                let erased = matches!(
+                    self.type_of_place(place),
+                    Ok(DirectType::Opaque(Type::TypeParam(name))) if name.starts_with("dyn ")
+                );
+                if let (Some(single), true) = (single, erased) {
+                    writebacks[0] = self.float_trait_object(updated.clone(), single)?;
+                }
+            }
+        }
         self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)
+    }
+
+    /// Boxes a float as the value a trait object holds. A boxed float does
+    /// not say its width, so the trait object keeps it beside the float:
+    /// `float32` and `float64` may implement the trait differently.
+    fn float_trait_object(
+        &mut self,
+        float: ValueRef,
+        single: bool,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxed = self.ensure_opaque(float)?;
+        let single = self.builder.iconst(types::I64, i64::from(single));
+        self.builder.call(
+            self.runtime[RuntimeFn::TraitObjectFloat],
+            &[boxed.values[0], single],
+        );
+        Ok(boxed)
     }
 
     /// Emits a resolved runtime operation on its loaded receiver. The op
@@ -17201,6 +17287,9 @@ fn validate_rvalue(
         Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => Ok(()),
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
         Rvalue::ModuleConstant { .. } => Ok(()),

@@ -42,12 +42,22 @@ fn trait_object_programs_run() {
         run_pass!("trait_object_conversion_sources"),
         run_pass!("trait_object_display"),
         run_pass!("trait_object_element_borrows"),
+        run_pass!("trait_object_exact_builtin_types"),
+        run_pass!("trait_object_exact_type_arguments"),
         run_pass!("trait_object_expressions"),
         run_pass!("trait_object_fields"),
+        run_pass!("trait_object_float_mut_calls"),
+        run_pass!("trait_object_float_widths"),
         run_pass!("trait_object_generic_arguments"),
         run_pass!("trait_object_generic_bounds"),
+        run_pass!("trait_object_generic_impls"),
         run_pass!("trait_object_iterator_adapters"),
         run_pass!("trait_object_iterators"),
+        run_pass!("trait_object_match"),
+        run_pass!("trait_object_match_catch_all_only"),
+        run_pass!("trait_object_match_expression"),
+        run_pass!("trait_object_match_places"),
+        run_pass!("trait_object_mut_element_argument"),
         run_pass!("trait_object_mut_methods"),
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
@@ -79,6 +89,91 @@ fn trait_objects_cross_module_boundaries() {
 #[test]
 fn trait_object_misuse_is_rejected() {
     let fixtures = [
+        check_fail!(
+            "trait_object_match_arm_after_catch_all",
+            "AU2013",
+            "duplicate or unreachable type arm"
+        ),
+        check_fail!(
+            "trait_object_match_arm_duplicate",
+            "AU2013",
+            "duplicate or unreachable type arm"
+        ),
+        check_fail!(
+            "trait_object_match_arm_lacks_impl",
+            "AU2013",
+            "type arm `Plain` can never match"
+        ),
+        check_fail!(
+            "trait_object_match_arm_names_trait_object",
+            "AU2013",
+            "type arm `dyn Other` names a trait object"
+        ),
+        check_fail!(
+            "trait_object_match_binding_is_shared",
+            "AU3003",
+            "cannot assign through immutable place `square.side`"
+        ),
+        check_fail!(
+            "trait_object_match_binding_moves",
+            "AU3002",
+            "cannot move `label` out of a shared match on `shape`"
+        ),
+        check_fail!(
+            "trait_object_match_binding_mut_alias",
+            "AU3002",
+            "shared values cannot be bound with `mut`"
+        ),
+        check_fail!(
+            "trait_object_match_or_pattern_types",
+            "AU2013",
+            "every alternative in an or-pattern must bind the same names"
+        ),
+        check_fail!(
+            "trait_object_match_scrutinee_is_shared",
+            "AU3002",
+            "cannot mutate `shape` while `shape` remains shared by a bare match"
+        ),
+        check_fail!(
+            "trait_object_match_class_pattern",
+            "AU2040",
+            "class pattern `Square` does not match scrutinee type `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_match_expression_needs_catch_all",
+            "AU2013",
+            "match on `dyn Shape` needs a final `case _:`"
+        ),
+        check_fail!(
+            "trait_object_match_literal_arm",
+            "AU2002",
+            "literal pattern `1` does not match scrutinee type `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_match_moves",
+            "AU3001",
+            "use of moved value `shape`"
+        ),
+        check_fail!(
+            "trait_object_match_mut_needs_mutable",
+            "AU3002",
+            "`match mut` requires a mutable place scrutinee"
+        ),
+        check_fail!(
+            "trait_object_match_needs_catch_all",
+            "AU2013",
+            "match on `dyn Shape` needs a final `case _:`"
+        ),
+        check_fail!(
+            "trait_object_match_own_borrowed_parameter",
+            "AU3002",
+            "parameter `shape` is borrowed; declare it as `own dyn Shape` to take ownership"
+        ),
+        check_fail!(
+            "trait_object_match_own_element",
+            "AU3005",
+            "cannot implicitly copy `dyn Shape` out of a list index"
+        ),
         check_fail!(
             "trait_object_cast_borrowed_parameter",
             "AU3002",

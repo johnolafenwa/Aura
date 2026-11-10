@@ -83,7 +83,7 @@ String and format-specification diagnostics are described under
 | `AU2010` | union member or context | A value that is not a direct member of the expected union, or a union without enough context. | Supply a direct member or the missing type context. |
 | `AU2011` | ambiguous union injection | A literal that more than one union member accepts. | Make the intended member explicit. |
 | `AU2012` | cyclic type alias | A transparent alias that refers back to itself. | Break the cycle. |
-| `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
+| `AU2013` | type arm coverage | Missing, duplicate, unreachable, or nonmember union type arms. A trait object match with no final `case _:`, or with an arm for a type that does not implement the trait. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
@@ -173,8 +173,10 @@ could accept reports `AU2011`.
 
 **`AU2012` cyclic type alias.** A cyclic transparent alias reports `AU2012`.
 
-**`AU2013` union pattern coverage.** Missing, duplicate, unreachable, or
-nonmember union type arms report `AU2013`.
+**`AU2013` type arm coverage.** Missing, duplicate, unreachable, or
+nonmember union type arms report `AU2013`. So does a `match` on a trait
+object with no final `case _:`, or with an arm whose type can never be the
+one the trait object holds.
 
 **`AU2014` invalidated narrowing.** A member use through a place whose
 `None`-test narrowing was invalidated reports exactly this message:

@@ -56,6 +56,53 @@ What is refused, each with its own message:
 - The parser reads `as dyn Name` as a cast. `with group() as dyn:` still
   binds a name called `dyn`.
 
+## The exact held type
+
+Step 1 lowered a conversion as a plain move, and each backend then worked
+out the held type from the value. That is not exact, and it showed as
+three bugs in step 1:
+
+- A `float32` and a `float64` that both implement the trait ran each
+  other's method: a float value does not say its width.
+- On `aura run`, `Cell[float32]` ran the method of `Cell[float64]`, and a
+  call on a trait object holding a value of a generic enum failed with
+  "type `Maybe` has no MIR implementation": an interpreter value does not
+  carry its type arguments.
+
+A conversion is now its own MIR rvalue, `TraitObject { value, held }`,
+with the static type of the value. The interpreter wraps the value as
+`Value::TraitObject { held, value }` and dispatches on `held`. The native
+runtime uses that wrapper for a float only, because every other boxed
+value already carries its exact type; a `mut self` call on a held float
+puts the wrapper back. A value known only by a type parameter or a union
+gives its active member at run time, so a trait object never holds a
+union, also when a generic function converts its `T`.
+
+Also fixed here: an element of a list of trait objects can be passed to a
+`mut` parameter, `widen(shapes[0])`.
+
+## Step 3: `match` type arms
+
+- `match` on a trait object takes type arms spelled like a union's:
+  `case Square as square:`. The checkpoint wrote `case Echo(echo):`; that
+  spelling is already a class pattern over fields, so the union spelling
+  is used and the checkpoint records the change.
+- An arm names one type that implements the trait and matches exactly
+  that type. The match needs a final `case _:` or a name. `AU2013`
+  reports a missing catch-all, an arm whose type does not implement the
+  trait, an arm that names a trait object, a second arm for one type, and
+  an arm after the catch-all.
+- A bare `match` gives a shared binding and locks the scrutinee for the
+  arm. `match mut` gives a mutable binding and writes it back at the end
+  of the arm and on `return`, `break`, and `continue`. `match own` moves
+  the value out.
+- Match statements and match expressions, guards, a scrutinee that is a
+  field, a list element, or a dictionary entry, and a type arm inside an
+  enum payload pattern all work.
+- Lowering: `TraitObjectHolds { value, ty }` tests the held type and
+  `TraitObjectTake { value, ty }` copies or moves the held value out.
+  `match mut` reuses the write-back path of `match mut` on a union.
+
 ## How it is built
 
 - The checker and MIR before specialization use
@@ -63,9 +110,9 @@ What is refused, each with its own message:
   canonical name: bare for a trait of the program's own module,
   `module.Name` with the module's full path otherwise, so an import alias
   does not change the type.
-- A conversion is recorded in the union-injection table and lowered as a
-  move into a place of the trait object type. There is no new MIR
-  instruction.
+- A conversion is recorded in the union-injection table and lowered as
+  the rvalue `TraitObject { value, held }` into a place of the trait
+  object type. An upcast, `dyn Tool` to `dyn Named`, is a plain move.
 - After specialization, `mir_trait_objects::erase_trait_objects` replaces
   each trait object type with a type parameter named `dyn Trait[args]`.
   Every later pass and both backends then treat the value as the erased
@@ -80,30 +127,27 @@ What is refused, each with its own message:
 
 ## Checked
 
-- 24 run-pass fixtures and 32 check-fail fixtures named `trait_object_*`.
+- 33 run-pass fixtures and 49 check-fail fixtures named `trait_object_*`.
   Each run-pass program prints the same on the interpreter and as a
   native binary, and the native binaries are clean under valgrind.
-- `cargo test -p aura-compiler --lib`: 1,951 pass. The one failure,
-  `package_io_helpers_cover_local_error_paths`, expects an unwritable
+- Unit tests in `aura-runtime` for the two new runtime entry points.
+- `package_io_helpers_cover_local_error_paths` expects an unwritable
   directory and fails when the tests run as root, as they do in the
   cloud container; it does not touch this work.
 
 ## Known gaps, for the next steps
 
-- `match` type arms and `trait Tool: Transfer:` are not built yet.
-- A generic function that converts its `T` to a trait object, called
-  with a union for `T`, still boxes the union value as it is. Calls on it
-  work, except that the native backend refuses a `mut self` call on it at
-  run time (the older "generic receiver holding a union" limit). Step 6
-  gives the conversion its own run-time step, which will unwrap it.
+- `trait Tool: Transfer:` is not built yet, so a trait object cannot
+  cross a task boundary.
 - A call still tries the trait's implementations one by one against the
-  box's type, and a `for` over a list copies each element that holds a
-  heap value. Steps 5 and 6 remove both, with probes against Rust and
-  Python.
+  box's type, a shared `match` copies the held value into its binding,
+  and a `for` over a list copies each element that holds a heap value.
+  Steps 5 and 6 remove these, with probes against Rust and Python.
+- `aura verify` does not model the three new rvalues yet (step 7).
 - A lambda whose body calls a method on a list element it captured,
   `lambda: items[0].area()`, fails with `AU4001` (loan flow). This is
   older than trait objects: it happens with `list[Label]` too.
-- In a shared `match` on a union, binding an arm's value to a new owned
-  name, `case Square as square:` then `other: Square = square`, fails
-  with `AU4001` (moves through an active loan). This is older than trait
-  objects too. `match own value:` works.
+- In a shared `match` on a union or an enum, binding an arm's value to a
+  new name, `case Square as square:` then `other = square`, fails with
+  `AU4001`. This is older than trait objects too, and the same code on a
+  trait object works.

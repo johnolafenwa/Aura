@@ -7014,7 +7014,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
 - A union value passed through a generic bound dispatches its trait methods on the active member on both backends, `mut self` methods included, because native code compiles a copy of the generic function for the union type. A call keeps the generic function instead when the module already has 4,096 copies, when a type argument nests deeper than a layout can, or when the copy would merge union members, as `T | int64` does with `T = int64`. Such a call still runs a `mut self` method on the interpreter only. There the direct backend reports `AU4001` because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before such a call.
 - A trait object, `dyn Trait`, has no `clone()`, no `==`, and no copy, so it cannot be a dictionary key or a set element, and `value = items[index]` is rejected for a collection of trait objects. Borrow the element with `view`, call a method on it in place, or take it out with `pop` or `remove`.
-- `match` cannot yet select on the type a trait object holds, and a trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
+- A trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
+- A `match` on a trait object needs a final `case _:`, because the set of types that implement a trait is open.
 - The MIR interpreter allocates a box for each union payload and closure environment. MIR is Aura's mid-level intermediate representation. The direct backend stores unions and callables inline, as [Performance](/manual/performance#representation) describes. Aura makes no foreign-function or application binary interface (ABI) stability claim for these layouts.
 
 ### Strings And Bytes
@@ -7371,7 +7372,7 @@ String and format-specification diagnostics are described under
 | `AU2010` | union member or context | A value that is not a direct member of the expected union, or a union without enough context. | Supply a direct member or the missing type context. |
 | `AU2011` | ambiguous union injection | A literal that more than one union member accepts. | Make the intended member explicit. |
 | `AU2012` | cyclic type alias | A transparent alias that refers back to itself. | Break the cycle. |
-| `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
+| `AU2013` | type arm coverage | Missing, duplicate, unreachable, or nonmember union type arms. A trait object match with no final `case _:`, or with an arm for a type that does not implement the trait. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
@@ -7461,8 +7462,10 @@ could accept reports `AU2011`.
 
 **`AU2012` cyclic type alias.** A cyclic transparent alias reports `AU2012`.
 
-**`AU2013` union pattern coverage.** Missing, duplicate, unreachable, or
-nonmember union type arms report `AU2013`.
+**`AU2013` type arm coverage.** Missing, duplicate, unreachable, or
+nonmember union type arms report `AU2013`. So does a `match` on a trait
+object with no final `case _:`, or with an arm whose type can never be the
+one the trait object holds.
 
 **`AU2014` invalidated narrowing.** A member use through a place whose
 `None`-test narrowing was invalidated reports exactly this message:
@@ -8514,6 +8517,7 @@ This prints `42` twice.
 - A type parameter cannot stand for a type arm either. `case V as inner` is rejected with `AU2013`, because `V` is not proved disjoint from the other arms. Use `case None` and a catch-all.
 - A matching type arm is irrefutable when the scrutinee type has collapsed to one member.
 - Type patterns may also appear inside nominal enum payload patterns.
+- A trait object matches the same way on the type of the value it holds. Its match always needs a catch-all. See [Matching On The Held Type](/manual/generics-and-traits#matching-on-the-held-type).
 
 ### Coverage
 
@@ -9113,7 +9117,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2001` | Unknown enum type, variant, or payload type. |
 | `AU2002` | Generic inference or bound failure. Constructor or payload type mismatch. Literal-pattern type mismatch. A non-Boolean guard. Alternative binding type mismatch. Incompatible match-expression results. |
 | `AU2004` | Invalid variant-constructor argument binding. |
-| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
+| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. A trait object match with no final `case _:`, or with an arm that can never match. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
 | `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
@@ -13321,6 +13325,64 @@ def main():
 
 This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
 
+### Matching On The Held Type
+
+`match` on a trait object selects on the type of the value it holds. A type arm is spelled `case Type as name:`, the same as a type arm on a [union](/manual/enums-and-match#union-type-patterns):
+
+```aura
+trait Shape:
+    def area(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+
+def describe(shape: dyn Shape) -> str:
+    match shape:
+        case Square as square:
+            return f"square of side {square.side}"
+        case Rect as rect:
+            return f"{rect.w} by {rect.h}"
+        case _:
+            return f"a shape of area {shape.area()}"
+
+def widen(shape: mut dyn Shape):
+    match mut shape:
+        case Rect as rect:
+            rect.w += 1
+        case _:
+            pass
+
+def main():
+    mut shapes: list[dyn Shape] = [Square(side=2), Rect(w=2, h=3)]
+    for shape in mut shapes:
+        widen(shape)
+    for shape in shapes:
+        print(describe(shape))
+```
+
+This prints `square of side 2` and `3 by 3`.
+
+- An arm names one type that implements the trait, with its type arguments. It matches that exact type: `float32` is not `float64`, and `case Cell[int64] as cell:` does not match a `Cell[str]`.
+- The match ends with `case _:` or a name, because a trait object can hold any type that implements its trait, including a type another module adds later. A match without one reports `AU2013`.
+- An arm whose type does not implement the trait can never match, and it reports `AU2013`. So does an arm that names a trait object, such as `case dyn Other as other:`, because a trait object holds a value of a concrete type. A second arm for one type and an arm after the catch-all report `AU2013` too.
+- Guards, match expressions, and the three capabilities work as they do on a union. A bare `match` gives a shared binding. `match mut` gives a mutable binding and writes the value back into the trait object when the arm ends, on `return`, `break`, and `continue` too. `match own` moves the value out of the trait object.
+- `match tools[i]:` and `match mut tools[i]:` inspect the element where it is. `match own tools[i]:` would copy the element out, so it reports `AU3005`.
+- Literal, class, and enum variant patterns do not apply to a trait object. Select the type first, then match the bound value.
+
+A type arm is the way back from a trait object to the type it holds. Nothing else converts one back: `square: Square = shape` reports `AU2002`.
+
 ### Ownership
 
 A trait object is an owned value. It moves on assignment and it is never copied:
@@ -13474,7 +13536,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
+- A trait object names one trait. Trait objects in tasks are not available yet.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -13529,7 +13591,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
-| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. A `match` on a trait object with no final `case _:`, with an arm whose type does not implement the trait, or with an arm that names a trait object. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
 | `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
@@ -13585,7 +13647,7 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
-- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
+- trait objects, `dyn Trait`, with conversion at typed places, `value as dyn Trait`, calls dispatched on the held value, and `match` type arms on the held type
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 
@@ -22181,7 +22243,7 @@ Compile-time diagnostics:
 | `AU2003` | Unsupported compound-assignment operator. |
 | `AU2004` | Call or target argument binding failed. |
 | `AU2005` | Unsupported syntax or feature for a Python-shaped statement. |
-| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. |
+| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. A trait object match has no final `case _:`, or has an arm that can never match. |
 | `AU2014` | A member use through a place whose `None`-test narrowing was ended by an assignment, a mutable match, or a call with mutable access. |
 | `AU2017` | A `with` item is not a context manager, or its exit `Result` does not fit the enclosing function. |
 | `AU2999` | An exhaustiveness, contextual-legality, or unsupported-statement rejection with no narrower code. |
@@ -37088,7 +37150,9 @@ each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
 trait declares. Where nothing names the type, say it yourself with `as`:
-`[book as dyn Priced, coffee]` is a `list[dyn Priced]`.
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`. When you do need the
+type back, `match` asks for it by name: `case Book as book:` runs when the
+item is a book, and a final `case _:` takes everything else.
 
 ### Traits are nominal
 

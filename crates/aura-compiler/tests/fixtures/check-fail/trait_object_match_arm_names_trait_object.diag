@@ -1,0 +1,6 @@
+error[AU2013]: type arm `dyn Other` names a trait object, and a `dyn Shape` holds a value of a concrete type
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_arm_names_trait_object.au:30:14
+   |
+30 |         case dyn Other as other:
+   |              ^
+  = help: name the type the value has, such as a class that implements the trait

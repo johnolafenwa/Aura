@@ -1083,6 +1083,30 @@ pub enum Rvalue {
         value: Operand,
         destination: Type,
     },
+    /// Converts `value` to a trait object that holds it. `held` is the type
+    /// the value has where the conversion is written, so the object knows
+    /// exactly which type it holds: a `float32` and a `float64`, or a
+    /// `Maybe[int32]` and a `Maybe[int64]`, are the same value at run time.
+    /// A `held` that still names a type parameter is resolved when the
+    /// conversion runs; a value that is already a trait object passes
+    /// through, and a union gives its active member.
+    TraitObject {
+        value: Operand,
+        held: Type,
+    },
+    /// Whether the trait object `value` holds a value of exactly `ty`, the
+    /// test of a `match` type arm.
+    TraitObjectHolds {
+        value: Operand,
+        ty: Type,
+    },
+    /// The value the trait object `value` holds, as the `ty` a
+    /// `TraitObjectHolds` test proved it has: moved out of the object, or a
+    /// copy when the operand is a copy of it.
+    TraitObjectTake {
+        value: Operand,
+        ty: Type,
+    },
     UnionTagTest {
         place: String,
         union_type: Type,
@@ -5070,6 +5094,9 @@ fn function_body_moves_root(function: &MirFunction, root: &str) -> bool {
         match value {
             Rvalue::Use(operand)
             | Rvalue::CallableAdapt { value: operand, .. }
+            | Rvalue::TraitObject { value: operand, .. }
+            | Rvalue::TraitObjectTake { value: operand, .. }
+            | Rvalue::TraitObjectHolds { value: operand, .. }
             | Rvalue::NoneTest { value: operand }
             | Rvalue::UnionInject { value: operand, .. }
             | Rvalue::Unary { value: operand, .. }
@@ -7082,7 +7109,9 @@ fn validate_loan_rvalue(
         Ok(())
     };
     match value {
-        Rvalue::NoneTest { value } => operands(std::slice::from_ref(value)),
+        Rvalue::NoneTest { value } | Rvalue::TraitObjectHolds { value, .. } => {
+            operands(std::slice::from_ref(value))
+        }
         Rvalue::UnionTagTest {
             place,
             union_type,
@@ -7195,6 +7224,8 @@ fn validate_loan_rvalue(
         }
         Rvalue::Use(value)
         | Rvalue::CallableAdapt { value, .. }
+        | Rvalue::TraitObject { value, .. }
+        | Rvalue::TraitObjectTake { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::Try { value, .. }
@@ -7974,6 +8005,8 @@ fn borrowed_noncopy_origins_for_rvalue(
     match value {
         Rvalue::Use(value)
         | Rvalue::CallableAdapt { value, .. }
+        | Rvalue::TraitObject { value, .. }
+        | Rvalue::TraitObjectTake { value, .. }
         | Rvalue::Try { value, .. }
         | Rvalue::Cast { value, .. }
         | Rvalue::UnionInject { value, .. } => candidates.push(value),
@@ -10328,6 +10361,9 @@ fn rvalue_place_mentions<'a>(value: &'a Rvalue, mentions: &mut Vec<&'a str>) {
     match value {
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::Unary { value: operand, .. }
@@ -11874,6 +11910,14 @@ struct BindingBlock {
 enum PatternWriteback {
     Use(Operand),
     InPlace(Operand),
+    /// A `match mut` type arm on a trait object bound a copy of the held
+    /// value, of type `held`, to `binding`. The arm's exits convert the
+    /// copy back and store it.
+    TraitObject {
+        binding: String,
+        held: Type,
+        object: Type,
+    },
     Or {
         ty: Type,
         selected: Vec<String>,
@@ -17198,6 +17242,87 @@ impl<'a> Lowerer<'a> {
         cleanup
     }
 
+    /// Lowers `case Type as name` on a trait object: test the held type,
+    /// then bind `name` to a copy of the held value. A shared match reads
+    /// the copy, and a `match mut` stores it back when the arm exits. An
+    /// owned match binds nothing here: once its guard passed,
+    /// `lower_consuming_pattern_bindings` moves the value out.
+    fn lower_trait_object_type_pattern(
+        &mut self,
+        pattern: &crate::ast::TypePattern,
+        scrutinee: Operand,
+        object_ty: &Type,
+        success_block: usize,
+        failure_block: usize,
+        options: PatternLoweringOptions,
+    ) -> Option<PatternWriteback> {
+        let held = self.lower_type_ref_with_provenance(&pattern.ty);
+        let place = self.trait_object_scrutinee_place(scrutinee, object_ty);
+        let condition = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: condition.clone(),
+            value: Rvalue::TraitObjectHolds {
+                value: Operand::Place(place.clone()),
+                ty: held.clone(),
+            },
+        });
+        let selected = self.new_block("match_trait_object_type");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(condition),
+            then_label: self.label(selected),
+            else_label: self.label(failure_block),
+        });
+        self.switch_to(selected);
+        let mut writeback = None;
+        if !options.consume_payloads {
+            let target = self
+                .scoped_names
+                .last()
+                .and_then(|scope| scope.get(&pattern.binding.name))
+                .cloned()
+                .unwrap_or_else(|| {
+                    let target = self.new_typed_temp(held.clone());
+                    self.scoped_names
+                        .last_mut()
+                        .expect("match scope")
+                        .insert(pattern.binding.name.clone(), target.clone());
+                    target
+                });
+            self.emit(Instruction::Assign {
+                target: target.clone(),
+                value: Rvalue::TraitObjectTake {
+                    value: Operand::Place(place),
+                    ty: held.clone(),
+                },
+            });
+            writeback = options
+                .collect_writeback
+                .then(|| PatternWriteback::TraitObject {
+                    binding: target,
+                    held,
+                    object: object_ty.clone(),
+                });
+        }
+        self.terminate(Terminator::Goto(self.label(success_block)));
+        writeback
+    }
+
+    /// The place a trait object scrutinee is read from: its own place, or a
+    /// temporary for a value that has none.
+    fn trait_object_scrutinee_place(&mut self, scrutinee: Operand, object_ty: &Type) -> String {
+        match scrutinee {
+            Operand::Place(place) | Operand::MovePlace(place) => place,
+            value => {
+                let place = self.new_typed_temp(object_ty.clone());
+                self.emit(Instruction::Assign {
+                    target: place.clone(),
+                    value: Rvalue::Use(value),
+                });
+                place
+            }
+        }
+    }
+
     fn lower_type_pattern_test(
         &mut self,
         scrutinee: Operand,
@@ -17323,6 +17448,15 @@ impl<'a> Lowerer<'a> {
     ) -> Option<PatternWriteback> {
         let first_loan = self.loan_scopes.last().map_or(0, Vec::len);
         match pattern {
+            Pattern::Type(pattern) if scrutinee_ty.is_some_and(Type::is_trait_object) => self
+                .lower_trait_object_type_pattern(
+                    pattern,
+                    scrutinee,
+                    scrutinee_ty.expect("checked type pattern"),
+                    success_block,
+                    failure_block,
+                    options,
+                ),
             Pattern::Type(pattern) => {
                 let member = self.type_pattern_member(&pattern.ty, scrutinee_ty);
                 let target = self
@@ -18279,6 +18413,19 @@ impl<'a> Lowerer<'a> {
                     .last_mut()
                     .expect("match scope")
                     .insert(pattern.binding.name.clone(), target.clone());
+                if let Some(object_ty) = scrutinee_ty.filter(|ty| ty.is_trait_object()) {
+                    // The arm's test proved the held type, and an owned
+                    // match owns the object, so the value moves out of it.
+                    let place = self.trait_object_scrutinee_place(scrutinee, object_ty);
+                    self.emit(Instruction::Assign {
+                        target,
+                        value: Rvalue::TraitObjectTake {
+                            value: Operand::MovePlace(place),
+                            ty: member,
+                        },
+                    });
+                    return;
+                }
                 if let Some(Type::Union(union)) = scrutinee_ty {
                     let place = match scrutinee {
                         Operand::Place(place) | Operand::MovePlace(place) => place,
@@ -22946,7 +23093,7 @@ impl<'a> Lowerer<'a> {
         let source_union = match self.infer_expr_type(expr) {
             Some(Type::Union(union)) => Some(Type::Union(union)),
             Some(_) => None,
-            None => Some(conversion.member_type).filter(|ty| matches!(ty, Type::Union(_))),
+            None => Some(conversion.member_type.clone()).filter(|ty| matches!(ty, Type::Union(_))),
         };
         let value = if owned {
             self.lower_expr_for_owned_value(expr, None)
@@ -22957,9 +23104,12 @@ impl<'a> Lowerer<'a> {
         if let Some(union_ty) = source_union {
             self.lower_union_to_trait_object(value, &union_ty, &target);
         } else {
+            let held = self
+                .infer_expr_type_with_hint(expr, &conversion.member_type)
+                .unwrap_or(conversion.member_type);
             self.emit(Instruction::Assign {
                 target: target.clone(),
-                value: Rvalue::Use(value),
+                value: Self::trait_object_rvalue(value, held),
             });
         }
         Some(if owned {
@@ -22967,6 +23117,16 @@ impl<'a> Lowerer<'a> {
         } else {
             Operand::Place(target)
         })
+    }
+
+    /// The conversion of `value`, of type `held`, to a trait object. A
+    /// value that is one already, the source of an upcast, moves as it is.
+    fn trait_object_rvalue(value: Operand, held: Type) -> Rvalue {
+        if held.is_trait_object() {
+            Rvalue::Use(value)
+        } else {
+            Rvalue::TraitObject { value, held }
+        }
     }
 
     /// Converts a union value to a trait object: the object holds the
@@ -23018,7 +23178,7 @@ impl<'a> Lowerer<'a> {
             let payload = self.move_place_for_type(payload, member_type);
             self.emit(Instruction::Assign {
                 target: target.to_string(),
-                value: Rvalue::Use(payload),
+                value: Self::trait_object_rvalue(payload, member_type.clone()),
             });
             self.terminate(Terminator::Goto(self.label(done)));
             if let Some(next) = next {
@@ -23308,6 +23468,18 @@ impl<'a> Lowerer<'a> {
     fn materialize_pattern_writeback(&mut self, writeback: &PatternWriteback) -> Operand {
         match writeback {
             PatternWriteback::Use(operand) | PatternWriteback::InPlace(operand) => operand.clone(),
+            PatternWriteback::TraitObject {
+                binding,
+                held,
+                object,
+            } => {
+                let converted = self.new_typed_temp(object.clone());
+                self.emit(Instruction::Assign {
+                    target: converted.clone(),
+                    value: Self::trait_object_rvalue(Operand::Place(binding.clone()), held.clone()),
+                });
+                Operand::MovePlace(converted)
+            }
             PatternWriteback::Or {
                 ty,
                 selected,

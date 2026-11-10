@@ -1,0 +1,5 @@
+error[AU2013]: every alternative in an or-pattern must bind the same names with identical types and capabilities
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_or_pattern_types.au:47:14
+   |
+47 |         case Square as it | Rect as it:
+   |              ^

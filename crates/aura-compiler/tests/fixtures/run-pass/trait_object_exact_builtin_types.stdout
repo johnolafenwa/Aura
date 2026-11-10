@@ -1,0 +1,13 @@
+int32
+int64
+uint8
+float32
+float64
+list[int64]
+list[str]
+list[int64]
+list[str]
+Box[int64]
+Box[str]
+Box[list[int32]]
+Box[list[int64]]

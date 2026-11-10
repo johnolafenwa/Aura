@@ -511,10 +511,13 @@ fn rvalue_roles<'a>(value: &'a Rvalue, roles: &mut Vec<(&'a Operand, OperandRole
         // injection wrap it, and `try` unwraps it.
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::Try { value: operand, .. } => roles.push((operand, Consume)),
         // A projection's result is a fresh owned copy of the part it reads.
         Rvalue::NoneTest { value: operand }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::Unary { value: operand, .. }
         | Rvalue::Cast { value: operand, .. }
         | Rvalue::TupleElement { tuple: operand, .. }
@@ -1234,6 +1237,14 @@ impl<'f> OwnershipFacts<'f> {
                 } => edges.push((target.as_str(), root_of(source), true)),
                 Rvalue::Use(Operand::Place(source) | Operand::MovePlace(source))
                 | Rvalue::CallableAdapt {
+                    value: Operand::Place(source) | Operand::MovePlace(source),
+                    ..
+                }
+                | Rvalue::TraitObject {
+                    value: Operand::Place(source) | Operand::MovePlace(source),
+                    ..
+                }
+                | Rvalue::TraitObjectTake {
                     value: Operand::Place(source) | Operand::MovePlace(source),
                     ..
                 } => edges.push((target.as_str(), root_of(source), false)),
@@ -2293,6 +2304,9 @@ fn rvalue_operands_mut<'a>(value: &'a mut Rvalue, operands: &mut Vec<&'a mut Ope
     match value {
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::UnionInject { value: operand, .. }
         | Rvalue::Try { value: operand, .. }
         | Rvalue::NoneTest { value: operand }

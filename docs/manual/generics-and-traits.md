@@ -937,6 +937,64 @@ def main():
 
 This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
 
+### Matching On The Held Type
+
+`match` on a trait object selects on the type of the value it holds. A type arm is spelled `case Type as name:`, the same as a type arm on a [union](/manual/enums-and-match#union-type-patterns):
+
+```aura
+trait Shape:
+    def area(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+
+def describe(shape: dyn Shape) -> str:
+    match shape:
+        case Square as square:
+            return f"square of side {square.side}"
+        case Rect as rect:
+            return f"{rect.w} by {rect.h}"
+        case _:
+            return f"a shape of area {shape.area()}"
+
+def widen(shape: mut dyn Shape):
+    match mut shape:
+        case Rect as rect:
+            rect.w += 1
+        case _:
+            pass
+
+def main():
+    mut shapes: list[dyn Shape] = [Square(side=2), Rect(w=2, h=3)]
+    for shape in mut shapes:
+        widen(shape)
+    for shape in shapes:
+        print(describe(shape))
+```
+
+This prints `square of side 2` and `3 by 3`.
+
+- An arm names one type that implements the trait, with its type arguments. It matches that exact type: `float32` is not `float64`, and `case Cell[int64] as cell:` does not match a `Cell[str]`.
+- The match ends with `case _:` or a name, because a trait object can hold any type that implements its trait, including a type another module adds later. A match without one reports `AU2013`.
+- An arm whose type does not implement the trait can never match, and it reports `AU2013`. So does an arm that names a trait object, such as `case dyn Other as other:`, because a trait object holds a value of a concrete type. A second arm for one type and an arm after the catch-all report `AU2013` too.
+- Guards, match expressions, and the three capabilities work as they do on a union. A bare `match` gives a shared binding. `match mut` gives a mutable binding and writes the value back into the trait object when the arm ends, on `return`, `break`, and `continue` too. `match own` moves the value out of the trait object.
+- `match tools[i]:` and `match mut tools[i]:` inspect the element where it is. `match own tools[i]:` would copy the element out, so it reports `AU3005`.
+- Literal, class, and enum variant patterns do not apply to a trait object. Select the type first, then match the bound value.
+
+A type arm is the way back from a trait object to the type it holds. Nothing else converts one back: `square: Square = shape` reports `AU2002`.
+
 ### Ownership
 
 A trait object is an owned value. It moves on assignment and it is never copied:
@@ -1090,7 +1148,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
+- A trait object names one trait. Trait objects in tasks are not available yet.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -1145,7 +1203,7 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
-| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. A `match` on a trait object with no final `case _:`, with an arm whose type does not implement the trait, or with an arm that names a trait object. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
 | `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
@@ -1201,7 +1259,7 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
-- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
+- trait objects, `dyn Trait`, with conversion at typed places, `value as dyn Trait`, calls dispatched on the held value, and `match` type arms on the held type
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 

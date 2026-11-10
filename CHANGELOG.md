@@ -22,8 +22,17 @@ in this file.
   reports `AU2050`. `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
-  so one function can return any of several iterator types. `match` on the
-  held type and trait objects in tasks come next.
+  so one function can return any of several iterator types. `match` on a
+  trait object selects on the type it holds with `case Type as name:` arms
+  and a final `case _:`, under a bare `match`, `match mut`, and `match own`.
+  Trait objects in tasks come next.
+- Fixed: a trait object dispatches on the exact type it holds. A `float32`
+  and a `float64` that both implement the trait no longer run each other's
+  method, `Cell[float32]` no longer runs the method of `Cell[float64]` on
+  `aura run`, and a method call on a trait object that holds a value of a
+  generic enum no longer fails on `aura run`.
+- Fixed: an element of a list of trait objects can be passed to a `mut`
+  parameter, as in `widen(shapes[0])`.
 - An enum type parameter can be bounded by a trait with associated types,
   as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
   `S.Iter`, and a `T` named only by the bound, from the implementation for

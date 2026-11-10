@@ -245,7 +245,9 @@ each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
 trait declares. Where nothing names the type, say it yourself with `as`:
-`[book as dyn Priced, coffee]` is a `list[dyn Priced]`.
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`. When you do need the
+type back, `match` asks for it by name: `case Book as book:` runs when the
+item is a book, and a final `case _:` takes everything else.
 
 ### Traits are nominal
 

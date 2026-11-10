@@ -649,6 +649,12 @@ impl Substitution<'_> {
                 self.operand(value);
                 self.types([destination]);
             }
+            Rvalue::TraitObject { value, held: ty }
+            | Rvalue::TraitObjectHolds { value, ty }
+            | Rvalue::TraitObjectTake { value, ty } => {
+                self.operand(value);
+                self.types([ty]);
+            }
             Rvalue::UnionTagTest {
                 union_type,
                 member_index,
