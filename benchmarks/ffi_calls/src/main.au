@@ -7,6 +7,9 @@ extern "C" def fc_six(a: int64, b: int64, c: int64, d: int64, e: int64, f: int64
 extern "C" def fc_text(text: str) -> uint64
 extern "C" def fc_bytes(bytes: list[uint8]) -> uint64
 extern "C" def fc_fill(bytes: mut list[uint8]) -> None
+extern "C" def fc_cstr(text: cstr) -> uint64
+extern "C" def fc_name() -> cstr
+extern "C" def fc_out(value: int64, out: mut int64) -> int32
 
 def report(name: str, started: int64, calls: int64) -> None:
     elapsed = sys.monotonic_time_ms() - started
@@ -73,5 +76,31 @@ def main() -> int32:
         i = i + 1
     report("fill", started, calls)
 
+    mut cstr_total: uint64 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        cstr_total = cstr_total + fc_cstr(text)
+        i = i + 1
+    report("cstr", started, calls)
+
+    mut name_total: int64 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        name_total = name_total + len(fc_name())
+        i = i + 1
+    report("name", started, calls)
+
+    mut out: int64 = 0
+    mut status: int32 = 0
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        status = status + fc_out(i, out)
+        i = i + 1
+    report("out", started, calls)
+
     print(f"checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {bytes[0]}")
+    print(f"checksum {cstr_total} {name_total} {out} {status}")
     return 0

@@ -541,6 +541,15 @@ pub struct ExternFunctionDecl {
     pub symbol: Option<String>,
     pub params: Vec<Param>,
     pub return_type: TypeRef,
+    /// One entry for each parameter: whether it was written `cstr` or
+    /// `cstr | None`. Such a parameter has the type `str` or `str | None`
+    /// in `params` and crosses the boundary as NUL-terminated text.
+    #[serde(skip_serializing_if = "no_c_strings")]
+    pub c_string_params: Vec<bool>,
+    /// Whether the result was written `cstr` or `cstr | None`.
+    /// `return_type` then holds `str` or `str | None`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub c_string_result: bool,
     pub span: Span,
     /// The trusted `requires` and `ensures` clauses of an indented block
     /// after the signature: `aura verify` proves the `requires` at each
@@ -554,6 +563,16 @@ impl ExternFunctionDecl {
     pub fn link_name(&self) -> &str {
         self.symbol.as_deref().unwrap_or(&self.name)
     }
+
+    /// Whether parameter `index` crosses the boundary as NUL-terminated
+    /// text.
+    pub fn c_string_param(&self, index: usize) -> bool {
+        self.c_string_params.get(index).copied().unwrap_or(false)
+    }
+}
+
+fn no_c_strings(marks: &[bool]) -> bool {
+    !marks.contains(&true)
 }
 
 /// A bodyless, layout-opaque foreign handle type declaration.

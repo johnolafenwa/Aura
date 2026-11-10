@@ -3289,6 +3289,7 @@ fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
             abi: "C".to_string(),
             params: Vec::new(),
             return_type: Type::named("int32"),
+            c_string_result: false,
         }),
         args: Vec::new(),
         type_args: Default::default(),
@@ -3371,14 +3372,17 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                         name: "fd".to_string(),
                                         passing: MirReceiverKind::Borrow,
                                         ty: Type::named("int32"),
+                                        c_string: false,
                                     },
                                     MirExternParam {
                                         name: "bytes".to_string(),
                                         passing: MirReceiverKind::BorrowMut,
                                         ty: bytes_ty.clone(),
+                                        c_string: false,
                                     },
                                 ],
                                 return_type: Type::named("int64"),
+                                c_string_result: false,
                             }),
                             args: vec![
                                 MirArg {
@@ -3405,8 +3409,10 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     name: "size".to_string(),
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint64"),
+                                    c_string: false,
                                 }],
                                 return_type: handle_ty.clone(),
+                                c_string_result: false,
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3426,8 +3432,10 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     name: "handle".to_string(),
                                     passing: MirReceiverKind::Value,
                                     ty: handle_ty,
+                                    c_string: false,
                                 }],
                                 return_type: Type::Unit,
+                                c_string_result: false,
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3447,8 +3455,10 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                     name: "value".to_string(),
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint16"),
+                                    c_string: false,
                                 }],
                                 return_type: Type::named("uint16"),
+                                c_string_result: false,
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3501,6 +3511,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 abi: "Rust".to_string(),
                 params: Vec::new(),
                 return_type: Type::named("int32"),
+                c_string_result: false,
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3519,8 +3530,10 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                     name: "value".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
                 }],
                 return_type: Type::named("int32"),
+                c_string_result: false,
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3541,8 +3554,10 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                     name: "value".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
                 }],
                 return_type: Type::named("int32"),
+                c_string_result: false,
             }),
             args: vec![MirArg {
                 name: None,
@@ -3604,8 +3619,10 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                                     name: "bytes".to_string(),
                                     passing: MirReceiverKind::BorrowMut,
                                     ty: bytes_ty,
+                                    c_string: false,
                                 }],
                                 return_type: Type::named("int64"),
+                                c_string_result: false,
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3684,14 +3701,42 @@ fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
     assert_eq!(handle.ffi_type, FfiType::OpaqueHandle);
     assert_eq!(handle.opaque_name.as_deref(), Some("ProcessHandle"));
 
-    for passing in [MirReceiverKind::BorrowMut, MirReceiverKind::Value] {
-        assert_eq!(
-            direct_ffi_type_for_source(&Type::named("int32"), Some(passing)),
-            Err(format!(
-                "direct backend cannot pass `int32` with ownership mode `{passing:?}` through FFI v0"
-            ))
-        );
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::named("int32"), Some(MirReceiverKind::Value)),
+        Err(
+            "direct backend cannot pass `int32` with ownership mode `Value` through FFI v0"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::named("int32"), Some(MirReceiverKind::BorrowMut))
+            .expect("a mut scalar is an out-parameter")
+            .ffi_type,
+        FfiType::Out(crate::ffi::FfiScalar::I32)
+    );
+    let nullable = Type::normalize_union(
+        vec![Type::named("ProcessHandle"), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("a nullable handle");
+    for (passing, expected) in [
+        (None, FfiType::NullableOpaqueHandle),
+        (Some(MirReceiverKind::Borrow), FfiType::NullableOpaqueHandle),
+        (Some(MirReceiverKind::BorrowMut), FfiType::OpaqueHandleOut),
+    ] {
+        let direct = direct_ffi_type_for_source(&nullable, passing)
+            .expect("a nullable handle is one pointer or a pointer to one");
+        assert_eq!(direct.ffi_type, expected);
+        assert_eq!(direct.opaque_name.as_deref(), Some("ProcessHandle"));
+        assert_eq!(direct.union_type.as_ref(), Some(&nullable));
     }
+    assert_eq!(
+        direct_ffi_type_for_source(&nullable, Some(MirReceiverKind::Value)),
+        Err(format!(
+            "direct backend cannot lower `{nullable}` through FFI v0"
+        ))
+    );
     assert_eq!(
         direct_ffi_type_for_source(&Type::named("str"), Some(MirReceiverKind::BorrowMut)),
         Err("direct backend can pass `str` through FFI v0 only as a shared view".to_string())
@@ -16412,6 +16457,119 @@ fn lower_ffi_source_to_mir(source: &str) -> crate::mir::MirModule {
     let program =
         crate::check_module_with_builtin_imports(module).expect("FFI source should type check");
     crate::mir::lower(&program)
+}
+
+#[test]
+fn direct_ffi_codegen_lowers_c_text_out_parameters_and_nullable_handles() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Handle
+
+extern "C" def length(text: cstr) -> uint64
+extern "C" def length_or(text: cstr | None) -> uint64
+extern "C" def name() -> cstr
+extern "C" def maybe_name() -> cstr | None
+extern "C" def divide(a: int32, quotient: mut int32, exact: mut bool, ratio: mut float32) -> None
+extern "C" def create(out: mut Handle | None) -> int32
+extern "C" def peek(handle: Handle | None) -> int32
+
+def main() -> int32:
+    held = "held"
+    total = length(held) + length("literal") + length_or(None) + length_or(held)
+    with_nul = length("a\0b")
+    print(name())
+    found = maybe_name()
+    if found is None:
+        print("none")
+    mut quotient: int32 = 0
+    mut exact = false
+    mut ratio: float32 = 0.0
+    divide(7, quotient, exact, ratio)
+    mut slot: Handle | None = None
+    made = create(slot)
+    print(total + with_nul)
+    print(exact)
+    print(ratio)
+    return quotient + made + peek(slot) + peek(None)
+"#,
+    );
+    let object = emit_host_object(&module).expect("the FFI v1 pointer types should emit");
+    let referenced = object_referenced_symbols(&object);
+    let calls = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "length",
+        "length_or",
+        "name",
+        "maybe_name",
+        "divide",
+        "create",
+        "peek",
+        "aura_direct_ffi_c_string",
+        "aura_direct_ffi_release_c_string",
+        "aura_direct_ffi_c_string_result",
+        "aura_direct_ffi_nullable_handle_address",
+        "aura_direct_ffi_handle",
+        "aura_direct_ffi_none",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            calls(symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    let length = extern_call("length");
+    assert!(length.params[0].c_string);
+    assert_eq!(length.params[0].ty, Type::named("str"));
+    assert!(!length.c_string_result);
+    assert_eq!(
+        super::foreign::foreign_param_type(&length.params[0])
+            .expect("cstr is a boundary type")
+            .ffi_type,
+        crate::ffi::FfiType::CString
+    );
+    assert_eq!(
+        super::foreign::foreign_param_type(&extern_call("length_or").params[0])
+            .expect("cstr | None is a boundary type")
+            .ffi_type,
+        crate::ffi::FfiType::NullableCString
+    );
+    assert_eq!(
+        super::foreign::foreign_result_type(&extern_call("name"))
+            .expect("cstr is a result type")
+            .ffi_type,
+        crate::ffi::FfiType::CString
+    );
+    assert_eq!(
+        super::foreign::foreign_result_type(&extern_call("maybe_name"))
+            .expect("cstr | None is a result type")
+            .ffi_type,
+        crate::ffi::FfiType::NullableCString
+    );
+    assert!(!extern_call("divide").params[0].c_string);
 }
 
 #[test]

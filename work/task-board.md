@@ -28,9 +28,11 @@ Last updated: 2026-11-10
 - Target: wrap real C libraries. Plan and measurements are in
   `2026-11-10-ffi-v1.md`.
 - Done: library linking from `[ffi]`, direct native calls, and the `symbol`
-  clause (ADR-0074).
-- Remaining: C strings and out-parameters, structs, callbacks, handle
-  destructors, a SQLite example, and benchmarks against Rust and Python.
+  clause (ADR-0074). `cstr` arguments and results, `mut` scalar
+  out-parameters, and `Handle | None` and `mut Handle | None` parameters
+  (ADR-0075).
+- Remaining: typed pointer views, structs, callbacks, handle destructors, a
+  SQLite example, and the final benchmarks against Rust and Python.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

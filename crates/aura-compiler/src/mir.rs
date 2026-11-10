@@ -1390,6 +1390,10 @@ pub struct MirExternCall {
     pub abi: String,
     pub params: Vec<MirExternParam>,
     pub return_type: Type,
+    /// The result is NUL-terminated text, `const char *`, copied into the
+    /// `str` or `str | None` of `return_type`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string_result: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1397,6 +1401,10 @@ pub struct MirExternParam {
     pub name: String,
     pub passing: MirReceiverKind,
     pub ty: Type,
+    /// The `str` or `str | None` of `ty` crosses as NUL-terminated text,
+    /// `const char *`, and not as a pointer and a length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string: bool,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12593,13 +12601,16 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .zip(&function.signature.param_passings),
                 )
-                .map(|(param, (ty, passing))| MirExternParam {
+                .enumerate()
+                .map(|(index, (param, (ty, passing)))| MirExternParam {
                     name: param.name.clone(),
                     passing: lower_receiver_kind(*passing),
                     ty: ty.clone(),
+                    c_string: function.decl.c_string_param(index),
                 })
                 .collect(),
             return_type: function.signature.return_type.clone(),
+            c_string_result: function.decl.c_string_result,
         }
     }
 

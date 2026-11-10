@@ -56,6 +56,16 @@ in this file.
   call. `aura run` still reports `AU4005`.
 - An extern function can name its C symbol:
   `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`.
+- FFI passes C strings. A `cstr` parameter takes a `str` and passes
+  NUL-terminated text, and a `cstr` result is copied into a `str`.
+  `cstr | None` is a pointer that may be null, in both directions.
+- FFI passes out-parameters. A `mut` scalar parameter such as
+  `exponent: mut int32` passes a pointer, and the variable holds what the
+  C function stored when the call returns.
+- `Handle | None` is a parameter type as well as a result type, and
+  `out: mut Handle | None` passes a pointer to a pointer, as
+  `sqlite3_open` takes. A `mut` scalar in an extern declaration was
+  `AU3004` before, and a `Handle | None` parameter was `AU2010`.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name

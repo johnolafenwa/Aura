@@ -6354,7 +6354,7 @@ impl MirRuntime {
             .iter()
             .map(ffi_type_for_extern_param)
             .collect::<Result<Vec<_>>>()?;
-        let result_type = ffi_type_for_extern_result(&call.return_type)?;
+        let result_type = ffi_type_for_extern_result(&call.return_type, call.c_string_result)?;
         let signature = FfiSignature::new(parameter_types, result_type);
         let mut arguments = ordered
             .iter()
@@ -6364,22 +6364,23 @@ impl MirRuntime {
 
         let result = dispatch(&call.symbol, &signature, &mut arguments);
 
-        // Mutable byte views are fixed-length copy-in/out values. Apply the
-        // engine's updated scratch bytes to the original Aura place before
-        // interpreting the foreign return, so both backends share the same
-        // post-call state even when return validation traps.
-        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(&arguments) {
+        // A `mut` parameter is copy-in/out: fixed-length bytes, one
+        // scalar, or one nullable handle. Apply what the engine read back
+        // to the original Aura place before interpreting the foreign
+        // return, so both backends share the same post-call state even
+        // when return validation traps.
+        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(arguments) {
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
-            let FfiValue::Bytes(bytes) = ffi_value else {
-                return Err(Diagnostic::coded(
-                    "AU4005",
-                    format!(
-                        "FFI call to `{}` failed: mutable parameter `{}` did not marshal as bytes",
-                        call.symbol, param.name
-                    ),
-                ));
+            let written = match ffi_value {
+                FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                other => runtime_value_from_ffi(other, &param.ty).map_err(|error| {
+                    Diagnostic::coded(
+                        "AU4005",
+                        format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                    )
+                })?,
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -6390,7 +6391,7 @@ impl MirRuntime {
                     ),
                 )
             })?;
-            env.write_place(place, bytes_runtime_value(bytes))?;
+            env.write_place(place, written)?;
         }
 
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
@@ -10739,23 +10740,38 @@ enum BlockOutcome {
 }
 
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
-    match (&param.ty, param.passing) {
-        (Type::Named(name, args), MirReceiverKind::BorrowMut)
-            if name == "list" && args.as_slice() == [Type::named("uint8")] =>
-        {
-            Ok(FfiType::BytesViewMut)
-        }
-        // Semantic analysis rejects every union parameter (AU2010); the
-        // nullable-handle form is result-only.
-        (ty @ Type::Union(_), _) => Err(Diagnostic::coded(
-            "AU4005",
-            format!("union FFI parameter type `{ty}` reached MIR execution"),
-        )),
-        (ty, _) => ffi_type_for_extern_result(ty),
+    let by_value = ffi_type_for_extern_result(&param.ty, param.c_string)?;
+    if param.passing != MirReceiverKind::BorrowMut {
+        return Ok(by_value);
+    }
+    // A `mut` parameter passes a pointer the function reads and writes.
+    match by_value {
+        FfiType::BytesView => Ok(FfiType::BytesViewMut),
+        FfiType::NullableOpaqueHandle => Ok(FfiType::OpaqueHandleOut),
+        other => crate::ffi::FfiScalar::of(other)
+            .map(FfiType::Out)
+            .ok_or_else(|| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "mutable FFI parameter type `{}` reached MIR execution",
+                        param.ty
+                    ),
+                )
+            }),
     }
 }
 
-fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
+/// The boundary type of a result of source type `ty`, which is also the
+/// by-value boundary type of a parameter. `c_string` marks a `str` or
+/// `str | None` that crosses as NUL-terminated text.
+fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
+    if c_string {
+        return Ok(match ty {
+            Type::Union(_) => FfiType::NullableCString,
+            _ => FfiType::CString,
+        });
+    }
     let ffi_type = match ty {
         Type::Unit => FfiType::Unit,
         Type::Named(name, args) if args.is_empty() => match name.as_str() {
@@ -10879,7 +10895,22 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 .collect::<Result<Vec<_>>>()?;
             Ok(FfiValue::Bytes(bytes))
         }
+        // `Handle | None` or `cstr | None`: the active member crosses, and
+        // `None` crosses as a null pointer.
+        Type::Union(_) => match value {
+            Value::Union(union) => ffi_nullable_from_runtime(&union.payload),
+            bare => ffi_nullable_from_runtime(bare),
+        }
+        .ok_or_else(mismatch),
         _ => Err(mismatch()),
+    }
+}
+
+fn ffi_nullable_from_runtime(payload: &Value) -> Option<FfiValue> {
+    match payload {
+        Value::Unit => Some(FfiValue::Unit),
+        Value::String(text) => Some(FfiValue::String(text.to_string())),
+        other => opaque_handle_from_runtime(other),
     }
 }
 
@@ -10983,6 +11014,18 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
         }
         (FfiValue::F64(value), Type::Named(name, args)) if name == "float64" && args.is_empty() => {
             Ok(Value::Float(value))
+        }
+        (FfiValue::String(text), Type::Named(name, args)) if name == "str" && args.is_empty() => {
+            Ok(Value::String(text.into()))
+        }
+        (FfiValue::String(text), Type::Union(union)) => {
+            if !union.members.contains(&Type::named("str")) {
+                return Err(mismatch(FfiType::NullableCString));
+            }
+            Ok(crate::union_runtime::coerce_union_boundary(
+                Value::String(text.into()),
+                ty,
+            ))
         }
         (FfiValue::OpaqueHandle(handle), Type::Named(class_name, args)) if args.is_empty() => {
             FfiHandleValue::new(class_name.clone(), handle.as_ptr())

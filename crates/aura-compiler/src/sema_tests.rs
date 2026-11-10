@@ -2018,6 +2018,74 @@ extern "C" def scalars(a: bool, b: int8, c: int16, d: int32, e: int64, f: int, g
 }
 
 #[test]
+fn ffi_admits_c_text_out_parameters_and_nullable_handle_parameters() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def open(path: cstr, flags: cstr | None, out: mut Handle | None) -> int32
+extern "C" def message(handle: Handle | None) -> cstr
+extern "C" def column(handle: Handle, index: int32, length: mut int32, found: mut bool) -> cstr | None
+
+def main() -> int32:
+    mut handle: Handle | None = None
+    status = open("db", None, handle)
+    mut length: int32 = 0
+    mut found = false
+    text = message(handle)
+    if handle is None:
+        return status
+    cell = column(handle, 0, length, found)
+    if cell is None:
+        return length
+    return status + (len(text) as int32) + (len(cell) as int32)
+"#,
+    )
+    .expect("C text, out-parameters and nullable handle parameters should check");
+
+    let open = &program.extern_functions["open"];
+    assert_eq!(open.decl.c_string_params, [true, true, false]);
+    assert!(open.decl.c_string_param(0) && !open.decl.c_string_param(9));
+    assert!(!open.decl.c_string_result);
+    assert_eq!(open.signature.params[0], Type::named("str"));
+    assert!(matches!(open.signature.params[1], Type::Union(_)));
+    let message = &program.extern_functions["message"];
+    assert!(message.decl.c_string_result);
+    assert_eq!(message.signature.return_type, Type::named("str"));
+    assert!(program.extern_functions["column"].decl.c_string_result);
+
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: cstr | int32) -> None
+"#,
+            "parameter `value` must be exactly `cstr` or `cstr | None` to pass C text",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad() -> cstr | int32
+"#,
+            "a C text result must be exactly `cstr` or `cstr | None`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: str | None) -> None
+"#,
+            "only `Handle | None` and `cstr | None` are marshalled",
+            "AU2010",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported FFI type must fail");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
 fn ffi_v0_validates_views_and_opaque_handle_capabilities() {
     check_ffi_source_for_test(
         r#"
@@ -2033,12 +2101,23 @@ extern "C" def acquire() -> Handle
         (
             r#"extern "C" def bad(value: own int32) -> None
 "#,
-            "fixed-width scalar parameter `value` must use the bare capability",
+            "fixed-width scalar parameter `value` cannot be `own`",
         ),
         (
-            r#"extern "C" def bad(value: mut int32) -> None
+            r#"extern "C" def bad(value: own cstr) -> None
 "#,
-            "fixed-width scalar parameter `value` must use the bare capability",
+            "cstr parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" def bad(value: mut cstr | None) -> None
+"#,
+            "cstr parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" opaque class Handle
+extern "C" def bad(value: own Handle | None) -> None
+"#,
+            "nullable handle parameter `value` cannot be `own`",
         ),
         (
             r#"extern "C" def bad(value: own str) -> None
@@ -2116,7 +2195,7 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
         (
             r#"extern "C" def bad() -> str
 "#,
-            "FFI v0 cannot return a str view",
+            "an extern function cannot return a str view",
             "AU2002",
         ),
         (
@@ -31000,6 +31079,8 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             return_type,
             span,
             contracts: Vec::new(),
+            c_string_params: Vec::new(),
+            c_string_result: false,
         };
     let opaque_handles = BTreeMap::new();
     let type_names = TypeDefinitions::default();

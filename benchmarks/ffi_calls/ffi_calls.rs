@@ -1,6 +1,7 @@
 //! The Rust side of the FFI call-overhead benchmark: the same calls as
 //! `src/main.au`, through `extern "C"` declarations.
 
+use std::ffi::{c_char, CStr, CString};
 use std::time::Instant;
 
 #[link(name = "ffi_calls")]
@@ -12,6 +13,9 @@ extern "C" {
     fn fc_text(text: *const u8, length: u64) -> u64;
     fn fc_bytes(bytes: *const u8, length: u64) -> u64;
     fn fc_fill(bytes: *mut u8, length: u64);
+    fn fc_cstr(text: *const c_char) -> u64;
+    fn fc_name() -> *const c_char;
+    fn fc_out(value: i64, out: *mut i64) -> i32;
 }
 
 fn report(name: &str, started: Instant, calls: i64) {
@@ -72,8 +76,36 @@ fn main() {
     }
     report("fill", started, calls);
 
+    // A `String` has no terminator, so each call makes a `CString`, as an
+    // Aura `cstr` argument does.
+    let mut cstr_total: u64 = 0;
+    let started = Instant::now();
+    for _ in 0..calls {
+        let terminated = CString::new(text.as_str()).unwrap();
+        cstr_total += unsafe { fc_cstr(terminated.as_ptr()) };
+    }
+    report("cstr", started, calls);
+
+    // The result is copied into an owned `String`, as an Aura `cstr` result is.
+    let mut name_total: i64 = 0;
+    let started = Instant::now();
+    for _ in 0..calls {
+        let name = unsafe { CStr::from_ptr(fc_name()) }.to_str().unwrap().to_owned();
+        name_total += name.len() as i64;
+    }
+    report("name", started, calls);
+
+    let mut out: i64 = 0;
+    let mut status: i32 = 0;
+    let started = Instant::now();
+    for i in 0..calls {
+        status += unsafe { fc_out(i, &mut out) };
+    }
+    report("out", started, calls);
+
     println!(
         "checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {}",
         bytes[0]
     );
+    println!("checksum {cstr_total} {name_total} {out} {status}");
 }

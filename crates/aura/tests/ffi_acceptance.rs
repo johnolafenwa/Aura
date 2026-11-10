@@ -359,6 +359,7 @@ const FIXTURE_LIBRARY: &str = r#"
 #include <stdbool.h>
 #include <stdint.h>
 #include <stdlib.h>
+#include <string.h>
 
 int64_t fx_widen_i8(int8_t v) { return v; }
 int64_t fx_widen_i16(int16_t v) { return v; }
@@ -413,6 +414,55 @@ int64_t fx_read(const fx_box *box) { return box->value; }
 void fx_add(fx_box *box, int64_t more) { box->value += more; }
 void fx_close(fx_box *box) { free(box); fx_live--; }
 int64_t fx_live_boxes(void) { return fx_live; }
+uint64_t fx_strlen(const char *text) { return text ? strlen(text) : 9999; }
+const char *fx_name(int64_t which) {
+    if (which == 0) return NULL;
+    if (which == 1) return "h\xc3\xa9llo";
+    if (which == 2) return "\xff\xfe";
+    return "";
+}
+static char fx_buffer[64];
+const char *fx_echo(const char *text) {
+    strncpy(fx_buffer, text, sizeof(fx_buffer) - 1);
+    return fx_buffer;
+}
+uint64_t fx_join(const char *a, const uint8_t *b, uint64_t bn, const char *c) {
+    return strlen(a) * 10000 + fx_sum(b, bn) * 100 + (c ? strlen(c) : 99);
+}
+bool fx_divide(int32_t a, int32_t b, int32_t *quotient, int8_t *remainder) {
+    if (b == 0) return false;
+    *quotient = a / b;
+    *remainder = (int8_t)(a % b);
+    return true;
+}
+void fx_bump(bool *flag, uint8_t *a, int16_t *b, uint32_t *c, int64_t *d,
+             uint64_t *e, float *f, double *g) {
+    *flag = !*flag;
+    *a += 1;
+    *b -= 1;
+    *c += 1;
+    *d -= 1;
+    *e += 1;
+    *f /= 2.0f;
+    *g *= 2.0;
+}
+void fx_narrow(int8_t *a, int16_t *b, int32_t *c) {
+    *a = (int8_t)(*a - 1);
+    *b = (int16_t)(*b - 1);
+    *c = *c - 1;
+}
+void fx_bad_flag(bool *flag) { *(uint8_t *)flag = 7; }
+int32_t fx_create(int64_t value, fx_box **out) {
+    *out = fx_open(value);
+    return *out ? 0 : 1;
+}
+int64_t fx_read_or(const fx_box *box, int64_t fallback) {
+    return box ? box->value : fallback;
+}
+void fx_clear(fx_box **slot) {
+    if (*slot) fx_close(*slot);
+    *slot = NULL;
+}
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -455,6 +505,22 @@ extern "C" def fx_read(box: Box) -> int64
 extern "C" def fx_add(box: Box, more: int64) -> None
 extern "C" def fx_close(box: own Box) -> None
 extern "C" def fx_live_boxes() -> int64
+extern "C" def fx_strlen(text: cstr) -> uint64
+extern "C" def fx_strlen_or(text: cstr | None) -> uint64 symbol "fx_strlen"
+extern "C" def fx_name(which: int64) -> cstr
+extern "C" def fx_maybe_name(which: int64) -> cstr | None symbol "fx_name"
+extern "C" def fx_echo(text: cstr) -> cstr
+extern "C" def fx_join(a: cstr, b: list[uint8], c: cstr | None) -> uint64
+extern "C" def fx_divide(a: int32, b: int32, quotient: mut int32, remainder: mut int8) -> bool
+extern "C" def fx_bump(
+    flag: mut bool, a: mut uint8, b: mut int16, c: mut uint32, d: mut int64,
+    e: mut uint64, f: mut float32, g: mut float64
+) -> None
+extern "C" def fx_narrow(a: mut int8, b: mut int16, c: mut int32) -> None
+extern "C" def fx_bad_flag(flag: mut bool) -> None
+extern "C" def fx_create(value: int64, out: mut Box | None) -> int32
+extern "C" def fx_read_or(box: Box | None, fallback: int64) -> int64
+extern "C" def fx_clear(slot: mut Box | None) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -559,6 +625,99 @@ def main() -> int32:
 }
 
 #[test]
+fn c_text_out_parameters_and_nullable_handles_cross_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+def show(text: str | None) -> str:
+    if text is None:
+        return "none"
+    return f"<{text}>"
+
+def main() -> int32:
+    print(fx_strlen("héllo"))
+    held = "abc"
+    print(fx_strlen(held))
+    print(fx_strlen(""))
+    print(fx_strlen_or(None))
+    print(fx_strlen_or(held))
+    print(fx_strlen_or("literal"))
+    maybe: str | None = "four"
+    print(fx_strlen_or(maybe))
+    print(fx_name(1))
+    print(len(fx_name(3)))
+    print(show(fx_maybe_name(1)))
+    print(show(fx_maybe_name(0)))
+    print(fx_echo(held + "def"))
+    bytes: list[uint8] = [1, 2, 3]
+    print(fx_join(held, bytes, None))
+    print(fx_join("ab", bytes, held))
+
+    mut quotient: int32 = 0
+    mut remainder: int8 = 0
+    print(fx_divide(-17, 5, quotient, remainder))
+    print(quotient)
+    print(remainder)
+    print(fx_divide(1, 0, quotient, remainder))
+    print(quotient)
+    mut flag = false
+    mut a: uint8 = 255
+    mut b: int16 = -32768
+    mut c: uint32 = 4294967294
+    mut d: int64 = -9000000000
+    mut e: uint64 = 18446744073709551614
+    mut f: float32 = 3.0
+    mut g = 1.25
+    fx_bump(flag, a, b, c, d, e, f, g)
+    print(flag)
+    print(a)
+    print(b)
+    print(c)
+    print(d)
+    print(e)
+    print(f)
+    print(g)
+    mut n8: int8 = 0
+    mut n16: int16 = 0
+    mut n32: int32 = 0
+    fx_narrow(n8, n16, n32)
+    print(n8)
+    print(n16)
+    print(n32)
+
+    mut slot: Box | None = None
+    print(fx_create(41, slot))
+    print(fx_read_or(slot, -1))
+    print(fx_read_or(None, -1))
+    print(fx_live_boxes())
+    fx_clear(slot)
+    print(slot is None)
+    print(fx_live_boxes())
+    print(fx_create(-1, slot))
+    print(slot is None)
+    mut round = 0
+    while round < 1000:
+        fx_create(round, slot)
+        fx_clear(slot)
+        round += 1
+    print(fx_live_boxes())
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "forced MIR C text fixture run");
+    assert_success(&direct, "direct C text fixture run");
+    let expected = "\
+6\n3\n0\n9999\n3\n7\n4\nhéllo\n0\n<héllo>\nnone\nabcdef\n\
+30699\n20603\n\
+true\n-3\n-2\nfalse\n-3\n\
+true\n0\n32767\n4294967295\n-9000000001\n18446744073709551615\n1.5\n2.5\n\
+-1\n-1\n-1\n\
+0\n41\n-1\n1\ntrue\n0\n1\ntrue\n0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
 fn foreign_results_a_declaration_rules_out_trap_with_backend_parity() {
     for (main, code, detail) in [
         (
@@ -570,6 +729,36 @@ fn foreign_results_a_declaration_rules_out_trap_with_backend_parity() {
             "def main() -> int32:\n    box = fx_open(-1)\n    fx_close(box)\n    return 0\n",
             "AU4005",
             "FFI call to `fx_open` failed",
+        ),
+        (
+            "def main() -> int32:\n    print(fx_name(0))\n    return 0\n",
+            "AU4005",
+            "FFI call to `fx_name` failed: FFI function returned a null cstr",
+        ),
+        (
+            "def main() -> int32:\n    print(fx_name(2))\n    return 0\n",
+            "AU4005",
+            "FFI call to `fx_name` failed: FFI function returned a cstr that is not UTF-8",
+        ),
+        (
+            "def main() -> int32:\n    print(fx_maybe_name(2))\n    return 0\n",
+            "AU4005",
+            "FFI call to `fx_name` failed: FFI function returned a cstr that is not UTF-8",
+        ),
+        (
+            "def main() -> int32:\n    print(fx_strlen(\"a\\0b\"))\n    return 0\n",
+            "AU4005",
+            "FFI call to `fx_strlen` failed: FFI argument 1 is a cstr that contains a NUL byte",
+        ),
+        (
+            "def main() -> int32:\n    held = \"a\\0b\"\n    print(fx_join(\"x\", [], held))\n    return 0\n",
+            "AU4005",
+            "FFI call to `fx_join` failed: FFI argument 3 is a cstr that contains a NUL byte",
+        ),
+        (
+            "def main() -> int32:\n    mut flag = true\n    fx_bad_flag(flag)\n    print(flag)\n    return 0\n",
+            "AU4001",
+            "FFI call to `fx_bad_flag` failed",
         ),
     ] {
         let (package, source) = fixture_package(main);

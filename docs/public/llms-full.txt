@@ -1315,7 +1315,7 @@ values. The binding package supplies their names and exact signatures.
 | Mutable byte view | `bytes: mut list[uint8]` | Copies into a same-length scratch buffer and back out. The writeback happens after the native call returns and before the result is validated. |
 | Consuming handle | `handle: own Handle` | Moves the opaque handle into a foreign call that closes or frees it. |
 
-[FFI v0](/manual/ffi) has the full scalar table, the manifest report, the
+[FFI](/manual/ffi) has the full scalar table, the manifest report, the
 safety boundary, diagnostics, and backend rules.
 
 ## Scalars And str
@@ -5842,7 +5842,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Delimiter continuation, ignored continuation indentation, expression-match layout islands, trailing-comma/backslash/single-line-string boundaries, and pairing diagnostics | focused lexer/parser tests; `newline_continuation*` and delimiter parse/run fixtures; `examples/basics/multiline_expressions.au`; compiler-bridge and extension indentation tests; and the MIR/direct parity matrix |
 | Parenthesized tuple values/types, recursive assignment/loop targets and patterns, function returns, left-to-right capture, recursive Copy, whole-source non-Copy moves, shared leaf provenance, copy-only constant indexing, canonical rendering, same-type recursive structural `==`/`!=` with non-consuming reads, retained ordering rejection, and mutable-writeback rejections | focused lexer/parser/sema/MIR/native/runtime tests; the `tuple_structural_equality`, `tuple_equality_contextual_literals`, and retained `tuple_ordering_rejected` fixtures; other `tuple_*` parse/check/run fixtures; `examples/basics/tuples.au`; the compiler-bridge tuple equality/ordering regression; and the MIR/direct parity matrix |
 | grammar and parser limits | `crates/aura-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
-| [FFI v0](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
+| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
 | `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` and `iteration_element_loan_write_through` for write-through on fallthrough, `continue`, `break`, and explicit return; the maintained example; and the MIR/direct parity matrix |
@@ -7096,14 +7096,14 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Foreign Functions
 
-The foreign function interface (FFI) is at version 0.
-
-- FFI v0 is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
-- Calls resolve already-loaded process-global symbols and run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte scratch copy-in/out, and non-null opaque handles. Empty views use `(NULL, 0)`.
-- There is no library-loading or link-name syntax, callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
-- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI v0](/manual/ffi).
-- Process-global lookup is supported on Unix-family hosts.
+- The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
+- Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
+- Calls run synchronously on the current worker.
+- The accepted ABI is limited to fixed-width scalars, pointers to one scalar, temporary str and byte pointer-length views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
+- There is no callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
+- A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
+- The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
+- The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
@@ -7587,7 +7587,7 @@ Foreign function interface (FFI) failures use these codes:
 | `AU4005` | A missing process-global symbol, a null opaque-handle result, or a runtime marshalling failure. |
 
 Native aborts, signals, memory faults, and foreign unwinds may terminate the
-process. They are not Aura diagnostics. See [FFI v0](/manual/ffi).
+process. They are not Aura diagnostics. See [FFI](/manual/ffi).
 
 ### Ownership Codes
 
@@ -9343,7 +9343,7 @@ Byte views pass as follows:
 
 The callee must not retain a pointer, and must not read or write outside the supplied length.
 
-Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI v0](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
+Aura diagnostics do not unwind through a foreign frame. A native abort, signal, memory fault, or foreign unwind is not caught and may terminate the process. [FFI](/manual/ffi) has the complete type, ownership, package, and safety contract. FFI means foreign function interface.
 
 ## Operators
 
@@ -11145,12 +11145,12 @@ Design record:
 
 ## Source: docs/manual/ffi.md
 
-# Foreign Function Interface (FFI) v0
+# Foreign Function Interface (FFI)
 
-Aura FFI v0 calls a small, fixed subset of the platform C ABI. It is an unsafe
-package capability for binding trusted native symbols that the process has
-already loaded. It is not a general system for dynamic libraries, pointers, or
-callbacks.
+Aura FFI calls C functions through a fixed subset of the platform C ABI. A
+package declares each function it calls and names the native libraries they
+come from. It is an unsafe package capability for binding trusted native
+code. It is not a general system for pointers or callbacks.
 
 ## Package Opt-In
 
@@ -11194,6 +11194,58 @@ The root application is still responsible for reviewing the declarations and
 the native code they call. [Packages](/manual/packages) documents the manifest
 fields.
 
+## Linking Libraries
+
+A package names the native libraries its extern functions come from in the
+`[ffi]` table of its manifest:
+
+```toml
+[package]
+name = "store"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["sqlite3"]
+library_paths = ["native/lib"]
+
+[ffi.macos]
+frameworks = ["Accelerate"]
+
+[ffi.linux]
+libraries = ["openblas"]
+```
+
+| Key | Meaning |
+| --- | --- |
+| `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. |
+| `frameworks` | macOS frameworks. Other hosts ignore them. |
+
+`[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
+host only. The settings of every package in the graph apply to the program:
+each dependency's first, then the root package's.
+
+The functions of the platform C library, such as `getpid` and `malloc`, need
+no entry.
+
+A package that names a library must set `allow_ffi = true`. A library or
+framework name is a bare name of ASCII letters, digits, `_`, `+`, `.`, and
+`-` that starts with a letter, digit, `_`, or `+`. The resolver rejects any
+other entry with `AU2999`, so a manifest cannot pass options to the linker.
+
+`aura build` and `aura run` pass the settings to the C linker. A program
+that names a library the linker cannot find does not build, and the linker's
+message names the library. The built program records each `library_paths`
+directory as a run-time search path, so it finds a library there when it
+starts. To move the program to another machine, install the library where
+that machine's loader looks.
+
+`aura run --backend mir` loads the same libraries into the interpreter
+before the program starts. A library it cannot load stops the run with
+`AU4005`.
+
 ## Grammar
 
 FFI accepts only bodyless C declarations:
@@ -11203,6 +11255,8 @@ public extern "C" opaque class ProcessHandle
 public extern "C" def getpid() -> int32
 extern "C" def inspect(label: str, data: list[uint8]) -> uint64
 extern "C" def update(data: mut list[uint8]) -> None
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
 extern "C" def close(handle: own ProcessHandle) -> None
 
 def main() -> int32:
@@ -11213,9 +11267,12 @@ def main() -> int32:
 The rules for these declarations:
 
 - **ABI string.** It must be exactly `"C"`.
-- **Symbol name.** The Aura declaration name is the C symbol name. There is no
-  source spelling for a separate link name, library name, calling convention,
-  symbol version, or variadic tail.
+- **Symbol name.** The Aura declaration name is the C symbol name unless a
+  `symbol` clause after the return type gives another:
+  `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`. Use the clause when
+  the C name is long, or is already an Aura name. `symbol` is an ordinary
+  name everywhere else. There is no source spelling for a calling
+  convention, symbol version, or variadic tail.
 - **Visibility.** `public` has its ordinary module meaning. Another module can
   import a public declaration. A private declaration is local to its module.
 - **Return type.** Every extern function spells an explicit `-> Type`. Use
@@ -11251,8 +11308,9 @@ The accepted scalar types are fixed:
 | `int` | the exact `int64` alias; `int64` is preferred in ABI declarations |
 | `None` | return-only void result |
 
-Scalar parameters must be bare, because their bits are passed by value. These
-types have no FFI v0 representation: `int128`, `uint128`, `intsize`,
+A bare scalar parameter passes its bits by value. A `mut` scalar parameter
+passes a pointer, as [Out-Parameters](#out-parameters) describes. These
+types have no FFI representation: `int128`, `uint128`, `intsize`,
 `uintsize`, `Duration`, tuples, user classes, enums, generic types, and
 arbitrary collection types.
 
@@ -11271,14 +11329,80 @@ callee must not keep it.
 
 - An empty `str` or byte view passes a null pointer and length zero.
 - A non-empty view passes a valid pointer and its exact byte length.
-- A mutable byte view uses a same-length scratch buffer. Aura copies the list's
-  bytes in, then copies exactly that length back after the foreign function
-  returns. The writeback happens even if later result validation reports an
-  Aura error. Foreign code cannot change the list's length or capacity.
+- A mutable byte view lends exactly the list's bytes. What the foreign
+  function writes is in the list when it returns, even if later result
+  validation reports an Aura error. Foreign code cannot change the list's
+  length or capacity.
 
 The checker rejects `own str`, `mut str`, and `own list[uint8]`. An extern
-function cannot return a text or byte view, because v0 has no foreign
-allocator or lifetime contract.
+function cannot return a text or byte view, because FFI has no foreign
+allocator or lifetime contract. It can return [C text](#c-text), which is
+copied.
+
+### C Text
+
+`cstr` is the C spelling of a `str`: UTF-8 bytes that end at a NUL byte,
+`const char *` in C. The name is a type only in an extern declaration. The
+Aura side of the call passes and receives a `str`.
+
+```aura fragment
+extern "C" def strlen(text: cstr) -> uint64
+extern "C" def getenv(name: cstr) -> cstr | None
+
+def main() -> int32:
+    print(strlen("hello"))
+    home = getenv("HOME")
+    if home is None:
+        return 1
+    print(home)
+    return 0
+```
+
+| Declaration | C type | Aura type | Contract |
+| --- | --- | --- | --- |
+| `text: cstr` | `const char *` | `str` | a NUL-terminated copy, valid during the call |
+| `text: cstr \| None` | `const char *` | `str \| None` | the same, and `None` passes a null pointer |
+| `-> cstr` | `const char *` | `str` | the text is copied into a new `str` |
+| `-> cstr \| None` | `const char *` | `str \| None` | the same, and a null pointer is `None` |
+
+- **Arguments.** Aura copies the text, adds the NUL, and frees the copy when
+  the call returns. The callee must not keep the pointer. A `str` literal
+  passes the program's constant bytes with no copy. Text that holds a NUL
+  byte cannot be a C string, so the call fails with `AU4005` before the
+  function runs.
+- **Results.** Aura copies the bytes up to the NUL into a new `str` and never
+  frees the C pointer. That fits a result the library owns, such as
+  `sqlite3_errmsg` or `getenv`. A result the caller must free leaks. Declare
+  such a function to return an opaque handle, and free it through the
+  library.
+- **Validation.** A null `-> cstr` result fails with `AU4005`, and so does a
+  result that is not UTF-8.
+
+A `cstr` parameter must be bare. The checker rejects `own cstr` and
+`mut cstr` with `AU3004`. To let C fill a buffer, pass `mut list[uint8]`.
+
+### Out-Parameters
+
+A `mut` scalar parameter passes a pointer to the scalar, such as
+`int32_t *`. The argument is a mutable variable or field. The function reads
+the value it holds and may store another, which the variable holds when the
+call returns.
+
+```aura fragment
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+
+def main() -> int32:
+    mut exponent: int32 = 0
+    fraction = frexp(48.0, exponent)
+    print(fraction)
+    print(exponent)
+    return 0
+```
+
+This prints `0.75` and `6`. Every scalar type of the table above can be an
+out-parameter. The pointer is valid only during the call. A `mut bool` that
+comes back as a byte other than `0` or `1` fails with `AU4001`. The checker
+rejects an `own` scalar with `AU3004`.
 
 ### Opaque Handles
 
@@ -11289,24 +11413,48 @@ Aura.
   the Aura handle.
 - An `own Handle` parameter consumes the handle. This is normally a foreign
   close or free operation.
-- `mut Handle` is reserved.
+- `mut Handle` is reserved. Use `mut Handle | None` for a pointer the
+  function stores a handle through.
 - Handles are not Copy, not cloneable, and never `Transfer`. They cannot cross
   a task or Queue boundary.
 - A null `-> Handle` result is an Aura runtime failure, `AU4005`.
 
-### Nullable Handle Results
+### Nullable Handles
 
-One nullable form exists. An extern result whose normalized type is exactly a
-declared opaque handle plus `None` crosses C as one pointer. Write it as
-`-> Handle | None` or through an alias of that shape. A null pointer becomes
-`None`, and a non-null pointer becomes the owned handle. No union tag or
-aggregate crosses C.
+A type that is exactly a declared opaque handle plus `None` crosses C as one
+pointer, where null is `None`. Write it as `Handle | None` or through an
+alias of that shape. No union tag or aggregate crosses C.
+
+| Declaration | C type | Meaning |
+| --- | --- | --- |
+| `-> Handle \| None` | `T *` | a null result is `None`, and any other is the owned handle |
+| `handle: Handle \| None` | `T *` | `None` passes a null pointer |
+| `out: mut Handle \| None` | `T **` | the function reads and stores a pointer through it |
+
+The `mut` form is how C constructors that report a status return their
+object:
+
+```aura fragment
+extern "C" opaque class Database
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close(db: own Database) -> int32
+
+def main() -> int32:
+    mut found: Database | None = None
+    status = sqlite3_open(":memory:", found)
+    if found is None:
+        return status
+    return sqlite3_close(found)
+```
+
+The variable holds what the function stored when the call returns: a handle,
+or `None` for a null pointer. Aura does not release the handle the variable
+held before the call. The checker rejects `own Handle | None` with `AU3004`.
 
 The checker rejects every other union shape with `AU2010`. That includes
-optional scalars, strings, byte views, nullable parameters, and several handle
-alternatives. These need an explicit C adapter. Mutable byte-view writeback
-still happens before result translation. The resulting handle follows every
-opaque-handle rule.
+optional scalars, byte views, and several handle alternatives. These need an
+explicit C adapter. Every `mut` argument is stored back before the result is
+validated. The resulting handle follows every opaque-handle rule.
 
 ### Handles Inside Other Values
 
@@ -11323,38 +11471,41 @@ classes, enum payloads, and generic specializations.
   diagnostics. Raw pointer arithmetic and ordering by foreign address are not
   language capabilities.
 
-FFI v0 does not expose foreign addresses. It does not assume that address
+FFI does not expose foreign addresses. It does not assume that address
 identity is the native API's identity. When callers need to compare foreign
 objects, a binding should expose reviewed extern operations or a stable scalar
 or `str` key.
 
 ## Runtime Semantics
 
-The runtime resolves the declaration name in the process-global symbol table
-at the moment of the call. FFI v0 does not open a dynamic library or search a
-user-specified path. The symbol must already be visible to the process. It
-usually comes from the platform C runtime or is linked into the executable.
+A built program calls a foreign function the way C code does. The call is
+one machine call instruction, with each argument in the register or stack
+slot the C ABI gives it. The linker resolves the symbol when the program is
+built, from the platform C library and the libraries the manifest names. A
+symbol that no library defines is a link error, not a run-time failure.
+
+The interpreter, `aura run --backend mir`, looks the symbol up when the call
+runs, among the libraries loaded into the process. A missing symbol there is
+`AU4005`. `aura run` with the default backend falls back to the interpreter
+when the program does not link, so it reports the same `AU4005`.
 
 A call runs in this order:
 
 1. Aura evaluates the arguments left to right under ordinary call rules.
-2. Aura marshals the arguments to the C ABI. A missing symbol or a marshalling
-   failure prevents the foreign call.
+2. Aura passes the arguments by the C ABI.
 3. The foreign function runs.
-4. Aura writes back each mutable byte scratch buffer.
-5. Aura validates the result, including canonical booleans and non-null opaque
+4. Aura validates the result, including canonical booleans and non-null opaque
    handles.
 
-A result validation failure cannot roll back foreign side effects or completed
-byte writeback.
+A result validation failure cannot roll back foreign side effects or bytes
+the function wrote.
 
 Every foreign call is synchronous. It occupies the current Aura worker until
 the native function returns. It does not move to the blocking I/O pool and
 does not create an implicit scheduling point. A long or blocking native call
 can delay other tasks pinned to that worker.
 
-FFI declarations are unsafe contracts. At compile time, Aura cannot verify
-that a process-global symbol exists. It cannot verify that the real C
+FFI declarations are unsafe contracts. Aura cannot verify that the real C
 signature, pointer retention, allocation, thread safety, and mutation behavior
 match the declaration.
 
@@ -11365,6 +11516,8 @@ match the declaration.
 | Scalar | Copied into an ABI slot. |
 | Bare `str`, `list[uint8]`, or opaque handle | Stays owned by the caller and is usable after the call. |
 | `mut list[uint8]` | Needs an exclusive mutable place. In-place byte updates are visible after return. |
+| `cstr` | Copied for the call. The caller keeps its `str`. |
+| `mut` scalar or `mut Handle \| None` | Needs an exclusive mutable place, which holds what the function stored after return. |
 | `own` opaque handle | Moves before the call and cannot be used afterward. |
 
 The declared capability is exact. Aura inserts no implicit clone, ownership
@@ -11386,21 +11539,21 @@ never appears in source-visible output or diagnostics.
 | Code | Cause |
 | --- | --- |
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, and opaque-handle tables, including a returned `str` or `list[uint8]` view. |
+| `AU2002` | A type outside the fixed scalar, view, C text, and opaque-handle tables, including a returned `str` or `list[uint8]` view and a `cstr` in a union other than `cstr \| None`. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
-| `AU2010` | A union result or parameter other than the `Handle \| None` result form. |
-| `AU2999` | Missing package opt-in, an inaccurate root dependency report, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
+| `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
+| `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
-| `AU3004` | An invalid scalar, view, or handle capability. |
+| `AU3004` | An invalid scalar, view, C text, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
-| `AU4001` | A non-canonical C boolean result: the returned byte was neither `0` nor `1`. |
-| `AU4005` | A recoverable runtime boundary failure, such as a missing process-global symbol, a null opaque-handle result, or a marshalling failure. |
+| `AU4001` | A non-canonical C boolean: the byte a function returned, or stored through a `mut bool`, was neither `0` nor `1`. |
+| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle or `cstr` result, a `cstr` result that is not UTF-8, a `cstr` argument that holds a NUL byte, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
 stop before entry, and post-call failures are raised after return.
 
-FFI v0 cannot catch or translate a native abort, signal, memory fault, or
+FFI cannot catch or translate a native abort, signal, memory fault, or
 foreign unwind. Foreign code must not unwind across the C ABI. Such a native
 failure may terminate the process instead of producing an Aura diagnostic.
 Out-of-bounds writes, a mismatched C signature, and keeping a temporary view
@@ -11408,26 +11561,32 @@ are outside Aura's memory-safety guarantees.
 
 ## Backend Support
 
-The MIR and direct native backends share one validated ABI description and one
-host-call engine. They must agree on argument layout, ownership, mutable-view
-writeback, results, and Aura diagnostics. The maintained
-`examples/packages/ffi_getpid` package and the FFI acceptance test run the same
-`getpid` declaration on both backends.
+The native backend and the interpreter share one validated ABI description.
+The native backend emits the C call itself. The interpreter builds each call
+at run time. They agree on argument layout, ownership, mutable views,
+results, and Aura diagnostics. The maintained `examples/packages/ffi_getpid`
+package and the FFI acceptance tests run the same declarations on both.
 
-Process-global symbol lookup is implemented on Unix-family hosts. On other
-hosts, a call fails with the runtime boundary diagnostic. Aura does not
-silently select a different ABI. The declaration must still name the host's
-actual C symbol.
+A foreign call from a built program costs about what the same call costs
+from C. A scalar call such as `labs` takes under a nanosecond more than the
+function itself. A `str` or `list[uint8]` argument adds a few nanoseconds to
+find its bytes, and a `str` literal adds nothing. A `cstr` argument or
+result costs one allocation and one copy, about 20 to 40 nanoseconds. An
+out-parameter costs a store and a load.
+
+Library loading and symbol lookup in the interpreter are implemented on
+Unix-family hosts. On other hosts, a call there fails with the runtime
+boundary diagnostic. Aura does not silently select a different ABI. The
+declaration must still name the host's actual C symbol.
 
 ## Limits And Implementation-Defined Behavior
 
-FFI v0 does not:
+FFI does not:
 
-- load libraries or select symbols by link name
 - define C structs or unions, or pass enums
 - allocate foreign memory or expose pointer arithmetic
-- return views
-- represent nullable handles beyond the `Handle | None` result form
+- return views, or free a `cstr` result
+- pass typed pointers to anything but one scalar or one handle
 - accept callbacks or variadics
 - offer asynchronous foreign calls
 
@@ -11441,17 +11600,20 @@ terminate the process, and no backend can make it safe.
 
 ## Status
 
-Implemented in Aura 0.13:
+Implemented:
 
-- FFI v0 package opt-in and the root dependency report
-- bodyless `extern "C"` functions and opaque handles
+- package opt-in and the root dependency report
+- library, search path, and framework settings in `[ffi]`, with host tables
+- bodyless `extern "C"` functions, the `symbol` clause, and opaque handles
 - fixed-width scalars and pointer-length views
-- Unix process-global symbol lookup
-- the `Handle | None` result form
+- `cstr` arguments and results, and `cstr | None`
+- `mut` scalar out-parameters
+- direct calls from built programs, and library loading in the interpreter
+- `Handle | None` results and parameters, and `mut Handle | None`
 
 Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
-other nullable shapes, explicit library loading or link configuration, and
-foreign aggregate layout. Aura does not infer them from current syntax.
+other nullable shapes, and foreign aggregate layout. Aura does not infer them
+from current syntax.
 
 Design record:
 [anonymous closed union types](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0052-anonymous-closed-union-types.md)
@@ -12334,7 +12496,7 @@ The contracts described above are implemented for functions, methods, generics, 
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 
-Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI v0](/manual/ffi) specifies their restricted signatures.
+Foreign function interface (FFI) v0 provides bodyless, direct-call-only `extern "C" def` declarations. They are not function values. [FFI](/manual/ffi) specifies their restricted signatures.
 
 Design record: supplied and default argument evaluation and capture follow `architecture_docs/decisions/0015-explicit-and-default-argument-order.md`, which is Accepted. By-value expression closures follow Accepted ADR-0037.
 
@@ -13625,7 +13787,7 @@ Parsing requires the extern ABI string to be exactly `"C"`. Extern
 declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
 contract.
-[FFI v0](/manual/ffi) restricts their parameter modes and types.
+[FFI](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
 
@@ -15489,7 +15651,7 @@ Read the normative core in this order:
 4. [Types](/manual/types) and [Static Semantics](/manual/static-semantics)
 5. [Ownership And Borrowing](/manual/ownership-and-borrowing)
 6. [Expressions](/manual/expressions), [Statements](/manual/statements),
-   [Closures](/manual/closures), [FFI v0](/manual/ffi), and the declaration
+   [Closures](/manual/closures), [FFI](/manual/ffi), and the declaration
    chapters
 7. [Execution Model](/manual/execution-model)
 8. the runtime and library chapters, and the [API Index](/manual/api-index)
@@ -15569,7 +15731,7 @@ cannot normally be used as ordinary identifiers.
 Some of these words have further rules:
 
 - `extern` and `opaque` introduce the bodyless declarations described by
-  [FFI v0](/manual/ffi).
+  [FFI](/manual/ffi).
 - `own` is reserved everywhere. It marks consuming ordinary parameters,
   collection loops, and matches, and the consuming receiver spelling
   `own self`.
@@ -17864,7 +18026,7 @@ An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper fo
 
 Aura does not call a foreign destructor automatically, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
 
-See [FFI v0](/manual/ffi) for the complete ABI and failure boundary.
+See [FFI](/manual/ffi) for the complete ABI and failure boundary.
 
 ## Tasks And Borrowing
 
@@ -18141,8 +18303,12 @@ The report lists every reachable FFI-enabled dependency by package name,
 including transitive dependencies. It does not list the root package. The
 resolver rejects duplicate, unknown, unreachable, and non-FFI entries. It also
 rejects a report that omits an FFI-enabled dependency. Every listed dependency
-must set its own `[package] allow_ffi = true`. See
-[FFI v0](/manual/ffi).
+must set its own `[package] allow_ffi = true`.
+
+The `[ffi]` table also names the native libraries the package links:
+`libraries`, `library_paths`, and `frameworks`, with `[ffi.linux]` and
+`[ffi.macos]` tables for one host. They require `allow_ffi = true`. See
+[FFI](/manual/ffi#linking-libraries).
 
 ### Source Roots
 
@@ -22048,7 +22214,7 @@ An extern declaration joins the module namespace but has no Aura body. Its rules
 - Its complete signature must belong to the fixed FFI v0 scalar/view/opaque-handle table. FFI is the foreign function interface.
 - Extern functions are direct-call-only. Referencing one without immediately calling it is rejected. It does not produce a function value.
 
-An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI v0](/manual/ffi).
+An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI](/manual/ffi).
 
 ## Bindings And Assignment
 
@@ -48356,7 +48522,7 @@ calls C, and why it keeps that door deliberately narrow.
 Sooner or later you will want a function that Aura's standard modules do not
 have but the C library on your machine does. Most operating-system services
 are C functions underneath, and so are a great many libraries. Aura can call
-them through its foreign function interface, FFI v0. It is deliberately
+them through its foreign function interface, FFI. It is deliberately
 small: it lets you bind a handful of trusted C functions with simple
 signatures, and it does not let C code reach into Aura's memory in ways the
 compiler cannot see. This chapter shows what it can do, what it refuses to
@@ -48429,11 +48595,18 @@ true
 ```
 
 The call works on both backends. Notice what we did not do: we did not tell
-Aura which library `getpid` lives in. FFI v0 looks the name up in the
-symbols already loaded into the process at the moment of the call. The C
-library is always loaded, so its functions are available; a function from a
-library the process has not loaded is not. The Aura name of the declaration
-is the C symbol name, and there is no way to give it a different link name.
+Aura which library `getpid` lives in. Every program links the C library, so
+its functions are always available. A function from any other library needs
+one more line in the manifest, which we get to in
+[Linking a library](#linking-a-library).
+
+The Aura name of the declaration is the C symbol name. When that name is
+awkward, or is already taken in Aura the way `abs` is, give the C name in a
+`symbol` clause and pick your own name for the declaration:
+
+```aura fragment
+extern "C" def c_abs(x: int32) -> int32 symbol "abs"
+```
 
 Because the code examples in this chapter only check inside a package with
 `allow_ffi = true`, the listings below are shown as they appear in
@@ -48490,14 +48663,13 @@ false
 
 `write` put thirteen bytes on file descriptor 1, standard output, and
 returned the count. The string view is *not* terminated with a NUL byte, which
-is why it comes with its length. So you cannot pass a `str` to a C function
-that expects a NUL-terminated `char *`, such as `strlen` or `fopen`; those
-need a small C adapter that takes a pointer and a length.
+is why it comes with its length. A C function that expects a NUL-terminated
+`char *`, such as `strlen` or `fopen`, takes a different parameter type,
+`cstr`, which we come to in a moment.
 
 `getentropy(void *buf, size_t len)` fills a buffer with random bytes, which
-is what a `mut list[uint8]` parameter is for. Aura copies the list into a
-scratch buffer of the same length, passes the pointer and length, and copies
-the bytes back after the call returns. The C function can change the bytes
+is what a `mut list[uint8]` parameter is for. Aura passes a pointer to the
+list's own bytes and their length. The C function can change the bytes
 but never the length; `noise` still has eight elements, and they are no
 longer all zero. A bare `list[uint8]` passes a read-only view the same way,
 and an empty `str` or list passes a null pointer with length zero.
@@ -48513,19 +48685,19 @@ extern "C" def getenv(name: str) -> str
 
 ```console
 $ aura check src/ret.au
-error[AU2002]: FFI v0 cannot return a str view because no foreign lifetime or allocator contract exists
+error[AU2002]: an extern function cannot return a str view because no foreign lifetime or allocator contract exists
  --> src/ret.au:1:37
   |
 1 | extern "C" def getenv(name: str) -> str
   |                                     ^
+  = help: return `cstr` to copy NUL-terminated text that the C side keeps
 ```
 
-The message says exactly what is missing. A returned pointer could point at
-static memory, at a buffer the caller must free, or at something that will
-change on the next call, and the declaration has no way to say which. Rather
-than guess, FFI v0 does not offer the form. (For environment variables,
-`sys.env` already exists.) Raw pointers are refused for the same reason, with
-a parser error that suggests the alternatives:
+The message says exactly what is missing. A returned pointer and length
+could describe static memory, a buffer the caller must free, or something
+that will change on the next call, and the declaration has no way to say
+which. Raw pointers are refused for the same reason, with a parser error
+that suggests the alternatives:
 
 ```aura fragment
 extern "C" def strlen(text: *uint8) -> uint64
@@ -48539,6 +48711,74 @@ error[AU1101]: FFI v0 does not expose raw pointer syntax; use a supported byte/s
 1 | extern "C" def strlen(text: *uint8) -> uint64
   |                             ^
 ```
+
+## C strings and out-parameters
+
+Most C functions that take text want a `char *` that ends at a NUL byte, with
+no length. The type `cstr` is that contract. It exists only in extern
+declarations: on the Aura side the value is an ordinary `str`. Two more forms
+cover the other everyday C habits. A `cstr | None` is a pointer that may be
+null, and a `mut` scalar is a pointer the function writes its answer through:
+
+*Filename: src/main.au*
+
+```aura fragment
+extern "C" def strlen(text: cstr) -> uint64
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+
+def main() -> int32:
+    print(strlen("hello from C"))
+
+    home = getenv("HOME")
+    if home is None:
+        print("HOME is not set")
+    else:
+        print(strlen(home) > 0)
+    print(getenv("AURA_NO_SUCH_VARIABLE") is None)
+
+    mut exponent: int32 = 0
+    fraction = frexp(48.0, exponent)
+    print(fraction)
+    print(exponent)
+    return 0
+```
+
+<span class="caption">Listing 18-2: NUL-terminated text and a scalar out-parameter</span>
+
+```console
+$ aura run src/main.au
+12
+true
+true
+0.75
+6
+```
+
+For a `cstr` argument Aura makes a copy of the text with a NUL on the end,
+passes its address, and frees the copy when the call returns. A string
+literal skips the copy, because the compiler stores it with its NUL already
+in place. An Aura string can hold a NUL byte and a C string cannot, so
+passing one traps with `AU4005` before the C function runs.
+
+A `cstr` result goes the other way: Aura reads bytes up to the NUL, checks
+that they are UTF-8, and copies them into a new `str`. It never frees the C
+pointer. That is the right contract for `getenv`, which returns a pointer
+into memory the C library owns, and for most "get the error message" calls.
+It is the wrong one for a function such as `strdup`, whose result the caller
+must free: declared `-> cstr`, that memory leaks. Declare such a function to
+return an opaque handle, the subject of the next section, and free it with
+the library's own function.
+
+`getenv` returns a null pointer for a variable that is not set, so its result
+is `cstr | None`, and the checker makes us test for `None` before we use the
+text. Had we declared it `-> cstr`, a null result would trap with `AU4005`.
+
+`frexp(double, int *)` splits a number into a fraction and a power of two.
+It returns the fraction and stores the exponent through its second
+parameter. The `mut int32` parameter passes the address of a temporary that
+holds `exponent`, and after the call `exponent` holds what C left there:
+`48.0` is `0.75 * 2^6`. Any scalar type can be an out-parameter.
 
 ## Opaque handles
 
@@ -48571,7 +48811,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 18-2: Wrapping a C `FILE *` in an opaque handle</span>
+<span class="caption">Listing 18-3: Wrapping a C `FILE *` in an opaque handle</span>
 
 ```console
 $ aura run src/cfile.au
@@ -48624,6 +48864,45 @@ And they cannot cross into another task: passing a `CFile` to `group.start`
 fails with `AU3008`, because C libraries differ wildly in what they allow
 across threads, and Aura cannot know.
 
+A handle is never null. `tmpfile` can fail, though, and then it returns a
+null pointer, which would trap with `AU4005`. A C function that reports
+failure that way should say so in its declaration, with `| None`:
+
+*Filename: src/open.au*
+
+```aura fragment
+extern "C" opaque class CFile
+extern "C" def fopen(path: cstr, mode: cstr) -> CFile | None
+extern "C" def fclose(file: own CFile) -> int32
+
+def main() -> int32:
+    missing = fopen("/no/such/file", "r")
+    print(missing is None)
+
+    found = fopen("/dev/null", "r")
+    if found is None:
+        print("could not open /dev/null")
+        return 1
+    print(fclose(found))
+    return 0
+```
+
+<span class="caption">Listing 18-4: A handle result that may be null</span>
+
+```console
+$ aura run src/open.au
+true
+0
+```
+
+A null pointer becomes `None`, and anything else becomes the handle, so the
+checker makes us deal with the failure before we can use the file. The same
+type works as a parameter, where `None` passes a null pointer. And a
+`mut CFile | None` parameter is C's pointer to a pointer: the function stores
+the object it creates through it, which is how `sqlite3_open` and many other
+constructors that return a status code hand back their result. The
+[Manual's FFI page](/manual/ffi#nullable-handles) shows that form.
+
 What Aura does *not* do is close a handle for you. A dropped `CFile` only
 discards Aura's wrapper, and the `FILE *` leaks. When you write a binding,
 declare the C function that releases the object with an `own` parameter,
@@ -48633,8 +48912,11 @@ and give your callers a way to call it, typically through a class with a
 
 ## When things go wrong at run time
 
-Some foreign failures Aura can catch. If the symbol does not exist in the
-process, the call fails with a trap before anything is called:
+Some foreign failures Aura can catch. If no library defines the symbol, the
+program cannot be linked, so `aura build` stops with the linker's "undefined
+reference" message. `aura run` then runs the program in its interpreter,
+which looks each symbol up at the call, and the call fails with a trap before
+anything is called:
 
 ```aura fragment
 extern "C" def no_such_function_anywhere() -> int32
@@ -48652,10 +48934,11 @@ error[AU4005]: FFI call to `no_such_function_anywhere` failed: FFI symbol `no_su
   = note: Aura call chain (innermost first): main at 3:1
 ```
 
-The program compiled, because lookup happens at the call. (The path in the
+The interpreter got as far as the call, because its lookup happens there. (The path in the
 message is the program the symbol was looked up in, here the `aura` command
 itself, so yours will differ.) A handle-returning
-function that returns a null pointer traps with `AU4005` too, and a `bool`
+function that returns a null pointer traps with `AU4005` too, as does a
+`cstr` result that is null or not UTF-8, and a `bool`
 result that is anything other than `0` or `1` traps with `AU4001`.
 
 Everything else is outside Aura's reach. A segmentation fault, an abort, an
@@ -48665,6 +48948,70 @@ foreign call is synchronous: it runs on the current scheduler worker until it
 returns, without a scheduling point, so a C function that blocks for a second
 stalls every task on that worker for a second. Keep foreign calls short, or
 keep blocking work in a process you start with the `process` module.
+
+## Linking a library
+
+Most C code worth calling lives in a library of its own. To use one, name it
+in the `[ffi]` table of the manifest. This package calls zlib, the
+compression library, to checksum some text:
+
+*Filename: Aura.toml*
+
+```toml
+[package]
+name = "checksum"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+libraries = ["z"]
+```
+
+*Filename: src/main.au*
+
+```aura fragment
+extern "C" def crc32_z(seed: uint64, text: str) -> uint64
+
+def main():
+    print(crc32_z(0, "hello"))
+```
+
+```console
+$ aura run src/main.au
+907060870
+```
+
+`crc32_z` takes a starting value, a pointer, and a length, so the `str`
+parameter supplies its last two arguments.
+
+The name is the one a C programmer gives the linker: `z` for *libz.so* on
+Linux and *libz.dylib* on macOS. `aura build` passes it to the linker, and
+the built program loads the library when it starts, as a C program would.
+The call itself is an ordinary machine call, so calling `crc32_z` from Aura
+costs what it costs from C.
+
+Three more settings cover the cases that come up in practice. If the library
+is not in a directory the system searches, list the directory in
+`library_paths`. A relative path starts at the package. A macOS framework
+goes in `frameworks`. And when the name differs between systems, put the
+setting in a table for that system:
+
+```toml
+[ffi]
+library_paths = ["vendor/lib"]
+
+[ffi.linux]
+libraries = ["openblas"]
+
+[ffi.macos]
+frameworks = ["Accelerate"]
+```
+
+A library that is not installed is a link error from `aura build`, and the
+message names it. The library needs its development files for linking. On
+Debian and Ubuntu that is the package whose name ends in `-dev`, such as
+`zlib1g-dev`.
 
 ## Depending on an FFI package
 
@@ -48691,27 +49038,29 @@ The list must be exact: a missing, unknown, or duplicate entry is an error.
 That way, adding a dependency that quietly pulls in native code cannot happen
 without a change to your own manifest that a reviewer will see.
 
-## What FFI v0 leaves out
+## What FFI leaves out
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no callbacks from C into Aura, no
 variadic functions such as `printf`, no structs or unions passed by value, no
-raw pointers or pointer arithmetic, no returned views, no loading of
-libraries by path, and no asynchronous foreign calls. When you need one of
+raw pointers or pointer arithmetic, no returned views, no freeing of
+returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
-signature, linked into the process, or a separate helper program driven
+signature, built as a library the package links, or a separate helper program driven
 through `process`. The [Manual's FFI page](/manual/ffi) has the full ABI
 table, the diagnostics, and the backend contract.
 
 ## Summary
 
 You can now call a C function from Aura: declare it with `extern "C" def`
-inside a package that opts in with `allow_ffi = true`, pass scalars by value
-and text and bytes as temporary views, and wrap C objects in opaque handles
+inside a package that opts in with `allow_ffi = true`, name its library
+under `[ffi]`, pass scalars by value,
+text and bytes as temporary views, C strings as `cstr`, and results through
+`mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the
-boundary of the C code itself, and why FFI v0 keeps that boundary small.
+boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In
 [Chapter 19](/book/ch19-00-final-project) we put the pieces together in one

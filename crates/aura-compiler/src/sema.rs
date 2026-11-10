@@ -334,7 +334,7 @@ fn validate_ffi_signature(
         &format!("extern function `{}`", decl.name),
     )?;
 
-    for param in &decl.params {
+    for (index, param) in decl.params.iter().enumerate() {
         if matches!(param.ty.kind, crate::ast::TypeRefKind::Function { .. }) {
             return Err(Diagnostic::coded_at(
                 "AU2005",
@@ -368,7 +368,14 @@ fn validate_ffi_signature(
             canonical_type_names,
             &BTreeMap::new(),
         )?;
-        validate_ffi_parameter(&param.name, param.mode, &ty, param.span, opaque_handles)?;
+        validate_ffi_parameter(
+            &param.name,
+            param.mode,
+            &ty,
+            decl.c_string_param(index),
+            param.span,
+            opaque_handles,
+        )?;
     }
 
     if matches!(
@@ -395,7 +402,12 @@ fn validate_ffi_signature(
         canonical_type_names,
         &BTreeMap::new(),
     )?;
-    validate_ffi_return(&return_type, decl.return_type.span, opaque_handles)
+    validate_ffi_return(
+        &return_type,
+        decl.c_string_result,
+        decl.return_type.span,
+        opaque_handles,
+    )
 }
 
 fn ffi_type_ref_is_raw_pointer(ty: &TypeRef) -> bool {
@@ -441,20 +453,42 @@ fn validate_ffi_parameter(
     param_name: &str,
     mode: ParamMode,
     ty: &Type,
+    c_string: bool,
     span: crate::diag::Span,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
 ) -> Result<()> {
     if ffi_scalar_type(ty) {
+        if mode == ParamMode::Own {
+            return Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("fixed-width scalar parameter `{param_name}` cannot be `own`"),
+            )
+            .with_help(
+                "write the bare type to pass the value, or `mut` to pass a pointer the C function reads and writes",
+            ));
+        }
+        return Ok(());
+    }
+
+    if c_string {
+        if !ffi_c_string_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "parameter `{param_name}` must be exactly `cstr` or `cstr | None` to pass C text"
+                ),
+            ));
+        }
         if mode != ParamMode::Default {
             return Err(Diagnostic::coded_at(
                 "AU3004",
                 span,
-                format!(
-                    "fixed-width scalar parameter `{param_name}` must use the bare capability"
-                ),
+                format!("cstr parameter `{param_name}` must use the bare capability"),
             )
             .with_help(
-                "remove `own` or `mut`; FFI v0 passes scalar bits by value and reserves pointer-style scalar parameters",
+                "a `cstr` argument is copied with its terminator for the call; use `mut list[uint8]` for a buffer the C function fills",
             ));
         }
         return Ok(());
@@ -520,12 +554,26 @@ fn validate_ffi_parameter(
         };
     }
 
+    if ffi_nullable_handle_member(ty, opaque_handles).is_some() {
+        return match mode {
+            ParamMode::Default | ParamMode::BorrowMut => Ok(()),
+            ParamMode::Own => Err(Diagnostic::coded_at(
+                "AU3004",
+                span,
+                format!("nullable handle parameter `{param_name}` cannot be `own`"),
+            )
+            .with_help(
+                "write the bare union to pass a pointer that may be null, or `mut` to pass a pointer the C function stores a handle through",
+            )),
+        };
+    }
+
     if let Type::Union(_) = ty {
         return Err(Diagnostic::coded_at(
             "AU2010",
             span,
             format!(
-                "union parameter `{param_name}` cannot cross the C boundary; only a `Handle | None` result is marshalled"
+                "union parameter `{param_name}` cannot cross the C boundary; only `Handle | None` and `cstr | None` are marshalled"
             ),
         )
         .with_help("pass a declared opaque handle, or test the union in Aura and call the extern function with its member"));
@@ -537,8 +585,22 @@ fn validate_ffi_parameter(
         format!("FFI v0 does not support parameter type `{ty}`"),
     )
     .with_help(
-        "use a fixed-width scalar, bare str, bare or mut list[uint8], or a declared opaque handle",
+        "use a fixed-width scalar, bare str, cstr, bare or mut list[uint8], or a declared opaque handle",
     ))
+}
+
+/// Whether `ty` is what a `cstr` or `cstr | None` annotation lowers to:
+/// `str`, or exactly `str | None`.
+fn ffi_c_string_type(ty: &Type) -> bool {
+    let text = Type::named("str");
+    match ty {
+        Type::Union(union) => {
+            union.members.len() == 2
+                && union.members.contains(&Type::Unit)
+                && union.members.contains(&text)
+        }
+        other => *other == text,
+    }
 }
 
 /// The one union an extern result may declare (ADR-0052 A10, Q10 A):
@@ -564,9 +626,20 @@ pub(crate) fn ffi_nullable_handle_member(
 
 fn validate_ffi_return(
     ty: &Type,
+    c_string: bool,
     span: crate::diag::Span,
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
 ) -> Result<()> {
+    if c_string {
+        if ffi_c_string_type(ty) {
+            return Ok(());
+        }
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            "a C text result must be exactly `cstr` or `cstr | None`",
+        ));
+    }
     if *ty == Type::Unit || ffi_scalar_type(ty) || ffi_opaque_handle(ty, opaque_handles) {
         return Ok(());
     }
@@ -589,8 +662,9 @@ fn validate_ffi_return(
         return Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            "FFI v0 cannot return a str view because no foreign lifetime or allocator contract exists",
-        ));
+            "an extern function cannot return a str view because no foreign lifetime or allocator contract exists",
+        )
+        .with_help("return `cstr` to copy NUL-terminated text that the C side keeps"));
     }
     if matches!(ty, Type::Named(name, args) if name == "list" && args == &[Type::named("uint8")]) {
         return Err(Diagnostic::coded_at(

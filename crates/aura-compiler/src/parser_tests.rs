@@ -5416,6 +5416,62 @@ fn extern_functions_take_a_symbol_clause_after_the_result() {
 }
 
 #[test]
+fn extern_functions_read_cstr_as_str_and_mark_where_it_was() {
+    let module = parse(concat!(
+        "extern \"C\" def open(path: cstr, mode: cstr | None, flags: int32) -> cstr\n",
+        "extern \"C\" def find(name: str) -> None | cstr\n",
+        "extern \"C\" def getpid() -> int32\n",
+    ))
+    .expect("cstr is a type an extern declaration can name");
+    let externs: Vec<&ExternFunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    let named = |ty: &TypeRef| match &ty.kind {
+        TypeRefKind::Named { name, .. } => name.clone(),
+        TypeRefKind::Union(members) => members
+            .iter()
+            .map(|member| match &member.kind {
+                TypeRefKind::Named { name, .. } => name.clone(),
+                other => panic!("expected a named member, found {other:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("|"),
+        other => panic!("expected a named type, found {other:?}"),
+    };
+    let open = externs[0];
+    assert_eq!(open.c_string_params, [true, true, false]);
+    assert!(open.c_string_result);
+    assert_eq!(named(&open.params[0].ty), "str");
+    assert_eq!(named(&open.params[1].ty), "str|None");
+    assert_eq!(named(&open.return_type), "str");
+    assert!(open.c_string_param(1) && !open.c_string_param(2) && !open.c_string_param(3));
+
+    let find = externs[1];
+    assert_eq!(find.c_string_params, [false]);
+    assert!(find.c_string_result);
+    assert_eq!(named(&find.return_type), "None|str");
+
+    let shape = shape_of(open);
+    assert_eq!(
+        shape["c_string_params"],
+        serde_json::json!([true, true, false])
+    );
+    assert_eq!(shape["c_string_result"], true);
+    let plain = shape_of(externs[2]);
+    assert!(
+        plain.get("c_string_params").is_none() && plain.get("c_string_result").is_none(),
+        "a declaration without cstr serializes as before: {plain}"
+    );
+    assert!(shape_of(find).get("c_string_params").is_none());
+}
+
+#[test]
 fn extern_symbol_clauses_reject_missing_and_malformed_names() {
     let missing = parse("extern \"C\" def f() -> int32 symbol abs\n")
         .expect_err("the symbol name must be a string");

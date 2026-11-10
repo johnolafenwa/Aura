@@ -13,6 +13,9 @@ the time measured is the cost of crossing the boundary.
 | `text` | `uint64_t fc_text(const uint8_t *, uint64_t)` | a `str` view |
 | `bytes` | `uint64_t fc_bytes(const uint8_t *, uint64_t)` | a `list[uint8]` view |
 | `fill` | `void fc_fill(uint8_t *, uint64_t)` | a `mut list[uint8]` view |
+| `cstr` | `uint64_t fc_cstr(const char *)` | a `cstr` argument made from a held string |
+| `name` | `const char *fc_name(void)` | a `cstr` result copied into a string |
+| `out` | `int32_t fc_out(int64_t, int64_t *)` | a `mut int64` out-parameter |
 
 ## Running
 
@@ -39,7 +42,16 @@ Linux x86-64 cloud container, 2026-11-10, nanoseconds per call:
 | `text` | 2.8 | 1.0 | 327 | 189 |
 | `bytes` | 1.1 | 1.1 | 345 | 198 |
 | `fill` | 1.9 | 1.0 | 296 | 173 |
+| `cstr` | 22 | 18 | 179 | 126 |
+| `name` | 38 | 20 | 155 | 248 |
+| `out` | 1.9 | 2.0 | 359 | 158 |
 
 The container is shared, so a number moves by a few tenths of a nanosecond
 between runs. A `str` argument asks the runtime for its bytes, which is the
 1.8 ns over Rust in `text`.
+
+In `cstr` each side makes a NUL-terminated copy of a string it holds: Aura
+in its runtime, Rust with `CString::new`. In `name` each side copies the
+result into an owned string: Rust with `CStr::to_str` and `to_owned`. Both
+cases are one allocation and one copy, and Aura's extra time in `name` is
+the box of the new `str`.

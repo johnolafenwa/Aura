@@ -14,7 +14,7 @@ def report(name, started):
     print(f'{name} {(time.perf_counter_ns() - started) / CALLS}')
 
 
-def run(prefix, lib, text, data, buffer):
+def run(prefix, lib, text, data, buffer, out, as_text):
     total = 0
     started = time.perf_counter_ns()
     for i in range(CALLS):
@@ -56,6 +56,24 @@ def run(prefix, lib, text, data, buffer):
         lib.fc_fill(buffer, 8)
     report(f'{prefix}fill', started)
 
+    cstr_total = 0
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        cstr_total += lib.fc_cstr(text)
+    report(f'{prefix}cstr', started)
+
+    name_total = 0
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        name_total += len(as_text(lib.fc_name()))
+    report(f'{prefix}name', started)
+
+    status = 0
+    started = time.perf_counter_ns()
+    for i in range(CALLS):
+        status += lib.fc_out(i, out)
+    report(f'{prefix}out', started)
+
 
 def ctypes_library(path):
     lib = ctypes.CDLL(path)
@@ -67,6 +85,9 @@ def ctypes_library(path):
     lib.fc_text.argtypes, lib.fc_text.restype = [ctypes.c_char_p, u64], u64
     lib.fc_bytes.argtypes, lib.fc_bytes.restype = [ctypes.c_char_p, u64], u64
     lib.fc_fill.argtypes, lib.fc_fill.restype = [ctypes.c_char_p, u64], None
+    lib.fc_cstr.argtypes, lib.fc_cstr.restype = [ctypes.c_char_p], u64
+    lib.fc_name.argtypes, lib.fc_name.restype = [], ctypes.c_char_p
+    lib.fc_out.argtypes, lib.fc_out.restype = [i64, ctypes.POINTER(i64)], ctypes.c_int32
     return lib
 
 
@@ -78,6 +99,9 @@ int64_t fc_six(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f)
 uint64_t fc_text(const uint8_t *text, uint64_t length);
 uint64_t fc_bytes(const uint8_t *bytes, uint64_t length);
 void fc_fill(uint8_t *bytes, uint64_t length);
+uint64_t fc_cstr(const char *text);
+const char *fc_name(void);
+int32_t fc_out(int64_t value, int64_t *out);
 '''
 
 
@@ -85,14 +109,20 @@ def main():
     path = sys.argv[1]
     text = b'hello, world'
     data = bytes([1, 2, 3, 4, 5, 6, 7, 8])
-    run('ctypes_', ctypes_library(path), text, data, ctypes.create_string_buffer(8))
+    run(
+        'ctypes_', ctypes_library(path), text, data, ctypes.create_string_buffer(8),
+        ctypes.byref(ctypes.c_int64(0)), lambda name: name.decode(),
+    )
     try:
         import cffi
     except ImportError:
         return
     ffi = cffi.FFI()
     ffi.cdef(CFFI_DECLARATIONS)
-    run('cffi_', ffi.dlopen(path), text, data, ffi.new('uint8_t[8]'))
+    run(
+        'cffi_', ffi.dlopen(path), text, data, ffi.new('uint8_t[8]'),
+        ffi.new('int64_t *'), lambda name: ffi.string(name).decode(),
+    )
 
 
 if __name__ == '__main__':

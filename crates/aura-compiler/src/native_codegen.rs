@@ -17244,10 +17244,10 @@ fn validate_rvalue(
                 CallTarget::Extern(call) => {
                     for param in &call.params {
                         ensure_direct_type(&param.ty, classes, "extern parameter")?;
-                        direct_ffi_type_for_source(&param.ty, Some(param.passing))?;
+                        foreign::foreign_param_type(param)?;
                     }
                     ensure_direct_type(&call.return_type, classes, "extern return")?;
-                    direct_ffi_type_for_source(&call.return_type, None)?;
+                    foreign::foreign_result_type(call)?;
                 }
                 CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
                     validate_operand(object)?
@@ -17469,15 +17469,24 @@ fn direct_ffi_type_for_source(
         if *ty == Type::Unit && passing.is_none() {
             return Ok(DirectFfiType::scalar(FfiType::Unit));
         }
-        // Semantic analysis admits exactly `Handle | None` as a result
-        // (ADR-0052 A10); it is one nullable C pointer.
-        if let (Type::Union(union), None) = (ty, passing) {
+        // Semantic analysis admits exactly `Handle | None` as a union
+        // (ADR-0052 A10). It is one nullable C pointer as a result or a
+        // shared argument, and a pointer to one as a `mut` argument.
+        if let (
+            Type::Union(union),
+            None | Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut),
+        ) = (ty, passing)
+        {
             if union.members.len() == 2 && union.members.contains(&Type::Unit) {
                 if let Some(Type::Named(handle, handle_args)) =
                     union.members.iter().find(|member| **member != Type::Unit)
                 {
                     if handle_args.is_empty() {
-                        return Ok(DirectFfiType::nullable(handle.clone(), ty.clone()));
+                        let mut nullable = DirectFfiType::nullable(handle.clone(), ty.clone());
+                        if passing == Some(MirReceiverKind::BorrowMut) {
+                            nullable.ffi_type = FfiType::OpaqueHandleOut;
+                        }
+                        return Ok(nullable);
                     }
                 }
             }
@@ -17502,8 +17511,15 @@ fn direct_ffi_type_for_source(
         };
         if let Some(ffi_type) = scalar {
             if ffi_type != FfiType::StringView {
-                if let Some(passing) = passing {
-                    if passing != MirReceiverKind::Borrow {
+                match passing {
+                    None | Some(MirReceiverKind::Borrow) => {}
+                    // A `mut` scalar passes a pointer to the scalar.
+                    Some(MirReceiverKind::BorrowMut) => {
+                        let scalar = crate::ffi::FfiScalar::of(ffi_type)
+                            .expect("every name above but `str` is a scalar");
+                        return Ok(DirectFfiType::scalar(FfiType::Out(scalar)));
+                    }
+                    Some(passing) => {
                         return Err(format!(
                             "direct backend cannot pass `{ty}` with ownership mode `{passing:?}` through FFI v0"
                         ));

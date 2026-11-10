@@ -4,15 +4,15 @@
 //! types the declaration names and reads the result the same way. The
 //! helpers here cover the rest of the boundary. They find the bytes a `str`
 //! or `list[uint8]` argument lends for the call, read the address an opaque
-//! handle carries, box a returned address as a handle, and report a result
-//! the declaration rules out.
+//! handle carries, box a returned address as a handle, copy C text in and
+//! out, and report a result the declaration rules out.
 //!
 //! A view lends the value's own storage, so the foreign function reads the
 //! bytes in place. The value's caller keeps it alive and unchanged for the
 //! whole call: a shared argument has no writer, and a `mut` argument has no
 //! other reader.
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
 use std::str;
 
@@ -194,6 +194,117 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_handle_address(
                 value_type_name(other)
             )),
         })
+    })
+}
+
+/// The value itself, or the active member of a union.
+fn active_member(value: &Value) -> &Value {
+    match value {
+        Value::Union(union) => &union.payload,
+        other => other,
+    }
+}
+
+/// The address the `Handle | None` `value` carries: null for `None`.
+///
+/// # Safety
+///
+/// `value` is a live value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_nullable_handle_address(
+    value: *mut OpaqueValue,
+) -> *mut c_void {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match active_member(value) {
+            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::Unit => std::ptr::null_mut(),
+            other => runtime_error(format!(
+                "FFI argument expected opaque handle or None, but received `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
+/// A NUL-terminated copy of the `str` or `str | None` `value`, argument
+/// `index` of a call of `symbol`, or null for `None`. The caller frees the
+/// copy with [`aura_direct_ffi_release_c_string`] once the foreign call
+/// returns. Text that holds a NUL byte ends the task with `AU4005`.
+///
+/// # Safety
+///
+/// `value` is a live value and the symbol name is UTF-8 text in generated
+/// code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
+    value: *mut OpaqueValue,
+    index: usize,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut c_char {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match active_member(value) {
+            Value::String(text) => match CString::new(text.as_bytes()) {
+                Ok(copy) => copy.into_raw(),
+                Err(_) => foreign_call_failure(
+                    metadata_text(symbol, symbol_length),
+                    "AU4005",
+                    crate::ffi::FfiError::InteriorNul { index },
+                ),
+            },
+            Value::Unit => std::ptr::null_mut(),
+            other => runtime_error(format!(
+                "FFI argument expected cstr, but received `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
+/// Frees a copy [`aura_direct_ffi_c_string`] returned. Null is no copy.
+///
+/// # Safety
+///
+/// `copy` is one result of that function, not freed before.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_c_string(copy: *mut c_char) {
+    if copy.is_null() {
+        return;
+    }
+    // SAFETY: the caller's contract names a `CString` given up with
+    // `into_raw`.
+    drop(unsafe { CString::from_raw(copy) });
+}
+
+/// A new `str` that copies the NUL-terminated text the foreign function
+/// `symbol` returned. The text stays the foreign side's to free. A null
+/// pointer gives null when `nullable` is not 0 and ends the task with
+/// `AU4005` otherwise, as text that is not UTF-8 does.
+///
+/// # Safety
+///
+/// `text` is null or points to NUL-terminated bytes, and the symbol name is
+/// UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string_result(
+    text: *const c_char,
+    nullable: i64,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let failure = if text.is_null() {
+            if nullable != 0 {
+                return std::ptr::null_mut();
+            }
+            crate::ffi::FfiError::NullCStringReturn
+        } else {
+            match CStr::from_ptr(text).to_str() {
+                Ok(text) => return boxed_value(Value::String(text.into())),
+                Err(_) => crate::ffi::FfiError::InvalidUtf8Return,
+            }
+        };
+        foreign_call_failure(metadata_text(symbol, symbol_length), "AU4005", failure)
     })
 }
 

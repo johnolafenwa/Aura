@@ -2694,6 +2694,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                             abi: "C".to_string(),
                             params: Vec::new(),
                             return_type: Type::named("int32"),
+                            c_string_result: false,
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),
@@ -2816,24 +2817,29 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 name: "minimum".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int8"),
+                c_string: false,
             },
             MirExternParam {
                 name: "maximum".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("uint64"),
+                c_string: false,
             },
             MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                c_string: false,
             },
             MirExternParam {
                 name: "handle".to_string(),
                 passing: MirReceiverKind::Value,
                 ty: Type::named("Token"),
+                c_string: false,
             },
         ],
         return_type: Type::named("Token"),
+        c_string_result: false,
     };
     let args = vec![
         MirArg {
@@ -2918,6 +2924,7 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
         abi: "C".to_string(),
         params: Vec::new(),
         return_type: Type::named("bool"),
+        c_string_result: false,
     };
     let error = runtime
         .evaluate_extern_call_with(&call, &[], &mut env, |_, _, _| {
@@ -3042,9 +3049,11 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
                 name: (*name).to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: ty.clone(),
+                c_string: false,
             })
             .collect(),
         return_type: Type::Unit,
+        c_string_result: false,
     };
     let args = parameter_specs
         .iter()
@@ -3118,6 +3127,7 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
             abi: "C".to_string(),
             params: Vec::new(),
             return_type: ty,
+            c_string_result: false,
         };
         runtime
             .evaluate_extern_call_with(
@@ -3280,8 +3290,10 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                c_string: false,
             }],
             return_type: Type::named("int32"),
+            c_string_result: false,
         }
     }
 
@@ -3403,6 +3415,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
         name: "value".to_string(),
         passing: MirReceiverKind::Borrow,
         ty: Type::named("int32"),
+        c_string: false,
     }];
 
     let unsupported_abi = runtime
@@ -3412,6 +3425,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 abi: "stdcall".to_string(),
                 params: params.clone(),
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[MirArg {
                 name: None,
@@ -3435,6 +3449,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 abi: "C".to_string(),
                 params,
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3485,8 +3500,10 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                         name: "value".to_string(),
                         passing: MirReceiverKind::Borrow,
                         ty: param_ty,
+                        c_string: false,
                     }],
                     return_type: Type::Unit,
+                    c_string_result: false,
                 },
                 &[MirArg {
                     name: None,
@@ -3566,8 +3583,10 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     name: "bytes".to_string(),
                     passing: MirReceiverKind::BorrowMut,
                     ty: bytes_type,
+                    c_string: false,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[MirArg {
                 name: None,
@@ -3581,7 +3600,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     assert_eq!(mutated_shape.code, "AU4005");
     assert_eq!(
         mutated_shape.message,
-        "FFI call to `aura_test_mutable_shape_guard` failed: mutable parameter `bytes` did not marshal as bytes"
+        "FFI call to `aura_test_mutable_shape_guard` failed: FFI result `bool` does not match source return type `list[uint8]`"
     );
     assert_eq!(
         env.read_place("bytes")
@@ -3599,8 +3618,10 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     name: "expected".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3633,8 +3654,10 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     name: "bytes".to_string(),
                     passing: MirReceiverKind::BorrowMut,
                     ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                    c_string: false,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[MirArg {
                 name: None,
@@ -3665,6 +3688,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[],
             &mut Env::default(),
@@ -3683,6 +3707,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::named("int32"),
+                c_string_result: false,
             },
             &[],
             &mut Env::default(),
@@ -3701,6 +3726,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::Unit,
+                c_string_result: false,
             },
             &[],
             &mut Env::default(),
@@ -21620,14 +21646,11 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         name: "value".to_string(),
         passing: MirReceiverKind::Value,
         ty: Type::Union(Box::new(nullable.clone())),
+        c_string: false,
     };
-    let error = super::ffi_type_for_extern_param(&union_param)
-        .expect_err("union parameters never reach FFI marshalling");
-    assert_eq!(error.code, "AU4005");
-    assert!(
-        error.message.contains("union FFI parameter type"),
-        "{}",
-        error.message
+    assert_eq!(
+        super::ffi_type_for_extern_param(&union_param).expect("a nullable handle is a pointer"),
+        crate::ffi::FfiType::NullableOpaqueHandle
     );
 
     let unsupported = super::ffi_value_from_runtime(&Value::Unit, &Type::Tuple(Vec::new()))
@@ -21671,6 +21694,244 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         error.message.contains("does not match source return type"),
         "{}",
         error.message
+    );
+}
+
+#[test]
+fn ffi_conversions_cover_c_text_out_parameters_and_nullable_arguments() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue, OpaqueHandle};
+    let param = |ty: Type, passing, c_string| MirExternParam {
+        name: "value".to_string(),
+        passing,
+        ty,
+        c_string,
+    };
+    let text = Type::named("str");
+    let nullable_text = Type::Union(Box::new(coverage_union(vec![text.clone(), Type::Unit])));
+    let nullable_handle = Type::Union(Box::new(coverage_union(vec![
+        Type::named("Handle"),
+        Type::Unit,
+    ])));
+    let bytes = Type::Named("list".to_string(), vec![Type::named("uint8")]);
+    let shared = MirReceiverKind::Borrow;
+    let mutable = MirReceiverKind::BorrowMut;
+    for (param, expected) in [
+        (param(text.clone(), shared, true), FfiType::CString),
+        (param(text.clone(), shared, false), FfiType::StringView),
+        (
+            param(nullable_text.clone(), shared, true),
+            FfiType::NullableCString,
+        ),
+        (
+            param(nullable_handle.clone(), shared, false),
+            FfiType::NullableOpaqueHandle,
+        ),
+        (
+            param(nullable_handle.clone(), mutable, false),
+            FfiType::OpaqueHandleOut,
+        ),
+        (
+            param(Type::named("uint16"), mutable, false),
+            FfiType::Out(FfiScalar::U16),
+        ),
+        (param(bytes, mutable, false), FfiType::BytesViewMut),
+    ] {
+        assert_eq!(
+            super::ffi_type_for_extern_param(&param).expect("an admitted parameter"),
+            expected
+        );
+    }
+    let error = super::ffi_type_for_extern_param(&param(text.clone(), mutable, false))
+        .expect_err("a str view is never mutable");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "mutable FFI parameter type `str` reached MIR execution"
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_result(&text, true).expect("a cstr result"),
+        FfiType::CString
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_result(&nullable_text, true).expect("a nullable cstr result"),
+        FfiType::NullableCString
+    );
+
+    // A nullable argument crosses as its active member, bare or in a union.
+    let Type::Union(text_union) = &nullable_text else {
+        unreachable!("built as a union above")
+    };
+    let held = Value::String("held".to_string().into());
+    let lifted = crate::union_runtime::coerce_union_boundary(held.clone(), &nullable_text);
+    assert!(matches!(lifted, Value::Union(_)));
+    for value in [&held, &lifted] {
+        assert_eq!(
+            super::ffi_value_from_runtime(value, &nullable_text).expect("text crosses"),
+            FfiValue::String("held".to_string())
+        );
+    }
+    let none = crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_text);
+    for value in [&Value::Unit, &none] {
+        assert_eq!(
+            super::ffi_value_from_runtime(value, &nullable_text).expect("None crosses"),
+            FfiValue::Unit
+        );
+    }
+    let mut marker = 0u8;
+    let address = &mut marker as *mut u8 as *mut c_void;
+    let handle = Value::FfiHandle(
+        FfiHandleValue::new("Handle".to_string(), address).expect("a non-null handle"),
+    );
+    assert_eq!(
+        super::ffi_value_from_runtime(&handle, &nullable_handle).expect("a handle crosses"),
+        FfiValue::OpaqueHandle(OpaqueHandle::new(address).expect("non-null"))
+    );
+    let error = super::ffi_value_from_runtime(&Value::Bool(true), &nullable_handle)
+        .expect_err("a bool is no member of a nullable handle");
+    assert_eq!(error.code, "AU4005");
+
+    // C text results become `str` or the `str` member.
+    let copied = super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &text)
+        .expect("a cstr result is a str");
+    assert_eq!(copied, Value::String("name".to_string().into()));
+    let member =
+        super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &nullable_text)
+            .expect("a nullable cstr result is the str member");
+    assert!(matches!(
+        member,
+        Value::Union(union) if union.payload == Value::String("name".to_string().into())
+    ));
+    assert_eq!(text_union.members.len(), 2);
+    let error =
+        super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &nullable_handle)
+            .expect_err("a union without str takes no text");
+    assert!(
+        error.message.contains("does not match source return type"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue, OpaqueHandle};
+    let nullable_handle = Type::Union(Box::new(coverage_union(vec![
+        Type::named("Handle"),
+        Type::Unit,
+    ])));
+    let mut marker = 0u8;
+    let address = &mut marker as *mut u8 as *mut c_void as usize;
+    let mut env = Env::default();
+    env.define_typed(
+        "count",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_i32(1)),
+    );
+    env.define_typed(
+        "slot",
+        nullable_handle.clone(),
+        crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_handle),
+    );
+    let call = MirExternCall {
+        symbol: "aura_test_out".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "path".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("str"),
+                c_string: true,
+            },
+            MirExternParam {
+                name: "count".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::named("int32"),
+                c_string: false,
+            },
+            MirExternParam {
+                name: "slot".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: nullable_handle.clone(),
+                c_string: false,
+            },
+        ],
+        return_type: Type::named("str"),
+        c_string_result: true,
+    };
+    let args = [
+        MirArg {
+            name: None,
+            value: Operand::String("db".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("count".to_string()),
+            writeback_place: Some("count".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("slot".to_string()),
+            writeback_place: Some("slot".to_string()),
+        },
+    ];
+    let result = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, signature, arguments| {
+            assert_eq!(
+                signature.parameters(),
+                [
+                    FfiType::CString,
+                    FfiType::Out(FfiScalar::I32),
+                    FfiType::OpaqueHandleOut
+                ]
+            );
+            assert_eq!(signature.result(), FfiType::CString);
+            assert_eq!(arguments[0], FfiValue::String("db".to_string()));
+            assert_eq!(arguments[1], FfiValue::I32(1));
+            assert_eq!(arguments[2], FfiValue::Unit);
+            arguments[1] = FfiValue::I32(42);
+            arguments[2] = FfiValue::OpaqueHandle(
+                OpaqueHandle::new(address as *mut c_void).expect("non-null"),
+            );
+            Ok(FfiValue::String("opened".to_string()))
+        })
+        .expect("the call returns text");
+    assert_eq!(result, Value::String("opened".to_string().into()));
+    assert_eq!(
+        env.read_place("count").expect("count is defined"),
+        Value::Int(IntegerValue::from_i32(42))
+    );
+    assert!(matches!(
+        env.read_place("slot").expect("slot is defined"),
+        Value::Union(union)
+            if matches!(&union.payload, Value::FfiHandle(handle) if handle.type_name() == "Handle")
+    ));
+
+    // The handle the place now holds crosses back, and the function clears it.
+    let cleared = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, _, arguments| {
+            assert!(matches!(arguments[2], FfiValue::OpaqueHandle(_)));
+            arguments[2] = FfiValue::Unit;
+            Ok(FfiValue::String(String::new()))
+        })
+        .expect("the call returns text");
+    assert_eq!(cleared, Value::String(String::new().into()));
+    assert!(matches!(
+        env.read_place("slot").expect("slot is defined"),
+        Value::Union(union) if union.payload == Value::Unit
+    ));
+
+    // A slot the dispatch fills with another type is refused at writeback.
+    let forged = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, _, arguments| {
+            arguments[1] = FfiValue::Bool(true);
+            Ok(FfiValue::String(String::new()))
+        })
+        .expect_err("an int32 place takes no bool");
+    assert_eq!(forged.code, "AU4005");
+    assert_eq!(
+        forged.message,
+        "FFI call to `aura_test_out` failed: FFI result `bool` does not match source return type `int32`"
     );
 }
 

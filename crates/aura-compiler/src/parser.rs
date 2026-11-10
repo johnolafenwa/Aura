@@ -787,7 +787,7 @@ impl Parser {
         }
         self.reject_reserved_ffi_signature_syntax()?;
         self.expect_simple(TokenKind::LParen)?;
-        let (_, params) = self.parse_params(false)?;
+        let (_, mut params) = self.parse_params(false)?;
         self.expect_simple(TokenKind::RParen)?;
         if params.iter().any(|param| param.default.is_some()) {
             return Err(parse_error(
@@ -805,13 +805,18 @@ impl Parser {
                 "`extern` function declarations require an explicit return type; write `-> None` when the function returns no value",
             ));
         }
-        let (return_type, view_return) = self.parse_return_annotation(span)?;
+        let (mut return_type, view_return) = self.parse_return_annotation(span)?;
         if view_return.is_some() {
             return Err(parse_error(
                 span,
                 "`extern` functions cannot return Aura views",
             ));
         }
+        let c_string_params = params
+            .iter_mut()
+            .map(|param| take_c_string(&mut param.ty))
+            .collect();
+        let c_string_result = take_c_string(&mut return_type);
         let symbol = self.parse_extern_symbol_clause()?;
         // An indented block holds only the trusted contract.
         let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
@@ -829,6 +834,8 @@ impl Parser {
             symbol,
             params,
             return_type,
+            c_string_params,
+            c_string_result,
             span,
             contracts,
         }))
@@ -5605,4 +5612,25 @@ pub(crate) fn mentions_ghost(expr: &Expr) -> bool {
     let mut found = false;
     visit(&mut expr.clone(), &mut found);
     found
+}
+
+/// Rewrites `cstr`, alone or as a member of a union, to `str` in the type
+/// of an extern parameter or result, and reports whether it was there.
+/// `cstr` is the C spelling of an Aura `str` and names no type of its own.
+fn take_c_string(ty: &mut TypeRef) -> bool {
+    match &mut ty.kind {
+        TypeRefKind::Named { name, args } if name == "cstr" && args.is_empty() => {
+            *name = "str".to_string();
+            true
+        }
+        TypeRefKind::Union(members) => {
+            // Every member is rewritten, so the walk does not stop early.
+            let mut found = false;
+            for member in members {
+                found |= take_c_string(member);
+            }
+            found
+        }
+        _ => false,
+    }
 }

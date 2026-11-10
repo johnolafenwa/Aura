@@ -1,4 +1,4 @@
-use std::ffi::c_void;
+use std::ffi::{c_void, CStr};
 use std::slice;
 
 use aura_core::diag::Diagnostic;
@@ -10,13 +10,16 @@ use super::super::{
 };
 use super::{
     aura_direct_ffi_bad_bool, aura_direct_ffi_bytes_view, aura_direct_ffi_bytes_view_mut,
-    aura_direct_ffi_handle, aura_direct_ffi_handle_address, aura_direct_ffi_none,
-    aura_direct_ffi_null_handle, aura_direct_ffi_release_bytes, aura_direct_ffi_str_view,
-    ForeignView,
+    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_handle,
+    aura_direct_ffi_handle_address, aura_direct_ffi_none, aura_direct_ffi_null_handle,
+    aura_direct_ffi_nullable_handle_address, aura_direct_ffi_release_bytes,
+    aura_direct_ffi_release_c_string, aura_direct_ffi_str_view, ForeignView,
 };
 use crate::integer::{IntegerKind, IntegerValue};
 use crate::list_elements::ListElements;
-use crate::runtime_value::{run_lightweight_root_task, SharedType, Value, VecValue};
+use crate::runtime_value::{
+    run_lightweight_root_task, shared_union_value, SharedType, Value, VecValue,
+};
 
 fn empty_view() -> ForeignView {
     ForeignView {
@@ -299,4 +302,147 @@ fn results_a_declaration_rules_out_end_the_task_with_coded_diagnostics() {
             crate::ffi::FfiError::NonCanonicalBoolReturn(7)
         )
     );
+}
+
+/// `payload`, a value of the type `member`, in the union of `member` and
+/// `None`.
+fn nullable_value(member: &str, payload: Value) -> *mut OpaqueValue {
+    let active = match payload {
+        Value::Unit => Type::Unit,
+        _ => Type::named(member),
+    };
+    let union_type = Type::normalize_union(
+        vec![Type::named(member), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("a union of two members");
+    let Type::Union(union) = &union_type else {
+        panic!("expected a union, found {union_type}");
+    };
+    let index = union
+        .members
+        .iter()
+        .position(|candidate| *candidate == active)
+        .expect("the active member is a member");
+    boxed_value(shared_union_value(
+        std::sync::Arc::new(union_type.clone()),
+        index,
+        payload,
+    ))
+}
+
+#[test]
+fn a_nullable_handle_address_is_null_for_none() {
+    unsafe {
+        let mut target = 0_u8;
+        let address: *mut c_void = (&raw mut target).cast();
+        let name = "Database";
+        let handle = aura_direct_ffi_handle(address, name.as_ptr(), name.len());
+        assert_eq!(aura_direct_ffi_nullable_handle_address(handle), address);
+        let payload = with_value(handle, Value::clone);
+        aura_direct_release_value(handle);
+
+        let some = nullable_value("Database", payload);
+        assert_eq!(aura_direct_ffi_nullable_handle_address(some), address);
+        aura_direct_release_value(some);
+
+        let none = nullable_value("Database", Value::Unit);
+        assert!(aura_direct_ffi_nullable_handle_address(none).is_null());
+        aura_direct_release_value(none);
+    }
+
+    let message = capture_diagnostic(|| unsafe {
+        aura_direct_ffi_nullable_handle_address(string_value("x"));
+    })
+    .message;
+    assert!(
+        message.contains("FFI argument expected opaque handle or None, but received"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_c_string_argument_is_a_terminated_copy_and_none_is_null() {
+    let symbol = "open";
+    unsafe {
+        let text = string_value("héllo");
+        let copy = aura_direct_ffi_c_string(text, 0, symbol.as_ptr(), symbol.len());
+        assert_eq!(CStr::from_ptr(copy).to_bytes(), "héllo".as_bytes());
+        aura_direct_ffi_release_c_string(copy);
+        aura_direct_release_value(text);
+
+        let some = nullable_value("str", Value::String("ab".into()));
+        let copy = aura_direct_ffi_c_string(some, 0, symbol.as_ptr(), symbol.len());
+        assert_eq!(CStr::from_ptr(copy).to_bytes(), b"ab");
+        aura_direct_ffi_release_c_string(copy);
+        aura_direct_release_value(some);
+
+        let none = nullable_value("str", Value::Unit);
+        let copy = aura_direct_ffi_c_string(none, 0, symbol.as_ptr(), symbol.len());
+        assert!(copy.is_null());
+        aura_direct_ffi_release_c_string(copy);
+        aura_direct_release_value(none);
+    }
+
+    let diagnostic = capture_diagnostic(move || unsafe {
+        aura_direct_ffi_c_string(string_value("a\0b"), 2, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(
+        diagnostic.message,
+        "FFI call to `open` failed: FFI argument 3 is a cstr that contains a NUL byte"
+    );
+
+    let message = capture_diagnostic(move || unsafe {
+        aura_direct_ffi_c_string(unboxed_bytes(&[1]), 0, symbol.as_ptr(), symbol.len());
+    })
+    .message;
+    assert!(
+        message.contains("FFI argument expected cstr, but received"),
+        "{message}"
+    );
+}
+
+#[test]
+fn a_c_string_result_is_copied_into_a_new_str() {
+    let symbol = "name";
+    unsafe {
+        let text =
+            aura_direct_ffi_c_string_result(c"héllo".as_ptr(), 0, symbol.as_ptr(), symbol.len());
+        with_value(text, |value| match value {
+            Value::String(text) => assert_eq!(&**text, "héllo"),
+            other => panic!("expected a string, found {other:?}"),
+        });
+        aura_direct_release_value(text);
+
+        let none =
+            aura_direct_ffi_c_string_result(std::ptr::null(), 1, symbol.as_ptr(), symbol.len());
+        assert!(none.is_null(), "a nullable result reports null as no text");
+    }
+
+    let diagnostic = capture_diagnostic(move || unsafe {
+        aura_direct_ffi_c_string_result(std::ptr::null(), 0, symbol.as_ptr(), symbol.len());
+    });
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(
+        diagnostic.message,
+        "FFI call to `name` failed: FFI function returned a null cstr"
+    );
+
+    for nullable in [0, 1] {
+        let diagnostic = capture_diagnostic(move || unsafe {
+            aura_direct_ffi_c_string_result(
+                c"\xff".as_ptr(),
+                nullable,
+                symbol.as_ptr(),
+                symbol.len(),
+            );
+        });
+        assert_eq!(diagnostic.code, "AU4005");
+        assert_eq!(
+            diagnostic.message,
+            "FFI call to `name` failed: FFI function returned a cstr that is not UTF-8"
+        );
+    }
 }

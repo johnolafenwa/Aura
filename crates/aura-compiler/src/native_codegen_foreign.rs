@@ -11,7 +11,13 @@
 //!
 //! - a `str` or `list[uint8]` argument lends its bytes as a pointer and a
 //!   length, two C arguments in that order
-//! - an opaque handle argument passes the address it carries
+//! - an opaque handle argument passes the address it carries, and a
+//!   `Handle | None` argument passes null for `None`
+//! - a `cstr` argument passes a NUL-terminated copy of the text, freed when
+//!   the call returns, and a `cstr` result is copied into a new `str`
+//! - a `mut` scalar or `mut Handle | None` argument passes the address of a
+//!   stack word that holds the value, and the word is stored back to the
+//!   argument's place when the call returns
 //! - a handle result boxes the returned address, and a null address ends
 //!   the task with `AU4005` unless the declared result is `Handle | None`
 //! - a `bool` result that is neither 0 nor 1 ends the task with `AU4001`
@@ -22,6 +28,7 @@
 
 use super::*;
 
+use crate::mir::MirExternParam;
 use crate::native_backend::Extension;
 
 /// How one scalar crosses the C boundary.
@@ -56,13 +63,55 @@ fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
     })
 }
 
+/// The boundary type of one parameter of a foreign call.
+pub(super) fn foreign_param_type(
+    param: &MirExternParam,
+) -> std::result::Result<DirectFfiType, String> {
+    if param.c_string {
+        return Ok(DirectFfiType::scalar(c_string_type(&param.ty)));
+    }
+    direct_ffi_type_for_source(&param.ty, Some(param.passing))
+}
+
+/// The boundary type of the result of a foreign call.
+pub(super) fn foreign_result_type(
+    call: &MirExternCall,
+) -> std::result::Result<DirectFfiType, String> {
+    if call.c_string_result {
+        return Ok(DirectFfiType::scalar(c_string_type(&call.return_type)));
+    }
+    direct_ffi_type_for_source(&call.return_type, None)
+}
+
+/// `cstr` lowers to `str` and `cstr | None` to a union.
+fn c_string_type(ty: &Type) -> FfiType {
+    match ty {
+        Type::Union(_) => FfiType::NullableCString,
+        _ => FfiType::CString,
+    }
+}
+
 /// One argument of a foreign call, loaded and not yet lowered to C values.
 enum ForeignOperand {
     /// A value of the given boundary type.
-    Value(FfiType, ValueRef),
+    Value(DirectFfiType, ValueRef),
     /// The pointer and length of a `str` literal, which lends the
     /// program's own constant bytes without a box.
     Text((Val, Val)),
+    /// The address of a `cstr` literal: the program's own constant bytes,
+    /// which end in a NUL.
+    CText(Val),
+}
+
+/// What a `mut` argument's place takes when the call returns.
+enum ForeignWriteback {
+    /// The value that was passed: a byte list the function wrote in place.
+    Same(ValueRef),
+    /// The scalar in the stack word at this address.
+    Scalar(ForeignScalar, Val),
+    /// The `Handle | None` of this union type for the address in the stack
+    /// word at this address. The name is the handle's opaque type.
+    Handle(String, Type, Val),
 }
 
 /// The foreign call's C signature and argument values, in order.
@@ -106,12 +155,25 @@ impl FunctionCompiler<'_> {
         }
 
         let mut loaded = Vec::with_capacity(args.len());
-        let mut writebacks = Vec::new();
         for (index, (argument, param)) in args.iter().zip(&call.params).enumerate() {
-            let ffi = direct_ffi_type_for_source(&param.ty, Some(param.passing))?;
-            if let (FfiType::StringView, Operand::String(text)) = (ffi.ffi_type, &argument.value) {
-                loaded.push(ForeignOperand::Text(self.foreign_text_literal(text)?));
-                continue;
+            let ffi = foreign_param_type(param)?;
+            match (ffi.ffi_type, &argument.value) {
+                (FfiType::StringView, Operand::String(text)) => {
+                    let text = self.foreign_text_literal(text)?;
+                    loaded.push((ForeignOperand::Text(text), None));
+                    continue;
+                }
+                // Text with a NUL inside takes the helper, which reports it.
+                (FfiType::CString | FfiType::NullableCString, Operand::String(text))
+                    if !text.contains('\0') =>
+                {
+                    let mut bytes = text.as_bytes().to_vec();
+                    bytes.push(0);
+                    let (pointer, _) = self.string_constant(&bytes)?;
+                    loaded.push((ForeignOperand::CText(pointer), None));
+                    continue;
+                }
+                _ => {}
             }
             let expected = ensure_direct_type(
                 &param.ty,
@@ -120,15 +182,17 @@ impl FunctionCompiler<'_> {
             )?;
             let value = self.load_operand_for_target(&argument.value, &expected)?;
             let value = self.coerce_value(value, &expected)?;
-            let value = if foreign_scalar(ffi.ffi_type).is_some() {
+            let by_value = match ffi.ffi_type {
+                FfiType::Out(scalar) => scalar.ffi_type(),
+                other => other,
+            };
+            let value = if foreign_scalar(by_value).is_some() {
                 value
             } else {
                 self.ensure_opaque(value)?
             };
-            match (param.passing, argument.writeback_place.as_ref()) {
-                (MirReceiverKind::BorrowMut, Some(place)) => {
-                    writebacks.push((place.clone(), value.clone(), expected));
-                }
+            let place = match (param.passing, argument.writeback_place.as_ref()) {
+                (MirReceiverKind::BorrowMut, Some(place)) => Some((place.clone(), expected)),
                 (MirReceiverKind::BorrowMut, None) => {
                     return Err(format!(
                         "direct backend extern mutable argument {} has no writeback place",
@@ -141,9 +205,9 @@ impl FunctionCompiler<'_> {
                         index + 1
                     ));
                 }
-                (_, None) => {}
-            }
-            loaded.push(ForeignOperand::Value(ffi.ffi_type, value));
+                (_, None) => None,
+            };
+            loaded.push((ForeignOperand::Value(ffi, value), place));
         }
 
         let mut arguments = ForeignArguments {
@@ -151,26 +215,79 @@ impl FunctionCompiler<'_> {
             values: Vec::new(),
         };
         let mut copies = Vec::new();
-        for operand in &loaded {
-            match operand {
-                ForeignOperand::Value(ffi_type, value) => {
-                    self.push_foreign_argument(*ffi_type, value, &mut arguments, &mut copies)
-                }
+        let mut text_copies = Vec::new();
+        let mut writebacks = Vec::new();
+        for (index, (operand, place)) in loaded.into_iter().enumerate() {
+            let (ffi, value) = match operand {
+                ForeignOperand::Value(ffi, value) => (ffi, value),
                 ForeignOperand::Text((pointer, length)) => {
-                    arguments.push_word(*pointer);
-                    arguments.push_word(*length);
+                    arguments.push_word(pointer);
+                    arguments.push_word(length);
+                    continue;
                 }
+                ForeignOperand::CText(pointer) => {
+                    arguments.push_word(pointer);
+                    continue;
+                }
+            };
+            let word = value.values[0];
+            let writeback = match ffi.ffi_type {
+                FfiType::Out(scalar) => {
+                    let scalar = foreign_scalar(scalar.ffi_type())
+                        .expect("an out-parameter points to a scalar");
+                    let narrow = self.foreign_scalar_argument(&scalar, word);
+                    let slot = self.foreign_stack_word(narrow);
+                    arguments.push_word(slot);
+                    ForeignWriteback::Scalar(scalar, slot)
+                }
+                FfiType::OpaqueHandleOut => {
+                    let address = self.foreign_nullable_address(word);
+                    let slot = self.foreign_stack_word(address);
+                    arguments.push_word(slot);
+                    ForeignWriteback::Handle(
+                        ffi.opaque_name.unwrap_or_default(),
+                        ffi.union_type.unwrap_or(Type::Unit),
+                        slot,
+                    )
+                }
+                FfiType::NullableOpaqueHandle => {
+                    let address = self.foreign_nullable_address(word);
+                    arguments.push_word(address);
+                    continue;
+                }
+                FfiType::CString | FfiType::NullableCString => {
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    let index = self.builder.iconst(types::I64, index as i64);
+                    let copy = self.builder.call(
+                        self.runtime[RuntimeFn::FfiCString],
+                        &[word, index, symbol_ptr, symbol_len],
+                    );
+                    arguments.push_word(copy.results[0]);
+                    text_copies.push(copy.results[0]);
+                    continue;
+                }
+                ffi_type => {
+                    self.push_foreign_argument(ffi_type, &value, &mut arguments, &mut copies);
+                    ForeignWriteback::Same(value)
+                }
+            };
+            if let Some((place, expected)) = place {
+                writebacks.push((place, expected, writeback));
             }
         }
 
-        let result_ffi = direct_ffi_type_for_source(&call.return_type, None)?;
-        // The validated result is a scalar, a handle or a nullable handle,
-        // which come back as one C value, or nothing.
+        let result_ffi = foreign_result_type(call)?;
+        // The validated result is a scalar, a handle, a nullable handle or
+        // C text, which come back as one C value, or nothing.
         let result_scalar = foreign_scalar(result_ffi.ffi_type);
         let result_handle = result_ffi.opaque_name.as_deref();
+        let result_text = matches!(
+            result_ffi.ffi_type,
+            FfiType::CString | FfiType::NullableCString
+        );
         if let Some(scalar) = &result_scalar {
             arguments.signature.returns.push(scalar.ty);
-        } else if result_handle.is_some() {
+        } else if result_handle.is_some() || result_text {
             arguments.signature.returns.push(types::I64);
         }
 
@@ -185,7 +302,23 @@ impl FunctionCompiler<'_> {
         for (copy, length) in copies {
             self.release_foreign_copy(copy, length);
         }
-        for (place, value, expected) in writebacks {
+        for copy in text_copies {
+            self.builder
+                .call(self.runtime[RuntimeFn::FfiReleaseCString], &[copy]);
+        }
+        for (place, expected, writeback) in writebacks {
+            let flags = MemFlags::trusted();
+            let value = match writeback {
+                ForeignWriteback::Same(value) => value,
+                ForeignWriteback::Scalar(scalar, slot) => {
+                    let raw = self.builder.load(scalar.ty, flags, slot, 0);
+                    self.foreign_scalar_result(&scalar, raw, &call.symbol)?
+                }
+                ForeignWriteback::Handle(name, union_type, slot) => {
+                    let address = self.builder.load(types::I64, flags, slot, 0);
+                    self.foreign_nullable_handle(address, &name, &union_type)?
+                }
+            };
             let writeback = self.coerce_value(value, &expected)?;
             self.store_place(&place, writeback)?;
         }
@@ -194,6 +327,7 @@ impl FunctionCompiler<'_> {
             (Some(scalar), _) => {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
             }
+            (None, None) if result_text => self.foreign_text_result(invocation.results[0], call)?,
             (None, Some(name)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
                 let handle = self.foreign_handle(invocation.results[0], name)?;
                 self.trap_on_null_handle(handle, &call.symbol)?;
@@ -235,11 +369,7 @@ impl FunctionCompiler<'_> {
     ) {
         let word = value.values[0];
         if let Some(scalar) = foreign_scalar(ffi_type) {
-            let converted = match scalar.ty {
-                ScalarType::I64 | ScalarType::F64 => word,
-                ScalarType::F32 => self.builder.fdemote(types::F32, word),
-                narrow => self.builder.ireduce(narrow, word),
-            };
+            let converted = self.foreign_scalar_argument(&scalar, word);
             arguments.push(scalar.ty, scalar.extension, converted);
             return;
         }
@@ -313,6 +443,55 @@ impl FunctionCompiler<'_> {
         }
         arguments.push_word(pointer);
         arguments.push_word(length);
+    }
+
+    /// The Aura word `word` in the C type of `scalar`.
+    fn foreign_scalar_argument(&mut self, scalar: &ForeignScalar, word: Val) -> Val {
+        match scalar.ty {
+            ScalarType::I64 | ScalarType::F64 => word,
+            ScalarType::F32 => self.builder.fdemote(types::F32, word),
+            narrow => self.builder.ireduce(narrow, word),
+        }
+    }
+
+    /// The address of a new stack word that holds `value`, which is at
+    /// most 8 bytes. The bytes of the word above a narrower value are zero.
+    fn foreign_stack_word(&mut self, value: Val) -> Val {
+        let slot = self.builder.create_sized_stack_slot(8, 3);
+        let address = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.store(MemFlags::trusted(), zero, address, 0);
+        self.builder.store(MemFlags::trusted(), value, address, 0);
+        address
+    }
+
+    /// The address the `Handle | None` box `value` carries, null for
+    /// `None`.
+    fn foreign_nullable_address(&mut self, value: Val) -> Val {
+        let address = self
+            .builder
+            .call(self.runtime[RuntimeFn::FfiNullableHandleAddress], &[value]);
+        address.results[0]
+    }
+
+    /// The `str` or `str | None` copy of the C text at `pointer`, the
+    /// result of `call`.
+    fn foreign_text_result(
+        &mut self,
+        pointer: Val,
+        call: &MirExternCall,
+    ) -> std::result::Result<ValueRef, String> {
+        let nullable = matches!(call.return_type, Type::Union(_));
+        let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+        let flag = self.builder.iconst(types::I64, i64::from(nullable));
+        let text = self.builder.call(
+            self.runtime[RuntimeFn::FfiCStringResult],
+            &[pointer, flag, symbol_ptr, symbol_len],
+        );
+        if nullable {
+            return self.foreign_nullable(text.results[0], &call.return_type);
+        }
+        Ok(self.owned_opaque_result(text.results, call.return_type.clone()))
     }
 
     /// Asks the runtime for the view of `value`: its pointer, its length,
@@ -439,9 +618,20 @@ impl FunctionCompiler<'_> {
         name: &str,
         union_type: &Type,
     ) -> std::result::Result<ValueRef, String> {
-        // The validated union is exactly the handle and `None`.
+        let handle = self.foreign_handle(address, name)?;
+        self.foreign_nullable(handle, union_type)
+    }
+
+    /// The value of the two-member union `union_type` for `payload`, a box
+    /// of the member that is not `None`, or 0 for `None`.
+    fn foreign_nullable(
+        &mut self,
+        payload: Val,
+        union_type: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        // The validated union is exactly one member and `None`.
         let Type::Union(union) = union_type else {
-            return Err("nullable-handle FFI metadata is missing its union".to_string());
+            return Err("nullable FFI metadata is missing its union".to_string());
         };
         let unit = union
             .members
@@ -451,7 +641,7 @@ impl FunctionCompiler<'_> {
         let handle_index = 1 - none_index;
         self.require_union_plan(union_type)?;
 
-        let handle = self.foreign_handle(address, name)?;
+        let handle = payload;
         let none_block = self.builder.create_block();
         let join = self.builder.create_block();
         let payload = self.builder.append_block_param(join, types::I64);

@@ -18,3 +18,9 @@ uint64_t fc_bytes(const uint8_t *bytes, uint64_t length) {
 void fc_fill(uint8_t *bytes, uint64_t length) {
     if (length != 0) bytes[0]++;
 }
+uint64_t fc_cstr(const char *text) { return (uint64_t)text[0]; }
+const char *fc_name(void) { return "hello, world"; }
+int32_t fc_out(int64_t value, int64_t *out) {
+    *out += value;
+    return 0;
+}
