@@ -6354,14 +6354,18 @@ impl MirRuntime {
             .iter()
             .map(ffi_type_for_extern_param)
             .collect::<Result<Vec<_>>>()?;
-        let result_type = ffi_type_for_extern_result(&call.return_type, call.c_string_result)?;
+        let result_type = match &call.c_struct_result {
+            Some(layout) => FfiType::Struct(layout.interned()),
+            None => ffi_type_for_extern_result(&call.return_type, call.c_string_result)?,
+        };
         let signature = FfiSignature::new(parameter_types, result_type);
         let mut arguments = ordered
             .iter()
             .zip(&call.params)
-            .map(|(argument, param)| match param.pointer {
-                true => ffi_elements_from_runtime(&argument.value, &param.ty),
-                false => ffi_value_from_runtime(&argument.value, &param.ty),
+            .map(|(argument, param)| match (&param.c_struct, param.pointer) {
+                (Some(layout), _) => ffi_struct_from_runtime(&argument.value, layout),
+                (None, true) => ffi_elements_from_runtime(&argument.value, &param.ty),
+                (None, false) => ffi_value_from_runtime(&argument.value, &param.ty),
             })
             .collect::<Result<Vec<_>>>()?;
 
@@ -6380,6 +6384,9 @@ impl MirRuntime {
                 FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
                 FfiValue::Elements(scalar, words) => {
                     elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?
+                }
+                FfiValue::Struct(layout, bytes) => {
+                    struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
                 other => runtime_value_from_ffi(other, &param.ty).map_err(|error| {
                     Diagnostic::coded(
@@ -6401,6 +6408,9 @@ impl MirRuntime {
         }
 
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
+        if let FfiValue::Struct(layout, bytes) = &result {
+            return struct_runtime_value(layout, bytes, &call.symbol);
+        }
         runtime_value_from_ffi(result, &call.return_type).map_err(|error| {
             Diagnostic::coded(
                 "AU4005",
@@ -10746,6 +10756,12 @@ enum BlockOutcome {
 }
 
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
+    if let Some(layout) = &param.c_struct {
+        return Ok(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::StructPointer(layout.interned()),
+            _ => FfiType::Struct(layout.interned()),
+        });
+    }
     if param.pointer {
         let scalar = pointer_element(&param.ty)?.1;
         return Ok(match param.passing {
@@ -10917,6 +10933,89 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         .ok_or_else(mismatch),
         _ => Err(mismatch()),
     }
+}
+
+/// The Aura type of a scalar field of a C struct.
+fn scalar_field_type(scalar: crate::ffi::FfiScalar) -> Type {
+    Type::named(&scalar.ffi_type().to_string())
+}
+
+/// The instance `value` as the bytes of the C struct `layout`.
+fn ffi_struct_from_runtime(value: &Value, layout: &crate::c_layout::CStruct) -> Result<FfiValue> {
+    let layout = layout.interned();
+    let mut bytes = vec![0_u8; layout.size()];
+    write_struct_bytes(value, layout, &mut bytes)?;
+    Ok(FfiValue::Struct(layout, bytes))
+}
+
+/// Writes each field of the instance `value` at its offset in `bytes`,
+/// which holds the C struct `layout`.
+fn write_struct_bytes(
+    value: &Value,
+    layout: &crate::c_layout::CStruct,
+    bytes: &mut [u8],
+) -> Result<()> {
+    use crate::c_layout::CFieldKind;
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI value for C struct `{}` has incompatible runtime shape `{}`",
+                layout.name,
+                value.render()
+            ),
+        )
+    };
+    let Value::Instance(instance) = value else {
+        return Err(mismatch());
+    };
+    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+        let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
+        match &field.kind {
+            CFieldKind::Scalar(scalar) => {
+                let crossed = ffi_value_from_runtime(&held, &scalar_field_type(*scalar))?;
+                let word = scalar.word(&crossed).ok_or_else(mismatch)?;
+                let size = scalar.size();
+                bytes[offset..offset + size].copy_from_slice(&word.to_le_bytes()[..size]);
+            }
+            CFieldKind::Struct(inner) => {
+                write_struct_bytes(&held, inner, &mut bytes[offset..offset + inner.size()])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The instance the bytes of the C struct `layout` describe, as a foreign
+/// function left them.
+fn struct_runtime_value(
+    layout: &crate::c_layout::CStruct,
+    bytes: &[u8],
+    symbol: &str,
+) -> Result<Value> {
+    use crate::c_layout::CFieldKind;
+    let mut fields = BTreeMap::new();
+    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+        let value = match &field.kind {
+            CFieldKind::Scalar(scalar) => {
+                let size = scalar.size();
+                let mut word = [0_u8; 8];
+                word[..size].copy_from_slice(&bytes[offset..offset + size]);
+                let crossed = scalar
+                    .value(u64::from_le_bytes(word))
+                    .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
+                runtime_value_from_ffi(crossed, &scalar_field_type(*scalar))?
+            }
+            CFieldKind::Struct(inner) => {
+                struct_runtime_value(inner, &bytes[offset..offset + inner.size()], symbol)?
+            }
+        };
+        fields.insert(field.name.clone(), value);
+    }
+    Ok(Value::Instance(InstanceValue {
+        class_name: aura_runtime::runtime_value::RuntimeName::from(layout.name.clone()),
+        fields: fields.into(),
+    }))
 }
 
 /// The element type of `ty`, the `list[T]` of a `ptr[T]` parameter, and the

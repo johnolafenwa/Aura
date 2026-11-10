@@ -10,7 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ffi::FfiScalar;
 
 /// A C struct: its fields in declaration order.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CStruct {
     /// The Aura name of the class.
     pub name: String,
@@ -18,14 +18,14 @@ pub struct CStruct {
 }
 
 /// One field of a [`CStruct`].
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct CField {
     pub name: String,
     pub kind: CFieldKind,
 }
 
 /// What a field of a [`CStruct`] holds.
-#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CFieldKind {
     Scalar(FfiScalar),
     /// A struct held by value.
@@ -107,6 +107,20 @@ pub enum CPassing {
 }
 
 impl CStruct {
+    /// A copy of the description that lives as long as the process, shared
+    /// by every caller that asks for an equal one. A boundary type names a
+    /// struct by this reference.
+    pub fn interned(&self) -> &'static CStruct {
+        static TABLE: std::sync::Mutex<Vec<&'static CStruct>> = std::sync::Mutex::new(Vec::new());
+        let mut table = TABLE.lock().unwrap_or_else(|poison| poison.into_inner());
+        if let Some(found) = table.iter().find(|known| **known == self) {
+            return found;
+        }
+        let leaked: &'static CStruct = Box::leak(Box::new(self.clone()));
+        table.push(leaked);
+        leaked
+    }
+
     /// The alignment of the struct in bytes: that of its strictest field.
     pub fn align(&self) -> usize {
         self.fields

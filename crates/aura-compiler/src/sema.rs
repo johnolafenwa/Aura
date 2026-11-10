@@ -489,6 +489,11 @@ pub(crate) fn ffi_struct_layout(
 ) -> Option<crate::c_layout::CStruct> {
     use crate::c_layout::{CField, CFieldKind, CStruct};
     let class = ffi_struct(ty, classes)?;
+    // The layout carries the name the type goes by here, which is the name
+    // an instance of the class carries.
+    let Type::Named(name, _) = ty else {
+        return None;
+    };
     let fields = class
         .decl
         .fields
@@ -506,7 +511,7 @@ pub(crate) fn ffi_struct_layout(
         })
         .collect::<Option<Vec<_>>>()?;
     Some(CStruct {
-        name: class.decl.name.clone(),
+        name: name.clone(),
         fields,
     })
 }

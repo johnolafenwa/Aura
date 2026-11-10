@@ -13,7 +13,9 @@
 //! representable return-value failures are still reported as [`FfiError`]
 //! rather than panicking.
 
-use libffi::middle::{Arg, Cif, CodePtr, Type};
+use libffi::middle::{Arg, Cif, CodePtr, Ret, Type};
+
+use crate::c_layout::{CFieldKind, CStruct};
 use std::error::Error;
 use std::ffi::{c_void, CString};
 use std::fmt;
@@ -62,10 +64,14 @@ pub enum FfiType {
     Pointer(FfiScalar),
     /// A [`FfiType::Pointer`] the foreign function may also write through.
     PointerMut(FfiScalar),
+    /// A C struct passed or returned by value.
+    Struct(&'static CStruct),
+    /// A pointer to a C struct the foreign function may read and write.
+    StructPointer(&'static CStruct),
 }
 
 /// A scalar a foreign function reads and writes through a pointer.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 pub enum FfiScalar {
     Bool,
     I8,
@@ -173,6 +179,8 @@ impl fmt::Display for FfiType {
             Self::Out(scalar) => return write!(formatter, "mut {}", scalar.ffi_type()),
             Self::Pointer(scalar) => return write!(formatter, "ptr[{}]", scalar.ffi_type()),
             Self::PointerMut(scalar) => return write!(formatter, "mut ptr[{}]", scalar.ffi_type()),
+            Self::Struct(layout) => return write!(formatter, "struct {}", layout.name),
+            Self::StructPointer(layout) => return write!(formatter, "mut struct {}", layout.name),
             Self::Unit => "None",
             Self::Bool => "bool",
             Self::I8 => "int8",
@@ -259,6 +267,8 @@ pub enum FfiValue {
     /// The scalars a pointer argument points to, each as
     /// [`FfiScalar::word`] gives it.
     Elements(FfiScalar, Vec<u64>),
+    /// The bytes of a C struct, `size` of them, laid out as C lays it out.
+    Struct(&'static CStruct, Vec<u8>),
 }
 
 impl FfiValue {
@@ -280,6 +290,7 @@ impl FfiValue {
             Self::Bytes(_) => FfiType::BytesView,
             Self::OpaqueHandle(_) => FfiType::OpaqueHandle,
             Self::Elements(scalar, _) => FfiType::Pointer(*scalar),
+            Self::Struct(layout, _) => FfiType::Struct(layout),
         }
     }
 }
@@ -411,6 +422,9 @@ enum AbiArgument {
     MutPointer(*mut u8),
     OpaquePointer(*mut c_void),
     Length(usize),
+    /// A struct passed by value: the address of its bytes, and how many
+    /// words hold them.
+    Struct(*const u64, usize),
 }
 
 impl AbiArgument {
@@ -430,6 +444,11 @@ impl AbiArgument {
             Self::MutPointer(value) => Arg::new(value),
             Self::OpaquePointer(value) => Arg::new(value),
             Self::Length(value) => Arg::new(value),
+            // SAFETY: the words are in the call's storage, which outlives
+            // every `Arg`.
+            Self::Struct(words, count) => {
+                Arg::new(unsafe { std::slice::from_raw_parts(*words, *count) })
+            }
         }
     }
 }
@@ -444,6 +463,55 @@ struct CallStorage {
     /// The packed elements of each pointer argument, in storage aligned for
     /// every scalar, with the index of the argument.
     elements: Vec<(usize, Vec<u64>)>,
+    /// The bytes of each struct argument, in storage aligned for every
+    /// scalar, with the index of the argument.
+    structs: Vec<(usize, Vec<u64>)>,
+}
+
+/// `bytes` in storage aligned for every scalar, with room for at least
+/// `least` words.
+fn aligned_bytes(bytes: &[u8], least: usize) -> Vec<u64> {
+    let mut words = vec![0_u64; bytes.len().div_ceil(8).max(least)];
+    // SAFETY: the storage holds at least `bytes.len()` bytes.
+    unsafe {
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), words.as_mut_ptr().cast(), bytes.len());
+    }
+    words
+}
+
+/// The first `count` bytes of `words`.
+fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
+    // SAFETY: every caller made `words` with room for `count` bytes.
+    unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
+}
+
+/// The libffi description of a C struct.
+fn struct_type(layout: &CStruct) -> Type {
+    Type::structure(
+        layout
+            .fields
+            .iter()
+            .map(|field| match &field.kind {
+                CFieldKind::Scalar(scalar) => scalar_type(*scalar),
+                CFieldKind::Struct(inner) => struct_type(inner),
+            })
+            .collect::<Vec<_>>(),
+    )
+}
+
+fn scalar_type(scalar: FfiScalar) -> Type {
+    match scalar {
+        FfiScalar::Bool | FfiScalar::U8 => Type::u8(),
+        FfiScalar::I8 => Type::i8(),
+        FfiScalar::I16 => Type::i16(),
+        FfiScalar::U16 => Type::u16(),
+        FfiScalar::I32 => Type::i32(),
+        FfiScalar::U32 => Type::u32(),
+        FfiScalar::I64 => Type::i64(),
+        FfiScalar::U64 => Type::u64(),
+        FfiScalar::F32 => Type::f32(),
+        FfiScalar::F64 => Type::f64(),
+    }
 }
 
 /// `words`, one scalar each, packed as C lays out an array of `scalar`.
@@ -484,6 +552,10 @@ fn type_accepts_value(expected: FfiType, value: &FfiValue) -> bool {
             FfiType::Pointer(expected) | FfiType::PointerMut(expected),
             FfiValue::Elements(actual, _),
         ) => expected == *actual,
+        (
+            FfiType::Struct(expected) | FfiType::StructPointer(expected),
+            FfiValue::Struct(actual, bytes),
+        ) => expected == *actual && bytes.len() == expected.size(),
         (FfiType::CString | FfiType::NullableCString, FfiValue::String(_)) => true,
         (FfiType::NullableCString | FfiType::NullableOpaqueHandle, FfiValue::Unit) => true,
         (FfiType::NullableOpaqueHandle, FfiValue::OpaqueHandle(_)) => true,
@@ -628,6 +700,19 @@ fn append_argument(
             // Moving the `Vec` keeps its heap buffer where it is.
             storage.elements.push((index, packed));
         }
+        (FfiType::Struct(layout), FfiValue::Struct(_, bytes)) => {
+            let words = aligned_bytes(bytes, 1);
+            types.push(struct_type(layout));
+            // Moving the `Vec` keeps its heap buffer where it is.
+            values.push(AbiArgument::Struct(words.as_ptr(), words.len()));
+            storage.structs.push((index, words));
+        }
+        (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) => {
+            let mut words = aligned_bytes(bytes, 1);
+            types.push(Type::pointer());
+            values.push(AbiArgument::MutPointer(words.as_mut_ptr().cast()));
+            storage.structs.push((index, words));
+        }
         (FfiType::OpaqueHandleOut, value) => {
             let address = match value {
                 FfiValue::OpaqueHandle(handle) => handle.as_ptr() as usize as u64,
@@ -662,13 +747,15 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         | FfiType::NullableOpaqueHandle
         | FfiType::CString
         | FfiType::NullableCString => Type::pointer(),
+        FfiType::Struct(layout) => struct_type(layout),
         FfiType::StringView
         | FfiType::BytesView
         | FfiType::BytesViewMut
         | FfiType::Out(_)
         | FfiType::OpaqueHandleOut
         | FfiType::Pointer(_)
-        | FfiType::PointerMut(_) => {
+        | FfiType::PointerMut(_)
+        | FfiType::StructPointer(_) => {
             return Err(FfiError::UnsupportedReturnType(ffi_type));
         }
     })
@@ -733,6 +820,14 @@ unsafe fn invoke(
             let text = unsafe { std::ffi::CStr::from_ptr(pointer) };
             let text = text.to_str().map_err(|_| FfiError::InvalidUtf8Return)?;
             FfiValue::String(text.to_owned())
+        }
+        FfiType::Struct(layout) => {
+            // libffi widens a small result to a whole register.
+            let mut words = aligned_bytes(&[], layout.size().div_ceil(8).max(2));
+            unsafe {
+                cif.call_return_into(function, arguments, Ret::new(words.as_mut_slice()));
+            }
+            FfiValue::Struct(layout, leading_bytes(&words, layout.size()))
         }
         // `result_type` refused these before the call was built.
         _ => return Err(FfiError::UnsupportedReturnType(result)),
@@ -809,6 +904,14 @@ pub unsafe fn call_host_function(
                 unreachable!("mutable byte view was validated before invocation");
             };
             destination.copy_from_slice(&buffer);
+        }
+    }
+    // A struct passed by pointer takes the bytes the function left.
+    for (index, words) in storage.structs {
+        if let (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) =
+            (signature.parameters[index], &mut arguments[index])
+        {
+            *bytes = leading_bytes(&words, bytes.len());
         }
     }
     // A `mut` pointer argument takes the scalars the function left.
@@ -1215,6 +1318,278 @@ mod tests {
             1 => c"h\u{e9}llo".as_ptr(),
             _ => c"\xff".as_ptr(),
         }
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Pair {
+        x: f64,
+        y: f64,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Small {
+        count: i32,
+        flag: i8,
+    }
+
+    #[repr(C)]
+    #[derive(Clone, Copy)]
+    struct Wide {
+        tag: i8,
+        total: i64,
+        ratio: f32,
+        inner: Small,
+    }
+
+    unsafe extern "C" fn swap_pair(pair: Pair, scale: f64) -> Pair {
+        Pair {
+            x: pair.y * scale,
+            y: pair.x * scale,
+        }
+    }
+
+    unsafe extern "C" fn small_sum(before: i64, small: Small, after: i64) -> i64 {
+        before + i64::from(small.count) + i64::from(small.flag) + after
+    }
+
+    unsafe extern "C" fn make_small(count: i32) -> Small {
+        Small {
+            count,
+            flag: -(count as i8),
+        }
+    }
+
+    unsafe extern "C" fn widen(wide: Wide, more: i64) -> Wide {
+        Wide {
+            tag: wide.tag + 1,
+            total: wide.total + more,
+            ratio: wide.ratio * 2.0,
+            inner: Small {
+                count: wide.inner.count + 1,
+                flag: wide.inner.flag + 1,
+            },
+        }
+    }
+
+    unsafe extern "C" fn widen_in_place(wide: *mut Wide) -> i32 {
+        unsafe { *wide = widen(*wide, 100) };
+        7
+    }
+
+    /// The bytes of `value`, with every padding byte zero.
+    fn bytes_of<T: Copy>(layout: &CStruct, value: T) -> Vec<u8> {
+        assert_eq!(layout.size(), std::mem::size_of::<T>());
+        let mut bytes = vec![0_u8; layout.size()];
+        for leaf in layout.leaves() {
+            let size = leaf.scalar.size();
+            // SAFETY: the leaf lies inside `value`.
+            let field = unsafe {
+                std::slice::from_raw_parts((&raw const value).cast::<u8>().add(leaf.offset), size)
+            };
+            bytes[leaf.offset..leaf.offset + size].copy_from_slice(field);
+        }
+        bytes
+    }
+
+    /// The struct bytes of `value` with every padding byte zero. C leaves
+    /// padding unspecified.
+    fn scrubbed(value: Result<FfiValue, FfiError>) -> Vec<u8> {
+        let Ok(FfiValue::Struct(layout, bytes)) = value else {
+            panic!("expected a struct, found {value:?}");
+        };
+        let mut scrubbed = vec![0_u8; bytes.len()];
+        for leaf in layout.leaves() {
+            let field = leaf.offset..leaf.offset + leaf.scalar.size();
+            scrubbed[field.clone()].copy_from_slice(&bytes[field]);
+        }
+        scrubbed
+    }
+
+    fn layout_of(name: &str, fields: Vec<(&str, CFieldKind)>) -> &'static CStruct {
+        CStruct {
+            name: name.to_string(),
+            fields: fields
+                .into_iter()
+                .map(|(name, kind)| crate::c_layout::CField {
+                    name: name.to_string(),
+                    kind,
+                })
+                .collect(),
+        }
+        .interned()
+    }
+
+    #[test]
+    fn structs_cross_by_value_by_pointer_and_as_results() {
+        use CFieldKind::Scalar;
+        let pair = layout_of(
+            "Pair",
+            vec![("x", Scalar(FfiScalar::F64)), ("y", Scalar(FfiScalar::F64))],
+        );
+        let small = layout_of(
+            "Small",
+            vec![
+                ("count", Scalar(FfiScalar::I32)),
+                ("flag", Scalar(FfiScalar::I8)),
+            ],
+        );
+        let wide = layout_of(
+            "Wide",
+            vec![
+                ("tag", Scalar(FfiScalar::I8)),
+                ("total", Scalar(FfiScalar::I64)),
+                ("ratio", Scalar(FfiScalar::F32)),
+                ("inner", CFieldKind::Struct(small.clone())),
+            ],
+        );
+        assert!(
+            std::ptr::eq(pair, pair.clone().interned()),
+            "equal layouts share one copy"
+        );
+        assert_eq!(FfiType::Struct(pair).to_string(), "struct Pair");
+        assert_eq!(FfiType::StructPointer(wide).to_string(), "mut struct Wide");
+
+        let result = call(
+            swap_pair as *const (),
+            FfiSignature::new(
+                vec![FfiType::Struct(pair), FfiType::F64],
+                FfiType::Struct(pair),
+            ),
+            &mut [
+                FfiValue::Struct(pair, bytes_of(pair, Pair { x: 1.5, y: -2.0 })),
+                FfiValue::F64(2.0),
+            ],
+        );
+        assert_eq!(
+            result,
+            Ok(FfiValue::Struct(
+                pair,
+                bytes_of(pair, Pair { x: -4.0, y: 3.0 })
+            ))
+        );
+
+        let small_value = || {
+            FfiValue::Struct(
+                small,
+                bytes_of(
+                    small,
+                    Small {
+                        count: 40,
+                        flag: -3,
+                    },
+                ),
+            )
+        };
+        assert_eq!(small_value().ffi_type(), FfiType::Struct(small));
+        let result = call(
+            small_sum as *const (),
+            FfiSignature::new(
+                vec![FfiType::I64, FfiType::Struct(small), FfiType::I64],
+                FfiType::I64,
+            ),
+            &mut [FfiValue::I64(1000), small_value(), FfiValue::I64(5)],
+        );
+        assert_eq!(result, Ok(FfiValue::I64(1042)));
+        let result = call(
+            make_small as *const (),
+            FfiSignature::new(vec![FfiType::I32], FfiType::Struct(small)),
+            &mut [FfiValue::I32(9)],
+        );
+        assert_eq!(
+            result,
+            Ok(FfiValue::Struct(
+                small,
+                bytes_of(small, Small { count: 9, flag: -9 })
+            ))
+        );
+
+        let before = Wide {
+            tag: 1,
+            total: 1 << 40,
+            ratio: 0.25,
+            inner: Small { count: 6, flag: 7 },
+        };
+        let after = |more: i64| Wide {
+            tag: 2,
+            total: (1 << 40) + more,
+            ratio: 0.5,
+            inner: Small { count: 7, flag: 8 },
+        };
+        let result = call(
+            widen as *const (),
+            FfiSignature::new(
+                vec![FfiType::Struct(wide), FfiType::I64],
+                FfiType::Struct(wide),
+            ),
+            &mut [
+                FfiValue::Struct(wide, bytes_of(wide, before)),
+                FfiValue::I64(3),
+            ],
+        );
+        assert_eq!(scrubbed(result), bytes_of(wide, after(3)));
+
+        // A by-value argument keeps its bytes, and a pointer takes what
+        // the function left.
+        let mut arguments = [FfiValue::Struct(wide, bytes_of(wide, before))];
+        let result = call(
+            widen_in_place as *const (),
+            FfiSignature::new(vec![FfiType::StructPointer(wide)], FfiType::I32),
+            &mut arguments,
+        );
+        assert_eq!(result, Ok(FfiValue::I32(7)));
+        let [written] = arguments;
+        assert_eq!(scrubbed(Ok(written)), bytes_of(wide, after(100)));
+
+        let error = call(
+            small_sum as *const (),
+            FfiSignature::new(
+                vec![FfiType::I64, FfiType::Struct(small), FfiType::I64],
+                FfiType::I64,
+            ),
+            &mut [
+                FfiValue::I64(0),
+                FfiValue::Struct(pair, bytes_of(pair, Pair { x: 0.0, y: 0.0 })),
+                FfiValue::I64(0),
+            ],
+        )
+        .expect_err("a struct parameter takes its own struct");
+        assert_eq!(
+            error,
+            FfiError::ArgumentTypeMismatch {
+                index: 1,
+                expected: FfiType::Struct(small),
+                actual: FfiType::Struct(pair),
+            }
+        );
+        let error = call(
+            small_sum as *const (),
+            FfiSignature::new(
+                vec![FfiType::I64, FfiType::Struct(small), FfiType::I64],
+                FfiType::I64,
+            ),
+            &mut [
+                FfiValue::I64(0),
+                FfiValue::Struct(small, vec![0; 3]),
+                FfiValue::I64(0),
+            ],
+        )
+        .expect_err("a struct value holds exactly the struct's bytes");
+        assert!(matches!(
+            error,
+            FfiError::ArgumentTypeMismatch { index: 1, .. }
+        ));
+        let error = call(
+            make_small as *const (),
+            FfiSignature::new(Vec::new(), FfiType::StructPointer(small)),
+            &mut [],
+        )
+        .expect_err("a struct pointer is not a result");
+        assert_eq!(
+            error,
+            FfiError::UnsupportedReturnType(FfiType::StructPointer(small))
+        );
     }
 
     /// Reverses the order of `count` elements of `size` bytes each.
