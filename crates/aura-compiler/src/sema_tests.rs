@@ -32712,6 +32712,28 @@ fn the_iter_module_cannot_declare_generator_functions() {
 }
 
 #[test]
+fn lists_implement_into_iterator_for_generic_code() {
+    let source = include_str!("../tests/fixtures/run-pass/into_iterator_list.au");
+    crate::check_source(source).expect("a list satisfies an IntoIterator bound");
+    let duplicate = include_str!("../tests/fixtures/check-fail/into_iterator_list_duplicate.au");
+    let error = crate::check_source(duplicate).expect_err("list has the implementation already");
+    assert!(
+        error
+            .message
+            .contains("duplicate impl of trait `IntoIterator` for `list[int64]`"),
+        "{error:?}"
+    );
+    // An imported generic implementation takes this module's own class as
+    // its type argument, both for a bound and for an associated type.
+    let own_class = "from iter import Generator, IntoIterator, Iterator\n\nclass Box:\n    v: int64\n\ndef boxes() -> Generator[Box]:\n    yield Box(v=1)\n\nclass Crate:\n    n: int64\n\nimpl IntoIterator[Box] for Crate:\n    type Iter = Generator[Box]\n    def into_iter(own self) -> Generator[Box]:\n        return boxes()\n\ndef total[I: Iterator[Box]](source: own I) -> int64:\n    mut n = 0\n    for b in source:\n        n += b.v\n    return n\n\ndef main():\n    print(total(boxes()))\n    print(total(Crate(n=1).into_iter()))\n    print(total([Box(v=2)].into_iter()))\n";
+    crate::check_source(own_class).expect("Generator[Box] implements Iterator[Box]");
+    // A user implementation for a builtin collection does not take over the
+    // loops that read the collection in place.
+    let set_loops = "from iter import Generator, IntoIterator\n\ndef walk(items: own set[int64]) -> Generator[int64]:\n    yield 1\n\nimpl IntoIterator[int64] for set[int64]:\n    type Iter = Generator[int64]\n    def into_iter(own self) -> Generator[int64]:\n        return walk(self)\n\ndef main():\n    seen = {1, 2}\n    for i, x in enumerate(seen):\n        print(i + x)\n    print([x for x in seen])\n    print(len(seen))\n";
+    crate::check_source(set_loops).expect("a set keeps its builtin loops");
+}
+
+#[test]
 fn class_and_impl_bounds_may_name_associated_type_traits() {
     let source = include_str!("../tests/fixtures/run-pass/into_iterator_class_bounds.au");
     crate::check_source(source).expect("class and impl IntoIterator bounds type-check");

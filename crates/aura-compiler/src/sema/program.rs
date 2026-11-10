@@ -1765,6 +1765,22 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                 ),
             ));
         }
+        // `list[T]` turns into an iterator through the `iter` module's own
+        // implementation, which a second one would overlap.
+        if module_name != super::iterator_loops::ITER_MODULE
+            && trait_info.module_name == super::iterator_loops::ITER_MODULE
+            && trait_info.decl.name == super::iterator_loops::INTO_ITERATOR_TRAIT
+            && matches!(&for_type, Type::Named(name, _) if name == "list")
+        {
+            return Err(Diagnostic::at(
+                impl_decl.span,
+                format!(
+                    "duplicate impl of trait `{}` for `{}`",
+                    impl_decl.trait_name, for_type
+                ),
+            )
+            .with_help("every `list[T]` implements `iter.IntoIterator[T]` already"));
+        }
 
         let mut methods = BTreeMap::new();
         for method in &impl_decl.methods {

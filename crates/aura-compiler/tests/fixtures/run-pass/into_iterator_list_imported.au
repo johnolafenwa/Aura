@@ -1,0 +1,33 @@
+import into_iterator_list_imported_support.util as util
+from iter import Generator, IntoIterator
+
+
+class Tag:
+    name: str
+
+
+def tags() -> Generator[Tag]:
+    yield Tag(name="made")
+
+
+class Bag:
+    n: int64
+
+
+impl IntoIterator[Tag] for Bag:
+    type Iter = Generator[Tag]
+
+    def into_iter(own self) -> Generator[Tag]:
+        return tags()
+
+
+def main():
+    print(util.weighted([1, 2, 3]))
+    # The caller's own class is the item type of another module's generic
+    # implementation and bound.
+    kept = util.keep([Tag(name="listed")])
+    print(kept[0].name)
+    drained = util.drain(tags())
+    print(drained[0].name)
+    bagged = util.keep(Bag(n=1))
+    print(bagged[0].name)

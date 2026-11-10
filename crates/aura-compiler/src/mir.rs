@@ -27523,6 +27523,14 @@ impl<'a> Lowerer<'a> {
                                                 );
                                             }
                                         }
+                                        // A type parameter only a bound
+                                        // names, such as the `T` and hidden
+                                        // `S.Iter` of `S: IntoIterator[T]`.
+                                        self.infer_bound_only_type_args(
+                                            &type_params,
+                                            &function.type_param_bounds,
+                                            &mut substitutions,
+                                        );
                                         substitutions
                                     };
                                     return Some(substitute_type(

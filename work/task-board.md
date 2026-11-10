@@ -2,6 +2,16 @@
 
 Last updated: 2026-11-10
 
+## Iterator bound and float64 gaps (in progress)
+
+- Target: the three gaps the 0.13 evaluation left. Details are in
+  `2026-11-10-iterator-bound-and-float64-gaps.md`.
+- Done: `list[T]` implements `IntoIterator[T]`, with two older bugs fixed
+  on the way (imported generic impls rejected the caller's own classes;
+  module-qualified calls lost bound-only type parameters).
+- Remaining: enum and supertrait bounds that name a trait with associated
+  types, and fast failure of false float64 claims in `aura verify`.
+
 ## docdb margin over Python (complete)
 
 - Matched json field reads take the entry's tape node, entry loans that

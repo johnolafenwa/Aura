@@ -1,0 +1,16 @@
+from iter import IntoIterator, Iterator
+
+
+public def keep[T, S: IntoIterator[T]](source: own S) -> list[T]:
+    return source.into_iter().collect()
+
+
+public def drain[T, I: Iterator[T]](source: own I) -> list[T]:
+    return source.collect()
+
+
+public def weighted[S: IntoIterator[int64]](source: own S) -> int64:
+    mut total = 0
+    for i, value in enumerate(source):
+        total += value * (i + 1)
+    return total
