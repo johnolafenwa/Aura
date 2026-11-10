@@ -7,6 +7,22 @@ in this file.
 
 ## Unreleased
 
+- Every `list[T]` implements `iter.IntoIterator[T]`, so a function bounded
+  by `S: IntoIterator[T]` takes a list. `into_iter()` consumes the list and
+  returns an `iter.ListIter[T]`. Loops written directly over a list still
+  read it in place. A program that wrote its own
+  `impl IntoIterator[...] for list[...]` now gets a duplicate-impl error
+  and can delete that implementation.
+- Fixed: a generic implementation or bound from another module rejected
+  the caller's own classes as type arguments, as in
+  `def total[I: Iterator[Box]]` called with a `Generator[Box]`, or
+  `type Iter = Generator[Box]` in an `IntoIterator[Box]` implementation.
+- Fixed: a call through a module name, such as `util.keep(items)`, lost a
+  type parameter that only a bound names, and the build stopped with
+  `AU4001`.
+- Fixed: `enumerate`, `zip`, and comprehensions over a list, set, `Span`,
+  `Range`, or `Queue` keep their builtin loop when the program also gives
+  that type an `IntoIterator` implementation.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name

@@ -49,6 +49,10 @@ pub(crate) const ITERATOR_COLLECT: &str = "collect";
 pub(crate) const INTO_ITERATOR_TRAIT: &str = "IntoIterator";
 pub(crate) const INTO_ITERATOR_METHOD: &str = "into_iter";
 
+/// The builtin types a `for` loop, a comprehension, `enumerate`, and `zip`
+/// read directly. An `IntoIterator` implementation never replaces that loop.
+const BUILTIN_LOOP_SOURCES: [&str; 5] = ["list", "set", "Span", "Range", "Queue"];
+
 /// A source position: line and column of the `for` statement.
 type LoopSite = (usize, usize);
 
@@ -208,6 +212,12 @@ impl FunctionChecker<'_> {
     /// Whether `ty` implements the builtin `iter.IntoIterator[T]`, so a loop
     /// over it iterates `ty.into_iter()`.
     pub(super) fn implements_into_iterator(&self, ty: &Type) -> bool {
+        // A builtin collection keeps its own loop, which reads the items in
+        // place. `list[T]` implements `IntoIterator[T]` for generic code
+        // only, and that implementation consumes the list.
+        if matches!(ty, Type::Named(name, _) if BUILTIN_LOOP_SOURCES.contains(&name.as_str())) {
+            return false;
+        }
         // A type parameter bounded by `IntoIterator[T]` (with its hidden
         // associated `Iter` argument) iterates its `into_iter()`.
         if let Type::TypeParam(name) = ty {

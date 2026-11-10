@@ -1,0 +1,57 @@
+from iter import IntoIterator, ListIter
+
+
+class Tag:
+    name: str
+
+
+def count[T, S: IntoIterator[T]](source: own S) -> int64:
+    mut n = 0
+    for _ in source:
+        n += 1
+    return n
+
+
+def join[S: IntoIterator[str]](source: own S) -> str:
+    mut out = ""
+    for word in source:
+        out += word
+    return out
+
+
+def numbered[S: IntoIterator[str]](source: own S):
+    for i, word in enumerate(source):
+        print(f"{i} {word}")
+
+
+def keep[T, S: IntoIterator[T]](source: own S) -> list[T]:
+    return source.into_iter().collect()
+
+
+def iterator_of[T, S: IntoIterator[T]](source: own S) -> S.Iter:
+    return source.into_iter()
+
+
+def main():
+    print(count([1, 2, 3]))
+    print(join(["a", "b", "c"]))
+    numbered(["x", "y"])
+    tags = keep([Tag(name="first"), Tag(name="second")])
+    print(tags[1].name)
+    print(keep([[1], [2, 3]]))
+    empty: list[int64] = []
+    print(count(empty))
+    it: ListIter[int64] = iterator_of([7, 8])
+    for n in it:
+        print(n)
+
+    # A list keeps its own loops: they read the items in place.
+    scores = [10, 20]
+    for i, score in enumerate(scores):
+        print(i + score)
+    print([score * 2 for score in scores])
+    for left, right in zip(scores, scores):
+        print(left + right)
+    for score in scores:
+        print(score)
+    print(len(scores))

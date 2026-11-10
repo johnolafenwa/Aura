@@ -1170,7 +1170,12 @@ impl<'a> FunctionChecker<'a> {
             info.map(|info| format!("{}.{}", info.module_name, info.decl.name))
                 .unwrap_or_else(|| format!("{module}.{}", bound.trait_name))
         };
-        Type::Named(name, bound.trait_args.clone()).canonical_key(module, self.canonical_type_names)
+        // The trait is named in `module`, and the arguments are types of
+        // this module: an imported trait or implementation has its own
+        // types qualified already, so a bare name left among the arguments
+        // came from a type this module wrote.
+        Type::Named(name, bound.trait_args.clone())
+            .canonical_key(self.module_name, self.canonical_type_names)
     }
 
     /// The trait an implementation provides, resolved in the

@@ -308,7 +308,9 @@ def longest[S: IntoIterator[str]](words: own S) -> str:
 ```
 
 `longest(playlist)` works for a `Playlist`, and for any other type with an
-`IntoIterator[str]` implementation. Your own traits can declare associated
+`IntoIterator[str]` implementation. A `list[str]` has one, so
+`longest(["oak", "willow"])` works too. The call takes ownership of the list,
+because `into_iter` consumes its receiver. Your own traits can declare associated
 types the same way; the [Manual](/manual/generics-and-traits#associated-types)
 has the details.
 

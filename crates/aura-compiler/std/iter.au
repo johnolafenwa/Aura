@@ -34,6 +34,29 @@ public trait IntoIterator[T]:
     def into_iter(own self) -> Self.Iter
 
 
+public class ListIter[T]:
+    """The iterator a `list[T]` turns into. It yields the list's items in
+    order and owns the ones it has not yielded yet."""
+    # The remaining items, last one first, so `next` pops from the end.
+    rest: list[T]
+
+
+impl[T] Iterator[T] for ListIter[T]:
+    def next(mut self) -> Step[T]:
+        if len(self.rest) == 0:
+            return Step.End
+        return Step.Item(self.rest.pop())
+
+
+impl[T] IntoIterator[T] for list[T]:
+    type Iter = ListIter[T]
+
+    def into_iter(own self) -> ListIter[T]:
+        mut rest = self
+        rest.reverse()
+        return ListIter[T](rest=rest)
+
+
 public type GeneratorBody = Callable[own def() -> None]
 
 
