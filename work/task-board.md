@@ -9,8 +9,10 @@ Last updated: 2026-11-10
 - Done: `list[T]` implements `IntoIterator[T]`, with two older bugs fixed
   on the way (imported generic impls rejected the caller's own classes;
   module-qualified calls lost bound-only type parameters).
+- Done: false float claims fail fast in `aura verify` through sampled
+  inputs.
 - Remaining: enum and supertrait bounds that name a trait with associated
-  types, and fast failure of false float64 claims in `aura verify`.
+  types.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- `aura verify` tries a check that reads float arithmetic with sample
+  values for the function's float parameters before the exact search. A
+  false claim that many inputs break, such as `a / 3.0 * 3.0 == a` or
+  `a.sqrt() * a.sqrt() == a`, now fails in about 0.1 s with a
+  counterexample. Before, it took 2 to 11 s or ended as `AU5102`.
+- Counterexamples print very large and very small floats with an
+  exponent, as `5e-324`.
 - Every `list[T]` implements `iter.IntoIterator[T]`, so a function bounded
   by `S: IntoIterator[T]` takes a list. `into_iter()` consumes the list and
   returns an `iter.ListIter[T]`. Loops written directly over a list still

@@ -37,6 +37,22 @@ Making a list satisfy the bound exposed two older bugs, both fixed:
   and the build stopped with `AU4001`. The module-call path in `mir.rs`
   now runs the same bound inference as a bare call.
 
+### False float64 claims
+
+- `verify.rs` has a third solver lane between the rough float pass and the
+  exact query. It asks the check with every float parameter defined as a
+  sampled value (`define-fun`, so the solver folds the arithmetic while it
+  reads the problem; an asserted equality did not help Z3, which took 25 s
+  on the first such query).
+- `verify_float.rs::candidates` draws 512 rows between the sizes of the
+  function's float literals. The first 32 that the entry facts allow are
+  the samples. A function gets at most 8 x 32 fixed checks.
+- Measured on this container: `a / 3.0 * 3.0 == a` 3.7 s to 0.08 s,
+  `a.sqrt() * a.sqrt() == a` unknown after 11 s to 0.1 s, `a / b * b == a`
+  unknown after 10 s to 0.09 s, `(a + b) + c == a + (b + c)` 6 s to 0.1 s.
+- Not covered: floats inside a list or a class field are not fixed, so
+  `xs[0] * k / k == xs[0]` still runs to the limit.
+
 ## Verification
 
 - `cargo test -p aura-compiler --lib`: 1939 passed. The one failure,
@@ -50,7 +66,7 @@ Making a list satisfy the bound exposed two older bugs, both fixed:
 
 ## Follow-up
 
-- Items 2 and 3 of the goal.
+- Item 2 of the goal.
 - `set[T]`, `dict[K, V]`, and `Range` do not implement `IntoIterator`.
 - A comprehension over an `IntoIterator` type parameter binds borrowed
   items, so `[x for x in source]` cannot move non-copy items out

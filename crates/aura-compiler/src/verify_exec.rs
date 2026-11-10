@@ -467,6 +467,9 @@ pub(super) struct Exec<'a> {
     position: (usize, usize),
     /// Each float `/` and `sqrt` result, for the cheaper first query.
     pub(super) rounded: Vec<super::float::Rounded>,
+    /// How many of `facts` hold on entry, before the body runs: the
+    /// `requires` clauses and what the parameters' types say.
+    pub(super) entry_facts: usize,
     /// The constant each defined term is named by.
     defined: BTreeMap<String, String>,
 }
@@ -508,6 +511,7 @@ impl<'a> Exec<'a> {
             unsupported: None,
             captured: closure_captures(function),
             rounded: Vec::new(),
+            entry_facts: 0,
             defined: BTreeMap::new(),
             prove_sites: false,
             position: (0, 0),
@@ -1043,6 +1047,7 @@ impl<'a> Exec<'a> {
 
     /// Executes the whole function from its entry.
     pub(super) fn run(&mut self, entry_state: State) {
+        self.entry_facts = self.facts.len();
         let cfg = match self.cfg() {
             Ok(cfg) => cfg,
             Err(reason) => {
