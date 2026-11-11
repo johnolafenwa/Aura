@@ -71,6 +71,49 @@ pub(super) struct PlainRecords {
     cells: Vec<(DataHandle, String, u64)>,
 }
 
+impl PlainRecord {
+    /// The bytes one element takes in a list.
+    pub(super) fn stride(&self) -> i64 {
+        self.stride
+    }
+
+    /// One leaf per word of the record.
+    pub(super) fn leaves(&self) -> &[PlainLeaf] {
+        &self.leaves
+    }
+}
+
+/// The leaves of the place `projection` names inside a `direct` value whose
+/// leaves are `leaves`, the whole value for an empty projection, when the
+/// place is a `place_ty`.
+pub(super) fn place_leaves(
+    leaves: &[PlainLeaf],
+    direct: &DirectType,
+    projection: &str,
+    place_ty: &DirectType,
+) -> Option<Vec<PlainLeaf>> {
+    let mut current = direct;
+    let mut start = 0;
+    for segment in projection.split('.').filter(|segment| !segment.is_empty()) {
+        let DirectType::PlainClass(class) = current else {
+            return None;
+        };
+        let mut found = None;
+        for field in &class.fields {
+            if field.name == segment {
+                found = Some(&field.ty);
+                break;
+            }
+            start += field.ty.abi_types().len();
+        }
+        current = found?;
+    }
+    let end = start + current.abi_types().len();
+    (current == place_ty)
+        .then(|| leaves.get(start..end).map(<[PlainLeaf]>::to_vec))
+        .flatten()
+}
+
 impl PlainRecords {
     pub(super) fn new(module: &MirModule) -> Self {
         Self {
@@ -512,7 +555,7 @@ impl FunctionCompiler<'_> {
     /// Branches to `fast_block` when `list` keeps `record`'s values in
     /// place, which also means the list is confined to this thread, and to
     /// `slow_block` otherwise.
-    fn emit_plain_list_check(
+    pub(super) fn emit_plain_list_check(
         &mut self,
         list: Val,
         record: &PlainRecord,

@@ -152,7 +152,8 @@ fn reads_lent(instruction: &Instruction, temp: &str, borrowed: &[&Operand]) -> b
             ..
         } => false,
         _ => {
-            let receiver = read_receiver(instruction);
+            let receiver =
+                read_receiver(instruction).or_else(|| borrowed_receiver(instruction, borrowed));
             let accesses = instruction_accesses_with(instruction, borrowed)
                 .into_iter()
                 .filter(|(place, _)| root(place) == temp)
@@ -168,6 +169,33 @@ fn reads_lent(instruction: &Instruction, temp: &str, borrowed: &[&Operand]) -> b
                 })
         }
     }
+}
+
+/// The receiver place of a method call whose callee borrows its receiver,
+/// one of `borrowed`: a method that only reads `self`, which the MIR names
+/// as a writeback all the same.
+fn borrowed_receiver<'i>(instruction: &'i Instruction, borrowed: &[&Operand]) -> Option<&'i str> {
+    let Instruction::Assign {
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: object @ Operand::Place(receiver),
+                        receiver_place: Some(place),
+                        ..
+                    },
+                ..
+            },
+        ..
+    } = instruction
+    else {
+        return None;
+    };
+    (place == receiver
+        && borrowed
+            .iter()
+            .any(|operand| std::ptr::eq(*operand, object)))
+    .then_some(place.as_str())
 }
 
 /// The receiver place of a runtime call that only reads its receiver, which

@@ -1,0 +1,69 @@
+trait Grow:
+    def grow(mut self, by: int64) -> None
+    def renew(mut self, by: int64) -> None
+    def both(mut self) -> None
+
+class Dot:
+    name: str
+    r: int64
+
+class Pt:
+    r: int64
+    s: int64
+
+impl Grow for Dot:
+    def grow(mut self, by: int64) -> None:
+        self.r += by
+
+    def renew(mut self, by: int64) -> None:
+        self = Dot(name=f"n{by}", r=self.r + by)
+
+    def both(mut self) -> None:
+        self.grow(1)
+        self.renew(2)
+
+impl Grow for Pt:
+    def grow(mut self, by: int64) -> None:
+        self.r += by
+
+    def renew(mut self, by: int64) -> None:
+        self = Pt(r=self.r + by, s=by)
+
+    def both(mut self) -> None:
+        self.grow(1)
+        self.renew(2)
+
+
+def work(items: mut list[Dot], pts: mut list[Pt]) -> int64:
+    mut total: int64 = 0
+    for round in range(3):
+        for i in range(len(items)):
+            items[i].grow(1)
+            items[i].renew(i)
+            items[i].both()
+            pts[i].grow(1)
+            pts[i].renew(i)
+            pts[i].both()
+        for item in mut items:
+            item.grow(2)
+            item.renew(3)
+            item.both()
+        for pt in mut pts:
+            pt.grow(2)
+            pt.renew(3)
+            pt.both()
+    for item in items:
+        total += item.r + len(item.name)
+    for pt in pts:
+        total += pt.r + pt.s
+    return total
+
+
+def main() -> None:
+    mut items: list[Dot] = []
+    mut pts: list[Pt] = []
+    for i in range(40):
+        items.append(Dot(name="c", r=i))
+        pts.append(Pt(r=i, s=0))
+    print(work(items, pts))
+    print(f"{items[7].name} {items[7].r} {pts[7].r} {pts[7].s}")
