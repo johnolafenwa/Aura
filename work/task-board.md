@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 ## Streaming I/O and a deeper standard library (in progress)
 
@@ -13,7 +13,7 @@ Last updated: 2026-11-10
 - Remaining: `regex` and `time` modules, the `http` client module, and
   the streaming reference agent.
 
-## Release 0.14.0-preview (in progress)
+## Release 0.14.0-preview (complete)
 
 - Cut from `main` @ `33910bd` after the first steps of FFI v1 (#259) and
   trait objects (#261): compact JSON storage, the rest of lean values,
@@ -21,8 +21,9 @@ Last updated: 2026-11-10
   classes, implementations, enums, and supertraits, `IntoIterator` for
   lists, the verification leftovers, and the `float32` soundness fix. 30
   programs 13.1 s -> 11.3 s against 0.13.0 with the same instruction
-  count; `docdb` and `json_roundtrip` now beat Python. Details are in
-  `2026-11-10-v0.14.0-preview-release.md`.
+  count; `docdb` and `json_roundtrip` now beat Python. Published
+  2026-11-11 (tag `3507f338` on `10d43c5e`, release run `43003654986`).
+  Details are in `2026-11-10-v0.14.0-preview-release.md`.
 
 ## Trait objects (complete)
 
