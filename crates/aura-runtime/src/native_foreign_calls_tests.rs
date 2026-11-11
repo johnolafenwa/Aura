@@ -665,3 +665,37 @@ fn a_flag_list_with_a_byte_that_is_not_a_bool_ends_the_task() {
         )
     );
 }
+
+#[test]
+fn a_callback_failure_waits_for_the_foreign_call_to_return() {
+    use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
+    unsafe extern "C-unwind" fn doubles(frame: *mut u64) {
+        unsafe { *frame.add(1) = *frame * 2 };
+    }
+    unsafe extern "C-unwind" fn fails(frame: *mut u64) {
+        unsafe { *frame.add(1) = 9 };
+        std::panic::panic_any(41_i32);
+    }
+
+    let mut frame = [21_u64, 0];
+    unsafe { aura_direct_ffi_callback_guard(doubles, frame.as_mut_ptr()) };
+    assert_eq!(frame, [21, 42]);
+    // Nothing failed, so the check returns.
+    aura_direct_ffi_callback_check();
+
+    let mut frame = [1_u64, 0];
+    unsafe { aura_direct_ffi_callback_guard(fails, frame.as_mut_ptr()) };
+    assert_eq!(frame[1], 9);
+    // A later callback under the same foreign call does not run.
+    let mut later = [21_u64, 0];
+    unsafe { aura_direct_ffi_callback_guard(doubles, later.as_mut_ptr()) };
+    assert_eq!(later, [21, 0]);
+
+    let raised = std::panic::catch_unwind(|| aura_direct_ffi_callback_check())
+        .expect_err("the check raises the parked failure");
+    assert_eq!(raised.downcast_ref::<i32>(), Some(&41));
+    // The failure is raised once.
+    aura_direct_ffi_callback_check();
+    unsafe { aura_direct_ffi_callback_guard(doubles, later.as_mut_ptr()) };
+    assert_eq!(later, [21, 42]);
+}

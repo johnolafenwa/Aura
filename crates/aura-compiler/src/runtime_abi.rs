@@ -383,6 +383,8 @@ runtime_functions! {
     FfiElements => ("aura_direct_ffi_elements", [I64, I64, I64], Some(I64)),
     FfiElementsMut => ("aura_direct_ffi_elements_mut", [I64, I64, I64], None),
     FfiCheckFlags => ("aura_direct_ffi_check_flags", [I64, I64, I64], None),
+    FfiCallbackGuard => ("aura_direct_ffi_callback_guard", [I64, I64], None),
+    FfiCallbackCheck => ("aura_direct_ffi_callback_check", [], None),
     MonotonicTimeMs => ("aura_direct_monotonic_time_ms", [], Some(I64)),
     ChannelNew => ("aura_direct_channel_new", [I64], Some(I64)),
     ChannelSend => ("aura_direct_channel_send", [I64, I64], Some(I64)),

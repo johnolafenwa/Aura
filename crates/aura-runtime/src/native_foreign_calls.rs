@@ -545,6 +545,50 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
     })
 }
 
+thread_local! {
+    /// The failure of a callback that ran under the foreign call this
+    /// thread is in. `aura_direct_ffi_callback_check` raises it again when
+    /// the foreign function has returned.
+    static CALLBACK_FAILURE: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs the body of a callback that C code called. `body` is generated
+/// code that calls the Aura function with the arguments in `frame` and
+/// leaves its results there.
+///
+/// A failure in the function must not unwind through the C frames between
+/// the callback and the foreign call. It stops here and is raised again
+/// after the foreign function returns. Until then, every callback returns
+/// without running, with a zero result.
+///
+/// # Safety
+///
+/// `body` is the generated body for the callback, and `frame` is the frame
+/// its entry code built.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
+    body: unsafe extern "C-unwind" fn(*mut u64),
+    frame: *mut u64,
+) {
+    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+        return;
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
+    if let Err(payload) = outcome {
+        CALLBACK_FAILURE.set(Some(payload));
+    }
+}
+
+/// Raises the failure of a callback that ran under the foreign call that
+/// has just returned, when there is one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
+    if let Some(payload) = CALLBACK_FAILURE.take() {
+        std::panic::resume_unwind(payload);
+    }
+}
+
 #[cfg(test)]
 #[path = "native_foreign_calls_tests.rs"]
 mod tests;

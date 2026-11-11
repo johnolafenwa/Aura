@@ -24,6 +24,10 @@
 //!   calling convention passes a struct: in registers, on the stack, or
 //!   through an address. A `mut` argument of such a class passes the
 //!   address of a C copy, and the copy is read back when the call returns
+//! - a callback argument, a named function for a parameter of function
+//!   type, passes the address of entry code with the C signature. The
+//!   entry code hands the arguments to the Aura function through the
+//!   runtime, which stops a failure from unwinding into the C caller
 //! - a handle result boxes the returned address, and a null address ends
 //!   the task with `AU4005` unless the declared result is `Handle | None`
 //! - a `bool` result that is neither 0 nor 1 ends the task with `AU4001`
@@ -35,6 +39,8 @@
 use super::*;
 
 use crate::c_layout::{CAbi, CArgument, CPassing, CPiece, CStruct};
+use crate::ffi::CCallback;
+use crate::mir_runtime::callback_signature;
 use crate::mir::MirExternParam;
 use crate::native_backend::{Extension, Indirect};
 
@@ -70,10 +76,270 @@ fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
     })
 }
 
+/// A callback one foreign call passes: the Aura function and the C
+/// signature it is called with.
+pub(super) type CallbackKey = (String, CCallback);
+
+/// Every callback the module's foreign calls pass, once each, in an order
+/// that is the same in every build.
+pub(super) fn module_callbacks(module: &MirModule) -> Vec<CallbackKey> {
+    let mut found: Vec<CallbackKey> = Vec::new();
+    let instructions = module
+        .functions
+        .iter()
+        .chain(module.top_level.iter())
+        .flat_map(|function| &function.blocks)
+        .flat_map(|block| &block.instructions);
+    for instruction in instructions {
+        let Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee: CallTarget::Extern(call),
+                    args,
+                    ..
+                },
+            ..
+        } = instruction
+        else {
+            continue;
+        };
+        for (param, argument) in call.params.iter().zip(args) {
+            if let (Some(signature), Operand::Function { name, .. }) =
+                (callback_signature(&param.ty), &argument.value)
+            {
+                let key = (name.clone(), signature);
+                if !found.contains(&key) {
+                    found.push(key);
+                }
+            }
+        }
+    }
+    found.sort_by_cached_key(|(name, signature)| format!("{name} {signature:?}"));
+    found
+}
+
+/// The C signature of a callback's entry code, and the signature of its
+/// body, which takes the address of the call's frame.
+pub(super) fn callback_signatures(callback: &CCallback) -> (Signature, Signature) {
+    let mut entry = Signature::new(CallConv::C);
+    for param in &callback.params {
+        let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
+        match param.pointer {
+            true => entry.params.push(types::I64),
+            false => entry.params.push(scalar.ty),
+        }
+        entry.extensions.push(match param.pointer {
+            true => Extension::None,
+            false => scalar.extension,
+        });
+    }
+    if let Some(result) = callback.result {
+        entry.returns.push(callback_result_type(result));
+    }
+    let mut body = Signature::new(CallConv::C);
+    body.params.push(types::I64);
+    (entry, body)
+}
+
+/// The type a callback returns its result in. C callers differ on whether
+/// they extend a result narrower than 32 bits, so it returns extended.
+fn callback_result_type(result: crate::ffi::FfiScalar) -> ScalarType {
+    let scalar = foreign_scalar(result.ffi_type()).expect("a callback returns a scalar");
+    match scalar.ty {
+        ScalarType::I8 | ScalarType::I16 => types::I32,
+        other => other,
+    }
+}
+
+/// The Aura word of the C value `raw` that a callback received.
+fn callback_word(builder: &mut dyn FunctionBackend, scalar: &ForeignScalar, raw: Val) -> Val {
+    let bits = match (scalar.ty, scalar.extension) {
+        (ScalarType::I64 | ScalarType::F64, _) => return raw,
+        (ScalarType::F32, _) => return builder.fpromote(types::F64, raw),
+        (ScalarType::I8, Extension::Sign) => 8,
+        (ScalarType::I16, Extension::Sign) => 16,
+        (ScalarType::I32, Extension::Sign) => 32,
+        _ => 0,
+    };
+    let wide = builder.uextend(types::I64, raw);
+    if scalar.kind == ScalarKind::Bool {
+        // C code can pass any byte as a `bool`. Nonzero is true.
+        let set = builder.icmp_imm(IntCC::NotEqual, wide, 0);
+        let one = builder.iconst(types::I64, 1);
+        let zero = builder.iconst(types::I64, 0);
+        return builder.select(set, one, zero);
+    }
+    if bits == 0 {
+        return wide;
+    }
+    let shift = builder.iconst(types::I64, 64 - bits);
+    let high = builder.ishl(wide, shift);
+    builder.sshr(high, shift)
+}
+
+/// The C value of type `ty` for the Aura word `word`.
+fn callback_narrow(builder: &mut dyn FunctionBackend, ty: ScalarType, word: Val) -> Val {
+    match ty {
+        ScalarType::I64 | ScalarType::F64 => word,
+        ScalarType::F32 => builder.fdemote(types::F32, word),
+        narrow => builder.ireduce(narrow, word),
+    }
+}
+
+impl NativeCodegen<'_> {
+    /// Defines the entry code and the body of every callback the module
+    /// passes to C.
+    pub(super) fn define_callback_thunks(&mut self) -> std::result::Result<(), String> {
+        for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
+            let (entry, body) = callback_signatures(&callback);
+            self.define_body(
+                entry_id,
+                &entry,
+                &format!("callback entry for `{name}`"),
+                |codegen, builder| {
+                    codegen.emit_callback_entry(builder, &callback, body_id);
+                    Ok(())
+                },
+            )?;
+            let target = self.functions[&name];
+            self.define_body(
+                body_id,
+                &body,
+                &format!("callback body for `{name}`"),
+                |_, builder| {
+                    emit_callback_body(builder, &callback, target);
+                    Ok(())
+                },
+            )?;
+        }
+        Ok(())
+    }
+
+    /// The code C calls: it writes the arguments to a frame as Aura words,
+    /// runs the body under the runtime's guard, and returns what the body
+    /// left in the frame.
+    fn emit_callback_entry(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        callback: &CCallback,
+        body_id: FuncHandle,
+    ) {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let arguments = builder.block_params(entry);
+        let flags = MemFlags::trusted();
+        let count = callback.params.len();
+        let slot = builder.create_sized_stack_slot((count as u32 + 1) * 8, 3);
+        let frame = builder.stack_addr(types::I64, slot, 0);
+        let zero = builder.iconst(types::I64, 0);
+        builder.store(flags, zero, frame, count as i32 * 8);
+        // A null pointer argument reads and writes this word instead.
+        let spare = builder.create_sized_stack_slot(8, 3);
+        let spare = builder.stack_addr(types::I64, spare, 0);
+        builder.store(flags, zero, spare, 0);
+
+        let mut pointees = Vec::new();
+        for (index, (param, argument)) in callback.params.iter().zip(arguments).enumerate() {
+            let scalar =
+                foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
+            let raw = if param.pointer {
+                let present = builder.icmp_imm(IntCC::NotEqual, argument, 0);
+                let address = builder.select(present, argument, spare);
+                pointees.push((index, address));
+                builder.load(scalar.ty, flags, address, 0)
+            } else {
+                argument
+            };
+            let word = callback_word(builder, &scalar, raw);
+            builder.store(flags, word, frame, index as i32 * 8);
+        }
+
+        let body = builder.import_function(body_id);
+        let body = builder.func_addr(types::I64, body);
+        let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
+        builder.call(guard, &[body, frame]);
+
+        for (index, address) in pointees {
+            let scalar = foreign_scalar(callback.params[index].scalar.ffi_type())
+                .expect("a callback takes scalars");
+            let word = builder.load(
+                scalar.kind.signature_type(),
+                flags,
+                frame,
+                index as i32 * 8,
+            );
+            let narrow = callback_narrow(builder, scalar.ty, word);
+            builder.store(flags, narrow, address, 0);
+        }
+        let Some(result) = callback.result else {
+            builder.return_(&[]);
+            return;
+        };
+        let scalar = foreign_scalar(result.ffi_type()).expect("a callback returns a scalar");
+        let word = builder.load(
+            scalar.kind.signature_type(),
+            flags,
+            frame,
+            count as i32 * 8,
+        );
+        let narrow = callback_narrow(builder, callback_result_type(result), word);
+        builder.return_(&[narrow]);
+    }
+}
+
+/// The code the guard runs: it calls the Aura function `target` with the
+/// words of the frame, and stores the result and what the function wrote
+/// to its `mut` parameters back to the frame.
+fn emit_callback_body(builder: &mut dyn FunctionBackend, callback: &CCallback, target: FuncHandle) {
+    let entry = builder.create_block();
+    builder.append_block_params_for_function_params(entry);
+    builder.switch_to_block(entry);
+    builder.seal_block(entry);
+    let frame = builder.block_params(entry)[0];
+    let flags = MemFlags::trusted();
+    let count = callback.params.len();
+    let arguments = callback
+        .params
+        .iter()
+        .enumerate()
+        .map(|(index, param)| {
+            let scalar =
+                foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
+            builder.load(
+                scalar.kind.signature_type(),
+                flags,
+                frame,
+                index as i32 * 8,
+            )
+        })
+        .collect::<Vec<_>>();
+    let target = builder.import_function(target);
+    let results = builder.call(target, &arguments).results;
+    // The function returns its result, then one word for each `mut`
+    // parameter in order.
+    let written = callback.params.iter().filter(|param| param.pointer).count();
+    let mut cursor = results.len() - written;
+    if callback.result.is_some() {
+        builder.store(flags, results[0], frame, count as i32 * 8);
+    }
+    for (index, param) in callback.params.iter().enumerate() {
+        if param.pointer {
+            builder.store(flags, results[cursor], frame, index as i32 * 8);
+            cursor += 1;
+        }
+    }
+    builder.return_(&[]);
+}
+
 /// The boundary type of one parameter of a foreign call.
 pub(super) fn foreign_param_type(
     param: &MirExternParam,
 ) -> std::result::Result<DirectFfiType, String> {
+    if matches!(param.ty, Type::Function { .. }) {
+        return Ok(DirectFfiType::scalar(FfiType::Callback));
+    }
     if param.c_string {
         return Ok(DirectFfiType::scalar(c_string_type(&param.ty)));
     }
@@ -162,6 +428,8 @@ enum ForeignOperand {
     /// The address of a `cstr` literal: the program's own constant bytes,
     /// which end in a NUL.
     CText(Val),
+    /// The entry code of a callback.
+    Callback(FuncRef),
 }
 
 /// What a `mut` argument's place takes when the call returns.
@@ -272,6 +540,23 @@ impl FunctionCompiler<'_> {
         for (index, (argument, param)) in args.iter().zip(&call.params).enumerate() {
             let ffi = foreign_param_type(param)?;
             match (ffi.ffi_type, &argument.value) {
+                (FfiType::Callback, operand) => {
+                    let entry = match (callback_signature(&param.ty), operand) {
+                        (Some(signature), Operand::Function { name, .. }) => self
+                            .callback_refs
+                            .get(&(name.clone(), signature))
+                            .copied(),
+                        _ => None,
+                    };
+                    let entry = entry.ok_or_else(|| {
+                        format!(
+                            "direct backend needs a named function for callback `{}` of `{}`",
+                            param.name, call.symbol
+                        )
+                    })?;
+                    loaded.push((ForeignOperand::Callback(entry), None));
+                    continue;
+                }
                 (FfiType::StringView, Operand::String(text)) => {
                     let text = self.foreign_text_literal(text)?;
                     loaded.push((ForeignOperand::Text(text), None));
@@ -367,6 +652,11 @@ impl FunctionCompiler<'_> {
                 }
                 ForeignOperand::CText(pointer) => {
                     arguments.push_word(pointer);
+                    continue;
+                }
+                ForeignOperand::Callback(entry) => {
+                    let address = self.builder.func_addr(types::I64, entry);
+                    arguments.push_word(address);
                     continue;
                 }
             };
@@ -503,6 +793,12 @@ impl FunctionCompiler<'_> {
             self.store_place(&place, writeback)?;
         }
 
+        // A callback that failed under this call, or under an earlier one
+        // that kept the callback, fails the call now that C has returned.
+        if !self.callback_refs.is_empty() {
+            self.builder
+                .call(self.runtime[RuntimeFn::FfiCallbackCheck], &[]);
+        }
         let return_direct = ensure_direct_type(
             &call.return_type,
             &self.classes,
