@@ -15861,3 +15861,70 @@ def main() -> int32:
     let decoded: MirModule = serde_json::from_value(encoded).expect("MIR reads back");
     assert_eq!(decoded.foreign_link, linked.foreign_link);
 }
+
+/// `if call() is None:` once took a constant branch: only a named place was
+/// tested by its tag, and any other operand was treated as never `None`.
+const NONE_TEST_ON_CALL_RESULTS: &str = r#"def find_or_none(text: str, wanted: str) -> int64 | None:
+    return text.find(wanted)
+
+def absent(text: str) -> str:
+    if text.find("zzz") is None:
+        return "absent"
+    return "present"
+
+def present(text: str) -> str:
+    if find_or_none(text, "zzz") is not None:
+        return "present"
+    else:
+        return "absent"
+
+def both(text: str) -> str:
+    if text.find("a") is not None and not (text.find("zzz") is None):
+        return "both"
+    return "not both"
+
+def count_missing(texts: list[str]) -> int64:
+    mut missing = 0
+    mut index = 0
+    while index < texts.len() and texts[index].find("zzz") is None:
+        missing += 1
+        index += 1
+    return missing
+
+def main() -> int32:
+    print(absent("abc"))
+    print(absent("zzz"))
+    print(present("abc"))
+    print(present("a zzz"))
+    print(both("abc"))
+    print(both("a zzz"))
+    print(count_missing(["a", "b", "zzz", "c"]))
+    print("yes" if "abc".find("zzz") is None else "no")
+    return 0
+"#;
+
+#[test]
+fn a_none_test_on_a_call_result_in_a_condition_reads_the_result() {
+    let output = crate::run_source(NONE_TEST_ON_CALL_RESULTS).expect("the None tests should run");
+    assert_eq!(
+        output.stdout,
+        "absent\npresent\nabsent\npresent\nnot both\nboth\n2\nyes\n"
+    );
+    let module =
+        crate::lower_source_to_mir(NONE_TEST_ON_CALL_RESULTS).expect("the None tests should lower");
+    let absent = module
+        .functions
+        .iter()
+        .find(|function| function.name == "absent")
+        .expect("absent is lowered");
+    assert!(
+        absent.blocks.iter().all(|block| !matches!(
+            block.terminator,
+            Terminator::Branch {
+                condition: Operand::Bool(_),
+                ..
+            }
+        )),
+        "the branch must test the call result, not a constant"
+    );
+}

@@ -27,6 +27,10 @@ in this file.
   `net.HttpResponse` are removed. Use the `http` module. A response's
   `status`, `reason`, and `url` are fields, its header names are in lower
   case, and the 16 MiB limit on a whole response is gone.
+- Fixed: an `is None` or `is not None` test on a call result in a
+  condition, such as `if text.find("x") is None:`, always took the
+  not-`None` branch on both backends. The test reads the result. A test
+  on a variable or a field was not affected.
 - Fixed: `with` rejected a context manager whose class is declared in
   another module (`AU2017`).
 - Fixed: editor completion offered the private fields and methods of a

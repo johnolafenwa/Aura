@@ -155,6 +155,19 @@ How it got there, from a first version at 9.8 s:
 | --- | --- | --- | --- |
 | `http_stream` at 400,000 lines | 1.19 s | 5.78 s | 0.61 s |
 
+## Compiler fix found while writing the streaming agent (2026-11-11)
+
+`if text.find("x") is None:` took the not-`None` branch every time. The
+condition lowering in `lower_condition_branch` only read a union tag when
+the tested value was a place. A call result fell through to a constant
+`Branch`. The value form, `print(x.find("y") is None)`, was correct. The
+fix holds the result in a temporary, reads its tag, and ends any element
+loan the call took before the branch. Tests:
+`a_none_test_on_a_call_result_in_a_condition_reads_the_result` in
+`mir_tests.rs` and
+`none_test_on_a_call_result_in_a_condition_runs_on_both_backends` in the
+CLI tests.
+
 ## Gaps found in step 3, left for later
 
 - No HTTP/2, proxies, cookies, or streamed request bodies.
