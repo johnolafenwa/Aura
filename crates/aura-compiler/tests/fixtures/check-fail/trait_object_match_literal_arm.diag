@@ -1,0 +1,5 @@
+error[AU2002]: literal pattern `1` does not match scrutinee type `dyn Shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_literal_arm.au:30:14
+   |
+30 |         case 1:
+   |              ^

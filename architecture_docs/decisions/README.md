@@ -102,4 +102,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
 78. [ADR-0078: Regular expressions](0078-regular-expressions.md) — Accepted; the `regex` module on a linear-time engine, with a `Regex` that holds a pattern number
 79. [ADR-0079: Dates and times](0079-dates-and-times.md) — Accepted; `time.DateTime` as an instant with a fixed offset, exact `Duration` arithmetic, RFC 3339 and pattern text
+81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
 82. [ADR-0082: The `http` client module](0082-http-client-module.md) — Accepted; a client module written mostly in Aura over a streamed response, with kept connections, redirects, decompression, and server-sent events; replaces `net.http_request_*`

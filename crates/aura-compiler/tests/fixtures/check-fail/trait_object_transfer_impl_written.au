@@ -1,0 +1,15 @@
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        return len(self.values)
+
+impl Transfer for Sum:
+    pass
+
+def main() -> None:
+    print(Sum(values=[1]).run())

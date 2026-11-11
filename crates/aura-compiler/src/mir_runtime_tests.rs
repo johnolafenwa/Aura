@@ -1645,6 +1645,88 @@ fn adr0038_mir_returned_loan_instruction_reports_handoff_errors_and_root_project
     assert_eq!(env.resolve_loan_place("element").unwrap(), "pair.0");
 }
 
+#[test]
+fn trait_object_rvalues_wrap_test_and_take_the_held_value() {
+    let mut runtime = test_runtime();
+    let mut env = Env::default();
+    let mut evaluate = |value: Rvalue, env: &mut Env| {
+        let outcome = runtime.evaluate_rvalue(&value, env);
+        let Ok(super::RvalueOutcome::Value(value)) = outcome else {
+            panic!("expected a value");
+        };
+        value
+    };
+    let holds = |value: Operand, ty: &str| Rvalue::TraitObjectHolds {
+        value,
+        ty: Type::named(ty),
+    };
+
+    // A conversion wraps the value with the type it has where it converts.
+    let object = evaluate(
+        Rvalue::TraitObject {
+            value: Operand::Float(1.5),
+            held: Type::named("float32"),
+        },
+        &mut env,
+    );
+    let Value::TraitObject(wrapped) = &object else {
+        panic!("expected a trait object, found {object:?}");
+    };
+    assert_eq!(*wrapped.held, Type::named("float32"));
+    assert!(super::MirRuntime::trait_object_holds(
+        &object,
+        &Type::named("float32")
+    ));
+    assert!(!super::MirRuntime::trait_object_holds(
+        &object,
+        &Type::named("float64")
+    ));
+    assert!(!super::owns_generator(&object));
+    env.define_typed("object", Type::TypeParam("dyn Shape".to_string()), object);
+    let place = || Operand::Place("object".to_string());
+    assert_eq!(
+        evaluate(holds(place(), "float32"), &mut env),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        evaluate(holds(place(), "float64"), &mut env),
+        Value::Bool(false)
+    );
+    let taken = evaluate(
+        Rvalue::TraitObjectTake {
+            value: Operand::MovePlace("object".to_string()),
+            ty: Type::named("float32"),
+        },
+        &mut env,
+    );
+    assert_eq!(taken, Value::Float(1.5));
+
+    // A value that is no trait object holds nothing, and taking from it
+    // gives the value itself.
+    assert_eq!(
+        evaluate(holds(Operand::Bool(true), "bool"), &mut env),
+        Value::Bool(false)
+    );
+    let plain = evaluate(
+        Rvalue::TraitObjectTake {
+            value: Operand::Bool(true),
+            ty: Type::named("bool"),
+        },
+        &mut env,
+    );
+    assert_eq!(plain, Value::Bool(true));
+
+    // A value with no type to name still becomes a trait object.
+    let namespace = crate::runtime_value::ModuleNamespaceValue {
+        path: "m".to_string(),
+    };
+    let unnamed = runtime.trait_object_value(Value::ModuleNamespace(namespace), None);
+    let Value::TraitObject(unnamed) = unnamed else {
+        panic!("expected a trait object");
+    };
+    assert_eq!(*unnamed.held, Type::named("Unknown"));
+}
+
 fn test_runtime() -> MirRuntime {
     MirRuntime::new(
         MirModule {

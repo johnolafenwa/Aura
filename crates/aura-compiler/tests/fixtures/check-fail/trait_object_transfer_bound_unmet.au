@@ -1,0 +1,27 @@
+import random
+
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        return len(self.values)
+
+class Dice:
+    rng: random.Rng
+
+def send[T: Transfer](value: own T) -> int64:
+    queue = Queue[T]()
+    _ = queue.put(value)
+    return 1
+
+def main() -> None:
+    print(send(Sum(values=[1])))
+    print(send(4))
+    print(send("text"))
+    job: dyn Job = Sum(values=[1, 2])
+    print(send(job))
+    print(send(Dice(rng=random.Rng(1))))

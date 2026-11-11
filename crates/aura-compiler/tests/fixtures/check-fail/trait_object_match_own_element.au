@@ -1,0 +1,34 @@
+trait Shape:
+    def area(self) -> int64
+
+trait Other:
+    def other(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+
+class Plain:
+    x: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w
+
+impl Other for Square:
+    def other(self) -> int64:
+        return 1
+
+def main() -> None:
+    shapes: list[dyn Shape] = [Square(side=1)]
+    match own shapes[0]:
+        case Square as square:
+            print(square.side)
+        case _:
+            pass

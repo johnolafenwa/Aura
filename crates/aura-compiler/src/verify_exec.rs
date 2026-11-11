@@ -300,6 +300,10 @@ pub(super) enum Val {
     /// A function value of a callable alias with a contract, named by the
     /// alias: a call through it has that contract.
     Contracted(String),
+    /// A trait object made from a value of a known type: the type it
+    /// holds, and that value. A trait object the function receives is
+    /// `Opaque`, because any implementing type may be inside.
+    Held(Type, Box<Val>),
     /// A `dict`: its length, which keys it holds as an `(Array K Bool)`,
     /// and its values as an `(Array K S)` when the encoding models them.
     Map {
@@ -1720,6 +1724,11 @@ impl<'a> Exec<'a> {
                 Val::Union(tag, self.merge_children(pcs, values, hint))
             }
             // Equal units and opaque values returned above.
+            // Trait objects of one held type merge the values they hold.
+            Val::Held(held, _) => {
+                let mut merged = self.merge_children(pcs, values, hint);
+                Val::Held(held.clone(), Box::new(merged.remove(0)))
+            }
             Val::Unit | Val::Opaque | Val::Func(_) | Val::Task(_) | Val::Contracted(_) => {
                 Val::Opaque
             }
@@ -2779,6 +2788,24 @@ impl<'a> Exec<'a> {
                     .collect();
                 Val::Union(member_index.to_string(), members)
             }
+            // A conversion to a trait object keeps the value and the type it
+            // was made from, so a type arm and a call on it are decided.
+            Rvalue::TraitObject { value, held } => {
+                let inner = self.followed_operand(state, value, IntTy::of(held));
+                Val::Held(held.clone(), Box::new(inner))
+            }
+            Rvalue::TraitObjectHolds { value, ty } => {
+                match self.followed_operand(state, value, None) {
+                    Val::Held(held, _) => Val::Bool((held == *ty).to_string()),
+                    _ => fresh_target(self),
+                }
+            }
+            Rvalue::TraitObjectTake { value, ty } => {
+                match self.followed_operand(state, value, None) {
+                    Val::Held(held, inner) if held == *ty => *inner,
+                    _ => fresh_target(self),
+                }
+            }
             Rvalue::Try { value, .. } => {
                 let operand = self.operand(state, value, None);
                 match &operand {
@@ -3163,6 +3190,48 @@ impl<'a> Exec<'a> {
                     target,
                 )
             }
+            // A call on a trait object made in this function from a value
+            // of a known type runs that type's implementation, so it relies
+            // on that implementation's own contract.
+            CallTarget::TraitMember {
+                object,
+                receiver_place,
+                dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                ..
+            } if self.held_call_target(state, object, candidates).is_some() => {
+                let (function, held, receiver) = self
+                    .held_call_target(state, object, candidates)
+                    .expect("checked above");
+                let mut actuals = Vec::new();
+                for arg in args {
+                    actuals.push((
+                        arg.name.clone(),
+                        self.followed_operand(state, &arg.value, None),
+                        arg.writeback_place.clone(),
+                    ));
+                }
+                let result = self.user_call(
+                    state,
+                    &function,
+                    Some((receiver, receiver_place.clone())),
+                    actuals,
+                    target_type.as_ref(),
+                    target,
+                );
+                // A `mut self` method leaves the value it changed in the
+                // receiver's place, which still holds a trait object of the
+                // same type.
+                let mutates = self
+                    .cx
+                    .function(&function)
+                    .and_then(|callee| callee.receiver)
+                    == Some(MirReceiverKind::BorrowMut);
+                if let (true, Some(place)) = (mutates, receiver_place) {
+                    let changed = self.read_place(state, place);
+                    self.write_place(state, place, Val::Held(held, Box::new(changed)));
+                }
+                result
+            }
             // A call through a trait picks its implementation at run time.
             // Every implementation has the trait method's contract, so the
             // call relies on that.
@@ -3282,6 +3351,23 @@ impl<'a> Exec<'a> {
                 fresh_target(self)
             }
         }
+    }
+
+    /// The implementation a call on the trait object `object` runs, and the
+    /// value it runs on, when the object was made from a value of a known
+    /// type that one of `candidates` serves.
+    fn held_call_target(
+        &mut self,
+        state: &mut State,
+        object: &Operand,
+        candidates: &[crate::mir::MethodCandidate],
+    ) -> Option<(String, Type, Val)> {
+        let Val::Held(held, inner) = self.followed_operand(state, object, None) else {
+            return None;
+        };
+        let candidate = candidates.iter().find(|candidate| candidate.ty == held)?;
+        self.cx.function(&candidate.function)?;
+        Some((candidate.function.clone(), held, *inner))
     }
 
     /// The function a call through a trait is modeled by, and the contract
@@ -4555,6 +4641,7 @@ fn same_shape(a: &Val, b: &Val) -> bool {
             x == y && xs.iter().map(Vec::len).eq(ys.iter().map(Vec::len))
         }
         (Val::Union(_, xs), Val::Union(_, ys)) => xs.len() == ys.len(),
+        (Val::Held(x, _), Val::Held(y, _)) => x == y,
         _ => false,
     }
 }
@@ -4585,6 +4672,7 @@ fn tag_term(value: &Val) -> Option<&str> {
 fn children(value: &Val) -> Vec<&Val> {
     match value {
         Val::Tuple(items) | Val::Union(_, items) => items.iter().collect(),
+        Val::Held(_, inner) => vec![inner],
         Val::Record(_, fields) => fields.iter().map(|(_, value)| value).collect(),
         Val::Enum(_, _, payloads) => payloads.iter().flatten().collect(),
         _ => Vec::new(),

@@ -87,6 +87,8 @@ and promises to explain each later.
 - 10.1 Generic functions and classes
 - 10.2 Traits
 - 10.3 Converting between types
+- 10.4 Iterators and generators
+- 10.5 Trait objects (`dyn Trait`, conversion, `match` type arms, when to use a generic, a union, or a trait object)
 
 ## 11. Writing automated tests
 

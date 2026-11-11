@@ -1,0 +1,112 @@
+trait Named:
+    def name(self) -> str
+
+
+class Box[T]:
+    value: T
+
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+
+impl Named for float32:
+    def name(self) -> str:
+        return "float32"
+
+
+impl Named for float64:
+    def name(self) -> str:
+        return "float64"
+
+
+impl Named for list[float32]:
+    def name(self) -> str:
+        return "list[float32]"
+
+
+impl Named for list[float64]:
+    def name(self) -> str:
+        return "list[float64]"
+
+
+impl Named for Box[float32]:
+    def name(self) -> str:
+        return "Box[float32]"
+
+
+impl Named for Box[float64]:
+    def name(self) -> str:
+        return "Box[float64]"
+
+
+impl Named for Maybe[int32]:
+    def name(self) -> str:
+        return "Maybe[int32]"
+
+
+impl Named for Maybe[int64]:
+    def name(self) -> str:
+        return "Maybe[int64]"
+
+
+impl Named for dict[str, int32]:
+    def name(self) -> str:
+        return "dict[str, int32]"
+
+
+impl Named for dict[str, int64]:
+    def name(self) -> str:
+        return "dict[str, int64]"
+
+
+impl Named for set[int32]:
+    def name(self) -> str:
+        return "set[int32]"
+
+
+impl Named for set[int64]:
+    def name(self) -> str:
+        return "set[int64]"
+
+
+def generic_name[T: Named](value: T) -> str:
+    return value.name()
+
+
+def main() -> None:
+    f32: float32 = 1.5
+    i32: int32 = 3
+    l32: list[float32] = [f32]
+    l64: list[float64] = [2.5]
+    e32: list[float32] = []
+    e64: list[float64] = []
+    n32: Maybe[int32] = Maybe.Nothing
+    n64: Maybe[int64] = Maybe.Nothing
+    d32: dict[str, int32] = {}
+    d64: dict[str, int64] = {}
+    s32 = set[int32]()
+    s64 = set[int64]()
+    print(generic_name(f32))
+    print(generic_name(2.5))
+    items: list[dyn Named] = [
+        f32,
+        2.5,
+        l32,
+        l64,
+        e32,
+        e64,
+        Box(value=f32),
+        Box(value=2.5),
+        Maybe.Some(i32),
+        Maybe.Some(1),
+        n32,
+        n64,
+        d32,
+        d64,
+        s32,
+        s64,
+    ]
+    for item in items:
+        print(item.name())

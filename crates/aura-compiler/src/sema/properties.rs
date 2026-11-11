@@ -1253,6 +1253,8 @@ impl<'a> FunctionChecker<'a> {
                     failure: None,
                     requirements: vec![(*index, String::new())],
                 },
+                // A `T: Transfer` bound is the proof.
+                None if self.type_param_is_transfer(name) => TransferSummary::default(),
                 None => TransferSummary {
                     failure: Some(format!(
                         "type parameter `{name}` has no compiler-proven Transfer specialization"
@@ -1274,9 +1276,11 @@ impl<'a> FunctionChecker<'a> {
                 }
                 result
             }
+            // A trait that requires `Transfer` admits only Transfer types.
+            Type::Named(_, _) if self.trait_object_is_transfer(ty) => TransferSummary::default(),
             Type::Named(_, _) if ty.is_trait_object() => TransferSummary {
                 failure: Some(format!(
-                    "`{ty}` is a trait object, and the type it holds is not known to be Transfer"
+                    "`{ty}` is a trait object, and the type it holds is not known to be Transfer; declare its trait with `Transfer` as a supertrait to admit only Transfer types"
                 )),
                 requirements: Vec::new(),
             },

@@ -96,8 +96,11 @@ function is then compiled for `T = dyn Tool` like any other type.
 ## F. Getting The Type Back
 
 - **F1. `match` type arms with a required catch-all (default).**
-  `case Echo(echo):` selects on the held type. The set of types is open,
-  so the match needs `case _`.
+  `case Echo as echo:` selects on the held type. The set of types is open,
+  so the match needs `case _`. The ratified text spelled the arm
+  `case Echo(echo):`. Step 3 uses `case Echo as echo:` instead, because
+  that is how a union type arm is already spelled, and `Echo(...)` is a
+  class pattern over fields.
 - F2. A downcast method returning `T | None`. Rejected: it adds a
   reflective call where `match` already reads naturally.
 
@@ -174,6 +177,78 @@ boundary.
   of the trait object type. Supertrait calls, upcasts, and bounds already
   work in this step.
 
+- **Step 2 (2026-11-10).** `value as dyn Trait` is a cast whose target
+  is a trait object type. The checker records the same conversion for the
+  cast's operand that a typed site records, so the cast lowers through
+  the same path and borrows or moves as its context does. A cast is
+  refused where a place is needed: a `mut` receiver, a `mut` argument, a
+  `view` source. `dyn Iterator[T]` and a trait object of any trait that
+  extends it are `for` sources. A union value converts when every member
+  implements the trait; lowering branches on the union's tag, so the
+  trait object holds the active member and never the union.
+
+- **Exact held type (2026-11-10).** A conversion is now its own MIR
+  rvalue, `TraitObject { value, held }`, which records the static type of
+  the value. Step 1 lowered it as a plain move, and the backends then
+  guessed the held type from the shape of the value, which is not exact: a
+  float does not say its width, and an interpreter value does not carry
+  its type arguments. The interpreter wraps the value with `held`. The
+  native runtime needs the wrapper only for a float, because every other
+  boxed value already carries its exact type. A value known by a type
+  parameter or a union gives its active member at run time
+  (`aura_direct_trait_object_from`).
+
+- **Step 3 (2026-11-10).** `match` on a trait object takes type arms,
+  `case Type as name:`, and needs a final catch-all (`AU2013`). An arm's
+  type must implement the trait and cannot be a trait object. Lowering
+  uses two rvalues: `TraitObjectHolds { value, ty }` tests the held type,
+  and `TraitObjectTake { value, ty }` copies the held value out for a
+  shared or `mut` binding, or moves it out for `match own`. `match mut`
+  writes the binding back through the write-back path `match mut` on a
+  union already uses, so `return`, `break`, and `continue` write back too.
+  A shared or `mut` match on `items[i]` inspects the element in place.
+
+- **Step 4 (2026-11-10).** `Transfer` is a marker trait in the prelude
+  (`std/prelude.au`). It has no implementations: wherever a bound or a
+  supertrait names it, the checker asks the structural property instead
+  (`transfer_failure`). A trait with `Transfer` in its supertrait closure
+  admits only Transfer types, checked at each `impl` (`AU3008`), so its
+  trait object is Transfer. A type parameter is Transfer when one of its
+  bounds reaches the marker, which is what lets
+  `impl[T: Transfer] Job for Box[T]:` pass the `impl` check and lets a
+  generic function send a `T`. `impl Transfer for T:` is refused. A trait
+  the program itself names `Transfer` is an ordinary trait and changes
+  nothing. `Task.result()` moves a Transfer trait object out as it moves
+  any other single-consumer result. No backend change was needed: a trait
+  object already crosses a worker boundary as its box does.
+
+- **Steps 5 and 6 (2026-11-11).** Speed. Three changes, all in how
+  generated code calls a method on a trait object:
+  - A shared `for` over a local `list[dyn Trait]` lends each element
+    instead of copying it. The checker already holds every use of the
+    binding to a borrow, because a trait object is never copied.
+  - A call whose receiver is a lent list element passes the element's own
+    box to the implementation. The list moves its elements into boxes of
+    their own on first use (the `Boxes` list form).
+  - The call picks the implementation from the class access code in the
+    box header, one load and one compare per class, before the tests by
+    type name, which remain for a shared instance, a generic class, an
+    enum, and a scalar. A box that shows a class code skips the union
+    probe.
+  - A method a runtime type picks keeps its shared receiver with the
+    caller, as a statically called method does, so the call takes and
+    drops no reference.
+
+  The `trait_object_call` operation probe (three scalar classes in a
+  `list[dyn Solid]`) costs 34 instructions a call against Rust's 12 for
+  `Vec<Box<dyn Solid>>`, 2.8 times. Before, the same call cost about
+  4,600. On a mixed probe (two scalar classes and one that holds a `str`
+  and a list) a call takes 12 ns against Python's 60 ns and Rust's 2 ns.
+  Not done here: a `mut self` call on a list element, on a trait object or
+  on a class, still takes the element out and stores it back (about 3,600
+  instructions), and an instance takes two blocks of memory where Rust's
+  box takes one, which is most of the remaining time against Rust.
+
 ## Ratification Record
 
 - 2026-11-10 09:22 UTC: the owner chose "Approve all defaults" on the
@@ -181,3 +256,19 @@ boundary.
   `match` type arms (F1), `trait Tool: Transfer:` for tasks (H1), and the
   speed bar of 3x Rust `dyn` and faster than Python. The remaining
   defaults (C1, D1, I1) were approved with them.
+
+### Step 7 (2026-11-11)
+
+- `aura verify`: a conversion gives a value that keeps the held type and the
+  value (`Val::Held`). A call on it runs the implementation of that type with
+  its own contract, a `mut self` call leaves a trait object of the same type,
+  and `TraitObjectHolds` and `TraitObjectTake` are decided. Two paths that
+  hold one type merge their values. A trait object the function receives, or
+  one merged from different types, is unknown, and a call on it relies on the
+  trait method's contract as before.
+- Editor: completion after `.` on a trait object lists the methods of its
+  trait and supertraits that are callable on a trait object. Hover, go to
+  definition, references, and signature help resolve those calls, for a
+  trait of this module or an imported one. The grammar marks `dyn` before a
+  trait name.
+- The book has section 10.5, "Trait objects". The decision is ADR-0081.

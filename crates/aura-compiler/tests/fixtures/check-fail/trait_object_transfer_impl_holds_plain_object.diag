@@ -1,0 +1,6 @@
+error[AU3008]: impl of `Job` for `Holder` requires a Transfer type, because the trait has `Transfer` as a supertrait, and field `inner` of `Holder` -> `dyn Plain` is a trait object, and the type it holds is not known to be Transfer; declare its trait with `Transfer` as a supertrait to admit only Transfer types
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_impl_holds_plain_object.au:10:1
+   |
+10 | impl Job for Holder:
+   | ^
+  = help: implement the trait only for types made of Transfer components, or drop `Transfer` from the trait's supertraits

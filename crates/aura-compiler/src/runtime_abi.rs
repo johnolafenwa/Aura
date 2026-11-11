@@ -338,6 +338,8 @@ runtime_functions! {
     NoneTest => ("aura_direct_none_test", [I64], Some(I64)),
     ValueIsUnion => ("aura_direct_value_is_union", [I64], Some(I64)),
     UnionActivePayload => ("aura_direct_union_active_payload", [I64, I64], Some(I64)),
+    TraitObjectFrom => ("aura_direct_trait_object_from", [I64], Some(I64)),
+    TraitObjectFloat => ("aura_direct_trait_object_float", [I64, I64], None),
     UnionTakePayload => ("aura_direct_union_take_payload", [I64, I64, I64, I64], Some(I64)),
     EnumVariant => ("aura_direct_enum_variant", [I64, I64, I64, I64, I64, I64], Some(I64)),
     VariantMatches => ("aura_direct_variant_matches", [I64, I64, I64, I64, I64], Some(I64)),

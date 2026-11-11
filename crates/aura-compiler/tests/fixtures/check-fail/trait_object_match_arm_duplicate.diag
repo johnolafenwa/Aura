@@ -1,0 +1,5 @@
+error[AU2013]: duplicate or unreachable type arm
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_arm_duplicate.au:32:14
+   |
+32 |         case Square as again:
+   |              ^

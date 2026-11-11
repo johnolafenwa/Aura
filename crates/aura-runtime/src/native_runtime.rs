@@ -75,10 +75,10 @@ use crate::runtime_value::{
     ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
     RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
     SetElements, SetValue, SharedType, TaskCancelledSignal, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue,
-    UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue,
-    WebSocketListenerValue, WebSocketValue, DIRECT_GENERATOR_STACK_BYTES,
-    DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
+    TraitObjectValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
+    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
+    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -5003,6 +5003,7 @@ fn runtime_span(line: i64, column: i64) -> Option<Span> {
 fn value_type_name(value: impl Borrow<Value>) -> String {
     match value.borrow() {
         Value::Union(union) => union.union_type.to_string(),
+        Value::TraitObject(object) => object.held.to_string(),
         Value::Int(_) => "integer".to_string(),
         Value::Float(_) => "float64".to_string(),
         Value::Bool(_) => "bool".to_string(),
@@ -5066,6 +5067,7 @@ fn inferred_collection_type(value: &Value) -> Type {
     }
     match value {
         Value::Union(union) => Type::clone(&union.union_type),
+        Value::TraitObject(object) => Type::clone(&object.held),
         Value::String(_) => Type::named("str"),
         Value::Bool(_) => Type::named("bool"),
         Value::Float(_) => Type::named("float64"),
@@ -12688,12 +12690,20 @@ fn unbox_u64_of(value: &Value) -> u64 {
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_unbox_f64(value: *mut OpaqueValue) -> f64 {
-    task_runtime_boundary(|| match unsafe { value_ref(value) } {
-        Value::Float(value) => value,
-        other => runtime_error(format!(
-            "direct backend expected `float64`, found `{}`",
-            value_type_name(other)
-        )),
+    task_runtime_boundary(|| {
+        let value = unsafe { value_ref(value) };
+        // A trait object holds a float beside its width.
+        let held = match &value {
+            Value::TraitObject(object) => &object.value,
+            other => other,
+        };
+        match held {
+            Value::Float(value) => *value,
+            _ => runtime_error(format!(
+                "direct backend expected `float64`, found `{}`",
+                value_type_name(&value)
+            )),
+        }
     })
 }
 
@@ -13303,6 +13313,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
                 nominal_runtime_base_name(&variant.enum_name) == expected
             }
             Value::Union(union) => union.union_type.to_string() == expected,
+            Value::TraitObject(object) => object.held.to_string() == expected,
             Value::String(_) => expected == "str",
             Value::Tuple(tuple) => {
                 expected == "tuple"
@@ -13411,6 +13422,73 @@ pub extern "C-unwind" fn aura_direct_union_active_payload(
             })
         };
         boxed_value(payload)
+    })
+}
+
+/// The value a trait object holds when `value`, owned by the caller, is
+/// converted to one from a type the generated code knows only as a type
+/// parameter or a union: a union gives a copy of its active member, so a
+/// trait object never holds a union, and any other value is returned as it
+/// is.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_trait_object_from(
+    value: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let member = unsafe {
+            with_value(value, |value| {
+                let mut active = value;
+                let mut member = None;
+                while let Value::Union(union) = active {
+                    member = crate::union_runtime::active_member_type(union);
+                    active = &union.payload;
+                }
+                (!std::ptr::eq(active, value)).then(|| {
+                    let held = try_clone_array_containing_value(active)?;
+                    // A float does not say its width; the union member does.
+                    Ok(match (held, member) {
+                        (Value::Float(float), Some(member)) => {
+                            Value::TraitObject(Box::new(TraitObjectValue {
+                                held: Arc::new(member.clone()),
+                                value: Value::Float(float),
+                            }))
+                        }
+                        (held, _) => held,
+                    })
+                })
+            })
+        };
+        match member {
+            None => value,
+            Some(member) => {
+                unsafe {
+                    aura_direct_release_value(value);
+                }
+                boxed_value(member.unwrap_or_else(|error| runtime_diagnostic_error(error)))
+            }
+        }
+    })
+}
+
+/// The trait object that holds the float in `value`, a box the caller just
+/// made and owns. A float does not say its width, and `float32` and
+/// `float64` may implement the trait differently, so the box keeps the
+/// width beside the float wherever the trait object is stored.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_trait_object_float(value: *mut OpaqueValue, single: i64) {
+    task_runtime_boundary(|| {
+        let held = Type::named(if single == 0 { "float64" } else { "float32" });
+        unsafe {
+            value_mut(value, |value| {
+                if matches!(value, Value::Float(_)) {
+                    let float = mem::replace(value, Value::Unit);
+                    *value = Value::TraitObject(Box::new(TraitObjectValue {
+                        held: Arc::new(held),
+                        value: float,
+                    }));
+                }
+            });
+        }
     })
 }
 

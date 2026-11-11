@@ -1,0 +1,18 @@
+float32
+float64
+float32
+float64
+list[float32]
+list[float64]
+list[float32]
+list[float64]
+Box[float32]
+Box[float64]
+Maybe[int32]
+Maybe[int64]
+Maybe[int32]
+Maybe[int64]
+dict[str, int32]
+dict[str, int64]
+set[int32]
+set[int64]

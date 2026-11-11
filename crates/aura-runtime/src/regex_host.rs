@@ -80,7 +80,7 @@ fn compile(pattern: &str) -> std::result::Result<Rc<Regex>, String> {
 fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
     let known = PATTERNS
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .and_then(|table| table.numbers.get(pattern).copied());
     if let Some(number) = known {
@@ -90,7 +90,7 @@ fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
     let number = {
         let mut table = PATTERNS
             .write()
-            .unwrap_or_else(|poisoned| poisoned.into_inner());
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let table = table.get_or_insert_with(PatternTable::default);
         match table.numbers.get(pattern) {
             Some(number) => *number,
@@ -111,7 +111,7 @@ fn pattern_number(pattern: &str) -> std::result::Result<i64, String> {
 fn pattern_text(number: i64) -> Result<Arc<str>> {
     PATTERNS
         .read()
-        .unwrap_or_else(|poisoned| poisoned.into_inner())
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
         .as_ref()
         .and_then(|table| table.texts.get(usize::try_from(number).ok()?).cloned())
         .ok_or_else(|| {

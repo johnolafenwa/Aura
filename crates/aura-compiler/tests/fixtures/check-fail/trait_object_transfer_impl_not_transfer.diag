@@ -1,0 +1,6 @@
+error[AU3008]: impl of `Job` for `Dice` requires a Transfer type, because the trait has `Transfer` as a supertrait, and field `rng` of `Dice` -> `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_impl_not_transfer.au:16:1
+   |
+16 | impl Job for Dice:
+   | ^
+  = help: implement the trait only for types made of Transfer components, or drop `Transfer` from the trait's supertraits

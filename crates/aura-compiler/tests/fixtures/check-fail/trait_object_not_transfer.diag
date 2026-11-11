@@ -1,4 +1,4 @@
-error[AU3008]: task argument `shape` cannot cross a task boundary because `dyn Shape` is a trait object, and the type it holds is not known to be Transfer
+error[AU3008]: task argument `shape` cannot cross a task boundary because `dyn Shape` is a trait object, and the type it holds is not known to be Transfer; declare its trait with `Transfer` as a supertrait to admit only Transfer types
  --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_not_transfer.au:60:34
    |
 60 |         task = group.start(work, shape)

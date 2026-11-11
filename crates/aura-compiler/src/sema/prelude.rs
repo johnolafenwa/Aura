@@ -13,7 +13,7 @@ use crate::ast::{ImportDecl, ImportKind, ImportName, Item, Module};
 pub(crate) const PRELUDE_MODULE_NAME: &str = "prelude";
 
 /// The prelude traits a module names directly.
-const PRELUDE_TRAITS: &[&str] = &["Ord", "Add", "From"];
+const PRELUDE_TRAITS: &[&str] = &["Ord", "Add", "From", "Transfer"];
 
 /// The trait that gives `Result` its methods, and the methods.
 const RESULT_METHODS_TRAIT: &str = "ResultMethods";
@@ -38,6 +38,7 @@ pub(super) fn missing_name(
             // `prelude.` trait is a bound from another module, whose builtin
             // implementations this module sees once it imports the trait.
             message == format!("unknown trait `{name}`")
+                || message == format!("`dyn` needs a trait, and `{name}` is not a trait")
                 || (message.starts_with("type `")
                     && message.contains(&format!("does not implement trait `prelude.{name}[")))
         })
