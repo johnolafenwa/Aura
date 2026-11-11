@@ -227,10 +227,6 @@ fn ffi_keywords_and_reserved_syntax_have_stable_frontend_diagnostics() {
             "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
         ),
         (
-            "extern \"C\" def visit(callback: def(int32) -> None) -> int32\n",
-            "FFI v0 does not support callback parameters or returns",
-        ),
-        (
             "extern \"C\" def read(output: *uint8) -> int64\n",
             "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
         ),
@@ -907,8 +903,8 @@ fn ffi_nullable_handle_check_rejects_every_other_union_shape_at_the_c_boundary()
             "FFI v0 admits only `Handle | None` as a nullable result",
         ),
         (
-            "nullable parameter",
-            "extern \"C\" opaque class A\nextern \"C\" def take(value: A | None) -> None\n\ndef main():\n    pass\n",
+            "nullable scalar parameter",
+            "extern \"C\" def take(value: int64 | None) -> None\n\ndef main():\n    pass\n",
             "union parameter `value` cannot cross the C boundary",
         ),
     ] {
@@ -977,11 +973,10 @@ fn ffi_nullable_handle_engine_marshals_null_and_non_null_shim_results_after_writ
         "mutable bytes must write back before the non-null result is translated"
     );
 
-    // The nullable form is result-only: no argument value has that type, so a
-    // signature that declares it as a parameter is rejected before any call.
-    let mut arguments = [FfiValue::OpaqueHandle(
-        OpaqueHandle::new(nullable_shim_target_address()).expect("non-null test address"),
-    )];
+    // A nullable-handle parameter takes a handle or `None`. Any other value
+    // is rejected before the call.
+    assert!(OpaqueHandle::new(nullable_shim_target_address()).is_some());
+    let mut arguments = [FfiValue::U8(1)];
     // SAFETY: the engine rejects the arguments before calling the shim.
     let rejected = unsafe {
         call_host_function(
@@ -990,18 +985,18 @@ fn ffi_nullable_handle_engine_marshals_null_and_non_null_shim_results_after_writ
             &mut arguments,
         )
     }
-    .expect_err("a nullable-handle parameter cannot be marshalled");
+    .expect_err("a nullable-handle parameter takes no scalar");
     assert_eq!(
         rejected,
         FfiError::ArgumentTypeMismatch {
             index: 0,
             expected: FfiType::NullableOpaqueHandle,
-            actual: FfiType::OpaqueHandle,
+            actual: FfiType::U8,
         }
     );
     assert_eq!(
         rejected.to_string(),
-        "FFI argument 1 expected nullable opaque handle, but received opaque handle"
+        "FFI argument 1 expected nullable opaque handle, but received uint8"
     );
 }
 

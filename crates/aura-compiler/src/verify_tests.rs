@@ -2778,6 +2778,54 @@ def buffers() -> int64:
 
 def main():
     print(use_it(-5))
+
+extern "C" opaque class Store drop close_store
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" def magnitude(x: int32) -> int32 symbol "abs":
+    requires x > -2147483648
+    ensures result >= 0
+extern "C" def div(numerator: int32, denominator: int32) -> Div:
+    requires denominator != 0
+    ensures result.quot * denominator + result.rem == numerator
+extern "C" def open_store(path: cstr, out: mut Store | None) -> int32:
+    ensures result >= 0
+extern "C" def close_store(store: own Store) -> int32
+extern "C" def apply(f: def(value: int64) -> int64, value: int64) -> int64:
+    requires value >= 0
+extern "C" def total(values: ptr[float64], count: int64) -> float64:
+    requires 0 <= count and count <= len(values)
+
+def renamed(x: int32) -> int32:
+    requires x > -100
+    ensures result >= 0
+    return magnitude(x)
+
+def halves(total: int32) -> int32:
+    requires total >= 0
+    ensures result * 2 + (total - result * 2) == total
+    parts = div(total, 2)
+    return parts.quot
+
+def by_itself(total: int32) -> int32:
+    return div(total, total).rem
+
+def same(value: int64) -> int64:
+    return value
+
+def applied(start: int64) -> int64:
+    return apply(same, start)
+
+def opened() -> int32:
+    ensures result >= 0
+    mut slot: Store | None = None
+    return open_store(":memory:", slot)
+
+def summed() -> float64:
+    values: list[float64] = [1.0, 2.0]
+    return total(values, 3)
 "#,
     )
     .expect("source");
@@ -2787,7 +2835,15 @@ def main():
         let report = verify_module(&program, &module, &Options::default()).expect("verifies");
         assert_eq!(
             open_checks(&report),
-            ["19 requires failed", "25 requires failed"],
+            // A contract is found by the declared name, not the C symbol,
+            // and covers struct results, callbacks, and array pointers.
+            [
+                "19 requires failed",
+                "25 requires failed",
+                "62 requires failed",
+                "68 requires failed",
+                "77 requires failed"
+            ],
             "{report:#?}"
         );
     }

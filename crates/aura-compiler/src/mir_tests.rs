@@ -15871,3 +15871,73 @@ def main() -> int32:
     let decoded: MirModule = serde_json::from_value(encoded).expect("MIR reads back");
     assert_eq!(decoded.foreign_link, linked.foreign_link);
 }
+
+#[test]
+fn a_contracted_extern_with_a_callback_gets_a_wrapper_for_each_callback() {
+    let source = r#"extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None:
+    requires size == 4
+extern "C" def labs(value: int64) -> int64:
+    ensures result >= 0
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    return b - a
+
+def main():
+    mut values: list[int32] = [3, 9, 1]
+    qsort(values, 3, 4, ascending)
+    qsort(values, 3, 4, descending)
+    qsort(values, 3, 4, compare=descending)
+    print(labs(-2))
+"#;
+    let module = lower_ffi_source(source);
+    let wrappers = module
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("::__extern_contract"))
+        .map(|function| function.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wrappers,
+        [
+            "labs::__extern_contract",
+            "qsort::__extern_contract::compare=ascending",
+            "qsort::__extern_contract::compare=descending",
+        ]
+    );
+    // Each copy names its callback in the foreign call.
+    for (wrapper, callback) in [(wrappers[1], "ascending"), (wrappers[2], "descending")] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == wrapper)
+            .expect("the wrapper exists");
+        let named = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call { callee: CallTarget::Extern(_), args, .. },
+                        ..
+                    } if args.iter().any(|arg| matches!(
+                        &arg.value,
+                        Operand::Function { name, .. } if name == callback
+                    ))
+                )
+            });
+        assert!(named, "{wrapper}");
+    }
+    assert_eq!(
+        crate::mir::public_function_name(wrappers[1]),
+        "qsort",
+        "a backtrace shows the declared name"
+    );
+}

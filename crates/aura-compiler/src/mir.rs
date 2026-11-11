@@ -1410,10 +1410,28 @@ impl CallTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirExternCall {
+    /// The name of the Aura declaration, which is not the C symbol when
+    /// the declaration has a `symbol` clause. Its trusted contract is
+    /// found by this name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub symbol: String,
     pub abi: String,
     pub params: Vec<MirExternParam>,
     pub return_type: Type,
+    /// The result is NUL-terminated text, `const char *`, copied into the
+    /// `str` or `str | None` of `return_type`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string_result: bool,
+    /// The C layout of an `extern "C" class` result, which the function
+    /// returns by value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct_result: Option<crate::c_layout::CStruct>,
+    /// For each opaque handle type the signature names whose declaration
+    /// has a `drop` clause, the C symbol of the function that releases a
+    /// handle the program still owns.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handle_drops: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1421,6 +1439,18 @@ pub struct MirExternParam {
     pub name: String,
     pub passing: MirReceiverKind,
     pub ty: Type,
+    /// The `str` or `str | None` of `ty` crosses as NUL-terminated text,
+    /// `const char *`, and not as a pointer and a length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string: bool,
+    /// The `list[T]` of `ty` crosses as a pointer to its first element,
+    /// with no length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pointer: bool,
+    /// The C layout of an `extern "C" class` argument: passed by value, or
+    /// by pointer when `passing` is mutable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct: Option<crate::c_layout::CStruct>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -10869,6 +10899,10 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         Some(top_level)
     };
 
+    if !VERIFICATION.with(std::cell::Cell::get) {
+        push_extern_callback_contract_wrappers(program, &mut functions, top_level.as_ref());
+    }
+
     MirModule {
         foreign_link: program.foreign_link.clone(),
         constants,
@@ -11812,6 +11846,7 @@ fn push_extern_contract_wrappers(
                     program,
                     &wrapper_name,
                     extern_fn,
+                    &BTreeMap::new(),
                 ));
             }
         }
@@ -11834,6 +11869,7 @@ fn push_extern_contract_wrappers(
                 program,
                 &wrapper_name,
                 extern_fn,
+                &BTreeMap::new(),
             ));
         }
     }
@@ -11842,14 +11878,138 @@ fn push_extern_contract_wrappers(
     }
 }
 
+/// The callback arguments of a call to `function`: each parameter's name
+/// and the function the call names for it.
+fn extern_callback_args<'a>(
+    function: &'a crate::sema::ExternFunctionInfo,
+    args: &'a [MirArg],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
+    args.iter().enumerate().filter_map(|(index, arg)| {
+        let Operand::Function { name, .. } = &arg.value else {
+            return None;
+        };
+        let param = match &arg.name {
+            Some(param) => param.as_str(),
+            None => function.decl.params.get(index)?.name.as_str(),
+        };
+        Some((param, name.as_str()))
+    })
+}
+
+/// Adds the copy of a contract wrapper for each set of callbacks a call
+/// passes: the copy names those functions in its own foreign call.
+fn push_extern_callback_contract_wrappers(
+    program: &Program,
+    functions: &mut Vec<MirFunction>,
+    top_level: Option<&MirFunction>,
+) {
+    fn visit<'a>(
+        program: &Program,
+        namespace: &'a ModuleNamespace,
+        externs: &mut BTreeMap<String, &'a crate::sema::ExternFunctionInfo>,
+    ) {
+        for extern_fn in namespace
+            .extern_functions
+            .values()
+            .chain(namespace.all_extern_functions.values())
+        {
+            externs
+                .entry(extern_contract_wrapper_name(
+                    &program.module_name,
+                    extern_fn,
+                ))
+                .or_insert(extern_fn);
+        }
+        for child in namespace
+            .modules
+            .values()
+            .chain(namespace.imported_modules.values())
+        {
+            visit(program, child, externs);
+        }
+    }
+    let mut externs = BTreeMap::new();
+    for extern_fn in program.extern_functions.values() {
+        externs
+            .entry(extern_contract_wrapper_name(
+                &program.module_name,
+                extern_fn,
+            ))
+            .or_insert(extern_fn);
+    }
+    for namespace in program.module_registry.values() {
+        visit(program, namespace, &mut externs);
+    }
+
+    let mut wanted = BTreeMap::new();
+    for function in functions.iter().chain(top_level) {
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            let Some((base, copy)) = name.split_once("::__extern_contract") else {
+                continue;
+            };
+            if copy.is_empty() {
+                continue;
+            }
+            let Some(extern_fn) = externs.get(&format!("{base}::__extern_contract")) else {
+                continue;
+            };
+            let callbacks = extern_callback_args(extern_fn, args)
+                .filter_map(|(param, _)| {
+                    let arg = args.iter().enumerate().find(|(index, arg)| {
+                        arg.name.as_deref().unwrap_or_else(|| {
+                            extern_fn
+                                .decl
+                                .params
+                                .get(*index)
+                                .map_or("", |param| param.name.as_str())
+                        }) == param
+                    })?;
+                    Some((param.to_string(), arg.1.value.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            wanted
+                .entry(name.clone())
+                .or_insert((*extern_fn, callbacks));
+        }
+    }
+    for (name, (extern_fn, callbacks)) in wanted {
+        functions.extend(lower_extern_contract_wrapper(
+            program, &name, extern_fn, &callbacks,
+        ));
+    }
+}
+
 fn lower_extern_contract_wrapper(
     program: &Program,
     wrapper_name: &str,
     function: &crate::sema::ExternFunctionInfo,
+    callbacks: &BTreeMap<String, Operand>,
 ) -> Vec<MirFunction> {
     let Some(contract_decl) = &function.contract_decl else {
         return Vec::new();
     };
+    // A function that takes a callback has a copy for each set of
+    // callbacks and none without them.
+    let takes_callback = function
+        .signature
+        .params
+        .iter()
+        .any(|ty| matches!(ty, Type::Function { .. }));
+    if takes_callback && callbacks.is_empty() {
+        return Vec::new();
+    }
     let return_type = &function.signature.return_type;
     let params = function
         .decl
@@ -11906,7 +12066,9 @@ fn lower_extern_contract_wrapper(
         .iter()
         .map(|param| MirArg {
             name: Some(param.name.clone()),
-            value: if param.passing == MirReceiverKind::Value
+            value: if let Some(callback) = callbacks.get(&param.name) {
+                callback.clone()
+            } else if param.passing == MirReceiverKind::Value
                 && !type_is_copy_in_program(&param.ty, program)
             {
                 Operand::MovePlace(param.name.clone())
@@ -12847,12 +13009,19 @@ impl<'a> Lowerer<'a> {
             .or_else(|| self.program.extern_functions.get(name))
     }
 
-    fn extern_callee_target(&self, function: &crate::sema::ExternFunctionInfo) -> CallTarget {
+    fn extern_callee_target(
+        &self,
+        function: &crate::sema::ExternFunctionInfo,
+        args: &[MirArg],
+    ) -> CallTarget {
         if !VERIFICATION.with(std::cell::Cell::get) && function.contract_decl.is_some() {
-            CallTarget::Name(extern_contract_wrapper_name(
-                &self.program.module_name,
-                function,
-            ))
+            // A callback is a function the foreign call names, so each set
+            // of callbacks gets its own copy of the wrapper.
+            let mut name = extern_contract_wrapper_name(&self.program.module_name, function);
+            for (param, callback) in extern_callback_args(function, args) {
+                name.push_str(&format!("::{param}={callback}"));
+            }
+            CallTarget::Name(name)
         } else {
             CallTarget::Extern(Self::extern_call_target(function))
         }
@@ -12860,6 +13029,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
+            name: function.decl.name.clone(),
             symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
             params: function
@@ -12873,13 +13043,20 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .zip(&function.signature.param_passings),
                 )
-                .map(|(param, (ty, passing))| MirExternParam {
+                .enumerate()
+                .map(|(index, (param, (ty, passing)))| MirExternParam {
                     name: param.name.clone(),
                     passing: lower_receiver_kind(*passing),
                     ty: ty.clone(),
+                    c_string: function.decl.c_string_param(index),
+                    pointer: function.decl.pointer_param(index),
+                    c_struct: function.c_struct_params.get(index).cloned().flatten(),
                 })
                 .collect(),
             return_type: function.signature.return_type.clone(),
+            c_string_result: function.decl.c_string_result,
+            c_struct_result: function.c_struct_result.clone(),
+            handle_drops: function.handle_drops.clone(),
         }
     }
 
@@ -25152,7 +25329,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
-                                    callee: self.extern_callee_target(&function),
+                                    callee: self.extern_callee_target(&function, &lowered_args),
                                     args: lowered_args,
                                     type_args: Default::default(),
                                 },
@@ -25819,7 +25996,7 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
-                            callee: self.extern_callee_target(&function),
+                            callee: self.extern_callee_target(&function, &lowered_args),
                             args: lowered_args,
                             type_args: Default::default(),
                         },

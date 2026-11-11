@@ -665,6 +665,8 @@ struct NativeCodegen<'a> {
     program_shapes: shapes::ProgramShapes,
     contract_descriptors: HashMap<String, callables::ContractDescriptor>,
     cleanup_thunks: HashMap<(String, String), FuncHandle>,
+    /// The entry code and the body of each callback the module passes to C.
+    callback_thunks: Vec<(foreign::CallbackKey, (FuncHandle, FuncHandle))>,
     classes: HashMap<String, MirClass>,
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
@@ -1017,6 +1019,22 @@ impl<'a> NativeCodegen<'a> {
             module,
             callable_shapes.keys().map(|key| key.function.as_str()),
         );
+        let mut callback_thunks = Vec::new();
+        for (index, key) in foreign::module_callbacks(module).into_iter().enumerate() {
+            let (entry, body) = foreign::callback_signatures(&key.1);
+            let symbol = mangle_symbol(&format!("{}_ffi_callback_{index}", key.0));
+            let entry_id = try_or_string_error!(
+                object.declare_function(&symbol, Linkage::Local, &entry),
+                "failed to declare callback entry for `{}`: {}",
+                key.0
+            );
+            let body_id = try_or_string_error!(
+                object.declare_function(&format!("{symbol}_body"), Linkage::Local, &body),
+                "failed to declare callback body for `{}`: {}",
+                key.0
+            );
+            callback_thunks.push((key, (entry_id, body_id)));
+        }
         Ok(Self {
             module,
             explicit_locals: crate::mir::ownership::explicit_locals(module),
@@ -1034,6 +1052,7 @@ impl<'a> NativeCodegen<'a> {
             program_shapes,
             contract_descriptors: HashMap::new(),
             cleanup_thunks,
+            callback_thunks,
             classes,
             enums: module
                 .enums
@@ -1094,6 +1113,7 @@ impl<'a> NativeCodegen<'a> {
                 self.define_function_default_binder(function)?;
             }
         }
+        self.define_callback_thunks()?;
         self.define_callable_shapes()?;
         self.define_contract_descriptors()?;
         for function in self
@@ -1568,6 +1588,10 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = builder.import_function(*func_id);
             function_thunk_refs.insert(name.clone(), func_ref);
         }
+        let mut callback_refs = HashMap::new();
+        for (key, (entry_id, _)) in &self.callback_thunks {
+            callback_refs.insert(key.clone(), builder.import_function(*entry_id));
+        }
         let mut cleanup_thunk_refs = HashMap::new();
         for place in &cleanup_places {
             if let Some(func_id) = self
@@ -1971,6 +1995,7 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             function_thunk_refs,
+            callback_refs,
             cleanup_thunk_refs,
             function_return_types: self.function_return_types.clone(),
             function_param_types: self.function_param_types.clone(),
@@ -3303,6 +3328,8 @@ struct FunctionCompiler<'a> {
     next_variable_index: usize,
     function_refs: HashMap<String, FuncRef>,
     function_thunk_refs: HashMap<String, FuncRef>,
+    /// The entry code of each callback the module passes to C.
+    callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
     cleanup_thunk_refs: HashMap<String, FuncRef>,
     function_return_types: HashMap<String, DirectType>,
     function_param_types: HashMap<String, Vec<DirectType>>,
@@ -17425,10 +17452,10 @@ fn validate_rvalue(
                 CallTarget::Extern(call) => {
                     for param in &call.params {
                         ensure_direct_type(&param.ty, classes, "extern parameter")?;
-                        direct_ffi_type_for_source(&param.ty, Some(param.passing))?;
+                        foreign::foreign_param_type(param)?;
                     }
                     ensure_direct_type(&call.return_type, classes, "extern return")?;
-                    direct_ffi_type_for_source(&call.return_type, None)?;
+                    foreign::foreign_result_type(call)?;
                 }
                 CallTarget::Member { object, .. } | CallTarget::TraitMember { object, .. } => {
                     validate_operand(object)?
@@ -17650,15 +17677,24 @@ fn direct_ffi_type_for_source(
         if *ty == Type::Unit && passing.is_none() {
             return Ok(DirectFfiType::scalar(FfiType::Unit));
         }
-        // Semantic analysis admits exactly `Handle | None` as a result
-        // (ADR-0052 A10); it is one nullable C pointer.
-        if let (Type::Union(union), None) = (ty, passing) {
+        // Semantic analysis admits exactly `Handle | None` as a union
+        // (ADR-0052 A10). It is one nullable C pointer as a result or a
+        // shared argument, and a pointer to one as a `mut` argument.
+        if let (
+            Type::Union(union),
+            None | Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut),
+        ) = (ty, passing)
+        {
             if union.members.len() == 2 && union.members.contains(&Type::Unit) {
                 if let Some(Type::Named(handle, handle_args)) =
                     union.members.iter().find(|member| **member != Type::Unit)
                 {
                     if handle_args.is_empty() {
-                        return Ok(DirectFfiType::nullable(handle.clone(), ty.clone()));
+                        let mut nullable = DirectFfiType::nullable(handle.clone(), ty.clone());
+                        if passing == Some(MirReceiverKind::BorrowMut) {
+                            nullable.ffi_type = FfiType::OpaqueHandleOut;
+                        }
+                        return Ok(nullable);
                     }
                 }
             }
@@ -17683,8 +17719,15 @@ fn direct_ffi_type_for_source(
         };
         if let Some(ffi_type) = scalar {
             if ffi_type != FfiType::StringView {
-                if let Some(passing) = passing {
-                    if passing != MirReceiverKind::Borrow {
+                match passing {
+                    None | Some(MirReceiverKind::Borrow) => {}
+                    // A `mut` scalar passes a pointer to the scalar.
+                    Some(MirReceiverKind::BorrowMut) => {
+                        let scalar = crate::ffi::FfiScalar::of(ffi_type)
+                            .expect("every name above but `str` is a scalar");
+                        return Ok(DirectFfiType::scalar(FfiType::Out(scalar)));
+                    }
+                    Some(passing) => {
                         return Err(format!(
                             "direct backend cannot pass `{ty}` with ownership mode `{passing:?}` through FFI v0"
                         ));

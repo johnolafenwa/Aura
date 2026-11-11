@@ -408,12 +408,22 @@ pub struct ExternFunctionInfo {
     /// The declaration's trusted contract as a bodyless function, which
     /// the checker and `aura verify` read like any other contract.
     pub contract_decl: Option<FunctionDecl>,
+    /// One entry for each parameter: the C layout of an `extern "C" class`
+    /// parameter, which crosses by value, or by pointer when it is `mut`.
+    pub c_struct_params: Vec<Option<crate::c_layout::CStruct>>,
+    /// The C layout of an `extern "C" class` result.
+    pub c_struct_result: Option<crate::c_layout::CStruct>,
+    /// For each opaque handle type the signature names that declares a
+    /// `drop` function, the C symbol of that function.
+    pub handle_drops: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct OpaqueHandleInfo {
     pub module_name: String,
     pub decl: crate::ast::ExternOpaqueClassDecl,
+    /// The C symbol of the declaration's `drop` function.
+    pub drop_symbol: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1360,7 +1370,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     }
 
     for class in classes.values() {
-        if !class.decl.copy {
+        // The fields of an `extern "C"` class get their own, narrower check.
+        if !class.decl.copy || class.decl.c_layout {
             continue;
         }
         for field_decl in &class.decl.fields {
@@ -1577,12 +1588,21 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             OpaqueHandleInfo {
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
+                drop_symbol: super::ffi_drop_symbol(extern_decl, &module.items)?,
             },
         );
     }
     let mut ffi_signature_opaque_handles = opaque_handles.clone();
     for namespace in imported_modules.values() {
         register_public_namespace_opaque_handles(namespace, &mut ffi_signature_opaque_handles);
+    }
+
+    for item in &module.items {
+        if let Item::Class(class_decl) = item {
+            if class_decl.c_layout {
+                super::validate_ffi_struct_fields(&classes[&class_decl.name], &classes)?;
+            }
+        }
     }
 
     let mut extern_functions = imported_extern_functions;
@@ -1593,6 +1613,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         validate_ffi_signature(
             extern_decl,
             &ffi_signature_opaque_handles,
+            &classes,
             &type_names,
             &type_arities,
             &canonical_type_names,
@@ -1627,6 +1648,15 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         extern_functions.insert(
             extern_decl.name.clone(),
             ExternFunctionInfo {
+                c_struct_params: params
+                    .iter()
+                    .map(|param| super::ffi_struct_layout(param, &classes))
+                    .collect(),
+                c_struct_result: super::ffi_struct_layout(&return_type, &classes),
+                handle_drops: super::ffi_handle_drops(
+                    params.iter().chain([&return_type]),
+                    &ffi_signature_opaque_handles,
+                ),
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
                 contract_decl: (!extern_decl.contracts.is_empty()).then(|| FunctionDecl {

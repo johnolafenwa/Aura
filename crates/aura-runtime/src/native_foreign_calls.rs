@@ -4,15 +4,15 @@
 //! types the declaration names and reads the result the same way. The
 //! helpers here cover the rest of the boundary. They find the bytes a `str`
 //! or `list[uint8]` argument lends for the call, read the address an opaque
-//! handle carries, box a returned address as a handle, and report a result
-//! the declaration rules out.
+//! handle carries, box a returned address as a handle, copy C text in and
+//! out, and report a result the declaration rules out.
 //!
 //! A view lends the value's own storage, so the foreign function reads the
 //! bytes in place. The value's caller keeps it alive and unchanged for the
 //! whole call: a shared argument has no writer, and a `mut` argument has no
 //! other reader.
 
-use std::ffi::c_void;
+use std::ffi::{c_char, c_void, CStr, CString};
 use std::slice;
 use std::str;
 
@@ -22,7 +22,8 @@ use super::{
     boxed_value, runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut,
     value_type_name, with_value, OpaqueValue,
 };
-use crate::runtime_value::{FfiHandleValue, Value};
+use crate::list_elements::ListForm;
+use crate::runtime_value::{FfiHandleDrop, FfiHandleValue, Value, VecValue};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -197,25 +198,311 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_handle_address(
     })
 }
 
-/// A new handle of the opaque type the name spells for the address a
-/// foreign function returned, or null for a null address.
+/// The scalar list form generated code names by its list access code.
+fn scalar_form(access: i64) -> ListForm {
+    match access {
+        2 => ListForm::Int64,
+        3 => ListForm::Float64,
+        4 => ListForm::Bool,
+        6 => ListForm::Int8,
+        7 => ListForm::Int16,
+        8 => ListForm::Int32,
+        9 => ListForm::Uint8,
+        10 => ListForm::Uint16,
+        11 => ListForm::Uint32,
+        12 => ListForm::Uint64,
+        13 => ListForm::Float32,
+        other => runtime_error(format!("list access code {other} names no scalar form")),
+    }
+}
+
+/// # Safety
+///
+/// `out` is null or points to a writable [`ForeignView`].
+unsafe fn write_elements(out: *mut ForeignView, pointer: *const u8, length: usize) {
+    let Some(out) = (unsafe { out.as_mut() }) else {
+        runtime_error("a foreign call view has no place to go");
+    };
+    out.pointer = if length == 0 {
+        std::ptr::null()
+    } else {
+        pointer
+    };
+    out.length = length;
+}
+
+/// Writes the address of the first element of the list `value` to `out`,
+/// laid out as a C array of the scalar that `access` names, with the
+/// element count. A list that keeps its elements in that form lends them
+/// and the result is null. Any other list is copied into a new list in that
+/// form, and the result is the copy, which the caller releases as a value
+/// once the foreign call returns.
 ///
 /// # Safety
 ///
-/// The name is UTF-8 text in generated code's data.
+/// `value` is a live value and `out` points to a writable [`ForeignView`].
+/// Lent elements are valid while `value` is alive and unchanged.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_elements(
+    value: *mut OpaqueValue,
+    access: i64,
+    out: *mut ForeignView,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let form = scalar_form(access);
+        with_value(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            let length = vector.elements.len();
+            if let Some(pointer) = vector.elements.scalars(form) {
+                write_elements(out, pointer, length);
+                return std::ptr::null_mut();
+            }
+            let Some(copy) = vector.elements.in_scalar_form(form) else {
+                runtime_error(
+                    "FFI argument expected a list for a pointer, but an element is another type",
+                );
+            };
+            if length == 0 {
+                write_elements(out, std::ptr::null(), 0);
+                return std::ptr::null_mut();
+            }
+            // The elements are on the heap, so they stay where they are
+            // when the list moves into its box.
+            write_elements(out, copy.as_ptr() as *const u8, length);
+            boxed_value(Value::Vec(VecValue {
+                element_type: vector.element_type.clone(),
+                elements: copy,
+                str_view: Default::default(),
+            }))
+        })
+    })
+}
+
+/// Writes the address of the first element of the list `value` to `out`
+/// for a foreign function that may change the elements in place, laid out
+/// as a C array of the scalar that `access` names. The list keeps its
+/// length.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively, and `out` points to
+/// a writable [`ForeignView`]. The elements are valid until the caller next
+/// reaches the list.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_elements_mut(
+    value: *mut OpaqueValue,
+    access: i64,
+    out: *mut ForeignView,
+) {
+    task_runtime_boundary(|| unsafe {
+        let form = scalar_form(access);
+        value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a mut pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            let length = vector.elements.len();
+            match vector.elements.scalars_mut(form) {
+                Some(pointer) => write_elements(out, pointer, length),
+                None => runtime_error(
+                    "FFI argument expected a list for a mut pointer, but an element is another type",
+                ),
+            }
+        })
+    })
+}
+
+/// The value itself, or the active member of a union.
+fn active_member(value: &Value) -> &Value {
+    match value {
+        Value::Union(union) => &union.payload,
+        other => other,
+    }
+}
+
+/// The address the `Handle | None` `value` carries: null for `None`.
+///
+/// # Safety
+///
+/// `value` is a live value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_nullable_handle_address(
+    value: *mut OpaqueValue,
+) -> *mut c_void {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match active_member(value) {
+            Value::FfiHandle(handle) => handle.as_ptr(),
+            Value::Unit => std::ptr::null_mut(),
+            other => runtime_error(format!(
+                "FFI argument expected opaque handle or None, but received `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
+/// A NUL-terminated copy of the `str` or `str | None` `value`, argument
+/// `index` of a call of `symbol`, or null for `None`. The caller frees the
+/// copy with [`aura_direct_ffi_release_c_string`] once the foreign call
+/// returns. Text that holds a NUL byte ends the task with `AU4005`.
+///
+/// # Safety
+///
+/// `value` is a live value and the symbol name is UTF-8 text in generated
+/// code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string(
+    value: *mut OpaqueValue,
+    index: usize,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut c_char {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| match active_member(value) {
+            Value::String(text) => match CString::new(text.as_bytes()) {
+                Ok(copy) => copy.into_raw(),
+                Err(_) => foreign_call_failure(
+                    metadata_text(symbol, symbol_length),
+                    "AU4005",
+                    crate::ffi::FfiError::InteriorNul { index },
+                ),
+            },
+            Value::Unit => std::ptr::null_mut(),
+            other => runtime_error(format!(
+                "FFI argument expected cstr, but received `{}`",
+                value_type_name(other)
+            )),
+        })
+    })
+}
+
+/// Frees a copy [`aura_direct_ffi_c_string`] returned. Null is no copy.
+///
+/// # Safety
+///
+/// `copy` is one result of that function, not freed before.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_c_string(copy: *mut c_char) {
+    if copy.is_null() {
+        return;
+    }
+    // SAFETY: the caller's contract names a `CString` given up with
+    // `into_raw`.
+    drop(unsafe { CString::from_raw(copy) });
+}
+
+/// A new `str` that copies the NUL-terminated text the foreign function
+/// `symbol` returned. The text stays the foreign side's to free. A null
+/// pointer gives null when `nullable` is not 0 and ends the task with
+/// `AU4005` otherwise, as text that is not UTF-8 does.
+///
+/// # Safety
+///
+/// `text` is null or points to NUL-terminated bytes, and the symbol name is
+/// UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string_result(
+    text: *const c_char,
+    nullable: i64,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let failure = if text.is_null() {
+            if nullable != 0 {
+                return std::ptr::null_mut();
+            }
+            crate::ffi::FfiError::NullCStringReturn
+        } else {
+            match CStr::from_ptr(text).to_str() {
+                Ok(text) => return boxed_value(Value::String(text.into())),
+                Err(_) => crate::ffi::FfiError::InvalidUtf8Return,
+            }
+        };
+        foreign_call_failure(metadata_text(symbol, symbol_length), "AU4005", failure)
+    })
+}
+
+/// A new handle of the opaque type the name spells for the address a
+/// foreign function returned, or null for a null address. `drop` is the
+/// function the type's declaration names to release the object, or `None`.
+///
+/// # Safety
+///
+/// The name is UTF-8 text in generated code's data, and `drop` releases an
+/// object of the type.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_handle(
     address: *mut c_void,
     type_name: *const u8,
     type_name_length: usize,
+    drop: Option<FfiHandleDrop>,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
         let type_name = unsafe { metadata_text(type_name, type_name_length) };
-        match FfiHandleValue::new(type_name.to_string(), address) {
+        match FfiHandleValue::owned(type_name.to_string(), address, drop) {
             Some(handle) => boxed_value(Value::FfiHandle(handle)),
             None => std::ptr::null_mut(),
         }
+    })
+}
+
+/// The handle a foreign function left through a `mut Handle | None`
+/// parameter that held `before` when the call began, or null for a null
+/// address. An address the function did not change keeps the handle the
+/// place held. Any other address is a new handle, and the program no
+/// longer owns the object the place held.
+///
+/// # Safety
+///
+/// `before` is a live value, the name is UTF-8 text in generated code's
+/// data, and `drop` releases an object of the type.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_stored_handle(
+    before: *mut OpaqueValue,
+    address: *mut c_void,
+    type_name: *const u8,
+    type_name_length: usize,
+    drop: Option<FfiHandleDrop>,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let kept = with_value(before, |value| match active_member(value) {
+            Value::FfiHandle(held) if held.as_ptr() == address => Some(held.clone()),
+            Value::FfiHandle(held) => {
+                held.give_up();
+                None
+            }
+            _ => None,
+        });
+        match kept {
+            Some(held) => boxed_value(Value::FfiHandle(held)),
+            None => aura_direct_ffi_handle(address, type_name, type_name_length, drop),
+        }
+    })
+}
+
+/// Ends the program's ownership of the object behind the handle `value`,
+/// which a foreign function is about to take as `own`.
+///
+/// # Safety
+///
+/// `value` is a live value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_give_up_handle(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| {
+            if let Value::FfiHandle(handle) = value {
+                handle.give_up();
+            }
+        })
     })
 }
 
@@ -269,6 +556,91 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_bad_bool(
             crate::ffi::FfiError::NonCanonicalBoolReturn(byte as u8),
         )
     })
+}
+
+/// Ends the task with `AU4001` when the foreign function `symbol` left a
+/// byte that is neither 0 nor 1 in the `list[bool]` `value` it wrote
+/// through a `mut ptr[bool]`. The byte becomes `true` first, so the list
+/// holds only values of its type while the task unwinds.
+///
+/// # Safety
+///
+/// `value` is a live value its caller holds exclusively, and the symbol
+/// name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
+    value: *mut OpaqueValue,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let bad = value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                return None;
+            };
+            let length = vector.elements.len();
+            let flags = vector.elements.scalars_mut(ListForm::Bool)?;
+            // SAFETY: a `bool` list keeps one byte per element, and the
+            // bytes are read and written as bytes.
+            let bytes = std::slice::from_raw_parts_mut(flags, length);
+            let bad = bytes.iter().copied().find(|byte| *byte > 1);
+            for byte in bytes.iter_mut().filter(|byte| **byte > 1) {
+                *byte = 1;
+            }
+            bad
+        });
+        if let Some(byte) = bad {
+            foreign_call_failure(
+                metadata_text(symbol, symbol_length),
+                "AU4001",
+                crate::ffi::FfiError::NonCanonicalBoolReturn(byte),
+            )
+        }
+    })
+}
+
+thread_local! {
+    /// The failure of a callback that ran under the foreign call this
+    /// thread is in. `aura_direct_ffi_callback_check` raises it again when
+    /// the foreign function has returned.
+    static CALLBACK_FAILURE: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// Runs the body of a callback that C code called. `body` is generated
+/// code that calls the Aura function with the arguments in `frame` and
+/// leaves its results there.
+///
+/// A failure in the function must not unwind through the C frames between
+/// the callback and the foreign call. It stops here and is raised again
+/// after the foreign function returns. Until then, every callback returns
+/// without running, with a zero result.
+///
+/// # Safety
+///
+/// `body` is the generated body for the callback, and `frame` is the frame
+/// its entry code built.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
+    body: unsafe extern "C-unwind" fn(*mut u64),
+    frame: *mut u64,
+) {
+    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+        return;
+    }
+    let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
+    if let Err(payload) = outcome {
+        CALLBACK_FAILURE.set(Some(payload));
+    }
+}
+
+/// Raises the failure of a callback that ran under the foreign call that
+/// has just returned, when there is one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
+    if let Some(payload) = CALLBACK_FAILURE.take() {
+        std::panic::resume_unwind(payload);
+    }
 }
 
 #[cfg(test)]
