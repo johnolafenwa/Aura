@@ -27,7 +27,7 @@ migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
-Aura 0.13 task scheduling is cooperative across pinned workers:
+Aura 0.14 task scheduling is cooperative across pinned workers:
 
 - The compiler inserts a scheduling check on every loop backedge. This
   includes the ordinary end of the loop body and `continue`. A tight loop
@@ -790,7 +790,7 @@ These features are implemented:
   cleanup. It adds no statement syntax.
 
 Task execution is multicore. Queue and Task handle state is safe across
-workers, and task bodies run on the worker pinned at spawn time on both
+workers, and a task body stays on the worker that first runs it on both
 backends. Speedup depends on the workload. The share-nothing `Transfer`
 boundary holds while Queue and Task handles communicate between workers.
 
@@ -815,7 +815,7 @@ One bounded, nonblocking service step at a time owns the protocol state. The
 state is returned before the coroutine observes cancellation or resumes
 reactor waiting. The process-global pool starts lazily, is shared by all
 lightweight schedulers, and lives until process exit. It intentionally has no
-0.13 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
+0.14 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
 compatibility path.
 
 Plain socket and reactor operations stay on the scheduler side. Resolver,
@@ -825,8 +825,9 @@ protocol workers. The dynamic `json.parse` service and its scheduler-aware
 admission are described under [Runtime Semantics](#runtime-semantics). The
 JSON flat-dictionary operations stay on the caller.
 
-**Unavailable.** Preemptive scheduling, work stealing, `mut` task targets, and
-detached task syntax are unavailable.
+**Unavailable.** Preemptive scheduling, moving a task that has started to
+another worker, `mut` task targets, and detached task syntax are unavailable.
+Idle workers steal only children that have not started.
 
 **Memory measurements.** These results come from a clean Mac14,9 measurement
 at `181204b`:

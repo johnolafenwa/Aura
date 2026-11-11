@@ -13,6 +13,17 @@ Last updated: 2026-11-10
 - Remaining: `regex` and `time` modules, the `http` client module, and
   the streaming reference agent.
 
+## Release 0.14.0-preview (in progress)
+
+- Cut from `main` @ `33910bd` after the first steps of FFI v1 (#259) and
+  trait objects (#261): compact JSON storage, the rest of lean values,
+  associated-type bounds on
+  classes, implementations, enums, and supertraits, `IntoIterator` for
+  lists, the verification leftovers, and the `float32` soundness fix. 30
+  programs 13.1 s -> 11.3 s against 0.13.0 with the same instruction
+  count; `docdb` and `json_roundtrip` now beat Python. Details are in
+  `2026-11-10-v0.14.0-preview-release.md`.
+
 ## Trait objects (in progress)
 
 - `dyn Trait`: a value of any type that implements a trait, so a list can
