@@ -665,10 +665,7 @@ impl HttpBody {
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<String>> {
-        let connection = self
-            .connection
-            .as_mut()
-            .ok_or_else(closed_resource_error)?;
+        let connection = self.connection.as_mut().ok_or_else(closed_resource_error)?;
         let unread = connection.unread();
         let Some(end) = unread.windows(2).position(|pair| pair == b"\r\n") else {
             if unread.len() > MAX_CHUNK_LINE_BYTES {
@@ -752,7 +749,9 @@ impl HttpBody {
             if self.available() > MAX_LINE_BYTES {
                 return self.fail(io::Error::new(
                     io::ErrorKind::InvalidData,
-                    format!("a line of the HTTP response body is longer than {MAX_LINE_BYTES} bytes"),
+                    format!(
+                        "a line of the HTTP response body is longer than {MAX_LINE_BYTES} bytes"
+                    ),
                 ));
             }
             if !wait {
@@ -1110,12 +1109,9 @@ fn exchange(
         .map_err(|error| (error, false))?;
     loop {
         let head = loop {
-            let parsed = run_http_step_before(
-                || parse_head(connection.unread()),
-                deadline,
-                cancellation,
-            )
-            .map_err(|error| (error, true))?;
+            let parsed =
+                run_http_step_before(|| parse_head(connection.unread()), deadline, cancellation)
+                    .map_err(|error| (error, true))?;
             if let Some(head) = parsed {
                 break head;
             }
@@ -1266,7 +1262,8 @@ pub fn http_send(
         if !has("connection") && options.keep_alive {
             request_headers.push(("Connection".to_string(), "keep-alive".to_string()));
         }
-        let asked_to_close = !options.keep_alive || header_has_token(&headers, "connection", "close");
+        let asked_to_close =
+            !options.keep_alive || header_has_token(&headers, "connection", "close");
         let request = build_http_request_bytes(&method, &url, body, request_headers)?;
 
         let pooled = if options.keep_alive {
@@ -1354,15 +1351,20 @@ pub fn http_send(
                     .any(|secret| name.eq_ignore_ascii_case(secret))
             });
         }
-        let becomes_get = status == 303 && method != "HEAD"
-            || (matches!(status, 301 | 302) && method == "POST");
+        let becomes_get =
+            status == 303 && method != "HEAD" || (matches!(status, 301 | 302) && method == "POST");
         if becomes_get {
             method = "GET".to_string();
             body = &[];
             headers.retain(|(name, _)| {
-                !["content-type", "content-length", "content-encoding", "transfer-encoding"]
-                    .iter()
-                    .any(|content| name.eq_ignore_ascii_case(content))
+                ![
+                    "content-type",
+                    "content-length",
+                    "content-encoding",
+                    "transfer-encoding",
+                ]
+                .iter()
+                .any(|content| name.eq_ignore_ascii_case(content))
             });
         }
         url = next;
@@ -1520,8 +1522,8 @@ impl HttpSnapshot {
             start: 0,
             reused: false,
         };
-        let head = exchange(&mut connection, b"", deadline, cancellation)
-            .map_err(|(error, _)| error)?;
+        let head =
+            exchange(&mut connection, b"", deadline, cancellation).map_err(|(error, _)| error)?;
         let timeout = deadline.map(|deadline| deadline.saturating_duration_since(Instant::now()));
         let mut response = begin_body(connection, head, "GET", "", false, true, timeout)?;
         let body = response.read_all(limit as i64, cancellation)?;
@@ -1630,12 +1632,18 @@ pub fn host_http_send(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
     let method = host_string_ref_arg(&args, 0, name)?;
     let url = host_string_ref_arg(&args, 1, name)?;
     let Value::Map(map) = &args[2] else {
-        return Err(http_argument_error(name, "expects headers as a `dict[str, str]`"));
+        return Err(http_argument_error(
+            name,
+            "expects headers as a `dict[str, str]`",
+        ));
     };
     let mut headers = Vec::with_capacity(map.entries.len());
     for (key, value) in map.entries.iter() {
         let (Value::String(key), Value::String(value)) = (key, value) else {
-            return Err(http_argument_error(name, "expects headers as a `dict[str, str]`"));
+            return Err(http_argument_error(
+                name,
+                "expects headers as a `dict[str, str]`",
+            ));
         };
         headers.push((key.to_string(), value.to_string()));
     }
@@ -1716,8 +1724,7 @@ pub fn host_http_read_line(args: Vec<Value>, _program_args: Option<&[String]>) -
     let name = "http::__aura_read_line";
     host_expect_arity(name, &args, 1)?;
     let cancellation = current_lightweight_task_cancellation();
-    let line =
-        stream_arg(&args, 0, name)?.with_body(|body| body.read_line(cancellation.as_ref()));
+    let line = stream_arg(&args, 0, name)?.with_body(|body| body.read_line(cancellation.as_ref()));
     Ok(io_result(line.map(optional_str_value)))
 }
 

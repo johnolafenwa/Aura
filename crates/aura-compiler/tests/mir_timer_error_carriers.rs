@@ -3,21 +3,30 @@ use aura_compiler::run_source;
 #[test]
 fn mir_network_timer_conversion_errors_stay_inside_the_io_result_carrier() {
     let source = r#"
+import http
+import io
 import net
+
+def failure(result: own Result[http.Response, io.Error]) -> str:
+    match own result:
+        case Result.Err(error):
+            return f"Result.Err({error})"
+        case Result.Ok(_):
+            return "a response"
 
 def main() -> int32:
     print(net.connect_timeout("127.0.0.1:1", Duration.ms(-1)))
     print(net.unix_connect_timeout("/unused/aura.sock", Duration.ms(-1)))
     print(net.tls_connect_timeout("127.0.0.1:1", "localhost", "/unused/ca.pem", Duration.ms(-1)))
-    print(net.http_request_text_timeout("GET", "http://127.0.0.1:1/", "", {}, Duration.ms(-1)))
-    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", list[uint8](), {}, Duration.ms(-1)))
+    print(failure(http.Client(timeout=Duration.ms(-1)).request("GET", "http://127.0.0.1:1/", "", {})))
+    print(failure(http.Client(read_timeout=Duration.ms(-1)).request_bytes("GET", "http://127.0.0.1:1/", list[uint8](), {})))
     print(net.websocket_connect_timeout("ws://127.0.0.1:1/", Duration.ms(-1)))
     print(net.connect_timeout("127.0.0.1:1", Duration.minutes(9223372036854775807)))
     print(net.connect_timeout("127.0.0.1:1", Duration.seconds(9223372036854775807)))
     print(net.unix_connect_timeout("/unused/aura.sock", Duration.seconds(9223372036854775807)))
     print(net.tls_connect_timeout("127.0.0.1:1", "localhost", "/unused/ca.pem", Duration.seconds(9223372036854775807)))
-    print(net.http_request_text_timeout("GET", "http://127.0.0.1:1/", "", {}, Duration.seconds(9223372036854775807)))
-    print(net.http_request_bytes_timeout("GET", "http://127.0.0.1:1/", list[uint8](), {}, Duration.seconds(9223372036854775807)))
+    print(failure(http.Client(timeout=Duration.seconds(9223372036854775807)).get("http://127.0.0.1:1/")))
+    print(failure(http.Client(read_timeout=Duration.seconds(9223372036854775807)).get("http://127.0.0.1:1/")))
     print(net.websocket_connect_timeout("ws://127.0.0.1:1/", Duration.seconds(9223372036854775807)))
     return 0
 "#;

@@ -2694,8 +2694,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml", "metrics",
-    "log", "trace", "random",
+    "sys", "path", "math", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml",
+    "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {

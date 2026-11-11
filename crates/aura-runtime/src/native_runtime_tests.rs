@@ -28838,3 +28838,73 @@ fn direct_regex_reads_its_number_and_texts_through_borrowed_handles() {
         "{error:?}"
     );
 }
+
+#[test]
+fn http_host_entries_borrow_the_stream_and_read_a_response_through_the_native_abi() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the fixture should bind");
+    let address = listener.local_addr().expect("the fixture has an address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the fixture accepts one request");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).expect("the fixture reads");
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nfirst\nsecond",
+            )
+            .expect("the fixture replies");
+    });
+
+    let arguments = [
+        string_value("GET"),
+        string_value(&format!("http://{address}/native")),
+        string_map(&[("x-native", "yes")]),
+        string_value(""),
+        boxed_value(Value::Vec(crate::runtime_value::VecValue {
+            element_type: crate::runtime_value::SharedType::named("uint8"),
+            elements: crate::runtime_value::ListElements::from_uint8(Vec::new()),
+            str_view: Default::default(),
+        })),
+        boxed_value(Value::Duration(5_000_000_000)),
+        boxed_value(Value::Duration(0)),
+        int_value(0),
+        int_value(4),
+        string_value(""),
+    ];
+    let sent = expect_result_ok_payload(direct_host_builtin_call("http::__aura_send", &arguments));
+    for argument in arguments {
+        unsafe { release_value(argument) };
+    }
+    let Value::Tuple(sent) = sent else {
+        panic!("a send returns a tuple");
+    };
+    assert_eq!(sent.elements[1].render(), "200");
+    let stream = boxed_value(sent.elements[0].clone());
+
+    // The entry borrows the stream: the caller's handle reads on after it.
+    let line = expect_result_ok_payload(direct_host_builtin_call(
+        "http::__aura_read_line",
+        &[stream],
+    ));
+    assert_eq!(line.render(), "first");
+    let limit = int_value(64);
+    let rest = expect_result_ok_string(direct_host_builtin_call(
+        "http::__aura_read_text",
+        &[stream, limit],
+    ));
+    assert_eq!(rest, "second");
+    expect_unit(direct_host_builtin_call("http::__aura_close", &[stream]));
+    unsafe {
+        release_value(limit);
+        release_value(stream);
+    }
+    server.join().expect("the fixture should finish");
+
+    assert!(
+        expect_int(direct_host_builtin_call(
+            "http::__aura_idle_connections",
+            &[]
+        )) >= 0,
+        "the pool reports a count"
+    );
+    expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+}

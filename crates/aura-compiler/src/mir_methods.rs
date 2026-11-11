@@ -515,10 +515,7 @@ impl Resolver<'_, '_> {
             // These handles own no host resource, so closing them does
             // nothing.
             if call.field == "close"
-                && matches!(
-                    name.as_str(),
-                    "net.HttpExchange" | "net.WebSocketListener"
-                )
+                && matches!(name.as_str(), "net.HttpExchange" | "net.WebSocketListener")
             {
                 return Ok(MethodDispatch::Nothing);
             }

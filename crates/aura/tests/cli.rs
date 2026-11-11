@@ -4761,6 +4761,7 @@ fn large_http_responses_complete_without_timing_out() {
     fs::write(&body_path, "x".repeat(2_000_000)).expect("failed to write HTTP response body");
     let source = format!(
         r#"import fs
+import http
 import io
 import net
 
@@ -4778,9 +4779,8 @@ def run() -> Result[None, io.Error]:
         group.start_soon(serve, "{body_path}", addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
-                resp = try net.http_request_text_timeout("GET", "http://" + address + "/big", "x", {{}}, 5s)
-                with r = resp:
-                    print(r.status())
+                with r = try http.Client(timeout=5s).request("GET", "http://" + address + "/big", "x", {{}}):
+                    print(r.status)
                     text = try r.text()
                     print(text.len())
             case QueueReceive.Closed:
@@ -4805,15 +4805,16 @@ def main() -> int32:
 }
 
 #[test]
-fn http_declared_response_above_fixed_cap_is_typed_on_both_backends() {
-    let source = r#"import io
+fn http_declared_body_above_the_read_limit_is_typed_on_both_backends() {
+    let source = r#"import http
+import io
 import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.http_listen("127.0.0.1:0"):
         _ = addresses.put(try listener.local_addr())
         mut request = try listener.accept(timeout=5s)
-        try request.respond_text(200, "", {"Content-Length": "16777217"})
+        try request.respond_text(200, "", {"Content-Length": "67108865"})
         return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
@@ -4822,14 +4823,15 @@ def run() -> Result[None, io.Error]:
         group.start_soon(serve, addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
-                response = net.http_request_text_timeout("GET", "http://" + address + "/oversized", "", {}, 5s)
-                match response:
-                    case Result.Err(io.Error.InvalidData):
-                        print("http-too-large")
-                    case Result.Err(error):
-                        print(error)
-                    case Result.Ok(_):
-                        print("unexpected-success")
+                with response = try http.Client(timeout=5s).get("http://" + address + "/oversized"):
+                    print(response.header("content-length"))
+                    match response.text():
+                        case Result.Err(io.Error.InvalidData):
+                            print("http-too-large")
+                        case Result.Err(error):
+                            print(error)
+                        case Result.Ok(_):
+                            print("unexpected-success")
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="HTTP address queue closed"))
             case QueueReceive.TimedOut:
@@ -4847,7 +4849,11 @@ def main() -> int32:
             return 1
 "#;
 
-    assert_run_and_direct_source_stdout("aura-http-fixed-response-cap", source, "http-too-large\n");
+    assert_run_and_direct_source_stdout(
+        "aura-http-fixed-response-cap",
+        source,
+        "67108865\nhttp-too-large\n",
+    );
 }
 
 #[test]
@@ -12478,6 +12484,7 @@ fn direct_backend_build_supports_advanced_io_and_network_surface() {
     let source = format!(
         r#"import io
 import fs
+import http
 import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -12579,9 +12586,8 @@ def run() -> Result[None, io.Error]:
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
         headers: dict[str, str] = {{"X-Test": "ok"}}
-        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.copy())
-        with http_response = response:
-            print(http_response.status())
+        with http_response = try http.request("POST", "http://" + http_addr + "/hello", "body", headers.copy()):
+            print(http_response.status)
             print(try http_response.text())
         match own http_task.result():
             case TaskResult.Ready(result):
@@ -12596,10 +12602,9 @@ def run() -> Result[None, io.Error]:
         http_bytes_addresses = Queue[str](capacity=1)
         http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
         http_bytes_addr = try receive_address(http_bytes_addresses)
-        bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
-        with received_bytes = bytes_response:
-            print(received_bytes.status())
-            print(received_bytes.bytes().len())
+        with received_bytes = try http.request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers):
+            print(received_bytes.status)
+            print((try received_bytes.bytes()).len())
         match own http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result

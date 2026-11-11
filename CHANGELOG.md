@@ -7,6 +7,30 @@ in this file.
 
 ## Unreleased
 
+- New `http` module, the HTTP client. `http.get(url)`, `http.post(...)`,
+  `http.request(...)`, and `http.request_bytes(...)` return an
+  `http.Response` as soon as the status and headers arrive. The body is
+  read whole with `text()` and `bytes()`, or in pieces with `read_chunk`,
+  `read_line`, `read_lines`, and `read_event` for server-sent events, so
+  a long download or a streamed model reply never has to fit in memory.
+  The client follows redirects, keeps connections for reuse, decodes gzip
+  and deflate bodies, and takes its settings (`timeout`, `read_timeout`,
+  `max_redirects`, `decompress`, `keep_alive`, `ca_file`) as fields of
+  `http.Client`. The 34th
+  [cross-language program](benchmarks/cross_language/README.md),
+  `http_stream`, reads 400,000 streamed lines, 100,000 events, and 4,000
+  small replies over one connection in 1.19 s, where Python's
+  `http.client` takes 5.78 s and a hand-written Rust client 0.61 s. See
+  the [HTTP Module](docs/manual/http.md).
+- Breaking: `net.http_request_text`, `net.http_request_text_timeout`,
+  `net.http_request_bytes`, `net.http_request_bytes_timeout`, and
+  `net.HttpResponse` are removed. Use the `http` module. A response's
+  `status`, `reason`, and `url` are fields, its header names are in lower
+  case, and the 16 MiB limit on a whole response is gone.
+- Fixed: `with` rejected a context manager whose class is declared in
+  another module (`AU2017`).
+- Fixed: editor completion offered the private fields and methods of a
+  class from another module.
 - New `time` module: `time.now()`, `time.utc(...)`, `time.from_unix(...)`,
   and `time.parse_rfc3339(...)` return a `time.DateTime`, an instant with
   the UTC offset its calendar fields are read at. It has field methods,

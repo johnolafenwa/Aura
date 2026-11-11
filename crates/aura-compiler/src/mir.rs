@@ -6278,12 +6278,7 @@ fn validated_transfer_failure(
             .iter()
             .find_map(|member| validated_transfer_failure(member, context, visiting)),
         Type::Named(name, args) => {
-            if args.is_empty()
-                && matches!(
-                    name.as_str(),
-                    "process.Completed" | "net.UdpDatagram"
-                )
-            {
+            if args.is_empty() && matches!(name.as_str(), "process.Completed" | "net.UdpDatagram") {
                 return None;
             }
             if crate::sema::is_builtin_io_resource_type(name, args)
@@ -28689,8 +28684,7 @@ impl<'a> Lowerer<'a> {
             ("list", "filter") => Some(Type::Named("list".to_string(), args.clone())),
             // `with` cleanup closes these handles with no runtime call, so
             // they have no resolved operation.
-            ("net.HttpExchange", "close")
-            | ("net.WebSocketListener", "close") => Some(Type::Unit),
+            ("net.HttpExchange", "close") | ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],

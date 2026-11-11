@@ -50,6 +50,7 @@ every sample with the commit.
 | `graph_paths` | BFS, Dijkstra with a binary heap, and union-find on a random graph |
 | `hashing` | FNV-1a, CRC-32, Adler-32, and content-defined chunking over a byte buffer |
 | `http_api` | An HTTP JSON item service and a client, over loopback |
+| `http_stream` | An HTTP client reading a chunked body in line batches, server-sent events one at a time, and small replies, all over one kept connection |
 | `image_filters` | Blur, edge detection, a histogram, downscaling, and PGM encoding |
 | `interpreter` | Lexes, parses, and runs a small imperative language with a tree-walking interpreter |
 | `json_roundtrip` | Parses, walks, and serializes an API-style JSON payload |
@@ -167,6 +168,14 @@ in Rust (`chrono`): 0.19 times Python's time and 4.8 times Rust's. Most of
 Aura's time is in the calls that write and read text, each of which crosses
 into the runtime with boxed integer arguments. It is not in the table or the
 totals above either.
+
+`http_stream` was added on 11 November 2026 with the `http` module. At
+400,000 lines, 100,000 events, and 4,000 small requests it takes 1.19 s in
+Aura, 5.78 s in Python (`http.client`), and 0.61 s in Rust (a client
+written by hand on the standard library): 0.21 times Python's time and 1.9
+times Rust's. Each version also runs the server. It is not in the table or
+the totals above either. `http_api` and `mini_browser` now use the `http`
+module, and their times did not change.
 
 0.14.0 brings compact JSON storage and the rest of the lean-values work:
 

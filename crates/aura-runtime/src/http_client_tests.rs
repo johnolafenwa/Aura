@@ -141,7 +141,10 @@ fn a_body_is_read_in_pieces_and_its_connection_is_kept_for_the_next_request() {
         [("content-length".to_string(), "23".to_string())]
     );
     assert_eq!(first.read_chunk(4, None).unwrap().unwrap(), b"body");
-    assert_eq!(first.read_chunk(100, None).unwrap().unwrap(), b" of GET /a HTTP/1.1");
+    assert_eq!(
+        first.read_chunk(100, None).unwrap().unwrap(),
+        b" of GET /a HTTP/1.1"
+    );
     assert_eq!(first.read_chunk(100, None).unwrap(), None);
     assert_eq!(first.read_chunk(100, None).unwrap(), None);
 
@@ -265,7 +268,9 @@ fn a_request_that_fails_on_a_kept_connection_is_sent_again_only_when_safe() {
     pool_discard(port);
     let seen = server.join().expect("the server");
     assert_eq!(
-        seen.iter().map(|request| request.connection).collect::<Vec<_>>(),
+        seen.iter()
+            .map(|request| request.connection)
+            .collect::<Vec<_>>(),
         [0, 0, 1]
     );
 
@@ -322,10 +327,26 @@ fn malformed_and_truncated_chunked_bodies_are_errors() {
     let cases: [(&[u8], io::ErrorKind, &str); 6] = [
         (b"nope\r\n", io::ErrorKind::InvalidData, "not a hex number"),
         (b"\r\n", io::ErrorKind::InvalidData, "not a hex number"),
-        (b"+4\r\nabcd\r\n0\r\n\r\n", io::ErrorKind::InvalidData, "not a hex number"),
-        (b"4\r\nabcdXX0\r\n\r\n", io::ErrorKind::InvalidData, "does not end with CRLF"),
-        (b"4\r\nab", io::ErrorKind::UnexpectedEof, "before the HTTP response body was complete"),
-        (b"4\r\nabcd\r\n0\r\nX: y\r\n", io::ErrorKind::UnexpectedEof, "before the HTTP response body was complete"),
+        (
+            b"+4\r\nabcd\r\n0\r\n\r\n",
+            io::ErrorKind::InvalidData,
+            "not a hex number",
+        ),
+        (
+            b"4\r\nabcdXX0\r\n\r\n",
+            io::ErrorKind::InvalidData,
+            "does not end with CRLF",
+        ),
+        (
+            b"4\r\nab",
+            io::ErrorKind::UnexpectedEof,
+            "before the HTTP response body was complete",
+        ),
+        (
+            b"4\r\nabcd\r\n0\r\nX: y\r\n",
+            io::ErrorKind::UnexpectedEof,
+            "before the HTTP response body was complete",
+        ),
     ];
     for (body, kind, message) in cases {
         let mut reply = b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n".to_vec();
@@ -346,8 +367,13 @@ fn malformed_and_truncated_chunked_bodies_are_errors() {
     long_line.extend(std::iter::repeat_n(b'1', MAX_CHUNK_LINE_BYTES + READ_BLOCK));
     let (base, _, server) = serve(1, move |_| Reply::SendAndClose(long_line.clone()));
     let mut response = get(&base).expect("the head arrives");
-    let error = response.read_all(1 << 20, None).expect_err("an endless size line");
-    assert!(error.to_string().contains("a framing line is too long"), "{error}");
+    let error = response
+        .read_all(1 << 20, None)
+        .expect_err("an endless size line");
+    assert!(
+        error.to_string().contains("a framing line is too long"),
+        "{error}"
+    );
     drop(response);
     server.join().expect("the server");
 }
@@ -409,7 +435,9 @@ fn responses_without_a_body_end_at_once() {
 fn interim_responses_are_skipped_and_a_protocol_switch_is_an_error() {
     let (base, port, server) = serve(2, |request| {
         if request.connection == 0 {
-            let mut reply = b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n".to_vec();
+            let mut reply =
+                b"HTTP/1.1 100 Continue\r\n\r\nHTTP/1.1 103 Early Hints\r\nLink: </a>\r\n\r\n"
+                    .to_vec();
             reply.extend(ok("final"));
             Reply::Send(reply)
         } else {
@@ -444,8 +472,7 @@ fn encoded(encoding: &str, body: &[u8]) -> Vec<u8> {
 fn gzip_and_deflate_bodies_are_decoded_as_they_arrive() {
     let plain = "a line of text\n".repeat(4_000);
     let zipped = gzip(plain.as_bytes());
-    let mut deflater =
-        flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
+    let mut deflater = flate2::write::ZlibEncoder::new(Vec::new(), flate2::Compression::default());
     deflater.write_all(plain.as_bytes()).unwrap();
     let deflated = deflater.finish().unwrap();
     // Two gzip members in one body decode as their concatenation.
@@ -459,7 +486,13 @@ fn gzip_and_deflate_bodies_are_decoded_as_they_arrive() {
         encoded("GZIP", &two_members),
     ];
     let (base, port, server) = serve(1, move |request| {
-        let index: usize = request.line().split(['/', ' ']).nth(2).unwrap().parse().unwrap();
+        let index: usize = request
+            .line()
+            .split(['/', ' '])
+            .nth(2)
+            .unwrap()
+            .parse()
+            .unwrap();
         Reply::Send(replies[index].clone())
     });
     for index in 0..3 {
@@ -496,7 +529,10 @@ fn a_caller_who_names_the_encoding_or_turns_decoding_off_gets_the_bytes_sent() {
         None,
     )
     .expect("a response");
-    assert_eq!(asked.headers()[0], ("content-encoding".to_string(), "gzip".to_string()));
+    assert_eq!(
+        asked.headers()[0],
+        ("content-encoding".to_string(), "gzip".to_string())
+    );
     assert_eq!(asked.read_all(1 << 20, None).unwrap(), zipped);
     let off = HttpRequestOptions {
         decompress: false,
@@ -522,9 +558,13 @@ fn corrupt_and_truncated_compressed_bodies_are_invalid_data() {
         let reply = encoded("gzip", &body);
         let (base, port, server) = serve(1, move |_| Reply::Send(reply.clone()));
         let mut response = get(&base).expect("the head arrives");
-        let error = response.read_all(1 << 20, None).expect_err("a bad gzip body");
+        let error = response
+            .read_all(1 << 20, None)
+            .expect_err("a bad gzip body");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert!(error.to_string().contains("invalid compressed HTTP response body"));
+        assert!(error
+            .to_string()
+            .contains("invalid compressed HTTP response body"));
         pool_discard(port);
         drop(response);
         server.join().expect("the server");
@@ -588,7 +628,10 @@ fn redirects_are_followed_with_the_method_each_status_calls_for() {
     };
     assert_eq!(
         send("POST", "/301"),
-        (format!("{base}/end?from=301"), "GET /end?from=301 HTTP/1.1 ".to_string())
+        (
+            format!("{base}/end?from=301"),
+            "GET /end?from=301 HTTP/1.1 ".to_string()
+        )
     );
     assert_eq!(send("POST", "/302").1, "GET /end HTTP/1.1 ");
     assert_eq!(send("PUT", "/302").1, "PUT /end HTTP/1.1 data");
@@ -620,8 +663,7 @@ fn a_redirect_to_another_server_does_not_carry_credentials() {
         ("Host".to_string(), "first.example".to_string()),
         ("X-Plain".to_string(), "kept".to_string()),
     ];
-    let mut response =
-        http_send("GET", &base, headers, b"", &options(), None).expect("a response");
+    let mut response = http_send("GET", &base, headers, b"", &options(), None).expect("a response");
     assert_eq!(response.url(), format!("{other_base}/landing"));
     assert_eq!(text(&mut response), "GET /landing HTTP/1.1");
     pool_discard(port);
@@ -645,9 +687,7 @@ fn redirect_limits_and_bad_locations_are_reported() {
             "/loop" => Reply::Send(redirect(302, "/loop")),
             "/ftp" => Reply::Send(redirect(302, "ftp://example.test/file")),
             "/bad" => Reply::Send(redirect(302, "http://[broken")),
-            "/nowhere" => Reply::Send(
-                b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n".to_vec(),
-            ),
+            "/nowhere" => Reply::Send(b"HTTP/1.1 302 Found\r\nContent-Length: 0\r\n\r\n".to_vec()),
             _ => Reply::Send(ok("end")),
         }
     });
@@ -655,9 +695,16 @@ fn redirect_limits_and_bad_locations_are_reported() {
         max_redirects: 3,
         ..options()
     };
-    let error = http_send("GET", &format!("{base}/loop"), Vec::new(), b"", &three, None)
-        .err()
-        .expect("a redirect loop");
+    let error = http_send(
+        "GET",
+        &format!("{base}/loop"),
+        Vec::new(),
+        b"",
+        &three,
+        None,
+    )
+    .err()
+    .expect("a redirect loop");
     assert_eq!(error.to_string(), "stopped after 3 redirects");
 
     // Zero hands every redirect response to the caller.
@@ -668,7 +715,10 @@ fn redirect_limits_and_bad_locations_are_reported() {
     let mut manual = http_send("GET", &format!("{base}/loop"), Vec::new(), b"", &none, None)
         .expect("the redirect response itself");
     assert_eq!(manual.status(), 302);
-    assert_eq!(manual.headers()[0], ("location".to_string(), "/loop".to_string()));
+    assert_eq!(
+        manual.headers()[0],
+        ("location".to_string(), "/loop".to_string())
+    );
     assert_eq!(text(&mut manual), "moved");
 
     for path in ["/ftp", "/bad"] {
@@ -688,10 +738,9 @@ fn a_large_redirect_body_closes_its_connection_instead_of_being_read() {
     let big = MAX_REDIRECT_DRAIN_BYTES * 2;
     let (base, port, server) = serve(2, move |request| {
         if request.line().contains("/start") {
-            let mut reply = format!(
-                "HTTP/1.1 302 Found\r\nLocation: /end\r\nContent-Length: {big}\r\n\r\n"
-            )
-            .into_bytes();
+            let mut reply =
+                format!("HTTP/1.1 302 Found\r\nLocation: /end\r\nContent-Length: {big}\r\n\r\n")
+                    .into_bytes();
             reply.extend(std::iter::repeat_n(b'x', big));
             Reply::Send(reply)
         } else {
@@ -846,9 +895,14 @@ fn a_whole_body_read_enforces_its_limit() {
     });
     for _ in 0..3 {
         let mut response = get(&base).expect("a response");
-        let error = response.read_all(64, None).expect_err("a body over the limit");
+        let error = response
+            .read_all(64, None)
+            .expect_err("a body over the limit");
         assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-        assert_eq!(error.to_string(), "the HTTP response body is larger than 64 bytes");
+        assert_eq!(
+            error.to_string(),
+            "the HTTP response body is larger than 64 bytes"
+        );
         pool_discard(port);
     }
     let mut fits = get(&base).expect("a response");
@@ -878,7 +932,11 @@ fn invalid_requests_fail_before_anything_is_sent() {
         ("GET", "not-a-url", io::ErrorKind::InvalidInput),
         ("GET", "ftp://example.test/", io::ErrorKind::InvalidInput),
         ("", "http://127.0.0.1:1/", io::ErrorKind::InvalidInput),
-        ("GET /x HTTP/1.1\r\nX: y", "http://127.0.0.1:1/", io::ErrorKind::InvalidInput),
+        (
+            "GET /x HTTP/1.1\r\nX: y",
+            "http://127.0.0.1:1/",
+            io::ErrorKind::InvalidInput,
+        ),
     ];
     for (method, url, kind) in cases {
         let error = http_send(method, url, Vec::new(), b"", &options(), None)
@@ -942,9 +1000,16 @@ fn a_cancelled_task_stops_a_request() {
     let group = TaskGroupValue::new(&CancellationContext::default());
     let cancellation = group.child_cancellation();
     group.cancel();
-    let error = http_send("GET", &base, Vec::new(), b"", &options(), Some(&cancellation))
-        .err()
-        .expect("a cancelled request");
+    let error = http_send(
+        "GET",
+        &base,
+        Vec::new(),
+        b"",
+        &options(),
+        Some(&cancellation),
+    )
+    .err()
+    .expect("a cancelled request");
     assert_eq!(error.to_string(), "operation cancelled");
     // The server never sees a request; release it.
     drop(StdStream::connect(base.trim_start_matches("http://")).expect("a connection"));
@@ -956,9 +1021,21 @@ fn a_response_head_that_is_malformed_too_large_or_cut_short_is_an_error() {
     let mut huge = b"HTTP/1.1 200 OK\r\nX-Pad: ".to_vec();
     huge.extend(std::iter::repeat_n(b'a', MAX_HEAD_BYTES + READ_BLOCK));
     let cases: [(Vec<u8>, io::ErrorKind, &str); 5] = [
-        (b"HTTP/1.1 nope\r\n\r\n".to_vec(), io::ErrorKind::InvalidData, "invalid HTTP response"),
-        (b"HTTP/1.1 200".to_vec(), io::ErrorKind::UnexpectedEof, "before a complete HTTP response"),
-        (b"HTTP/1.1 200 OK\r\nX-Bad: \xff\r\n\r\n".to_vec(), io::ErrorKind::InvalidData, ""),
+        (
+            b"HTTP/1.1 nope\r\n\r\n".to_vec(),
+            io::ErrorKind::InvalidData,
+            "invalid HTTP response",
+        ),
+        (
+            b"HTTP/1.1 200".to_vec(),
+            io::ErrorKind::UnexpectedEof,
+            "before a complete HTTP response",
+        ),
+        (
+            b"HTTP/1.1 200 OK\r\nX-Bad: \xff\r\n\r\n".to_vec(),
+            io::ErrorKind::InvalidData,
+            "",
+        ),
         (huge, io::ErrorKind::InvalidData, "head is larger than"),
         (
             b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n".to_vec(),
@@ -1101,8 +1178,11 @@ fn the_host_builtins_send_a_request_and_read_its_body() {
         }
     });
     let sent = tuple(ok_payload(
-        host("http::__aura_send", send_args("POST", &format!("{base}/text"), "from text", b"", 15))
-            .expect("a send"),
+        host(
+            "http::__aura_send",
+            send_args("POST", &format!("{base}/text"), "from text", b"", 15),
+        )
+        .expect("a send"),
     ));
     assert_eq!(sent[1], int_value(200));
     assert_eq!(sent[2], Value::string("OK"));
@@ -1115,19 +1195,35 @@ fn the_host_builtins_send_a_request_and_read_its_body() {
     let line = ok_payload(host("http::__aura_read_line", vec![stream.clone()]).expect("a line"));
     assert_eq!(line.render(), "yes|from text");
     let lines = ok_payload(
-        host("http::__aura_read_lines", vec![stream.clone(), int_value(1)]).expect("lines"),
+        host(
+            "http::__aura_read_lines",
+            vec![stream.clone(), int_value(1)],
+        )
+        .expect("lines"),
     );
     assert_eq!(lines.render(), "[second line]");
     let chunk = ok_payload(
-        host("http::__aura_read_chunk", vec![stream.clone(), int_value(2)]).expect("a chunk"),
+        host(
+            "http::__aura_read_chunk",
+            vec![stream.clone(), int_value(2)],
+        )
+        .expect("a chunk"),
     );
     assert_eq!(chunk.render(), "[116, 104]");
     let rest = ok_payload(
-        host("http::__aura_read_text", vec![stream.clone(), int_value(100)]).expect("the rest"),
+        host(
+            "http::__aura_read_text",
+            vec![stream.clone(), int_value(100)],
+        )
+        .expect("the rest"),
     );
     assert_eq!(rest, Value::string("ird"));
     let end = ok_payload(
-        host("http::__aura_read_chunk", vec![stream.clone(), int_value(2)]).expect("the end"),
+        host(
+            "http::__aura_read_chunk",
+            vec![stream.clone(), int_value(2)],
+        )
+        .expect("the end"),
     );
     assert_eq!(end.render(), "None");
     let end = ok_payload(host("http::__aura_read_line", vec![stream.clone()]).expect("the end"));
@@ -1143,17 +1239,27 @@ fn the_host_builtins_send_a_request_and_read_its_body() {
 
     // A byte body wins over the text argument.
     let sent = tuple(ok_payload(
-        host("http::__aura_send", send_args("POST", &format!("{base}/bytes"), "", b"raw", 3))
-            .expect("a send"),
+        host(
+            "http::__aura_send",
+            send_args("POST", &format!("{base}/bytes"), "", b"raw", 3),
+        )
+        .expect("a send"),
     ));
     let all = ok_payload(
-        host("http::__aura_read_all", vec![sent[0].clone(), int_value(100)]).expect("a body"),
+        host(
+            "http::__aura_read_all",
+            vec![sent[0].clone(), int_value(100)],
+        )
+        .expect("a body"),
     );
     assert_eq!(all.render(), "[121, 101, 115, 124, 114, 97, 119, 10, 115, 101, 99, 111, 110, 100, 32, 108, 105, 110, 101, 10, 116, 104, 105, 114, 100]");
 
     let sent = tuple(ok_payload(
-        host("http::__aura_send", send_args("GET", &format!("{base}/events"), "", b"", 3))
-            .expect("a send"),
+        host(
+            "http::__aura_send",
+            send_args("GET", &format!("{base}/events"), "", b"", 3),
+        )
+        .expect("a send"),
     ));
     let read_event = |stream: &Value| {
         tuple(ok_payload(
@@ -1201,7 +1307,13 @@ fn the_host_builtins_report_request_errors_as_io_errors_and_bad_arguments_as_tra
         "InvalidInput"
     );
     assert_eq!(
-        err_variant(host("http::__aura_send", send_args("GET", "not-a-url", "", b"", 3)).unwrap()),
+        err_variant(
+            host(
+                "http::__aura_send",
+                send_args("GET", "not-a-url", "", b"", 3)
+            )
+            .unwrap()
+        ),
         "InvalidInput"
     );
 
@@ -1217,7 +1329,9 @@ fn the_host_builtins_report_request_errors_as_io_errors_and_bad_arguments_as_tra
     bad_header_value[2] = Value::Map(MapValue {
         key_type: SharedType::named("str"),
         value_type: SharedType::named("int64"),
-        entries: vec![(Value::string("a"), int_value(1))].into_iter().collect(),
+        entries: vec![(Value::string("a"), int_value(1))]
+            .into_iter()
+            .collect(),
     });
     assert!(trap(bad_header_value).contains("expects headers as a `dict[str, str]`"));
     for redirects in [-1, MAX_REDIRECT_LIMIT + 1] {
@@ -1265,7 +1379,11 @@ fn a_text_read_of_a_body_that_is_not_utf8_is_invalid_data() {
     ));
     assert_eq!(
         err_variant(
-            host("http::__aura_read_text", vec![sent[0].clone(), int_value(10)]).expect("a read")
+            host(
+                "http::__aura_read_text",
+                vec![sent[0].clone(), int_value(10)]
+            )
+            .expect("a read")
         ),
         "InvalidData"
     );
@@ -1290,7 +1408,10 @@ fn a_stream_in_use_reads_as_closed_instead_of_blocking() {
         })
         .unwrap();
     assert_eq!(
-        stream.with_body(|body| body.read_chunk(8, None)).unwrap().unwrap(),
+        stream
+            .with_body(|body| body.read_chunk(8, None))
+            .unwrap()
+            .unwrap(),
         b"x"
     );
     assert_eq!(format!("{stream:?}"), "<http-stream>");

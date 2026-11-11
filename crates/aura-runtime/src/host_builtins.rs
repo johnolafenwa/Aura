@@ -670,7 +670,11 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
 
 /// The bytes of a `list[uint8]` argument, borrowed when the list keeps
 /// them unboxed.
-pub(crate) fn host_bytes_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Result<Cow<'a, [u8]>> {
+pub(crate) fn host_bytes_arg<'a>(
+    args: &'a [Value],
+    index: usize,
+    call: &str,
+) -> Result<Cow<'a, [u8]>> {
     let elements = runtime_uint8_elements(&args[index], &call.replace("::", "."))?;
     match elements.as_uint8() {
         Some(bytes) => Ok(Cow::Borrowed(bytes)),

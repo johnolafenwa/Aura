@@ -621,6 +621,27 @@ def main() -> int32:
 }
 
 #[test]
+fn completion_hides_private_members_of_a_class_from_another_module() {
+    let source = r#"import http
+
+def inspect(response: http.Response) -> int32:
+    response.
+    return 0
+"#;
+    let members =
+        complete_source(source, 3, 13, Some('.')).expect("member completion should recover");
+    let has = |name: &str| members.iter().any(|item| item.name == name);
+    assert!(has("status") && has("header") && has("read_event"));
+    assert!(!has("fields") && !has("stream"));
+
+    let source = "import http\n\ndef main() -> int32:\n    http.\n    return 0\n";
+    let names = complete_source(source, 3, 9, Some('.')).expect("module completion should recover");
+    let has = |name: &str| names.iter().any(|item| item.name == name);
+    assert!(has("get") && has("Client") && has("Response"));
+    assert!(!has("__aura_send"));
+}
+
+#[test]
 fn path_named_random_keeps_user_rng_analysis_distinct_from_the_builtin() {
     let path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures/run-pass/random.au");
     let source = fs::read_to_string(&path).expect("path-level user Rng fixture should be readable");

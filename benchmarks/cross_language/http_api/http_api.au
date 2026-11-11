@@ -2,7 +2,7 @@
 #
 # The server answers POST /items/<id>, GET /items/<id>, and GET /stats with
 # JSON bodies. The client sends one request per connection, which is how the
-# Aura HTTP client works, and checks every reply.
+# Aura HTTP server answers, and checks every reply.
 import http
 import io
 import json

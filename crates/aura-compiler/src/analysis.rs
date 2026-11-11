@@ -4569,21 +4569,17 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
                     Some(Type::named("str"))
                 }
-                BuiltinMember::HttpExchangeHeaders => {
-                    Some(Type::Named(
-                        "dict".to_string(),
-                        vec![Type::named("str"), Type::named("str")],
-                    ))
-                }
-                BuiltinMember::HttpExchangeBodyText => {
-                    Some(Type::Named(
-                        "Result".to_string(),
-                        vec![
-                            Type::named("str"),
-                            Type::Named("io.Error".to_string(), Vec::new()),
-                        ],
-                    ))
-                }
+                BuiltinMember::HttpExchangeHeaders => Some(Type::Named(
+                    "dict".to_string(),
+                    vec![Type::named("str"), Type::named("str")],
+                )),
+                BuiltinMember::HttpExchangeBodyText => Some(Type::Named(
+                    "Result".to_string(),
+                    vec![
+                        Type::named("str"),
+                        Type::Named("io.Error".to_string(), Vec::new()),
+                    ],
+                )),
                 BuiltinMember::HttpExchangeBodyBytes => {
                     Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
                 }

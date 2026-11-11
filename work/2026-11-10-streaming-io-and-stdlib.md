@@ -130,3 +130,38 @@ How it got there, from a first version at 9.8 s:
   integer) and return several values only as a tuple. A call path that
   passes integers in registers would bring `regex`, `time`, and
   `fs.File.read_line()` much closer to Rust.
+
+## Step 3: the `http` client (work completed, 2026-11-11)
+
+- The `http` module (ADR-0080) replaces `net.http_request_*` and
+  `net.HttpResponse`. `Client`, `Response`, and `Event` are Aura classes in
+  `std/http.au`; the runtime half is `crates/aura-runtime/src/http_client.rs`
+  with ten host functions and the opaque `http.Stream`.
+- A response is returned when its head arrives. The body is read with
+  `read_chunk`, `read_line`, `read_lines`, `read_event` (server-sent
+  events), or whole with `text` and `bytes` (64 MiB default limit).
+- Redirects (301, 302, 303, 307, 308), a process-wide pool of kept
+  connections with one retry of a request on a stale connection, gzip and
+  deflate decoding, a head timeout and a read timeout, task cancellation,
+  and a certificate authority file.
+- 39 runtime tests against a scripted local server, plus the compiler,
+  CLI, and editor tests moved off the old functions. The examples
+  `http_roundtrip.au` and `retrying_network_worker.au`, `http_api`,
+  `mini_browser`, and the release `retrying_worker` use the new module.
+- Fixed on the way: `with` on a class from another module (`AU2017`), and
+  completion of private members of a class from another module.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `http_stream` at 400,000 lines | 1.19 s | 5.78 s | 0.61 s |
+
+## Gaps found in step 3, left for later
+
+- No HTTP/2, proxies, cookies, or streamed request bodies.
+- A `str` cannot be indexed, and there is no integer-to-hex formatting;
+  the benchmark's server builds chunk sizes digit by digit.
+- A function in a builtin source module that appends to a `str` local with
+  `+=` and also lends a field gets its temporaries numbered differently
+  when ownership is stripped and inserted again
+  (`stripping_undoes_the_lends_and_the_pass_makes_them_again`).
+  `Response.header` avoids the pattern.

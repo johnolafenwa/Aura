@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-10
+Last updated: 2026-11-11
 
 ## Streaming I/O and a deeper standard library (in progress)
 
@@ -11,8 +11,9 @@ Last updated: 2026-11-10
 - Done: `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip`
   module, `bytes.hmac_sha256`, and `bytes.constant_time_eq` (ADR-0073).
 - Done: the `regex` module (ADR-0078) and the `time` module (ADR-0079).
-- Remaining: the `http` client module, the streaming reference agent, and
-  a faster `read_line()`.
+- Done: the `http` client module (ADR-0080), which replaces
+  `net.http_request_*`.
+- Remaining: the streaming reference agent and a faster `read_line()`.
 
 ## Release 0.14.0-preview (in progress)
 

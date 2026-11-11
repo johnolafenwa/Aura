@@ -65,19 +65,19 @@ use aura_core::types::Type;
 mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
+#[path = "http_client.rs"]
+pub mod http_client;
 #[path = "regex_host.rs"]
 pub mod regex_host;
 #[path = "time_host.rs"]
 pub mod time_host;
-#[path = "http_client.rs"]
-pub mod http_client;
-#[cfg(any(test, feature = "test-support"))]
-pub use http_client::HttpSnapshot;
-pub use http_client::HttpResponseValue;
 pub use generator::{
     generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
+pub use http_client::HttpResponseValue;
+#[cfg(any(test, feature = "test-support"))]
+pub use http_client::HttpSnapshot;
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
