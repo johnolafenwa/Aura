@@ -1,0 +1,69 @@
+trait Job: Transfer:
+    def run(mut self) -> int64
+    def name(self) -> str
+
+class Sum:
+    values: list[int64]
+    runs: int64
+
+class Repeat:
+    text: str
+    times: int64
+
+impl Job for Sum:
+    def run(mut self) -> int64:
+        self.runs += 1
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+    def name(self) -> str:
+        return f"sum after {self.runs}"
+
+impl Job for Repeat:
+    def run(mut self) -> int64:
+        return len(self.text) * self.times
+    def name(self) -> str:
+        return "repeat"
+
+def work(job: own dyn Job) -> int64:
+    mut owned = job
+    return owned.run()
+
+def back(job: own dyn Job) -> dyn Job:
+    mut owned = job
+    _ = owned.run()
+    return owned
+
+def total(jobs: own list[dyn Job]) -> int64:
+    mut owned = jobs
+    mut sum = 0
+    for job in mut owned:
+        sum += job.run()
+    return sum
+
+def main() -> None:
+    job: dyn Job = Sum(values=[1, 2, 3], runs=0)
+    with TaskGroup() as group:
+        first = group.start(work, job)
+        second = group.start(work, Repeat(text="ab", times=3) as dyn Job)
+        print(first.result())
+        print(second.result())
+    with TaskGroup() as group:
+        returned = group.start(back, Sum(values=[4], runs=0) as dyn Job)
+        match returned.result():
+            case TaskResult.Ready(done):
+                print(done.name())
+            case _:
+                print("failed")
+    jobs: list[dyn Job] = [Sum(values=[5, 5], runs=0), Repeat(text="xyz", times=2)]
+    with TaskGroup() as group:
+        all = group.start(total, jobs)
+        print(all.result())
+    queue = Queue[dyn Job]()
+    _ = queue.put(Repeat(text="q", times=7))
+    match queue.get():
+        case QueueReceive.Item(received):
+            print(received.name())
+        case _:
+            print("other")

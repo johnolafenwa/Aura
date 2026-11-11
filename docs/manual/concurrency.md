@@ -112,6 +112,8 @@ with group = TaskGroup():
 
 `Transfer` is the compiler-derived property of a value that may cross a task
 or Queue boundary. [Typing Rules](#typing-rules) lists which types have it.
+The prelude names the property as a trait, so it can be written as a bound,
+`T: Transfer`, and as a supertrait, `trait Job: Transfer:`.
 
 ### Task Targets
 
@@ -520,8 +522,11 @@ on every captured argument and on the target's result. This obligation is
 provisional.
 
 - The check runs after generic specialization and before scheduling.
-- A fully concrete generic call is checked after inference. An unresolved type
-  parameter is rejected rather than becoming a deferred `Transfer` contract.
+- A fully concrete generic call is checked after inference. A type parameter
+  passes only when it is bounded by `Transfer`, as in
+  `def send[T: Transfer](value: own T)`, or by a trait that has `Transfer` as
+  a supertrait. Each call then proves the bound for its own type argument. An
+  unbounded type parameter is rejected.
 - The obligation applies to the owned capture even when the target declares a
   bare shared parameter and borrows that child-owned storage during its call.
 - Queue construction, `put`, and `try_put` require `T: Transfer`. Handle
@@ -531,7 +536,13 @@ provisional.
   tuples, classes, and enums, and `Queue` and `Task` handles.
 - Types that fail: capability views, `random.Rng`, `TaskGroup`, and live host
   resources.
-- `Transfer` is derived by the compiler. It is not a user trait.
+- A trait object passes only when its trait has `Transfer` as a supertrait.
+  `trait Job: Transfer:` admits only Transfer types, so `dyn Job` may cross
+  the boundary. See
+  [Trait Objects In Tasks](/manual/generics-and-traits#trait-objects-in-tasks).
+- `Transfer` is derived by the compiler. The prelude trait `Transfer` names
+  the property for bounds and supertraits. It has no implementations, and
+  `impl Transfer for T:` reports `AU3008`.
 
 Reading a Copy value through shared or mutable access for a task argument
 captures an owned snapshot, not the access capability. That snapshot is
@@ -682,8 +693,9 @@ before user code runs. A non-Unicode value is displayed lossily.
 field, element, or payload path that leads to the non-transferable leaf. To
 fix it, pass owned transferable data instead of a capability view. Keep a host
 resource or `random.Rng` on its owning task and send transferable input and
-output data instead. The guidance never suggests implementing `Transfer`,
-because there is no user implementation surface. This diagnostic belongs to
+output data instead. For a trait object, declare its trait with `Transfer` as
+a supertrait. The guidance never suggests implementing `Transfer`, because
+there is no user implementation surface. This diagnostic belongs to
 the provisional `Transfer` contract.
 
 **AU3009 versus AU3001.** `AU3009` means the value has already passed the

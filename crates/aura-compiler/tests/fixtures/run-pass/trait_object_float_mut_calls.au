@@ -1,0 +1,125 @@
+trait Grow:
+    def grow(mut self, by: int64) -> None
+    def show(self) -> str
+
+
+class Cell[T]:
+    value: T
+
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+
+impl Grow for float64:
+    def grow(mut self, by: int64) -> None:
+        self = self + 1.0
+    def show(self) -> str:
+        return f"float64 {self}"
+
+
+impl Grow for float32:
+    def grow(mut self, by: int64) -> None:
+        self = self + 0.5
+    def show(self) -> str:
+        return f"float32 {self}"
+
+
+impl Grow for int64:
+    def grow(mut self, by: int64) -> None:
+        self += by
+    def show(self) -> str:
+        return f"int64 {self}"
+
+
+impl Grow for Cell[float32]:
+    def grow(mut self, by: int64) -> None:
+        self.value = self.value + 0.25
+    def show(self) -> str:
+        return f"Cell[float32] {self.value}"
+
+
+impl Grow for Cell[float64]:
+    def grow(mut self, by: int64) -> None:
+        self.value = self.value + 2.0
+    def show(self) -> str:
+        return f"Cell[float64] {self.value}"
+
+
+impl Grow for Maybe[float32]:
+    def grow(mut self, by: int64) -> None:
+        self = Maybe.Nothing
+    def show(self) -> str:
+        match self:
+            case Maybe.Some(value):
+                return f"Maybe[float32] {value}"
+            case Maybe.Nothing:
+                return "Maybe[float32] nothing"
+
+
+impl Grow for Maybe[float64]:
+    def grow(mut self, by: int64) -> None:
+        self = Maybe.Some(9.0)
+    def show(self) -> str:
+        match self:
+            case Maybe.Some(value):
+                return f"Maybe[float64] {value}"
+            case Maybe.Nothing:
+                return "Maybe[float64] nothing"
+
+
+def hold[T: Grow](value: own T) -> dyn Grow:
+    return value
+
+
+def bump(item: mut dyn Grow) -> None:
+    item.grow(2)
+
+
+def main() -> None:
+    single: float32 = 1.5
+    one: int64 | float32 = single
+    two: int64 | float64 = 2.5
+    seven: int64 = 7
+    three: int64 | float64 = seven
+    none32: Maybe[float32] = Maybe.Some(single)
+    none64: Maybe[float64] = Maybe.Nothing
+    mut items: list[dyn Grow] = [
+        single,
+        2.5,
+        3,
+        Cell(value=single),
+        Cell(value=2.5),
+        none32,
+        none64,
+        hold(one),
+        hold(two),
+        hold(three),
+        hold(single),
+    ]
+    for item in items:
+        print(item.show())
+    for item in mut items:
+        item.grow(1)
+    for item in mut items:
+        bump(item)
+    for item in items:
+        print(item.show())
+    mut lone: dyn Grow = single
+    lone.grow(1)
+    bump(lone)
+    print(lone.show())
+    match mut lone:
+        case float32 as value:
+            value = value + 100.0
+        case _:
+            pass
+    print(lone.show())
+    match own lone:
+        case float64 as value:
+            print(f"double {value}")
+        case float32 as value:
+            print(f"single {value}")
+        case _:
+            print("other")

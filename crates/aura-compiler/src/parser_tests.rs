@@ -5439,6 +5439,40 @@ fn trait_object_types_name_one_trait_after_dyn() {
 }
 
 #[test]
+fn a_cast_names_a_trait_object_type_after_as() {
+    fn bound_value(source: &str) -> Expr {
+        match parse_stmt_from(source).expect("a binding") {
+            Stmt::Assign(assign) => assign.value,
+            other => panic!("expected a binding, found {other:?}"),
+        }
+    }
+
+    let cast = bound_value("tool = Echo() as dyn Tool\n");
+    let ExprKind::Cast { ty, .. } = &cast.kind else {
+        panic!("expected a cast, found {cast:?}");
+    };
+    assert!(ty.as_trait_object().is_some());
+
+    // The cast binds like a numeric cast, so a call on the converted value
+    // parenthesizes it.
+    let call = bound_value("count = (echo as dyn Tool).run()\n");
+    assert!(matches!(call.kind, ExprKind::Call { .. }));
+
+    let generic = bound_value("reader = source as dyn Reader[int64]\n");
+    let ExprKind::Cast { ty, .. } = &generic.kind else {
+        panic!("expected a cast, found {generic:?}");
+    };
+    let (_, args) = ty
+        .as_trait_object()
+        .and_then(|bound| bound.named_parts())
+        .expect("a named trait");
+    assert_eq!(args.len(), 1);
+
+    // `with ... as dyn:` still binds a plain name called `dyn`.
+    assert!(parse_stmt_from("with open_group() as dyn:\n    pass\n").is_ok());
+}
+
+#[test]
 fn trait_object_types_reject_brackets_and_indirect() {
     let brackets = parse_item_from("def run(tool: dyn[Tool]) -> None:\n    pass\n")
         .expect_err("`dyn[Tool]` is not a type");

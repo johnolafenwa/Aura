@@ -1,0 +1,15 @@
+int64 2
+int32 5
+str text!
+bool true
+list[int64] of 3
+list[str] of 0
+dict of 1
+Cell[int64] 7
+Cell[str] c
+Maybe[int64] 9
+Maybe[int64] -1
+Maybe[str]
+Color
+4
+moved

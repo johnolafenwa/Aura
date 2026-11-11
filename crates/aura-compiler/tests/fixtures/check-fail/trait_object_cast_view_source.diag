@@ -1,0 +1,5 @@
+error[AU3004]: a view source must be an addressable local, parameter, receiver, fixed field, tuple position, or existing view
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_view_source.au:49:18
+   |
+49 |     view shape = square as dyn Shape
+   |                  ^

@@ -123,7 +123,10 @@ impl Lowerer<'_> {
                 UnaryOp::Neg | UnaryOp::BitNot => self.completed_operand_type(value, params),
             },
             Rvalue::Cast { ty, .. } => Some(ty.clone()),
-            Rvalue::UnionTagTest { .. } | Rvalue::NoneTest { .. } => Some(Type::named("bool")),
+            Rvalue::UnionTagTest { .. }
+            | Rvalue::NoneTest { .. }
+            | Rvalue::TraitObjectHolds { .. } => Some(Type::named("bool")),
+            Rvalue::TraitObjectTake { ty, .. } => Some(ty.clone()),
             Rvalue::UnionTakePayload { member_type, .. } => Some(member_type.clone()),
             Rvalue::UnionInject { union_type, .. } => Some(union_type.clone()),
             Rvalue::Closure { signature, .. } => Some(signature.clone()),

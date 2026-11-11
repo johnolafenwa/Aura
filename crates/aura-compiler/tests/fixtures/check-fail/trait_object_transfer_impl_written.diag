@@ -1,0 +1,6 @@
+error[AU3008]: `Transfer` cannot be implemented for `Sum`: a type is Transfer when every part of it is
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_impl_written.au:11:1
+   |
+11 | impl Transfer for Sum:
+   | ^
+  = help: remove this `impl`; a class or enum made only from Transfer components is Transfer already

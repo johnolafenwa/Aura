@@ -1,0 +1,34 @@
+trait Shape:
+    def area(self) -> int64
+
+trait Other:
+    def other(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+
+class Plain:
+    x: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w
+
+impl Other for Square:
+    def other(self) -> int64:
+        return 1
+
+def f(shape: dyn Shape) -> int64:
+    return match shape:
+        case Square as square: square.side
+        case Rect as rect: rect.w
+
+def main() -> None:
+    print(f(Square(side=1)))

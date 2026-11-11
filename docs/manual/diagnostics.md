@@ -83,7 +83,7 @@ String and format-specification diagnostics are described under
 | `AU2010` | union member or context | A value that is not a direct member of the expected union, or a union without enough context. | Supply a direct member or the missing type context. |
 | `AU2011` | ambiguous union injection | A literal that more than one union member accepts. | Make the intended member explicit. |
 | `AU2012` | cyclic type alias | A transparent alias that refers back to itself. | Break the cycle. |
-| `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
+| `AU2013` | type arm coverage | Missing, duplicate, unreachable, or nonmember union type arms. A trait object match with no final `case _:`, or with an arm for a type that does not implement the trait. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
@@ -100,7 +100,7 @@ String and format-specification diagnostics are described under
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
-| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, and a `mut` argument whose type is not already the parameter's trait object type. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
+| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -173,8 +173,10 @@ could accept reports `AU2011`.
 
 **`AU2012` cyclic type alias.** A cyclic transparent alias reports `AU2012`.
 
-**`AU2013` union pattern coverage.** Missing, duplicate, unreachable, or
-nonmember union type arms report `AU2013`.
+**`AU2013` type arm coverage.** Missing, duplicate, unreachable, or
+nonmember union type arms report `AU2013`. So does a `match` on a trait
+object with no final `case _:`, or with an arm whose type can never be the
+one the trait object holds.
 
 **`AU2014` invalidated narrowing.** A member use through a place whose
 `None`-test narrowing was invalidated reports exactly this message:
@@ -403,6 +405,11 @@ The `AU3008` guidance follows these rules:
   not claim that all borrowed Copy captures fail.
 - It never proposes an `impl Transfer`. An ordinary user trait also named
   `Transfer`, and its implementations, do not alter the structural property.
+- For a trait object it recommends declaring the trait with the prelude
+  `Transfer` as a supertrait. An `impl` of such a trait for a type that is not
+  Transfer reports `AU3008` at the `impl`, and so does `impl Transfer for T:`.
+- A type argument that does not meet a `T: Transfer` bound reports `AU3008`
+  at the call, with the same path to the leaf.
 
 A task callable contract that returns a view also reports `AU3008`.
 

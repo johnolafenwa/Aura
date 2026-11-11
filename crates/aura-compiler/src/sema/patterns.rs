@@ -106,6 +106,20 @@ fn structural_match_not_exhaustive(span: crate::diag::Span, scrutinee_ty: &Type)
     )
 }
 
+/// A match on a trait object whose arms name types but leave the rest
+/// uncovered. The set of types that implement a trait is open, so no list
+/// of type arms is complete.
+fn trait_object_match_needs_catch_all(span: crate::diag::Span, scrutinee_ty: &Type) -> Diagnostic {
+    Diagnostic::coded_at(
+        "AU2013",
+        span,
+        format!(
+            "match on `{scrutinee_ty}` needs a final `case _:`, because a trait object can hold any type that implements its trait"
+        ),
+    )
+    .with_help("add `case _:` after the type arms")
+}
+
 impl FunctionChecker<'_> {
     /// The collection kind when `match_stmt` is `match table.lookup(key):`
     /// on a builtin list or dictionary. A user method named `lookup` keeps
@@ -151,6 +165,9 @@ impl FunctionChecker<'_> {
                 format!("type arm `{member}` is not proved to denote one direct, disjoint member"),
             ));
         }
+        if expected.is_trait_object() {
+            return self.trait_object_type_arm(pattern, member, expected);
+        }
         let direct = match expected {
             Type::Union(union) => union.members.contains(&member),
             _ => &member == expected,
@@ -163,6 +180,43 @@ impl FunctionChecker<'_> {
             ));
         }
         Ok(member)
+    }
+
+    /// The type a type arm selects when the scrutinee is the trait object
+    /// `expected`: a type that implements the trait, which the object may
+    /// hold. Another trait object type is not one: an object holds a value
+    /// of a concrete type.
+    fn trait_object_type_arm(
+        &self,
+        pattern: &crate::ast::TypePattern,
+        member: Type,
+        expected: &Type,
+    ) -> Result<Type> {
+        if member.is_trait_object() {
+            return Err(Diagnostic::coded_at(
+                "AU2013",
+                pattern.span,
+                format!(
+                    "type arm `{member}` names a trait object, and a `{expected}` holds a value of a concrete type"
+                ),
+            )
+            .with_help("name the type the value has, such as a class that implements the trait"));
+        }
+        if !self.converts_to_trait_object(&member, expected) {
+            return Err(Diagnostic::coded_at(
+                "AU2013",
+                pattern.span,
+                format!("type arm `{member}` can never match: a `{expected}` holds only types that implement its trait, and `{member}` does not"),
+            ));
+        }
+        Ok(member)
+    }
+
+    /// Whether a match on `ty` is checked by its type arms: a union, whose
+    /// arms name its members, or a trait object, whose arms name types it
+    /// may hold.
+    fn has_type_arms(ty: &Type) -> bool {
+        matches!(ty, Type::Union(_) | Type::Unit) || ty.is_trait_object()
     }
 
     fn is_none_type_pattern(pattern: &VariantPattern) -> bool {
@@ -255,6 +309,10 @@ impl FunctionChecker<'_> {
             None
         };
         let result = (|| {
+            if match_stmt.capability != ReceiverKind::Value {
+                // `match tools[i]:` inspects the element where it is.
+                self.mark_borrowed_element(&match_stmt.scrutinee);
+            }
             let scrutinee_ty = self.type_of_expr(&match_stmt.scrutinee, locals)?;
             let scrutinee_ty =
                 self.narrowed_scrutinee_type(&match_stmt.scrutinee, scrutinee_ty, locals);
@@ -279,7 +337,8 @@ impl FunctionChecker<'_> {
                 ));
             }
 
-            if matches!(scrutinee_ty, Type::Union(_) | Type::Unit)
+            if (matches!(scrutinee_ty, Type::Union(_) | Type::Unit)
+                || scrutinee_ty.is_trait_object())
                 || match_stmt
                     .arms
                     .iter()
@@ -336,6 +395,12 @@ impl FunctionChecker<'_> {
                 }
                 let missing = self.missing_patterns_for_type(&prior, &scrutinee_ty);
                 if !missing.is_empty() {
+                    if scrutinee_ty.is_trait_object() {
+                        return Err(trait_object_match_needs_catch_all(
+                            match_stmt.span,
+                            &scrutinee_ty,
+                        ));
+                    }
                     return Err(Diagnostic::coded_at(
                         "AU2013",
                         match_stmt.span,
@@ -1226,6 +1291,10 @@ impl FunctionChecker<'_> {
             None
         };
         let result = (|| {
+            if borrow_mode != ReceiverKind::Value {
+                // `match tools[i]:` inspects the element where it is.
+                self.mark_borrowed_element(scrutinee);
+            }
             let scrutinee_ty = self.type_of_expr(scrutinee, locals)?;
             let scrutinee_ty = self.narrowed_scrutinee_type(scrutinee, scrutinee_ty, locals);
             if borrow_mode == ReceiverKind::Value {
@@ -1248,7 +1317,8 @@ impl FunctionChecker<'_> {
                 ));
             }
 
-            if matches!(scrutinee_ty, Type::Union(_) | Type::Unit)
+            if (matches!(scrutinee_ty, Type::Union(_) | Type::Unit)
+                || scrutinee_ty.is_trait_object())
                 || arms
                     .iter()
                     .any(|arm| pattern_has_root_type_arm(&arm.pattern))
@@ -1303,6 +1373,9 @@ impl FunctionChecker<'_> {
                 }
                 let missing = self.missing_patterns_for_type(&prior, &scrutinee_ty);
                 if !missing.is_empty() {
+                    if scrutinee_ty.is_trait_object() {
+                        return Err(trait_object_match_needs_catch_all(span, &scrutinee_ty));
+                    }
                     return Err(Diagnostic::coded_at(
                         "AU2013",
                         span,
@@ -1943,7 +2016,7 @@ impl FunctionChecker<'_> {
         patterns: &[&Pattern],
         expected_ty: &Type,
     ) -> Vec<String> {
-        if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+        if Self::has_type_arms(expected_ty) {
             return self.typed_patterns_missing(patterns, expected_ty);
         }
         if patterns
@@ -2103,12 +2176,21 @@ impl FunctionChecker<'_> {
         pattern: &Pattern,
         expected_ty: &Type,
     ) -> bool {
-        if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+        if Self::has_type_arms(expected_ty) {
             let current = self.typed_pattern_members(pattern, expected_ty);
             let covered = patterns
                 .iter()
                 .flat_map(|pattern| self.typed_pattern_members(pattern, expected_ty))
                 .collect::<BTreeSet<_>>();
+            // A catch-all over a trait object covers every type it may
+            // hold, so no arm after it can match.
+            if expected_ty.is_trait_object()
+                && covered.contains(
+                    &expected_ty.canonical_key(self.module_name, self.canonical_type_names),
+                )
+            {
+                return true;
+            }
             if let Pattern::Class(class) = pattern {
                 if current.is_empty() {
                     return self.union_class_pattern_is_covered(
@@ -2377,7 +2459,7 @@ impl FunctionChecker<'_> {
     }
 
     pub(super) fn pattern_covers_entire_type(&self, pattern: &Pattern, expected_ty: &Type) -> bool {
-        if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+        if Self::has_type_arms(expected_ty) {
             return self
                 .typed_patterns_missing(&[pattern], expected_ty)
                 .is_empty();
@@ -2449,7 +2531,7 @@ impl FunctionChecker<'_> {
         patterns: &[&Pattern],
         expected_ty: &Type,
     ) -> bool {
-        if matches!(expected_ty, Type::Union(_) | Type::Unit) {
+        if Self::has_type_arms(expected_ty) {
             return self
                 .typed_patterns_missing(patterns, expected_ty)
                 .is_empty();

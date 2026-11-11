@@ -792,3 +792,21 @@ test("statement-position triple strings get a distinct docstring scope", async (
   assert.ok(ordinary.includes("string.quoted.triple.double.aura"));
   assert.ok(!ordinary.some((scope) => scope.includes("docstring")));
 });
+
+test("grammar marks dyn before a trait name and leaves a variable named dyn alone", async () => {
+  const source = [
+    "def run(tools: list[dyn Tool], one: dyn Reader[int64]) -> dyn Tool:",
+    "    first = Echo() as dyn Tool",
+    "    dyn = 3",
+    "    print(dyn)"
+  ].join("\n");
+  const tokenized = await tokenizeAura(source);
+
+  assert.ok(scopesAt(tokenized, 0, "dyn").includes("storage.modifier.dyn.aura"));
+  assert.ok(scopesAt(tokenized, 0, "dyn", 1).includes("storage.modifier.dyn.aura"));
+  assert.ok(scopesAt(tokenized, 0, "dyn", 2).includes("storage.modifier.dyn.aura"));
+  assert.ok(scopesAt(tokenized, 1, "dyn").includes("storage.modifier.dyn.aura"));
+  assert.ok(scopesAt(tokenized, 1, "as").includes("keyword.control.aura"));
+  assert.equal(scopesAt(tokenized, 2, "dyn").includes("storage.modifier.dyn.aura"), false);
+  assert.equal(scopesAt(tokenized, 3, "dyn").includes("storage.modifier.dyn.aura"), false);
+});

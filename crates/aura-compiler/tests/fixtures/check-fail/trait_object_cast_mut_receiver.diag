@@ -1,0 +1,6 @@
+error[AU2051]: a conversion to a trait object makes a new value, so it cannot be changed in place
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_mut_receiver.au:49:6
+   |
+49 |     (square as dyn Shape).grow(1)
+   |      ^
+  = help: bind the converted value to a `mut` name first, and use that

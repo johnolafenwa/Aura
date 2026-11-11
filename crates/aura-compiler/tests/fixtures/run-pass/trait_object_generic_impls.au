@@ -1,0 +1,52 @@
+trait Named:
+    def name(self) -> str
+
+
+class Box[T]:
+    value: T
+
+
+class Tagged[T]:
+    label: str
+
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+
+impl[T] Named for Maybe[T]:
+    def name(self) -> str:
+        match self:
+            case Maybe.Some(_):
+                return "some"
+            case Maybe.Nothing:
+                return "nothing"
+
+
+impl[T] Named for Box[T]:
+    def name(self) -> str:
+        return "box"
+
+
+impl[T] Named for Tagged[T]:
+    def name(self) -> str:
+        return self.label.clone()
+
+
+impl[T] Named for list[T]:
+    def name(self) -> str:
+        return f"list of {len(self)}"
+
+
+def generic_name[T: Named](value: T) -> str:
+    return value.name()
+
+
+def main() -> None:
+    nothing: Maybe[int64] = Maybe.Nothing
+    tagged: Tagged[float32] = Tagged(label="t")
+    print(generic_name(nothing))
+    items: list[dyn Named] = [Maybe.Some(1), nothing, Box(value=1.5), tagged, [1, 2]]
+    for item in items:
+        print(item.name())

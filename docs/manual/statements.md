@@ -836,7 +836,7 @@ Compile-time diagnostics:
 | `AU2003` | Unsupported compound-assignment operator. |
 | `AU2004` | Call or target argument binding failed. |
 | `AU2005` | Unsupported syntax or feature for a Python-shaped statement. |
-| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. |
+| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. A trait object match has no final `case _:`, or has an arm that can never match. |
 | `AU2014` | A member use through a place whose `None`-test narrowing was ended by an assignment, a mutable match, or a call with mutable access. |
 | `AU2017` | A `with` item is not a context manager, or its exit `Result` does not fit the enclosing function. |
 | `AU2999` | An exhaustiveness, contextual-legality, or unsupported-statement rejection with no narrower code. |

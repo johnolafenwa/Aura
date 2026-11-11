@@ -1,0 +1,7 @@
+error[AU3002]: cannot move `label` out of a shared match on `shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_binding_moves.au:48:20
+   |
+48 |             return label
+   |                    ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_binding_moves.au:47:23: value is borrowed here
+  = help: write `match own shape` to consume the scrutinee; `Label` cannot be cloned

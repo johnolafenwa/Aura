@@ -47,8 +47,12 @@ checks these places, so while one of them is unproved
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a
-type parameter, relies on the trait method's contract, which every
-implementation is proved to keep. A call of a `lemma def` relies on the
+type parameter or a trait object, relies on the trait method's contract,
+which every implementation is proved to keep. A trait object the function
+itself made from a value of a known type is followed more closely: a call on
+it relies on that type's own contract, and a `match` type arm on it is
+decided. A trait object the function receives, reads from a collection, or
+gets from two paths that hold different types may hold any type. A call of a `lemma def` relies on the
 lemma's `ensures` the same way; see
 [Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
 what a caller needs to know must be in the contract.

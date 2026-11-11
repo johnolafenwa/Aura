@@ -779,6 +779,72 @@ def show(tool: Tool):
 
 A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
 
+`value as dyn Trait` names the conversion where nothing else supplies the type. It gives a binding, a list literal, or a generic call its trait object type without an annotation:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def last[T](items: own list[T]) -> T:
+    mut rest = items
+    return rest.pop()
+
+def main():
+    tools = [Echo(prefix="> ") as dyn Tool, Counter(calls=0)]
+    print(len(tools))
+    tool = last([Counter(calls=0) as dyn Tool, Echo(prefix="")])
+    print(tool.name())
+    echo = Echo(prefix="> ")
+    print((echo as dyn Tool).name())
+    print(echo.prefix)
+```
+
+The explicit form converts exactly as the implicit one does. Bound to a name, stored, or passed to an `own` parameter, it moves the value. As the receiver of a `self` method or as a shared argument, it borrows the value for the call, so `echo` above is still usable. The converted value is a new value, so it cannot be a `mut` receiver or a `mut` argument (`AU2051`), and it cannot be the source of a `view`. A type that does not implement the trait reports `AU2002`.
+
+A value of a union type converts when every member implements the trait. The trait object then holds the union's active member. A value of a type parameter converts when a bound of the parameter promises the trait:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def boxed[T: Tool](tool: own T) -> dyn Tool:
+    return tool
+
+def main():
+    either: Echo | Counter = Counter(calls=0)
+    tool: dyn Tool = either
+    print(tool.name())
+    print(boxed(Echo(prefix="")).name())
+```
+
 The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
 
 A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
@@ -827,6 +893,108 @@ A trait object exposes the methods of its trait and its supertraits only. It has
 
 A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
 
+### Iteration
+
+`dyn Iterator[T]` is a `for` source, and so is a trait object of a trait that extends `Iterator[T]`. A function can return any of several iterator types behind it, and a list can hold iterators of different types:
+
+```aura
+from iter import Iterator, Step
+
+class Count:
+    next_value: int64
+    stop: int64
+
+class Repeat:
+    value: int64
+    left: int64
+
+impl Iterator[int64] for Count:
+    def next(mut self) -> Step[int64]:
+        if self.next_value >= self.stop:
+            return Step.End
+        self.next_value += 1
+        return Step.Item(self.next_value - 1)
+
+impl Iterator[int64] for Repeat:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.value)
+
+def numbers(repeat: bool) -> dyn Iterator[int64]:
+    if repeat:
+        return Repeat(value=7, left=2)
+    return Count(next_value=0, stop=3)
+
+def main():
+    for value in numbers(false):
+        print(value)
+    sources: list[dyn Iterator[int64]] = [numbers(true), numbers(false)]
+    for source in own sources:
+        print(source.collect())
+```
+
+This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
+
+### Matching On The Held Type
+
+`match` on a trait object selects on the type of the value it holds. A type arm is spelled `case Type as name:`, the same as a type arm on a [union](/manual/enums-and-match#union-type-patterns):
+
+```aura
+trait Shape:
+    def area(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+
+def describe(shape: dyn Shape) -> str:
+    match shape:
+        case Square as square:
+            return f"square of side {square.side}"
+        case Rect as rect:
+            return f"{rect.w} by {rect.h}"
+        case _:
+            return f"a shape of area {shape.area()}"
+
+def widen(shape: mut dyn Shape):
+    match mut shape:
+        case Rect as rect:
+            rect.w += 1
+        case _:
+            pass
+
+def main():
+    mut shapes: list[dyn Shape] = [Square(side=2), Rect(w=2, h=3)]
+    for shape in mut shapes:
+        widen(shape)
+    for shape in shapes:
+        print(describe(shape))
+```
+
+This prints `square of side 2` and `3 by 3`.
+
+- An arm names one type that implements the trait, with its type arguments. It matches that exact type: `float32` is not `float64`, and `case Cell[int64] as cell:` does not match a `Cell[str]`.
+- The match ends with `case _:` or a name, because a trait object can hold any type that implements its trait, including a type another module adds later. A match without one reports `AU2013`.
+- An arm whose type does not implement the trait can never match, and it reports `AU2013`. So does an arm that names a trait object, such as `case dyn Other as other:`, because a trait object holds a value of a concrete type. A second arm for one type and an arm after the catch-all report `AU2013` too.
+- Guards, match expressions, and the three capabilities work as they do on a union. A bare `match` gives a shared binding. `match mut` gives a mutable binding and writes the value back into the trait object when the arm ends, on `return`, `break`, and `continue` too. `match own` moves the value out of the trait object.
+- `match tools[i]:` and `match mut tools[i]:` inspect the element where it is. `match own tools[i]:` would copy the element out, so it reports `AU3005`.
+- Literal, class, and enum variant patterns do not apply to a trait object. Select the type first, then match the bound value.
+
+A type arm is the way back from a trait object to the type it holds. Nothing else converts one back: `square: Square = shape` reports `AU2002`.
+
 ### Ownership
 
 A trait object is an owned value. It moves on assignment and it is never copied:
@@ -835,11 +1003,48 @@ A trait object is an owned value. It moves on assignment and it is never copied:
 - It does not define `==`.
 - Reading an element out of a collection would copy it, so `tool = tools[0]` reports `AU3005`. Use `view tool = tools[0]`, or take the element out with `pop` or `remove`.
 - A method call on an element, `tools[0].run(input)`, borrows the element where it is. So does passing an element to a shared or `mut` parameter.
-- A trait object is not Transfer, so it cannot cross a task boundary.
+- A trait object is Transfer only when its trait says so. See [Trait Objects In Tasks](#trait-objects-in-tasks).
+
+### Trait Objects In Tasks
+
+A trait object crosses a task boundary when its trait has `Transfer` as a supertrait. `Transfer` is the prelude trait for the property the compiler derives from a type's structure, described in [Concurrency](/manual/concurrency#typing-rules).
+
+```aura
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+
+def work(job: own dyn Job) -> int64:
+    return job.run()
+
+def main() -> None:
+    with TaskGroup() as group:
+        task = group.start(work, Sum(values=[1, 2, 3]) as dyn Job)
+        print(task.result())
+```
+
+- `trait Job: Transfer:` admits only Transfer types. An `impl Job for T:` where `T` is not Transfer reports `AU3008` and names the field that is not Transfer.
+- So every value a `dyn Job` can hold is Transfer, and `dyn Job` is Transfer. It can be a task argument, a task result, and a `Queue` payload. So can a list, a dictionary, a tuple, a union, or a class that holds one.
+- A trait that extends `Job` inherits the property: with `trait Fast: Job:`, `dyn Fast` is Transfer too.
+- A trait object of any other trait is not Transfer, and sending one reports `AU3008`.
+- No `impl Transfer for T:` is written, and one reports `AU3008`. A type is Transfer when every part of it is.
+- `Transfer` is a bound as well. `def send[T: Transfer](value: own T)` accepts every Transfer type and may put `value` in a `Queue[T]` or hand it to a task. A generic implementation states it the same way: `impl[T: Transfer] Job for Box[T]:`.
+- `dyn Transfer` holds a value of any Transfer type. It has no methods, so a [type arm](#matching-on-the-held-type) is the way to use the value.
 
 ### Representation
 
 A trait object is one handle to a box that holds the value together with its type. A call reads the type from the box and runs that type's implementation. A conversion from a value that is already boxed, such as another erased value, reuses its box.
+
+A `for` loop over a `list[dyn Trait]` lends each element to the body and copies none. A call on a lent element of a class type compares a type number in the box, so it costs a few instructions more than a call the compiler resolves. A `mut self` call on a list element takes the element out and stores it back, as it does for a list of one class.
 
 ## Operator Traits
 
@@ -863,7 +1068,7 @@ Builtin rules come first:
 - `/` on equal integer operands is rejected with the integer-division teaching diagnostic. It is not dispatched to `Div.div`. `/` still requests `Div.div` for an applicable non-numeric user type.
 - The divisor-sign rule for `%` describes builtin numeric remainder. `Mod.mod` on a user type has the semantics of that implementation.
 
-`Ord`, `Add`, and `From` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
+`Ord`, `Add`, `From`, and the marker trait `Transfer` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
 
 ```aura
 trait Add[Rhs, Out]:
@@ -980,7 +1185,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
+- A trait object names one trait. It crosses a task boundary only when that trait has `Transfer` as a supertrait.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -1035,9 +1240,9 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
-| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. A `match` on a trait object with no final `case _:`, with an arm whose type does not implement the trait, or with an arm that names a trait object. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
-| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
@@ -1092,7 +1297,7 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
-- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
+- trait objects, `dyn Trait`, with conversion at typed places, `value as dyn Trait`, calls dispatched on the held value, and `match` type arms on the held type
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 

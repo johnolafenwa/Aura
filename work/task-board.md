@@ -24,7 +24,7 @@ Last updated: 2026-11-10
   count; `docdb` and `json_roundtrip` now beat Python. Details are in
   `2026-11-10-v0.14.0-preview-release.md`.
 
-## Trait objects (in progress)
+## Trait objects (complete)
 
 - `dyn Trait`: a value of any type that implements a trait, so a list can
   hold an open set of types. The ratified design is in
@@ -33,10 +33,26 @@ Last updated: 2026-11-10
 - Step 1 is done: the type, conversion at typed sites, calls dispatched
   on the held value, supertrait calls and upcasts, bounds, and the
   ownership rules, on both backends.
-- Next: `value as dyn Trait` and `dyn Iterator[T]` in `for`, `match` type
-  arms, `trait Tool: Transfer:`, element lends, fast dispatch with
-  probes against Rust and Python, then `aura verify`, the language
-  server, the book chapter, and the ADR.
+- Step 2 is done: `value as dyn Trait`, `dyn Iterator[T]` as a `for`
+  source, and conversion from union values and bounded type parameters.
+- The held type is exact: a conversion is its own MIR rvalue, so
+  `float32` and `float64`, and `Cell[int64]` and `Cell[str]`, dispatch to
+  their own implementations on both backends.
+- Step 3 is done: `match` on a trait object with `case Type as name:`
+  arms and a required catch-all, under a bare `match`, `match mut`, and
+  `match own`.
+- Step 4 is done: `Transfer` is a prelude marker trait. A trait with it
+  as a supertrait admits only Transfer types, so its trait object
+  crosses task and queue boundaries, and `T: Transfer` is a bound.
+- Steps 5 and 6 are done: a loop lends each element, and a call picks
+  its implementation from the class code in the box. The
+  `trait_object_call` probe costs 34 instructions against Rust's 12
+  (2.8x, was about 4,600), and a call runs 5 times faster than Python.
+- Step 7 is done: `aura verify` follows a trait object made from a
+  known type, the editor completes and resolves trait object calls, the
+  book has section 10.5, and the decision is ADR-0081.
+- Open, for every class and not only trait objects: a `mut self` call on
+  a list element takes the element out and stores it back.
 
 ## Iterator bound and float64 gaps (complete)
 

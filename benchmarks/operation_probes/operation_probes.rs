@@ -420,6 +420,66 @@ fn str_format(n: i64, run: bool) -> i64 {
     text.len() as i64
 }
 
+trait Solid {
+    fn volume(&self) -> i64;
+}
+
+struct Cube {
+    side: i64,
+}
+
+struct Slab {
+    width: i64,
+    depth: i64,
+}
+
+struct Rod {
+    length: i64,
+    step: i64,
+}
+
+impl Solid for Cube {
+    fn volume(&self) -> i64 {
+        self.side * self.side
+    }
+}
+
+impl Solid for Slab {
+    fn volume(&self) -> i64 {
+        self.width * self.depth
+    }
+}
+
+impl Solid for Rod {
+    fn volume(&self) -> i64 {
+        self.length + self.step
+    }
+}
+
+fn trait_object_call(n: i64, run: bool) -> i64 {
+    let mut solids: Vec<Box<dyn Solid>> = Vec::new();
+    for i in 0..n {
+        match i % 3 {
+            0 => solids.push(Box::new(Cube { side: i % 7 })),
+            1 => solids.push(Box::new(Slab {
+                width: i % 5,
+                depth: i % 11,
+            })),
+            _ => solids.push(Box::new(Rod {
+                length: i % 13,
+                step: 1,
+            })),
+        }
+    }
+    let mut total = 0i64;
+    if run {
+        for solid in black_box(&solids) {
+            total += solid.volume();
+        }
+    }
+    total + solids.len() as i64
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -446,6 +506,7 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "generator_class" => generator_class(n, run),
         "str_append" => str_append(n, run),
         "str_format" => str_format(n, run),
+        "trait_object_call" => trait_object_call(n, run),
         _ => -1,
     }
 }

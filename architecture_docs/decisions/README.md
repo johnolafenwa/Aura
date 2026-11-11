@@ -104,4 +104,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 76. [ADR-0076: FFI passes a list of scalars as an array pointer](0076-ffi-array-pointers.md) — Accepted; `ptr[T]` and `mut ptr[T]` parameters over the elements of a scalar list
 77. [ADR-0077: FFI passes C structs by value and by pointer](0077-ffi-c-structs.md) — Accepted; `extern "C" class` structs in registers or memory by the C calling convention
 80. [ADR-0080: FFI passes a named function as a C callback](0080-ffi-callbacks.md) — Accepted; function-typed extern parameters over scalars, with a failure parked until the C function returns
+81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
 83. [ADR-0083: An opaque handle names the C function that releases it](0083-ffi-handle-drop-functions.md) — Accepted; `drop` clause on `extern "C" opaque class`, run once when the last owner goes away

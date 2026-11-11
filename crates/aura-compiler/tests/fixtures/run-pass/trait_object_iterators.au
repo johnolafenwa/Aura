@@ -1,0 +1,54 @@
+from iter import Generator, Iterator, Step
+
+class Countdown:
+    left: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.left)
+
+class Evens:
+    at: int64
+    stop: int64
+
+impl Iterator[int64] for Evens:
+    def next(mut self) -> Step[int64]:
+        if self.at >= self.stop:
+            return Step.End
+        self.at += 2
+        return Step.Item(self.at - 2)
+
+def squares(count: int64) -> Generator[int64]:
+    for i in range(count):
+        yield i * i
+
+def pick(kind: int64) -> dyn Iterator[int64]:
+    if kind == 0:
+        return Countdown(left=3)
+    if kind == 1:
+        return Evens(at=0, stop=6)
+    return squares(4)
+
+def total(source: own dyn Iterator[int64]) -> int64:
+    mut sum = 0
+    for value in source:
+        sum += value
+    return sum
+
+def main() -> None:
+    for kind in range(3):
+        for value in pick(kind):
+            print(value)
+    print(total(pick(1)))
+    mut sources: list[dyn Iterator[int64]] = [pick(0), pick(1), pick(2)]
+    while len(sources) > 0:
+        print(total(sources.pop()))
+    mut manual: dyn Iterator[int64] = Countdown(left=2)
+    match manual.next():
+        case Step.Item(value):
+            print(value)
+        case Step.End:
+            print("end")

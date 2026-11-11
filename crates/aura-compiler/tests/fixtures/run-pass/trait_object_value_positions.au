@@ -1,0 +1,87 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def pick(square: bool) -> dyn Shape:
+    if square:
+        return Square(side=3)
+    return Rect(w=2, h=5)
+
+
+def show(shape: dyn Shape) -> str:
+    return shape.describe()
+
+
+def side(square: bool) -> int64:
+    match pick(square):
+        case Square as found:
+            return found.side
+        case _:
+            return -1
+
+
+def main() -> None:
+    print(side(true))
+    print(side(false))
+    text = match pick(true):
+        case Square as found: f"square {found.side}"
+        case _: "other"
+    print(text)
+    grouped: dyn Shape = (Square(side=4))
+    print(grouped.area())
+    again: dyn Shape = (grouped as dyn Shape)
+    print(show(again as dyn Shape))
+    print(show((Rect(w=1, h=1)) as dyn Shape))
+    print((Square(side=5) as dyn Shape).area())
+    areas = [(Square(side=2) as dyn Shape).area(), show(again as dyn Shape).len()]
+    print(areas)
+    same = (again as dyn Shape).area() == 16
+    print(same)

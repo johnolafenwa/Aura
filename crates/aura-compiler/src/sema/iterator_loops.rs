@@ -198,6 +198,19 @@ impl FunctionChecker<'_> {
                         .then(|| bound.trait_args[0].clone())
                 });
         }
+        // A trait object of `Iterator[T]`, or of a trait that has it as a
+        // supertrait, iterates its `T` through the held value's `next`.
+        if ty.is_trait_object() {
+            return self
+                .trait_object_traits(ty)
+                .into_iter()
+                .find_map(|exposed| {
+                    (exposed.info.module_name == ITER_MODULE
+                        && exposed.info.decl.name == ITERATOR_TRAIT
+                        && exposed.args.len() == 1)
+                        .then(|| exposed.args[0].clone())
+                });
+        }
         if !matches!(ty, Type::Named(..)) {
             return None;
         }

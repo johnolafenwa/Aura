@@ -1,0 +1,6 @@
+error[AU2002]: binding `item` has annotated type `dyn prelude.Transfer`, but value has type `Dice`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_conversion.au:17:5
+   |
+17 |     item: dyn Transfer = Dice(rng=random.Rng(1))
+   |     ^
+  = help: `Dice` is not Transfer: field `rng` of `Dice` -> `random.Rng` is a stateful generator and is not Transfer

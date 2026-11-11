@@ -1,0 +1,78 @@
+from iter import Generator, IntoIterator, Iterator, Step
+
+trait Feed: Iterator[int64]:
+    def label(self) -> str
+
+class Countdown:
+    left: int64
+
+impl Iterator[int64] for Countdown:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.left)
+
+impl Feed for Countdown:
+    def label(self) -> str:
+        return f"countdown {self.left}"
+
+class Words:
+    items: list[str]
+
+impl Iterator[str] for Words:
+    def next(mut self) -> Step[str]:
+        if len(self.items) == 0:
+            return Step.End
+        return Step.Item(self.items.pop())
+
+def squares(count: int64) -> Generator[int64]:
+    for i in range(count):
+        yield i * i
+
+def sum_all[I: Iterator[int64]](source: own I) -> int64:
+    mut sum = 0
+    for value in source:
+        sum += value
+    return sum
+
+def drain_two(source: mut dyn Iterator[int64]) -> int64:
+    mut sum = 0
+    mut taken = 0
+    for value in mut source:
+        sum += value
+        taken += 1
+        if taken == 2:
+            break
+    return sum
+
+def boxed(count: int64) -> dyn Iterator[int64]:
+    return squares(count)
+
+def main() -> None:
+    mut source: dyn Iterator[int64] = Countdown(left=5)
+    print(drain_two(source))
+    for value in mut source:
+        print(value)
+        break
+    print(source.collect())
+    print(sum_all(boxed(4)))
+    print([value * 2 for value in boxed(3)])
+    for (index, value) in enumerate(boxed(3)):
+        print(f"{index}: {value}")
+    for (left, right) in zip(boxed(3), boxed(4)):
+        print(left + right)
+    mut feed: dyn Feed = Countdown(left=3)
+    print(feed.label())
+    for value in mut feed:
+        print(value)
+    print(feed.label())
+    words: dyn Iterator[str] = Words(items=["b", "a"])
+    for word in words:
+        print(word)
+    feeds: list[dyn Feed] = [Countdown(left=2), Countdown(left=1)]
+    for each in own feeds:
+        print(each.label())
+        print(sum_all(each))
+    upcast: dyn Iterator[int64] = feed
+    print(upcast.collect())

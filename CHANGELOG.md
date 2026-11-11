@@ -7,6 +7,46 @@ in this file.
 
 ## Unreleased
 
+- Trait objects: `value as dyn Trait` names the conversion where no
+  annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
+  `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
+  so one function can return any of several iterator types. A union value
+  converts when every member implements the trait.
+- `match` on a trait object selects on the type it holds with
+  `case Type as name:` arms and a final `case _:`, under a bare `match`,
+  `match mut`, and `match own`. A match without the catch-all, or with an
+  arm whose type does not implement the trait, reports `AU2013`.
+- Trait objects in tasks. `Transfer` is now a prelude trait that names the
+  property the compiler derives. `trait Job: Transfer:` admits only Transfer
+  types, so `dyn Job` may be a task argument, a task result, and a `Queue`
+  payload, alone or inside a list, a dictionary, a tuple, a union, or a
+  class. An `impl` of such a trait for a type that is not Transfer reports
+  `AU3008` and names the field. `T: Transfer` is a bound, so a generic
+  function may send a `T` to a task or a queue, and
+  `impl[T: Transfer] Job for Box[T]:` states the same for a generic type.
+  `dyn Transfer` holds a value of any Transfer type. `impl Transfer for T:`
+  is refused: a type is Transfer when every part of it is.
+- A method call on a trait object is fast. A `for` loop over a
+  `list[dyn Trait]` lends each element instead of copying it, and the call
+  picks its implementation from a type number in the value's box. One call
+  costs 34 instructions against 12 for Rust's `Box<dyn Trait>`, down from
+  about 4,600, and runs about 5 times faster than the same loop in Python.
+- `aura verify` follows a trait object the function made from a value of a
+  known type: a call on it relies on that type's own contract, and a `match`
+  type arm on it is decided. A trait object the function receives still
+  gives the trait method's contract.
+- Editor: completion, hover, go to definition, references, and signature
+  help work on a method call on a trait object, and `dyn` is highlighted
+  before a trait name.
+- The book has a new section 10.5, "Trait objects".
+- Fixed: a trait object dispatches on the exact type it holds. A `float32`
+  and a `float64` that both implement the trait no longer run each other's
+  method, `Cell[float32]` no longer runs the method of `Cell[float64]` on
+  `aura run`, and a method call on a trait object that holds a value of a
+  generic enum no longer fails on `aura run`. These were the three known
+  issues of 0.14.0.
+- Fixed: an element of a list of trait objects can be passed to a `mut`
+  parameter, as in `widen(shapes[0])`.
 - `fs.File` reads a file in pieces: `read_lines(max_lines)` returns the
   next batch of lines, `read_line()` the next line, and
   `read_chunk(max_bytes)` the next bytes. A file larger than the 256 MiB

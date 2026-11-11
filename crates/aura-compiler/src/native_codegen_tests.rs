@@ -17076,3 +17076,79 @@ def main() -> int32:
         .iter()
         .any(|name| name.contains("st_done")));
 }
+
+#[test]
+fn trait_object_calls_lend_the_element_and_keep_the_shared_receiver() {
+    let source = r#"
+trait Scorer:
+    def score(self, word: str) -> int64
+
+class Length:
+    bonus: int64
+
+class Prefix:
+    start: str
+
+impl Scorer for Length:
+    def score(self, word: str) -> int64:
+        return len(word) + self.bonus
+
+impl Scorer for Prefix:
+    def score(self, word: str) -> int64:
+        if word.starts_with(self.start):
+            return 1
+        return 0
+
+def total(scorers: list[dyn Scorer], word: str) -> int64:
+    mut sum = 0
+    for scorer in scorers:
+        sum += scorer.score(word)
+    return sum
+
+def main():
+    scorers: list[dyn Scorer] = [Length(bonus=1), Prefix(start="a")]
+    print(total(scorers, "apple"))
+"#;
+    let mir = lower_source_to_mir(source).expect("the trait object loop should lower");
+    let total = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "total")
+        .expect("total should lower");
+    // The dispatched call names the element loan as its receiver and as
+    // the receiver's place, which is followed only when the call lends it.
+    fn dispatched(instruction: &Instruction) -> Option<&Operand> {
+        match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::TraitMember {
+                                object,
+                                dispatch: Some(crate::mir::MethodDispatch::Candidates { .. }),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => Some(object),
+            _ => None,
+        }
+    }
+    assert!(
+        total
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| dispatched(instruction).is_some()),
+        "the call should dispatch on the held type"
+    );
+    let (lent, _) = super::element_loans::native_element_loans(total, |instruction| {
+        dispatched(instruction).into_iter().collect()
+    });
+    assert_eq!(lent.len(), 1);
+    let (unlent, _) = super::element_loans::native_element_loans(total, |_| Vec::new());
+    assert!(unlent.is_empty());
+
+    emit_host_object(&mir).expect("the trait object loop should compile directly");
+}

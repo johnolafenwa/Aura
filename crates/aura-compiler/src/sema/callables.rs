@@ -2490,6 +2490,8 @@ impl<'a> FunctionChecker<'a> {
                     // A `mut` trait object parameter can be given a value of
                     // another type, so its argument must be a trait object
                     // place already: a conversion would lend a temporary.
+                    // An element is such a place, lent where it is.
+                    self.mark_borrowed_element(&argument.value);
                     let actual =
                         self.type_of_expr_without_move_state(&argument.value, locals, None)?;
                     if actual != hinted_expected {
@@ -2517,6 +2519,9 @@ impl<'a> FunctionChecker<'a> {
             let actual = if let Some(argument) = argument {
                 if *passing != ReceiverKind::Value {
                     self.mark_borrowed_element(&argument.value);
+                }
+                if *passing == ReceiverKind::BorrowMut {
+                    self.reject_mutable_trait_object_cast(&argument.value)?;
                 }
                 let typed = if hint_names_callee_params {
                     self.type_of_expr_hint_uncontracted(

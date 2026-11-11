@@ -52,6 +52,16 @@ def run_all(tools: mut list[dyn Tool], input: str) -> None:
         print(f"{tool.name()}: {tool.run(input)}")
 
 
+def calls(tool: dyn Tool) -> int64:
+    # A type arm reads the value as the type it holds. The set of types
+    # that implement `Tool` is open, so the match ends with `case _`.
+    match tool:
+        case Counter as counter:
+            return counter.calls
+        case _:
+            return 0
+
+
 def main() -> None:
     # One list holds values of three types. Each value converts to
     # `dyn Tool` where it is stored.
@@ -63,8 +73,18 @@ def main() -> None:
     # A call on an element borrows it where it is.
     print(tools[1].describe())
 
+    mut total = 0
+    for tool in tools:
+        total += calls(tool)
+    print(f"{total} counted calls")
+
     mut registry: dict[str, dyn Tool] = {}
     registry["quiet"] = pick(false)
     registry["loud"] = pick(true)
     print(registry["quiet"].run("typed"))
     print(registry["loud"].describe())
+
+    # `as dyn Tool` names the conversion where no annotation does.
+    spare = [Echo(prefix="spare ") as dyn Tool, Counter(calls=10)]
+    print(len(spare))
+    print(spare[1].describe())
