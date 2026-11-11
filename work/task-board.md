@@ -2,6 +2,16 @@
 
 Last updated: 2026-11-11
 
+## Six older compiler bugs (in progress)
+
+- Five programs the checker accepted and lowering refused, or the
+  verifier could not prove, are fixed: a lambda that calls a method on a
+  captured list's element, a local bound to a shared `match` binding, an
+  `impl` for a union type, an explicit type argument naming the enclosing
+  type parameter, and a `for` invariant that now holds after the loop.
+  Details are in `2026-11-11-six-older-compiler-bugs.md`.
+- Remaining: the cost of a `mut self` method call on a list element.
+
 ## Streaming I/O and a deeper standard library (in progress)
 
 - Target: streamed HTTP bodies, line and chunk file reads, redirects,
