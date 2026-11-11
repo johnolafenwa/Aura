@@ -4688,6 +4688,10 @@ enum FillSource {
 }
 
 /// What a read that must not wait found.
+#[cfg_attr(
+    not(all(target_os = "linux", target_env = "gnu")),
+    expect(dead_code, reason = "only Linux has a read that does not wait")
+)]
 enum CachedRead {
     /// This many bytes came. Zero is the end of the file.
     Read(usize),
