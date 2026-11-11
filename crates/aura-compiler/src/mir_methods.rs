@@ -517,7 +517,7 @@ impl Resolver<'_, '_> {
             if call.field == "close"
                 && matches!(
                     name.as_str(),
-                    "net.HttpExchange" | "net.HttpResponse" | "net.WebSocketListener"
+                    "net.HttpExchange" | "net.WebSocketListener"
                 )
             {
                 return Ok(MethodDispatch::Nothing);

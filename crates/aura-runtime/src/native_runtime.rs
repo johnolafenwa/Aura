@@ -70,7 +70,7 @@ use crate::runtime_value::{
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
     DictEntries, EnumVariantValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorHooks,
-    GeneratorValue, HttpListenerValue, HttpResponseValue, InstanceFields, InstanceValue,
+    GeneratorValue, HttpListenerValue, InstanceFields, InstanceValue,
     IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue, ProcessChildValue,
     ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
     ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
@@ -3572,6 +3572,38 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("pattern"), borrowed("text")],
     },
     DynamicHostAbi {
+        name: "http::__aura_send",
+        params: &[borrowed("method"), borrowed("url"), borrowed("headers"), borrowed("text"), borrowed("body"), borrowed("timeout"), borrowed("read_timeout"), borrowed("max_redirects"), borrowed("flags"), borrowed("ca_file")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_chunk",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_line",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_lines",
+        params: &[borrowed("stream"), borrowed("max_lines")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_event",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_all",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_text",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_close",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
         name: "regex::__aura_split",
         params: &[borrowed("pattern"), borrowed("text")],
     },
@@ -4992,7 +5024,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::UdpDatagram(_) => "net.UdpDatagram".to_string(),
         Value::HttpListener(_) => "net.HttpListener".to_string(),
         Value::HttpExchange(_) => "net.HttpExchange".to_string(),
-        Value::HttpResponse(_) => "net.HttpResponse".to_string(),
+        Value::HttpResponse(_) => "http.Stream".to_string(),
         Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
         Value::WebSocket(_) => "net.WebSocket".to_string(),
         Value::UnixListener(_) => "net.UnixListener".to_string(),
@@ -5055,7 +5087,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::UdpDatagram(_) => Type::named("net.UdpDatagram"),
         Value::HttpListener(_) => Type::named("net.HttpListener"),
         Value::HttpExchange(_) => Type::named("net.HttpExchange"),
-        Value::HttpResponse(_) => Type::named("net.HttpResponse"),
+        Value::HttpResponse(_) => Type::named("http.Stream"),
         Value::WebSocketListener(_) => Type::named("net.WebSocketListener"),
         Value::WebSocket(_) => Type::named("net.WebSocket"),
         Value::UnixListener(_) => Type::named("net.UnixListener"),
@@ -13285,7 +13317,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::UdpDatagram(_) => expected == "net.UdpDatagram",
             Value::HttpListener(_) => expected == "net.HttpListener",
             Value::HttpExchange(_) => expected == "net.HttpExchange",
-            Value::HttpResponse(_) => expected == "net.HttpResponse",
+            Value::HttpResponse(_) => expected == "http.Stream",
             Value::WebSocketListener(_) => expected == "net.WebSocketListener",
             Value::WebSocket(_) => expected == "net.WebSocket",
             Value::UnixListener(_) => expected == "net.UnixListener",
@@ -14886,6 +14918,16 @@ host_builtin_entries! {
     owned "time::__aura_format" => aura_host_time_format(crate::runtime_value::time_host::host_time_format);
     owned "time::__aura_parse_rfc3339" => aura_host_time_parse_rfc3339(crate::runtime_value::time_host::host_time_parse_rfc3339);
     owned "time::__aura_parse" => aura_host_time_parse(crate::runtime_value::time_host::host_time_parse);
+    borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));
+    borrowed "http::__aura_read_chunk" => aura_host_http_read_chunk(|args| direct_http("http::__aura_read_chunk", crate::runtime_value::http_client::host_http_read_chunk, args));
+    borrowed "http::__aura_read_line" => aura_host_http_read_line(|args| direct_http("http::__aura_read_line", crate::runtime_value::http_client::host_http_read_line, args));
+    borrowed "http::__aura_read_lines" => aura_host_http_read_lines(|args| direct_http("http::__aura_read_lines", crate::runtime_value::http_client::host_http_read_lines, args));
+    borrowed "http::__aura_read_event" => aura_host_http_read_event(|args| direct_http("http::__aura_read_event", crate::runtime_value::http_client::host_http_read_event, args));
+    borrowed "http::__aura_read_all" => aura_host_http_read_all(|args| direct_http("http::__aura_read_all", crate::runtime_value::http_client::host_http_read_all, args));
+    borrowed "http::__aura_read_text" => aura_host_http_read_text(|args| direct_http("http::__aura_read_text", crate::runtime_value::http_client::host_http_read_text, args));
+    borrowed "http::__aura_close" => aura_host_http_close(|args| direct_http("http::__aura_close", crate::runtime_value::http_client::host_http_close, args));
+    owned "http::__aura_idle_connections" => aura_host_http_idle_connections(crate::runtime_value::http_client::host_http_idle_connections);
+    owned "http::__aura_close_idle" => aura_host_http_close_idle(crate::runtime_value::http_client::host_http_close_idle);
     owned "regex::__aura_compile" => aura_host_regex_compile(crate::runtime_value::regex_host::host_regex_compile);
     owned "regex::__aura_pattern" => aura_host_regex_pattern(crate::runtime_value::regex_host::host_regex_pattern);
     owned "regex::__aura_escape" => aura_host_regex_escape(crate::runtime_value::regex_host::host_regex_escape);
@@ -14997,6 +15039,22 @@ fn direct_generator_yield(
 /// Evaluates a `regex` builtin for a pattern number over its borrowed
 /// texts. Nothing is copied: the searched text and the replacement stay
 /// borrowed while the search runs.
+/// Evaluates an `http` host builtin over copies of its borrowed
+/// arguments. A stream copy is another handle to the same body, so the
+/// builtin reads the body the caller still owns.
+fn direct_http(
+    name: &str,
+    evaluate: host_builtins::HostBuiltinFn,
+    args: &DirectHostArgBuffer,
+) -> std::result::Result<Value, Diagnostic> {
+    let count = dynamic_host_abi(name).map_or(0, |metadata| metadata.params.len());
+    let mut values = Vec::with_capacity(count);
+    for index in 0..count {
+        values.push(args.with_borrow(name, index, |value| Ok(value.clone()))?);
+    }
+    evaluate(values, None)
+}
+
 fn direct_regex(name: &str, args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
     use crate::runtime_value::regex_host::{evaluate_regex_builtin, RegexArgument};
     fn text_of<'a>(
@@ -18192,144 +18250,6 @@ pub extern "C-unwind" fn aura_direct_net_http_listen(
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_net_http_request_text(
-    method: *mut OpaqueValue,
-    url: *mut OpaqueValue,
-    body: *mut OpaqueValue,
-    headers: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let method =
-            expect_string_value(&unsafe { value_ref(method) }, "net.http_request_text(...)");
-        let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_text(...)");
-        let body = expect_string_value(&unsafe { value_ref(body) }, "net.http_request_text(...)");
-        let headers =
-            expect_headers_map(&unsafe { value_ref(headers) }, "net.http_request_text(...)");
-        match HttpResponseValue::request_text(
-            &method,
-            &url,
-            &body,
-            headers,
-            None,
-            Some(&current_cancellation()),
-        ) {
-            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_net_http_request_text_timeout(
-    method: *mut OpaqueValue,
-    url: *mut OpaqueValue,
-    body: *mut OpaqueValue,
-    headers: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let method = expect_string_value(
-            &unsafe { value_ref(method) },
-            "net.http_request_text_timeout(...)",
-        );
-        let url = expect_string_value(
-            &unsafe { value_ref(url) },
-            "net.http_request_text_timeout(...)",
-        );
-        let body = expect_string_value(
-            &unsafe { value_ref(body) },
-            "net.http_request_text_timeout(...)",
-        );
-        let headers = expect_headers_map(
-            &unsafe { value_ref(headers) },
-            "net.http_request_text_timeout(...)",
-        );
-        let timeout = io_timeout_or_return!(timeout, "net.http_request_text_timeout(...)");
-        match HttpResponseValue::request_text(
-            &method,
-            &url,
-            &body,
-            headers,
-            timeout,
-            Some(&current_cancellation()),
-        ) {
-            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_net_http_request_bytes(
-    method: *mut OpaqueValue,
-    url: *mut OpaqueValue,
-    bytes: *mut OpaqueValue,
-    headers: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let method =
-            expect_string_value(&unsafe { value_ref(method) }, "net.http_request_bytes(...)");
-        let url = expect_string_value(&unsafe { value_ref(url) }, "net.http_request_bytes(...)");
-        let bytes = expect_bytes_value(&unsafe { value_ref(bytes) }, "net.http_request_bytes(...)");
-        let headers = expect_headers_map(
-            &unsafe { value_ref(headers) },
-            "net.http_request_bytes(...)",
-        );
-        match HttpResponseValue::request_bytes(
-            &method,
-            &url,
-            &bytes,
-            headers,
-            None,
-            Some(&current_cancellation()),
-        ) {
-            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_net_http_request_bytes_timeout(
-    method: *mut OpaqueValue,
-    url: *mut OpaqueValue,
-    bytes: *mut OpaqueValue,
-    headers: *mut OpaqueValue,
-    timeout: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        let method = expect_string_value(
-            &unsafe { value_ref(method) },
-            "net.http_request_bytes_timeout(...)",
-        );
-        let url = expect_string_value(
-            &unsafe { value_ref(url) },
-            "net.http_request_bytes_timeout(...)",
-        );
-        let bytes = expect_bytes_value(
-            &unsafe { value_ref(bytes) },
-            "net.http_request_bytes_timeout(...)",
-        );
-        let headers = expect_headers_map(
-            &unsafe { value_ref(headers) },
-            "net.http_request_bytes_timeout(...)",
-        );
-        let timeout = io_timeout_or_return!(timeout, "net.http_request_bytes_timeout(...)");
-        match HttpResponseValue::request_bytes(
-            &method,
-            &url,
-            &bytes,
-            headers,
-            timeout,
-            Some(&current_cancellation()),
-        ) {
-            Ok(response) => boxed_value(result_ok(Value::HttpResponse(response))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_net_websocket_listen(
     address: *mut OpaqueValue,
 ) -> *mut OpaqueValue {
@@ -19080,72 +19000,6 @@ pub extern "C-unwind" fn aura_direct_http_exchange_respond_bytes(
                 value_type_name(other)
             )),
         }
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_http_response_status(response: *mut OpaqueValue) -> i64 {
-    task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => i64::from(response.status()),
-        other => runtime_error(format!(
-            "expected `net.HttpResponse`, found `{}`",
-            value_type_name(other)
-        )),
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_http_response_reason(
-    response: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => boxed_value(Value::String(response.reason().into())),
-        other => runtime_error(format!(
-            "expected `net.HttpResponse`, found `{}`",
-            value_type_name(other)
-        )),
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_http_response_headers(
-    response: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => boxed_value(headers_map_value(response.headers())),
-        other => runtime_error(format!(
-            "expected `net.HttpResponse`, found `{}`",
-            value_type_name(other)
-        )),
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_http_response_text(
-    response: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => match response.text() {
-            Ok(text) => boxed_value(result_ok(Value::String(text.into()))),
-            Err(error) => boxed_value(result_err(io_error(error))),
-        },
-        other => runtime_error(format!(
-            "expected `net.HttpResponse`, found `{}`",
-            value_type_name(other)
-        )),
-    })
-}
-
-#[cfg_attr(not(coverage), no_mangle)]
-pub extern "C-unwind" fn aura_direct_http_response_bytes(
-    response: *mut OpaqueValue,
-) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match unsafe { value_ref(response) } {
-        Value::HttpResponse(response) => boxed_value(bytes_vec_value(response.bytes())),
-        other => runtime_error(format!(
-            "expected `net.HttpResponse`, found `{}`",
-            value_type_name(other)
-        )),
     })
 }
 

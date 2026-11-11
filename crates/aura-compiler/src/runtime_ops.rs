@@ -229,11 +229,6 @@ resource_ops! {
     HttpExchangeBodyBytes => ("net.HttpExchange", HttpExchangeBodyBytes),
     HttpExchangeRespondText => ("net.HttpExchange", HttpExchangeRespondText),
     HttpExchangeRespondBytes => ("net.HttpExchange", HttpExchangeRespondBytes),
-    HttpResponseStatus => ("net.HttpResponse", HttpResponseStatus),
-    HttpResponseReason => ("net.HttpResponse", HttpResponseReason),
-    HttpResponseHeaders => ("net.HttpResponse", HttpResponseHeaders),
-    HttpResponseText => ("net.HttpResponse", HttpResponseText),
-    HttpResponseBytes => ("net.HttpResponse", HttpResponseBytes),
     WebSocketListenerAccept => ("net.WebSocketListener", WebsocketListenerAccept),
     WebSocketListenerLocalAddr => ("net.WebSocketListener", WebsocketListenerLocalAddr),
     WebSocketSendText => ("net.WebSocket", WebsocketSendText),
@@ -323,7 +318,6 @@ impl ResourceOp {
             | UdpDatagramText
             | HttpListenerLocalAddr
             | HttpExchangeBodyText
-            | HttpResponseText
             | WebSocketListenerLocalAddr
             | TlsListenerLocalAddr => io(str()),
             FileReadBytes | TcpStreamReadExact | UnixStreamReadExact | TlsStreamReadExact => {
@@ -358,17 +352,14 @@ impl ResourceOp {
             UdpDatagramAddress
             | HttpExchangeMethod
             | HttpExchangePath
-            | HttpResponseReason
             | ProcessCompletedStdout
             | ProcessCompletedStderr => str(),
             UdpDatagramBytes
             | HttpExchangeBodyBytes
-            | HttpResponseBytes
             | ProcessCompletedStdoutBytes
             | ProcessCompletedStderrBytes => bytes(),
             HttpListenerAccept => io(Type::named("net.HttpExchange")),
-            HttpExchangeHeaders | HttpResponseHeaders => headers(),
-            HttpResponseStatus => Type::named("int32"),
+            HttpExchangeHeaders => headers(),
             WebSocketListenerAccept => io(Type::named("net.WebSocket")),
             UnixListenerAccept => io(Type::named("net.UnixStream")),
             TlsListenerAccept => io(Type::named("net.TlsStream")),
@@ -2186,10 +2177,6 @@ function_ops! {
         NetTlsConnect => ("net::tls_connect", NetTlsConnect),
         NetTlsConnectTimeout => ("net::tls_connect_timeout", NetTlsConnectTimeout),
         NetHttpListen => ("net::http_listen", NetHttpListen),
-        NetHttpRequestText => ("net::http_request_text", NetHttpRequestText),
-        NetHttpRequestTextTimeout => ("net::http_request_text_timeout", NetHttpRequestTextTimeout),
-        NetHttpRequestBytes => ("net::http_request_bytes", NetHttpRequestBytes),
-        NetHttpRequestBytesTimeout => ("net::http_request_bytes_timeout", NetHttpRequestBytesTimeout),
         NetWebsocketListen => ("net::websocket_listen", NetWebsocketListen),
         NetWebsocketConnect => ("net::websocket_connect", NetWebsocketConnect),
         NetWebsocketConnectTimeout => ("net::websocket_connect_timeout", NetWebsocketConnectTimeout),

@@ -16,7 +16,7 @@ use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot, InstanceValue,
     LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
@@ -2112,6 +2112,8 @@ fn every_host_builtin_entry_checks_its_argument_count() {
                 | "control::__retry_cancel_if_requested"
                 | "time::__aura_now"
                 | "time::__aura_monotonic"
+                | "http::__aura_idle_connections"
+                | "http::__aura_close_idle"
         );
         match result {
             Ok(_) => assert!(!takes_arguments, "`{name}` accepted no arguments"),
@@ -7544,65 +7546,30 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
             }
         }
     });
-    let text_response = match expect_result_ok_payload(super::aura_direct_net_http_request_text(
-        string_value("POST"),
-        string_value(&format!("http://{http_address}/direct-text")),
-        string_value("hello"),
-        string_map(&[("x-client", "text")]),
-    )) {
-        Value::HttpResponse(response) => response,
-        other => panic!("expected net.HttpResponse, found {:?}", other),
-    };
-    assert_eq!(
-        super::aura_direct_http_response_status(boxed_value(Value::HttpResponse(
-            text_response.clone(),
-        ))),
-        200
-    );
-    assert_eq!(
-        expect_string(super::aura_direct_http_response_reason(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        ))),
-        "OK"
-    );
-    match unsafe {
-        take_value(super::aura_direct_http_response_headers(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        )))
-    } {
-        Value::Map(headers) => assert!(!headers.entries.is_empty()),
-        other => panic!("expected HTTP response header map, found {:?}", other),
-    }
-    assert_eq!(
-        expect_result_ok_string(super::aura_direct_http_response_text(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        ))),
-        "ack"
-    );
-    assert_eq!(
-        expect_vec_ints(super::aura_direct_http_response_bytes(boxed_value(
-            Value::HttpResponse(text_response),
-        ))),
-        vec![97, 99, 107]
-    );
+    let text_response = HttpSnapshot::request_text(
+        "POST",
+        &format!("http://{http_address}/direct-text"),
+        "hello",
+        vec![("x-client".to_string(), "text".to_string())],
+        None,
+        None,
+    )
+    .expect("the text request should get a response");
+    assert_eq!(text_response.status(), 200);
+    assert_eq!(text_response.reason(), "OK");
+    assert!(!text_response.headers().is_empty());
+    assert_eq!(text_response.text().expect("the body is text"), "ack");
 
-    let bytes_response =
-        match expect_result_ok_payload(super::aura_direct_net_http_request_bytes_timeout(
-            string_value("POST"),
-            string_value(&format!("http://{http_address}/direct-bytes")),
-            int_vec(&[114, 97, 119]),
-            string_map(&[("x-client", "bytes")]),
-            timeout,
-        )) {
-            Value::HttpResponse(response) => response,
-            other => panic!("expected net.HttpResponse, found {:?}", other),
-        };
-    assert_eq!(
-        expect_vec_ints(super::aura_direct_http_response_bytes(boxed_value(
-            Value::HttpResponse(bytes_response),
-        ))),
-        vec![114, 97, 119, 45, 111, 107]
-    );
+    let bytes_response = HttpSnapshot::request_bytes(
+        "POST",
+        &format!("http://{http_address}/direct-bytes"),
+        &[114, 97, 119],
+        vec![("x-client".to_string(), "bytes".to_string())],
+        Some(StdDuration::from_secs(5)),
+        None,
+    )
+    .expect("the byte request should get a response");
+    assert_eq!(bytes_response.bytes(), vec![114, 97, 119, 45, 111, 107]);
     http_server
         .join()
         .expect("http direct wrapper server should join");
@@ -7830,20 +7797,6 @@ fn native_runtime_direct_network_wrappers_cover_timeout_and_error_results() {
     expect_unit(super::aura_direct_http_listener_close(boxed_value(
         Value::HttpListener(http_listener),
     )));
-
-    expect_io_result_error(super::aura_direct_net_http_request_text_timeout(
-        string_value("GET"),
-        string_value("not-a-url"),
-        string_value(""),
-        string_map(&[]),
-        duration_value(1),
-    ));
-    expect_io_result_error(super::aura_direct_net_http_request_bytes(
-        string_value("POST"),
-        string_value("not-a-url"),
-        int_vec(&[1, 2]),
-        string_map(&[]),
-    ));
 
     expect_io_result_error(super::aura_direct_net_tls_listen(
         string_value("127.0.0.1:0"),
@@ -13389,21 +13342,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     string_map(&[]),
                 );
             }
-            "http-response-status-type" => {
-                super::aura_direct_http_response_status(bool_value(true));
-            }
-            "http-response-reason-type" => {
-                super::aura_direct_http_response_reason(bool_value(true));
-            }
-            "http-response-headers-type" => {
-                super::aura_direct_http_response_headers(bool_value(true));
-            }
-            "http-response-text-type" => {
-                super::aura_direct_http_response_text(bool_value(true));
-            }
-            "http-response-bytes-type" => {
-                super::aura_direct_http_response_bytes(bool_value(true));
-            }
             "websocket-listener-accept-type" => {
                 super::aura_direct_websocket_listener_accept(bool_value(true), duration_value(1));
             }
@@ -14518,26 +14456,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "http-exchange-respond-bytes-type",
             "expected `net.HttpExchange`, found `bool`",
-        ),
-        (
-            "http-response-status-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-reason-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-headers-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-text-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-bytes-type",
-            "expected `net.HttpResponse`, found `bool`",
         ),
         (
             "websocket-listener-accept-type",
@@ -15746,24 +15664,29 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
             .expect("http fixture should write response");
     });
-    let http_response = HttpResponseValue::request_text(
+    let http_response = crate::runtime_value::http_client::http_send(
         "GET",
         &format!("http://{http_address}/"),
-        "",
         Vec::new(),
-        Some(StdDuration::from_secs(1)),
+        b"",
+        &crate::runtime_value::http_client::HttpRequestOptions {
+            timeout: Some(StdDuration::from_secs(1)),
+            keep_alive: false,
+            ..Default::default()
+        },
         None,
     )
+    .map(HttpResponseValue::new)
     .expect("http response should be read from local fixture");
     http_thread
         .join()
         .expect("http fixture worker should join successfully");
     assert_value_metadata(
         &Value::HttpResponse(http_response.clone()),
-        "net.HttpResponse",
-        "net.HttpResponse",
+        "http.Stream",
+        "http.Stream",
     );
-    assert_direct_type_match(Value::HttpResponse(http_response), "net.HttpResponse");
+    assert_direct_type_match(Value::HttpResponse(http_response), "http.Stream");
 
     let ws_listener =
         WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
@@ -24033,33 +23956,6 @@ fn direct_network_connectors_report_unreachable_endpoints_as_io_errors() {
         string_value(&closed),
         string_value("localhost"),
         string_value(missing_cert.to_str().expect("utf-8 temp path")),
-        timeout(),
-    ));
-    let url = format!("http://{closed}/");
-    expect_result_err_payload(super::aura_direct_net_http_request_text(
-        string_value("GET"),
-        string_value(&url),
-        string_value(""),
-        string_map(&[]),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_text_timeout(
-        string_value("GET"),
-        string_value(&url),
-        string_value(""),
-        string_map(&[]),
-        timeout(),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_bytes(
-        string_value("POST"),
-        string_value(&url),
-        int_vec(&[]),
-        string_map(&[]),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_bytes_timeout(
-        string_value("POST"),
-        string_value(&url),
-        int_vec(&[]),
-        string_map(&[]),
         timeout(),
     ));
     expect_result_err_payload(super::aura_direct_net_websocket_connect_timeout(

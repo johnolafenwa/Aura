@@ -4555,13 +4555,13 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::HttpExchangeMethod | BuiltinMember::HttpExchangePath => {
                     Some(Type::named("str"))
                 }
-                BuiltinMember::HttpExchangeHeaders | BuiltinMember::HttpResponseHeaders => {
+                BuiltinMember::HttpExchangeHeaders => {
                     Some(Type::Named(
                         "dict".to_string(),
                         vec![Type::named("str"), Type::named("str")],
                     ))
                 }
-                BuiltinMember::HttpExchangeBodyText | BuiltinMember::HttpResponseText => {
+                BuiltinMember::HttpExchangeBodyText => {
                     Some(Type::Named(
                         "Result".to_string(),
                         vec![
@@ -4570,7 +4570,7 @@ impl<'a> AnalysisBuilder<'a> {
                         ],
                     ))
                 }
-                BuiltinMember::HttpExchangeBodyBytes | BuiltinMember::HttpResponseBytes => {
+                BuiltinMember::HttpExchangeBodyBytes => {
                     Some(Type::Named("list".to_string(), vec![Type::named("uint8")]))
                 }
                 BuiltinMember::HttpExchangeRespondText
@@ -4578,8 +4578,6 @@ impl<'a> AnalysisBuilder<'a> {
                     "Result".to_string(),
                     vec![Type::Unit, Type::Named("io.Error".to_string(), Vec::new())],
                 )),
-                BuiltinMember::HttpResponseStatus => Some(Type::named("int32")),
-                BuiltinMember::HttpResponseReason => Some(Type::named("str")),
                 BuiltinMember::WebSocketListenerAccept => Some(Type::Named(
                     "Result".to_string(),
                     vec![
@@ -7966,11 +7964,6 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::HttpExchangeBodyBytes,
         BuiltinMember::HttpExchangeRespondText,
         BuiltinMember::HttpExchangeRespondBytes,
-        BuiltinMember::HttpResponseStatus,
-        BuiltinMember::HttpResponseReason,
-        BuiltinMember::HttpResponseHeaders,
-        BuiltinMember::HttpResponseText,
-        BuiltinMember::HttpResponseBytes,
         BuiltinMember::WebSocketListenerAccept,
         BuiltinMember::WebSocketListenerLocalAddr,
         BuiltinMember::WebSocketSendText,

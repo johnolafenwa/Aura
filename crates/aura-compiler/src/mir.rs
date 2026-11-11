@@ -6281,7 +6281,7 @@ fn validated_transfer_failure(
             if args.is_empty()
                 && matches!(
                     name.as_str(),
-                    "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
+                    "process.Completed" | "net.UdpDatagram"
                 )
             {
                 return None;
@@ -28690,7 +28690,6 @@ impl<'a> Lowerer<'a> {
             // `with` cleanup closes these handles with no runtime call, so
             // they have no resolved operation.
             ("net.HttpExchange", "close")
-            | ("net.HttpResponse", "close")
             | ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
