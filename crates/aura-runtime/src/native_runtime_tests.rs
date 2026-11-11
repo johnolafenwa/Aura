@@ -9843,6 +9843,7 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
 #[cfg(debug_assertions)]
 #[test]
 fn native_runtime_direct_task_refuses_a_release_it_does_not_own() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let result = run_lightweight_root_task(move || {
         let args = super::aura_direct_arg_buffer_new(0);
         let group = super::aura_direct_task_group_new();
@@ -16928,6 +16929,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
 
 #[test]
 fn native_runtime_child_task_inherits_youngest_first_ancestry_and_starts_a_new_call_chain() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let parent_ancestry = vec![RuntimeTaskFrame {
         task_function: "parent".to_string(),
         task_entry_span: runtime_source_span("/workspace/parent.au", 3, 1),
@@ -17798,6 +17800,7 @@ fn native_runtime_static_task_frames_preserve_absent_paths_and_reject_invalid_ut
 
 #[test]
 fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let signature = Type::Function {
         params: Vec::new(),
         return_type: Box::new(Type::Unit),
@@ -17852,6 +17855,7 @@ fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() 
 
 #[test]
 fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_thunks() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let non_callable = int_value(7);
     let missing_thunk = boxed_value(Value::Function(Box::new(FunctionValue {
         name: "declaration-only".to_string(),
@@ -25900,6 +25904,7 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
 
 #[test]
 fn task_arguments_are_shared_before_the_child_starts() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let argument = string_value("task argument");
     let argument_address = argument as usize;
     let result = run_lightweight_root_task(move || {
