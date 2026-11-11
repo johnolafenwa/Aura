@@ -536,6 +536,27 @@ The threaded programs gain most: `kv_server` takes 0.2 times Rust's time
 slower than Python on `csv_aggregate`, `docdb`, `file_io`,
 `json_roundtrip`, and `template_render`.
 
+Aura 0.14.0 keeps a parsed JSON document, and a `json.Value` literal
+spelled whole, as one flat tape that `match`, key lookups, and
+`json.dumps` read in place. It also shrinks runtime values from 96 to 64
+bytes. Both compilers measured in the same two passes on 10 November 2026,
+median of ten runs, on a busier container than on 8 November:
+
+| Measure | Aura 0.13.0 | Aura 0.14.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 13.1 s | 11.3 s |
+| Median Aura / Rust, wall time | 3.5x | 3.2x |
+| Median Aura / Python 3.13, wall time | 0.38x | 0.37x |
+| Programs faster than Python | 25 | 27 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 30 programs | 79.9 billion | 79.7 billion |
+
+`docdb` takes 309 ms instead of 977 and `json_roundtrip` 287 ms instead of
+673, so both are now faster than Python (0.56 and 0.69 times its time, from
+1.8 and 1.6). `csv_aggregate` is level with Python, and Aura is still
+slower on `file_io` and `template_render`. Fifteen programs run 2 to 6%
+more instructions than with 0.13.0 while their times are level or lower.
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute
