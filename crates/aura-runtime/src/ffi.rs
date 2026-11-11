@@ -1770,12 +1770,10 @@ mod tests {
             FfiSignature::new(vec![FfiType::I32], FfiType::Struct(small)),
             &mut [FfiValue::I32(9)],
         );
+        // The padding of a struct returned in a register is not defined.
         assert_eq!(
-            result,
-            Ok(FfiValue::Struct(
-                small,
-                bytes_of(small, Small { count: 9, flag: -9 })
-            ))
+            scrubbed(result),
+            bytes_of(small, Small { count: 9, flag: -9 })
         );
 
         let before = Wide {
