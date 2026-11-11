@@ -413,12 +413,17 @@ pub struct ExternFunctionInfo {
     pub c_struct_params: Vec<Option<crate::c_layout::CStruct>>,
     /// The C layout of an `extern "C" class` result.
     pub c_struct_result: Option<crate::c_layout::CStruct>,
+    /// For each opaque handle type the call can produce that declares a
+    /// `drop` function, the C symbol of that function.
+    pub handle_drops: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug)]
 pub struct OpaqueHandleInfo {
     pub module_name: String,
     pub decl: crate::ast::ExternOpaqueClassDecl,
+    /// The C symbol of the declaration's `drop` function.
+    pub drop_symbol: Option<String>,
 }
 
 #[derive(Clone, Debug)]
@@ -1583,6 +1588,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             OpaqueHandleInfo {
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
+                drop_symbol: super::ffi_drop_symbol(extern_decl, &module.items)?,
             },
         );
     }
@@ -1647,6 +1653,10 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     .map(|param| super::ffi_struct_layout(param, &classes))
                     .collect(),
                 c_struct_result: super::ffi_struct_layout(&return_type, &classes),
+                handle_drops: super::ffi_handle_drops(
+                    params.iter().chain([&return_type]),
+                    &ffi_signature_opaque_handles,
+                ),
                 module_name: module_name.clone(),
                 decl: extern_decl.clone(),
                 contract_decl: (!extern_decl.contracts.is_empty()).then(|| FunctionDecl {

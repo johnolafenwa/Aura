@@ -2696,6 +2696,7 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                             return_type: Type::named("int32"),
                             c_string_result: false,
                             c_struct_result: None,
+                            handle_drops: BTreeMap::new(),
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),
@@ -2850,6 +2851,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
         return_type: Type::named("Token"),
         c_string_result: false,
         c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = vec![
         MirArg {
@@ -2936,6 +2938,7 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
         return_type: Type::named("bool"),
         c_string_result: false,
         c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let error = runtime
         .evaluate_extern_call_with(&call, &[], &mut env, |_, _, _| {
@@ -3068,6 +3071,7 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         return_type: Type::Unit,
         c_string_result: false,
         c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = parameter_specs
         .iter()
@@ -3143,6 +3147,7 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
             return_type: ty,
             c_string_result: false,
             c_struct_result: None,
+            handle_drops: BTreeMap::new(),
         };
         runtime
             .evaluate_extern_call_with(
@@ -3312,6 +3317,7 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
             return_type: Type::named("int32"),
             c_string_result: false,
             c_struct_result: None,
+            handle_drops: BTreeMap::new(),
         }
     }
 
@@ -3447,6 +3453,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3472,6 +3479,7 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3529,6 +3537,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                     return_type: Type::Unit,
                     c_string_result: false,
                     c_struct_result: None,
+                    handle_drops: BTreeMap::new(),
                 },
                 &[MirArg {
                     name: None,
@@ -3615,6 +3624,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3653,6 +3663,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3692,6 +3703,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3724,6 +3736,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -3744,6 +3757,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::named("int32"),
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -3764,6 +3778,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -21947,6 +21962,7 @@ fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
         return_type: Type::Unit,
         c_string_result: false,
         c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = [
         MirArg {
@@ -22040,6 +22056,7 @@ fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
         return_type: Type::named("str"),
         c_string_result: true,
         c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = [
         MirArg {

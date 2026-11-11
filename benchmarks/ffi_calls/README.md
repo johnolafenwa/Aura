@@ -21,6 +21,7 @@ the time measured is the cost of crossing the boundary.
 | `vec2` | `Vec2 fc_vec2_add(Vec2, Vec2)` | two 16-byte structs of floats in registers, and one back |
 | `triple` | `Triple fc_triple_next(Triple)` | a 24-byte struct in memory, and one back |
 | `move` | `void fc_vec2_move(Vec2 *, double)` | a `mut Vec2` struct pointer |
+| `callback` | `int64_t fc_apply(int64_t (*)(int64_t, int32_t), int64_t)` | a C function that calls back once |
 
 ## Running
 
@@ -55,6 +56,7 @@ Linux x86-64 cloud container, 2026-11-10, nanoseconds per call:
 | `vec2` | 13.9 | 14.1 | 410 | 297 |
 | `triple` | 13.6 | 10.0 | 303 | 201 |
 | `move` | 9.4 | 3.1 | 439 | 172 |
+| `callback` | 6.8 | 2.5 | 513 | 446 |
 
 The container is shared, so a number moves by a few tenths of a nanosecond
 between runs. A `str` argument asks the runtime for its bytes, which is the
@@ -75,3 +77,8 @@ the next, so `vec2` and `triple` time the round trip of a struct through
 memory on both sides. In `move`, Rust passes the address of the struct it
 holds. Aura writes the fields to a C copy, passes its address, and reads
 the fields back, which is the 6 ns over Rust.
+
+In `callback` the C function calls the function it is handed once. Rust
+passes an `extern "C" fn`, and Python a `CFUNCTYPE` or `ffi.callback`
+wrapper of a lambda. Aura's 4 ns over Rust is the frame its entry packs and
+the guard that keeps a failure from unwinding through C.

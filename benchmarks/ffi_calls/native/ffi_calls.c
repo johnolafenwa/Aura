@@ -32,3 +32,4 @@ typedef struct { int64_t a, b, c; } Triple;
 Vec2 fc_vec2_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }
 Triple fc_triple_next(Triple t) { Triple r = {t.b, t.c, t.a + 1}; return r; }
 void fc_vec2_move(Vec2 *v, double by) { v->x += by; v->y -= by; }
+int64_t fc_apply(int64_t (*f)(int64_t, int32_t), int64_t value) { return f(value, 3); }

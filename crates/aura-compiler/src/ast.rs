@@ -610,6 +610,10 @@ pub struct ExternOpaqueClassDecl {
     pub name: String,
     pub name_span: Span,
     pub span: Span,
+    /// The extern function of the `drop` clause, which releases a handle
+    /// the program still owns when its last use ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop: Option<(String, Span)>,
 }
 
 #[derive(Clone, Debug, Serialize)]

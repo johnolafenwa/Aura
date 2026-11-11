@@ -1095,6 +1095,21 @@ fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     }
 }
 
+/// The function `symbol` among the libraries loaded into the process, as
+/// the function that releases the object behind an opaque handle.
+///
+/// # Safety
+///
+/// The symbol is a C function that takes one pointer.
+pub unsafe fn handle_drop(symbol: &str) -> Result<crate::runtime_value::FfiHandleDrop, FfiError> {
+    let function = process_symbol(symbol)?;
+    // SAFETY: the address is not null, and the caller's contract gives its
+    // signature.
+    Ok(unsafe {
+        std::mem::transmute::<*mut c_void, crate::runtime_value::FfiHandleDrop>(function.as_ptr())
+    })
+}
+
 /// The file names a library called `name` may have on this host, most
 /// specific first.
 fn library_file_names(name: &str) -> Vec<String> {

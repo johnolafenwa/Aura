@@ -770,6 +770,17 @@ impl Parser {
                     "`extern` opaque classes have no Aura body; remove `:` and the indented block",
                 ));
             }
+            let drop = if matches!(self.peek_kind_at(self.index), Some(TokenKind::Identifier(word)) if word == "drop")
+            {
+                self.bump();
+                Some(self.expect_identifier_with_span().map_err(|error| {
+                    error.with_help(
+                        "name the extern function that releases the handle, such as `drop sqlite3_close`",
+                    )
+                })?)
+            } else {
+                None
+            };
             self.expect_newline()?;
             return Ok(Item::ExternOpaqueClass(ExternOpaqueClassDecl {
                 public,
@@ -777,6 +788,7 @@ impl Parser {
                 name,
                 name_span,
                 span,
+                drop,
             }));
         }
 

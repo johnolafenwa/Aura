@@ -292,9 +292,9 @@ Foreign function interface (FFI) failures use these codes:
 
 | Code | FFI failure |
 | --- | --- |
-| `AU1101` | Malformed extern bodies, defaults, type parameters, callbacks, variadics, and raw-pointer syntax, each with dedicated parser guidance. |
+| `AU1101` | Malformed extern bodies, defaults, type parameters, variadics, and raw-pointer syntax, each with dedicated parser guidance. |
 | `AU2002` | A type outside the FFI v0 scalar/view/opaque table. |
-| `AU2005` | A reserved raw-pointer or callback contract, or opaque construction. |
+| `AU2005` | A reserved raw-pointer contract, a callback argument that is not a named top-level function, or opaque construction. |
 | `AU2999` | Package authorization, root dependency reports, and the direct-call-only policy. |
 | `AU3004` | An invalid FFI capability. |
 | `AU3001`, `AU3008` | Opaque handle moves and task/Queue boundaries keep their usual codes. |

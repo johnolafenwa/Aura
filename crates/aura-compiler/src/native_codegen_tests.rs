@@ -3291,6 +3291,7 @@ fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
             return_type: Type::named("int32"),
             c_string_result: false,
             c_struct_result: None,
+            handle_drops: std::collections::BTreeMap::new(),
         }),
         args: Vec::new(),
         type_args: Default::default(),
@@ -3389,6 +3390,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 return_type: Type::named("int64"),
                                 c_string_result: false,
                                 c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![
                                 MirArg {
@@ -3422,6 +3424,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 return_type: handle_ty.clone(),
                                 c_string_result: false,
                                 c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3448,6 +3451,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 return_type: Type::Unit,
                                 c_string_result: false,
                                 c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3474,6 +3478,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                 return_type: Type::named("uint16"),
                                 c_string_result: false,
                                 c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3528,6 +3533,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 return_type: Type::named("int32"),
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3553,6 +3559,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 return_type: Type::named("int32"),
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3580,6 +3587,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                 return_type: Type::named("int32"),
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: vec![MirArg {
                 name: None,
@@ -3648,6 +3656,7 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                                 return_type: Type::named("int64"),
                                 c_string_result: false,
                                 c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,

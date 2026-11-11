@@ -14,7 +14,7 @@ def report(name, started):
     print(f'{name} {(time.perf_counter_ns() - started) / CALLS}')
 
 
-def run(prefix, lib, text, data, buffer, out, as_text, floats, structs):
+def run(prefix, lib, text, data, buffer, out, as_text, floats, structs, advance):
     total = 0
     started = time.perf_counter_ns()
     for i in range(CALLS):
@@ -101,6 +101,15 @@ def run(prefix, lib, text, data, buffer, out, as_text, floats, structs):
         lib.fc_vec2_move(point_address, 0.5)
     report(f'{prefix}move', started)
 
+    applied = 0
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        applied = lib.fc_apply(advance, applied)
+    report(f'{prefix}callback', started)
+
+
+ADVANCE = ctypes.CFUNCTYPE(ctypes.c_int64, ctypes.c_int64, ctypes.c_int32)
+
 
 class Vec2(ctypes.Structure):
     _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double)]
@@ -128,6 +137,7 @@ def ctypes_library(path):
     lib.fc_vec2_add.argtypes, lib.fc_vec2_add.restype = [Vec2, Vec2], Vec2
     lib.fc_triple_next.argtypes, lib.fc_triple_next.restype = [Triple], Triple
     lib.fc_vec2_move.argtypes, lib.fc_vec2_move.restype = [ctypes.POINTER(Vec2), f64], None
+    lib.fc_apply.argtypes, lib.fc_apply.restype = [ADVANCE, i64], i64
     return lib
 
 
@@ -149,6 +159,7 @@ typedef struct { int64_t a, b, c; } Triple;
 Vec2 fc_vec2_add(Vec2 a, Vec2 b);
 Triple fc_triple_next(Triple t);
 void fc_vec2_move(Vec2 *v, double by);
+int64_t fc_apply(int64_t (*f)(int64_t, int32_t), int64_t value);
 '''
 
 
@@ -161,6 +172,7 @@ def main():
         ctypes.byref(ctypes.c_int64(0)), lambda name: name.decode(),
         (ctypes.c_double * 8)(1, 2, 3, 4, 5, 6, 7, 8),
         (Vec2(0.0, 0.0), Vec2(0.5, -0.25), Triple(1, 2, 3), ctypes.byref(Vec2(0.0, 0.0))),
+        ADVANCE(lambda value, step: value + step),
     )
     try:
         import cffi
@@ -176,6 +188,7 @@ def main():
             ffi.new('Vec2 *', [0.0, 0.0])[0], ffi.new('Vec2 *', [0.5, -0.25])[0],
             ffi.new('Triple *', [1, 2, 3])[0], ffi.new('Vec2 *', [0.0, 0.0]),
         ),
+        ffi.callback('int64_t(int64_t, int32_t)', lambda value, step: value + step),
     )
 
 

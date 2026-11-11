@@ -3,7 +3,7 @@
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers or callbacks.
+code. It is not a general system for pointers.
 
 ## Package Opt-In
 
@@ -118,6 +118,10 @@ extern "C" class Div:
     rem: int32
 
 extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
 
 def main() -> int32:
     print(getpid() > 0)
@@ -151,7 +155,7 @@ The rules for these declarations:
   with a block of fields. It has no methods, invariants, field defaults, or
   type parameters. See [Structs](#structs).
 
-Raw pointer syntax, callback types, and `...` variadics are reserved. The
+Raw pointer syntax and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
 opaque handle. An extern declaration is direct-call-only, so it cannot be used
 as a first-class function value.
@@ -373,6 +377,65 @@ AArch64, a struct argument that the convention would split between the last
 free registers and the stack is a build error. Move the parameter earlier or
 pass it as `mut Name`.
 
+### Callbacks
+
+A parameter of function type is a C function pointer. The argument is a
+named Aura function, and the C function calls it.
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+| Callback parameter | C type | Meaning |
+| --- | --- | --- |
+| `value: T` | `T` | a scalar by value |
+| `value: mut T` | `T *` | a pointer to one scalar, read on entry and written back on return |
+| `-> T` | `T` | a scalar result |
+| `-> None` | `void` | no result |
+
+`T` is any scalar type of the [Scalars](#scalars) table.
+
+- **Named functions only.** The argument names a top-level function with
+  exactly the declared parameter and result types. A lambda, a closure, a
+  method, a generic function, and a function held in a variable are
+  `AU2005`. C receives a plain code address, so the function has no
+  captured values. A `void *` user-data parameter that C passes through is
+  declared `uint64`.
+- **Pointer parameters.** `mut T` is also the spelling for `const T *`. A
+  null pointer reads as zero and is not written.
+- **Booleans.** A `bool` argument from C is `true` for any nonzero byte.
+- **Lifetime.** The code address stays valid for the life of the program.
+  The C library may keep it and call it during a later foreign call.
+- **Threads.** C must call the function on the thread that made the foreign
+  call, while a foreign call is running. A call from a thread the C library
+  started has undefined behavior.
+- **Suspension.** A callback should not wait on a task, a `Queue`, or a
+  timer. Other tasks would run while the C function is still on the stack.
+- **Failures.** A failure in the callback, such as an index out of range,
+  does not unwind through the C function. The callback returns zero to C,
+  later callbacks return zero without running, and the foreign call fails
+  with the callback's diagnostic when the C function returns.
+
+A callback parameter or result of any other type is `AU2002`: text, lists,
+structs, and handles do not cross in a callback. An extern function cannot
+return a function, and a callback parameter cannot be `own` or `mut`.
+
 ### Opaque Handles
 
 An opaque handle is one non-null foreign pointer with no layout visible to
@@ -509,10 +572,10 @@ never appears in source-visible output or diagnostics.
 
 | Code | Cause |
 | --- | --- |
-| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
+| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
 | `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
-| `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
+| `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, or a function as an extern result. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
@@ -545,7 +608,9 @@ find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
 loads to find the list's elements. A struct argument or result costs a
-store and a load for each field.
+store and a load for each field. A callback costs about 4 ns more
+than a C function pointer, for the frame that guards the C caller against
+a failure.
 
 Library loading and symbol lookup in the interpreter are implemented on
 Unix-family hosts. On other hosts, a call there fails with the runtime
@@ -563,7 +628,9 @@ FFI does not:
 - pass typed pointers to anything but one scalar, one handle, or the
   elements of a list of scalars
 - pass an `Array[T]` as a pointer
-- accept callbacks or variadics
+- accept variadics
+- pass a closure as a callback, or pass text, lists, structs, or handles to
+  one
 - offer asynchronous foreign calls
 
 Aura does not infer C ABI layout outside the tables above.
@@ -586,10 +653,11 @@ Implemented:
 - `mut` scalar out-parameters
 - `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
 - `extern "C"` classes passed and returned by value, and passed by pointer
+- named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 
-Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
+Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
 other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 

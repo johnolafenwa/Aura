@@ -6372,6 +6372,16 @@ impl MirRuntime {
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // The foreign function owns each handle it takes as `own` from
+        // here on, so the handle's `drop` function does not run for it.
+        for (argument, param) in ordered.iter().zip(&call.params) {
+            if let (MirReceiverKind::Value, Value::FfiHandle(handle)) =
+                (param.passing, &argument.value)
+            {
+                handle.give_up();
+            }
+        }
+
         // A callback the foreign function calls re-enters this interpreter.
         let outer = CALLBACK_RUNTIME.replace(self);
         let result = dispatch(&call.symbol, &signature, &mut arguments);
@@ -6395,12 +6405,16 @@ impl MirRuntime {
                 FfiValue::Struct(layout, bytes) => {
                     struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
-                other => runtime_value_from_ffi(other, &param.ty).map_err(|error| {
-                    Diagnostic::coded(
-                        "AU4005",
-                        format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-                    )
-                })?,
+                other => match stored_handle(&argument.value, &other) {
+                    Some(kept) => kept,
+                    None => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops)
+                        .map_err(|error| {
+                            Diagnostic::coded(
+                                "AU4005",
+                                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                            )
+                        })?,
+                },
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -6421,12 +6435,14 @@ impl MirRuntime {
         if let FfiValue::Struct(layout, bytes) = &result {
             return struct_runtime_value(layout, bytes, &call.symbol);
         }
-        runtime_value_from_ffi(result, &call.return_type).map_err(|error| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-            )
-        })
+        runtime_value_from_ffi_with(result, &call.return_type, &call.handle_drops).map_err(
+            |error| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                )
+            },
+        )
     }
 
     /// Calls the function `name` with the arguments C passed in `frame`,
@@ -11316,6 +11332,57 @@ fn bytes_runtime_value(bytes: &[u8]) -> Value {
 }
 
 fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
+    runtime_value_from_ffi_with(value, ty, &BTreeMap::new())
+}
+
+/// What a `mut Handle | None` place holds after a foreign call that left
+/// `written` in it, when that is decided by the handle it held `before`.
+/// An address the function did not change keeps that handle. Any other
+/// address ends the program's ownership of the object the place held.
+fn stored_handle(before: &Value, written: &FfiValue) -> Option<Value> {
+    let held = match before {
+        Value::Union(union) => &union.payload,
+        bare => bare,
+    };
+    let Value::FfiHandle(handle) = held else {
+        return None;
+    };
+    if matches!(written, FfiValue::OpaqueHandle(now) if now.as_ptr() == handle.as_ptr()) {
+        return Some(before.clone());
+    }
+    handle.give_up();
+    None
+}
+
+/// A new handle of the opaque type `class_name` for a non-null address a
+/// foreign function returned. `drops` names the function that releases a
+/// handle of the type, when its declaration has a `drop` clause.
+fn ffi_handle_value(
+    class_name: &str,
+    handle: &crate::ffi::OpaqueHandle,
+    drops: &BTreeMap<String, String>,
+) -> Result<Value> {
+    let drop = match drops.get(class_name) {
+        // SAFETY: the checker admits only an extern function that takes
+        // the handle as its one parameter.
+        Some(symbol) => Some(
+            unsafe { crate::ffi::handle_drop(symbol) }
+                .map_err(|error| ffi_runtime_diagnostic(symbol, error))?,
+        ),
+        None => None,
+    };
+    FfiHandleValue::owned(class_name.to_string(), handle.as_ptr(), drop)
+        .map(Value::FfiHandle)
+        .ok_or_else(|| Diagnostic::coded("AU4005", "FFI function returned a null opaque handle"))
+}
+
+/// The Aura value of `value`, which a foreign function returned or stored,
+/// as the type `ty`.
+fn runtime_value_from_ffi_with(
+    value: FfiValue,
+    ty: &Type,
+    drops: &BTreeMap<String, String>,
+) -> Result<Value> {
     let mismatch = |actual: FfiType| {
         Diagnostic::coded(
             "AU4005",
@@ -11387,11 +11454,7 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
             ))
         }
         (FfiValue::OpaqueHandle(handle), Type::Named(class_name, args)) if args.is_empty() => {
-            FfiHandleValue::new(class_name.clone(), handle.as_ptr())
-                .map(Value::FfiHandle)
-                .ok_or_else(|| {
-                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
-                })
+            ffi_handle_value(class_name, &handle, drops)
         }
         // A `Handle | None` result (ADR-0052 A10): non-null constructs the
         // owned handle member, null constructs `None`.
@@ -11405,11 +11468,7 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
             let Type::Named(class_name, _) = member else {
                 unreachable!("checked handle member")
             };
-            let payload = FfiHandleValue::new(class_name.clone(), handle.as_ptr())
-                .map(Value::FfiHandle)
-                .ok_or_else(|| {
-                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
-                })?;
+            let payload = ffi_handle_value(class_name, &handle, drops)?;
             crate::union_runtime::inject_union_member(union, index, payload)
                 .map_err(|message| Diagnostic::coded("AU4005", message))
         }

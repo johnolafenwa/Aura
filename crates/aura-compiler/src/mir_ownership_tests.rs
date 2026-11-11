@@ -307,6 +307,7 @@ fn calls_consume_arguments_except_extern_and_runtime_borrows() {
                 return_type: Type::Unit,
                 c_string_result: false,
                 c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             vec![arg(None, "a")]
         )),

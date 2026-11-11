@@ -57,7 +57,8 @@ Last updated: 2026-11-10
   out-parameters, and `Handle | None` and `mut Handle | None` parameters
   (ADR-0075). `ptr[T]` and `mut ptr[T]` array pointers over scalar lists
   (ADR-0076). `extern "C" class` structs by value and by pointer (ADR-0077).
-- Remaining: callbacks, handle destructors, a
+  Named functions as C callbacks over scalars (ADR-0080).
+- Remaining: handle destructors, a
   SQLite example, and the final benchmarks against Rust and Python.
 
 ## Evaluation of the work since 0.13.0-preview (complete)

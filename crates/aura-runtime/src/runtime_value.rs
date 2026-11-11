@@ -590,15 +590,41 @@ pub struct UnionValue {
 /// A non-null foreign-owned opaque address tagged with its Aura nominal
 /// type.
 ///
-/// The address is deliberately stored as a non-zero integer rather than a raw
+/// The address is deliberately stored as an integer rather than a raw
 /// pointer so the general runtime value remains `Send`. Cloning this internal
 /// transport value aliases the same foreign object; Aura's semantic move and
 /// Transfer rules still prevent source programs from cloning or task-sending
 /// an opaque handle.
+///
+/// The clones share one core. When the handle's type declares a `drop`
+/// function, the core calls it once, when its last clone goes away, unless
+/// the handle was given up first with [`FfiHandleValue::give_up`].
 #[derive(Clone)]
 pub struct FfiHandleValue {
     type_name: String,
-    address: NonZeroUsize,
+    core: Arc<FfiHandleCore>,
+}
+
+/// The C function that releases the foreign object behind a handle.
+pub type FfiHandleDrop = unsafe extern "C" fn(*mut c_void);
+
+struct FfiHandleCore {
+    /// The address of the foreign object, or 0 once the program gave it
+    /// to a foreign function that takes it as `own`.
+    address: AtomicUsize,
+    drop: Option<FfiHandleDrop>,
+}
+
+impl Drop for FfiHandleCore {
+    fn drop(&mut self) {
+        let address = *self.address.get_mut();
+        if let (Some(release), true) = (self.drop, address != 0) {
+            // SAFETY: the declaration of the handle's type names this
+            // function as the one that releases an object of the type,
+            // and the program still owns the object at `address`.
+            unsafe { release(address as *mut c_void) };
+        }
+    }
 }
 
 impl fmt::Debug for FfiHandleValue {
@@ -613,10 +639,31 @@ impl fmt::Debug for FfiHandleValue {
 
 impl FfiHandleValue {
     pub fn new(type_name: String, pointer: *mut c_void) -> Option<Self> {
-        Some(Self {
+        Self::owned(type_name, pointer, None)
+    }
+
+    /// A handle for the non-null `pointer` that calls `drop` on it when the
+    /// program lets go of the handle without giving it to a foreign
+    /// function.
+    pub fn owned(
+        type_name: String,
+        pointer: *mut c_void,
+        drop: Option<FfiHandleDrop>,
+    ) -> Option<Self> {
+        NonZeroUsize::new(pointer as usize).map(|address| Self {
             type_name,
-            address: NonZeroUsize::new(pointer as usize)?,
+            core: Arc::new(FfiHandleCore {
+                address: AtomicUsize::new(address.get()),
+                drop,
+            }),
         })
+    }
+
+    /// Ends the program's ownership of the foreign object: a foreign
+    /// function took it, or stored another one over it. The `drop`
+    /// function does not run for it.
+    pub fn give_up(&self) {
+        self.core.address.store(0, Ordering::Relaxed);
     }
 
     pub fn type_name(&self) -> &str {
@@ -624,7 +671,7 @@ impl FfiHandleValue {
     }
 
     pub fn as_ptr(&self) -> *mut c_void {
-        self.address.get() as *mut c_void
+        self.core.address.load(Ordering::Relaxed) as *mut c_void
     }
 }
 

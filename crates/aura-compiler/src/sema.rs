@@ -540,6 +540,80 @@ pub(crate) fn validate_ffi_struct_fields(
     Ok(())
 }
 
+/// The C symbol of the `drop` function an opaque class declares. The
+/// function is an extern function of the same module that takes the
+/// handle as its one `own` parameter and returns a scalar or nothing.
+pub(crate) fn ffi_drop_symbol(
+    class: &crate::ast::ExternOpaqueClassDecl,
+    items: &[Item],
+) -> Result<Option<String>> {
+    let Some((name, span)) = &class.drop else {
+        return Ok(None);
+    };
+    let function = items.iter().find_map(|item| match item {
+        Item::ExternFunction(function) if function.name == *name => Some(function),
+        _ => None,
+    });
+    let Some(function) = function else {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            *span,
+            format!(
+                "`drop` of opaque class `{}` names `{name}`, which is not an `extern \"C\"` function of this module",
+                class.name
+            ),
+        ));
+    };
+    let takes_the_handle = matches!(
+        function.params.as_slice(),
+        [param] if param.mode == ParamMode::Own
+            && matches!(&param.ty.kind, crate::ast::TypeRefKind::Named { name, args } if *name == class.name && args.is_empty())
+    );
+    let result_is_plain = matches!(
+        &function.return_type.kind,
+        crate::ast::TypeRefKind::Named { name, args }
+            if args.is_empty() && (name == "None" || ffi_scalar_type(&Type::named(name)))
+    );
+    if !takes_the_handle || !result_is_plain || function.c_string_result {
+        return Err(Diagnostic::coded_at(
+            "AU2005",
+            *span,
+            format!(
+                "`drop` function `{name}` of opaque class `{0}` must take one `own {0}` parameter and return a scalar or nothing",
+                class.name
+            ),
+        ));
+    }
+    Ok(Some(function.link_name().to_string()))
+}
+
+/// The `drop` symbols of the opaque handle types that `types` name, bare
+/// or as the handle of a `Handle | None`.
+pub(crate) fn ffi_handle_drops<'a>(
+    types: impl Iterator<Item = &'a Type>,
+    handles: &BTreeMap<String, OpaqueHandleInfo>,
+) -> BTreeMap<String, String> {
+    let mut drops = BTreeMap::new();
+    for ty in types {
+        let members = match ty {
+            Type::Union(union) => union.members.as_slice(),
+            other => std::slice::from_ref(other),
+        };
+        for member in members {
+            let Type::Named(name, _) = member else {
+                continue;
+            };
+            if let Some(symbol) = handles
+                .get(name)
+                .and_then(|handle| handle.drop_symbol.as_ref())
+            {
+                drops.insert(name.clone(), symbol.clone());
+            }
+        }
+    }
+    drops
+}
+
 /// Checks a callback parameter of an extern function: a function type
 /// whose parameters are scalars, by value or through a `mut` pointer, and
 /// whose result is a scalar or nothing.

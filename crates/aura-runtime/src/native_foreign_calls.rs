@@ -23,7 +23,7 @@ use super::{
     value_type_name, with_value, OpaqueValue,
 };
 use crate::list_elements::ListForm;
-use crate::runtime_value::{FfiHandleValue, Value, VecValue};
+use crate::runtime_value::{FfiHandleDrop, FfiHandleValue, Value, VecValue};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -431,24 +431,78 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_c_string_result(
 }
 
 /// A new handle of the opaque type the name spells for the address a
-/// foreign function returned, or null for a null address.
+/// foreign function returned, or null for a null address. `drop` is the
+/// function the type's declaration names to release the object, or `None`.
 ///
 /// # Safety
 ///
-/// The name is UTF-8 text in generated code's data.
+/// The name is UTF-8 text in generated code's data, and `drop` releases an
+/// object of the type.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_handle(
     address: *mut c_void,
     type_name: *const u8,
     type_name_length: usize,
+    drop: Option<FfiHandleDrop>,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         // SAFETY: the caller's contract.
         let type_name = unsafe { metadata_text(type_name, type_name_length) };
-        match FfiHandleValue::new(type_name.to_string(), address) {
+        match FfiHandleValue::owned(type_name.to_string(), address, drop) {
             Some(handle) => boxed_value(Value::FfiHandle(handle)),
             None => std::ptr::null_mut(),
         }
+    })
+}
+
+/// The handle a foreign function left through a `mut Handle | None`
+/// parameter that held `before` when the call began, or null for a null
+/// address. An address the function did not change keeps the handle the
+/// place held. Any other address is a new handle, and the program no
+/// longer owns the object the place held.
+///
+/// # Safety
+///
+/// `before` is a live value, the name is UTF-8 text in generated code's
+/// data, and `drop` releases an object of the type.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_stored_handle(
+    before: *mut OpaqueValue,
+    address: *mut c_void,
+    type_name: *const u8,
+    type_name_length: usize,
+    drop: Option<FfiHandleDrop>,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let kept = with_value(before, |value| match active_member(value) {
+            Value::FfiHandle(held) if held.as_ptr() == address => Some(held.clone()),
+            Value::FfiHandle(held) => {
+                held.give_up();
+                None
+            }
+            _ => None,
+        });
+        match kept {
+            Some(held) => boxed_value(Value::FfiHandle(held)),
+            None => aura_direct_ffi_handle(address, type_name, type_name_length, drop),
+        }
+    })
+}
+
+/// Ends the program's ownership of the object behind the handle `value`,
+/// which a foreign function is about to take as `own`.
+///
+/// # Safety
+///
+/// `value` is a live value.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_give_up_handle(value: *mut OpaqueValue) {
+    task_runtime_boundary(|| unsafe {
+        with_value(value, |value| {
+            if let Value::FfiHandle(handle) = value {
+                handle.give_up();
+            }
+        })
     })
 }
 

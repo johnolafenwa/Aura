@@ -235,7 +235,7 @@ fn a_handle_boxes_an_address_and_gives_it_back() {
         let mut target = 0_u8;
         let address: *mut c_void = (&raw mut target).cast();
         let name = "Database";
-        let handle = aura_direct_ffi_handle(address, name.as_ptr(), name.len());
+        let handle = aura_direct_ffi_handle(address, name.as_ptr(), name.len(), None);
         assert!(!handle.is_null());
         with_value(handle, |value| match value {
             Value::FfiHandle(handle) => assert_eq!(handle.type_name(), "Database"),
@@ -244,10 +244,10 @@ fn a_handle_boxes_an_address_and_gives_it_back() {
         assert_eq!(aura_direct_ffi_handle_address(handle), address);
         aura_direct_release_value(handle);
 
-        let null = aura_direct_ffi_handle(std::ptr::null_mut(), name.as_ptr(), name.len());
+        let null = aura_direct_ffi_handle(std::ptr::null_mut(), name.as_ptr(), name.len(), None);
         assert!(null.is_null(), "a null address is no handle");
 
-        let unnamed = aura_direct_ffi_handle(address, std::ptr::null(), 0);
+        let unnamed = aura_direct_ffi_handle(address, std::ptr::null(), 0, None);
         with_value(unnamed, |value| match value {
             Value::FfiHandle(handle) => assert_eq!(handle.type_name(), ""),
             other => panic!("expected a handle, found {other:?}"),
@@ -339,7 +339,7 @@ fn a_nullable_handle_address_is_null_for_none() {
         let mut target = 0_u8;
         let address: *mut c_void = (&raw mut target).cast();
         let name = "Database";
-        let handle = aura_direct_ffi_handle(address, name.as_ptr(), name.len());
+        let handle = aura_direct_ffi_handle(address, name.as_ptr(), name.len(), None);
         assert_eq!(aura_direct_ffi_nullable_handle_address(handle), address);
         let payload = with_value(handle, Value::clone);
         aura_direct_release_value(handle);

@@ -1398,6 +1398,11 @@ pub struct MirExternCall {
     /// returns by value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_struct_result: Option<crate::c_layout::CStruct>,
+    /// For each opaque handle type the call can produce whose declaration
+    /// has a `drop` clause, the C symbol of the function that releases a
+    /// handle the program still owns.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handle_drops: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12661,6 +12666,7 @@ impl<'a> Lowerer<'a> {
             return_type: function.signature.return_type.clone(),
             c_string_result: function.decl.c_string_result,
             c_struct_result: function.c_struct_result.clone(),
+            handle_drops: function.handle_drops.clone(),
         }
     }
 

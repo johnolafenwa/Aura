@@ -83,6 +83,7 @@ fn item_name_matches_decl_name() {
         name: "ProcessHandle".to_string(),
         name_span: Span::new(1, 25),
         span: Span::new(1, 1),
+        drop: None,
     });
     let trait_item = Item::Trait(TraitDecl {
         public: true,

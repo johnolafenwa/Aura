@@ -26,6 +26,12 @@ in this file.
   parameter or result crosses by value, in registers or in memory as the
   C calling convention says, and `mut Name` passes a pointer the function
   can write through. In Aura code the class is an ordinary `copy class`.
+- FFI passes callbacks. An extern parameter with a function type, such as
+  `compare: def(a: mut int32, b: mut int32) -> int32`, takes the name of a
+  top-level Aura function, and the C function calls it. Callback
+  parameters and results are scalars, and `mut T` is a pointer to one. A
+  failure in a callback fails the foreign call once the C function
+  returns. Closures cannot be callbacks.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

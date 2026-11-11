@@ -422,8 +422,9 @@ enum ForeignWriteback {
     /// The scalar in the stack word at this address.
     Scalar(ForeignScalar, Val),
     /// The `Handle | None` of this union type for the address in the stack
-    /// word at this address. The name is the handle's opaque type.
-    Handle(String, Type, Val),
+    /// word at this address. The name is the handle's opaque type, and the
+    /// last value is what the place held when the call began.
+    Handle(String, Type, Val, Val),
     /// The struct in the C copy at this address.
     Struct(&'static CStruct, Val),
 }
@@ -624,6 +625,7 @@ impl FunctionCompiler<'_> {
         let mut list_copies = Vec::new();
         let mut flag_lists = Vec::new();
         let mut writebacks = Vec::new();
+        let mut given_up = Vec::new();
         for (index, (operand, place)) in loaded.into_iter().enumerate() {
             let (ffi, value) = match operand {
                 ForeignOperand::Value(ffi, value) => (ffi, value),
@@ -660,6 +662,7 @@ impl FunctionCompiler<'_> {
                         ffi.opaque_name.unwrap_or_default(),
                         ffi.union_type.unwrap_or(Type::Unit),
                         slot,
+                        word,
                     )
                 }
                 FfiType::NullableOpaqueHandle => {
@@ -705,6 +708,11 @@ impl FunctionCompiler<'_> {
                     ForeignWriteback::Struct(layout, slot)
                 }
                 ffi_type => {
+                    if ffi_type == FfiType::OpaqueHandle
+                        && call.params[index].passing == MirReceiverKind::Value
+                    {
+                        given_up.push(word);
+                    }
                     self.push_foreign_argument(ffi_type, &value, &mut arguments, &mut copies);
                     ForeignWriteback::Same(value)
                 }
@@ -729,6 +737,12 @@ impl FunctionCompiler<'_> {
             arguments.signature.returns.push(types::I64);
         }
 
+        // The foreign function owns each handle it takes as `own` from
+        // here on, so the handle's `drop` function does not run for it.
+        for handle in given_up {
+            self.builder
+                .call(self.runtime[RuntimeFn::FfiGiveUpHandle], &[handle]);
+        }
         let symbol = self.builder.module().declare_foreign_symbol(&call.symbol)?;
         let symbol = self.builder.import_function(symbol);
         let address = self.builder.func_addr(types::I64, symbol);
@@ -763,9 +777,15 @@ impl FunctionCompiler<'_> {
                     let raw = self.builder.load(scalar.ty, flags, slot, 0);
                     self.foreign_scalar_result(&scalar, raw, &call.symbol)?
                 }
-                ForeignWriteback::Handle(name, union_type, slot) => {
+                ForeignWriteback::Handle(name, union_type, slot, before) => {
                     let address = self.builder.load(types::I64, flags, slot, 0);
-                    self.foreign_nullable_handle(address, &name, &union_type)?
+                    let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+                    let drop = self.foreign_handle_drop(call, &name)?;
+                    let handle = self.builder.call(
+                        self.runtime[RuntimeFn::FfiStoredHandle],
+                        &[before, address, name_ptr, name_len, drop],
+                    );
+                    self.foreign_nullable(handle.results[0], &union_type)?
                 }
                 ForeignWriteback::Struct(layout, slot) => {
                     self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
@@ -803,12 +823,13 @@ impl FunctionCompiler<'_> {
             }
             (None, None) if result_text => self.foreign_text_result(invocation.results[0], call)?,
             (None, Some(name)) if result_ffi.ffi_type == FfiType::OpaqueHandle => {
-                let handle = self.foreign_handle(invocation.results[0], name)?;
+                let handle = self.foreign_handle(invocation.results[0], name, call)?;
                 self.trap_on_null_handle(handle, &call.symbol)?;
                 self.owned_opaque_result(vec![handle], call.return_type.clone())
             }
             (None, Some(name)) => {
-                self.foreign_nullable_handle(invocation.results[0], name, &call.return_type)?
+                let handle = self.foreign_handle(invocation.results[0], name, call)?;
+                self.foreign_nullable(handle, &call.return_type)?
             }
             (None, None) => unit_value(&mut *self.builder),
         };
@@ -1206,13 +1227,34 @@ impl FunctionCompiler<'_> {
 
     /// A new handle box of the opaque type `name` for `address`, or 0 when
     /// the address is null.
-    fn foreign_handle(&mut self, address: Val, name: &str) -> std::result::Result<Val, String> {
+    fn foreign_handle(
+        &mut self,
+        address: Val,
+        name: &str,
+        call: &MirExternCall,
+    ) -> std::result::Result<Val, String> {
         let (name_ptr, name_len) = self.string_constant(name.as_bytes())?;
+        let drop = self.foreign_handle_drop(call, name)?;
         let handle = self.builder.call(
             self.runtime[RuntimeFn::FfiHandle],
-            &[address, name_ptr, name_len],
+            &[address, name_ptr, name_len, drop],
         );
         Ok(handle.results[0])
+    }
+
+    /// The address of the function that releases a handle of the opaque
+    /// type `name`, or 0 when its declaration has no `drop` clause.
+    fn foreign_handle_drop(
+        &mut self,
+        call: &MirExternCall,
+        name: &str,
+    ) -> std::result::Result<Val, String> {
+        let Some(symbol) = call.handle_drops.get(name) else {
+            return Ok(self.builder.iconst(types::I64, 0));
+        };
+        let symbol = self.builder.module().declare_foreign_symbol(symbol)?;
+        let symbol = self.builder.import_function(symbol);
+        Ok(self.builder.func_addr(types::I64, symbol))
     }
 
     fn trap_on_null_handle(
@@ -1235,18 +1277,6 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(valid);
         self.builder.seal_block(valid);
         Ok(())
-    }
-
-    /// The `Handle | None` value of a returned address: the handle member
-    /// for a non-null address and `None` for null (ADR-0052 A10).
-    fn foreign_nullable_handle(
-        &mut self,
-        address: Val,
-        name: &str,
-        union_type: &Type,
-    ) -> std::result::Result<ValueRef, String> {
-        let handle = self.foreign_handle(address, name)?;
-        self.foreign_nullable(handle, union_type)
     }
 
     /// The value of the two-member union `union_type` for `payload`, a box

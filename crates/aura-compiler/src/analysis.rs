@@ -7095,8 +7095,13 @@ fn format_extern_function_hover(function_decl: &crate::ast::ExternFunctionDecl) 
 }
 
 fn format_extern_opaque_hover(handle_decl: &crate::ast::ExternOpaqueClassDecl) -> String {
+    let drop = handle_decl
+        .drop
+        .as_ref()
+        .map(|(function, _)| format!(" drop {function}"))
+        .unwrap_or_default();
     format!(
-        "```aura\nextern \"{}\" opaque class {}\n```",
+        "```aura\nextern \"{}\" opaque class {}{drop}\n```",
         handle_decl.abi, handle_decl.name
     )
 }

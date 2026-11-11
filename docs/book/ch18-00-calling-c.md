@@ -504,6 +504,64 @@ rules the C compiler follows on the machine we build for, so a call with a
 struct costs a few nanoseconds more than one with plain numbers. C unions,
 bit-fields, and array fields have no Aura spelling.
 
+## Callbacks
+
+Sometimes the C function wants to call us. `qsort` sorts an array of
+anything, so it asks for a function that compares two elements. In an
+extern declaration a parameter with a function type is a C function
+pointer, and the argument is the name of an Aura function:
+
+*Filename: src/sorting.au*
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+<span class="caption">Listing 18-7: Handing an Aura function to C's `qsort`</span>
+
+```console
+$ aura run src/sorting.au
+[12, 9, 3, 0, -4]
+```
+
+`qsort` hands its comparison function two `const void *` pointers. We know
+they point at `int32` elements, so the callback type says `mut int32`: a
+pointer to one number, which Aura reads on the way in. A plain `int32`
+parameter would be a number passed by value. A callback takes and returns
+scalars only.
+
+The argument must be a function we name, defined at the top level of a
+module. C receives a bare code address with nowhere to keep captured
+variables, so a lambda or a closure is a compile error. C libraries usually
+make up for that with a `void *user_data` parameter that they pass back to
+the callback untouched. Declare it `uint64`, and use it to carry an index
+or a key.
+
+A callback can fail like any other Aura code, with an index out of range
+or an overflow. Aura does not unwind through the C function, which would
+not expect it. The callback returns zero to C, any later callbacks return
+zero without running, and the `qsort` call itself fails with the
+callback's error as soon as the C function returns. Two rules keep
+callbacks safe: the C library must call the function on the thread that
+made the foreign call, and the callback should not wait on a task or a
+queue.
+
 ## When things go wrong at run time
 
 Some foreign failures Aura can catch. If no library defines the symbol, the
@@ -636,7 +694,7 @@ without a change to your own manifest that a reviewer will see.
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
-the compiler cannot check. There are no callbacks from C into Aura, no
+the compiler cannot check. There are no closures as callbacks, no
 variadic functions such as `printf`, no unions or arrays of structs, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
@@ -651,7 +709,8 @@ You can now call a C function from Aura: declare it with `extern "C" def`
 inside a package that opts in with `allow_ffi = true`, name its library
 under `[ffi]`, pass scalars by value,
 text and bytes as temporary views, C strings as `cstr`, lists of numbers as
-`ptr[T]` arrays, C structs as `extern "C"` classes, and results through
+`ptr[T]` arrays, C structs as `extern "C"` classes, Aura functions as
+callbacks, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the

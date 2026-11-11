@@ -733,6 +733,7 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
                             return_type: Type::named("int32"),
                             c_string_result: false,
                             c_struct_result: None,
+                            handle_drops: std::collections::BTreeMap::new(),
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),

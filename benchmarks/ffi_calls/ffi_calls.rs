@@ -21,6 +21,11 @@ extern "C" {
     fn fc_vec2_add(a: Vec2, b: Vec2) -> Vec2;
     fn fc_triple_next(t: Triple) -> Triple;
     fn fc_vec2_move(v: *mut Vec2, by: f64);
+    fn fc_apply(f: extern "C" fn(i64, i32) -> i64, value: i64) -> i64;
+}
+
+extern "C" fn advance(value: i64, step: i32) -> i64 {
+    value + step as i64
 }
 
 #[repr(C)]
@@ -158,6 +163,13 @@ fn main() {
     }
     report("move", started, calls);
 
+    let mut applied: i64 = 0;
+    let started = Instant::now();
+    for _ in 0..calls {
+        applied = unsafe { fc_apply(advance, applied) };
+    }
+    report("callback", started, calls);
+
     println!(
         "checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {}",
         bytes[0]
@@ -167,7 +179,7 @@ fn main() {
         floats[7]
     );
     println!(
-        "checksum {:?} {:?} {} {} {}",
+        "checksum {:?} {:?} {} {} {} {applied}",
         point.x, point.y, triple.a, triple.b, triple.c
     );
 }

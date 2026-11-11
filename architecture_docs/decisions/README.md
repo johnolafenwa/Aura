@@ -102,3 +102,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 75. [ADR-0075: FFI passes C text, out-parameters, and nullable handles](0075-ffi-c-text-and-out-parameters.md) — Accepted; `cstr`, `mut` scalar out-parameters, `Handle | None` parameters, and `mut Handle | None`
 76. [ADR-0076: FFI passes a list of scalars as an array pointer](0076-ffi-array-pointers.md) — Accepted; `ptr[T]` and `mut ptr[T]` parameters over the elements of a scalar list
 77. [ADR-0077: FFI passes C structs by value and by pointer](0077-ffi-c-structs.md) — Accepted; `extern "C" class` structs in registers or memory by the C calling convention
+80. [ADR-0080: FFI passes a named function as a C callback](0080-ffi-callbacks.md) — Accepted; function-typed extern parameters over scalars, with a failure parked until the C function returns
