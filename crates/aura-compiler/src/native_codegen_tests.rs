@@ -8234,14 +8234,13 @@ def main() -> int32:
     let object = emit_unoptimized_object(&mir)
         .expect("a positional argument after a named slot should bind the next free parameter");
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
-    for runtime_symbol in ["aura_callable_"] {
-        assert!(
-            main_references
-                .iter()
-                .any(|symbol| symbol.contains(runtime_symbol)),
-            "mixed binding must call through the callable descriptor `{runtime_symbol}`: {main_references:?}"
-        );
-    }
+    let runtime_symbol = "aura_callable_";
+    assert!(
+        main_references
+            .iter()
+            .any(|symbol| symbol.contains(runtime_symbol)),
+        "mixed binding must call through the callable descriptor `{runtime_symbol}`: {main_references:?}"
+    );
 }
 
 #[test]
@@ -16838,8 +16837,7 @@ def main() -> int32:
         let mut param = writes.params[1].clone();
         param.ty = ty;
         let error = super::foreign::foreign_param_type(&param)
-            .err()
-            .expect("a pointer needs a list of scalars");
+            .expect_err("a pointer needs a list of scalars");
         assert!(error.contains("as an FFI pointer"), "{error}");
     }
 }

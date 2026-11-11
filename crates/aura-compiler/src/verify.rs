@@ -221,8 +221,13 @@ pub(crate) struct VerifyContext<'a> {
     classes: BTreeMap<&'a str, &'a MirClass>,
     enums: BTreeMap<&'a str, &'a MirEnum>,
     decls: BTreeMap<String, &'a FunctionDecl>,
+    extern_decls: BTreeMap<String, &'a FunctionDecl>,
     spec_defs: BTreeMap<String, &'a FunctionDecl>,
-    class_invariants: BTreeMap<String, Vec<ContractClause>>,
+    decl_modules_by_ptr: BTreeMap<usize, &'a str>,
+    spec_return_by_ptr: BTreeMap<usize, &'a Type>,
+    class_invariants: BTreeMap<String, (&'a str, Vec<ContractClause>)>,
+    module_paths: BTreeSet<String>,
+    module_aliases: BTreeMap<(String, String), String>,
     /// Each trait method's declaration, by `Trait.method`.
     trait_methods: BTreeMap<String, &'a FunctionDecl>,
     /// The trait method each implementation method implements, by MIR
@@ -238,84 +243,404 @@ pub(crate) struct VerifyContext<'a> {
 impl<'a> VerifyContext<'a> {
     fn new(program: &'a Program, module: &'a MirModule) -> Self {
         let mut decls = BTreeMap::new();
+        let mut extern_decls = BTreeMap::new();
         let mut spec_defs = BTreeMap::new();
+        let mut decl_modules_by_ptr = BTreeMap::new();
+        let mut spec_return_by_ptr = BTreeMap::new();
+        let mut callable_contracts = BTreeMap::new();
+        let mut class_invariants = BTreeMap::new();
+        let mut field_contracts = BTreeMap::new();
+        let mut trait_methods = BTreeMap::new();
+        let mut impl_methods = BTreeMap::new();
+        let mut module_paths = BTreeSet::new();
+        let mut module_aliases = BTreeMap::new();
+
+        for (alias, ns) in &program.imported_modules {
+            module_aliases.insert(
+                (program.module_name.clone(), alias.clone()),
+                ns.path.clone(),
+            );
+        }
+
         for function in program.extern_functions.values() {
             if let Some(decl) = &function.contract_decl {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(decl) as usize,
+                    function.module_name.as_str(),
+                );
                 decls.entry(function.decl.name.clone()).or_insert(decl);
+                if function.module_name != program.module_name {
+                    decls
+                        .entry(format!("{}::{}", function.module_name, function.decl.name))
+                        .or_insert(decl);
+                }
+                extern_decls
+                    .entry(function.decl.link_name().to_string())
+                    .or_insert(decl);
             }
         }
         for (name, function) in &program.functions {
+            decl_modules_by_ptr.insert(
+                std::ptr::from_ref(&function.decl) as usize,
+                function.module_name.as_str(),
+            );
             decls.insert(name.clone(), &function.decl);
+            if function.module_name != program.module_name {
+                decls.insert(
+                    format!("{}::{}", function.module_name, function.decl.name),
+                    &function.decl,
+                );
+            }
             if function.decl.spec {
+                spec_return_by_ptr.insert(
+                    std::ptr::from_ref(&function.decl) as usize,
+                    &function.signature.return_type,
+                );
                 spec_defs.insert(name.clone(), &function.decl);
-            }
-        }
-        let mut callable_contracts = BTreeMap::new();
-        for (name, alias) in program.aliases_in_scope() {
-            if let Some(info) = &alias.contract {
-                callable_contracts.insert(name.clone(), info);
-            }
-        }
-        let mut class_invariants = BTreeMap::new();
-        let mut field_contracts = BTreeMap::new();
-        for class in program.classes.values() {
-            for field in &class.decl.fields {
-                if let crate::ast::TypeRefKind::Named { name, args } = &field.ty.kind {
-                    if args.is_empty() && callable_contracts.contains_key(name) {
-                        field_contracts
-                            .insert((class.decl.name.clone(), field.name.clone()), name.clone());
-                    }
-                }
-            }
-            for (name, method) in &class.methods {
-                decls.insert(format!("{}.{name}", class.decl.name), &method.decl);
-                if method.decl.spec {
-                    spec_defs.insert(format!("{}.{name}", class.decl.name), &method.decl);
-                }
-                if name == crate::ast::CLASS_INVARIANT_METHOD {
-                    class_invariants.insert(
-                        class.decl.name.clone(),
-                        method
-                            .decl
-                            .contracts
-                            .iter()
-                            .filter(|clause| clause.kind == ContractKind::Invariant)
-                            .cloned()
-                            .collect(),
+                spec_defs.insert(format!("{}::{name}", program.module_name), &function.decl);
+                if function.module_name != program.module_name {
+                    spec_defs.insert(
+                        format!("{}::{}", function.module_name, function.decl.name),
+                        &function.decl,
                     );
                 }
             }
         }
+        for (name, alias) in program.aliases_in_scope() {
+            if let Some(info) = &alias.contract {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(&info.decl) as usize,
+                    info.module_name.as_str(),
+                );
+                callable_contracts.insert(name.clone(), info);
+            }
+        }
+
+        #[allow(clippy::too_many_arguments)]
+        fn register_class<'a>(
+            root_module_name: &str,
+            class: &'a crate::sema::ClassInfo,
+            decls: &mut BTreeMap<String, &'a FunctionDecl>,
+            spec_defs: &mut BTreeMap<String, &'a FunctionDecl>,
+            decl_modules_by_ptr: &mut BTreeMap<usize, &'a str>,
+            spec_return_by_ptr: &mut BTreeMap<usize, &'a Type>,
+            class_invariants: &mut BTreeMap<String, (&'a str, Vec<ContractClause>)>,
+            field_contracts: &mut BTreeMap<(String, String), String>,
+            callable_contracts: &BTreeMap<String, &'a crate::sema::FunctionInfo>,
+        ) {
+            let class_key = if class.module_name == root_module_name {
+                class.decl.name.clone()
+            } else {
+                format!("{}.{}", class.module_name, class.decl.name)
+            };
+            let mir_prefix = if class.module_name == root_module_name {
+                class.decl.name.clone()
+            } else {
+                format!("{}::{}", class.module_name, class.decl.name)
+            };
+            for field in &class.decl.fields {
+                if let crate::ast::TypeRefKind::Named { name, args } = &field.ty.kind {
+                    let qualified_alias = format!("{}::{name}", class.module_name);
+                    let resolved_alias = if callable_contracts.contains_key(&qualified_alias) {
+                        Some(qualified_alias)
+                    } else if callable_contracts.contains_key(name) {
+                        Some(name.clone())
+                    } else {
+                        None
+                    };
+                    if args.is_empty() {
+                        if let Some(alias_key) = resolved_alias {
+                            field_contracts
+                                .entry((class_key.clone(), field.name.clone()))
+                                .or_insert_with(|| alias_key.clone());
+                            field_contracts
+                                .entry((class.decl.name.clone(), field.name.clone()))
+                                .or_insert(alias_key);
+                        }
+                    }
+                }
+            }
+            for (name, method) in &class.methods {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(&method.decl) as usize,
+                    class.module_name.as_str(),
+                );
+                decls
+                    .entry(format!("{mir_prefix}.{name}"))
+                    .or_insert(&method.decl);
+                if class.module_name == root_module_name {
+                    decls.insert(format!("{}.{name}", class.decl.name), &method.decl);
+                }
+                if method.decl.spec {
+                    spec_return_by_ptr.insert(
+                        std::ptr::from_ref(&method.decl) as usize,
+                        &method.signature.return_type,
+                    );
+                    spec_defs
+                        .entry(format!("{class_key}.{name}"))
+                        .or_insert(&method.decl);
+                    spec_defs
+                        .entry(format!("{mir_prefix}.{name}"))
+                        .or_insert(&method.decl);
+                }
+                if name == crate::ast::CLASS_INVARIANT_METHOD {
+                    let clauses: Vec<ContractClause> = method
+                        .decl
+                        .contracts
+                        .iter()
+                        .filter(|clause| clause.kind == ContractKind::Invariant)
+                        .cloned()
+                        .collect();
+                    class_invariants
+                        .entry(class_key.clone())
+                        .or_insert((class.module_name.as_str(), clauses));
+                }
+            }
+        }
+
+        for class in program.classes.values() {
+            register_class(
+                &program.module_name,
+                class,
+                &mut decls,
+                &mut spec_defs,
+                &mut decl_modules_by_ptr,
+                &mut spec_return_by_ptr,
+                &mut class_invariants,
+                &mut field_contracts,
+                &callable_contracts,
+            );
+        }
         // A method of a trait implementation has the contract of its
         // declaration, found by its span: the implementation's own method,
         // or the trait's default.
-        let mut trait_methods = BTreeMap::new();
         for (trait_name, info) in &program.traits {
             for (method, method_info) in &info.methods {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(&method_info.decl) as usize,
+                    info.module_name.as_str(),
+                );
                 trait_methods.insert(format!("{trait_name}.{method}"), &method_info.decl);
             }
         }
-        let mut impl_methods = BTreeMap::new();
         for trait_impl in &program.trait_impls {
             for (method_name, method) in &trait_impl.methods {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(&method.decl) as usize,
+                    trait_impl.module_name.as_str(),
+                );
                 let trait_method = program
                     .traits
                     .get(&trait_impl.trait_name)
                     .and_then(|info| info.methods.get(method_name))
                     .map(|info| &info.decl);
                 impl_methods.insert(
-                    (method.decl.span.line, method.decl.span.column),
+                    (
+                        trait_impl.module_name.as_str(),
+                        method.decl.span.line,
+                        method.decl.span.column,
+                    ),
                     (&method.decl, trait_method),
                 );
             }
         }
+
+        #[allow(clippy::too_many_arguments)]
+        fn visit_namespace<'a>(
+            program: &'a Program,
+            ns: &'a crate::sema::ModuleNamespace,
+            visited: &mut BTreeSet<(String, usize)>,
+            module_paths: &mut BTreeSet<String>,
+            module_aliases: &mut BTreeMap<(String, String), String>,
+            decls: &mut BTreeMap<String, &'a FunctionDecl>,
+            extern_decls: &mut BTreeMap<String, &'a FunctionDecl>,
+            spec_defs: &mut BTreeMap<String, &'a FunctionDecl>,
+            decl_modules_by_ptr: &mut BTreeMap<usize, &'a str>,
+            spec_return_by_ptr: &mut BTreeMap<usize, &'a Type>,
+            callable_contracts: &mut BTreeMap<String, &'a crate::sema::FunctionInfo>,
+            class_invariants: &mut BTreeMap<String, (&'a str, Vec<ContractClause>)>,
+            field_contracts: &mut BTreeMap<(String, String), String>,
+            trait_methods: &mut BTreeMap<String, &'a FunctionDecl>,
+            impl_methods: &mut BTreeMap<
+                (&'a str, usize, usize),
+                (&'a FunctionDecl, Option<&'a FunctionDecl>),
+            >,
+        ) {
+            if !visited.insert((ns.path.clone(), std::ptr::from_ref(ns) as usize)) {
+                return;
+            }
+            module_paths.insert(ns.path.clone());
+            for (alias, child) in ns.imported_modules.iter().chain(&ns.modules) {
+                module_aliases.insert((ns.path.clone(), alias.clone()), child.path.clone());
+            }
+            for (name, alias) in ns.all_aliases.iter().chain(&ns.aliases) {
+                if let Some(info) = &alias.contract {
+                    decl_modules_by_ptr.insert(
+                        std::ptr::from_ref(&info.decl) as usize,
+                        info.module_name.as_str(),
+                    );
+                    callable_contracts
+                        .entry(format!("{}::{name}", ns.path))
+                        .or_insert(info);
+                    callable_contracts.entry(name.clone()).or_insert(info);
+                }
+            }
+            for extern_fn in ns
+                .extern_functions
+                .values()
+                .chain(ns.all_extern_functions.values())
+            {
+                if let Some(decl) = &extern_fn.contract_decl {
+                    decl_modules_by_ptr.insert(
+                        std::ptr::from_ref(decl) as usize,
+                        extern_fn.module_name.as_str(),
+                    );
+                    decls
+                        .entry(format!(
+                            "{}::{}",
+                            extern_fn.module_name, extern_fn.decl.name
+                        ))
+                        .or_insert(decl);
+                    extern_decls
+                        .entry(extern_fn.decl.link_name().to_string())
+                        .or_insert(decl);
+                }
+            }
+            for (local_name, function) in ns.all_functions.iter().chain(&ns.functions) {
+                decl_modules_by_ptr.insert(
+                    std::ptr::from_ref(&function.decl) as usize,
+                    function.module_name.as_str(),
+                );
+                decls
+                    .entry(format!("{}::{}", function.module_name, function.decl.name))
+                    .or_insert(&function.decl);
+                if function.decl.spec {
+                    spec_return_by_ptr.insert(
+                        std::ptr::from_ref(&function.decl) as usize,
+                        &function.signature.return_type,
+                    );
+                    spec_defs
+                        .entry(format!("{}::{}", function.module_name, function.decl.name))
+                        .or_insert(&function.decl);
+                    spec_defs
+                        .entry(format!("{}::{local_name}", ns.path))
+                        .or_insert(&function.decl);
+                }
+            }
+            for class in ns.all_classes.values().chain(ns.classes.values()) {
+                register_class(
+                    &program.module_name,
+                    class,
+                    decls,
+                    spec_defs,
+                    decl_modules_by_ptr,
+                    spec_return_by_ptr,
+                    class_invariants,
+                    field_contracts,
+                    callable_contracts,
+                );
+            }
+            for (trait_name, info) in ns.all_traits.iter().chain(&ns.traits) {
+                for (method, method_info) in &info.methods {
+                    decl_modules_by_ptr.insert(
+                        std::ptr::from_ref(&method_info.decl) as usize,
+                        info.module_name.as_str(),
+                    );
+                    trait_methods
+                        .entry(format!("{trait_name}.{method}"))
+                        .or_insert(&method_info.decl);
+                    trait_methods
+                        .entry(format!("{}.{}.{method}", info.module_name, info.decl.name))
+                        .or_insert(&method_info.decl);
+                }
+            }
+            for trait_impl in &ns.trait_impls {
+                for (method_name, method) in &trait_impl.methods {
+                    decl_modules_by_ptr.insert(
+                        std::ptr::from_ref(&method.decl) as usize,
+                        trait_impl.module_name.as_str(),
+                    );
+                    let short_trait = trait_impl
+                        .trait_name
+                        .rsplit('.')
+                        .next()
+                        .unwrap_or(&trait_impl.trait_name);
+                    let trait_method = [
+                        ns.all_traits.get(&trait_impl.trait_name),
+                        ns.traits.get(&trait_impl.trait_name),
+                        ns.all_traits.get(short_trait),
+                        ns.traits.get(short_trait),
+                        program.traits.get(&trait_impl.trait_name),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .next()
+                    .and_then(|info| info.methods.get(method_name))
+                    .map(|info| &info.decl);
+                    impl_methods
+                        .entry((
+                            trait_impl.module_name.as_str(),
+                            method.decl.span.line,
+                            method.decl.span.column,
+                        ))
+                        .or_insert((&method.decl, trait_method));
+                }
+            }
+            for child in ns.modules.values().chain(ns.imported_modules.values()) {
+                visit_namespace(
+                    program,
+                    child,
+                    visited,
+                    module_paths,
+                    module_aliases,
+                    decls,
+                    extern_decls,
+                    spec_defs,
+                    decl_modules_by_ptr,
+                    spec_return_by_ptr,
+                    callable_contracts,
+                    class_invariants,
+                    field_contracts,
+                    trait_methods,
+                    impl_methods,
+                );
+            }
+        }
+
+        let mut visited = BTreeSet::new();
+        for ns in program
+            .module_registry
+            .values()
+            .chain(program.imported_modules.values())
+        {
+            visit_namespace(
+                program,
+                ns,
+                &mut visited,
+                &mut module_paths,
+                &mut module_aliases,
+                &mut decls,
+                &mut extern_decls,
+                &mut spec_defs,
+                &mut decl_modules_by_ptr,
+                &mut spec_return_by_ptr,
+                &mut callable_contracts,
+                &mut class_invariants,
+                &mut field_contracts,
+                &mut trait_methods,
+                &mut impl_methods,
+            );
+        }
+
         let mut implemented = BTreeMap::new();
         for function in &module.functions {
             let name = spec::base_name(&function.name);
             if name.contains(" for ") {
-                if let Some((decl, trait_method)) =
-                    impl_methods.get(&(function.span.line, function.span.column))
-                {
+                if let Some((decl, trait_method)) = impl_methods.get(&(
+                    function.module_name.as_str(),
+                    function.span.line,
+                    function.span.column,
+                )) {
                     decls.entry(name.to_string()).or_insert(decl);
                     if let Some(trait_method) = trait_method {
                         implemented.insert(name.to_string(), *trait_method);
@@ -340,8 +665,13 @@ impl<'a> VerifyContext<'a> {
                 .map(|item| (item.name.as_str(), item))
                 .collect(),
             decls,
+            extern_decls,
             spec_defs,
+            decl_modules_by_ptr,
+            spec_return_by_ptr,
             class_invariants,
+            module_paths,
+            module_aliases,
             trait_methods,
             implemented,
             callable_contracts,
@@ -352,6 +682,14 @@ impl<'a> VerifyContext<'a> {
     /// The callable alias with a contract that field `field` of class
     /// `class` is declared as.
     pub(crate) fn field_contract(&self, class: &str, field: &str) -> Option<String> {
+        let normalized = class.replace("::", ".");
+        if let Some(found) = self
+            .field_contracts
+            .get(&(normalized, field.to_string()))
+            .cloned()
+        {
+            return Some(found);
+        }
         let class = class.rsplit("::").next().unwrap_or(class);
         self.field_contracts
             .get(&(class.to_string(), field.to_string()))
@@ -368,9 +706,13 @@ impl<'a> VerifyContext<'a> {
 
     /// The declaration of trait method `method` of `trait_name`.
     pub(crate) fn trait_method(&self, trait_name: &str, method: &str) -> Option<&'a FunctionDecl> {
-        let trait_name = trait_name.rsplit("::").next().unwrap_or(trait_name);
+        let normalized = trait_name.replace("::", ".");
+        if let Some(decl) = self.trait_methods.get(&format!("{normalized}.{method}")) {
+            return Some(*decl);
+        }
+        let short = trait_name.rsplit("::").next().unwrap_or(trait_name);
         self.trait_methods
-            .get(&format!("{trait_name}.{method}"))
+            .get(&format!("{short}.{method}"))
             .copied()
     }
 
@@ -386,6 +728,51 @@ impl<'a> VerifyContext<'a> {
     /// The declaration whose contract a call of MIR function `name` uses.
     pub(crate) fn decl(&self, name: &str) -> Option<&'a FunctionDecl> {
         self.decls.get(spec::base_name(name)).copied()
+    }
+
+    /// The contract declaration of an `extern` function by its C link symbol.
+    pub(crate) fn extern_decl(&self, symbol: &str) -> Option<&'a FunctionDecl> {
+        self.extern_decls.get(symbol).copied()
+    }
+
+    /// The module where `decl` was written, when recorded.
+    pub(crate) fn decl_module(&self, decl: &FunctionDecl) -> Option<&'a str> {
+        self.decl_modules_by_ptr
+            .get(&(std::ptr::from_ref(decl) as usize))
+            .copied()
+    }
+
+    /// The return type of `spec`, when `spec` is a `spec def`.
+    pub(crate) fn spec_return_type(&self, spec: &FunctionDecl) -> Option<&'a Type> {
+        self.spec_return_by_ptr
+            .get(&(std::ptr::from_ref(spec) as usize))
+            .copied()
+    }
+
+    /// Resolves `dotted` as an imported module path inside `current_module`.
+    pub(crate) fn resolve_module_path(&self, current_module: &str, dotted: &str) -> Option<String> {
+        if let Some(path) = self
+            .module_aliases
+            .get(&(current_module.to_string(), dotted.to_string()))
+        {
+            return Some(path.clone());
+        }
+        if let Some((head, tail)) = dotted.split_once('.') {
+            if let Some(prefix) = self
+                .module_aliases
+                .get(&(current_module.to_string(), head.to_string()))
+            {
+                let candidate = format!("{prefix}.{tail}");
+                if self.module_paths.contains(&candidate) {
+                    return Some(candidate);
+                }
+            }
+        }
+        if self.module_paths.contains(dotted) {
+            Some(dotted.to_string())
+        } else {
+            None
+        }
     }
 
     /// The alias and its contract, when `ty` names a callable alias that
@@ -414,8 +801,20 @@ impl<'a> VerifyContext<'a> {
         self.spec_defs.get(spec::base_name(name)).copied()
     }
 
-    pub(crate) fn class_invariant(&self, class: &str) -> Option<&[ContractClause]> {
-        self.class_invariants.get(class).map(Vec::as_slice)
+    pub(crate) fn spec_def_in(&self, module_name: &str, name: &str) -> Option<&'a FunctionDecl> {
+        let base = spec::base_name(name);
+        self.spec_defs
+            .get(&format!("{module_name}::{base}"))
+            .copied()
+            .or_else(|| self.spec_defs.get(base).copied())
+    }
+
+    pub(crate) fn class_invariant(&self, class: &str) -> Option<(&'a str, &[ContractClause])> {
+        let normalized = class.replace("::", ".");
+        self.class_invariants
+            .get(&normalized)
+            .or_else(|| self.class_invariants.get(class))
+            .map(|(module_name, clauses)| (*module_name, clauses.as_slice()))
     }
 
     /// Each field of class `name` and its type for `args`.
@@ -545,6 +944,24 @@ fn verified_function(program: &Program, cx: &VerifyContext<'_>, function: &MirFu
     !cx.decl(&function.name).is_some_and(|decl| decl.spec)
 }
 
+/// Default-argument thunks in the entry module and imported `lemma def`
+/// bodies are also checked so an ill-defined default or an unproved imported
+/// lemma cannot go unnoticed.
+fn auxiliary_verified_function(
+    program: &Program,
+    cx: &VerifyContext<'_>,
+    function: &MirFunction,
+) -> bool {
+    if function.module_name == program.module_name {
+        if let Some((owner, _)) = function.name.split_once("::__default_") {
+            return !cx.decl(owner).is_some_and(|decl| decl.spec);
+        }
+        return false;
+    }
+    !function.name.contains("::__default_")
+        && cx.decl(&function.name).is_some_and(|decl| decl.lemma)
+}
+
 /// Verifies every function of `program` whose MIR is `module`.
 pub fn verify_module(
     program: &Program,
@@ -559,7 +976,7 @@ pub fn verify_module(
         solver: format!("{} ({version})", command.program.display()),
         ..Report::default()
     };
-    let mut merged: BTreeMap<((usize, usize), ObligationKind, String), ObligationReport> =
+    let mut merged: BTreeMap<(String, (usize, usize), ObligationKind, String), ObligationReport> =
         BTreeMap::new();
     let mut proved_sites = BTreeSet::new();
     let mut erased_open = false;
@@ -569,7 +986,9 @@ pub fn verify_module(
     let mut sample_solver: Option<smt::Solver> = None;
     let trace = options.trace;
     for function in &module.functions {
-        if !verified_function(program, &cx, function) {
+        let is_primary = verified_function(program, &cx, function);
+        let is_auxiliary = !is_primary && auxiliary_verified_function(program, &cx, function);
+        if !is_primary && !is_auxiliary {
             continue;
         }
         if let Some(filter) = &options.function_filter {
@@ -577,8 +996,15 @@ pub fn verify_module(
                 continue;
             }
         }
-        report.functions += 1;
+        if is_primary {
+            report.functions += 1;
+        }
         let public = crate::mir::public_function_name(&function.name);
+        let module_order = if function.module_name == program.module_name {
+            String::new()
+        } else {
+            function.module_name.clone()
+        };
         let mut exec = exec::Exec::new(&cx, function);
         exec.prove_sites = options.prove_sites;
         let entry = exec.entry_state();
@@ -588,7 +1014,11 @@ pub fn verify_module(
         exec.assume_entry_parameters(&entry);
         exec.run(entry);
         if let Some(reason) = exec.unsupported.clone() {
+            if !is_primary {
+                erased_open |= cx.decl(&function.name).is_some_and(|decl| decl.lemma);
+            }
             let key = (
+                module_order,
                 (function.span.line, function.span.column),
                 ObligationKind::Assert,
                 "function body".to_string(),
@@ -611,7 +1041,9 @@ pub fn verify_module(
             .map(|dir| dir.join(format!("{}.json", cache_key(&version, options, &exec))));
         let statuses = match cache.as_deref().and_then(|path| read_cache(path, &exec)) {
             Some(statuses) => {
-                report.cached += 1;
+                if is_primary {
+                    report.cached += 1;
+                }
                 statuses
             }
             None => {
@@ -647,7 +1079,11 @@ pub fn verify_module(
                 *sites.entry(site).or_insert(true) &= status == Status::Proved;
                 continue;
             }
+            if !is_primary && status == Status::Proved {
+                continue;
+            }
             let key = (
+                module_order.clone(),
                 (obligation.span.line, obligation.span.column),
                 obligation.kind,
                 obligation.message.clone(),

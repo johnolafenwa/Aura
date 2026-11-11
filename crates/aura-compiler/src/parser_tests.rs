@@ -961,20 +961,13 @@ fn tuple_parsing_keeps_container_commas_and_rejects_unsupported_forms() {
         Pattern::Binding(BindingPattern { ref name, .. }) if name == "name"
     ));
 
-    for (source, expected) in [("()", "empty tuple patterns are not supported")] {
-        let error = parse_pattern_from(source)
-            .expect_err("unsupported tuple pattern syntax must produce a teaching diagnostic");
-        assert_eq!(error.message, expected);
-    }
+    let error = parse_pattern_from("()")
+        .expect_err("unsupported tuple pattern syntax must produce a teaching diagnostic");
+    assert_eq!(error.message, "empty tuple patterns are not supported");
 
-    for (source, expected) in [(
-        "def invalid(value: ()):\n    pass\n",
-        "empty tuple types are not supported",
-    )] {
-        let error = parse_item_from(source)
-            .expect_err("unsupported tuple type syntax must produce a teaching diagnostic");
-        assert_eq!(error.message, expected);
-    }
+    let error = parse_item_from("def invalid(value: ()):\n    pass\n")
+        .expect_err("unsupported tuple type syntax must produce a teaching diagnostic");
+    assert_eq!(error.message, "empty tuple types are not supported");
 
     for (source, expected) in [
         (

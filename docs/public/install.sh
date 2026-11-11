@@ -36,9 +36,21 @@ main() {
   tmpdir=$(mktemp -d "${TMPDIR:-/tmp}/aura-install.XXXXXX") || fail "could not create a temporary directory"
   trap 'rm -rf "$tmpdir"' EXIT HUP INT TERM
 
+  case "$base_url" in
+    https://*)
+      set -- --proto '=https' --tlsv1.2
+      ;;
+    file://*)
+      set -- --proto '=file'
+      ;;
+    *)
+      fail "refusing insecure AURA_INSTALL_BASE_URL '$base_url'; expected an https:// URL"
+      ;;
+  esac
+
   printf 'Downloading Aura %s for %s...\n' "$release_tag" "$target"
-  curl -fsSL "$base_url/$archive" -o "$tmpdir/$archive" || fail "could not download $archive"
-  curl -fsSL "$base_url/SHA256SUMS" -o "$tmpdir/SHA256SUMS" || fail "could not download SHA256SUMS"
+  curl -fsSL "$@" -o "$tmpdir/$archive" -- "$base_url/$archive" || fail "could not download $archive"
+  curl -fsSL "$@" -o "$tmpdir/SHA256SUMS" -- "$base_url/SHA256SUMS" || fail "could not download SHA256SUMS"
 
   (
     cd "$tmpdir"

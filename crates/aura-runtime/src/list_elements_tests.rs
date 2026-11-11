@@ -347,7 +347,7 @@ fn every_edit_matches_a_plain_vector_of_values() {
             for (index, value) in model.iter().enumerate() {
                 assert_eq!(
                     exact(&[list.get(index).unwrap().into_owned()]),
-                    exact(&[value.clone()])
+                    exact(std::slice::from_ref(value))
                 );
             }
             assert!(list.get(model.len()).is_none());
@@ -811,7 +811,9 @@ fn reads_iterate_in_both_directions_and_report_their_length() {
             exact(&[iter.nth_back(2).unwrap().into_owned()]),
             exact(&values[..1])
         );
-        assert!(iter.nth(0).is_none());
+        #[allow(clippy::iter_nth_zero)]
+        let none = iter.nth(0);
+        assert!(none.is_none());
         assert_eq!(
             exact(&list.iter().skip(2).map(Cow::into_owned).collect::<Vec<_>>()),
             exact(&values[2..])

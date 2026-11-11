@@ -354,3 +354,44 @@ fn a_value_leaving_the_middle_of_the_list_moves_the_last_into_its_slot() {
         free_box(value);
     }
 }
+
+#[test]
+fn generated_fast_path_preserves_adjacent_list_capacity_and_32bit_owned_bounds() {
+    let task = Task::new();
+    let value = new_box();
+    header(value).list_capacity.store(16, Ordering::Relaxed);
+    retain(&task, value);
+    assert_eq!(ref_count(value), 2);
+    assert_eq!(header(value).owned.get(), 1);
+
+    // With owned == 1, generated_release must refuse in-place release even when
+    // the adjacent 32-bit list_capacity header field is non-zero.
+    assert!(!task.release_in_place(value));
+    assert_eq!(ref_count(value), 2);
+    assert_eq!(header(value).owned.get(), 1);
+    assert_eq!(header(value).list_capacity.load(Ordering::Relaxed), 16);
+
+    // Normal in-place retain and release must update the 32-bit owned count without
+    // touching list_capacity.
+    assert!(task.retain_in_place(value));
+    assert_eq!(ref_count(value), 3);
+    assert_eq!(header(value).owned.get(), 2);
+    assert_eq!(header(value).list_capacity.load(Ordering::Relaxed), 16);
+
+    assert!(task.release_in_place(value));
+    assert_eq!(ref_count(value), 2);
+    assert_eq!(header(value).owned.get(), 1);
+    assert_eq!(header(value).list_capacity.load(Ordering::Relaxed), 16);
+
+    // Overflowing the 32-bit owned count must be refused rather than carrying into list_capacity.
+    header(value).owned.set(u32::MAX);
+    assert!(!task.retain_in_place(value));
+    assert_eq!(ref_count(value), 2);
+    assert_eq!(header(value).owned.get(), u32::MAX);
+    assert_eq!(header(value).list_capacity.load(Ordering::Relaxed), 16);
+
+    header(value).owned.set(1);
+    assert!(task.remove(value));
+    header(value).ref_count.store(1, Ordering::Relaxed);
+    free_box(value);
+}

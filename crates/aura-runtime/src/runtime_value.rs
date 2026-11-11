@@ -12326,14 +12326,15 @@ fn validate_requested_read_size(label: &str, count: usize) -> io::Result<usize> 
     Ok(count)
 }
 
-fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
-    if buffer_len >= MAX_STREAM_READ_BYTES {
-        return Err(read_all_limit_error(
-            "network read_line",
-            MAX_STREAM_READ_BYTES,
-        ));
+fn validate_read_line_capacity_with_limit(buffer_len: usize, limit: usize) -> io::Result<()> {
+    if buffer_len >= limit {
+        return Err(read_all_limit_error("network read_line", limit));
     }
     Ok(())
+}
+
+fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
+    validate_read_line_capacity_with_limit(buffer_len, MAX_STREAM_READ_BYTES)
 }
 
 fn push_limited_bytes_with_limit(
@@ -12404,16 +12405,39 @@ fn read_tls_config_file(path: &str, label: &str) -> io::Result<Vec<u8>> {
     read_std_file_with_limit(&mut file, label, MAX_TLS_CONFIG_BYTES)
 }
 
-fn validate_http_header_name(name: &str) -> io::Result<()> {
-    fn is_tchar(byte: u8) -> bool {
-        matches!(
-            byte,
-            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
-                | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
-        )
-    }
+fn is_http_tchar(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
+            | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+    )
+}
 
-    if name.is_empty() || name.bytes().any(|byte| !is_tchar(byte)) {
+fn validate_http_method(method: &str) -> io::Result<()> {
+    if method.is_empty() || method.bytes().any(|byte| !is_http_tchar(byte)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid HTTP method `{}`", method),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_status_code(status: i32) -> io::Result<()> {
+    if !(100..=999).contains(&status) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "HTTP status code must be between 100 and 999, found {}",
+                status
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_header_name(name: &str) -> io::Result<()> {
+    if name.is_empty() || name.bytes().any(|byte| !is_http_tchar(byte)) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("invalid HTTP header name `{}`", name),
@@ -13575,6 +13599,7 @@ fn build_http_request_bytes(
     body: &[u8],
     headers: Vec<(String, String)>,
 ) -> io::Result<Vec<u8>> {
+    validate_http_method(method)?;
     validate_http_headers(&headers)?;
     let mut path = if url.path().is_empty() {
         "/".to_string()
@@ -13663,6 +13688,7 @@ fn build_http_response_bytes(
     headers: Vec<(String, String)>,
     body: &[u8],
 ) -> io::Result<Vec<u8>> {
+    validate_http_status_code(status)?;
     validate_http_headers(&headers)?;
     let mut rendered =
         format!("HTTP/1.1 {} {}\r\n", status, http_reason_phrase(status)).into_bytes();
@@ -16399,16 +16425,19 @@ fn tls_stream_raw_fd(stream: &TlsStreamKind) -> i32 {
     }
 }
 
+const MAX_TLS_READ_STEP_BYTES: usize = 64 * 1024;
+
 fn tls_read_step(
     stream: TlsStreamKind,
     max_bytes: usize,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<(TlsStreamKind, io::Result<Vec<u8>>)> {
+    let step_bytes = max_bytes.min(MAX_TLS_READ_STEP_BYTES);
     let (stream, result) = run_protocol_state_step(
         stream,
         move |stream| {
-            let mut bytes = vec![0u8; max_bytes];
+            let mut bytes = vec![0u8; step_bytes];
             let count = match stream {
                 TlsStreamKind::Client(stream) => stream.read(&mut bytes),
                 TlsStreamKind::Server(stream) => stream.read(&mut bytes),
@@ -16697,11 +16726,21 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<String>> {
+        self.read_line_with_limit(MAX_STREAM_READ_BYTES, timeout, cancellation)
+    }
+
+    fn read_line_with_limit(
+        &self,
+        limit: usize,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<String>> {
         let deadline = deadline_from_timeout(timeout)?;
         let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
         let mut buffer = Vec::new();
         loop {
             check_deadline_and_cancellation(deadline, cancellation)?;
+            validate_read_line_capacity_with_limit(buffer.len(), limit)?;
             let stream = self.take_stream_for_step()?;
             let (stream, result) = tls_read_step(stream, 1, deadline, cancellation)?;
             let fd = tls_stream_raw_fd(&stream);
@@ -16738,9 +16777,10 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Vec<u8>> {
+        validate_requested_read_size("read_exact(...)", count)?;
         let deadline = deadline_from_timeout(timeout)?;
         let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
-        let mut output = Vec::with_capacity(count);
+        let mut output = Vec::with_capacity(count.min(MAX_TLS_READ_STEP_BYTES));
         while output.len() < count {
             check_deadline_and_cancellation(deadline, cancellation)?;
             let stream = self.take_stream_for_step()?;

@@ -8131,10 +8131,6 @@ fn function_value_analysis_preserves_symbol_contract_and_indirect_call_result() 
     assert!(!params[0].has_default);
     assert_eq!(params[1].name, "value");
     assert!(params[1].has_default);
-    assert!(
-        true,
-        "direct function symbols must retain their named/default call contract"
-    );
 }
 
 #[test]

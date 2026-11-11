@@ -361,11 +361,11 @@ pub(super) unsafe fn generated_retain(
             return false;
         }
         let ref_count = base.offset(layout.ref_count_offset as isize).cast::<u32>();
-        if ref_count.read() == u32::MAX {
+        let owned = base.offset(layout.owned_offset as isize).cast::<u32>();
+        if ref_count.read() == u32::MAX || owned.read() == u32::MAX {
             return false;
         }
         ref_count.write(ref_count.read() + 1);
-        let owned = word(layout.owned_offset);
         owned.write(owned.read() + 1);
     }
     true
@@ -393,7 +393,7 @@ pub(super) unsafe fn generated_release(
             return false;
         }
         let ref_count = base.offset(layout.ref_count_offset as isize).cast::<u32>();
-        let owned = word(layout.owned_offset);
+        let owned = base.offset(layout.owned_offset as isize).cast::<u32>();
         if owned.read() <= 1 || ref_count.read() <= 1 {
             return false;
         }

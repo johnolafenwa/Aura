@@ -9,6 +9,7 @@ const { createPositionMapper } = require("./positions");
 
 // A proof may take a while; a run past this is stopped and shows nothing.
 const VERIFY_TIMEOUT_MS = 60_000;
+const MAX_VERIFY_STDOUT_BYTES = 16 * 1024 * 1024;
 
 // What the editor shows for each status other than `proved`: the
 // diagnostic severity (2 warning, 3 information), the code `aura verify`
@@ -25,38 +26,63 @@ const OPEN_STATUSES = {
 
 // Runs the verifier on `source`, the text of the file at `filePath`. It
 // resolves the report, or null when there is none: no solver, a program
-// that does not check, a crash, or a run that took too long.
+// that does not check, a crash, a cancelled run, or a run that took too long.
 function runVerifier(
   command,
   filePath,
   source,
   spawnImpl = spawn,
-  timeoutMs = VERIFY_TIMEOUT_MS
+  timeoutMs = VERIFY_TIMEOUT_MS,
+  { signal = null, maxStdoutBytes = MAX_VERIFY_STDOUT_BYTES } = {}
 ) {
+  if (signal && signal.aborted) {
+    return Promise.resolve(null);
+  }
   return new Promise((resolve) => {
     let child;
     try {
       child = spawnImpl(
         command.cmd,
         [...command.args, "verify", "--format", "json", "--stdin", filePath],
-        { cwd: command.cwd, stdio: ["pipe", "pipe", "pipe"] }
+        {
+          cwd: command.cwd,
+          env: { AURA_OFFLINE: "1", ...process.env },
+          stdio: ["pipe", "pipe", "pipe"]
+        }
       );
     } catch {
       resolve(null);
       return;
     }
     let stdout = "";
-    const timer = setTimeout(() => child.kill(), timeoutMs);
+    let aborted = false;
+    const abortChild = () => {
+      aborted = true;
+      child.kill();
+    };
+    const timer = setTimeout(abortChild, timeoutMs);
+    if (signal) {
+      signal.addEventListener("abort", abortChild, { once: true });
+    }
+    const cleanup = () => {
+      clearTimeout(timer);
+      if (signal) {
+        signal.removeEventListener("abort", abortChild);
+      }
+    };
     child.stdout.on("data", (chunk) => {
       stdout += chunk.toString();
+      if (Buffer.byteLength(stdout, "utf8") > maxStdoutBytes) {
+        abortChild();
+      }
     });
     child.on("error", () => {
-      clearTimeout(timer);
+      cleanup();
       resolve(null);
     });
     child.on("close", () => {
-      clearTimeout(timer);
-      resolve(parseReport(stdout));
+      cleanup();
+      resolve(aborted ? null : parseReport(stdout));
     });
     child.stdin.on("error", () => {});
     child.stdin.end(source);
@@ -126,7 +152,7 @@ function verificationHints(report, source, range) {
   const byLine = new Map();
   for (const obligation of report.obligations) {
     const line = Math.max(0, obligation.line - 1);
-    const entry = byLine.get(line) || { proved: 0, open: 0, kinds: new Set() };
+    const entry = byLine.get(line) || { proved: 0, kinds: new Set(), open: 0 };
     if (obligation.status === "proved") {
       entry.proved += 1;
       entry.kinds.add(obligation.kind);
@@ -154,21 +180,36 @@ function verificationHints(report, source, range) {
 }
 
 // The newest verifier report of each document, by version: a run started
-// before the latest one is dropped, and a report is read only for the
-// version it verified.
+// before the latest one is cancelled and dropped, and a report is read only
+// for the version it verified.
 function createVerificationState() {
   const reports = new Map();
   const runs = new Map();
+  const controllers = new Map();
+  const cancel = (uri) => {
+    const controller = controllers.get(uri);
+    if (controller) {
+      controller.abort();
+      controllers.delete(uri);
+    }
+  };
   return {
     start(uri) {
+      cancel(uri);
       const run = (runs.get(uri) || 0) + 1;
       runs.set(uri, run);
+      controllers.set(uri, new AbortController());
       return run;
+    },
+    signal(uri) {
+      const controller = controllers.get(uri);
+      return controller ? controller.signal : null;
     },
     finish(uri, run, version, report) {
       if (runs.get(uri) !== run) {
         return false;
       }
+      controllers.delete(uri);
       reports.set(uri, { version, report });
       return true;
     },
@@ -177,6 +218,7 @@ function createVerificationState() {
       return entry && entry.version === version ? entry.report : null;
     },
     delete(uri) {
+      cancel(uri);
       reports.delete(uri);
       runs.delete(uri);
     }

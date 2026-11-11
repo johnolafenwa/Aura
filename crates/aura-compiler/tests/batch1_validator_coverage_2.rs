@@ -22,7 +22,7 @@ fn function_mut<'a>(encoded: &'a mut Value, name: &str) -> &'a mut Value {
         .unwrap_or_else(|| panic!("function `{name}` should exist"))
 }
 
-fn instruction_mut<'a>(function: &'a mut Value, matches: impl Fn(&Value) -> bool) -> &'a mut Value {
+fn instruction_mut(function: &mut Value, matches: impl Fn(&Value) -> bool) -> &mut Value {
     for block in function["blocks"].as_array_mut().unwrap() {
         for instruction in block["instructions"].as_array_mut().unwrap() {
             if matches(instruction) {
@@ -126,7 +126,7 @@ fn trait_method_referencing_a_missing_function_is_rejected() {
         .unwrap()
         .first_mut()
         .expect("the trait implementation should be declared");
-    let methods = implementation["methods"].as_object_mut().or_else(|| None);
+    let methods = implementation["methods"].as_object_mut();
     match methods {
         Some(methods) => {
             for (_, function_name) in methods.iter_mut() {

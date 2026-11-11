@@ -26,9 +26,11 @@ aura check app.au
 | `aura run --backend mir\|direct\|auto file.au` | Choose the execution backend explicitly. |
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
+| `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
+| `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
