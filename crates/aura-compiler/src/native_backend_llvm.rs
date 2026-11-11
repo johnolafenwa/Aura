@@ -35,7 +35,9 @@ use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
     CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
 };
-use inkwell::types::{BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType};
+use inkwell::types::{
+    AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType,
+};
 use inkwell::values::{
     AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PhiValue, PointerValue,
@@ -47,8 +49,8 @@ use units::{Partition, Placement};
 use super::{
     AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
     DebugEncoding, DebugRecord, DebugVariable, DefineError, Extension, FloatCC, FuncHandle,
-    FuncRef, FunctionBackend, FunctionBody, FunctionSource, Inst, IntCC, Linkage, MemFlags,
-    ModuleBackend, NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    FuncRef, FunctionBackend, FunctionBody, FunctionSource, Indirect, Inst, IntCC, Linkage,
+    MemFlags, ModuleBackend, NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -1613,7 +1615,15 @@ fn function_type<'ctx>(context: &'ctx Context, signature: &Signature) -> Functio
     let params = signature
         .params
         .iter()
-        .map(|ty| BasicMetadataTypeEnum::from(basic_type(context, *ty)))
+        .enumerate()
+        .map(|(index, ty)| {
+            // A struct in memory travels as a real pointer, which `byval`
+            // and `sret` need.
+            match signature.indirects.iter().any(|(at, _)| *at == index) {
+                true => context.ptr_type(AddressSpace::default()).into(),
+                false => BasicMetadataTypeEnum::from(basic_type(context, *ty)),
+            }
+        })
         .collect::<Vec<_>>();
     // Both conventions lower to the C convention. A private Aura function
     // with many results returns them as one struct, which LLVM passes back
@@ -2785,12 +2795,40 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     context.ptr_type(AddressSpace::default()),
                     "",
                 ))?;
+                let mut arguments = self.args(args)?;
+                for (index, _) in &signature.indirects {
+                    let address = built(self.builder.build_int_to_ptr(
+                        self.int(args[*index])?,
+                        context.ptr_type(AddressSpace::default()),
+                        "",
+                    ))?;
+                    arguments[*index] = address.into();
+                }
                 let call = built(self.builder.build_indirect_call(
                     function_type(context, signature),
                     pointer,
-                    &self.args(args)?,
+                    &arguments,
                     "",
                 ))?;
+                for (index, indirect) in &signature.indirects {
+                    let (name, size) = match indirect {
+                        Indirect::ByValue { size } => ("byval", *size),
+                        Indirect::Result { size } => ("sret", *size),
+                    };
+                    let location = AttributeLoc::Param(*index as u32);
+                    call.add_attribute(
+                        location,
+                        context.create_type_attribute(
+                            Attribute::get_named_enum_kind_id(name),
+                            context.i8_type().array_type(size).as_any_type_enum(),
+                        ),
+                    );
+                    call.add_attribute(
+                        location,
+                        context
+                            .create_enum_attribute(Attribute::get_named_enum_kind_id("align"), 8),
+                    );
+                }
                 for (index, extension) in signature.extensions.iter().enumerate() {
                     let name = match extension {
                         Extension::None => continue,

@@ -247,6 +247,19 @@ pub(crate) enum Extension {
     Zero,
 }
 
+/// How a pointer parameter of a foreign C signature carries a struct that
+/// the convention passes in memory.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum Indirect {
+    /// The call copies the `size` bytes the pointer names to the argument
+    /// area of the stack: LLVM's `byval`.
+    ByValue { size: u32 },
+    /// The callee writes its `size`-byte result through the pointer, which
+    /// travels where the convention puts a struct result's address: LLVM's
+    /// `sret`.
+    Result { size: u32 },
+}
+
 /// A function signature.
 #[derive(Clone, Debug, Eq, PartialEq)]
 pub(crate) struct Signature {
@@ -256,6 +269,9 @@ pub(crate) struct Signature {
     /// The extension of each parameter of a foreign C signature, in order.
     /// A signature that leaves it empty extends nothing.
     pub(crate) extensions: Vec<Extension>,
+    /// The pointer parameters of a foreign C signature that carry a struct
+    /// in memory, by index. Each is an `I64` in `params`.
+    pub(crate) indirects: Vec<(usize, Indirect)>,
 }
 
 impl Signature {
@@ -265,6 +281,7 @@ impl Signature {
             params: Vec::new(),
             returns: Vec::new(),
             extensions: Vec::new(),
+            indirects: Vec::new(),
         }
     }
 }
