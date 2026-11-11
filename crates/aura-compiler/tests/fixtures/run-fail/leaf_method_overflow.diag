@@ -1,0 +1,6 @@
+error[AU4002]: integer value `9223372036854775810` does not fit in `int64`
+ --> crates/aura-compiler/tests/fixtures/run-fail/leaf_method_overflow.au:6:9
+  |
+6 |         self.count += by
+  |         ^
+  = note: Aura call chain (innermost first): Counter.bump at 5:5 -> main at 9:1

@@ -17296,3 +17296,187 @@ fn element_method_call_fixtures_emit_directly() {
         emit_host_object(&mir).expect("element call fixture should emit directly");
     }
 }
+
+const LEAF_METHODS_SOURCE: &str = r#"
+class Tally:
+    count: int64
+    step: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by * self.step
+
+    def scaled(self, factor: int64) -> int64:
+        return self.count * factor
+
+    def halved(self) -> int64:
+        return self.count // 2
+
+class Counter:
+    name: str
+    count: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by
+
+    def doubled(self) -> int64:
+        return self.count * 2
+
+    def rename(mut self, name: str) -> None:
+        self.name = name.clone()
+
+    def label(self) -> str:
+        return self.name.clone()
+
+    def reset(mut self) -> None:
+        self = Counter(name="reset", count=0)
+
+    def bump_twice(mut self) -> None:
+        self.bump(1)
+        self.bump(1)
+
+class Pair[T]:
+    left: T
+    count: int64
+
+    def bump(mut self) -> None:
+        self.count += 1
+
+def forward(counter: mut Counter) -> None:
+    counter.bump(1)
+
+def main() -> None:
+    mut tally = Tally(count=1, step=2)
+    tally.bump(1)
+    print(tally.scaled(2) + tally.halved())
+    mut counter = Counter(name="a", count=0)
+    counter.bump(1)
+    forward(counter)
+    counter.rename("b")
+    counter.bump_twice()
+    print(f"{counter.label()} {counter.doubled()}")
+    counter.reset()
+    mut pair = Pair[str](left="x", count=0)
+    pair.bump()
+    print(pair.count)
+"#;
+
+#[test]
+fn a_leaf_with_a_mutable_receiver_gets_a_frameless_second_body() {
+    let mir = lower_source_to_mir(LEAF_METHODS_SOURCE).expect("the leaf methods should lower");
+    let classes = mir
+        .classes
+        .iter()
+        .map(|class| (class.name.clone(), class.clone()))
+        .collect::<HashMap<_, _>>();
+    let function = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    // A `mut self` leaf keeps its framed body for calls that hand a sink
+    // over, and gets a second one.
+    for name in ["Tally.bump", "Counter.bump"] {
+        assert!(super::leaf_variant(function(name), &classes), "{name}");
+        assert!(!super::frameless_leaf(function(name), &classes), "{name}");
+        assert!(super::small_leaf(function(name)), "{name}");
+    }
+    // A leaf that only reads its receiver needs one body, with no frame.
+    for name in ["Tally.scaled", "Counter.doubled"] {
+        assert!(super::frameless_leaf(function(name), &classes), "{name}");
+        assert!(!super::leaf_variant(function(name), &classes), "{name}");
+    }
+    // A division traps in the runtime, a text field is a box of its own,
+    // an assignment to `self` replaces the box, a call needs the frame,
+    // and a generic class keeps a symbolic layout.
+    for name in [
+        "Tally.halved",
+        "Counter.rename",
+        "Counter.label",
+        "Counter.reset",
+        "Counter.bump_twice",
+        "Pair.bump",
+        "forward",
+        "main",
+    ] {
+        assert!(!super::leaf_variant(function(name), &classes), "{name}");
+        assert!(!super::frameless_leaf(function(name), &classes), "{name}");
+    }
+    assert_eq!(
+        super::boxed_receiver_fields(function("Counter.bump"), &classes),
+        Some(["count"].into_iter().collect())
+    );
+    assert_eq!(
+        super::boxed_receiver_fields(function("Tally.bump"), &classes),
+        None
+    );
+    assert_eq!(
+        super::boxed_receiver_fields(function("forward"), &classes),
+        None
+    );
+    assert_eq!(
+        super::mangle_leaf_symbol("Tally.bump"),
+        "aura_fn_Tally_bump__leaf"
+    );
+
+    // Unoptimized, each second body is still in the object.
+    let object = crate::native_backend::without_optimization(|| emit_host_object(&mir))
+        .expect("the leaf methods should emit");
+    let defined = object_defined_aura_functions(&object);
+    for name in ["aura_fn_Tally_bump__leaf", "aura_fn_Counter_bump__leaf"] {
+        assert!(defined.contains(name), "{name}: {defined:?}");
+    }
+    for name in [
+        "aura_fn_Tally_scaled__leaf",
+        "aura_fn_Counter_rename__leaf",
+        "aura_fn_Counter_reset__leaf",
+        "aura_fn_Pair_bump__leaf",
+    ] {
+        assert!(!defined.contains(name), "{name}: {defined:?}");
+    }
+    emit_host_object(&mir).expect("the leaf methods should emit optimized");
+}
+
+#[test]
+fn a_large_leaf_is_left_to_the_optimizer() {
+    let mut source = String::from("def spread(n: int64) -> int64:\n    mut total = n\n");
+    for step in 0..40 {
+        source.push_str(&format!("    total = total + {step}\n"));
+    }
+    source.push_str("    return total\n\ndef main() -> None:\n    print(spread(1))\n");
+    let mir = lower_source_to_mir(&source).expect("the long leaf should lower");
+    let classes = HashMap::new();
+    let spread = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "spread")
+        .expect("spread should lower");
+    assert!(super::frameless_leaf(spread, &classes));
+    assert!(!super::small_leaf(spread));
+    emit_host_object(&mir).expect("the long leaf should emit");
+}
+
+#[test]
+fn a_leaf_with_a_loop_is_left_to_the_optimizer() {
+    let source = "def triangle(n: int64) -> int64:\n    mut total = 0\n    mut i = 0\n    while i < n:\n        total = total + i\n        i = i + 1\n    return total\n\ndef main() -> None:\n    print(triangle(4))\n";
+    let mir = lower_source_to_mir(source).expect("the loop should lower");
+    let triangle = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "triangle")
+        .expect("triangle should lower");
+    assert!(!super::small_leaf(triangle));
+    emit_host_object(&mir).expect("the loop should emit");
+}
+
+#[test]
+fn leaf_method_call_fixtures_emit_directly() {
+    for source in [
+        include_str!("../tests/fixtures/run-pass/leaf_method_calls.au"),
+        include_str!("../tests/fixtures/run-fail/leaf_method_overflow.au"),
+        include_str!("../tests/fixtures/run-fail/leaf_plain_method_overflow.au"),
+    ] {
+        let mir = lower_source_to_mir(source).expect("leaf call fixture should lower");
+        emit_host_object(&mir).expect("leaf call fixture should emit directly");
+    }
+}

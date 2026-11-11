@@ -1,0 +1,14 @@
+class Counter:
+    name: str
+    count: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by
+
+
+def main() -> None:
+    mut counters: list[Counter] = [Counter(name="a", count=9223372036854775800)]
+    for i in range(len(counters)):
+        counters[i].bump(5)
+    print(counters[0].count)
+    counters[0].bump(5)
