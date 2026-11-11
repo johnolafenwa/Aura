@@ -570,6 +570,52 @@ double fx_mix_all(Vec2 a, IPair p, Mixed m, Triple t, Vec2 b, Wide w) {
         + b.x + b.y + (double)(w.lo + w.hi);
 }
 Triple fx_triple_from(Wide w, Vec2 v) { Triple r = {w.lo, w.hi, (int64_t)(v.x + v.y)}; return r; }
+int64_t fx_fold(int64_t (*step)(int64_t, int32_t), int32_t count) {
+    int64_t total = 0;
+    for (int32_t i = 1; i <= count; i++) total = step(total, i);
+    return total;
+}
+double fx_integrate(double (*f)(double), double lo, double hi, int32_t steps) {
+    double width = (hi - lo) / steps, sum = 0.0;
+    for (int32_t i = 0; i < steps; i++) sum += f(lo + (i + 0.5) * width) * width;
+    return sum;
+}
+typedef void (*fx_visitor)(uint8_t, int16_t, uint16_t, uint32_t, uint64_t, int8_t, float, bool);
+void fx_visit(fx_visitor visit) {
+    visit(255, -32768, 65535, 4294967295u, 18446744073709551615ull, -128, 0.25f, true);
+    visit(0, 32767, 0, 7, 9, 127, -1.5f, false);
+}
+int64_t fx_count_if(bool (*test)(int32_t), const int32_t *values, int64_t count) {
+    int64_t found = 0;
+    for (int64_t i = 0; i < count; i++) found += test(values[i]) ? 1 : 0;
+    return found;
+}
+double fx_step_all(void (*next)(int32_t *, double *, bool *), int32_t count) {
+    int32_t slot = 1; double sum = 0.5; bool odd = false; int32_t flips = 0;
+    for (int32_t i = 0; i < count; i++) { next(&slot, &sum, &odd); flips += odd; }
+    return slot + sum + 1000.0 * flips;
+}
+int64_t fx_narrow_results(int8_t (*a)(int8_t), uint16_t (*b)(uint16_t), int16_t (*c)(int16_t),
+                          uint8_t (*d)(uint8_t), int32_t (*e)(int32_t), uint32_t (*f)(uint32_t)) {
+    return (int64_t)a(-100) + (int64_t)b(65000) + (int64_t)c(-30000) + (int64_t)d(200)
+        + (int64_t)e(-2000000000) + (int64_t)f(4000000000u);
+}
+float fx_blend(float (*mix)(float, float)) { return mix(1.5f, 2.25f) + mix(-4.0f, 0.5f); }
+uint64_t fx_big(uint64_t (*f)(uint64_t)) { return f(18446744073709551000ull); }
+int32_t fx_null_slot(int32_t (*f)(int32_t *)) { int32_t v = 5; return f(NULL) * 100 + f(&v) + v; }
+bool fx_truthy(bool (*f)(bool)) {
+    bool (*raw)(uint8_t) = (bool (*)(uint8_t))f;
+    return raw(7);
+}
+static void (*fx_kept)(int32_t) = NULL;
+void fx_keep(void (*f)(int32_t)) { fx_kept = f; }
+void fx_fire(int32_t value) { if (fx_kept) fx_kept(value); }
+int32_t fx_twice(int32_t (*f)(int32_t), int32_t value) { return f(f(value)); }
+int32_t fx_until_failure(int32_t (*f)(int32_t)) {
+    int32_t last = 0;
+    for (int32_t i = 3; i >= -1; i--) last = f(i);
+    return last;
+}
 Flag fx_bad_struct_flag(void) { Flag f; *(uint8_t *)&f.ok = 9; return f; }
 void fx_bad_struct_out(Flag *f) { *(uint8_t *)&f->ok = 9; }
 "#;
@@ -736,6 +782,35 @@ extern "C" def fx_spill_floats(
 extern "C" def fx_mix_all(a: Vec2, p: IPair, m: Mixed, t: Triple, b: Vec2, w: Wide) -> float64
 extern "C" def fx_triple_from(w: Wide, v: Vec2) -> Triple
 extern "C" def fx_bad_struct_flag() -> Flag
+extern "C" def fx_fold(step: def(total: int64, item: int32) -> int64, count: int32) -> int64
+extern "C" def fx_integrate(
+    f: def(x: float64) -> float64, lo: float64, hi: float64, steps: int32
+) -> float64
+extern "C" def fx_visit(
+    visit: def(
+        a: uint8, b: int16, c: uint16, d: uint32, e: uint64, f: int8, g: float32, h: bool
+    ) -> None
+) -> None
+extern "C" def fx_count_if(test: def(value: int32) -> bool, values: ptr[int32], count: int64) -> int64
+extern "C" def fx_step_all(
+    next: def(slot: mut int32, sum: mut float64, odd: mut bool) -> None, count: int32
+) -> float64
+extern "C" def fx_narrow_results(
+    a: def(v: int8) -> int8, b: def(v: uint16) -> uint16, c: def(v: int16) -> int16,
+    d: def(v: uint8) -> uint8, e: def(v: int32) -> int32, f: def(v: uint32) -> uint32
+) -> int64
+extern "C" def fx_blend(mix: def(a: float32, b: float32) -> float32) -> float32
+extern "C" def fx_big(f: def(v: uint64) -> uint64) -> uint64
+extern "C" def fx_null_slot(f: def(slot: mut int32) -> int32) -> int32
+extern "C" def fx_truthy(f: def(v: bool) -> bool) -> bool
+extern "C" def fx_keep(f: def(value: int32) -> None) -> None
+extern "C" def fx_fire(value: int32) -> None
+extern "C" def fx_twice(f: def(value: int32) -> int32, value: int32) -> int32
+extern "C" def fx_until_failure(f: def(value: int32) -> int32) -> int32
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
 extern "C" def fx_bad_struct_out(f: mut Flag) -> None
 "#;
 
@@ -1153,6 +1228,146 @@ def main() -> int32:
         100\n-1000\n7\n3.0\n20.0\n27.0\n47.5\n1000.0\n-2000.0\n";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn callbacks_run_aura_functions_from_c_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+def add_square(total: int64, item: int32) -> int64:
+    return total + ((item * item) as int64)
+
+def parabola(x: float64) -> float64:
+    return 3.0 * x * x
+
+def show(a: uint8, b: int16, c: uint16, d: uint32, e: uint64, f: int8, g: float32, h: bool) -> None:
+    print(f"{a} {b} {c} {d} {e} {f} {g} {h}")
+
+def is_even(value: int32) -> bool:
+    return value % 2 == 0
+
+def advance(slot: mut int32, sum: mut float64, odd: mut bool) -> None:
+    sum += slot as float64
+    slot = slot * 2
+    odd = not odd
+
+def same_i8(v: int8) -> int8:
+    return v
+
+def same_u16(v: uint16) -> uint16:
+    return v
+
+def same_i16(v: int16) -> int16:
+    return v
+
+def same_u8(v: uint8) -> uint8:
+    return v
+
+def same_i32(v: int32) -> int32:
+    return v
+
+def same_u32(v: uint32) -> uint32:
+    return v
+
+def mix(a: float32, b: float32) -> float32:
+    return a * b
+
+def bump(v: uint64) -> uint64:
+    return v + 615
+
+def read_slot(slot: mut int32) -> int32:
+    seen = slot
+    slot = slot + 1
+    return seen
+
+def negate(v: bool) -> bool:
+    return not v
+
+def announce(value: int32) -> None:
+    print(f"kept {value}")
+
+def halve_with_c(value: int32) -> int32:
+    return (fx_widen_i32(value) as int32) // 2
+
+def nested(value: int32) -> int32:
+    return fx_twice(halve_with_c, value) + 1
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    print(fx_fold(add_square, 10))
+    print(fx_integrate(parabola, 0.0, 2.0, 1000) > 7.99)
+    fx_visit(show)
+    values: list[int32] = [1, 2, 4, 7, 10, 12]
+    print(fx_count_if(is_even, values, 6))
+    print(fx_step_all(advance, 5))
+    print(fx_narrow_results(same_i8, same_u16, same_i16, same_u8, same_i32, same_u32))
+    print(fx_blend(mix))
+    print(fx_big(bump))
+    print(fx_null_slot(read_slot))
+    print(fx_truthy(negate))
+    fx_fire(1)
+    fx_keep(announce)
+    fx_fire(2)
+    fx_fire(3)
+    print(fx_twice(nested, 100))
+    mut sorted: list[int32] = [3, 9, -4, 12, 0, 9]
+    qsort(sorted, 6, 4, descending)
+    print(sorted)
+    mut round = 0
+    mut total: int64 = 0
+    while round < 2000:
+        total += fx_fold(add_square, 3)
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "callbacks on the interpreter");
+    assert_success(&direct, "callbacks in a built program");
+    let expected = "385\ntrue\n\
+        255 -32768 65535 4294967295 18446744073709551615 -128 0.25 true\n\
+        0 32767 0 7 9 127 -1.5 false\n\
+        4\n3063.5\n2000035100\n1.375\n18446744073709551615\n11\nfalse\n\
+        kept 2\nkept 3\n7\n[12, 9, 9, 3, 0, -4]\n28000\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn a_failing_callback_fails_its_foreign_call_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+def reciprocal(value: int32) -> int32:
+    print(f"called with {value}")
+    return 12 // value
+
+def main() -> int32:
+    print(fx_until_failure(reciprocal))
+    print("not reached")
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    for (backend, output) in [("mir", &mir), ("direct", &direct)] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(!output.status.success(), "{backend}: {stdout}");
+        assert!(
+            stdout.starts_with("called with 3\ncalled with 2\ncalled with 1\ncalled with 0\n"),
+            "{backend}: {stdout}"
+        );
+        assert!(!stdout.contains("called with -1"), "{backend}: {stdout}");
+        assert!(!stdout.contains("not reached"), "{backend}: {stdout}");
+        assert!(stderr.contains("AU4"), "{backend}: {stderr}");
+        assert!(stderr.contains("division by zero"), "{backend}: {stderr}");
+    }
 }
 
 #[test]
