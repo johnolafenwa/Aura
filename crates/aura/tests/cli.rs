@@ -54,6 +54,65 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
 }
 
 #[test]
+fn reference_streaming_agent_package_has_pinned_output_on_both_backends() {
+    let package = repo_root().join("examples/agents/streaming_agent");
+    let expected = fs::read(package.join("stdout.txt")).expect("pinned streaming agent output");
+    let temp = TempDir::new("aura-reference-streaming-agent");
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    for name in [
+        "Aura.toml",
+        "Aura.lock",
+        "src/main.au",
+        "src/claude.au",
+        "src/mock.au",
+    ] {
+        fs::copy(package.join(name), temp.path().join(name)).unwrap();
+    }
+    let binary = temp.path().join("streaming-agent");
+    let build = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&binary)
+        .arg("src/main.au")
+        .output()
+        .expect("build streaming agent package");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    for backend in ["mir", "direct"] {
+        let mut command = if backend == "mir" {
+            let mut command = Command::new(aura_bin());
+            command
+                .current_dir(temp.path())
+                .args(["run", "--backend", "mir", "src/main.au"]);
+            command
+        } else {
+            generated_binary(&binary)
+        };
+        // With no key the agent talks to its own loopback stand-in for the
+        // API, so the run needs no network.
+        command.env_remove("ANTHROPIC_API_KEY");
+        let output = command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+            "reference streaming agent package",
+        );
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&expected),
+            "{backend} streaming agent output"
+        );
+    }
+}
+
+#[test]
 fn reference_tool_runner_package_has_pinned_output_on_both_backends() {
     let package = repo_root().join("examples/agents/tool_runner");
     let expected = fs::read(package.join("stdout.txt")).expect("pinned reference agent output");

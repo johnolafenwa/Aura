@@ -13,7 +13,10 @@ Last updated: 2026-11-11
 - Done: the `regex` module (ADR-0078) and the `time` module (ADR-0079).
 - Done: the `http` client module (ADR-0082), which replaces
   `net.http_request_*`.
-- Remaining: the streaming reference agent and a faster `read_line()`.
+- Done: the reference streaming agent, `examples/agents/streaming_agent`.
+  Its run against the live API is not exercised by the tests, which use
+  the package's loopback stand-in.
+- Remaining: a faster `read_line()`.
 
 ## Release 0.14.0-preview (in progress)
 

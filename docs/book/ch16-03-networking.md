@@ -257,6 +257,10 @@ closes its connection. A program that wants the body calls `text()` or
 `read_lines`, or, for a server that streams events, `read_event`. The
 [HTTP Module](/manual/http) page has the details.
 
+For a complete program built on a streamed response, see
+`examples/agents/streaming_agent` in the repository. It reads a model's
+reply event by event and prints the text as it arrives.
+
 Notice the two different ways a check can fail here, as with commands. A
 response with status `404` or `500` is a successful request that brought bad
 news, and we report it from the `Ok` arm. A refused connection, a DNS failure,

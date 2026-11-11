@@ -151,6 +151,11 @@ def print_events(url: str) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
+The
+[reference streaming agent](https://github.com/johnolafenwa/Aura/tree/main/examples/agents/streaming_agent)
+reads a model's reply this way. It prints the text as it arrives, runs the
+tool the model calls, and sends the result back.
+
 ## Connections
 
 A response owns its connection until the body has been read to its end.

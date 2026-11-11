@@ -15191,6 +15191,11 @@ def print_events(url: str) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
+The
+[reference streaming agent](https://github.com/johnolafenwa/Aura/tree/main/examples/agents/streaming_agent)
+reads a model's reply this way. It prints the text as it arrives, runs the
+tool the model calls, and sends the result back.
+
 ## Connections
 
 A response owns its connection until the body has been read to its end.
@@ -48079,6 +48084,10 @@ closes its connection. A program that wants the body calls `text()` or
 `bytes()`, or reads it in pieces with `read_chunk`, `read_line`,
 `read_lines`, or, for a server that streams events, `read_event`. The
 [HTTP Module](/manual/http) page has the details.
+
+For a complete program built on a streamed response, see
+`examples/agents/streaming_agent` in the repository. It reads a model's
+reply event by event and prints the text as it arrives.
 
 Notice the two different ways a check can fail here, as with commands. A
 response with status `404` or `500` is a successful request that brought bad

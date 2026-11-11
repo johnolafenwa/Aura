@@ -178,3 +178,32 @@ CLI tests.
   when ownership is stripped and inserted again
   (`stripping_undoes_the_lends_and_the_pass_makes_them_again`).
   `Response.header` avoids the pattern.
+
+## Step 4: the reference streaming agent (work completed, 2026-11-11)
+
+`examples/agents/streaming_agent` is a package of three modules.
+`claude.au` is a streaming client for the Claude Messages API on the
+`http` module. `main.au` holds one tool and the conversation loop.
+`mock.au` is a loopback stand-in for the API that streams a scripted
+reply, used when `ANTHROPIC_API_KEY` is not set.
+
+- The client reads the reply with `Response.read_event()` and builds text,
+  thinking, and tool call blocks from their deltas.
+- A tool call's input is decoded against a derived `json.Codec` class
+  before the tool runs. A bad input goes back as an error result.
+- The loop handles `tool_use`, `pause_turn`, and every other stop reason,
+  and sends the assistant turn back unchanged.
+- The CLI test
+  `reference_streaming_agent_package_has_pinned_output_on_both_backends`
+  checks both backends against `stdout.txt`.
+
+Not verified: a run against the live API. No key is available where this
+was built, so only the stand-in path has run.
+
+## Gaps found in step 4, left for later
+
+- `json.Value` has no `clone()`. The client keeps blocks it does not
+  build itself as JSON text and parses them again to send them back.
+- A conversation is a `list[str]` of JSON messages for the same reason.
+- There is no JSON object literal shorter than
+  `json.Value.Object({...})` with each value wrapped by hand.

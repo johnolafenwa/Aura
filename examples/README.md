@@ -84,6 +84,7 @@ executable size.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `tool_runner/` | The version-2 reference agent package. See the notes below. | Matches `tool_runner/stdout.txt` |
+| `streaming_agent/` | The reference streaming agent package: a model reply read as it arrives over `http`, with a tool call. See the notes below. | Matches `streaming_agent/stdout.txt` |
 | `control_plane_foundations.au` | Typed JSON and TOML metadata, path operations, process-local counters, and structured log and trace events | The artifact path, deterministic JSON, TOML validity, and the counter value |
 | `retry_with_backoff.au` | `control.retry` with an immediate first attempt, zero-delay retries, eventual success, and exact final-error exhaustion | `42`, `attempt 2`, `3`, `2` |
 | `retrying_network_worker.au` | An application-level HTTP retry policy over a loopback server. See the notes below. | `recover request 1`, `recover retry 4ms`, `recover request 2`, `recover result 200`, `rate request 1`, `rate retry 6ms`, `rate request 2`, `rate result 429`, `exhaust request 1`, `exhaust retry 3ms`, `exhaust request 2`, `exhaust retry 5ms`, `exhaust request 3`, `exhaust result 503`, `requests 7` |
@@ -105,6 +106,20 @@ It uses no network, filesystem, or process access. Both backends match
 `tool_runner/stdout.txt`. Run it with
 `aura run --backend mir examples/agents/tool_runner/src/main.au`, or select
 `direct`.
+
+**`streaming_agent/`** shows:
+
+- a streaming client for the Claude Messages API on the `http` module
+- a reply read with `Response.read_event()` and printed as it arrives
+- content blocks built from their deltas, with a tool call's input
+  checked against a derived `json.Codec` class before the tool runs
+- a conversation loop that sends tool results back until the model stops
+- a loopback stand-in for the API, so the program runs with no network
+  and no key
+
+With `ANTHROPIC_API_KEY` set it talks to the API. Without it, both backends
+match `streaming_agent/stdout.txt`. Run it with
+`aura run examples/agents/streaming_agent/src/main.au`.
 
 **`retrying_network_worker.au`** retries only `503`, keeps a terminal `429`,
 and returns the final `503` once the attempt budget runs out. At that point it

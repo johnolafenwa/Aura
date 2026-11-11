@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- New example package `examples/agents/streaming_agent`, the reference
+  streaming agent. It sends a conversation to the Claude Messages API with
+  the `http` module, prints the reply as it arrives, runs the tool the
+  model calls, and sends the result back. With no `ANTHROPIC_API_KEY` it
+  runs against a loopback stand-in for the API, and both backends match
+  its pinned output.
 - New `http` module, the HTTP client. `http.get(url)`, `http.post(...)`,
   `http.request(...)`, and `http.request_bytes(...)` return an
   `http.Response` as soon as the status and headers arrive. The body is
