@@ -5509,3 +5509,17 @@ fn extern_symbol_clauses_reject_missing_and_malformed_names() {
         );
     }
 }
+
+#[test]
+fn public_copy_class_is_a_class_and_public_constants_still_parse() {
+    let module = parse("public copy class Point:\n    x: int64\n\npublic copy = 3\n")
+        .expect("a public copy class should parse");
+    assert!(matches!(
+        module.items.as_slice(),
+        [Item::Class(class_decl)] if class_decl.public && class_decl.copy && class_decl.name == "Point"
+    ));
+    assert!(matches!(
+        module.constants.as_slice(),
+        [constant] if constant.public && constant.name == "copy"
+    ));
+}

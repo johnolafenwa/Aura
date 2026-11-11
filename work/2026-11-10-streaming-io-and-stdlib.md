@@ -65,3 +65,68 @@ How the batch read got there, from a first version at 480 ms:
 ## Verification
 
 Recorded with the pull request.
+
+## Step 2a: `regex` (work completed)
+
+- The `regex` module (ADR-0078): `regex.compile`, `regex.escape`,
+  `regex.Regex` with `is_match`, `count`, `find`, `find_all`, `matches`,
+  `captures`, `replace`, `replace_all`, `split`, and `pattern`,
+  `regex.Match`, `regex.Captures`, and `regex.Error`, on both backends.
+- Example `examples/strings/regex_log.au`, the manual's Regex page, and the
+  `regex_scan` cross-language program.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `regex_scan` at 200,000 lines | 1.19 s | 1.63 s | 0.30 s |
+
+How it got there, from a first version at 9.8 s:
+
+- The compiled program is shared, not cloned, on each call. A clone starts
+  with empty scratch space (49 microseconds per search). 9.8 s to 1.97 s.
+- No copy of the pattern per call, a short list of recent patterns in
+  front of the map, and a group-name lookup in the runtime. 1.83 s.
+- A `Regex` holds a pattern number, not the text. Reading a `str` or a
+  class-typed field out of a class instance costs about 2,000 instructions
+  and a release, and every method read one. 1.19 s.
+
+## Gaps found in step 2a, left for later
+
+- A non-scalar field read (`str`, a list, or a class instance held by
+  another class) goes through `aura_direct_instance_get_field`, which
+  copies the field. Scalar fields are inline loads. This is the largest
+  cost left in programs that keep text in objects.
+- A small host call costs about 1,900 instructions around its work: an
+  argument buffer, boxed scalar arguments, and a boxed result.
+
+## Step 2b: `time` (work completed)
+
+- The `time` module (ADR-0079): `time.now`, `now_local`, `monotonic`,
+  `utc`, `from_unix`, `from_unix_ms`, `parse_rfc3339`, `parse`, and
+  `time.DateTime` with calendar fields, offsets, exact `Duration`
+  arithmetic, comparison, RFC 3339 text, and `format`, on both backends.
+- `regex.Regex` and `time.DateTime` are `copy class` values with a
+  `Display` implementation. `public copy class` did not parse before (it
+  was read as a constant named `copy`); the parser is fixed.
+- Example `examples/time/timestamps.au`, the manual's Time page, the book's
+  history log now writes `time.now()`, and the `date_time` cross-language
+  program.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `date_time` at 200,000 instants | 0.77 s | 4.1 s | 0.16 s |
+
+## Gaps found in step 2b, left for later
+
+- A tuple of scalars returned from a function is a boxed runtime value
+  (`aura_direct_tuple_new`, then `aura_direct_tuple_element` and an unbox
+  per field). Returning the date as `(int64, int64, int64)` from a helper
+  cost a third of the benchmark. The field methods now return one integer
+  each.
+- A module-level constant in a builtin source module is not visible inside
+  its methods (`AU4001: unknown MIR place`), and negating one in a
+  condition fails MIR validation. `std/time.au` writes its limits as
+  literals.
+- Host calls take scalar arguments boxed (about 330 instructions per
+  integer) and return several values only as a tuple. A call path that
+  passes integers in registers would bring `regex`, `time`, and
+  `fs.File.read_line()` much closer to Rust.

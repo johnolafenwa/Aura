@@ -354,6 +354,13 @@ printed-output order unless they coordinate that order explicitly.
 | `borrow_str.au` | Borrowed string parameters with `str` | `Hello, Aura` |
 | `f_strings.au` | Interpolated `f"..."` strings that produce owned `str` values | `Hello, Aura 42` |
 | `literal_forms_and_formatting.au` | Exact triple-quoted prompts, raw backslash-heavy paths, and statically checked width, sign-aware zero padding, grouping, and percentage formatting. Shows Unicode-aware formatting through the f-string grammar. | |
+| `regex_log.au` | `regex.compile(...)`, `is_match`, `count`, `find`, `find_all`, `matches`, `captures`, `replace`, `replace_all`, `split`, and `regex.escape(...)` | `true`, `3`, the three matches, `took=120ms at 9..19`, the groups, each match with its start, two rewritten lines, the split pieces, `invalid pattern`, `true` |
+
+### `time/`
+
+| File | Shows | Prints |
+| --- | --- | --- |
+| `timestamps.au` | `time.parse_rfc3339(...)`, calendar fields, `to_offset(...)`, `add(...)` and `since(...)` with a Duration, `format(...)`, `time.utc(...)` rejecting a date that does not exist, `time.parse(...)` with a pattern, `time.now()`, and `time.monotonic()` | The instant as RFC 3339, its date and weekday, Unix milliseconds, the instant at `+05:30`, the instant 60 days later, `Saturday 09 January 2027, 08:14 PM`, `day 29 is not in month 2 of 2026`, the parsed log time, `true`, `true` |
 
 ## Top-Level Examples
 

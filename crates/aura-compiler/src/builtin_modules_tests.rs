@@ -244,6 +244,28 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::constant_time_eq",
         "gzip::compress",
         "gzip::decompress",
+        "regex::__aura_compile",
+        "regex::__aura_pattern",
+        "regex::__aura_escape",
+        "regex::__aura_is_match",
+        "regex::__aura_count",
+        "regex::__aura_find",
+        "regex::__aura_matches",
+        "regex::__aura_find_all",
+        "regex::__aura_captures",
+        "regex::__aura_group_index",
+        "regex::__aura_split",
+        "regex::__aura_replace",
+        "regex::__aura_replace_all",
+        "time::__aura_now",
+        "time::__aura_monotonic",
+        "time::__aura_local_offset_minutes",
+        "time::__aura_duration_parts",
+        "time::__aura_duration",
+        "time::__aura_rfc3339",
+        "time::__aura_format",
+        "time::__aura_parse_rfc3339",
+        "time::__aura_parse",
     ] {
         assert!(
             host_builtin_metadata(name).is_some(),
@@ -974,4 +996,131 @@ def unpack(data: list[uint8]) -> str:
     )
     .expect_err("gzip.compress takes bytes, not text");
     assert!(error.message.contains("list[uint8]"), "{}", error.message);
+}
+
+#[test]
+fn regex_module_type_checks_its_whole_api_and_keeps_regex_construction_private() {
+    assert!(super::is_builtin_root_module("regex"));
+    assert!(super::builtin_module_registry().contains_key("regex"));
+    let find = host_builtin_metadata("regex::__aura_find").expect("regex find metadata");
+    assert_eq!(find.params.len(), 2);
+
+    crate::check_source(
+        r#"import regex
+
+def scan(pattern: regex.Regex, line: str) -> int64:
+    mut total = pattern.count(line)
+    if pattern.is_match(line):
+        total += 1
+    match pattern.find(line):
+        case regex.Match as found:
+            total += found.end - found.start + found.text.len()
+        case None:
+            pass
+    for found in pattern.matches(line):
+        total += found.start
+    match pattern.captures(line):
+        case regex.Captures as groups:
+            total += groups.len()
+            match groups.get(1):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+            match groups.name("key"):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+        case None:
+            pass
+    total += pattern.find_all(line).len() + pattern.split(line).len()
+    total += pattern.replace(line, "$1").len() + pattern.replace_all(line, "").len()
+    other = pattern
+    total += pattern.count(line)
+    return total + other.pattern().len() + regex.escape(line).len()
+
+def build(text: str) -> Result[regex.Regex, regex.Error]:
+    return regex.compile(text)
+
+def reason(error: regex.Error) -> str:
+    match error:
+        case regex.Error.Invalid(message):
+            return message.clone()
+"#,
+    )
+    .expect("the regex API should type-check");
+
+    let error = crate::check_source(
+        "import regex\n\ndef forge() -> regex.Regex:\n    return regex.Regex(number=0)\n",
+    )
+    .expect_err("only regex.compile builds a Regex");
+    assert!(error.message.contains("number"), "{}", error.message);
+    let error = crate::check_source(
+        "import regex\n\ndef bad(pattern: regex.Regex) -> bool:\n    return pattern.is_match(3)\n",
+    )
+    .expect_err("a search takes text");
+    assert!(error.message.contains("str"), "{}", error.message);
+}
+
+#[test]
+fn time_module_type_checks_its_whole_api_and_keeps_date_time_fields_private() {
+    assert!(super::is_builtin_root_module("time"));
+    assert!(super::builtin_module_registry().contains_key("time"));
+    let format = host_builtin_metadata("time::__aura_format").expect("time format metadata");
+    assert_eq!(format.params.len(), 4);
+
+    crate::check_source(
+        r#"import time
+
+def describe(moment: time.DateTime) -> Result[str, time.Error]:
+    (year, month, day) = moment.date()
+    total = (
+        year + month + day + moment.year() + moment.month() + moment.day()
+        + moment.hour() + moment.minute() + moment.second() + moment.nanosecond()
+        + moment.weekday() + moment.day_of_year() + moment.offset_minutes()
+        + moment.unix() + moment.unix_ms()
+    )
+    shifted = try moment.to_offset(60)
+    later = shifted.to_utc().to_local().add(Duration.seconds(5)).sub(Duration.ms(1))
+    elapsed: Duration = later.since(moment)
+    copy = later
+    if later.is_before(moment) or copy.is_after(moment) or later.same_instant(moment):
+        return Result.Ok(f"{total} {elapsed.to_ms()} {later}")
+    text = try later.format("%Y-%m-%d")
+    return Result.Ok(text + later.to_rfc3339())
+
+def build(text: str) -> Result[time.DateTime, time.Error]:
+    first = try time.utc(2026, 1, 2)
+    second = try time.utc(2026, 1, 2, 3, 4, 5, 6)
+    third = try time.from_unix(0)
+    fourth = try time.from_unix(0, 5)
+    fifth = try time.from_unix_ms(1)
+    sixth = try time.parse(text, "%Y")
+    seventh = try time.parse_rfc3339(text)
+    waited: Duration = time.monotonic() - time.monotonic()
+    if first.is_before(second) and third.is_before(fourth) and fifth.is_before(sixth):
+        return Result.Ok(time.now())
+    if waited.to_ms() > 0.0:
+        return Result.Ok(time.now_local())
+    return Result.Ok(seventh)
+
+def reason(error: time.Error) -> str:
+    match error:
+        case time.Error.Invalid(message):
+            return message.clone()
+"#,
+    )
+    .expect("the time API should type-check");
+
+    let error = crate::check_source(
+        "import time\n\ndef forge() -> time.DateTime:\n    return time.DateTime(unix_seconds=0, subsecond_nanos=0, utc_offset_minutes=0)\n",
+    )
+    .expect_err("only the time functions build a DateTime");
+    assert!(error.message.contains("unix_seconds"), "{}", error.message);
+    let error = crate::check_source(
+        "import time\n\ndef bad(moment: time.DateTime) -> time.DateTime:\n    return moment.add(5)\n",
+    )
+    .expect_err("arithmetic takes a Duration");
+    assert!(error.message.contains("Duration"), "{}", error.message);
 }

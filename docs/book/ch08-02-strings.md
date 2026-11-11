@@ -346,6 +346,41 @@ The triple-quoted string keeps its text exactly as written, newlines
 included, and the final newline doesn't produce an empty last line. Notice,
 too, that a printed list of strings shows them without quotation marks.
 
+Sometimes the separator isn't one fixed piece of text. Suppose scores can be
+separated by a comma or a semicolon, with any amount of space around either.
+`split(",")` can't say that, but a regular expression can. The `regex` module
+compiles a pattern into a `regex.Regex`, and its `split` takes the pattern as
+the separator:
+
+*Filename: src/main.au*
+
+```aura
+import regex
+
+def main():
+    match regex.compile(r"\s*[,;]\s*"):
+        case Result.Ok(separator):
+            print(separator.split("72, 95;88 ,  91"))
+            print(separator.replace_all("72, 95;88 ,  91", " "))
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+```
+
+```console
+$ aura run src/main.au
+[72, 95, 88, 91]
+72 95 88 91
+```
+
+`regex.compile` returns a `Result`, because a pattern is text like any other
+and might be malformed, especially if it comes from a user or a settings
+file. Compile a pattern once and reuse the `Regex`. The same value can test a
+line with `is_match`, pull out pieces with `captures`, and rewrite with
+`replace_all`. Aura's regular expressions always run in time proportional to
+the text, so a hostile pattern can't make a search take forever. What that
+costs is backreferences and look-around, which `regex.compile` rejects. The
+[Regex Module](/manual/regex) page has the full pattern syntax.
+
 While we're on literals: the usual escapes `\n`, `\t`, `\r`, `\\`, `\"`, and
 `\'` work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. Any
 other backslash sequence is an error (`AU1001`) rather than a literal

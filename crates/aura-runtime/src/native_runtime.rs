@@ -3544,6 +3544,54 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("bytes")],
     },
     DynamicHostAbi {
+        name: "regex::__aura_is_match",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_count",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_find",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_matches",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_find_all",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_captures",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_group_index",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_split",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_replace",
+        params: &[
+            borrowed("pattern"),
+            borrowed("text"),
+            borrowed("replacement"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_replace_all",
+        params: &[
+            borrowed("pattern"),
+            borrowed("text"),
+            borrowed("replacement"),
+        ],
+    },
+    DynamicHostAbi {
         name: "iter::__aura_generator_resume",
         params: &[borrowed("handle")],
     },
@@ -14829,6 +14877,28 @@ host_builtin_entries! {
     owned "bytes::constant_time_eq" => aura_host_bytes_constant_time_eq(host_builtins::host_bytes_constant_time_eq);
     owned "gzip::compress" => aura_host_gzip_compress(host_builtins::host_gzip_compress);
     owned "gzip::decompress" => aura_host_gzip_decompress(host_builtins::host_gzip_decompress);
+    owned "time::__aura_now" => aura_host_time_now(crate::runtime_value::time_host::host_time_now);
+    owned "time::__aura_monotonic" => aura_host_time_monotonic(crate::runtime_value::time_host::host_time_monotonic);
+    owned "time::__aura_local_offset_minutes" => aura_host_time_local_offset_minutes(crate::runtime_value::time_host::host_time_local_offset_minutes);
+    owned "time::__aura_duration_parts" => aura_host_time_duration_parts(crate::runtime_value::time_host::host_time_duration_parts);
+    owned "time::__aura_duration" => aura_host_time_duration(crate::runtime_value::time_host::host_time_duration);
+    owned "time::__aura_rfc3339" => aura_host_time_rfc3339(crate::runtime_value::time_host::host_time_rfc3339);
+    owned "time::__aura_format" => aura_host_time_format(crate::runtime_value::time_host::host_time_format);
+    owned "time::__aura_parse_rfc3339" => aura_host_time_parse_rfc3339(crate::runtime_value::time_host::host_time_parse_rfc3339);
+    owned "time::__aura_parse" => aura_host_time_parse(crate::runtime_value::time_host::host_time_parse);
+    owned "regex::__aura_compile" => aura_host_regex_compile(crate::runtime_value::regex_host::host_regex_compile);
+    owned "regex::__aura_pattern" => aura_host_regex_pattern(crate::runtime_value::regex_host::host_regex_pattern);
+    owned "regex::__aura_escape" => aura_host_regex_escape(crate::runtime_value::regex_host::host_regex_escape);
+    borrowed "regex::__aura_is_match" => aura_host_regex_is_match(|args| direct_regex("regex::__aura_is_match", args));
+    borrowed "regex::__aura_count" => aura_host_regex_count(|args| direct_regex("regex::__aura_count", args));
+    borrowed "regex::__aura_find" => aura_host_regex_find(|args| direct_regex("regex::__aura_find", args));
+    borrowed "regex::__aura_matches" => aura_host_regex_matches(|args| direct_regex("regex::__aura_matches", args));
+    borrowed "regex::__aura_find_all" => aura_host_regex_find_all(|args| direct_regex("regex::__aura_find_all", args));
+    borrowed "regex::__aura_captures" => aura_host_regex_captures(|args| direct_regex("regex::__aura_captures", args));
+    borrowed "regex::__aura_group_index" => aura_host_regex_group_index(|args| direct_regex("regex::__aura_group_index", args));
+    borrowed "regex::__aura_split" => aura_host_regex_split(|args| direct_regex("regex::__aura_split", args));
+    borrowed "regex::__aura_replace" => aura_host_regex_replace(|args| direct_regex("regex::__aura_replace", args));
+    borrowed "regex::__aura_replace_all" => aura_host_regex_replace_all(|args| direct_regex("regex::__aura_replace_all", args));
     borrowed "json::parse" => aura_host_json_parse(direct_json_parse);
     borrowed "json::dumps" => aura_host_json_dumps(direct_json_dumps);
     borrowed "json::is_null" => aura_host_json_is_null(direct_json_is_null);
@@ -14922,6 +14992,45 @@ fn direct_generator_yield(
         .pop()
         .ok_or_else(|| Diagnostic::new("`yield` expects one item argument"))?;
     generator_yield(item).map(Value::Bool)
+}
+
+/// Evaluates a `regex` builtin for a pattern number over its borrowed
+/// texts. Nothing is copied: the searched text and the replacement stay
+/// borrowed while the search runs.
+fn direct_regex(name: &str, args: &DirectHostArgBuffer) -> std::result::Result<Value, Diagnostic> {
+    use crate::runtime_value::regex_host::{evaluate_regex_builtin, RegexArgument};
+    fn text_of<'a>(
+        name: &str,
+        index: usize,
+        value: &'a Value,
+    ) -> std::result::Result<&'a str, Diagnostic> {
+        match value {
+            Value::String(text) => Ok(text.as_str()),
+            other => Err(Diagnostic::coded(
+                "AU4001",
+                format!(
+                    "`{name}` expects argument {} to be `str`, found `{}`",
+                    index + 1,
+                    value_type_name(other)
+                ),
+            )),
+        }
+    }
+    let pattern = args.with_copy(name, 0, |number| {
+        crate::runtime_value::regex_host::regex_number(number, name)
+    })?;
+    args.with_borrow(name, 1, |text| {
+        let text = text_of(name, 1, text)?;
+        match name {
+            "regex::__aura_replace" | "regex::__aura_replace_all" => {
+                args.with_borrow(name, 2, |argument| {
+                    let argument = RegexArgument::Text(text_of(name, 2, argument)?);
+                    evaluate_regex_builtin(name, pattern, text, argument)
+                })
+            }
+            _ => evaluate_regex_builtin(name, pattern, text, RegexArgument::None),
+        }
+    })
 }
 
 fn direct_generator_handle(

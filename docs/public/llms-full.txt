@@ -1199,6 +1199,10 @@ scope, terminology, authority, and conformance language.
   SHA-256, and HMAC-SHA256.
 - [Gzip Module](/manual/gzip): gzip compression and bounded decompression of
   byte lists, with typed errors.
+- [Regex Module](/manual/regex): compiled regular expressions with
+  linear-time search, groups, replacement, and splitting.
+- [Time Module](/manual/time): the clocks, `DateTime` with fixed offsets,
+  Duration arithmetic, RFC 3339, and pattern formatting and parsing.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
   exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact
@@ -1489,6 +1493,50 @@ limit, and the error variants.
 | --- | --- | --- |
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
+
+## Regex
+
+[Regex Module](/manual/regex) covers the pattern syntax, positions, groups,
+replacement text, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `regex.compile` | `compile(pattern: str) -> Result[regex.Regex, regex.Error]` | Compiles a pattern. An invalid pattern returns `regex.Error.Invalid(message)`. |
+| `regex.escape` | `escape(text: str) -> str` | Escapes every pattern metacharacter in `text`. |
+| `Regex.is_match` | `is_match(self, text: str) -> bool` | Whether the pattern matches anywhere in `text`. |
+| `Regex.count` | `count(self, text: str) -> int64` | The number of non-overlapping matches. |
+| `Regex.find` | `find(self, text: str) -> regex.Match \| None` | The leftmost match, with `text`, `start`, and `end` in Unicode scalar values. |
+| `Regex.find_all` | `find_all(self, text: str) -> list[str]` | The text of every match. |
+| `Regex.matches` | `matches(self, text: str) -> list[regex.Match]` | Every match with its position. |
+| `Regex.captures` | `captures(self, text: str) -> regex.Captures \| None` | The groups of the leftmost match, read with `get(index)`, `name(name)`, and `len()`. |
+| `Regex.replace` | `replace(self, text: str, replacement: str) -> str` | Replaces the leftmost match. `$1`, `${name}`, and `$$` are expanded. |
+| `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | Replaces every match. |
+| `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
+| `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
+
+## Time
+
+[Time Module](/manual/time) covers instants and offsets, the system time
+zone, RFC 3339 text, the pattern directives, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `time.now` | `now() -> time.DateTime` | The current instant, read at UTC. |
+| `time.now_local` | `now_local() -> time.DateTime` | The current instant, read at the system time zone's current offset. |
+| `time.monotonic` | `monotonic() -> Duration` | A reading of a clock that never goes backward. Subtract two readings. |
+| `time.utc` | `utc(year: int64, month: int64, day: int64, hour: int64 = 0, minute: int64 = 0, second: int64 = 0, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from calendar fields at UTC. A field out of range or a date that does not exist returns `time.Error.Invalid`. |
+| `time.from_unix` | `from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix seconds. |
+| `time.from_unix_ms` | `from_unix_ms(milliseconds: int64) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix milliseconds. |
+| `time.parse_rfc3339` | `parse_rfc3339(text: str) -> Result[time.DateTime, time.Error]` | Parses RFC 3339 text and keeps its offset. |
+| `time.parse` | `parse(text: str, pattern: str) -> Result[time.DateTime, time.Error]` | Parses text laid out by `%` directives. |
+| `DateTime` fields | `year()`, `month()`, `day()`, `date()`, `hour()`, `minute()`, `second()`, `nanosecond()`, `weekday()`, `day_of_year()`, `offset_minutes()` | Calendar fields at the value's offset. `weekday()` is 1 for Monday to 7 for Sunday. |
+| `DateTime.unix` | `unix(self) -> int64`, `unix_ms(self) -> int64` | Seconds or milliseconds since 1970-01-01T00:00:00Z, rounded down. |
+| `DateTime.to_utc` | `to_utc(self) -> time.DateTime` | The same instant at UTC. `to_offset(minutes)` and `to_local()` read it at another offset. |
+| `DateTime.add` | `add(self, amount: Duration) -> time.DateTime`, `sub(self, amount: Duration) -> time.DateTime` | Exact arithmetic. Traps when the result leaves the years 1 to 9999. |
+| `DateTime.since` | `since(self, earlier: time.DateTime) -> Duration` | The time between two instants. |
+| `DateTime.is_before` | `is_before(self, other) -> bool`, `is_after(self, other) -> bool`, `same_instant(self, other) -> bool` | Compare instants, whatever their offsets. |
+| `DateTime.to_rfc3339` | `to_rfc3339(self) -> str` | RFC 3339 text. `print` and f-strings show the same text. |
+| `DateTime.format` | `format(self, pattern: str) -> Result[str, time.Error]` | Text laid out by `%` directives. |
 
 ## Collections
 
@@ -21482,6 +21530,203 @@ Aura 0.14 has no other random distributions, no secure float function, no global
 
 Design records: [ADR-0020: Randomness algorithm and security boundary](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md) and [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).
 
+## Source: docs/manual/regex.md
+
+# Regex Module
+
+The `regex` module searches text with regular expressions. A pattern is
+compiled once into a `regex.Regex`, which then tests, finds, captures,
+replaces, and splits. Every search runs in time linear in the length of the
+text, whatever the pattern.
+
+```aura
+import regex
+```
+
+## Public API
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `regex.compile` | `compile(pattern: str) -> Result[regex.Regex, regex.Error]` | The compiled pattern, or why it is not one. |
+| `regex.escape` | `escape(text: str) -> str` | `text` with every pattern metacharacter escaped, so that as a pattern it matches exactly `text`. |
+| `Regex.is_match` | `is_match(self, text: str) -> bool` | Whether the pattern matches anywhere in `text`. |
+| `Regex.count` | `count(self, text: str) -> int64` | The number of non-overlapping matches. |
+| `Regex.find` | `find(self, text: str) -> regex.Match \| None` | The leftmost match. |
+| `Regex.find_all` | `find_all(self, text: str) -> list[str]` | The text of every match, in order. |
+| `Regex.matches` | `matches(self, text: str) -> list[regex.Match]` | Every match with its position, in order. |
+| `Regex.captures` | `captures(self, text: str) -> regex.Captures \| None` | The groups of the leftmost match. |
+| `Regex.replace` | `replace(self, text: str, replacement: str) -> str` | `text` with the leftmost match replaced. |
+| `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | `text` with every match replaced. |
+| `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between the matches. |
+| `Regex.pattern` | `pattern(self) -> str` | The pattern text the value was compiled from. |
+| `Captures.len` | `len(self) -> int64` | The number of groups, the whole match included. |
+| `Captures.get` | `get(self, index: int64) -> str \| None` | The text of group `index`. Group `0` is the whole match. |
+| `Captures.name` | `name(self, name: str) -> str \| None` | The text of the group named `name`. |
+
+A `regex.Match` has three public fields: `text: str`, `start: int64`, and
+`end: int64`. Every method takes `self` and its arguments as shared borrows
+and returns fresh owned values.
+
+## Example
+
+<<< ../../examples/strings/regex_log.au{aura}
+
+It prints:
+
+```text
+true
+3
+[took=120ms, user=7, retries=3]
+took=120ms at 9..19
+4
+took
+120
+ms
+None
+9: took=120ms
+20: user=7
+27: retries=3
+café up: took:120 user=7 retries=3
+café up: 120 7 3
+[café up: ,  ,  , ]
+invalid pattern
+true
+```
+
+## Compiling A Pattern
+
+`regex.compile` returns `Result.Err(regex.Error.Invalid(message))` for a
+pattern that is not valid, so a pattern that comes from a user or a
+configuration file is checked like any other input. `message` describes the
+fault for a person and is not a stable format.
+
+Write patterns as raw strings, `r"\d+"`, so that a backslash reaches the
+pattern as written. In an ordinary string literal the same pattern is
+`"\\d+"`.
+
+Compile a pattern once and keep the `Regex`: in a local, a class field, or a
+parameter. A `Regex` is a small copy value that names the compiled pattern,
+so assigning it or passing it to a task copies it, and every copy searches
+with the same compiled pattern. Printing a `Regex` shows its pattern text.
+Compiling a pattern text a second time is cheap, because the runtime finds
+the pattern it already knows.
+
+The runtime remembers each distinct pattern text for the life of the
+process, and each thread keeps the compiled form of up to 256 patterns it
+used last. A program that compiles an unbounded number of different
+patterns, such as one search pattern per request, grows by the length of
+each new pattern text and by nothing else.
+
+`Regex` has no public constructor. `regex.compile` is the only way to make
+one, so every `Regex` holds a valid pattern.
+
+## Pattern Syntax
+
+| Form | Matches |
+| --- | --- |
+| `.` | Any character except a newline. |
+| `\d` `\w` `\s` | A digit, a word character, whitespace. `\D` `\W` `\S` match the opposite. |
+| `[abc]` `[a-z]` `[^a-z]` | One character in, or not in, a set. |
+| `\p{Greek}` `\p{L}` | One character with a Unicode property. |
+| `^` `$` | The start and end of the text, or of a line with `(?m)`. |
+| `\b` `\B` | A word boundary, and not a word boundary. |
+| `x*` `x+` `x?` | Zero or more, one or more, zero or one, taking as many as possible. |
+| `x{2}` `x{2,}` `x{2,5}` | A counted repeat. |
+| `x*?` `x+?` `x??` | The same repeats, taking as few as possible. |
+| `a\|b` | Either side. |
+| `(x)` | A numbered group. |
+| `(?P<name>x)` `(?<name>x)` | A named group, which is also numbered. |
+| `(?:x)` | A group that is not captured. |
+| `(?i)` `(?m)` `(?s)` `(?x)` | Flags: ignore case, `^` and `$` match at lines, `.` matches a newline, ignore whitespace and allow `#` comments in the pattern. |
+
+Classes such as `\d`, `\w`, and `\s`, word boundaries, and case-insensitive
+matching follow Unicode. `\d` matches `٣` as well as `3`. Write `[0-9]` to
+match ASCII digits only.
+
+Backreferences such as `\1` and look-around such as `(?=x)` and `(?<!x)` are
+not supported. They cannot be matched in linear time, and `regex.compile`
+returns `regex.Error.Invalid` for a pattern that uses one.
+
+Matches are leftmost-first: among the matches that start earliest, an
+alternation prefers its left branch, as in Perl and Python.
+
+## Positions
+
+`Match.start` and `Match.end` count Unicode scalar values from the start of
+the searched text, as `str` indexes and `str.len()` do. `end` is one past
+the last character of the match, so `end - start` is the length of
+`Match.text`.
+
+## Groups
+
+`Captures.get(0)` is the whole match and `get(1)` the first group, counted
+by its opening parenthesis. A group that took no part in the match, such as
+an optional group that matched nothing, is `None`. That is different from a
+group that matched the empty text, which is `""`. An index or a name the
+pattern does not have is also `None`.
+
+## Replacement Text
+
+In the replacement of `replace` and `replace_all`:
+
+| Form | Stands for |
+| --- | --- |
+| `$1` `${1}` | Group 1. |
+| `$name` `${name}` | The group named `name`. |
+| `$0` | The whole match. |
+| `$$` | A dollar sign. |
+
+A name runs as far as letters, digits, and underscores go, so `$1a` is the
+group named `1a`. Write `${1}a` for group 1 followed by `a`. A group the
+pattern does not have, or one that took no part in the match, is replaced by
+the empty text. To insert text exactly as it is, replace each `$` in it with
+`$$`.
+
+## Splitting
+
+`split` returns the text between matches. A match at the start or end of the
+text gives an empty first or last piece, and two matches side by side give an
+empty piece between them, as `str.split` does for its separator.
+
+## Error Model
+
+| Variant | Meaning |
+| --- | --- |
+| `Invalid(message: str)` | The pattern has a syntax error, uses an unsupported feature, or compiles to a program larger than the 10 MiB limit, as a very large counted repeat can. |
+
+Searching cannot fail. A result that would pass the 64 MiB `str` limit, which
+only `replace` and `replace_all` can produce, traps with `AU4005`.
+
+## Performance
+
+Search time grows linearly with the text. No pattern takes exponential time,
+so a pattern from an untrusted source cannot stall the program by
+backtracking. The 10 MiB limit on the compiled form bounds its memory.
+
+`is_match` and `count` are the cheapest calls, because they build no
+values. `find_all` builds only the matched texts. `matches` and `captures`
+build a `Match` or a group list for each result. Call the cheapest method
+that answers the question.
+
+The cross-language program
+[`regex_scan`](https://github.com/johnolafenwa/Aura/tree/main/benchmarks/cross_language/regex_scan)
+runs five patterns over generated log lines in Aura, Python, and Rust.
+
+## Backend Support
+
+The MIR runtime and the direct native backend use the same implementation,
+so results match. A program that does not import `regex` does not link it.
+
+## Limits
+
+- Patterns match `str` only. There is no search over `list[uint8]`.
+- There is no iterator of matches. `matches` and `find_all` return lists.
+- A replacement is text with group references. A function cannot compute it.
+- `split` has no limit on the number of pieces.
+- A search always starts at the beginning of the text.
+
+Design record: [ADR-0078: Regular expressions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0078-regular-expressions.md).
+
 ## Source: docs/manual/statements.md
 
 # Statements
@@ -23064,6 +23309,218 @@ See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned tool
 - [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
 - [ADR-0047: Integer literal bases, bitwise operators, and shifts](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md)
 - [ADR-0048: Power, rounding, divmod, and the math module](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md)
+
+## Source: docs/manual/time.md
+
+# Time Module
+
+The `time` module reads the clocks and works with dates and times. A
+`time.DateTime` is an instant together with the offset from UTC at which
+its calendar fields are read.
+
+```aura
+import time
+```
+
+## Public API
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `time.now` | `now() -> time.DateTime` | The current instant from the system clock, read at UTC. |
+| `time.now_local` | `now_local() -> time.DateTime` | The current instant, read at the system time zone's current offset. |
+| `time.monotonic` | `monotonic() -> Duration` | Time since a fixed point in the past, from a clock that never goes backward. |
+| `time.utc` | `utc(year: int64, month: int64, day: int64, hour: int64 = 0, minute: int64 = 0, second: int64 = 0, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | The instant with these calendar fields at UTC. |
+| `time.from_unix` | `from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | The instant that many seconds after 1970-01-01T00:00:00Z. |
+| `time.from_unix_ms` | `from_unix_ms(milliseconds: int64) -> Result[time.DateTime, time.Error]` | The instant that many milliseconds after 1970-01-01T00:00:00Z. |
+| `time.parse_rfc3339` | `parse_rfc3339(text: str) -> Result[time.DateTime, time.Error]` | Parses RFC 3339 text and keeps its offset. |
+| `time.parse` | `parse(text: str, pattern: str) -> Result[time.DateTime, time.Error]` | Parses text laid out as `pattern` directs. |
+
+`time.DateTime` methods:
+
+| Method | Signature | Result |
+| --- | --- | --- |
+| `year` `month` `day` | `year(self) -> int64` | The calendar date at the value's offset. `month` runs from 1 to 12 and `day` from 1 to 31. |
+| `date` | `date(self) -> (int64, int64, int64)` | Year, month, and day together. |
+| `hour` `minute` `second` | `hour(self) -> int64` | The time of day at the value's offset. |
+| `nanosecond` | `nanosecond(self) -> int64` | Nanoseconds past the whole second, from 0 to 999,999,999. |
+| `weekday` | `weekday(self) -> int64` | 1 for Monday to 7 for Sunday. |
+| `day_of_year` | `day_of_year(self) -> int64` | 1 to 366. |
+| `offset_minutes` | `offset_minutes(self) -> int64` | Minutes east of UTC. |
+| `unix` | `unix(self) -> int64` | Whole seconds since 1970-01-01T00:00:00Z, rounded down. |
+| `unix_ms` | `unix_ms(self) -> int64` | Whole milliseconds since 1970-01-01T00:00:00Z, rounded down. |
+| `to_utc` | `to_utc(self) -> time.DateTime` | The same instant read at UTC. |
+| `to_offset` | `to_offset(self, minutes: int64) -> Result[time.DateTime, time.Error]` | The same instant read `minutes` east of UTC. |
+| `to_local` | `to_local(self) -> time.DateTime` | The same instant read at the offset the system time zone has at that instant. |
+| `add` | `add(self, amount: Duration) -> time.DateTime` | The instant `amount` later, at the same offset. |
+| `sub` | `sub(self, amount: Duration) -> time.DateTime` | The instant `amount` earlier, at the same offset. |
+| `since` | `since(self, earlier: time.DateTime) -> Duration` | The time from `earlier` to this instant. Negative when `earlier` is later. |
+| `is_before` `is_after` | `is_before(self, other: time.DateTime) -> bool` | Compares the instants, whatever their offsets. |
+| `same_instant` | `same_instant(self, other: time.DateTime) -> bool` | Whether both are the same instant, whatever their offsets. |
+| `to_rfc3339` | `to_rfc3339(self) -> str` | RFC 3339 text. |
+| `format` | `format(self, pattern: str) -> Result[str, time.Error]` | Text laid out as `pattern` directs. |
+
+## Example
+
+<<< ../../examples/time/timestamps.au{aura}
+
+It prints:
+
+```text
+2026-11-10T20:14:38.250Z
+2026-11-10 is day 314, weekday 2
+1794341678250
+2026-11-11T01:44:38.250+05:30
+11 1:44
+true
+2027-01-09T20:14:38.250Z
+5184000.0
+true
+Saturday 09 January 2027, 08:14 PM
+day 29 is not in month 2 of 2026
+2026-11-10T20:14:38Z
+true
+true
+```
+
+## Instants And Offsets
+
+A `DateTime` holds an instant to the nanosecond and an offset in whole
+minutes. The instant is what `unix`, `since`, `is_before`, and
+`same_instant` read. The offset only decides which calendar date and time of
+day the field methods and the text methods show. `to_utc`, `to_offset`, and
+`to_local` change the offset and never the instant.
+
+The calendar is the Gregorian calendar, extended backward before its
+adoption. Years run from 1 to 9999. A constructor or a parse returns
+`time.Error.Invalid` for an instant outside that range, and `add` and `sub`
+trap when their result leaves it, because a result that far away is a
+programming error.
+
+There are no leap seconds. Every day has 86,400 seconds, as Unix time
+counts, so second 60 is rejected.
+
+## Arithmetic
+
+`add` and `sub` take a `Duration`, an exact count of nanoseconds, so
+`moment.add(Duration.minutes(90))` is exactly 5,400 seconds later.
+`later.since(earlier)` returns the `Duration` between two instants.
+
+There is no "one month later". Months and years have different lengths, so
+that is a calendar rule a program states for itself: read the fields, change
+the month, and build the result with `time.utc`, which reports a day the new
+month does not have.
+
+## The System Time Zone
+
+`now_local` and `to_local` ask the operating system for the offset its time
+zone has at the instant in question, so daylight saving time is applied for
+that instant. The result is a fixed offset. Arithmetic on it keeps that
+offset: adding six months to a summer time does not switch to the winter
+offset. Call `to_local` on the result to read it at the offset in force
+then.
+
+Named time zones such as `Europe/Paris` are not provided. A program reads
+other zones with `to_offset`.
+
+## RFC 3339 Text
+
+`to_rfc3339` writes `2026-11-10T20:14:38Z`. A zero offset is `Z` and any
+other is `+hh:mm` or `-hh:mm`. A fraction of a second is written only when
+it is not zero, with 3, 6, or 9 digits, whichever is the shortest that is
+exact.
+
+`parse_rfc3339` reads the same form. It also accepts a lowercase `t` or `z`
+and a space in place of `T`. The offset is required. A fraction may have any
+number of digits, and digits past the ninth are dropped.
+
+## Patterns
+
+`format` and `parse` follow a pattern in which a directive stands for a
+field and any other character stands for itself.
+
+| Directive | Field | Written as |
+| --- | --- | --- |
+| `%Y` | Year | Four digits, `2026`. |
+| `%y` | Year in its century | Two digits, `26`. Parsing reads 69 to 99 as the 1900s and 00 to 68 as the 2000s. |
+| `%m` | Month | Two digits, `01` to `12`. |
+| `%b` `%B` | Month name | `Nov`, `November`. |
+| `%d` | Day | Two digits, `01` to `31`. |
+| `%e` | Day | Padded with a space, ` 5`. |
+| `%j` | Day of the year | Three digits, `001` to `366`. Cannot be parsed. |
+| `%a` `%A` | Weekday name | `Tue`, `Tuesday`. |
+| `%H` | Hour | Two digits, `00` to `23`. |
+| `%I` | Hour on a 12-hour clock | Two digits, `01` to `12`. |
+| `%p` | Half of the day | `AM` or `PM`. |
+| `%M` | Minute | Two digits. |
+| `%S` | Second | Two digits. |
+| `%f` | Fraction of a second | Six digits, microseconds. Parsing reads one to nine digits. |
+| `%z` | Offset | `+0100`. |
+| `%:z` | Offset | `+01:00`. |
+| `%%` | A percent sign | `%`. |
+
+Names are English. A pattern with an unknown directive returns
+`time.Error.Invalid` from both functions.
+
+When parsing:
+
+- Numeric fields other than `%Y` and `%y` accept one or two digits, so `%d`
+  reads both `5` and `05`.
+- Names match in any letter case.
+- A space in the pattern matches any amount of whitespace, including none.
+- `%z` and `%:z` each read `+0100`, `+01:00`, and `Z`.
+- The pattern must read a year. A month or day it does not read is 1, and a
+  time field it does not read is 0. Without an offset directive the fields
+  are read at UTC.
+- A weekday name is read and not checked against the date.
+- The whole text must be used.
+
+## Measuring Time
+
+`time.monotonic()` reads a clock that only moves forward and is not changed
+when the system clock is set. Subtract two readings to measure an interval:
+
+```aura
+import time
+
+def main():
+    started = time.monotonic()
+    mut total = 0
+    for i in range(1000):
+        total += i
+    elapsed = time.monotonic() - started
+    print(total)
+    print(elapsed.to_ms() >= 0.0)
+```
+
+The program prints `499500` and `true`. A single reading has no meaning on
+its own and cannot be compared between processes.
+
+## Error Model
+
+| Variant | Meaning |
+| --- | --- |
+| `Invalid(message: str)` | A field is out of range, a date does not exist, text does not match the expected form, a pattern has an unknown directive, or the instant is outside the years 1 to 9999. `message` describes the fault for a person and is not a stable format. |
+
+## Backend Support
+
+The MIR runtime and the direct native backend share one implementation, so
+results match. Calendar arithmetic is Aura code over three integers, and a
+`DateTime` is passed and stored like any small class.
+
+`to_local` and `now_local` use the offset 0 on a platform where the system
+time zone cannot be read.
+
+## Limits
+
+- No named time zones and no time zone database. Offsets are fixed.
+- No date-only or time-of-day-only types, and no calendar durations such as
+  months.
+- No leap seconds.
+- Month and weekday names are English.
+- `sys.unix_time_ms()` and `sys.monotonic_time_ms()` remain for programs
+  that only need a number.
+
+Design record: [ADR-0079: Dates and times](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0079-dates-and-times.md).
 
 ## Source: docs/manual/tuples.md
 
@@ -34024,6 +34481,41 @@ $ aura run src/main.au
 The triple-quoted string keeps its text exactly as written, newlines
 included, and the final newline doesn't produce an empty last line. Notice,
 too, that a printed list of strings shows them without quotation marks.
+
+Sometimes the separator isn't one fixed piece of text. Suppose scores can be
+separated by a comma or a semicolon, with any amount of space around either.
+`split(",")` can't say that, but a regular expression can. The `regex` module
+compiles a pattern into a `regex.Regex`, and its `split` takes the pattern as
+the separator:
+
+*Filename: src/main.au*
+
+```aura
+import regex
+
+def main():
+    match regex.compile(r"\s*[,;]\s*"):
+        case Result.Ok(separator):
+            print(separator.split("72, 95;88 ,  91"))
+            print(separator.replace_all("72, 95;88 ,  91", " "))
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+```
+
+```console
+$ aura run src/main.au
+[72, 95, 88, 91]
+72 95 88 91
+```
+
+`regex.compile` returns a `Result`, because a pattern is text like any other
+and might be malformed, especially if it comes from a user or a settings
+file. Compile a pattern once and reuse the `Regex`. The same value can test a
+line with `is_match`, pull out pieces with `captures`, and rewrite with
+`replace_all`. Aura's regular expressions always run in time proportional to
+the text, so a hostile pattern can't make a search take forever. What that
+costs is backreferences and look-around, which `regex.compile` rejects. The
+[Regex Module](/manual/regex) page has the full pattern syntax.
 
 While we're on literals: the usual escapes `\n`, `\t`, `\r`, `\\`, `\"`, and
 `\'` work in ordinary strings, along with `\0`, `\xHH`, and `\u{...}`. Any
@@ -46363,13 +46855,16 @@ not there yet:
 ```aura fragment
 def append_history(report: str) -> Result[None, io.Error]:
     with file = try fs.append("history.log"):
-        try file.write_all(f"run at {sys.unix_time_ms()}\n")
+        try file.write_all(f"run at {time.now()}\n")
         try file.write_all(report)
     return Result.Ok(None)
 ```
 
-`sys.unix_time_ms()` gives milliseconds since the Unix epoch, which is enough
-to tell runs apart. The two `write_all` calls land in the handle's buffer and
+`time.now()` is the current date and time, and an f-string writes it in the
+RFC 3339 form, such as `2026-11-10T20:14:38.250Z`, which sorts correctly as
+text and which every log tool can read. (Add `import time` at the top of the
+file. The [Time Module](/manual/time) page covers offsets, arithmetic, and
+other layouts.) The two `write_all` calls land in the handle's buffer and
 reach the file when the `with` block closes it. If you only need to add one
 string, `fs.append_string(path, text)` does the open, write, and close in one
 call, as `fs.write_string` does for replacing.
@@ -46400,6 +46895,7 @@ and appends to the history.
 import fs
 import io
 import sys
+import time
 
 enum Probe:
     File(path: str)
@@ -46470,7 +46966,7 @@ def save(path: str, text: str) -> Result[None, io.Error]:
 
 def append_history(report: str) -> Result[None, io.Error]:
     with file = try fs.append("history.log"):
-        try file.write_all(f"run at {sys.unix_time_ms()}\n")
+        try file.write_all(f"run at {time.now()}\n")
         try file.write_all(report)
     return Result.Ok(None)
 

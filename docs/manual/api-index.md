@@ -230,6 +230,50 @@ limit, and the error variants.
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
 
+## Regex
+
+[Regex Module](/manual/regex) covers the pattern syntax, positions, groups,
+replacement text, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `regex.compile` | `compile(pattern: str) -> Result[regex.Regex, regex.Error]` | Compiles a pattern. An invalid pattern returns `regex.Error.Invalid(message)`. |
+| `regex.escape` | `escape(text: str) -> str` | Escapes every pattern metacharacter in `text`. |
+| `Regex.is_match` | `is_match(self, text: str) -> bool` | Whether the pattern matches anywhere in `text`. |
+| `Regex.count` | `count(self, text: str) -> int64` | The number of non-overlapping matches. |
+| `Regex.find` | `find(self, text: str) -> regex.Match \| None` | The leftmost match, with `text`, `start`, and `end` in Unicode scalar values. |
+| `Regex.find_all` | `find_all(self, text: str) -> list[str]` | The text of every match. |
+| `Regex.matches` | `matches(self, text: str) -> list[regex.Match]` | Every match with its position. |
+| `Regex.captures` | `captures(self, text: str) -> regex.Captures \| None` | The groups of the leftmost match, read with `get(index)`, `name(name)`, and `len()`. |
+| `Regex.replace` | `replace(self, text: str, replacement: str) -> str` | Replaces the leftmost match. `$1`, `${name}`, and `$$` are expanded. |
+| `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | Replaces every match. |
+| `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
+| `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
+
+## Time
+
+[Time Module](/manual/time) covers instants and offsets, the system time
+zone, RFC 3339 text, the pattern directives, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `time.now` | `now() -> time.DateTime` | The current instant, read at UTC. |
+| `time.now_local` | `now_local() -> time.DateTime` | The current instant, read at the system time zone's current offset. |
+| `time.monotonic` | `monotonic() -> Duration` | A reading of a clock that never goes backward. Subtract two readings. |
+| `time.utc` | `utc(year: int64, month: int64, day: int64, hour: int64 = 0, minute: int64 = 0, second: int64 = 0, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from calendar fields at UTC. A field out of range or a date that does not exist returns `time.Error.Invalid`. |
+| `time.from_unix` | `from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix seconds. |
+| `time.from_unix_ms` | `from_unix_ms(milliseconds: int64) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix milliseconds. |
+| `time.parse_rfc3339` | `parse_rfc3339(text: str) -> Result[time.DateTime, time.Error]` | Parses RFC 3339 text and keeps its offset. |
+| `time.parse` | `parse(text: str, pattern: str) -> Result[time.DateTime, time.Error]` | Parses text laid out by `%` directives. |
+| `DateTime` fields | `year()`, `month()`, `day()`, `date()`, `hour()`, `minute()`, `second()`, `nanosecond()`, `weekday()`, `day_of_year()`, `offset_minutes()` | Calendar fields at the value's offset. `weekday()` is 1 for Monday to 7 for Sunday. |
+| `DateTime.unix` | `unix(self) -> int64`, `unix_ms(self) -> int64` | Seconds or milliseconds since 1970-01-01T00:00:00Z, rounded down. |
+| `DateTime.to_utc` | `to_utc(self) -> time.DateTime` | The same instant at UTC. `to_offset(minutes)` and `to_local()` read it at another offset. |
+| `DateTime.add` | `add(self, amount: Duration) -> time.DateTime`, `sub(self, amount: Duration) -> time.DateTime` | Exact arithmetic. Traps when the result leaves the years 1 to 9999. |
+| `DateTime.since` | `since(self, earlier: time.DateTime) -> Duration` | The time between two instants. |
+| `DateTime.is_before` | `is_before(self, other) -> bool`, `is_after(self, other) -> bool`, `same_instant(self, other) -> bool` | Compare instants, whatever their offsets. |
+| `DateTime.to_rfc3339` | `to_rfc3339(self) -> str` | RFC 3339 text. `print` and f-strings show the same text. |
+| `DateTime.format` | `format(self, pattern: str) -> Result[str, time.Error]` | Text laid out by `%` directives. |
+
 ## Collections
 
 [Collections](/manual/collections) covers ownership and iteration.

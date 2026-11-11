@@ -4597,7 +4597,19 @@ test("compiler bridge exposes control-plane module completions", async () => {
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control", "gzip"];
+    const modules = [
+      "sys",
+      "path",
+      "json",
+      "toml",
+      "log",
+      "metrics",
+      "trace",
+      "control",
+      "gzip",
+      "regex",
+      "time",
+    ];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
       const line = `    ${moduleName}.`;
@@ -4626,6 +4638,16 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const gzipNames = await completionNames("gzip");
     for (const expected of ["compress", "decompress", "Error"]) {
       assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
+    }
+
+    const regexNames = await completionNames("regex");
+    for (const expected of ["compile", "escape", "Regex", "Match", "Captures", "Error"]) {
+      assert.ok(regexNames.has(expected), `regex completion should include ${expected}`);
+    }
+
+    const timeNames = await completionNames("time");
+    for (const expected of ["now", "utc", "parse_rfc3339", "monotonic", "DateTime", "Error"]) {
+      assert.ok(timeNames.has(expected), `time completion should include ${expected}`);
     }
 
     const retryCompletion = (await completions("control")).find(

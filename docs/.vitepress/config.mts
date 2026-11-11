@@ -98,6 +98,8 @@ export default defineConfig({
             { text: 'Math Module', link: '/manual/math' },
             { text: 'Bytes, Codecs, And SHA-256', link: '/manual/bytes' },
             { text: 'Gzip Module', link: '/manual/gzip' },
+            { text: 'Regex Module', link: '/manual/regex' },
+            { text: 'Time Module', link: '/manual/time' },
             { text: 'JSON Module', link: '/manual/json' },
             { text: 'Randomness Module', link: '/manual/randomness' },
             { text: 'Concurrency', link: '/manual/concurrency' },

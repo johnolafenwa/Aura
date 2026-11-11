@@ -1,0 +1,78 @@
+# Dates and times over generated timestamps.
+#
+# For each of N instants between 1990 and 2040: write it as RFC 3339 text
+# at a generated offset, parse the text back, add a generated Duration,
+# read the calendar fields, write the result in a log layout, and parse
+# that back. Takes the instant count.
+import sys
+import time
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Totals:
+    parsed: int64 = 0
+    weekdays: int64 = 0
+    year_days: int64 = 0
+    fields: int64 = 0
+    bytes: int64 = 0
+    ordered: int64 = 0
+    checksum: int64 = 0
+
+
+def main() -> int32:
+    args = sys.args()
+    match parse_int64(args[0]):
+        case Result.Ok(n):
+            match run(n):
+                case Result.Ok(summary):
+                    print(summary)
+                    return 0
+                case Result.Err(time.Error.Invalid(message)):
+                    print(message)
+                    return 1
+        case Result.Err(_):
+            print("usage: date_time <instants>")
+            return 2
+
+
+def run(n: int64) -> Result[str, time.Error]:
+    mut rng = Rng(state=59)
+    mut totals = Totals()
+    for i in range(n):
+        # 1990-01-01 plus up to 50 years, to the millisecond.
+        seconds = 631152000 + rng.next() % 1577836800
+        millis = rng.next() % 1000
+        offset = (rng.next() % 105 - 48) * 15
+        start = try (try time.from_unix(seconds, millis * 1000000)).to_offset(offset)
+
+        text = start.to_rfc3339()
+        totals.bytes += text.byte_len()
+        parsed = try time.parse_rfc3339(text)
+        if parsed.same_instant(start) and parsed.offset_minutes() == offset:
+            totals.parsed += 1
+
+        later = parsed.add(
+            Duration.seconds(rng.next() % 31536000) + Duration.ms(rng.next() % 1000)
+        )
+        if parsed.is_before(later):
+            totals.ordered += 1
+        totals.weekdays += later.weekday()
+        totals.year_days += later.day_of_year()
+        totals.fields += later.year() + later.month() + later.day() + later.hour() + later.minute() + later.second()
+
+        line = try later.format("%d/%b/%Y:%H:%M:%S %z")
+        totals.bytes += line.byte_len()
+        again = try time.parse(line, "%d/%b/%Y:%H:%M:%S %z")
+        totals.checksum = (
+            totals.checksum * 31 + again.unix() + round(later.since(again).to_ms())
+        ) % 1000000007
+    return Result.Ok(
+        f"date_time instants={n} parsed={totals.parsed} ordered={totals.ordered} " + f"weekdays={totals.weekdays} year_days={totals.year_days} fields={totals.fields} " + f"bytes={totals.bytes} checksum={totals.checksum}"
+    )

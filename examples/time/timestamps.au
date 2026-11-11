@@ -1,0 +1,59 @@
+# Dates and times: build an instant, read its calendar fields at an offset,
+# do arithmetic with Durations, and write and parse text.
+import time
+
+
+def main():
+    match time.parse_rfc3339("2026-11-10T20:14:38.250Z"):
+        case Result.Ok(sent):
+            report(sent)
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+
+    # Fields are checked, so a date that does not exist is an error value.
+    match time.utc(2026, 2, 29):
+        case Result.Ok(day):
+            print(day.to_rfc3339())
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+
+    # A pattern reads text in other layouts. `%z` reads the offset.
+    match time.parse("10/Nov/2026:21:14:38 +0100", "%d/%b/%Y:%H:%M:%S %z"):
+        case Result.Ok(logged):
+            print(logged.to_utc().to_rfc3339())
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+
+    # The clocks: `now` for the date, `monotonic` for measuring.
+    started = time.monotonic()
+    print(time.now().year() >= 2026)
+    print((time.monotonic() - started).to_seconds() >= 0.0)
+
+
+def report(sent: time.DateTime):
+    print(sent.to_rfc3339())
+    print(
+        f"{sent.year()}-{sent.month()}-{sent.day()} is day {sent.day_of_year()}, weekday {sent.weekday()}"
+    )
+    print(sent.unix_ms())
+
+    # The same instant read five and a half hours east of UTC.
+    match sent.to_offset(330):
+        case Result.Ok(delhi):
+            print(delhi.to_rfc3339())
+            print(f"{delhi.day()} {delhi.hour()}:{delhi.minute()}")
+            print(delhi.same_instant(sent))
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+
+    # Arithmetic takes a Duration and crosses days, months, and years.
+    due = sent.add(Duration.minutes(60 * 24 * 60))
+    print(due.to_rfc3339())
+    print(due.since(sent).to_seconds())
+    print(sent.is_before(due))
+
+    match due.format("%A %d %B %Y, %I:%M %p"):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
