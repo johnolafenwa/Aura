@@ -77,7 +77,13 @@ fn serve(
                 let answer = reply(&request);
                 seen.push(request);
                 match answer {
-                    Reply::Send(bytes) => stream.write_all(&bytes).expect("a reply"),
+                    Reply::Send(bytes) => {
+                        // A client that gives up on a large body closes the
+                        // connection while the reply is still being written.
+                        if stream.write_all(&bytes).is_err() {
+                            break;
+                        }
+                    }
                     Reply::SendAndClose(bytes) => {
                         stream.write_all(&bytes).expect("a reply");
                         break;
