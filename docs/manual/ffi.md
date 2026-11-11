@@ -73,7 +73,7 @@ libraries = ["openblas"]
 | Key | Meaning |
 | --- | --- |
 | `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
-| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. |
 | `frameworks` | macOS frameworks. Other hosts ignore them. |
 
 `[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
@@ -91,9 +91,9 @@ other entry with `AU2999`, so a manifest cannot pass options to the linker.
 `aura build` and `aura run` pass the settings to the C linker. A program
 that names a library the linker cannot find does not build, and the linker's
 message names the library. The built program records each `library_paths`
-directory as a run-time search path, so it finds a library there when it
-starts. To move the program to another machine, install the library where
-that machine's loader looks.
+directory as a run-time search path unless `aura build --no-rpath` omits it.
+Pass `--no-rpath` when building a binary for another machine, and install the
+library where that machine's loader looks.
 
 `aura run --backend mir` loads the same libraries into the interpreter
 before the program starts. A library it cannot load stops the run with
@@ -146,8 +146,10 @@ The rules for these declarations:
 - **Trusted contract.** An indented block of `requires` and `ensures` clauses
   states what the C function needs and promises. `aura verify` proves each
   `requires` at every call and assumes each `ensures` after it, without
-  proof. The program checks neither when it runs, because the contract is
-  trusted. See [Verification](/manual/verification#trust).
+  reading the C body. At run time, the program checks `requires` before the
+  foreign call and `ensures` after it, stopping with `AU4009` when one fails.
+  `aura build --remove-proved-checks` keeps these foreign boundary checks. See
+  [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.

@@ -333,7 +333,8 @@ impl ModuleBackend for LlvmModule {
         Ok(())
     }
 
-    fn finish(self: Box<Self>) -> Result<Vec<u8>, String> {
+    fn finish(mut self: Box<Self>) -> Result<Vec<u8>, String> {
+        self.inline_calls_copied_with_their_loops();
         self.unit_object(
             &self.target_machine()?,
             &Partition::whole(&self),
@@ -349,7 +350,111 @@ impl ModuleBackend for LlvmModule {
             return self.finish().map(|object| vec![object]);
         }
         let threads = std::thread::available_parallelism().map_or(1, std::num::NonZero::get);
-        self.unit_objects(&Partition::split(&self), threads)
+        let mut module = self;
+        module.inline_calls_copied_with_their_loops();
+        module.unit_objects(&Partition::split(&module), threads)
+    }
+}
+
+/// A function of more recorded instructions is never marked for inlining
+/// because its one call was copied.
+const COPIED_CALL_INLINE_WEIGHT: usize = 1_024;
+
+impl LlvmModule {
+    /// Marks for inlining each local function that one call reaches, when
+    /// `version_blocks` copied that call with its loop.
+    ///
+    /// LLVM inlines a local function with one call whatever its size. A
+    /// loop that reads a list view once has two copies, so the function it
+    /// calls has two calls and LLVM weighs each against its size. The
+    /// copies stand for one call in the source, and this keeps the
+    /// function inlined in both.
+    ///
+    /// Only calls in functions the program can reach count: the emitter
+    /// declares a thunk for every function, and LLVM drops the ones
+    /// nothing names before it inlines. A function whose address a
+    /// function or data object takes is left alone. A debug build runs no
+    /// passes and keeps every function.
+    fn inline_calls_copied_with_their_loops(&mut self) {
+        if self.debug_info || !super::optimizes() {
+            return;
+        }
+        let count = self.functions.len();
+        let mut reached = vec![false; count];
+        let mut address_taken = vec![false; count];
+        let mut pending = Vec::new();
+        for (index, decl) in self.functions.iter().enumerate() {
+            if decl.linkage != Linkage::Local {
+                reached[index] = true;
+                pending.push(index);
+            }
+        }
+        // Every data object counts as reached: none is large enough to be
+        // worth following.
+        for decl in &self.data {
+            let addresses = decl
+                .contents
+                .iter()
+                .flat_map(|contents| &contents.addresses);
+            for (_, address) in addresses {
+                if let DataAddress::Function(function) = address {
+                    let index = function.0 as usize;
+                    address_taken[index] = true;
+                    if !std::mem::replace(&mut reached[index], true) {
+                        pending.push(index);
+                    }
+                }
+            }
+        }
+        let mut calls = vec![0_usize; count];
+        let mut copies = vec![0_usize; count];
+        let mut calls_itself = vec![false; count];
+        while let Some(caller) = pending.pop() {
+            let Some(body) = &self.functions[caller].body else {
+                continue;
+            };
+            let callee_of = |callee: &FuncRef| body.func_refs[callee.0 as usize].0 as usize;
+            let mut names = Vec::new();
+            for inst in &body.insts {
+                match &inst.op {
+                    Op::Call(callee, _) => {
+                        let callee = callee_of(callee);
+                        calls[callee] += 1;
+                        calls_itself[callee] |= callee == caller;
+                        names.push(callee);
+                    }
+                    Op::FuncAddr(callee) => {
+                        let callee = callee_of(callee);
+                        address_taken[callee] = true;
+                        names.push(callee);
+                    }
+                    _ => {}
+                }
+            }
+            for callee in &body.copied_calls {
+                copies[callee_of(callee)] += 1;
+            }
+            for callee in names {
+                if !std::mem::replace(&mut reached[callee], true) {
+                    pending.push(callee);
+                }
+            }
+        }
+        for (index, decl) in self.functions.iter_mut().enumerate() {
+            let small = decl
+                .body
+                .as_ref()
+                .is_some_and(|body| body.insts.len() <= COPIED_CALL_INLINE_WEIGHT);
+            if decl.linkage == Linkage::Local
+                && small
+                && copies[index] > 0
+                && calls[index] == copies[index] + 1
+                && !address_taken[index]
+                && !calls_itself[index]
+            {
+                decl.inline = true;
+            }
+        }
     }
 }
 
@@ -665,6 +770,9 @@ struct FunctionIr {
     func_refs: Vec<FuncHandle>,
     data_refs: Vec<DataHandle>,
     sig_refs: Vec<Signature>,
+    /// The callee of each direct call `version_blocks` copied, once per
+    /// copy.
+    copied_calls: Vec<FuncRef>,
     current: Option<u32>,
     params_block: Option<u32>,
     /// The source position of the instructions built from here on.
@@ -786,6 +894,7 @@ impl FunctionIr {
             func_refs: Vec::new(),
             data_refs: Vec::new(),
             sig_refs: Vec::new(),
+            copied_calls: Vec::new(),
             current: None,
             params_block: None,
             location: None,
@@ -972,6 +1081,9 @@ impl FunctionIr {
                     Some(Err(if_true)) => Op::Copy(value(*if_true)),
                     None => map_op(&original.op, value, target),
                 };
+                if let Op::Call(callee, _) = &op {
+                    self.copied_calls.push(*callee);
+                }
                 for successor in op_targets(&op) {
                     self.blocks[successor.0 as usize].predecessors.push(copy);
                 }

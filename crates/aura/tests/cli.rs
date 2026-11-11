@@ -17295,3 +17295,212 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("AU5103"));
 }
+
+#[test]
+fn run_and_direct_backends_distinguish_same_named_classes_in_cross_module_unions() {
+    let alpha = r#"public class Item:
+    public label: str
+"#;
+    let main = r#"import alpha
+
+class Item:
+    count: int64
+
+type Choice = alpha.Item | Item
+
+def describe(choice: Choice) -> str:
+    match choice:
+        case Item as local_item:
+            return f"local:{local_item.count}"
+        case alpha.Item as remote_item:
+            return f"remote:{remote_item.label}"
+
+def main() -> int32:
+    first: Choice = alpha.Item(label="hello")
+    second: Choice = Item(count=7)
+    print(describe(first))
+    print(describe(second))
+    return 0
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-cross-module-union-nominal-collision",
+        main,
+        &[("alpha.au", alpha)],
+        "remote:hello\nlocal:7\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_close_broken_generators_and_propagate_exit_traps() {
+    let cleanup_source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/generator_break_cleanup.au");
+    let cleanup_expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/generator_break_cleanup.stdout");
+    assert_run_and_direct_source_stdout(
+        "aura-generator-break-cleanup-order",
+        cleanup_source,
+        cleanup_expected,
+    );
+
+    let trap_source = r#"from iter import Generator
+
+class FailingGuard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        assert false
+
+def broken() -> Generator[int64]:
+    with _g = FailingGuard():
+        yield 1
+        yield 2
+
+def main() -> int32:
+    for x in broken():
+        if x == 1:
+            break
+    print("survived")
+    return 0
+"#;
+    assert_run_and_direct_source_failure_with_timeout(
+        "aura-generator-break-exit-trap",
+        trap_source,
+        std::time::Duration::from_secs(30),
+        "",
+        "assertion failed",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
+    let temp = TempDir::new("aura-cli-hardening-flags");
+
+    // 1. LOW-01: `aura upgrade` rejects plaintext `http://` installer URLs before invoking curl.
+    let insecure_upgrade = Command::new(aura_bin())
+        .arg("upgrade")
+        .env(
+            "AURA_UPGRADE_INSTALLER_URL",
+            "http://example.invalid/install.sh",
+        )
+        .output()
+        .expect("run aura upgrade with http URL");
+    assert!(
+        !insecure_upgrade.status.success(),
+        "aura upgrade must reject plaintext http:// URLs"
+    );
+    let upgrade_stderr = String::from_utf8_lossy(&insecure_upgrade.stderr);
+    assert!(
+        upgrade_stderr.contains("https://"),
+        "unexpected upgrade stderr:\n{upgrade_stderr}"
+    );
+
+    // 2. HIGH-03: `aura check --offline` blocks uncached remote git dependency fetches.
+    let app_dir = temp.path.join("app");
+    fs::create_dir_all(app_dir.join("src")).expect("create app/src");
+    fs::write(
+        app_dir.join("Aura.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\ndep = { git = \"https://example.invalid/org/dep.git\", branch = \"main\" }\n",
+    )
+    .expect("write app Aura.toml");
+    let main_au = app_dir.join("src/main.au");
+    fs::write(
+        &main_au,
+        "import dep.lib\n\ndef main() -> int32:\n    print(dep.lib.val())\n    return 0\n",
+    )
+    .expect("write app main.au");
+
+    let offline_check = Command::new(aura_bin())
+        .args(["check", "--offline"])
+        .arg(&main_au)
+        .env("XDG_CACHE_HOME", temp.path.join("empty-cache"))
+        .output()
+        .expect("run aura check --offline");
+    assert!(
+        !offline_check.status.success(),
+        "aura check --offline must reject uncached remote git dependencies"
+    );
+    assert!(
+        String::from_utf8_lossy(&offline_check.stderr).contains("offline mode"),
+        "unexpected offline stderr:\n{}",
+        String::from_utf8_lossy(&offline_check.stderr)
+    );
+
+    // 3. MED-03: `aura build --no-rpath` links without embedding build-host library_paths in rpath.
+    let ffi_pkg = temp.path.join("ffi-pkg");
+    let native_dir = ffi_pkg.join("native-rpath-probe");
+    fs::create_dir_all(&native_dir).expect("create native_dir");
+    fs::create_dir_all(ffi_pkg.join("src")).expect("create ffi-pkg/src");
+    let c_lib_name = if cfg!(target_os = "macos") {
+        "libprobe.dylib"
+    } else {
+        "libprobe.so"
+    };
+    let c_src = temp.path.join("probe.c");
+    fs::write(&c_src, "int probe_fn(void) { return 5; }\n").expect("write probe.c");
+    let shared_args: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "-dynamiclib",
+            "-fPIC",
+            "-Wl,-install_name,@rpath/libprobe.dylib",
+        ]
+    } else {
+        &["-shared", "-fPIC", "-Wl,-soname,libprobe.so"]
+    };
+    let cc_status = Command::new("cc")
+        .args(shared_args)
+        .arg(&c_src)
+        .arg("-o")
+        .arg(native_dir.join(c_lib_name))
+        .status()
+        .expect("compile probe shared library");
+    assert!(cc_status.success());
+
+    fs::write(
+        ffi_pkg.join("Aura.toml"),
+        "[package]\nname = \"ffipkg\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n\n[ffi]\nlibraries = [\"probe\"]\nlibrary_paths = [\"native-rpath-probe\"]\n",
+    )
+    .expect("write ffi-pkg Aura.toml");
+    let ffi_main = ffi_pkg.join("src/main.au");
+    fs::write(
+        &ffi_main,
+        "extern \"C\" def probe_fn() -> int32\n\ndef main() -> int32:\n    print(probe_fn())\n    return 0\n",
+    )
+    .expect("write ffi main.au");
+    let out_with_rpath = temp.path.join("ffipkg-with-rpath");
+    let build_with_rpath = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&out_with_rpath)
+        .arg(&ffi_main)
+        .output()
+        .expect("run aura build with default rpath");
+    assert!(
+        build_with_rpath.status.success(),
+        "default aura build failed:\n{}",
+        String::from_utf8_lossy(&build_with_rpath.stderr)
+    );
+    let with_rpath_bytes = fs::read(&out_with_rpath).expect("read default built binary");
+    assert!(
+        String::from_utf8_lossy(&with_rpath_bytes).contains("native-rpath-probe"),
+        "default aura build should embed library_paths in rpath"
+    );
+
+    let out_bin = temp.path.join("ffipkg-no-rpath");
+    let build_no_rpath = Command::new(aura_bin())
+        .args(["build", "--no-rpath", "-o"])
+        .arg(&out_bin)
+        .arg(&ffi_main)
+        .output()
+        .expect("run aura build --no-rpath");
+    assert!(
+        build_no_rpath.status.success(),
+        "aura build --no-rpath failed:\n{}",
+        String::from_utf8_lossy(&build_no_rpath.stderr)
+    );
+    let bin_bytes = fs::read(&out_bin).expect("read built binary");
+    assert!(
+        !String::from_utf8_lossy(&bin_bytes).contains("native-rpath-probe"),
+        "--no-rpath binary must not embed build-host library_paths in rpath"
+    );
+}

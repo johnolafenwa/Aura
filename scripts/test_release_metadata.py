@@ -155,6 +155,10 @@ class ReleaseMetadataTests(unittest.TestCase):
             ROOT / "crates/aura-compiler/tests/native_runtime_ffi.rs"
         ).read_text()
 
+        native_runtime_tests = (
+            ROOT / "crates/aura-runtime/src/native_runtime_tests.rs"
+        ).read_text()
+
         self.assertIn("RUSTUP_TOOLCHAIN: nightly-2026-07-01", workflow)
         self.assertEqual(
             workflow.count("cargo +nightly-2026-07-01 fuzz run"),
@@ -174,7 +178,54 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime)
         self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime_exports)
         self.assertNotIn("aura_direct_coverage_live_value_count", native_runtime_exports)
-        self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 7)
+        test_count = ffi_tests.count("#[test]")
+        self.assertGreaterEqual(test_count, 6)
+        self.assertEqual(
+            ffi_tests.count("let _runtime_guard = direct_runtime_ffi_test_guard();"),
+            test_count,
+        )
+        self.assertEqual(
+            ffi_tests.count("direct_runtime_ffi_test_guard()"),
+            test_count + 1,
+        )
+        self.assertIn(
+            "fn every_direct_task_start_test_holds_claim_flag_test_guard()",
+            native_runtime_tests,
+        )
+
+    def test_ci_and_repo_hygiene_gates_stay_wired_and_non_interactive(self) -> None:
+        gitignore_lines = [
+            line.strip()
+            for line in (ROOT / ".gitignore").read_text().splitlines()
+            if line.strip() and not line.lstrip().startswith("#")
+        ]
+        self.assertEqual(gitignore_lines.count(".DS_Store"), 1)
+        for pattern in ("*.swp", "*.swo", "*~"):
+            self.assertIn(pattern, gitignore_lines)
+
+        package_manifest = json.loads((ROOT / "package.json").read_text())
+        scripts = package_manifest["scripts"]
+        self.assertIn("--all-targets", scripts["check:clippy"])
+        self.assertIn("scripts/test_release_metadata.py", scripts["test:release-metadata"])
+        self.assertIn("scripts/test_generate_llms.py", scripts["test:release-metadata"])
+        self.assertIn("npm run test:release-metadata", scripts["ci"])
+        self.assertIn("npm run docs:llms:check", scripts["ci"])
+
+        docs_workflow = (ROOT / ".github/workflows/docs.yml").read_text()
+        self.assertEqual(docs_workflow.count("scripts/generate_llms.py"), 2)
+        self.assertIn("npm run docs:llms:check", docs_workflow)
+
+        vitepress_config = (ROOT / "docs/.vitepress/config.mts").read_text()
+        self.assertIn("ebnf: 'txt'", vitepress_config)
+
+        install_llvm = (ROOT / "scripts/install-llvm.sh").read_text()
+        self.assertIn(
+            "HOMEBREW_NO_AUTO_UPDATE=1 brew install llvm@22 </dev/null",
+            install_llvm,
+        )
+
+        workspace_lock = (ROOT / "examples/packages/workspace/Aura.lock").read_text()
+        self.assertIn('name = "app"', workspace_lock)
 
     def test_scheduler_stress_filters_resolve_and_fit_the_hosted_budget(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()

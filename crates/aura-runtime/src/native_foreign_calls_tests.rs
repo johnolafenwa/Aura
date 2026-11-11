@@ -719,7 +719,7 @@ fn releases_of(address: *mut c_void) -> usize {
 fn a_handle_with_a_drop_function_releases_its_object_once() {
     use super::{aura_direct_ffi_give_up_handle, aura_direct_ffi_stored_handle};
     let name = "Database";
-    let mut targets = [0_u8; 5];
+    let targets = [0_u8; 5];
     let address =
         |index: usize| -> *mut c_void { targets.as_ptr().wrapping_add(index) as *mut c_void };
     let open = |index: usize| unsafe {
@@ -796,5 +796,4 @@ fn a_handle_with_a_drop_function_releases_its_object_once() {
         aura_direct_release_value(first);
         assert_eq!(releases_of(address(3)), 0, "a type with no drop function");
     }
-    targets[0] = 1;
 }

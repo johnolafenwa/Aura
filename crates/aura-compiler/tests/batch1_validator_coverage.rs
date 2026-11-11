@@ -62,7 +62,7 @@ fn member_callee_mut(instruction: &mut Value) -> &mut Value {
     &mut callee[kind]
 }
 
-fn find_block<'a>(function: &'a mut Value, matches: impl Fn(&Value) -> bool) -> &'a mut Value {
+fn find_block(function: &mut Value, matches: impl Fn(&Value) -> bool) -> &mut Value {
     blocks_mut(function)
         .iter_mut()
         .find(|block| matches(block))

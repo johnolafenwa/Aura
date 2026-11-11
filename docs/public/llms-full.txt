@@ -2993,8 +2993,10 @@ aura check app.au
 | `aura run --backend mir\|direct\|auto file.au` | Choose the execution backend explicitly. |
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
+| `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -6284,7 +6286,9 @@ def main():
 - It takes no `mut` parameters. It may state `requires` clauses, which say
   where it is defined: they are checked when it runs, and `aura verify`
   proves them wherever a contract uses it. It takes no other clauses.
-- It may call other `spec def` functions, itself included.
+- It may call other `spec def` functions, itself included. `aura verify`
+  evaluates recursive calls on concrete arguments and unfolds symbolic calls up
+  to eight levels.
 - Only contract clauses and other `spec def` bodies may call or name a
   module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.
@@ -11379,7 +11383,7 @@ libraries = ["openblas"]
 | Key | Meaning |
 | --- | --- |
 | `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
-| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. |
 | `frameworks` | macOS frameworks. Other hosts ignore them. |
 
 `[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
@@ -11397,9 +11401,9 @@ other entry with `AU2999`, so a manifest cannot pass options to the linker.
 `aura build` and `aura run` pass the settings to the C linker. A program
 that names a library the linker cannot find does not build, and the linker's
 message names the library. The built program records each `library_paths`
-directory as a run-time search path, so it finds a library there when it
-starts. To move the program to another machine, install the library where
-that machine's loader looks.
+directory as a run-time search path unless `aura build --no-rpath` omits it.
+Pass `--no-rpath` when building a binary for another machine, and install the
+library where that machine's loader looks.
 
 `aura run --backend mir` loads the same libraries into the interpreter
 before the program starts. A library it cannot load stops the run with
@@ -11452,8 +11456,10 @@ The rules for these declarations:
 - **Trusted contract.** An indented block of `requires` and `ensures` clauses
   states what the C function needs and promises. `aura verify` proves each
   `requires` at every call and assumes each `ensures` after it, without
-  proof. The program checks neither when it runs, because the contract is
-  trusted. See [Verification](/manual/verification#trust).
+  reading the C body. At run time, the program checks `requires` before the
+  foreign call and `ensures` after it, stopping with `AU4009` when one fails.
+  `aura build --remove-proved-checks` keeps these foreign boundary checks. See
+  [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
@@ -19600,8 +19606,9 @@ A path package is rejected as an update target.
 
 ## Git Resolution, Cache, And Safety
 
-A git source is either an explicit URL or SSH form, or an existing local path
-relative to the declaring manifest. Aura rejects these before invoking git:
+A git source is either an explicit `https://`, `ssh://`, or `git@host:path`
+SSH remote, or an existing local path relative to the declaring manifest. Aura
+rejects these before invoking git:
 
 - empty sources
 - option-like sources that begin with `-`
@@ -19612,6 +19619,10 @@ Aura disables interactive git credential prompts, so package commands fail
 instead of waiting for terminal input. Each git command has a 60-second
 default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to
 override it.
+
+Pass `--offline` or set `AURA_OFFLINE=1` to forbid network git traffic. Offline
+mode resolves local path dependencies, local git repositories, and cached
+remote revisions, and rejects uncached remote git queries.
 
 Resolved revisions live in a content-addressed cache under
 `$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`. When neither
@@ -25519,9 +25530,9 @@ wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
 
-A trusted contract on an `extern "C"` function is the other thing a proof
-relies on without checking. The verifier cannot read C, so it takes the
-`ensures` as given:
+A contract on an `extern "C"` function is the other boundary a proof relies on
+without reading its body. The verifier cannot read C, so it proves each
+`requires` at the call and assumes each `ensures` after it:
 
 ```aura fragment
 extern "C" def clamp_index(i: int64, n: int64) -> int64:
@@ -25529,8 +25540,10 @@ extern "C" def clamp_index(i: int64, n: int64) -> int64:
     ensures 0 <= result and result < n
 ```
 
-A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
-contract to what the C function's own documentation promises.
+At run time, the program checks both clauses around the foreign call and keeps
+those checks under `--remove-proved-checks`. A wrong `ensures` still misleads
+static proofs that rely on it, so keep such a contract to what the C function
+guarantees.
 
 ## Source: docs/book/index.md
 

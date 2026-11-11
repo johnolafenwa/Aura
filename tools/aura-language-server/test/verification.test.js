@@ -95,10 +95,11 @@ test("the verifier runs on the document text and its report is read", async () =
   assert.equal(calls[0].cmd, "aura");
   assert.deepEqual(calls[0].args, ["--x", "verify", "--format", "json", "--stdin", "/work/a.au"]);
   assert.equal(calls[0].options.cwd, "/work");
+  assert.equal(calls[0].options.env.AURA_OFFLINE, "1");
   assert.equal(calls[0].input, "source");
 });
 
-test("a verifier that cannot start, fails, or runs too long gives no report", async () => {
+test("a verifier that cannot start, fails, exceeds stdout cap, aborts, or runs too long gives no report", async () => {
   const throwing = () => {
     throw new Error("no such file");
   };
@@ -110,6 +111,33 @@ test("a verifier that cannot start, fails, or runs too long gives no report", as
     await runVerifier({ cmd: "aura", args: [] }, "a.au", "", hanging.spawnImpl, 5),
     null
   );
+
+  const oversized = fakeSpawn({ stdout: `${"x".repeat(64)}\n${JSON.stringify(REPORT)}\n` });
+  assert.equal(
+    await runVerifier({ cmd: "aura", args: [] }, "a.au", "", oversized.spawnImpl, 1000, {
+      maxStdoutBytes: 32
+    }),
+    null
+  );
+
+  const preAborted = new AbortController();
+  preAborted.abort();
+  const neverCalled = fakeSpawn({ stdout: `${JSON.stringify(REPORT)}\n` });
+  assert.equal(
+    await runVerifier({ cmd: "aura", args: [] }, "a.au", "", neverCalled.spawnImpl, 1000, {
+      signal: preAborted.signal
+    }),
+    null
+  );
+  assert.equal(neverCalled.calls.length, 0);
+
+  const midFlight = new AbortController();
+  const cancellable = fakeSpawn({ hang: true });
+  const pending = runVerifier({ cmd: "aura", args: [] }, "a.au", "", cancellable.spawnImpl, 5000, {
+    signal: midFlight.signal
+  });
+  setImmediate(() => midFlight.abort());
+  assert.equal(await pending, null);
 });
 
 test("only a JSON report with obligations counts", () => {
@@ -175,18 +203,32 @@ test("a line whose checks are all proved gets a hint at its end", () => {
   );
 });
 
-test("a report is kept for the version it verified, from the newest run", () => {
+test("a report is kept for the version it verified, from the newest run, cancelling older runs", () => {
   const state = createVerificationState();
   assert.equal(state.report("a", 1), null);
+  assert.equal(state.signal("a"), null);
   const first = state.start("a");
+  const firstSignal = state.signal("a");
+  assert.equal(firstSignal.aborted, false);
   const second = state.start("a");
+  const secondSignal = state.signal("a");
+  assert.equal(firstSignal.aborted, true);
+  assert.equal(secondSignal.aborted, false);
   assert.equal(state.finish("a", first, 1, REPORT), false);
   assert.equal(state.report("a", 1), null);
   assert.equal(state.finish("a", second, 2, REPORT), true);
+  assert.equal(state.signal("a"), null);
   assert.equal(state.report("a", 2), REPORT);
   assert.equal(state.report("a", 3), null);
   state.delete("a");
   assert.equal(state.report("a", 2), null);
+
+  state.start("b");
+  const activeSignal = state.signal("b");
+  assert.equal(activeSignal.aborted, false);
+  state.delete("b");
+  assert.equal(activeSignal.aborted, true);
+  assert.equal(state.signal("b"), null);
 });
 
 test("verifying on save is on unless turned off", () => {

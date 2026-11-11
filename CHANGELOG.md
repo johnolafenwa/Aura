@@ -75,6 +75,19 @@ in this file.
   [cross-language program](benchmarks/cross_language/README.md),
   `regex_scan`, runs five patterns over 200,000 log lines: Aura 0.83 s,
   Python 1.55 s, Rust 0.27 s. See the [Regex Module](docs/manual/regex.md).
+- Fixed the two regressions the 0.14.0 release measured against 0.13.0.
+  - A hello world executable is 68 KB smaller: 1,167,304 bytes before and
+    1,098,640 now, against 1,080,264 on 0.13.0. `print` no longer links
+    the list and dict code that turns a parsed `json.Value` into values.
+  - Fifteen of the 30 cross-language programs executed 2 to 6% more
+    instructions on 0.14.0. The 30 programs now execute 76,843M
+    instructions, against 79,828M on 0.14.0 and 79,994M on 0.13.0. A new
+    list no longer looks its element type up by name, a dict read tests
+    its storage form once, freeing a value is one inlined path again, and
+    a function with one call is inlined again when its loop has two
+    copies. Four programs stay 1 to 2% above 0.13.0, where they pay for
+    the smaller value header and the JSON tape that 0.14.0 added.
+
 - A method call on a list element no longer takes the element out of the
   list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
   shared call by index (`items[i].get()`), any call in
@@ -211,6 +224,37 @@ in this file.
 - `aura verify` finds the trusted contract of an extern function that has
   a `symbol` clause. It looked the contract up by the C symbol, so the
   contract was ignored.
+- Security and soundness fixes from the 2026-11-10 review.
+  - `aura verify` now reads the contracts, class invariants, `spec def`
+    functions, and `lemma def` functions of imported modules, proves an
+    imported lemma's body before relying on it, and checks that a default
+    argument is well-defined.
+  - A contract on an `extern "C"` function is checked when the program
+    runs: a broken `requires` or `ensures` stops it with `AU4009`, and
+    `--remove-proved-checks` keeps these checks (ADR-0084).
+  - A union of two classes or enums with the same name from different
+    modules, such as `alpha.Item | Item`, selects the right member.
+  - A generator left waiting when a `for` loop ends early is closed at that
+    point on `aura run` too, so its `with` exits run before the code after
+    the loop and a trap in one stops the program.
+  - A recursive `spec def` verifies for concrete arguments and for calls
+    that recurse at most eight levels; deeper calls report the limit.
+  - Git dependencies accept only `https://`, `ssh://`, `git@host:path`, and
+    local paths, never materialize symlinks, and a package's `src` must stay
+    inside the package. `--offline` and `AURA_OFFLINE=1` forbid network git
+    access, and the editor runs the compiler offline.
+  - `library_paths` entries may not contain `..`, a dependency's must stay
+    inside the dependency, and `aura build --no-rpath` leaves them out of
+    the binary's run-time search path.
+  - `aura run` stages a freshly built program in a private directory, loads
+    foreign libraries privately, and refuses a foreign symbol that resolves
+    into `aura` itself (ADR-0084).
+  - An HTTP method must be a token and a response status must be 100 to 999;
+    TLS `read_line` and `read_exact` have the size limits TCP streams have.
+  - `aura upgrade` and `install.sh` download over HTTPS only.
+  - The VS Code extension runs commands as structured tasks, quotes
+    PowerShell arguments literally, and never runs a bare `aura` from the
+    workspace directory; a newer save cancels a running `aura verify`.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

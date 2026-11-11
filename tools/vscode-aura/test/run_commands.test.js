@@ -6,7 +6,9 @@ const path = require("node:path");
 
 const {
   buildOutputPath,
+  commandArgs,
   commandLine,
+  compilerCommand,
   mainDefinitionLines,
   quoteArgument,
   registerRunCommands
@@ -101,9 +103,24 @@ function document(fsPath, { untitled = false, dirty = false, text = "def main() 
   };
 }
 
-test("command lines quote paths for the shell", () => {
+test("command lines quote paths for the shell without PowerShell expansion", () => {
   assert.equal(quoteArgument("/tmp/it's here.au", "linux"), "'/tmp/it'\\''s here.au'");
-  assert.equal(quoteArgument('C:\\a "b".au', "win32"), '"C:\\a ""b"".au"');
+  assert.equal(quoteArgument('C:\\a "b".au', "win32"), '\'C:\\a "b".au\'');
+  assert.equal(
+    quoteArgument("C:\\it's $(calc) $env:SECRET `n %TEMP%.au", "win32"),
+    "'C:\\it''s $(calc) $env:SECRET `n %TEMP%.au'"
+  );
+  const winVscode = fakeVscode({ settings: { compilerPath: "C:\\Program Files\\Aura\\aura.exe" } }).vscode;
+  assert.equal(compilerCommand(winVscode, "win32"), "& 'C:\\Program Files\\Aura\\aura.exe'");
+  assert.equal(compilerCommand(fakeVscode().vscode, "win32"), "aura");
+  assert.deepEqual(commandArgs("run", "/w/main.au", "linux"), ["run", "/w/main.au"]);
+  assert.deepEqual(commandArgs("build", "/w/main.au", "win32"), [
+    "build",
+    "-o",
+    path.join("/w", "main.exe"),
+    "/w/main.au"
+  ]);
+  assert.deepEqual(commandArgs("test", "/w/main.au", "linux"), ["test", "/w/main.au"]);
   assert.equal(buildOutputPath("/work/app/main.au", "linux"), path.join("/work/app", "main"));
   assert.equal(buildOutputPath("/work/app/main.au", "win32"), path.join("/work/app", "main.exe"));
   assert.equal(commandLine("run", "aura", "/w/main.au"), "aura run '/w/main.au'");
@@ -112,6 +129,41 @@ test("command lines quote paths for the shell", () => {
     `aura build -o ${quoteArgument(buildOutputPath("/w/main.au"))} '/w/main.au'`
   );
   assert.equal(commandLine("test", "aura", "/w/main.au"), "aura test '/w/main.au'");
+});
+
+test("commands prefer structured VS Code ShellExecution tasks when available", async () => {
+  const executed = [];
+  const active = document("/w/it's $(safe).au");
+  const fake = fakeVscode({
+    activeDocument: active,
+    settings: { compilerPath: "/opt/aura/bin/aura" },
+    workspaceFolders: [{ uri: { fsPath: "/w" } }]
+  });
+  fake.vscode.TaskScope = { Workspace: 2 };
+  fake.vscode.ShellExecution = class {
+    constructor(command, args) {
+      Object.assign(this, { command, args });
+    }
+  };
+  fake.vscode.Task = class {
+    constructor(definition, scope, name, source, execution) {
+      Object.assign(this, { definition, scope, name, source, execution });
+    }
+  };
+  fake.vscode.tasks = {
+    async executeTask(task) {
+      executed.push(task);
+    }
+  };
+  registerRunCommands(fake.vscode, { subscriptions: [] });
+  await fake.commands.get("aura.runFile")();
+  await fake.commands.get("aura.runTests")();
+  assert.equal(fake.terminals.length, 0);
+  assert.equal(executed.length, 2);
+  assert.equal(executed[0].execution.command, "/opt/aura/bin/aura");
+  assert.deepEqual(executed[0].execution.args, ["run", "/w/it's $(safe).au"]);
+  assert.equal(executed[1].execution.command, "/opt/aura/bin/aura");
+  assert.deepEqual(executed[1].execution.args, ["test", "/w"]);
 });
 
 test("main definitions get Run and Debug lenses", () => {

@@ -5065,7 +5065,7 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     }
 
     fn function_value(signature: &Type, name: &'static [u8]) -> *mut OpaqueValue {
-        let encoded = super::canonical_runtime_type_name(&signature).into_bytes();
+        let encoded = super::canonical_runtime_type_name(signature).into_bytes();
         super::aura_direct_function_value(
             test_native_thunk as *const () as usize as i64,
             1,
@@ -15887,10 +15887,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert!(super::direct_primary_runtime_diagnostic().is_none());
 
     assert_eq!(
-        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_signed(7))),
+        extract_duration_nanoseconds(Value::Int(IntegerValue::from_signed(7))),
         7
     );
-    assert_eq!(extract_duration_nanoseconds(&Value::Duration(9)), 9);
+    assert_eq!(extract_duration_nanoseconds(Value::Duration(9)), 9);
     assert_eq!(decode_bytes(b"aura".as_ptr(), "aura".len()), "aura");
 
     unsafe {
@@ -20059,7 +20059,7 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
 #[test]
 fn duration_integer_outside_signed_range_helper_exits_with_error() {
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-int-out-of-range") {
-        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_literal(u128::MAX)));
+        extract_duration_nanoseconds(Value::Int(IntegerValue::from_literal(u128::MAX)));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -20084,7 +20084,7 @@ fn duration_integer_outside_signed_range_helper_exits_with_error() {
 #[test]
 fn duration_type_mismatch_helper_exits_with_error() {
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-type") {
-        extract_duration_nanoseconds(&Value::String("oops".to_string().into()));
+        extract_duration_nanoseconds(Value::String("oops".to_string().into()));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -20234,15 +20234,12 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
         expect_int(super::aura_direct_unary_value(0, int_value(9))),
         -9
     );
-    assert_eq!(
-        expect_bool_boxed(super::aura_direct_unary_value_at(
-            1,
-            bool_value(false),
-            3,
-            4
-        )),
-        true
-    );
+    assert!(expect_bool_boxed(super::aura_direct_unary_value_at(
+        1,
+        bool_value(false),
+        3,
+        4
+    )));
 
     assert_eq!(
         expect_int(super::aura_direct_binary_value(
@@ -23042,7 +23039,8 @@ fn direct_union_tag_take_and_inject_reject_invalid_metadata_and_identities() {
     let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
     let scalar_name = super::canonical_runtime_type_name(&Type::named("int64"));
 
-    let cases: Vec<(&str, Box<dyn FnOnce() + Send>)> = vec![
+    type Case<'a> = (&'a str, Box<dyn FnOnce() + Send>);
+    let cases: Vec<Case<'_>> = vec![
         (
             "invalid union tag type",
             Box::new(|| {
@@ -25869,7 +25867,7 @@ fn leaf_runtime_type_tags_skip_the_value_lock() {
 fn values_take_the_lock_only_once_shared() {
     let value = string_value("confined");
     let opaque = unsafe { &*value };
-    assert!(!opaque.shared_lock().is_some());
+    assert!(opaque.shared_lock().is_none());
     assert!(matches!(
         opaque.access(true),
         super::DirectValueAccess::Confined
@@ -27237,7 +27235,8 @@ fn direct_lookup_payload_gets_agree_with_lookup_gets() {
         super::aura_direct_vec_push_in_place(groups, int_vec(&[1]));
         groups
     }
-    let cases: [(fn(), fn()); 5] = [
+    type FnPair = (fn(), fn());
+    let cases: [FnPair; 5] = [
         (
             || {
                 super::aura_direct_map_get_str_payload(int_value(3), b"age".as_ptr(), 3);
@@ -27390,7 +27389,8 @@ fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
             payloads: vec![Value::Int(IntegerValue::from_u64(u64::MAX))].into(),
         }))
     }
-    let cases: [(fn(), fn()); 7] = [
+    type FnPair = (fn(), fn());
+    let cases: [FnPair; 7] = [
         (
             || {
                 super::aura_direct_variant_payload_int64(text_variant(), 0);
@@ -29312,4 +29312,46 @@ fn file_read_line_try_hands_back_the_line_and_leaves_a_failure_in_its_word() {
     expect_unit(super::aura_direct_file_close(file));
     unsafe { release_value(file) };
     std::fs::remove_file(&path).expect("fixture should be removed");
+}
+
+#[test]
+fn every_direct_task_start_test_holds_claim_flag_test_guard() {
+    let source = include_str!("native_runtime_tests.rs");
+    let lines: Vec<&str> = source.lines().collect();
+    let mut unguarded = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        let is_test_attr = trimmed == "#[test]";
+        if is_test_attr {
+            let mut fn_idx = index + 1;
+            while fn_idx < lines.len() && lines[fn_idx].trim().starts_with("#[") {
+                fn_idx += 1;
+            }
+            if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
+                let fn_header = lines[fn_idx];
+                let mut end_idx = fn_idx + 1;
+                while end_idx < lines.len() && lines[end_idx] != "}" {
+                    end_idx += 1;
+                }
+                let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
+                let needle_start = ["aura_direct_start_task", "_"].concat();
+                let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
+                let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
+                if (body.contains(&needle_start) || body.contains(&needle_count))
+                    && !body.contains(&needle_guard)
+                {
+                    unguarded.push(format!("line {}: {}", fn_idx + 1, fn_header));
+                }
+                index = end_idx + 1;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    assert!(
+        unguarded.is_empty(),
+        "direct-task tests missing direct_task_claim_flag_test_guard():\n{}",
+        unguarded.join("\n")
+    );
 }

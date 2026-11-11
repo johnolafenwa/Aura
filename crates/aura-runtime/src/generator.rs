@@ -249,6 +249,16 @@ impl GeneratorValue {
         self.drive(GeneratorInput::Next)
     }
 
+    /// Whether this handle is the sole remaining reference to a generator
+    /// currently suspended on this thread.
+    pub fn should_close_on_release(&self) -> bool {
+        if Arc::strong_count(&self.inner) != 1 {
+            return false;
+        }
+        let state = lock(&self.inner);
+        state.status == GeneratorStatus::Suspended && state.owner == std::thread::current().id()
+    }
+
     /// Closes the generator: a suspended body sees its `yield` return false
     /// and runs its cleanup. Closing an ended generator does nothing.
     pub fn close(&self) -> Result<(), Diagnostic> {

@@ -37,7 +37,7 @@ fn assert_rejected(encoded: Value, expected: &str) {
 }
 
 /// The erased callable contract of the first parameter of `function`.
-fn boundary_callable_mut<'a>(function: &'a mut Value) -> &'a mut Value {
+fn boundary_callable_mut(function: &mut Value) -> &mut Value {
     function["params"][0]
         .get_mut("ty")
         .and_then(|ty| ty.get_mut("Callable"))

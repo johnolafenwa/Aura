@@ -26,7 +26,7 @@ fn malformed_descriptors_are_rejected() {
     let wrong_key = union_descriptor.replacen("int32", "int64", 1);
     let cases = [
         ("u".to_string(), "unknown version"),
-        (format!("{DESCRIPTOR_PREFIX}"), "ends early"),
+        (DESCRIPTOR_PREFIX.to_string(), "ends early"),
         (format!("{DESCRIPTOR_PREFIX}x"), "unknown type tag"),
         (format!("{DESCRIPTOR_PREFIX}uu"), "trailing bytes"),
         (format!("{DESCRIPTOR_PREFIX}n9:int"), "string ends early"),

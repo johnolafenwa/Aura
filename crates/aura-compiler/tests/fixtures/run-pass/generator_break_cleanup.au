@@ -1,0 +1,26 @@
+from iter import Generator
+
+class Guard:
+    events: Queue[str]
+
+    def __enter__(mut self) -> None:
+        _ = self.events.put("enter:gen")
+
+    def __exit__(mut self) -> None:
+        _ = self.events.put("exit:gen")
+
+def stream_numbers(events: Queue[str]) -> Generator[int64]:
+    with _g = Guard(events=events):
+        yield 10
+        yield 20
+
+def main() -> int32:
+    events = Queue[str]()
+    for n in stream_numbers(events):
+        _ = events.put(f"got:{n}")
+        break
+    _ = events.put("after_loop")
+    events.close()
+    for item in events:
+        print(item)
+    return 0

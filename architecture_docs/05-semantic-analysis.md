@@ -191,11 +191,12 @@ single-consumer right uses `AU3009`, and reuse after a consuming observation
 uses ordinary `AU3001`.
 
 This section describes the implemented Provisional Phase 5.6 semantic
-contract. Phase 5.7 uses it as the admission boundary for spawn-time pinned
-workers on both backends: Queue and Task handles may communicate across
-workers, while all other captures and results cross as owned `Transfer`
-values. The semantic property does not by itself promise preemption, work
-stealing, a scheduling order, or parallel speedup.
+contract. Phase 5.7 uses it as the admission boundary for pinned workers on
+both backends: Queue and Task handles may communicate across workers, while
+all other captures and results cross as owned `Transfer` values. A task binds
+to the worker that first runs it, and an idle worker may steal a child that
+has not started. The semantic property does not by itself promise preemption,
+a scheduling order, or parallel speedup.
 
 ## A tiny Aura-like type checker in Rust
 
