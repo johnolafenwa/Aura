@@ -15,9 +15,14 @@ const REQUEST_TIMEOUT_MS = 10_000;
 
 function startLanguageServer(serverPath, environment = {}) {
   // These tests analyze this checkout with its own build, as a contributor
-  // who opts in to workspace compiler discovery would.
+  // who opts in to workspace compiler discovery would, without picking up
+  // stale globally installed `aura` binaries from the host machine.
+  const isolatedHome = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-proto-home-"));
   const env = {
     ...process.env,
+    HOME: isolatedHome,
+    USERPROFILE: isolatedHome,
+    AURA_LSP_SYSTEM_BIN_DIRS: "",
     AURA_LSP_USE_WORKSPACE_COMPILER: "1",
     ...environment,
     PATH: ""
@@ -29,6 +34,9 @@ function startLanguageServer(serverPath, environment = {}) {
     cwd: path.resolve(__dirname, ".."),
     env,
     stdio: ["pipe", "pipe", "pipe"]
+  });
+  child.on("exit", () => {
+    fs.rmSync(isolatedHome, { recursive: true, force: true });
   });
   const pending = new Map();
   const notificationWaiters = new Map();
@@ -1235,3 +1243,56 @@ test("bundled language server serves highlights, tokens, hints, fixes, and works
   });
   assert.deepEqual(impls.result.map((location) => location.range.start.line), [6]);
 });
+
+test(
+  "bundled language server skips aura verify for untitled buffers",
+  { skip: process.platform === "win32" },
+  async (t) => {
+    const serverPath = process.env.AURA_EXTENSION_SERVER_PATH
+      ? path.resolve(process.env.AURA_EXTENSION_SERVER_PATH)
+      : path.resolve(__dirname, "..", "dist", "server.js");
+    const temp = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-untitled-verify-"));
+    t.after(() => fs.rmSync(temp, { recursive: true, force: true }));
+    const verifyMarker = path.join(temp, "verify-invoked");
+    const fakeAura = path.join(temp, "aura");
+    fs.writeFileSync(
+      fakeAura,
+      `#!${process.execPath}\n` +
+        `"use strict";\n` +
+        `const fs = require("node:fs");\n` +
+        `const readline = require("node:readline");\n` +
+        `if (process.argv[2] === "verify") {\n` +
+        `  fs.writeFileSync(${JSON.stringify(verifyMarker)}, "ran");\n` +
+        `  process.exit(0);\n` +
+        `}\n` +
+        `readline.createInterface({ input: process.stdin }).on("line", (line) => {\n` +
+        `  const request = JSON.parse(line);\n` +
+        `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION}, result: { diagnostics: [], symbols: [], occurrences: [] } }) + "\\n");\n` +
+        `});\n`
+    );
+    fs.chmodSync(fakeAura, 0o755);
+
+    const client = startLanguageServer(serverPath, {
+      AURA_LSP_AURA_PATH: fakeAura,
+      AURA_LSP_VERIFY: "1"
+    });
+    t.after(() => client.dispose());
+    await client.request("initialize", {
+      processId: null,
+      rootUri: null,
+      capabilities: {},
+      workspaceFolders: null
+    });
+    client.notify("initialized", {});
+
+    const uri = "untitled:Untitled-1";
+    const published = publishedDiagnostics(client, uri);
+    client.notify("textDocument/didOpen", {
+      textDocument: { uri, languageId: "aura", version: 1, text: "def main():\n    pass\n" }
+    });
+    assert.deepEqual(await published, []);
+    client.notify("textDocument/didSave", { textDocument: { uri } });
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    assert.equal(fs.existsSync(verifyMarker), false, "untitled buffer triggered aura verify");
+  }
+);

@@ -7,6 +7,8 @@ use super::super::list_snapshots::list_snapshot_regions;
 use super::{range_proof, RangeBound, RangeGuard, RangeProof};
 
 const SOURCE: &str = r#"
+from simd import F64x4
+
 def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
     for i in range(len(xs)):
         y = ys[i]
@@ -98,6 +100,12 @@ def stepped(xs: list[int64]) -> int64:
     for i in range(0, len(xs) - 1, 2):
         total += xs[i] + xs[i + 1]
     return total
+
+def lanes(xs: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i)
+    return acc.sum()
 
 def main():
     mut ys = [1.0, 2.0, 3.0]
@@ -210,10 +218,11 @@ fn a_range_loop_covers_reads_and_writes_at_its_counter() {
 fn an_access_beside_the_counter_guards_its_distance() {
     let xs = proof("stencil", "xs");
     assert_eq!(xs.covered.len(), 2, "{xs:?}");
-    // `xs[i - 1]` needs the counter to start at 1, and `xs[i + 1]` needs
-    // the bound to stop one short of the length.
-    assert_eq!(at_least(&xs.guards), vec![-1, 1]);
-    assert_eq!(within(&xs.guards), vec![-1, 1]);
+    // `xs[i - 1]` needs the counter to start at 1, which covers what
+    // `xs[i + 1]` needs of it, and `xs[i + 1]` needs the bound to stop one
+    // short of the length.
+    assert_eq!(at_least(&xs.guards), vec![1]);
+    assert_eq!(within(&xs.guards), vec![1]);
     let out = proof("stencil", "out");
     assert_eq!(
         (at_least(&out.guards), within(&out.guards)),
@@ -330,8 +339,21 @@ fn a_sum_is_exact_only_below_a_bound_the_guards_hold() {
 fn a_stepped_range_loop_covers_its_accesses_and_its_advance() {
     let xs = proof("stepped", "xs");
     assert_eq!(xs.covered.len(), 2, "{xs:?}");
-    assert_eq!(at_least(&xs.guards), vec![-1, 0]);
-    assert_eq!(within(&xs.guards), vec![0, 1]);
+    // The first iteration reads at the counter's first value and one past
+    // it. Every later one follows the test against the last value, two
+    // below `stop`, and an advance by 2.
+    assert_eq!(at_least(&xs.guards), vec![0]);
+    assert_eq!(within(&xs.guards), vec![2, 3]);
     // The index sum `i + 1` and the advance by 2 where the iteration ends.
     assert_eq!(xs.exact.len(), 2, "{xs:?}");
+}
+
+#[test]
+fn a_lane_load_asks_for_one_guard_of_each_kind() {
+    let xs = proof("lanes", "xs");
+    assert_eq!(xs.covered.len(), 4, "{xs:?}");
+    // Four lanes need the counter at least 0 once, and the furthest lane
+    // inside the list from the entry and from the advance.
+    assert_eq!(at_least(&xs.guards), vec![0]);
+    assert_eq!(within(&xs.guards), vec![4, 7]);
 }

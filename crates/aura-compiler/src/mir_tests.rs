@@ -5184,8 +5184,8 @@ def main():
     else {
         panic!("unexpected counted binding: {:?}", next.instructions);
     };
-    // The last value an iteration may start from is `stop - step`, taken
-    // only when `stop` is not negative, so it cannot overflow.
+    // The last value an iteration may advance from is below `stop - step`,
+    // taken only when the difference cannot overflow.
     let [back] = labelled("_for_range_last_back_")[..] else {
         panic!("one counted loop should compute its last value");
     };
@@ -5226,7 +5226,7 @@ def main():
         .find(|block| {
             matches!(
                 &block.terminator,
-                Terminator::Branch { else_label, .. } if *else_label == step.label
+                Terminator::Branch { then_label, .. } if *then_label == step.label
             )
         })
         .expect("a block should branch to the advance");
@@ -5234,13 +5234,30 @@ def main():
         instruction,
         Instruction::Assign {
             value: Rvalue::Binary {
-                op: BinaryOp::LessEq,
-                right: Operand::Place(right),
+                op: BinaryOp::Less,
+                left: Operand::Place(left),
                 ..
             },
             ..
-        } if right == cursor
+        } if left == cursor
     )));
+    // The advance goes back to the block that binds the counter, so the
+    // loop has one test for each iteration after the first.
+    assert!(matches!(
+        &step.terminator,
+        Terminator::Goto(label) if *label == next.label
+    ));
+    // A `stop` too low to subtract the step from leaves one iteration.
+    let [first] = labelled("_for_range_last_first_")[..] else {
+        panic!("one counted loop should handle a stop near the least int64");
+    };
+    assert!(matches!(
+        first.instructions.as_slice(),
+        [Instruction::Assign {
+            value: Rvalue::Use(Operand::Place(from)),
+            ..
+        }] if from == cursor
+    ));
 }
 
 #[test]
@@ -5351,7 +5368,9 @@ fn simd_lane_counts_come_from_the_class_name() {
     assert_eq!(simd_lane_count("F64x2"), Some(2));
     assert_eq!(simd_lane_count("F64x4"), Some(4));
     assert_eq!(simd_lane_count("F32x8"), Some(8));
-    for name in ["F64", "I64x4", "F64x3", "F64xx", "Lanes", "F16x4"] {
+    assert_eq!(simd_lane_count("I64x2"), Some(2));
+    assert_eq!(simd_lane_count("I64x4"), Some(4));
+    for name in ["F64", "I32x4", "F64x3", "F64xx", "Lanes", "F16x4"] {
         assert_eq!(simd_lane_count(name), None, "{name}");
     }
 }
@@ -13533,8 +13552,10 @@ fn batch1_loan_ancestor_walks_stop_on_cycles() {
 #[test]
 fn batch1_loan_path_budgets_reject_oversized_expansions() {
     let function = batch1_test_function("budget");
-    let mut state = ValidatedLoanState::default();
-    state.active_path_bytes = MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES;
+    let state = ValidatedLoanState {
+        active_path_bytes: MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES,
+        ..Default::default()
+    };
     let error = validate_active_loan_path_budget(&function, "loan", &state, 1)
         .expect_err("a full path budget admits no new loan");
     assert!(
@@ -16177,4 +16198,79 @@ def main():
     // Three components pass their words as a tuple.
     assert_eq!(count("Select"), 1, "{rendered}");
     assert_eq!(count("Assign"), 1, "{rendered}");
+}
+
+#[test]
+fn a_contracted_extern_with_a_callback_gets_a_wrapper_for_each_callback() {
+    let source = r#"extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None:
+    requires size == 4
+extern "C" def labs(value: int64) -> int64:
+    ensures result >= 0
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64:
+    ensures exponent >= old(exponent) - 2000
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    return b - a
+
+def main():
+    mut values: list[int32] = [3, 9, 1]
+    qsort(values, 3, 4, ascending)
+    qsort(values, 3, 4, descending)
+    qsort(values, 3, 4, compare=descending)
+    print(labs(-2))
+    mut exponent: int32 = 0
+    print(frexp(48.0, exponent))
+"#;
+    let module = lower_ffi_source(source);
+    let wrappers = module
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("::__extern_contract"))
+        .map(|function| function.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wrappers,
+        [
+            "frexp::__extern_contract",
+            "labs::__extern_contract",
+            "qsort::__extern_contract::compare=ascending",
+            "qsort::__extern_contract::compare=descending",
+        ]
+    );
+    // Each copy names its callback in the foreign call.
+    for (wrapper, callback) in [(wrappers[2], "ascending"), (wrappers[3], "descending")] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == wrapper)
+            .expect("the wrapper exists");
+        let named = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call { callee: CallTarget::Extern(_), args, .. },
+                        ..
+                    } if args.iter().any(|arg| matches!(
+                        &arg.value,
+                        Operand::Function { name, .. } if name == callback
+                    ))
+                )
+            });
+        assert!(named, "{wrapper}");
+    }
+    assert_eq!(
+        crate::mir::public_function_name(wrappers[2]),
+        "qsort",
+        "a backtrace shows the declared name"
+    );
 }

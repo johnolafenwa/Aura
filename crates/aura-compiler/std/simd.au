@@ -1,5 +1,5 @@
 # The builtin `simd` module: values of two, four, or eight numbers that
-# native code keeps in one vector register (ADR-0087). The compiler checks
+# native code keeps in one vector register (ADR-0087, ADR-0092). The compiler checks
 # this file as module `simd`. Each class is a plain Copy class of lanes, and
 # each method is ordinary Aura over the lanes, so `aura run` and a native
 # build compute the same bits. Native code holds the lanes unboxed, and LLVM
@@ -363,3 +363,139 @@ impl Div[F32x8, F32x8] for F32x8:
 impl Neg[F32x8] for F32x8:
     def neg(self) -> F32x8:
         return F32x8(l0=-self.l0, l1=-self.l1, l2=-self.l2, l3=-self.l3, l4=-self.l4, l5=-self.l5, l6=-self.l6, l7=-self.l7)
+
+
+public copy class I64x2:
+    """Two `int64` lanes, `l0` first."""
+    public l0: int64
+    public l1: int64
+
+    public def splat(value: int64) -> I64x2:
+        """Every lane holds `value`."""
+        return I64x2(l0=value, l1=value)
+
+    public def load(values: list[int64], at: int64) -> I64x2:
+        """The 2 elements of `values` from index `at`. Each index
+        follows the list index rules and must be inside the list."""
+        return I64x2(l0=values[at], l1=values[at + 1])
+
+    public def store(self, values: mut list[int64], at: int64):
+        """Writes the lanes over the 2 elements of `values` from index
+        `at`. Each index must be inside the list."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+
+    public def min(self, other: I64x2) -> I64x2:
+        """In each lane, `self` where it is less than `other`, else
+        `other`."""
+        return I64x2(l0=(self.l0 if self.l0 < other.l0 else other.l0), l1=(self.l1 if self.l1 < other.l1 else other.l1))
+
+    public def max(self, other: I64x2) -> I64x2:
+        """In each lane, `self` where it is greater than `other`, else
+        `other`."""
+        return I64x2(l0=(self.l0 if self.l0 > other.l0 else other.l0), l1=(self.l1 if self.l1 > other.l1 else other.l1))
+
+    public def abs(self) -> I64x2:
+        """The absolute value of each lane. The least
+        `int64` has none and reports overflow."""
+        return I64x2(l0=abs(self.l0), l1=abs(self.l1))
+
+    public def sum(self) -> int64:
+        """The sum of the lanes, added in pairs: `(l0 + l1) + (l2 + l3)`
+        for four lanes. A sum outside the element type
+        reports overflow."""
+        return self.l0 + self.l1
+
+    public def to_list(self) -> list[int64]:
+        """The lanes as a list, `l0` first."""
+        return [self.l0, self.l1]
+
+
+impl Add[I64x2, I64x2] for I64x2:
+    def add(self, rhs: I64x2) -> I64x2:
+        return I64x2(l0=self.l0 + rhs.l0, l1=self.l1 + rhs.l1)
+
+
+impl Sub[I64x2, I64x2] for I64x2:
+    def sub(self, rhs: I64x2) -> I64x2:
+        return I64x2(l0=self.l0 - rhs.l0, l1=self.l1 - rhs.l1)
+
+
+impl Mul[I64x2, I64x2] for I64x2:
+    def mul(self, rhs: I64x2) -> I64x2:
+        return I64x2(l0=self.l0 * rhs.l0, l1=self.l1 * rhs.l1)
+
+
+impl Neg[I64x2] for I64x2:
+    def neg(self) -> I64x2:
+        return I64x2(l0=-self.l0, l1=-self.l1)
+
+
+public copy class I64x4:
+    """Four `int64` lanes, `l0` first."""
+    public l0: int64
+    public l1: int64
+    public l2: int64
+    public l3: int64
+
+    public def splat(value: int64) -> I64x4:
+        """Every lane holds `value`."""
+        return I64x4(l0=value, l1=value, l2=value, l3=value)
+
+    public def load(values: list[int64], at: int64) -> I64x4:
+        """The 4 elements of `values` from index `at`. Each index
+        follows the list index rules and must be inside the list."""
+        return I64x4(l0=values[at], l1=values[at + 1], l2=values[at + 2], l3=values[at + 3])
+
+    public def store(self, values: mut list[int64], at: int64):
+        """Writes the lanes over the 4 elements of `values` from index
+        `at`. Each index must be inside the list."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+        values[at + 2] = self.l2
+        values[at + 3] = self.l3
+
+    public def min(self, other: I64x4) -> I64x4:
+        """In each lane, `self` where it is less than `other`, else
+        `other`."""
+        return I64x4(l0=(self.l0 if self.l0 < other.l0 else other.l0), l1=(self.l1 if self.l1 < other.l1 else other.l1), l2=(self.l2 if self.l2 < other.l2 else other.l2), l3=(self.l3 if self.l3 < other.l3 else other.l3))
+
+    public def max(self, other: I64x4) -> I64x4:
+        """In each lane, `self` where it is greater than `other`, else
+        `other`."""
+        return I64x4(l0=(self.l0 if self.l0 > other.l0 else other.l0), l1=(self.l1 if self.l1 > other.l1 else other.l1), l2=(self.l2 if self.l2 > other.l2 else other.l2), l3=(self.l3 if self.l3 > other.l3 else other.l3))
+
+    public def abs(self) -> I64x4:
+        """The absolute value of each lane. The least
+        `int64` has none and reports overflow."""
+        return I64x4(l0=abs(self.l0), l1=abs(self.l1), l2=abs(self.l2), l3=abs(self.l3))
+
+    public def sum(self) -> int64:
+        """The sum of the lanes, added in pairs: `(l0 + l1) + (l2 + l3)`
+        for four lanes. A sum outside the element type
+        reports overflow."""
+        return (self.l0 + self.l1) + (self.l2 + self.l3)
+
+    public def to_list(self) -> list[int64]:
+        """The lanes as a list, `l0` first."""
+        return [self.l0, self.l1, self.l2, self.l3]
+
+
+impl Add[I64x4, I64x4] for I64x4:
+    def add(self, rhs: I64x4) -> I64x4:
+        return I64x4(l0=self.l0 + rhs.l0, l1=self.l1 + rhs.l1, l2=self.l2 + rhs.l2, l3=self.l3 + rhs.l3)
+
+
+impl Sub[I64x4, I64x4] for I64x4:
+    def sub(self, rhs: I64x4) -> I64x4:
+        return I64x4(l0=self.l0 - rhs.l0, l1=self.l1 - rhs.l1, l2=self.l2 - rhs.l2, l3=self.l3 - rhs.l3)
+
+
+impl Mul[I64x4, I64x4] for I64x4:
+    def mul(self, rhs: I64x4) -> I64x4:
+        return I64x4(l0=self.l0 * rhs.l0, l1=self.l1 * rhs.l1, l2=self.l2 * rhs.l2, l3=self.l3 * rhs.l3)
+
+
+impl Neg[I64x4] for I64x4:
+    def neg(self) -> I64x4:
+        return I64x4(l0=-self.l0, l1=-self.l1, l2=-self.l2, l3=-self.l3)

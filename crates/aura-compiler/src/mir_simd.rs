@@ -33,7 +33,7 @@ pub(super) const SIMD_SOURCE_PATH: &str = "<std>/simd.au";
 /// How many lanes the lane class `name` holds: `F64x4` holds four.
 pub(super) fn simd_lane_count(name: &str) -> Option<usize> {
     let (element, lanes) = name.rsplit_once('x')?;
-    if !matches!(element, "F32" | "F64") {
+    if !matches!(element, "F32" | "F64" | "I64") {
         return None;
     }
     lanes

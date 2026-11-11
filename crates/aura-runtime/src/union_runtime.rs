@@ -72,10 +72,83 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
     }
 }
 
+fn active_concrete_key(value: &Value) -> Option<&str> {
+    let Value::Union(union) = value else {
+        return None;
+    };
+    let Type::Union(own) = &*union.union_type else {
+        return None;
+    };
+    let member = own.members.get(union.member_index)?;
+    if is_type_param(member) {
+        return None;
+    }
+    own.keys.get(union.member_index).map(String::as_str)
+}
+
+/// Locates `candidate` among the concrete (non-type-parameter) members of
+/// `target`. Prefers an exact member or canonical-key match in `target`'s
+/// defining module, falling back to one-sided module qualification only when
+/// it identifies a single concrete member unambiguously.
+fn concrete_member_index(target: &UnionType, candidate: &Type) -> Option<usize> {
+    let candidate_key = (!target.module_name.is_empty())
+        .then(|| candidate.canonical_key(&target.module_name, &std::collections::BTreeMap::new()));
+    if let Some(index) = target.members.iter().enumerate().position(|(i, member)| {
+        !is_type_param(member)
+            && (member == candidate
+                || candidate_key
+                    .as_deref()
+                    .zip(target.keys.get(i).map(String::as_str))
+                    .is_some_and(|(left, right)| left == right))
+    }) {
+        return Some(index);
+    }
+    let matches = target
+        .members
+        .iter()
+        .enumerate()
+        .filter_map(|(i, member)| {
+            (!is_type_param(member) && member_matches(candidate, member)).then_some(i)
+        })
+        .collect::<Vec<_>>();
+    match matches.as_slice() {
+        [single] => Some(*single),
+        _ => None,
+    }
+}
+
 /// Active-member equality between two values of which at least one is a
 /// union: the active member identities must match and the payloads must be
 /// equal. Different tags are unequal even when the payloads coincide.
 pub fn union_values_equal(left: &Value, right: &Value) -> bool {
+    fn payload(value: &Value) -> &Value {
+        match value {
+            Value::Union(union) => &union.payload,
+            other => other,
+        }
+    }
+    match (active_concrete_key(left), active_concrete_key(right)) {
+        (Some(left_key), Some(right_key)) => {
+            return left_key == right_key && payload(left) == payload(right);
+        }
+        (Some(_), None) => {
+            if let (Value::Union(union), Some(right_identity)) = (left, member_identity(right)) {
+                if let Type::Union(own) = &*union.union_type {
+                    return concrete_member_index(own, &right_identity) == Some(union.member_index)
+                        && payload(left) == payload(right);
+                }
+            }
+        }
+        (None, Some(_)) => {
+            if let (Some(left_identity), Value::Union(union)) = (member_identity(left), right) {
+                if let Type::Union(own) = &*union.union_type {
+                    return concrete_member_index(own, &left_identity) == Some(union.member_index)
+                        && payload(left) == payload(right);
+                }
+            }
+        }
+        (None, None) => {}
+    }
     let (Some(left_identity), Some(right_identity)) =
         (member_identity(left), member_identity(right))
     else {
@@ -83,12 +156,6 @@ pub fn union_values_equal(left: &Value, right: &Value) -> bool {
     };
     if !member_matches(&left_identity, &right_identity) {
         return false;
-    }
-    fn payload(value: &Value) -> &Value {
-        match value {
-            Value::Union(union) => &union.payload,
-            other => other,
-        }
     }
     payload(left) == payload(right)
 }
@@ -158,16 +225,23 @@ pub fn plan_union_alignment(
         if matches!(&*union.union_type, Type::Union(own) if own.keys == target.keys) {
             return Ok(UnionAlignment::Exact);
         }
+        if let Some(own_key) = active_concrete_key(value) {
+            if let Some(index) = target
+                .keys
+                .iter()
+                .enumerate()
+                .position(|(i, key)| !is_type_param(&target.members[i]) && key == own_key)
+            {
+                return Ok(UnionAlignment::Retag(index));
+            }
+        }
     }
     let Some(active) = member_identity(value) else {
         return Err(format!(
             "{operation} cannot identify the active union member"
         ));
     };
-    let index = target
-        .members
-        .iter()
-        .position(|member| !is_type_param(member) && member_matches(&active, member))
+    let index = concrete_member_index(target, &active)
         .or_else(|| target.members.iter().position(is_type_param))
         .ok_or_else(|| format!("{operation} type identity mismatch"))?;
     Ok(match value {
@@ -321,12 +395,8 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
                 return value;
             }
             let admissible = matches!(&value, Value::Union(_))
-                || member_identity(&value).is_some_and(|active| {
-                    target
-                        .members
-                        .iter()
-                        .any(|member| !is_type_param(member) && member_matches(&active, member))
-                });
+                || member_identity(&value)
+                    .is_some_and(|active| concrete_member_index(target, &active).is_some());
             if admissible && align_union_value(&mut value, target, "union boundary").is_ok() {
                 return value;
             }
@@ -335,11 +405,24 @@ pub fn coerce_union_boundary(value: Value, expected: &Type) -> Value {
         Type::TypeParam(_) => value,
         Type::Named(name, _) if name == "Unknown" => value,
         other => match value {
-            Value::Union(union)
-                if member_identity(&Value::Union(union.clone()))
-                    .is_some_and(|active| member_matches(&active, other)) =>
-            {
-                union.payload
+            Value::Union(union) => {
+                let unwrap = match &*union.union_type {
+                    Type::Union(own)
+                        if own
+                            .members
+                            .get(union.member_index)
+                            .is_some_and(|member| !is_type_param(member)) =>
+                    {
+                        concrete_member_index(own, other) == Some(union.member_index)
+                    }
+                    _ => member_identity(&Value::Union(union.clone()))
+                        .is_some_and(|active| member_matches(&active, other)),
+                };
+                if unwrap {
+                    union.payload
+                } else {
+                    Value::Union(union)
+                }
             }
             value => value,
         },

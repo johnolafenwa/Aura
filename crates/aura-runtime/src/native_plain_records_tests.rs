@@ -267,7 +267,8 @@ fn registration_refuses_tables_codes_and_descriptors_it_cannot_honor() {
     registered(name, FIRST_TEST_ACCESS + 10);
     let other = entry("PlainTestOtherCodes", 0);
     let other_descriptor = (other.descriptor as usize, other.len);
-    let cases: Vec<(&str, Box<dyn FnOnce() + Send>)> = vec![
+    type Case<'a> = (&'a str, Box<dyn FnOnce() + Send>);
+    let cases: Vec<Case<'_>> = vec![
         (
             "direct runtime received a null plain layout table",
             Box::new(|| unsafe { aura_direct_register_plain_layouts(std::ptr::null(), 1) }),
@@ -361,7 +362,8 @@ fn record_helpers_report_bad_cells_shapes_and_positions() {
             str_view: Default::default(),
         })) as usize
     };
-    let cases: Vec<(&str, Box<dyn FnOnce() + Send>)> = vec![
+    type Case<'a> = (&'a str, Box<dyn FnOnce() + Send>);
+    let cases: Vec<Case<'_>> = vec![
         (
             "direct runtime received a null layout cell",
             Box::new(move || unsafe {

@@ -435,3 +435,41 @@ fn forged_union_values_without_a_union_type_have_no_identity() {
     );
     assert!(!union_values_equal(&forged, &int(1)));
 }
+
+#[test]
+fn cross_module_nominal_collision_distinguishes_imported_and_entry_classes() {
+    // Entry module `main` defines `Item` while importing `alpha.Item`.
+    // Canonical sorting orders `"alpha.Item"` (index 0) before `"main.Item"` (index 1).
+    let choice = union(vec![Type::named("alpha.Item"), Type::named("Item")]);
+    let remote_index = index_of(&choice, &Type::named("alpha.Item"));
+    let local_index = index_of(&choice, &Type::named("Item"));
+    assert_eq!((remote_index, local_index), (0, 1));
+
+    let remote_instance = Value::Instance(InstanceValue {
+        class_name: crate::runtime_value::RuntimeName::from("alpha.Item".to_string()),
+        fields: Default::default(),
+    });
+    let local_instance = Value::Instance(InstanceValue {
+        class_name: crate::runtime_value::RuntimeName::from("Item".to_string()),
+        fields: Default::default(),
+    });
+
+    assert_eq!(
+        plan_union_alignment(&remote_instance, &choice, "lift remote"),
+        Ok(UnionAlignment::Lift(remote_index))
+    );
+    assert_eq!(
+        plan_union_alignment(&local_instance, &choice, "lift local"),
+        Ok(UnionAlignment::Lift(local_index))
+    );
+
+    let remote_union = union_value(&choice, &Type::named("alpha.Item"), remote_instance.clone());
+    let local_union = union_value(&choice, &Type::named("Item"), local_instance.clone());
+    assert!(!union_values_equal(&remote_union, &local_union));
+    assert!(!union_values_equal(&remote_union, &local_instance));
+    assert!(union_values_equal(&local_union, &local_instance));
+
+    // Ambiguous bare `Item` against two distinct imported `alpha.Item | beta.Item` must fail closed.
+    let two_imported = union(vec![Type::named("alpha.Item"), Type::named("beta.Item")]);
+    assert!(plan_union_alignment(&local_instance, &two_imported, "ambiguous").is_err());
+}

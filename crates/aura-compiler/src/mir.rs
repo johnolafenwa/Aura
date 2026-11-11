@@ -10671,6 +10671,9 @@ pub fn lower_implicit(program: &Program) -> MirModule {
 /// arguments.
 pub(crate) fn public_function_name(name: &str) -> String {
     let name = name
+        .split_once("::__extern_contract")
+        .map_or(name, |(public, _)| public);
+    let name = name
         .split_once("::__default_")
         .map_or(name, |(public, _)| public);
     let mut public = String::with_capacity(name.len());
@@ -10892,6 +10895,9 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     );
 
     push_display_wrappers(program, &mut functions);
+    if !VERIFICATION.with(std::cell::Cell::get) {
+        push_extern_contract_wrappers(program, &mut functions, &mut seen_function_names);
+    }
 
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
@@ -10917,6 +10923,10 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         functions.extend(lowered);
         Some(top_level)
     };
+
+    if !VERIFICATION.with(std::cell::Cell::get) {
+        push_extern_callback_contract_wrappers(program, &mut functions, top_level.as_ref());
+    }
 
     MirModule {
         foreign_link: program.foreign_link.clone(),
@@ -11824,6 +11834,311 @@ fn lower_default_function(
     })
 }
 
+fn extern_contract_wrapper_name(
+    program_module_name: &str,
+    function: &crate::sema::ExternFunctionInfo,
+) -> String {
+    let base = if function.module_name == program_module_name {
+        function.decl.name.clone()
+    } else {
+        imported_module_function_name(&function.module_name, &function.decl.name)
+    };
+    format!("{base}::__extern_contract")
+}
+
+fn push_extern_contract_wrappers(
+    program: &Program,
+    functions: &mut Vec<MirFunction>,
+    seen_function_names: &mut BTreeSet<String>,
+) {
+    fn visit_namespace(
+        program: &Program,
+        namespace: &ModuleNamespace,
+        functions: &mut Vec<MirFunction>,
+        seen_function_names: &mut BTreeSet<String>,
+    ) {
+        for extern_fn in namespace
+            .extern_functions
+            .values()
+            .chain(namespace.all_extern_functions.values())
+        {
+            if extern_fn.contract_decl.is_none() {
+                continue;
+            }
+            let wrapper_name = extern_contract_wrapper_name(&program.module_name, extern_fn);
+            if seen_function_names.insert(wrapper_name.clone()) {
+                functions.extend(lower_extern_contract_wrapper(
+                    program,
+                    &wrapper_name,
+                    extern_fn,
+                    &BTreeMap::new(),
+                ));
+            }
+        }
+        for child in namespace
+            .modules
+            .values()
+            .chain(namespace.imported_modules.values())
+        {
+            visit_namespace(program, child, functions, seen_function_names);
+        }
+    }
+
+    for extern_fn in program.extern_functions.values() {
+        if extern_fn.contract_decl.is_none() {
+            continue;
+        }
+        let wrapper_name = extern_contract_wrapper_name(&program.module_name, extern_fn);
+        if seen_function_names.insert(wrapper_name.clone()) {
+            functions.extend(lower_extern_contract_wrapper(
+                program,
+                &wrapper_name,
+                extern_fn,
+                &BTreeMap::new(),
+            ));
+        }
+    }
+    for namespace in program.module_registry.values() {
+        visit_namespace(program, namespace, functions, seen_function_names);
+    }
+}
+
+/// The callback arguments of a call to `function`: each parameter's name
+/// and the function the call names for it.
+fn extern_callback_args<'a>(
+    function: &'a crate::sema::ExternFunctionInfo,
+    args: &'a [MirArg],
+) -> impl Iterator<Item = (&'a str, &'a str)> {
+    args.iter().enumerate().filter_map(|(index, arg)| {
+        let Operand::Function { name, .. } = &arg.value else {
+            return None;
+        };
+        let param = match &arg.name {
+            Some(param) => param.as_str(),
+            None => function.decl.params.get(index)?.name.as_str(),
+        };
+        Some((param, name.as_str()))
+    })
+}
+
+/// Adds the copy of a contract wrapper for each set of callbacks a call
+/// passes: the copy names those functions in its own foreign call.
+fn push_extern_callback_contract_wrappers(
+    program: &Program,
+    functions: &mut Vec<MirFunction>,
+    top_level: Option<&MirFunction>,
+) {
+    fn visit<'a>(
+        program: &Program,
+        namespace: &'a ModuleNamespace,
+        externs: &mut BTreeMap<String, &'a crate::sema::ExternFunctionInfo>,
+    ) {
+        for extern_fn in namespace
+            .extern_functions
+            .values()
+            .chain(namespace.all_extern_functions.values())
+        {
+            externs
+                .entry(extern_contract_wrapper_name(
+                    &program.module_name,
+                    extern_fn,
+                ))
+                .or_insert(extern_fn);
+        }
+        for child in namespace
+            .modules
+            .values()
+            .chain(namespace.imported_modules.values())
+        {
+            visit(program, child, externs);
+        }
+    }
+    let mut externs = BTreeMap::new();
+    for extern_fn in program.extern_functions.values() {
+        externs
+            .entry(extern_contract_wrapper_name(
+                &program.module_name,
+                extern_fn,
+            ))
+            .or_insert(extern_fn);
+    }
+    for namespace in program.module_registry.values() {
+        visit(program, namespace, &mut externs);
+    }
+
+    let mut wanted = BTreeMap::new();
+    for function in functions.iter().chain(top_level) {
+        for instruction in function.blocks.iter().flat_map(|block| &block.instructions) {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee: CallTarget::Name(name),
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            let Some((base, copy)) = name.split_once("::__extern_contract") else {
+                continue;
+            };
+            if copy.is_empty() {
+                continue;
+            }
+            let Some(extern_fn) = externs.get(&format!("{base}::__extern_contract")) else {
+                continue;
+            };
+            let callbacks = extern_callback_args(extern_fn, args)
+                .filter_map(|(param, _)| {
+                    let arg = args.iter().enumerate().find(|(index, arg)| {
+                        arg.name.as_deref().unwrap_or_else(|| {
+                            extern_fn
+                                .decl
+                                .params
+                                .get(*index)
+                                .map_or("", |param| param.name.as_str())
+                        }) == param
+                    })?;
+                    Some((param.to_string(), arg.1.value.clone()))
+                })
+                .collect::<BTreeMap<_, _>>();
+            wanted
+                .entry(name.clone())
+                .or_insert((*extern_fn, callbacks));
+        }
+    }
+    for (name, (extern_fn, callbacks)) in wanted {
+        functions.extend(lower_extern_contract_wrapper(
+            program, &name, extern_fn, &callbacks,
+        ));
+    }
+}
+
+fn lower_extern_contract_wrapper(
+    program: &Program,
+    wrapper_name: &str,
+    function: &crate::sema::ExternFunctionInfo,
+    callbacks: &BTreeMap<String, Operand>,
+) -> Vec<MirFunction> {
+    let Some(contract_decl) = &function.contract_decl else {
+        return Vec::new();
+    };
+    // A function that takes a callback has a copy for each set of
+    // callbacks and none without them.
+    let takes_callback = function
+        .signature
+        .params
+        .iter()
+        .any(|ty| matches!(ty, Type::Function { .. }));
+    if takes_callback && callbacks.is_empty() {
+        return Vec::new();
+    }
+    let return_type = &function.signature.return_type;
+    let params = function
+        .decl
+        .params
+        .iter()
+        .zip(
+            function
+                .signature
+                .params
+                .iter()
+                .zip(function.signature.param_passings.iter()),
+        )
+        .map(|(param, (ty, passing))| MirParam {
+            name: param.name.clone(),
+            passing: lower_receiver_kind(*passing),
+            ty: ty.clone(),
+            default_function: None,
+            keyword_only: param.keyword_only,
+        })
+        .collect::<Vec<_>>();
+    let mut lowerer = Lowerer::new(
+        program,
+        wrapper_name,
+        &function.module_name,
+        return_type.clone(),
+        BTreeMap::new(),
+    )
+    .with_metadata_owner(ClosureOwner::Function(wrapper_name.to_string()));
+    for ((param, ty), passing) in function
+        .decl
+        .params
+        .iter()
+        .zip(function.signature.params.iter())
+        .zip(function.signature.param_passings.iter())
+    {
+        lowerer.local_types.insert(param.name.clone(), ty.clone());
+        if *passing != ReceiverKind::Value {
+            lowerer.non_owning_roots.insert(param.name.clone());
+        }
+    }
+    lowerer.lower_contract_checks(contract_decl, crate::ast::ContractKind::Requires);
+    let olds = contract_decl
+        .contracts
+        .iter()
+        .flat_map(|clause| clause.olds.iter())
+        .map(|old| (old.name.clone(), lowerer.lower_old_value(&old.expr)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let has_olds = !olds.is_empty();
+    if has_olds {
+        lowerer.scoped_names.push(olds);
+    }
+    let return_place = lowerer.new_typed_temp(return_type.clone());
+    let extern_args = params
+        .iter()
+        .map(|param| MirArg {
+            name: Some(param.name.clone()),
+            value: if let Some(callback) = callbacks.get(&param.name) {
+                callback.clone()
+            } else if param.passing == MirReceiverKind::Value
+                && !type_is_copy_in_program(&param.ty, program)
+            {
+                Operand::MovePlace(param.name.clone())
+            } else {
+                Operand::Place(param.name.clone())
+            },
+            writeback_place: (param.passing == MirReceiverKind::BorrowMut)
+                .then(|| param.name.clone()),
+        })
+        .collect();
+    lowerer.emit(Instruction::Assign {
+        target: return_place.clone(),
+        value: Rvalue::Call {
+            callee: CallTarget::Extern(Lowerer::extern_call_target(function)),
+            args: extern_args,
+            type_args: Default::default(),
+        },
+    });
+    if contract_decl
+        .contracts
+        .iter()
+        .any(|clause| clause.kind == crate::ast::ContractKind::Ensures)
+    {
+        lowerer.scoped_names.push(std::collections::HashMap::from([(
+            crate::sema::CONTRACT_RESULT_NAME.to_string(),
+            return_place.clone(),
+        )]));
+        lowerer.lower_contract_checks(contract_decl, crate::ast::ContractKind::Ensures);
+        lowerer.scoped_names.pop();
+    }
+    if has_olds {
+        lowerer.scoped_names.pop();
+    }
+    let value = lowerer.move_place_for_type(return_place, return_type);
+    lowerer.terminate(Terminator::Return(value));
+    lowerer.finish_with_generated(MirFunctionSpec {
+        name: wrapper_name.to_string(),
+        span: function.decl.span,
+        receiver: None,
+        params,
+        return_type: return_type.clone(),
+        default_return: default_return_operand(return_type),
+    })
+}
+
 fn grouped_mir_expr(expr: &Expr) -> &Expr {
     match &expr.kind {
         ExprKind::Group(inner) => grouped_mir_expr(inner),
@@ -12708,13 +13023,20 @@ impl<'a> Lowerer<'a> {
         let ExprKind::Call { callee, .. } = &expr.kind else {
             return false;
         };
-        let ExprKind::Name(name) = &callee.kind else {
-            return false;
-        };
-        !self.local_types.contains_key(&self.render_local_name(name))
-            && self
-                .resolve_function_info(name)
-                .is_some_and(|function| function.decl.lemma)
+        match &callee.kind {
+            ExprKind::Name(name) => {
+                !self.local_types.contains_key(&self.render_local_name(name))
+                    && self
+                        .resolve_function_info(name)
+                        .is_some_and(|function| function.decl.lemma)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module_path| self.module_namespace(&module_path))
+                .and_then(|namespace| namespace.functions.get(field))
+                .is_some_and(|function| function.decl.lemma),
+            _ => false,
+        }
     }
 
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
@@ -12727,6 +13049,24 @@ impl<'a> Lowerer<'a> {
         self.current_module_namespace()
             .and_then(|namespace| namespace.all_extern_functions.get(name))
             .or_else(|| self.program.extern_functions.get(name))
+    }
+
+    fn extern_callee_target(
+        &self,
+        function: &crate::sema::ExternFunctionInfo,
+        args: &[MirArg],
+    ) -> CallTarget {
+        if !VERIFICATION.with(std::cell::Cell::get) && function.contract_decl.is_some() {
+            // A callback is a function the foreign call names, so each set
+            // of callbacks gets its own copy of the wrapper.
+            let mut name = extern_contract_wrapper_name(&self.program.module_name, function);
+            for (param, callback) in extern_callback_args(function, args) {
+                name.push_str(&format!("::{param}={callback}"));
+            }
+            CallTarget::Name(name)
+        } else {
+            CallTarget::Extern(Self::extern_call_target(function))
+        }
     }
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
@@ -17518,10 +17858,22 @@ impl<'a> Lowerer<'a> {
     ) -> Type {
         let member = self.lower_type_ref_with_provenance(ty);
         if let Some(Type::Union(union)) = scrutinee_ty {
-            if let Some(canonical) = union.members.iter().find(|candidate| {
-                **candidate == member || crate::union_runtime::member_matches(candidate, &member)
-            }) {
+            let member_key = member.canonical_key(self.module_name, &BTreeMap::new());
+            if let Some((_, canonical)) = union
+                .keys
+                .iter()
+                .zip(&union.members)
+                .find(|(key, candidate)| *candidate == &member || **key == member_key)
+            {
                 return canonical.clone();
+            }
+            let matches = union
+                .members
+                .iter()
+                .filter(|candidate| crate::union_runtime::member_matches(candidate, &member))
+                .collect::<Vec<_>>();
+            if let [canonical] = matches.as_slice() {
+                return (*canonical).clone();
             }
         }
         member
@@ -19383,6 +19735,8 @@ impl<'a> Lowerer<'a> {
         // The cursor, the last value it advances from, and the step of a
         // counted range with a step above 1.
         let mut stepped_advance = None;
+        // The block a counted range binds its target in.
+        let mut stepped_next = dispatch_block;
 
         match iterable_ty {
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
@@ -19393,7 +19747,7 @@ impl<'a> Lowerer<'a> {
                     .take()
                     .expect("the guard checked the counted range");
                 if step > 1 {
-                    let last = self.lower_stepped_range_last(&stop, step, for_stmt.span);
+                    let last = self.lower_stepped_range_last(&cursor, &stop, step, for_stmt.span);
                     stepped_advance = Some((cursor.clone(), last, step));
                 }
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -19420,7 +19774,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     Some(binding)
                 };
-                self.lower_counted_range_test(
+                stepped_next = self.lower_counted_range_test(
                     step_binding,
                     cursor,
                     stop,
@@ -19918,9 +20272,13 @@ impl<'a> Lowerer<'a> {
         self.switch_to(safepoint_block);
         self.emit(Instruction::Safepoint);
         if let Some((cursor, last, step)) = stepped_advance {
+            // The advance stays below `stop`, so the next iteration starts
+            // without the loop's first test.
             self.lower_stepped_range_advance(cursor, last, step, for_stmt.span, after_block);
+            self.terminate(Terminator::Goto(self.label(stepped_next)));
+        } else {
+            self.terminate(Terminator::Goto(self.label(dispatch_block)));
         }
-        self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
         self.switch_to(after_block);
     }
@@ -20011,19 +20369,20 @@ impl<'a> Lowerer<'a> {
         (cursor, end, step)
     }
 
-    /// The last cursor value a stepped range advances from: an iteration at
+    /// The bound a stepped range's cursor advances below: an iteration at
     /// `cursor` has a successor when `cursor + step < stop`, which is
-    /// `cursor < stop - step`. A negative `stop` keeps `stop` itself, since
-    /// `stop - step` could pass the least `int64`: every cursor is then
-    /// negative, the advance cannot overflow, and the loop's own test ends
-    /// it.
+    /// `cursor < stop - step`. When `stop - step` would pass the least
+    /// `int64`, no iteration has a successor, and the bound is the first
+    /// cursor, which no cursor is below.
     fn lower_stepped_range_last(
         &mut self,
+        cursor: &str,
         stop: &str,
         step: u128,
         span: crate::diag::Span,
     ) -> String {
-        let last = self.new_typed_temp(Type::named("int64"));
+        let int64 = Type::named("int64");
+        let last = self.new_typed_temp(int64.clone());
         let negative = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
             target: negative.clone(),
@@ -20035,22 +20394,54 @@ impl<'a> Lowerer<'a> {
                 trap: ArithmeticTrap::None,
             },
         });
-        let keep_block = self.new_block("for_range_last_stop");
+        let low_block = self.new_block("for_range_last_low");
+        let keep_block = self.new_block("for_range_last_first");
         let back_block = self.new_block("for_range_last_back");
         let ready_block = self.new_block("for_range_ready");
         self.terminate(Terminator::Branch {
             condition: Operand::Place(negative),
+            then_label: self.label(low_block),
+            else_label: self.label(back_block),
+        });
+        self.switch_to(low_block);
+        // A negative `stop` is below `int64` min plus the step exactly when
+        // `stop + int64 max` is below the step less one. The sum is at
+        // least -1, so it never traps.
+        let raised = self.new_typed_temp(int64);
+        self.emit(Instruction::Assign {
+            target: raised.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(stop.to_string()),
+                right: Operand::Int(i64::MAX as u128),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
+        let passes = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: passes.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(raised),
+                right: Operand::Int(step - 1),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(passes),
             then_label: self.label(keep_block),
             else_label: self.label(back_block),
         });
         self.switch_to(keep_block);
         self.emit(Instruction::Assign {
             target: last.clone(),
-            value: Rvalue::Use(Operand::Place(stop.to_string())),
+            value: Rvalue::Use(Operand::Place(cursor.to_string())),
         });
         self.terminate(Terminator::Goto(self.label(ready_block)));
         self.switch_to(back_block);
-        // `stop` is at least 0 and the step at most `int64` max, so the
+        // `stop` is at least `int64` min plus the step here, so the
         // difference never traps.
         self.emit(Instruction::Assign {
             target: last.clone(),
@@ -20067,10 +20458,12 @@ impl<'a> Lowerer<'a> {
         last
     }
 
-    /// Ends a stepped range's iteration: leaves the loop when the cursor
-    /// has no successor below `stop`, and otherwise advances it. The
-    /// advance never traps: the cursor is below `last` (see
-    /// `lower_stepped_range_last`). The caller jumps back to the test.
+    /// Ends a stepped range's iteration: advances the cursor while it is
+    /// below `last` (see `lower_stepped_range_last`), and otherwise leaves
+    /// the loop. The advance never traps, and the cursor it leaves is
+    /// below `stop`, so the caller jumps to the block that binds the
+    /// target. The loop then has this one test, which lets LLVM count its
+    /// iterations.
     fn lower_stepped_range_advance(
         &mut self,
         cursor: String,
@@ -20079,22 +20472,22 @@ impl<'a> Lowerer<'a> {
         span: crate::diag::Span,
         after_block: usize,
     ) {
-        let done = self.new_typed_temp(Type::named("bool"));
+        let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
-            target: done.clone(),
+            target: more.clone(),
             value: Rvalue::Binary {
-                op: BinaryOp::LessEq,
-                left: Operand::Place(last),
-                right: Operand::Place(cursor.clone()),
+                op: BinaryOp::Less,
+                left: Operand::Place(cursor.clone()),
+                right: Operand::Place(last),
                 span,
                 trap: ArithmeticTrap::None,
             },
         });
         let advance_block = self.new_block("for_range_step");
         self.terminate(Terminator::Branch {
-            condition: Operand::Place(done),
-            then_label: self.label(after_block),
-            else_label: self.label(advance_block),
+            condition: Operand::Place(more),
+            then_label: self.label(advance_block),
+            else_label: self.label(after_block),
         });
         self.switch_to(advance_block);
         self.emit(Instruction::Assign {
@@ -20115,7 +20508,7 @@ impl<'a> Lowerer<'a> {
     /// stays below `stop`, which is at most `int64` max. A larger step
     /// advances where the iteration ends (see
     /// `lower_stepped_range_advance`). The blocks are the loop's body and
-    /// the block after the loop.
+    /// the block after the loop. Returns the block that binds the cursor.
     fn lower_counted_range_test(
         &mut self,
         binding: Option<String>,
@@ -20124,7 +20517,7 @@ impl<'a> Lowerer<'a> {
         step: u128,
         span: crate::diag::Span,
         (body_block, after_block): (usize, usize),
-    ) {
+    ) -> usize {
         let next_block = self.new_block("for_range_next");
         let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
@@ -20164,6 +20557,7 @@ impl<'a> Lowerer<'a> {
             });
         }
         self.terminate(Terminator::Goto(self.label(body_block)));
+        next_block
     }
 
     fn lower_list_iteration_by_loan(
@@ -20365,6 +20759,27 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(after_block);
+        let site = format!(
+            "iterator {}:{}",
+            while_stmt.span.line, while_stmt.span.column
+        );
+        if self.binding_is_visible(&site) {
+            let place = self.render_local_name(&site);
+            self.emit(Instruction::Eval {
+                value: Operand::Place(place),
+            });
+        } else {
+            for position in 0.. {
+                let indexed = format!("{site} {position}");
+                if !self.binding_is_visible(&indexed) {
+                    break;
+                }
+                let place = self.render_local_name(&indexed);
+                self.emit(Instruction::Eval {
+                    value: Operand::Place(place),
+                });
+            }
+        }
     }
 
     fn lower_comprehension(
@@ -25503,7 +25918,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
-                                    callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                                    callee: self.extern_callee_target(&function, &lowered_args),
                                     args: lowered_args,
                                     type_args: Default::default(),
                                 },
@@ -26170,7 +26585,7 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                            callee: self.extern_callee_target(&function, &lowered_args),
                             args: lowered_args,
                             type_args: Default::default(),
                         },

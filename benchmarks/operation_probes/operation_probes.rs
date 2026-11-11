@@ -17,6 +17,23 @@ struct Counter {
     count: i64,
 }
 
+impl Counter {
+    fn bump(&mut self, by: i64) {
+        self.count += by;
+    }
+}
+
+struct Tally {
+    count: i64,
+    step: i64,
+}
+
+impl Tally {
+    fn bump(&mut self, by: i64) {
+        self.count += by * self.step;
+    }
+}
+
 enum Shape {
     Circle(f64),
     Rect(f64, f64),
@@ -480,6 +497,49 @@ fn trait_object_call(n: i64, run: bool) -> i64 {
     total + solids.len() as i64
 }
 
+// Both phases make one pass first, as the Aura version does.
+fn element_mut_call(n: i64, run: bool) -> i64 {
+    let mut counters: Vec<Counter> = Vec::new();
+    for i in 0..n {
+        counters.push(Counter {
+            name: "c".to_string(),
+            count: i,
+        });
+    }
+    for i in 0..counters.len() {
+        counters[i].bump(1);
+    }
+    black_box(&counters);
+    if run {
+        for i in 0..counters.len() {
+            counters[i].bump(2);
+        }
+    }
+    black_box(&counters[0].name);
+    counters[n as usize - 1].count
+}
+
+fn element_plain_mut_call(n: i64, run: bool) -> i64 {
+    let mut tallies: Vec<Tally> = Vec::new();
+    for i in 0..n {
+        tallies.push(Tally {
+            count: i,
+            step: i % 3,
+        });
+    }
+    for i in 0..tallies.len() {
+        tallies[i].bump(1);
+    }
+    black_box(&tallies);
+    if run {
+        for i in 0..tallies.len() {
+            tallies[i].bump(2);
+        }
+    }
+    black_box(&tallies);
+    tallies[n as usize - 1].count
+}
+
 fn probe(operation: &str, n: i64, run: bool) -> i64 {
     match operation {
         "while_step" => while_step(n, run),
@@ -507,6 +567,8 @@ fn probe(operation: &str, n: i64, run: bool) -> i64 {
         "str_append" => str_append(n, run),
         "str_format" => str_format(n, run),
         "trait_object_call" => trait_object_call(n, run),
+        "element_mut_call" => element_mut_call(n, run),
+        "element_plain_mut_call" => element_plain_mut_call(n, run),
         _ => -1,
     }
 }

@@ -6,7 +6,7 @@ use std::io::{Read, Write};
 use std::os::windows::ffi::OsStrExt;
 use std::path::{Component, Path, PathBuf};
 use std::process::{Command, Output, Stdio};
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
@@ -31,6 +31,18 @@ const TEMP_FILE_RETRY_LIMIT: usize = 32;
 const DEFAULT_GIT_COMMAND_TIMEOUT: StdDuration = StdDuration::from_secs(60);
 
 static TEMP_FILE_COUNTER: AtomicU64 = AtomicU64::new(0);
+static OFFLINE_MODE: AtomicBool = AtomicBool::new(false);
+
+pub fn set_offline_mode(offline: bool) {
+    OFFLINE_MODE.store(offline, Ordering::Relaxed);
+}
+
+pub fn is_offline_mode() -> bool {
+    OFFLINE_MODE.load(Ordering::Relaxed)
+        || env::var("AURA_OFFLINE")
+            .ok()
+            .is_some_and(|value| value == "1" || value.eq_ignore_ascii_case("true"))
+}
 
 #[derive(Clone, Debug)]
 enum PackageOrigin {
@@ -681,6 +693,20 @@ impl PackageResolver {
                     manifest_dir.display()
                 )));
             }
+            for lib_path in &manifest.foreign_link.library_paths {
+                let canonical_lib_path = canonicalize_if_exists(lib_path)?;
+                if !canonical_lib_path.starts_with(&manifest_dir) {
+                    return Err(Diagnostic::coded(
+                        "AU2999",
+                        format!(
+                            "dependency `{}` has `library_paths` entry `{}` outside its package directory `{}`",
+                            manifest.package.name,
+                            lib_path.display(),
+                            manifest_dir.display()
+                        ),
+                    ));
+                }
+            }
         }
 
         if let Some(existing) = self.packages.get(&manifest.package.name) {
@@ -782,6 +808,15 @@ impl PackageResolver {
 
         let source_root = manifest_dir.join("src");
         let canonical_source_root = canonicalize_dir(&source_root)?;
+        if !canonical_source_root.starts_with(&manifest_dir) {
+            self.in_progress.pop();
+            return Err(Diagnostic::new(format!(
+                "package `{}` source directory `{}` resolves outside package directory `{}`",
+                manifest.package.name,
+                canonical_source_root.display(),
+                manifest_dir.display()
+            )));
+        }
         let package = PackageSource {
             name: manifest.package.name.clone(),
             version: manifest.package.version,
@@ -1234,6 +1269,19 @@ fn foreign_link_plan_for_host(
                     ),
                 ));
             }
+            if Path::new(path)
+                .components()
+                .any(|component| matches!(component, Component::ParentDir))
+            {
+                return Err(Diagnostic::coded(
+                    "AU2999",
+                    format!(
+                        "manifest `{}` has invalid entry `{}` in `{table} library_paths`; parent directory traversal (`..`) is not allowed",
+                        manifest_path.display(),
+                        path.escape_default()
+                    ),
+                ));
+            }
             host.library_paths.push(manifest_dir.join(path));
         }
         if applies {
@@ -1415,6 +1463,12 @@ fn resolve_git_revision(source: &str, selector: &GitSelector) -> Result<String> 
     match selector {
         GitSelector::Rev(rev) => Ok(rev.clone()),
         GitSelector::Tag(tag) => {
+            if is_offline_mode() && is_explicit_git_url(source) {
+                return Err(Diagnostic::new(format!(
+                    "cannot query git dependency `{}` in offline mode (`--offline` / `AURA_OFFLINE=1`)",
+                    source
+                )));
+            }
             let reference = format!("refs/tags/{}", tag);
             let output = run_git_command(
                 None,
@@ -1430,6 +1484,12 @@ fn resolve_git_revision(source: &str, selector: &GitSelector) -> Result<String> 
             parse_ls_remote_revision(source, &reference, &output)
         }
         GitSelector::Branch(branch) => {
+            if is_offline_mode() && is_explicit_git_url(source) {
+                return Err(Diagnostic::new(format!(
+                    "cannot query git dependency `{}` in offline mode (`--offline` / `AURA_OFFLINE=1`)",
+                    source
+                )));
+            }
             let reference = format!("refs/heads/{}", branch);
             let output = run_git_command(
                 None,
@@ -1500,7 +1560,31 @@ fn ensure_git_checkout(source: &str, rev: &str) -> Result<PathBuf> {
     materialize_git_checkout(source, rev, &checkout_dir)
 }
 
+fn reject_git_tracked_symlinks(root: &Path) -> Result<()> {
+    let listing = run_git_command(
+        Some(root),
+        vec!["ls-tree".to_string(), "-r".to_string(), "HEAD".to_string()],
+    )?;
+    for line in listing.lines() {
+        if line.starts_with("120000 ") {
+            let entry_name = line.split('\t').nth(1).unwrap_or("<symlink>");
+            return Err(Diagnostic::new(format!(
+                "refusing to use git checkout `{}` because it contains symlinked content at `{}`",
+                root.display(),
+                root.join(entry_name).display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Result<PathBuf> {
+    if is_offline_mode() && is_explicit_git_url(source) {
+        return Err(Diagnostic::new(format!(
+            "cannot clone uncached git dependency `{}` at `{}` in offline mode (`--offline` / `AURA_OFFLINE=1`)",
+            source, rev
+        )));
+    }
     let parent = checkout_dir
         .parent()
         .expect("git checkout cache paths should have parent directories");
@@ -1521,8 +1605,11 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             temp_checkout.to_string_lossy().to_string(),
         ],
     )?;
-    reject_symlinks_in_tree(&temp_checkout)?;
-    run_git_command(
+    if let Err(error) = reject_symlinks_in_tree(&temp_checkout) {
+        let _ = fs::remove_dir_all(&temp_checkout);
+        return Err(error);
+    }
+    if let Err(error) = run_git_command(
         Some(&temp_checkout),
         vec![
             "-c".to_string(),
@@ -1531,7 +1618,16 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
             "--detach".to_string(),
             rev.to_string(),
         ],
-    )?;
+    ) {
+        let _ = fs::remove_dir_all(&temp_checkout);
+        return Err(error);
+    }
+    if let Err(error) = reject_symlinks_in_tree(&temp_checkout)
+        .and_then(|()| reject_git_tracked_symlinks(&temp_checkout))
+    {
+        let _ = fs::remove_dir_all(&temp_checkout);
+        return Err(error);
+    }
     write_cached_git_revision(&temp_checkout, rev)?;
 
     match fs::rename(&temp_checkout, checkout_dir) {
@@ -1556,12 +1652,30 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
     }
 }
 
+fn git_allow_protocol_for_args(args: &[String]) -> &'static str {
+    if env::var("AURA_GIT_ALLOW_FILE_PROTOCOL").as_deref() == Ok("1") {
+        return "https:ssh:file";
+    }
+    if let Some(sep_idx) = args.iter().position(|arg| arg == "--") {
+        if let Some(source) = args.get(sep_idx + 1) {
+            if !is_explicit_git_url(source) && Path::new(source).exists() {
+                return "https:ssh:file";
+            }
+        }
+    }
+    "https:ssh"
+}
+
 fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Command {
     let mut command = Command::new("git");
     command.args(args);
     command.env("GIT_TERMINAL_PROMPT", "0");
     command.env("GIT_ASKPASS", "");
     command.env("SSH_ASKPASS", "");
+    command.env("GIT_ALLOW_PROTOCOL", git_allow_protocol_for_args(args));
+    command.env("GIT_CONFIG_COUNT", "1");
+    command.env("GIT_CONFIG_KEY_0", "core.symlinks");
+    command.env("GIT_CONFIG_VALUE_0", "false");
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
@@ -1862,6 +1976,26 @@ fn validate_git_source_literal(dependency_name: &str, source: &str) -> Result<()
             "dependency `{}` has an invalid git source `{}`; git sources must not contain control characters",
             dependency_name, source
         )));
+    }
+    let has_helper_syntax = match trimmed.split_once("://") {
+        Some((scheme, _)) => scheme.contains("::"),
+        None => trimmed.contains("::"),
+    };
+    if has_helper_syntax {
+        return Err(Diagnostic::new(format!(
+            "dependency `{}` uses a disallowed git remote helper transport (`::`) in `{}`",
+            dependency_name, source
+        )));
+    }
+    if let Some((scheme, _)) = trimmed.split_once("://") {
+        let allow_file = env::var("AURA_GIT_ALLOW_FILE_PROTOCOL").as_deref() == Ok("1");
+        let allowed = matches!(scheme, "https" | "ssh") || (allow_file && scheme == "file");
+        if !allowed {
+            return Err(Diagnostic::new(format!(
+                "dependency `{}` uses unsupported git protocol `{scheme}://` in `{}`; use `https://`, `ssh://`, `git@`, or a local directory path",
+                dependency_name, source
+            )));
+        }
     }
     Ok(())
 }

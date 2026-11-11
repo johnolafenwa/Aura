@@ -317,6 +317,11 @@ fn float_matmul_adds_in_inner_order_at_every_level() {
         (9, 70, 11),
         (3, 130, 600),
         (17, 5, 1030),
+        // Whole tiles only, a tile and a leftover column, and two blocks
+        // of the inner index with an odd row left over.
+        (4, 6, 32),
+        (6, 9, 17),
+        (7, 259, 50),
     ] {
         let left = floats(n * k, 37 + (n * k) as u64);
         let right = floats(k * m, 41 + (k * m) as u64);
@@ -371,6 +376,91 @@ fn float_matmul_adds_in_inner_order_at_every_level() {
             });
         }
     }
+}
+
+#[test]
+fn float_matmul_gives_the_same_bits_on_any_number_of_threads() {
+    for (n, k, m) in [(1, 4, 40), (2, 3, 16), (9, 140, 70), (33, 20, 35)] {
+        let left = floats(n * k, 61 + n as u64);
+        let right = floats(k * m, 67 + m as u64);
+        let expected = reference_matmul(&left, &right, n, k, m);
+        let left32 = floats32(n * k, 71);
+        let right32 = floats32(k * m, 73);
+        for level in LEVELS {
+            with_kernel_level(level, || {
+                let mut one32 = vec![0.0_f32; n * m];
+                float_matmul_on(1, &left32, &right32, &mut one32, n, k, m);
+                for threads in [1, 2, 3, 8, 64] {
+                    let mut output = vec![0.0; n * m];
+                    float_matmul_on(threads, &left, &right, &mut output, n, k, m);
+                    assert_eq!(
+                        output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        "{n}x{k} by {k}x{m} on {threads} threads at {level:?}"
+                    );
+                    let mut output32 = vec![0.0_f32; n * m];
+                    float_matmul_on(threads, &left32, &right32, &mut output32, n, k, m);
+                    assert_eq!(
+                        output32.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                        one32.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+                    );
+                }
+            });
+        }
+    }
+    // The tiles and the row kernel agree on every target, whichever one
+    // the CPU's level picks.
+    for (n, k, m) in [(5, 131, 70), (2, 3, 32), (3, 2, 15), (0, 4, 40), (4, 0, 40)] {
+        let left = floats(n * k, 79);
+        let right = floats(k * m, 83);
+        let expected = reference_matmul(&left, &right, n, k, m);
+        let left32 = floats32(n * k, 89);
+        let right32 = floats32(k * m, 97);
+        let mut by_row32 = vec![0.0_f32; n * m];
+        float_matmul_rows(false, &left32, &right32, &mut by_row32, n, k, m);
+        for tiled in [false, true] {
+            let mut output = vec![0.0; n * m];
+            float_matmul_rows(tiled, &left, &right, &mut output, n, k, m);
+            assert_eq!(
+                output.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                expected.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                "{n}x{k} by {k}x{m}, tiled {tiled}"
+            );
+            let mut output32 = vec![0.0_f32; n * m];
+            float_matmul_rows(tiled, &left32, &right32, &mut output32, n, k, m);
+            assert_eq!(
+                output32.iter().map(|v| v.to_bits()).collect::<Vec<_>>(),
+                by_row32.iter().map(|v| v.to_bits()).collect::<Vec<_>>()
+            );
+        }
+    }
+    // An empty product starts no thread.
+    let mut nothing: Vec<f64> = Vec::new();
+    float_matmul_on(4, &[], &[], &mut nothing, 6, 0, 0);
+    assert!(nothing.is_empty());
+}
+
+#[test]
+fn matmul_threads_follow_the_work_and_the_limit() {
+    // 64 by 64 by 64 is an eighth of one thread's share.
+    assert_eq!(matmul_threads(64, 64, 64, 8), 1);
+    // 256 cubed is eight shares.
+    assert_eq!(matmul_threads(256, 256, 256, 16), 8);
+    assert_eq!(matmul_threads(256, 256, 256, 4), 4);
+    assert_eq!(matmul_threads(256, 256, 256, 1), 1);
+    // Two rows are one tile, whatever the work.
+    assert_eq!(matmul_threads(2, 4096, 4096, 8), 1);
+    assert_eq!(matmul_threads(7, 4096, 4096, 8), 3);
+    assert_eq!(matmul_threads(usize::MAX, usize::MAX, 2, 8), 8);
+    assert_eq!(matmul_threads(0, 5, 5, 8), 1);
+
+    assert_eq!(thread_limit_for(None, 6), 6);
+    assert_eq!(thread_limit_for(Some("3"), 6), 3);
+    assert_eq!(thread_limit_for(Some(" 1 "), 6), 1);
+    assert_eq!(thread_limit_for(Some("0"), 6), 6);
+    assert_eq!(thread_limit_for(Some("many"), 6), 6);
+    assert_eq!(thread_limit_for(Some("500"), 6), 16);
+    assert_eq!(thread_limit_for(None, 128), 16);
 }
 
 #[test]

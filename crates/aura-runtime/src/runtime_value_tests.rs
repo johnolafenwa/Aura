@@ -4041,8 +4041,7 @@ fn tcp_connect_to_a_literal_address_reports_refusal_from_the_reactor_wait() {
         Some(StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
     )
-    .err()
-    .expect("nothing listens on a port just released");
+    .expect_err("nothing listens on a port just released");
     assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
 }
 
@@ -5827,6 +5826,7 @@ fn float32_slots_render_named_fields_and_payloads_with_float32_digits() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn render_float_formats_current_surface() {
     assert_eq!(render_float(42.0), "42.0");
     assert_eq!(render_float(3.5), "3.5");
@@ -7270,7 +7270,7 @@ fn runtime_json_clone_preserves_empty_containers_and_shares_buffers_until_a_writ
         match variant.payloads.values() {
             [Value::Vec(vector)] => {
                 if !vector.elements.is_empty() {
-                    output.push(vector.elements.as_ptr() as usize);
+                    output.push(vector.elements.as_ptr());
                 }
                 for element in vector.elements.as_values().unwrap_or_default() {
                     container_buffers(element, output);
@@ -13341,7 +13341,7 @@ fn unix_error_normalization_helpers_cover_udp_and_websocket_edges() {
         "UDP datagram exceeds the platform send limit"
     );
 
-    let other = super::normalize_udp_send_error(io::Error::new(io::ErrorKind::Other, "plain"));
+    let other = super::normalize_udp_send_error(io::Error::other("plain"));
     assert_eq!(other.kind(), io::ErrorKind::Other);
     assert_eq!(other.to_string(), "plain");
 
@@ -17183,8 +17183,7 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
         io::ErrorKind::UnexpectedEof,
         "truncated request"
     )));
-    assert!(!super::is_http_bad_request_error(&io::Error::new(
-        io::ErrorKind::Other,
+    assert!(!super::is_http_bad_request_error(&io::Error::other(
         "network failure"
     )));
     assert!(!super::is_http_bad_request_error(
@@ -20306,6 +20305,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
 }
 
 #[test]
+#[allow(clippy::cmp_owned, clippy::nonminimal_bool)]
 fn runtime_names_behave_like_their_text() {
     use super::RuntimeName;
     use std::collections::hash_map::DefaultHasher;
@@ -20972,4 +20972,138 @@ fn json_tape_values_dump_convert_and_copy_inside_trees() {
     };
     assert!(first.payloads.json().is_some());
     assert_eq!(copied.elements.value_at(1), Some(&mixed));
+}
+
+#[test]
+fn http_wire_builders_reject_malformed_methods_and_out_of_range_status_codes() {
+    let url = url::Url::parse("http://example.com/items").expect("valid URL");
+    for bad_method in [
+        "",
+        "GET /admin HTTP/1.1\r\nHost: evil.example\r\nX-Ignore:",
+        "POST ",
+        "GET\r\n",
+        "M\x00",
+        "GET/1",
+    ] {
+        let err = super::build_http_request_bytes(bad_method, &url, b"", Vec::new())
+            .expect_err("invalid HTTP method token must be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "unexpected error kind for method {bad_method:?}: {err}"
+        );
+    }
+    let valid_req = super::build_http_request_bytes("PATCH", &url, b"ok", Vec::new())
+        .expect("valid RFC 9110 method token must succeed");
+    assert!(valid_req.starts_with(b"PATCH /items HTTP/1.1\r\n"));
+
+    for bad_status in [-200, -1, 0, 99, 1000, i32::MAX] {
+        let err = super::build_http_response_bytes(bad_status, Vec::new(), b"")
+            .expect_err("out-of-range HTTP status code must be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "unexpected error kind for status {bad_status}: {err}"
+        );
+    }
+    let valid_resp = super::build_http_response_bytes(204, Vec::new(), b"")
+        .expect("valid 3-digit HTTP status code must succeed");
+    assert!(valid_resp.starts_with(b"HTTP/1.1 204 No Content\r\n"));
+}
+
+#[test]
+fn tls_stream_enforces_stream_read_size_and_line_limits() {
+    let closed_tls = TlsStreamValue {
+        inner: Arc::new(super::TlsStreamState {
+            stream: Mutex::new(None),
+            busy: AtomicBool::new(false),
+            closed: AtomicBool::new(true),
+        }),
+    };
+    let zero_err = closed_tls
+        .read_exact(0, None, None)
+        .expect_err("TLS read_exact(0) must fail with InvalidInput like TCP read_exact(0)");
+    assert_eq!(zero_err.kind(), io::ErrorKind::InvalidInput);
+
+    let oversize_err = closed_tls
+        .read_exact(super::MAX_STREAM_READ_BYTES + 1, None, None)
+        .expect_err("TLS read_exact above MAX_STREAM_READ_BYTES must fail before stream access");
+    assert_eq!(oversize_err.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        oversize_err.to_string().contains("supported read limit"),
+        "expected read limit message, got: {oversize_err}"
+    );
+
+    let suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos()
+    );
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = std::env::temp_dir().join(format!("aura-tls-bounds-{suffix}-cert.pem"));
+    let key_path = std::env::temp_dir().join(format!("aura-tls-bounds-{suffix}-key.pem"));
+    fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes()).expect("write key pem");
+    let cert_str = cert_path.to_str().expect("utf-8 cert path").to_string();
+    let key_str = key_path.to_str().expect("utf-8 key path").to_string();
+
+    let listener = TlsListenerValue::bind("127.0.0.1:0", &cert_str, &key_str)
+        .expect("tls listener should bind");
+    let address = listener.local_addr().expect("tls local addr");
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let cancellation = CancellationContext::default();
+            let accepted = listener
+                .accept(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("accept tls client");
+            let payload = "a".repeat(70_000);
+            accepted
+                .write_all(
+                    &payload,
+                    Some(StdDuration::from_secs(5)),
+                    Some(&cancellation),
+                )
+                .expect("write payload");
+            accepted.close();
+            listener.close();
+        })
+    };
+
+    let client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert_str),
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls client connect");
+    let line_err = client
+        .read_line_with_limit(
+            32,
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("TLS read_line exceeding limit must fail");
+    assert!(
+        line_err.to_string().contains("network read_line"),
+        "expected network read_line limit error, got: {line_err}"
+    );
+    let remaining = client
+        .read_exact(
+            70_000 - 32,
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("multi-step >64 KiB TLS read_exact should succeed");
+    assert_eq!(remaining.len(), 70_000 - 32);
+    assert!(remaining.iter().all(|&b| b == b'a'));
+    client.close();
+    server.join().expect("server thread joins");
+    let _ = fs::remove_file(&cert_path);
+    let _ = fs::remove_file(&key_path);
 }

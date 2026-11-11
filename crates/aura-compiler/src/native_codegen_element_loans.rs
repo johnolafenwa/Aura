@@ -19,6 +19,21 @@
 //!   `native_codegen_elements.rs`), when the loan only reads its place;
 //! - a read-only loan matched on, as `match row[i]` is, tests its variant
 //!   and reads its payload in that box.
+//! - an element of a list of plain records, which keeps each record's
+//!   bytes in place, lies in the list's storage, and so does a scalar or
+//!   record place inside it, whether the loan selects it
+//!   (`dots[i].r += 1`) or the function names it inside a loan of the
+//!   whole element (`dot.r += 1` in `for dot in mut dots`);
+//! - a method call on an element (`items[i].bump(1)`, or `item.bump(1)` in
+//!   `for item in mut items`) reads a record's words where they lie and
+//!   stores the updated receiver back there. A method that only reads its
+//!   receiver borrows the box in a slot. A `mut self` method takes the
+//!   reference the list holds of the box and hands it back as the updated
+//!   receiver, so the box never leaves its slot; only a method that hands
+//!   back the box it was given is called this way (see
+//!   [`receiver_keepers`]), since one that assigns `self` releases it.
+//!   Behind a trait object, an implementation for a plain class reads the
+//!   record in the slot's box and writes it back there.
 //!
 //! A read-only loan that selects inside another one, such as `row[i]` for
 //! `view row = rows[slot]`, selects from the list in its parent's slot.
@@ -39,7 +54,7 @@
 use std::collections::{HashMap, HashSet};
 
 use super::classes::{receives_lent_field, ClassSlot, FieldLend, SlotKind};
-use super::plain::PlainLeaf;
+use super::plain::{place_leaves, PlainLeaf, PlainRecord};
 use super::*;
 use crate::mir::{instruction_place_mentions, terminator_place_mentions};
 
@@ -49,6 +64,13 @@ pub(super) struct LoanUse {
     /// Whether the loan only lends its place, or passes it to borrowing
     /// parameters, rather than reading and writing it.
     lends: bool,
+    /// Whether the function reads or writes a place inside the loan's
+    /// place by name, as `item.count += 1` does in `for item in mut items`.
+    projects: bool,
+    /// Whether every method the loan lends its place to in a temporary
+    /// leaves the receiver's box where it is, so the box in a slot may be
+    /// lent as it is.
+    keeps: bool,
     mutable: bool,
     /// The loan a read-only nested selection begins on.
     parent: Option<String>,
@@ -59,6 +81,7 @@ pub(super) struct LoanUse {
 pub(super) fn native_element_loans<'f>(
     function: &'f MirFunction,
     borrowed: impl Fn(&'f Instruction) -> Vec<&'f Operand>,
+    keeps_receiver: impl Fn(&str) -> bool,
 ) -> (HashMap<String, LoanUse>, HashSet<String>) {
     let mut sources = HashMap::new();
     let mut rejected = HashSet::new();
@@ -112,6 +135,13 @@ pub(super) fn native_element_loans<'f>(
     // not change their place.
     let mut reads = HashSet::new();
     let mut lend_temps = HashSet::new();
+    // The loans lent to a method call, and the temporaries of those lends.
+    let mut calls = HashSet::new();
+    let mut call_temps = HashSet::new();
+    // The loans lent to a method that may replace its receiver's box.
+    let mut replaced = HashSet::new();
+    // The mutable loans a place inside which is read or written by name.
+    let mut projects = HashSet::new();
     for block in &function.blocks {
         for (index, instruction) in block.instructions.iter().enumerate() {
             let mut mentions = Vec::new();
@@ -135,7 +165,21 @@ pub(super) fn native_element_loans<'f>(
                 Instruction::ReborrowElement { parent, .. } => Some(parent.as_str()),
                 _ => None,
             };
-            let allowed = allowed.or(passed).or(reborrowed);
+            let called = match passed {
+                Some(_) => None,
+                None => called_on_loan(instruction, &sources),
+            };
+            // The retain the ownership pass puts before a `mut self` call
+            // on the loan, which the call consumes or the emitter cancels.
+            let retained = match instruction {
+                Instruction::Retain { place } => block
+                    .instructions
+                    .get(index + 1)
+                    .and_then(|next| called_on_loan(next, &sources))
+                    .filter(|loan| loan == place),
+                _ => None,
+            };
+            let allowed = allowed.or(passed).or(reborrowed).or(called).or(retained);
             let assigned = match instruction {
                 Instruction::Assign { target, .. } => Some(target.as_str()),
                 _ => None,
@@ -176,11 +220,24 @@ pub(super) fn native_element_loans<'f>(
                     reads.insert(loan.to_string());
                     continue;
                 }
+                // A place inside a mutable loan's place is read and written
+                // where the loan's place lies.
+                let written = matches!(
+                    instruction,
+                    Instruction::ReadLoan { loan: named, .. }
+                        | Instruction::WriteLoan { loan: named, .. } if named == mention
+                );
+                if *mutable && mention != loan && (read || written) {
+                    accesses.insert(loan.to_string());
+                    projects.insert(loan.to_string());
+                    continue;
+                }
                 // An added-to receiver names its loan as the receiver and as
                 // the receiver's place.
                 if allowed_seen
                     && mention == loan
                     && (added_receiver_loan(instruction, &sources) == Some(loan)
+                        || called == Some(loan)
                         || (passed == Some(loan) && dispatches_on_loan(instruction, loan)))
                 {
                     continue;
@@ -198,6 +255,14 @@ pub(super) fn native_element_loans<'f>(
                         if lends_to_one_operation(&block.instructions, index, temp, loan, source) {
                             lends.insert(loan.to_string());
                             lend_temps.insert(temp.clone());
+                        } else if let Some(method) =
+                            lends_to_one_method_call(&block.instructions, index, temp, loan, source)
+                        {
+                            if !keeps_receiver(method) {
+                                replaced.insert(loan.to_string());
+                            }
+                            calls.insert(loan.to_string());
+                            call_temps.insert(temp.clone());
                         } else {
                             rejected.insert(loan.to_string());
                         }
@@ -206,6 +271,9 @@ pub(super) fn native_element_loans<'f>(
                     // list's root, which an immutable loan leaves as it is.
                     Instruction::ReborrowElement { .. } => {
                         reads.insert(loan.to_string());
+                    }
+                    Instruction::Assign { .. } if called == Some(loan) => {
+                        calls.insert(loan.to_string());
                     }
                     Instruction::Assign { .. } => {
                         lends.insert(loan.to_string());
@@ -241,14 +309,24 @@ pub(super) fn native_element_loans<'f>(
         .into_iter()
         .filter(|(loan, _)| !rejected.contains(loan))
         .filter(|(loan, (_, mutable))| !(*mutable && reads.contains(loan)))
-        .filter(|(loan, _)| accesses.contains(loan) != lends.contains(loan))
+        // A loan lent only to method calls may also read and write its
+        // place: a record's words are copied out for the call.
+        .filter(|(loan, _)| {
+            accesses.contains(loan) != lends.contains(loan)
+                || (calls.contains(loan) && !lends.contains(loan))
+        })
         .map(|(loan, (_, mutable))| {
-            let lends = lends.contains(&loan);
+            let calls = calls.contains(&loan);
+            let lends = calls || lends.contains(&loan);
+            let projects = projects.contains(&loan);
+            let keeps = !replaced.contains(&loan);
             let parent = parents.get(&loan).cloned();
             (
                 loan,
                 LoanUse {
                     lends,
+                    projects,
+                    keeps,
                     mutable,
                     parent,
                 },
@@ -275,6 +353,17 @@ pub(super) fn native_element_loans<'f>(
             uses.remove(&orphan);
         }
     }
+    // A temporary lent to a method call is one only while its loan is
+    // followed: the call takes it as any other receiver otherwise.
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            if let Instruction::Lend { place, temp, .. } = instruction {
+                if call_temps.contains(temp) && uses.contains_key(place) {
+                    lend_temps.insert(temp.clone());
+                }
+            }
+        }
+    }
     (uses, lend_temps)
 }
 
@@ -296,17 +385,24 @@ fn passed_loan<'f>(
         value:
             Rvalue::Call {
                 callee:
-                    CallTarget::Name(_)
+                    callee @ (CallTarget::Name(_)
+                    | CallTarget::Member {
+                        dispatch: Some(MethodDispatch::Static { .. }),
+                        ..
+                    }
                     | CallTarget::TraitMember {
                         dispatch: Some(MethodDispatch::Candidates { .. }),
                         ..
-                    },
+                    }),
                 ..
             },
     } = instruction
     else {
         return None;
     };
+    // A method of the element's own type borrows the box of a read-only
+    // loan only: a mutable loan's call is `called_on_loan`'s.
+    let method = matches!(callee, CallTarget::Member { .. });
     let mut passed = borrowed(instruction)
         .into_iter()
         .filter_map(|operand| match operand {
@@ -317,6 +413,13 @@ fn passed_loan<'f>(
         });
     let (loan, source) = passed.next()?;
     if passed.next().is_some() || root(target) == source {
+        return None;
+    }
+    if method
+        && sources
+            .get(loan.as_str())
+            .is_some_and(|(_, mutable)| *mutable)
+    {
         return None;
     }
     let mut mentions = Vec::new();
@@ -425,6 +528,192 @@ fn lends_to_one_operation(
     calls == 1 && rest_stays_away
 }
 
+/// The loan `instruction` calls a method on, as `items[i].grow(1)` calls a
+/// trait method an impl gives the element's class, when the call names
+/// the loan and its list's root nowhere else. The method reaches the list
+/// only through its receiver, so the element stays where the loan found
+/// it.
+fn called_on_loan<'f>(
+    instruction: &'f Instruction,
+    sources: &HashMap<String, (String, bool)>,
+) -> Option<&'f str> {
+    let Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(receiver),
+                        receiver_place,
+                        dispatch: Some(MethodDispatch::Static { .. }),
+                        ..
+                    }
+                    | CallTarget::TraitMember {
+                        object: Operand::Place(receiver),
+                        receiver_place,
+                        dispatch:
+                            Some(MethodDispatch::Static { .. } | MethodDispatch::Candidates { .. }),
+                        ..
+                    },
+                args,
+                ..
+            },
+    } = instruction
+    else {
+        return None;
+    };
+    let (source, _) = sources.get(receiver.as_str())?;
+    let names = |place: &str| [receiver.as_str(), source.as_str()].contains(&root(place));
+    (receiver_place
+        .as_ref()
+        .is_none_or(|place| place == receiver)
+        && !names(target)
+        && args.iter().all(|arg| {
+            arg.writeback_place.is_none()
+                && !matches!(
+                    &arg.value,
+                    Operand::Place(place) | Operand::MovePlace(place) if names(place)
+                )
+        }))
+    .then_some(receiver.as_str())
+}
+
+/// The method the `Lend` at `index` lends `loan`'s place to, when it lends
+/// it to one method call and nothing else: before its `EndLend`, only a
+/// call of a method the receiver's type picks, with `temp` as its
+/// receiver, names `temp`, the loan, or its list's root. The method
+/// reaches the list only through its receiver, so the element stays where
+/// the loan found it.
+fn lends_to_one_method_call<'f>(
+    instructions: &'f [Instruction],
+    index: usize,
+    temp: &str,
+    loan: &str,
+    source: &str,
+) -> Option<&'f str> {
+    let Some(Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(receiver),
+                        receiver_place,
+                        dispatch: Some(MethodDispatch::Static { function }),
+                        ..
+                    },
+                args,
+                ..
+            },
+    }) = instructions.get(index + 1)
+    else {
+        return None;
+    };
+    let ended = matches!(
+        instructions.get(index + 2),
+        Some(Instruction::EndLend { temp: ended, .. }) if ended == temp
+    );
+    let names = |place: &str| [temp, loan, source].contains(&root(place));
+    (ended
+        && receiver == temp
+        && receiver_place.as_deref().is_none_or(|place| place == temp)
+        && !names(target)
+        && args.iter().all(|arg| {
+            arg.writeback_place.is_none()
+                && !matches!(
+                    &arg.value,
+                    Operand::Place(place) | Operand::MovePlace(place) if names(place)
+                )
+        }))
+    .then_some(function.as_str())
+}
+
+/// The `mut self` methods of `module` that hand back the receiver box they
+/// were given: nothing in them names the whole receiver but calls of such
+/// methods on it. A caller may give one the reference a list holds of an
+/// element's box and find the box in its slot afterwards. Any other
+/// method may release its receiver's box, as one that assigns `self` does.
+pub(super) fn receiver_keepers(
+    module: &MirModule,
+    method_receivers: &HashMap<String, Option<MirReceiverKind>>,
+) -> HashSet<String> {
+    let mutable =
+        |name: &str| method_receivers.get(name) == Some(&Some(MirReceiverKind::BorrowMut));
+    let mut keepers = module
+        .functions
+        .iter()
+        .filter(|function| mutable(&function.name))
+        .map(|function| function.name.clone())
+        .collect::<HashSet<_>>();
+    loop {
+        let dropped = module
+            .functions
+            .iter()
+            .filter(|function| keepers.contains(&function.name))
+            .filter(|function| {
+                function.blocks.iter().any(|block| {
+                    block.instructions.iter().any(|instruction| {
+                        !keeps_whole_receiver(instruction, &keepers, method_receivers)
+                    }) || names_whole_receiver(&block.terminator)
+                })
+            })
+            .map(|function| function.name.clone())
+            .collect::<Vec<_>>();
+        if dropped.is_empty() {
+            return keepers;
+        }
+        for name in dropped {
+            keepers.remove(&name);
+        }
+    }
+}
+
+/// Whether the MIR node `node` names the whole receiver, `self`, rather
+/// than a place inside it.
+fn names_whole_receiver(node: &impl std::fmt::Debug) -> bool {
+    format!("{node:?}").contains("\"self\"")
+}
+
+/// Whether `instruction` leaves the box of the receiver `self` where it
+/// is: it names no whole receiver, or calls a method on it that only reads
+/// it or is one of `keepers`.
+fn keeps_whole_receiver(
+    instruction: &Instruction,
+    keepers: &HashSet<String>,
+    method_receivers: &HashMap<String, Option<MirReceiverKind>>,
+) -> bool {
+    if !names_whole_receiver(instruction) {
+        return true;
+    }
+    let Instruction::Assign {
+        target,
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Member {
+                        object: Operand::Place(receiver),
+                        receiver_place,
+                        dispatch: Some(MethodDispatch::Static { function }),
+                        ..
+                    },
+                args,
+                ..
+            },
+    } = instruction
+    else {
+        return false;
+    };
+    let keeps = keepers.contains(function)
+        || method_receivers.get(function) == Some(&Some(MirReceiverKind::Borrow));
+    keeps
+        && receiver == "self"
+        && receiver_place
+            .as_deref()
+            .is_none_or(|place| place == "self")
+        && target != "self"
+        && !names_whole_receiver(args)
+}
+
 /// An element loan generated code followed when it began.
 #[derive(Clone, Debug)]
 pub(super) struct NativeLoan {
@@ -432,6 +721,30 @@ pub(super) struct NativeLoan {
     /// follow the loan.
     address: Var,
     target: LoanTarget,
+}
+
+/// A `mut self` method call in progress on a followed loan of a box slot
+/// (see `begin_native_element_call`).
+#[derive(Clone, Debug)]
+pub(super) struct ElementCall {
+    /// The receiver: the box in the slot, or the reference a missed loan
+    /// loaded.
+    receiver: Val,
+    /// The reference a missed loan loaded, or 0.
+    owned: Val,
+    /// The variable that holds the slot's address, 0 when the loan missed.
+    slot: Var,
+    /// Whether the method being compiled took the receiver's box.
+    handed_over: bool,
+}
+
+/// A lend of a plain record to a method call in progress: the variable
+/// that holds the record's address, 0 when the loan missed, and the
+/// record's leaves.
+#[derive(Clone, Debug)]
+pub(super) struct RecordLend {
+    address: Var,
+    leaves: Vec<PlainLeaf>,
 }
 
 #[derive(Clone, Debug)]
@@ -455,6 +768,13 @@ enum LoanPlace {
     /// A scalar or plain-record place inside a class element kept in place:
     /// the leaves of the place, in the block at the address.
     Leaves(Vec<PlainLeaf>),
+    /// A plain record a list keeps in place, or a scalar or plain-record
+    /// place inside one: the leaves of the place, in the element at the
+    /// address.
+    Record {
+        record: PlainRecord,
+        leaves: Vec<PlainLeaf>,
+    },
     /// The `int64` value of a dict entry, in the runtime value at the
     /// address (see `aura_direct_map_value_slot`).
     MapValue,
@@ -649,8 +969,13 @@ impl FunctionCompiler<'_> {
             return Ok(false);
         }
         let loan_ty = self.local_type(loan)?;
-        let Some((target, class)) =
-            self.loan_target(element, &selector.projection, &loan_ty, usage.lends)?
+        let Some((target, class)) = self.loan_target(
+            element,
+            &selector.projection,
+            &loan_ty,
+            usage.lends || usage.projects,
+            usage.keeps,
+        )?
         else {
             return Ok(false);
         };
@@ -682,6 +1007,20 @@ impl FunctionCompiler<'_> {
                 let elements =
                     self.list_view_word(list_box, super::list_snapshots::ViewWord::Elements);
                 self.scalar_list_element(elements, position, stride)
+            }
+            LoanTarget::Place(LoanPlace::Record { record, .. }) => {
+                let fast_block = self.builder.create_block();
+                self.emit_plain_list_check(list_box, record, &layout, slow_block, fast_block);
+                self.builder.switch_to_block(fast_block);
+                self.builder.seal_block(fast_block);
+                let position =
+                    self.emit_list_view_bounds_check(list_box, index, &layout, slow_block);
+                if usage.mutable {
+                    self.emit_unshared_storage_check(list_box, position, slow_block);
+                }
+                let elements =
+                    self.list_view_word(list_box, super::list_snapshots::ViewWord::Elements);
+                self.scalar_list_element(elements, position, record.stride())
             }
             LoanTarget::Place(LoanPlace::Leaves(_)) | LoanTarget::Slot => {
                 use aura_runtime::native_runtime::DirectListAccess;
@@ -731,7 +1070,10 @@ impl FunctionCompiler<'_> {
         self.builder.seal_block(slow_block);
         // Only a list of boxes, or a list of instances or lists that may
         // become one, gains from counting the miss.
-        let promotes = !matches!(target, LoanTarget::Place(LoanPlace::Scalar(_)));
+        let promotes = !matches!(
+            target,
+            LoanTarget::Place(LoanPlace::Scalar(_) | LoanPlace::Record { .. })
+        );
         self.emit_element_path_probe(loan, promotes)?;
         let missed = self.builder.iconst(types::I64, 0);
         self.builder.def_var(address, missed);
@@ -1256,7 +1598,22 @@ impl FunctionCompiler<'_> {
         projection: &str,
         loan_ty: &DirectType,
         lends: bool,
+        keeps: bool,
     ) -> std::result::Result<Option<(LoanTarget, Option<ClassSlot>)>, String> {
+        if let Some(direct) = direct_type(element, &self.classes) {
+            if let Some(record) = self.plain_record(&direct)? {
+                let leaves = place_leaves(record.leaves(), &direct, projection, loan_ty);
+                return Ok(leaves.map(|leaves| {
+                    let place = LoanPlace::Record { record, leaves };
+                    (LoanTarget::Place(place), None)
+                }));
+            }
+        }
+        // A method that may replace its receiver's box is lent a record's
+        // words only.
+        if !keeps {
+            return Ok(None);
+        }
         if projection.is_empty() {
             if !lends {
                 return Ok(ScalarElement::of(element)
@@ -1404,6 +1761,9 @@ impl FunctionCompiler<'_> {
         &mut self,
         place: &str,
     ) -> std::result::Result<Option<ValueRef>, String> {
+        if let Some(value) = self.load_native_record_projection(place)? {
+            return Ok(Some(value));
+        }
         let Some((slot, ty)) = self.native_loan_projection(place)? else {
             return Ok(None);
         };
@@ -1411,6 +1771,101 @@ impl FunctionCompiler<'_> {
         let element = self.native_loan_element(place, slow_block)?;
         self.load_class_slot(place, element, slow_block, &slot, ty, true)
             .map(Some)
+    }
+
+    /// The address and leaves of `place`, a followed loan of a scalar or
+    /// plain-record place, or a place by name inside a followed loan of a
+    /// plain record a list keeps in place.
+    fn native_loan_place(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<(Var, LoanPlace)>, String> {
+        if let Some(NativeLoan {
+            address,
+            target: LoanTarget::Place(target),
+        }) = self.native_loans.get(place)
+        {
+            return Ok(Some((*address, target.clone())));
+        }
+        let Some((loan, projection)) = place.split_once('.') else {
+            return Ok(None);
+        };
+        let Some(NativeLoan {
+            address,
+            target: LoanTarget::Place(LoanPlace::Record { record, leaves }),
+        }) = self.native_loans.get(loan).cloned()
+        else {
+            return Ok(None);
+        };
+        let loan_ty = self.local_type(loan)?;
+        let Ok(place_ty) = self.type_of_place(place) else {
+            return Ok(None);
+        };
+        Ok(
+            place_leaves(&leaves, &loan_ty, projection, &place_ty).map(|leaves| {
+                let place = LoanPlace::Record { record, leaves };
+                (address, place)
+            }),
+        )
+    }
+
+    /// Whether `place` is, or lies inside, a followed loan of a plain
+    /// record a list keeps in place.
+    pub(super) fn names_native_record(&self, place: &str) -> bool {
+        matches!(
+            self.native_loans.get(root(place)),
+            Some(NativeLoan {
+                target: LoanTarget::Place(LoanPlace::Record { .. }),
+                ..
+            })
+        )
+    }
+
+    /// Loads `place`, a place by name inside a followed loan of a plain
+    /// record, where the list keeps the record. A loan that missed reads
+    /// the place through its view as before. Returns `None` for any other
+    /// place.
+    fn load_native_record_projection(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some((address, LoanPlace::Record { leaves, .. })) = self.native_loan_place(place)?
+        else {
+            return Ok(None);
+        };
+        let ty = self.type_of_place(place)?;
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        for abi in ty.abi_types() {
+            self.builder.append_block_param(join_block, abi);
+        }
+        let address = self.builder.use_var(address);
+        self.builder.brif(address, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let values = leaves
+            .iter()
+            .map(|leaf| self.load_leaf(*leaf, address))
+            .collect::<Vec<_>>();
+        self.builder.jump(join_block, &values);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        let loaded = self.load_view_place(place)?;
+        let loaded = self.coerce_value(loaded, &ty)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.jump(join_block, &loaded.values);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(Some(ValueRef {
+            values: self.builder.block_params(join_block).to_vec(),
+            ty,
+        }))
     }
 
     /// The slot and type of `place`, a field of the element a followed loan
@@ -1478,14 +1933,10 @@ impl FunctionCompiler<'_> {
         target: &str,
         loan: &str,
     ) -> std::result::Result<bool, String> {
-        let Some(NativeLoan {
-            address,
-            target: LoanTarget::Place(place),
-        }) = self.native_loans.get(loan).cloned()
-        else {
+        let Some((address, place)) = self.native_loan_place(loan)? else {
             return Ok(false);
         };
-        let loan_ty = self.local_type(loan)?;
+        let loan_ty = self.type_of_place(loan)?;
         let target_ty = self.type_of_place(target)?;
         let fast_block = self.builder.create_block();
         let slow_block = self.builder.create_block();
@@ -1507,7 +1958,7 @@ impl FunctionCompiler<'_> {
                     bits
                 }]
             }
-            LoanPlace::Leaves(leaves) => leaves
+            LoanPlace::Leaves(leaves) | LoanPlace::Record { leaves, .. } => leaves
                 .iter()
                 .map(|leaf| self.load_leaf(*leaf, address))
                 .collect(),
@@ -1522,7 +1973,12 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
-        let loaded = self.load_place(loan)?;
+        // A record's place is read here where it lies, so the missed loan
+        // reads its view.
+        let loaded = match &place {
+            LoanPlace::Record { .. } => self.load_view_place(loan)?,
+            _ => self.load_place(loan)?,
+        };
         let loaded = self.coerce_value(loaded, &loan_ty)?;
         self.release_temporary_owned_since(&caller_owned);
         self.builder.jump(join_block, &loaded.values);
@@ -1547,16 +2003,28 @@ impl FunctionCompiler<'_> {
         loan: &str,
         value: &Rvalue,
     ) -> std::result::Result<bool, String> {
-        let Some(NativeLoan {
-            address,
-            target: LoanTarget::Place(place),
-        }) = self.native_loans.get(loan).cloned()
-        else {
+        if self.native_loan_place(loan)?.is_none() && self.native_element_field(loan)?.is_none() {
             return Ok(false);
-        };
+        }
         let loan_ty = self.type_of_place(loan)?;
         let compiled = self.compile_rvalue_for_target(value, &loan_ty)?;
-        let value = self.coerce_value(compiled, &loan_ty)?;
+        self.store_native_loan_place(loan, compiled)
+    }
+
+    /// Stores `value` in `loan`, a followed loan of a scalar or
+    /// plain-record place or a place by name inside one of a plain record,
+    /// where the place lies, or through its view when the loan missed.
+    /// Returns false for any other place.
+    pub(super) fn store_native_loan_place(
+        &mut self,
+        loan: &str,
+        value: ValueRef,
+    ) -> std::result::Result<bool, String> {
+        let Some((address, place)) = self.native_loan_place(loan)? else {
+            return self.store_native_element_field(loan, value);
+        };
+        let loan_ty = self.type_of_place(loan)?;
+        let value = self.coerce_value(value, &loan_ty)?;
         let fast_block = self.builder.create_block();
         let slow_block = self.builder.create_block();
         let join_block = self.builder.create_block();
@@ -1575,7 +2043,7 @@ impl FunctionCompiler<'_> {
                 };
                 self.store_scalar_list_element(*kind, bits, address);
             }
-            LoanPlace::Leaves(leaves) => {
+            LoanPlace::Leaves(leaves) | LoanPlace::Record { leaves, .. } => {
                 for (leaf, word) in leaves.iter().zip(&value.values) {
                     self.store_leaf(*leaf, *word, address);
                 }
@@ -1592,13 +2060,332 @@ impl FunctionCompiler<'_> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         let caller_owned = self.layout_scratch.clone();
-        self.store_place(loan, value)?;
+        self.store_view_place(loan, value)?;
         self.release_temporary_owned_since(&caller_owned);
         self.builder.jump(join_block, &[]);
         self.layout_scratch = caller_owned;
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
+        Ok(true)
+    }
+
+    /// The slot and type of `place`, a scalar or plain-record field of the
+    /// class element a followed mutable loan reaches, which is written in
+    /// the element's block.
+    fn native_element_field(
+        &mut self,
+        place: &str,
+    ) -> std::result::Result<Option<(ClassSlot, DirectType)>, String> {
+        let mutable = self
+            .native_loan_uses
+            .get(root(place))
+            .is_some_and(|usage| usage.mutable);
+        if !mutable {
+            return Ok(None);
+        }
+        Ok(self
+            .native_loan_projection(place)?
+            .filter(|(slot, _)| matches!(slot.kind, SlotKind::Leaves(_))))
+    }
+
+    /// Stores `value` in `place`, a scalar or plain-record field of the
+    /// class element a followed mutable loan reaches, in the element's
+    /// block, or through the place's view when the loan missed or the
+    /// element does not keep its fields in place. Returns false for any
+    /// other place.
+    fn store_native_element_field(
+        &mut self,
+        place: &str,
+        value: ValueRef,
+    ) -> std::result::Result<bool, String> {
+        let Some((slot, ty)) = self.native_element_field(place)? else {
+            return Ok(false);
+        };
+        let SlotKind::Leaves(leaves) = &slot.kind else {
+            return Ok(false);
+        };
+        let value = self.coerce_value(value, &ty)?;
+        let slow_block = self.builder.create_block();
+        let fast_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let element = self.native_loan_element(place, slow_block)?;
+        self.emit_class_check(element, slot.access, slow_block, fast_block);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let block = self.class_block(element);
+        for (leaf, word) in leaves.iter().zip(&value.values) {
+            self.store_leaf(*leaf, *word, block);
+        }
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        self.store_view_place(place, value)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.jump(join_block, &[]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(true)
+    }
+
+    /// Whether a `Retain` of `place` waits for the call that follows it:
+    /// `place` is a followed mutable loan of a box slot, which only a `mut
+    /// self` call on the loan retains (see [`native_element_loans`]).
+    pub(super) fn defers_native_element_retain(&self, place: &str) -> bool {
+        matches!(
+            self.native_loans.get(place),
+            Some(NativeLoan {
+                target: LoanTarget::Slot,
+                ..
+            })
+        ) && self
+            .native_loan_uses
+            .get(place)
+            .is_some_and(|usage| usage.mutable)
+    }
+
+    /// The receiver of a `mut self` method call on `place`, a followed
+    /// mutable loan of a box slot: the box where its list keeps it. A
+    /// method that takes the box takes the list's own reference and hands
+    /// it back as the updated receiver, and one that takes a record's
+    /// words reads them in the box; [`Self::store_native_element_call`]
+    /// puts the updated receiver back. A loan that missed, or a moved-out
+    /// slot, loads a reference of the call's own as before. Returns `None`
+    /// for any other place, and for a `dispatch` that may run a method
+    /// that replaces its receiver's box.
+    pub(super) fn begin_native_element_call(
+        &mut self,
+        place: &str,
+        dispatch: &MethodDispatch,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let address = match self.native_loans.get(place) {
+            Some(NativeLoan {
+                address,
+                target: LoanTarget::Slot,
+            }) => *address,
+            _ => return Ok(None),
+        };
+        let mutable = self
+            .native_loan_uses
+            .get(place)
+            .is_some_and(|usage| usage.mutable);
+        let loan_ty = self.local_type(place)?;
+        if !mutable || !matches!(loan_ty, DirectType::Opaque(_)) {
+            return Ok(None);
+        }
+        let functions = match dispatch {
+            MethodDispatch::Static { function } => vec![function],
+            MethodDispatch::Candidates { candidates, .. } => candidates
+                .iter()
+                .map(|candidate| &candidate.function)
+                .collect(),
+            _ => return Ok(None),
+        };
+        for function in functions {
+            let takes_box = matches!(
+                self.function_param_types
+                    .get(function)
+                    .and_then(|params| params.first()),
+                Some(DirectType::Opaque(_))
+            );
+            if takes_box && !self.receiver_keepers.contains(function) {
+                return Ok(None);
+            }
+        }
+        let slot_var = self.declare_word_var();
+        let fast_block = self.builder.create_block();
+        let lent_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.append_block_param(join_block, types::I64);
+        self.builder.append_block_param(join_block, types::I64);
+        let address = self.builder.use_var(address);
+        self.builder.brif(address, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        let boxed = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), address, 0);
+        // A moved-out element takes the runtime walk, which reports it.
+        self.builder.brif(boxed, lent_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(lent_block);
+        self.builder.seal_block(lent_block);
+        self.builder.def_var(slot_var, address);
+        let none = self.builder.iconst(types::I64, 0);
+        self.builder.jump(join_block, &[boxed, none]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        let loaded = self.load_place(place)?;
+        let loaded = self.coerce_value(loaded, &loan_ty)?;
+        let [word] = loaded.values.as_slice() else {
+            return Err(format!(
+                "direct backend loaded element loan `{place}` as more than one word"
+            ));
+        };
+        let word = *word;
+        let word = if self.layout_scratch.opaque.contains(&word) {
+            self.layout_scratch.remove(&word);
+            word
+        } else {
+            self.retain_opaque_handle(word)
+        };
+        self.release_temporary_owned_since(&caller_owned);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.def_var(slot_var, zero);
+        self.builder.jump(join_block, &[word, word]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let [receiver, owned] = self.builder.block_params(join_block)[..] else {
+            unreachable!("the join block takes two words");
+        };
+        // The reference a missed loan loaded, or 0: a method that takes
+        // the box takes it, and it is released after any other.
+        self.layout_scratch.opaque.insert(owned);
+        self.element_calls.insert(
+            place.to_string(),
+            ElementCall {
+                receiver,
+                owned,
+                slot: slot_var,
+                handed_over: false,
+            },
+        );
+        Ok(Some(ValueRef {
+            values: vec![receiver],
+            ty: loan_ty,
+        }))
+    }
+
+    /// Ends the call [`Self::begin_native_element_call`] began on `place`.
+    pub(super) fn end_native_element_call(&mut self, place: &str) {
+        self.element_calls.remove(place);
+    }
+
+    /// Whether `receiver`, coerced from `object` for a `mut self` method
+    /// that takes a box, is the box of a call
+    /// [`Self::begin_native_element_call`] began: the method takes the
+    /// reference the call holds, the list's own or the one a missed loan
+    /// loaded, with no other.
+    pub(super) fn hands_over_native_element(
+        &mut self,
+        object: &ValueRef,
+        receiver: &ValueRef,
+    ) -> bool {
+        if !matches!(receiver.ty, DirectType::Opaque(_)) || receiver.values != object.values {
+            return false;
+        }
+        let Some(call) = self
+            .element_calls
+            .values_mut()
+            .find(|call| receiver.values == [call.receiver])
+        else {
+            return false;
+        };
+        call.handed_over = true;
+        let owned = call.owned;
+        self.layout_scratch.remove(&owned);
+        true
+    }
+
+    /// Stores `value`, the updated receiver a `mut self` method handed
+    /// back, in `place`, the followed loan the call began on (see
+    /// [`Self::begin_native_element_call`]). A box the method took and the
+    /// slot still holds, which nothing else shares, stays where it is;
+    /// otherwise the runtime gives the slot the box, as it ends a field
+    /// lend. A record's words are stored in the slot's box when it keeps
+    /// them in place. Any other value, and a call that loaded its own
+    /// reference, is stored through the place's view as before. Returns
+    /// false for any other place.
+    pub(super) fn store_native_element_call(
+        &mut self,
+        place: &str,
+        value: &ValueRef,
+    ) -> std::result::Result<bool, String> {
+        let Some(call) = self.element_calls.get_mut(place) else {
+            return Ok(false);
+        };
+        let handed_over = std::mem::take(&mut call.handed_over);
+        let slot_var = call.slot;
+        let flags = MemFlags::trusted();
+        let lent_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let slot = self.builder.use_var(slot_var);
+        self.builder.brif(slot, lent_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(lent_block);
+        self.builder.seal_block(lent_block);
+        let record = self.record_class_leaves(&value.ty)?;
+        match (&value.ty, record) {
+            (DirectType::Opaque(_), _) if handed_over => {
+                let boxed = value.values[0];
+                let ownership = ownership_layout();
+                let restore_block = self.builder.create_block();
+                let held = self.builder.load(types::I64, flags, slot, 0);
+                let kept = self.builder.icmp(IntCC::Equal, held, boxed);
+                let count = self
+                    .builder
+                    .uload32(flags, boxed, ownership.ref_count_offset);
+                let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
+                let unchanged = self.builder.band(kept, alone);
+                self.builder
+                    .brif(unchanged, join_block, &[], restore_block, &[]);
+
+                self.builder.switch_to_block(restore_block);
+                self.builder.seal_block(restore_block);
+                self.builder.call(
+                    self.runtime[RuntimeFn::InstanceRestoreField],
+                    &[slot, boxed],
+                );
+                self.builder.jump(join_block, &[]);
+            }
+            (_, Some((class, leaves))) if !handed_over => {
+                let held = self.builder.load(types::I64, flags, slot, 0);
+                let fast_block = self.builder.create_block();
+                self.emit_class_check(held, class.access(), slow_block, fast_block);
+                self.builder.switch_to_block(fast_block);
+                self.builder.seal_block(fast_block);
+                let block = self.class_block(held);
+                for (leaf, word) in leaves.iter().zip(&value.values) {
+                    self.store_leaf(*leaf, *word, block);
+                }
+                self.builder.jump(join_block, &[]);
+            }
+            _ if handed_over => {
+                return Err(format!(
+                    "direct backend handed the box of `{place}` to a method that kept it"
+                ));
+            }
+            _ => {
+                self.builder.jump(slow_block, &[]);
+            }
+        }
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        self.store_view_place(place, value.clone())?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.jump(join_block, &[]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        if handed_over {
+            // The slot holds the reference on both paths.
+            self.clear_temporary_opaque_owned(value);
+        }
         Ok(true)
     }
 
@@ -1618,6 +2405,14 @@ impl FunctionCompiler<'_> {
                 address,
                 target: LoanTarget::Slot,
             }) if self.element_lend_temps.contains(temp) => *address,
+            Some(NativeLoan {
+                address,
+                target: LoanTarget::Place(LoanPlace::Record { leaves, .. }),
+            }) if self.element_lend_temps.contains(temp) => {
+                let (address, leaves) = (*address, leaves.clone());
+                self.lend_native_record(place, temp, mutable, address, leaves)?;
+                return Ok(true);
+            }
             _ => return Ok(false),
         };
         let lent = self.declare_word_var();
@@ -1669,6 +2464,91 @@ impl FunctionCompiler<'_> {
                 slot: slot_var,
             },
         );
+        Ok(true)
+    }
+
+    /// Lends the plain record a followed loan reaches to a method call: the
+    /// record's words are read into `temp` where the list keeps them, and
+    /// [`Self::end_native_record_lend`] stores them back. A loan that
+    /// missed takes the element out as before.
+    fn lend_native_record(
+        &mut self,
+        place: &str,
+        temp: &str,
+        mutable: bool,
+        address: Var,
+        leaves: Vec<PlainLeaf>,
+    ) -> std::result::Result<(), String> {
+        self.lent_temps.insert(temp.to_string(), mutable);
+        let temp_vars = self.local_vars(temp)?;
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let found = self.builder.use_var(address);
+        self.builder.brif(found, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        for (leaf, var) in leaves.iter().zip(&temp_vars) {
+            let word = self.load_leaf(*leaf, found);
+            self.builder.def_var(*var, word);
+        }
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        self.lend_on_runtime_path(place, temp, mutable)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.jump(join_block, &[]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        self.record_lends
+            .insert(temp.to_string(), RecordLend { address, leaves });
+        Ok(())
+    }
+
+    /// Lowers MIR `EndLend` of a lend [`Self::lend_native_record`] lowered:
+    /// a mutable lend stores the temporary's words where the list keeps
+    /// the record. Returns false for any other lend.
+    pub(super) fn end_native_record_lend(
+        &mut self,
+        place: &str,
+        temp: &str,
+        mutable: bool,
+    ) -> std::result::Result<bool, String> {
+        let Some(lend) = self.record_lends.remove(temp) else {
+            return Ok(false);
+        };
+        let temp_vars = self.local_vars(temp)?;
+        let fast_block = self.builder.create_block();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        let found = self.builder.use_var(lend.address);
+        self.builder.brif(found, fast_block, &[], slow_block, &[]);
+
+        self.builder.switch_to_block(fast_block);
+        self.builder.seal_block(fast_block);
+        if mutable {
+            for (leaf, var) in lend.leaves.iter().zip(&temp_vars) {
+                let word = self.builder.use_var(*var);
+                self.store_leaf(*leaf, word, found);
+            }
+        }
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let caller_owned = self.layout_scratch.clone();
+        self.end_lend_on_runtime_path(place, temp, mutable)?;
+        self.release_temporary_owned_since(&caller_owned);
+        self.builder.jump(join_block, &[]);
+        self.layout_scratch = caller_owned;
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
         Ok(true)
     }
 

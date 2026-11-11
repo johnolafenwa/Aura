@@ -347,6 +347,7 @@ printed-output order unless they coordinate that order explicitly.
 | `array_products.au` | `Array.matmul` of a table and a vector and of two tables, `Array.dot`, and the reordered `fast_sum` and `fast_mean` beside the left-to-right `sum` | `Array[float64](shape=[2], values=[88.3, 88.3])`, `0.38`, `Array[int64](shape=[2, 2], values=[19, 22, 43, 50])`, `70`, `100000.00000133288`, `99999.9999999441`, `0.0999999999999441` |
 | `array_views.au` | Array selections with a coordinate or a slice on each axis, `transpose`, `reshape`, `flatten`, and `permute` over shared storage, slice assignment, and a view that keeps its elements after the source is written | `Array[float64](shape=[4], values=[4.0, 5.0, 6.0, 7.0])`, `[4, 3]`, `Array[float64](shape=[4], values=[0.0, 1.0, 2.0, 3.0])`, `Array[int64](shape=[5], values=[1, 1, 2, 3, 4])`, `Array[float64](shape=[4], values=[8.5, 9.5, 10.0, 90.0])` |
 | `simd_lanes.au` | The `simd` module's lane values: a dot product on `F64x4` with `splat`, `load`, `+`, `*`, and `sum`, a clamp on `F32x8` with `max`, `min`, and `store`, and `sqrt`, `mul_add`, and `to_list` | `29.0`, `[0.0, 0.25, 1.0, 0.75, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]`, `[2.0, 3.0, 4.0, 5.0]`, `32.0` |
+| `simd_integer_lanes.au` | The `simd` module's `int64` lane values: a checked sum and an in-place shift on `I64x4`, with unary `-`, `abs`, and `max` | `45`, `[101, 102, 103, 104, 105, 106, 107, 108, 109]`, `[3, -4, 5, -6]`, `[5, 5, 5, 6]` |
 | `uint128_values.au` | Full-range `uint128` literals and arithmetic through the runtimes and the direct backend | `340282366920938463463374607431768211455`, `340282366920938463463374607431768211455` |
 | `unary_minus.au` | Unary minus for integer and floating-point expressions | `-5`, `-3.5`, `2` |
 
@@ -470,6 +471,7 @@ cargo run -p aura -- run examples/numbers/numeric_arrays.au
 cargo run -p aura -- run examples/numbers/array_products.au
 cargo run -p aura -- run examples/numbers/array_views.au
 cargo run -p aura -- run examples/numbers/simd_lanes.au
+cargo run -p aura -- run examples/numbers/simd_integer_lanes.au
 cargo run -p aura -- run examples/numbers/unary_minus.au
 cargo run -p aura -- run examples/strings/string_clone.au
 cargo run -p aura -- run examples/strings/string_methods.au

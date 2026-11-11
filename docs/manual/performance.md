@@ -1685,7 +1685,9 @@ These loops stay scalar:
   Use `Array.fast_sum()` or `Array.dot()` for a reordered sum, or keep the
   sum in a lane value from the [SIMD module](/manual/simd).
 - **Checked integer arithmetic** on the elements. Each operation can
-  report overflow.
+  report overflow. For `int64`, the lane values `I64x2` and `I64x4` of
+  the [SIMD module](/manual/simd#integer-lanes) check a whole operation
+  with one test on a build for AVX2.
 - **A loop in a program that starts tasks.** Each iteration checks
   whether to yield.
 

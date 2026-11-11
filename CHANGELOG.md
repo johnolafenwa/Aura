@@ -48,6 +48,12 @@ in this file.
   with a constant step, and `mut` list parameters qualify. Five such loops
   in `benchmarks/simd` now run at the speed of the same loops in Rust. An
   index out of range still stops at the access that reaches it.
+- A float `matmul` of two matrices is faster and gives the same bits as
+  before. On a CPU with AVX2 it keeps its running sums in registers, and a
+  large product runs on several threads. 2,000 products of 64 by 64
+  matrices take 41 ms where they took 108, and a 512 by 512 product takes
+  a seventh of the time on four cores. `AURA_ARRAY_THREADS` sets the most
+  threads a product may use.
 - Arrays: `left.dot(right)` is the inner product of two Arrays of the same
   shape, and `left.matmul(right)` is the matrix product of `[n, k]` with
   `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Integer products are
@@ -62,10 +68,34 @@ in this file.
   the same at every width. `AURA_ARRAY_KERNELS=baseline` turns the wide
   copies off. A float `min` and `max` now compare many elements at once,
   and order `-0.0` below `0.0`.
+- The `simd` module has `int64` lane values `I64x2` and `I64x4`, with
+  `splat`, `load`, `store`, `+`, `-`, `*`, unary `-`, `min`, `max`, `abs`,
+  `sum`, and `to_list`. Every lane is checked: an overflow stops the
+  program with `AU4002` and names the value, as the scalar operation
+  does. On a build for AVX2 (`--target-cpu x86-64-v3` or `native`) one
+  test covers all lanes of a sum or difference, and an `I64x4` sum takes
+  under half the time of the plain loop.
+- A `for` loop over `range(start, stop, step)` with a literal step tests
+  its bound once in each iteration, and a lane load or store adds two
+  conditions to the loop's entry whatever its lane count. The lane
+  kernels of `benchmarks/simd` run up to twice as fast as before on a
+  baseline build.
 - `aura build --target-cpu <name>` and `aura run --target-cpu <name>`
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
   when the option is absent.
+- A method call on a list element no longer takes the element out of the
+  list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
+  shared call by index (`items[i].get()`), any call in
+  `for item in mut items:`, and `item.count += 1` in such a loop cost 2,300
+  to 2,800 instructions each. They now cost 36 for a class of numbers and 92
+  for a class with a `str` field, with the method inlined, and a field
+  update in the loop costs 16 and 37. This covers a class's own methods,
+  trait methods, and `list[dyn Trait]` elements. `for item in items:
+  item.get()` on a class with a `str` field no longer clones each element
+  (1,615 instructions down to 46). The first pass over a list still pays
+  the old cost for about one element in eight while the list settles how
+  it stores its elements.
 - A `for` invariant that does not read the loop target is now checked
   before the loop asks for each element, as a `while` invariant is: on
   entry, after every iteration, and when the loop runs out. It holds after
@@ -190,6 +220,37 @@ in this file.
 - `aura verify` finds the trusted contract of an extern function that has
   a `symbol` clause. It looked the contract up by the C symbol, so the
   contract was ignored.
+- Security and soundness fixes from the 2026-11-10 review.
+  - `aura verify` now reads the contracts, class invariants, `spec def`
+    functions, and `lemma def` functions of imported modules, proves an
+    imported lemma's body before relying on it, and checks that a default
+    argument is well-defined.
+  - A contract on an `extern "C"` function is checked when the program
+    runs: a broken `requires` or `ensures` stops it with `AU4009`, and
+    `--remove-proved-checks` keeps these checks (ADR-0084).
+  - A union of two classes or enums with the same name from different
+    modules, such as `alpha.Item | Item`, selects the right member.
+  - A generator left waiting when a `for` loop ends early is closed at that
+    point on `aura run` too, so its `with` exits run before the code after
+    the loop and a trap in one stops the program.
+  - A recursive `spec def` verifies for concrete arguments and for calls
+    that recurse at most eight levels; deeper calls report the limit.
+  - Git dependencies accept only `https://`, `ssh://`, `git@host:path`, and
+    local paths, never materialize symlinks, and a package's `src` must stay
+    inside the package. `--offline` and `AURA_OFFLINE=1` forbid network git
+    access, and the editor runs the compiler offline.
+  - `library_paths` entries may not contain `..`, a dependency's must stay
+    inside the dependency, and `aura build --no-rpath` leaves them out of
+    the binary's run-time search path.
+  - `aura run` stages a freshly built program in a private directory, loads
+    foreign libraries privately, and refuses a foreign symbol that resolves
+    into `aura` itself (ADR-0084).
+  - An HTTP method must be a token and a response status must be 100 to 999;
+    TLS `read_line` and `read_exact` have the size limits TCP streams have.
+  - `aura upgrade` and `install.sh` download over HTTPS only.
+  - The VS Code extension runs commands as structured tasks, quotes
+    PowerShell arguments literally, and never runs a bare `aura` from the
+    workspace directory; a newer save cancels a running `aura verify`.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

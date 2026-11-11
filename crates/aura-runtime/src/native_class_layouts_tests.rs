@@ -102,7 +102,7 @@ fn book_env(prefix: &str) -> LayoutEnv {
 
 fn descriptor(prefix: &str, class: &str) -> &'static str {
     Box::leak(
-        encode_descriptor(&Type::named(&format!("{prefix}{class}")), &book_env(prefix))
+        encode_descriptor(&Type::named(format!("{prefix}{class}")), &book_env(prefix))
             .expect("a layout")
             .into_boxed_str(),
     )
@@ -466,7 +466,7 @@ fn typed_fields_change_where_they_lie() {
     assert_eq!(typed.remove("missing"), None);
     let copy = typed.clone();
     assert!(!copy.contains_key("title"));
-    assert!(copy.into_map().get("title").is_none());
+    assert!(!copy.into_map().contains_key("title"));
     typed.insert("title", text("v")).expect("fills the slot");
     assert_eq!(typed.get("title").map(Cow::into_owned), Some(text("v")));
 
@@ -639,7 +639,7 @@ fn appended_typed_instances_keep_their_own_boxes() {
         let prefix = "Appended";
         let access = FIRST_TEST_ACCESS + 70;
         let list = boxed_value(Value::Vec(VecValue {
-            element_type: crate::runtime_value::SharedType::from(Type::named(&format!(
+            element_type: crate::runtime_value::SharedType::from(Type::named(format!(
                 "{prefix}Book"
             ))),
             elements: ListElements::new(),
@@ -668,7 +668,7 @@ fn appended_typed_instances_keep_their_own_boxes() {
         unsafe { aura_direct_release_value(second) };
         // A list that keeps `Value`s takes the instance out of its box.
         let values = boxed_value(Value::Vec(VecValue {
-            element_type: crate::runtime_value::SharedType::from(Type::named(&format!(
+            element_type: crate::runtime_value::SharedType::from(Type::named(format!(
                 "{prefix}Book"
             ))),
             elements: ListElements::from(vec![instance(

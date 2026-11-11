@@ -92,13 +92,71 @@ All of 1 to 5 reproduced on `main` @ `0694dba` before the fix.
   `module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends`
   covers both.
 
+## 6. Method calls on list elements
+
+Measured on `main`: about 2,800 instructions for `items[i].bump(1)`, for
+`for item in mut items: item.bump(1)`, and for a shared `items[i].get()`
+by index, against 10 for `for item in items: item.get()`, on a class of
+scalars. The native backend followed an element loan only when the body
+read or wrote the element's fields. A method call made it fall back to
+the runtime, which takes the element out of the list and puts it back.
+
+- `native_element_loans` now follows a loan whose element is the receiver
+  of a call: a lend to one method call, a call on the loan itself (a trait
+  method, or a call through `dyn`), and reads and writes of the element's
+  fields by name inside a whole-element loan (`item.count += 1` in
+  `for item in mut items:`).
+- An element of a list of all-scalar classes is lent as its words in
+  place. A `mut self` call copies the words in and the result back.
+- A boxed element is handed to a `mut self` method without a retain, and
+  put back only if the method replaced it. The task ledger does not hold
+  the list's own reference, so this is only done for a method that never
+  releases its receiver: `receiver_keepers` finds the methods that name
+  `self` whole only to call another such method on it. A method that
+  assigns `self` takes the old path.
+- A `mut self` method from an `impl` block is called on the loan itself,
+  and the ownership pass retains the loan before it. The loan analysis
+  accepts that retain, and the emitter defers it to the call: the fast
+  path hands the list's own reference over with no retain, and only a call
+  that falls back to the general path makes it.
+- `for item in items: item.get()` cloned each element of a class with a
+  `str` field, because a call on a borrowed receiver did not count as a
+  read of the lent element. It does now.
+
+Instructions per call in the release build, method inlined, 200 passes
+over 1,000 elements:
+
+| loop | class of numbers | class with a `str` field |
+| --- | ---: | ---: |
+| `for item in items: item.get()` | 10 | 1,615 to 46 |
+| `items[i].get()` | 2,814 to 15 | about 2,300 to 73 |
+| `for item in mut items: item.bump(1)` | 2,827 to 36 | about 2,300 to 92 |
+| `items[i].bump(1)` | 2,827 to 36 | about 2,300 to 92 |
+| `items[i].grow(1)`, a trait method from an `impl` block | 3,347 to 50 | 3,150 to 88 |
+| `for item in mut items: item.count += 1` | 3,637 to 15 | 4,243 to 37 |
+| `items[i].count += 1` | 16 | 35 |
+
+Probes `element_mut_call` and `element_plain_mut_call` read 94.1 and 64.1
+against Rust's 12.0 and 16.0. There the method is not inlined, and its
+frame entry and exit take about 50 of the instructions.
+
+Tests: run fixtures `element_method_calls_plain_classes`,
+`element_method_calls_plain_trait_impls`,
+`element_method_calls_boxed_and_dyn`,
+`element_method_calls_shared_in_mut_loops`,
+`element_method_calls_replacing_receivers`, and
+`element_method_calls_trait_impl_receivers`, the same on both backends and
+clean under valgrind with the debug ownership ledger, and the library test
+`native_element_loans_follow_method_calls_on_list_elements`.
+
 ## Open
 
-- 6, the cost of a `mut self` call on a list element, is next. Measured
-  on `main`: about 2,800 instructions for `items[i].bump(1)` and for
-  `for item in mut items: item.bump(1)`, and the same for a shared
-  `items[i].get()` by index, against 7 for `for item in items: item.get()`
-  on a class of scalars.
+- The first pass over a list still takes the runtime path for about one
+  element in eight, until the list is promoted to hold its elements in a
+  form the loan can reach. The promotion policy is unchanged.
+- A call that is not inlined pays about 50 instructions for its frame
+  (the stack-trace frame and saved registers), which keeps the two new
+  probes at 7.8 and 4.0 times Rust.
 - A generic function whose bound names a trait that no type implements
   (or only a union type implements) does not build: "no type declares
   `.name` for `T`". It runs under `aura run`. Found while testing 3.

@@ -49,7 +49,14 @@ fn simd_is_a_source_module_of_lane_classes_and_operator_traits() {
     let host = builtin_module_namespace(&path("simd")).expect("simd is builtin");
     assert!(host.functions.is_empty());
     let merged = importable_builtin_namespace(&path("simd")).expect("simd is importable");
-    for (class, lanes) in [("F64x2", 2), ("F64x4", 4), ("F32x4", 4), ("F32x8", 8)] {
+    for (class, lanes) in [
+        ("F64x2", 2),
+        ("F64x4", 4),
+        ("F32x4", 4),
+        ("F32x8", 8),
+        ("I64x2", 2),
+        ("I64x4", 4),
+    ] {
         let info = merged
             .classes
             .get(class)

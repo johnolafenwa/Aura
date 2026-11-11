@@ -1271,6 +1271,55 @@ fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
 }
 
 #[test]
+fn versioned_blocks_keep_the_order_their_instructions_were_built_in() {
+    // The latch is created before the body and built after it, and it uses
+    // a value of the body. Its copy must follow the body's copy.
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    let copied = std::rc::Rc::new(std::cell::Cell::new(false));
+    let result = std::rc::Rc::clone(&copied);
+    define(&mut module, "late", Linkage::Export, &sig, move |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let [count, flag] = builder.block_params(entry)[..] else {
+            unreachable!("two parameters")
+        };
+        let header = builder.create_block();
+        let index = builder.append_block_param(header, types::I64);
+        let latch = builder.create_block();
+        let body = builder.create_block();
+        let exit = builder.create_block();
+        let zero = builder.iconst(types::I64, 0);
+        builder.jump(header, &[zero]);
+
+        builder.switch_to_block(header);
+        let more = builder.icmp(IntCC::SignedLessThan, index, count);
+        builder.brif(more, body, &[], exit, &[]);
+
+        builder.switch_to_block(body);
+        builder.seal_block(body);
+        let next = builder.iadd_imm(index, 1);
+        builder.jump(latch, &[]);
+
+        builder.switch_to_block(latch);
+        builder.seal_block(latch);
+        builder.jump(header, &[next]);
+        builder.seal_block(header);
+
+        builder.switch_to_block(exit);
+        builder.seal_block(exit);
+        builder.return_(&[count]);
+        result.set(builder.version_blocks(&[header, latch, body], &[], &[(entry, flag, None)]));
+    });
+    assert!(copied.get());
+    // The module lowers, which fails on a value used before its block.
+    let ir = ir(&module);
+    assert_eq!(ir.matches("icmp slt i64").count(), 2, "{ir}");
+}
+
+#[test]
 fn element_addresses_are_offsets_from_one_pointer() {
     let mut module = module();
     let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
@@ -1383,6 +1432,33 @@ fn foreign_symbols_declare_once_and_calls_extend_narrow_arguments() {
         ir.contains("(i32 signext %") && ir.contains(", i8 zeroext %"),
         "narrow C arguments carry their extension: {ir}"
     );
+}
+
+#[test]
+fn lane_checks_join_from_avx2_on() {
+    use crate::native_backend::{joins_lane_checks, lane_checks_join_on, with_joined_lane_checks};
+
+    let host = |features: &'static str| move || format!("native:cpu:{features}");
+    assert!(lane_checks_join_on("x86_64", "x86-64-v3", host("")));
+    assert!(lane_checks_join_on("x86_64", "x86-64-v4", host("")));
+    assert!(lane_checks_join_on(
+        "x86_64",
+        "native",
+        host("+sse2,+avx2,-avx512f")
+    ));
+    assert!(!lane_checks_join_on(
+        "x86_64",
+        "native",
+        host("+sse2,-avx2")
+    ));
+    assert!(!lane_checks_join_on("x86_64", "generic", host("+avx2")));
+    assert!(!lane_checks_join_on("x86_64", "x86-64-v2", host("+avx2")));
+    // Other architectures are not measured.
+    assert!(!lane_checks_join_on("aarch64", "native", host("+avx2")));
+    // The default target CPU of a test is the generic one.
+    assert!(!joins_lane_checks());
+    assert!(with_joined_lane_checks(joins_lane_checks));
+    assert!(!joins_lane_checks());
 }
 
 #[test]

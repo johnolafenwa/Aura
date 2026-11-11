@@ -163,8 +163,21 @@ class CompilerService {
     this.requestTimeoutMs = requestTimeoutMs;
     this.responseLimitBytes = responseLimitBytes;
     this.onSemanticSchemaMismatch = onSemanticSchemaMismatch;
+    if (!isRunnableCompilerCommand(command)) {
+      this.child = null;
+      const error = Object.assign(
+        new Error(`Aura compiler binary \`${command.cmd}\` was not found`),
+        { code: "ENOENT" }
+      );
+      queueMicrotask(() => {
+        onUnavailable({ command, error });
+        this.fail(error);
+      });
+      return;
+    }
     this.child = spawn(command.cmd, [...command.args, "lsp"], {
       cwd: command.cwd,
+      env: { AURA_OFFLINE: "1", ...process.env },
       stdio: ["pipe", "pipe", "pipe"]
     });
     this.child.stdout.setEncoding("utf8");
@@ -211,14 +224,16 @@ class CompilerService {
           })
         : null;
       this.pending.set(id, { resolve, reject, timer, cancellation });
-      this.child.stdin.write(
-        `${JSON.stringify({
-          id,
-          method,
-          ...params,
-          semantic_interface_version: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
-        })}\n`
-      );
+      if (this.child) {
+        this.child.stdin.write(
+          `${JSON.stringify({
+            id,
+            method,
+            ...params,
+            semantic_interface_version: SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+          })}\n`
+        );
+      }
     });
   }
 
@@ -287,7 +302,7 @@ class CompilerService {
       return;
     }
     this.closed = true;
-    if (kill) {
+    if (kill && this.child) {
       this.child.kill();
     }
     for (const pending of this.pending.values()) {
@@ -583,13 +598,24 @@ function findOnPath(name, searchPath = process.env.PATH || "") {
 // `PATH`, so look where the Aura installer, cargo, and Homebrew put `aura`.
 function installedCompiler(home = os.homedir(), platform = process.platform) {
   const name = binaryName(platform);
+  const systemDirs = Object.prototype.hasOwnProperty.call(
+    process.env,
+    "AURA_LSP_SYSTEM_BIN_DIRS"
+  )
+    ? process.env.AURA_LSP_SYSTEM_BIN_DIRS.split(path.delimiter).filter(Boolean)
+    : ["/opt/homebrew/bin", "/usr/local/bin"];
   const directories = [
     path.join(home, ".local", "bin"),
     path.join(home, ".cargo", "bin"),
-    "/opt/homebrew/bin",
-    "/usr/local/bin"
+    ...systemDirs
   ];
   return directories.map((directory) => path.join(directory, name)).find(isFile) || null;
+}
+
+function isRunnableCompilerCommand(command) {
+  return Boolean(
+    command && command.cmd && (path.isAbsolute(command.cmd) || command.cmd === "cargo")
+  );
 }
 
 function resolveCompilerCommand() {
@@ -630,11 +656,14 @@ function resolveCompilerCommand() {
 }
 
 // Spawns the compiler by the absolute path it was found at. A bare name is
-// searched for again at spawn time, and on Windows that search looks in the
-// workspace before `PATH`.
+// never spawned with a workspace working directory, preventing CWD planting.
 function defaultCompilerCommand() {
   const compiler = findOnPath(binaryName()) || installedCompiler();
-  return { cmd: compiler || "aura", args: [], cwd: workspaceRoots[0] };
+  return {
+    cmd: compiler || binaryName(),
+    args: [],
+    cwd: compiler ? workspaceRoots[0] : undefined
+  };
 }
 
 function binaryName(platform = process.platform) {
@@ -690,6 +719,7 @@ module.exports = {
   expandHome,
   findOnPath,
   installedCompiler,
+  isRunnableCompilerCommand,
   resolveCompilerCommand,
   runCommand,
   SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION,

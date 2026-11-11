@@ -45,8 +45,8 @@ row. The Python column is its measured time multiplied by 100.
 | `dot` | 1,000,000 | 300 | 175 | 185 | 230 | 256 | 58 | 21,000 |
 | `min` and `max` | 1,000,000 | 300 | 219 | 242 | 494 | 246 | 157 | 10,000 |
 | `+` | 1,000,000 | 300 | 267 | 334 | 297 | 297 | 374 | 24,500 |
-| `matmul` | 64 by 64 | 2,000 | 108 | 111 | 150 | 145 | 26 | 42,400 |
-| `matmul` | 512 by 512 | 4 | 100 | 116 | 232 | 177 | 10 | |
+| `matmul` | 64 by 64 | 2,000 | 41 | 82 | 150 | 145 | 16 | 42,400 |
+| `matmul` | 512 by 512 | 4 | 13 | 27 | 232 | 177 | 7 | |
 
 Every side prints the same checksum for every row but one: NumPy's
 512 by 512 product differs in the last digit, because its library adds in
@@ -62,9 +62,15 @@ What the numbers say:
   right, and ahead of NumPy on a small Array.
 - NumPy calls a tuned linear algebra library for `dot` and `@`. It uses
   fused multiply-add, 512-bit registers, and several threads, so it is
-  ahead on a large `dot` and on `matmul`. Aura's `matmul` keeps the
-  plain three-loop order and its bits, and is ahead of the same loop in
-  Rust.
+  ahead on a large `dot` and on `matmul`.
+- Aura's `matmul` keeps the plain three-loop order and its bits. With
+  AVX2 it runs in register tiles, and a large product uses every core
+  (ADR-0093). It is 3.5 times faster than the same loop in Rust at 64 by
+  64 and 13 times faster at 512 by 512. NumPy is still 2.6 times faster
+  at 64 by 64 and about twice as fast at 512 by 512. With one thread on
+  each side (`AURA_ARRAY_THREADS=1`, `OPENBLAS_NUM_THREADS=1`) the 512 by
+  512 row is 42 against 18. That factor is the fused multiply-add, which
+  is one instruction where the exact product and sum are two.
 - The host is shared, so a row moves by a fifth between runs. The
   baseline column is within that of the 256-bit column on most rows: at
   1,024 elements the call costs as much as the kernel, and at one million
@@ -120,12 +126,12 @@ Milliseconds for 1,024 elements, 400,000 times:
 
 | Kernel | Lane class | Aura | Aura, native | Rust | Rust, native | Python |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `dot` | `F64x4` | 99 | 83 | 189 | 121 | 13,100 |
-| `saxpy` | `F64x4` | 133 | 124 | 217 | 59 | 15,000 |
-| `norms` | `F64x4` | 449 | 436 | 441 | 442 | 45,500 |
-| `clamp` | `F64x4` | 169 | 87 | 149 | 61 | 29,600 |
-| `absdiff` | `F32x8` | 105 | 56 | 280 | 23 | 17,000 |
-| `sum8` | `F32x8` | 114 | 78 | 98 | 72 | 6,400 |
+| `dot` | `F64x4` | 80 | 66 | 145 | 132 | 13,100 |
+| `saxpy` | `F64x4` | 94 | 91 | 215 | 62 | 15,000 |
+| `norms` | `F64x4` | 442 | 444 | 434 | 441 | 45,500 |
+| `clamp` | `F64x4` | 84 | 56 | 151 | 67 | 29,600 |
+| `absdiff` | `F32x8` | 49 | 46 | 262 | 32 | 17,000 |
+| `sum8` | `F32x8` | 95 | 84 | 93 | 77 | 6,400 |
 
 Aura and Rust print the same checksum on every row. Python runs one
 hundredth of the repetitions and adds in source order, so its checksums
@@ -134,11 +140,37 @@ differ and its column is the measured time multiplied by 100.
 - On a generic build Aura is at or ahead of Rust on every row. Rust keeps
   a bounds check on each load and store. Aura checks the range of every
   lane once, where the loop starts.
-- On a build for the host CPU Rust is about twice as fast on `saxpy`,
-  `clamp`, and `absdiff`, where it unrolls further with 256-bit
-  registers. Aura stays within three times of Rust on every row.
+- On a build for the host CPU, which has 512-bit registers, Rust is
+  about one and a half times as fast on `saxpy` and `absdiff`. Its loop
+  vectorizer turns the struct loop into 512-bit instructions and unrolls
+  it four times. Aura keeps the width the program wrote. About a fifth
+  of Aura's time on those rows is the cost of entering the function,
+  which is the same for any list length.
 - `dot` with `F64x4` takes a third of the time of the scalar `dot` in
   the list loop table above, which has to add in source order.
 - `norms` is bound by the square root, which costs the same in every
   column.
 - Python is 60 to 300 times slower than Aura.
+
+## Integer lane values
+
+`int_lanes.au`, `int_lanes.rs`, and `int_lanes.py` run two kernels over
+`int64` lists with `I64x4` (ADR-0092), and the same kernels as plain
+loops: `add` writes the sum of two lists to a third, and `total` sums
+one list. Every addition is checked in the Aura and Rust forms. The Rust lane struct calls `checked_add` on each lane.
+
+Milliseconds for 1,024 elements, 400,000 times, best of five:
+
+| Kernel | Aura lanes | Aura lanes, native | Aura plain loop | Rust lanes | Rust lanes, native | Rust plain loop | Python |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `add` | 174 | 100 | 209 | 155 | 155 | 304 | 17,900 |
+| `total` | 129 | 79 | 155 | 114 | 103 | 166 | 10,500 |
+
+- On a build for the host CPU, which has AVX2, Aura tests the four lanes
+  of a sum with one branch and keeps them in one register. The lanes
+  take half the time of the plain loop and two thirds of Rust's.
+- On a generic build each lane keeps its own branch. The lanes are 1.2
+  times as fast as the plain loop, and Rust's lane struct is about a
+  tenth ahead.
+- Python runs one hundredth of the repetitions, and its column is the
+  measured time multiplied by 100.

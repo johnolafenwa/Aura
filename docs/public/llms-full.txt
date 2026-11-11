@@ -1491,17 +1491,18 @@ cannot be represented or allocated traps with `AU4005`. Malformed data returns
 
 [SIMD Module](/manual/simd) covers the lane classes, exact results, and how
 loads and stores work in a counted loop. `V` is one of `simd.F64x2`,
-`simd.F64x4`, `simd.F32x4`, and `simd.F32x8`, and `E` is its element type.
+`simd.F64x4`, `simd.F32x4`, `simd.F32x8`, `simd.I64x2`, and `simd.I64x4`,
+and `E` is its element type.
 
 | API | Signature | Behavior |
 | --- | --- | --- |
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | Reads one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
 | `V.store` | `store(self, values: mut list[E], at: int64)` | Writes one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
-| `V` operators | `+`, `-`, `*`, `/`, unary `-` | The operation in each lane. Division by a zero lane traps with `AU4004`. |
+| `V` operators | `+`, `-`, `*`, unary `-`, and `/` on float lanes | The operation in each lane. Division by a zero lane traps with `AU4004`. An `int64` lane that overflows traps with `AU4002`. |
 | `V.min`, `V.max` | `min(self, other: V) -> V` | The lesser or greater lane, `other` when the comparison is false. |
-| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. |
-| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. |
+| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. `sqrt` is on float lanes only. |
+| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. Float lanes only. |
 | `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
 | `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
 
@@ -2950,9 +2951,11 @@ aura check app.au
 | `aura run --backend mir\|direct\|auto file.au` | Choose the execution backend explicitly. |
 | `aura run file.au -- args...` | Execute with program arguments available through `sys.args()`. |
 | `aura build -o path file.au` | Build a native binary. |
+| `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
+| `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -6278,7 +6281,9 @@ def main():
 - It takes no `mut` parameters. It may state `requires` clauses, which say
   where it is defined: they are checked when it runs, and `aura verify`
   proves them wherever a contract uses it. It takes no other clauses.
-- It may call other `spec def` functions, itself included.
+- It may call other `spec def` functions, itself included. `aura verify`
+  evaluates recursive calls on concrete arguments and unfolds symbolic calls up
+  to eight levels.
 - Only contract clauses and other `spec def` bodies may call or name a
   module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.
@@ -7234,7 +7239,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### SIMD Lane Values
 
-- The `simd` module has float lanes only: `F64x2`, `F64x4`, `F32x4`, and `F32x8`. There are no integer lanes, lane comparisons, masks, shuffles, or fused multiply-add.
+- The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
+- `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
 - `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
 - A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
 - A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
@@ -11388,7 +11394,7 @@ libraries = ["openblas"]
 | Key | Meaning |
 | --- | --- |
 | `libraries` | Library names as the C linker's `-l` option takes them. `sqlite3` names `libsqlite3.so` on Linux and `libsqlite3.dylib` on macOS. |
-| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. |
+| `library_paths` | Directories to search for those libraries before the system's own. A relative path starts at the manifest's directory. A dependency's entry must stay inside that dependency's directory, with no `..` segment. |
 | `frameworks` | macOS frameworks. Other hosts ignore them. |
 
 `[ffi.linux]` and `[ffi.macos]` take the same three keys and apply on that
@@ -11406,9 +11412,9 @@ other entry with `AU2999`, so a manifest cannot pass options to the linker.
 `aura build` and `aura run` pass the settings to the C linker. A program
 that names a library the linker cannot find does not build, and the linker's
 message names the library. The built program records each `library_paths`
-directory as a run-time search path, so it finds a library there when it
-starts. To move the program to another machine, install the library where
-that machine's loader looks.
+directory as a run-time search path unless `aura build --no-rpath` omits it.
+Pass `--no-rpath` when building a binary for another machine, and install the
+library where that machine's loader looks.
 
 `aura run --backend mir` loads the same libraries into the interpreter
 before the program starts. A library it cannot load stops the run with
@@ -11461,8 +11467,10 @@ The rules for these declarations:
 - **Trusted contract.** An indented block of `requires` and `ensures` clauses
   states what the C function needs and promises. `aura verify` proves each
   `requires` at every call and assumes each `ensures` after it, without
-  proof. The program checks neither when it runs, because the contract is
-  trusted. See [Verification](/manual/verification#trust).
+  reading the C body. At run time, the program checks `requires` before the
+  foreign call and `ensures` after it, stopping with `AU4009` when one fails.
+  `aura build --remove-proved-checks` keeps these foreign boundary checks. See
+  [Verification](/manual/verification#trust).
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
@@ -18491,6 +18499,14 @@ order of the inner index, rounding each product before it is added. That is
 the order of the plain three-loop program, so `matmul` gives that program's
 bits. An integer `matmul` is checked and reports `AU4002`.
 
+A large float product of two matrices runs on several threads. Each thread
+computes whole rows of the result, and no element is shared, so the bits
+are the same on any number of threads. A product whose `n * k * m` is under
+about two million runs on the calling thread. `AURA_ARRAY_THREADS` sets the
+most threads one product may use. The default is the number of CPUs the
+process may run on, a product never uses more than 16, and
+`AURA_ARRAY_THREADS=1` keeps every product on the calling thread.
+
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
@@ -18686,6 +18702,11 @@ exist. On arm64 there is one copy, which uses NEON.
 The copies give the same bits. No kernel uses fused multiply-add, and no
 kernel lets the register width decide the order of its floating-point
 operations.
+
+With AVX2 a float `matmul` of two matrices copies a block of the right
+operand into a packed buffer and computes two rows by sixteen `float64`
+columns of the result at a time, which keeps the running sums in
+registers. The additions for each element stay in the same order.
 
 Set `AURA_ARRAY_KERNELS=baseline` to make a process use the baseline copies,
 to compare the two or to rule the wide ones out. `--target-cpu` in
@@ -19645,8 +19666,9 @@ A path package is rejected as an update target.
 
 ## Git Resolution, Cache, And Safety
 
-A git source is either an explicit URL or SSH form, or an existing local path
-relative to the declaring manifest. Aura rejects these before invoking git:
+A git source is either an explicit `https://`, `ssh://`, or `git@host:path`
+SSH remote, or an existing local path relative to the declaring manifest. Aura
+rejects these before invoking git:
 
 - empty sources
 - option-like sources that begin with `-`
@@ -19657,6 +19679,10 @@ Aura disables interactive git credential prompts, so package commands fail
 instead of waiting for terminal input. Each git command has a 60-second
 default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to
 override it.
+
+Pass `--offline` or set `AURA_OFFLINE=1` to forbid network git traffic. Offline
+mode resolves local path dependencies, local git repositories, and cached
+remote revisions, and rejects uncached remote git queries.
 
 Resolved revisions live in a content-addressed cache under
 `$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`. When neither
@@ -21555,7 +21581,9 @@ These loops stay scalar:
   Use `Array.fast_sum()` or `Array.dot()` for a reordered sum, or keep the
   sum in a lane value from the [SIMD module](/manual/simd).
 - **Checked integer arithmetic** on the elements. Each operation can
-  report overflow.
+  report overflow. For `int64`, the lane values `I64x2` and `I64x4` of
+  the [SIMD module](/manual/simd#integer-lanes) check a whole operation
+  with one test on a build for AVX2.
 - **A loop in a program that starts tasks.** Each iteration checks
   whether to yield.
 
@@ -22444,7 +22472,7 @@ Design records: [ADR-0020: Randomness algorithm and security boundary](https://g
 
 # SIMD Module
 
-The `simd` module has values that hold two, four, or eight floats and do
+The `simd` module has values that hold two, four, or eight numbers and do
 arithmetic on all of them at once. Native code keeps such a value in vector
 registers, so one `+` adds every lane with one or two instructions.
 
@@ -22452,10 +22480,11 @@ registers, so one `+` adds every lane with one or two instructions.
 import simd
 ```
 
-Use it when a loop over a list of floats does not turn into vector
+Use it when a loop over a list of numbers does not turn into vector
 instructions on its own. The usual case is a float sum, which Aura adds in
 source order: with lane values you choose the order yourself, and it is the
-same on every machine.
+same on every machine. The other case is checked `int64` arithmetic, which
+a plain loop does one element at a time.
 
 ## Lane Classes
 
@@ -22465,14 +22494,16 @@ same on every machine.
 | `simd.F64x4` | 4 | `float64` |
 | `simd.F32x4` | 4 | `float32` |
 | `simd.F32x8` | 8 | `float32` |
+| `simd.I64x2` | 2 | `int64` |
+| `simd.I64x4` | 4 | `int64` |
 
 Each class is an ordinary Copy class whose public fields `l0`, `l1`, and so
 on are the lanes. You can construct one by naming its fields, read a lane
 with `value.l2`, pass it to a function, return it, and store it in a class
 field. Assigning one copies it.
 
-There are no integer lane classes. Integer arithmetic in Aura reports
-overflow, and a check in each lane would cost more than the lanes save.
+There are no lane classes for `int32` or the other narrow integers. See
+[Integer Lanes](#integer-lanes) for why.
 
 ## Public API
 
@@ -22483,13 +22514,14 @@ overflow, and a check in each lane would cost more than the lanes save.
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
 | `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
-| `+`, `-`, `*`, `/` | `V` with `V` | The operation in each lane. |
+| `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
+| `/` | `V` with `V`, float classes only | The division in each lane. |
 | unary `-` | `V` | Each lane negated. |
 | `min` | `min(self, other: V) -> V` | In each lane, `self` where it is less than `other`, else `other`. |
 | `max` | `max(self, other: V) -> V` | In each lane, `self` where it is greater than `other`, else `other`. |
 | `abs` | `abs(self) -> V` | The absolute value of each lane. |
-| `sqrt` | `sqrt(self) -> V` | The square root of each lane. |
-| `mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane. |
+| `sqrt` | `sqrt(self) -> V`, float classes only | The square root of each lane. |
+| `mul_add` | `mul_add(self, factor: V, addend: V) -> V`, float classes only | `self * factor + addend` in each lane. |
 | `sum` | `sum(self) -> E` | The sum of the lanes, added in pairs. |
 | `to_list` | `to_list(self) -> list[E]` | The lanes as a new list, `l0` first. |
 
@@ -22545,6 +22577,63 @@ program runs under `aura run` or as a native binary.
 
 A loop that keeps a lane value as its running sum adds in a different order
 than a loop that keeps one float. The two can differ in their last bits.
+
+## Integer Lanes
+
+`I64x2` and `I64x4` hold `int64` lanes. Each operation is the checked
+scalar operation in each lane: a sum, difference, product, or negation
+that does not fit `int64`, and `abs` of the least `int64`, stops the
+program with `AU4002`. `sum` checks each of its additions.
+
+```aura
+from simd import I64x4
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    mut sum = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        sum += xs[i]
+    return sum
+
+def main():
+    print(total([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+```
+
+```text
+45
+```
+
+A lane that overflows is reported as the scalar operation would be, with
+the value that does not fit. The position is the lane's line in the
+module's source, and the call chain names your function:
+
+```text
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> <std>/simd.au:486:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+```
+
+How much faster the lanes are depends on the target CPU:
+
+- **With `--target-cpu x86-64-v3`, `x86-64-v4`, or `native` on a machine
+  with AVX2**, `+`, `-`, and unary `-` test all lanes of an operation
+  with one branch, and the lanes share a 256-bit register. On
+  `benchmarks/simd` an `I64x4` sum takes under half the time of the plain
+  loop.
+- **On the default build and on Apple Silicon**, each lane keeps its own
+  overflow branch. The lanes are about 1.2 times as fast as the plain
+  loop.
+- **`*`** checks one lane at a time on every CPU.
+- **`min` and `max`** are no faster than the scalar comparison before
+  AVX-512.
+
+The results and the reports are the same on every target.
+
+There are no `int32` lanes. Aura computes an `int32` in a 64-bit word and
+checks its range after each operation, so eight `int32` lanes ran no
+faster than the plain loop when measured.
 
 ## Loads And Stores
 
@@ -25385,9 +25474,9 @@ wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
 
-A trusted contract on an `extern "C"` function is the other thing a proof
-relies on without checking. The verifier cannot read C, so it takes the
-`ensures` as given:
+A contract on an `extern "C"` function is the other boundary a proof relies on
+without reading its body. The verifier cannot read C, so it proves each
+`requires` at the call and assumes each `ensures` after it:
 
 ```aura fragment
 extern "C" def clamp_index(i: int64, n: int64) -> int64:
@@ -25395,8 +25484,10 @@ extern "C" def clamp_index(i: int64, n: int64) -> int64:
     ensures 0 <= result and result < n
 ```
 
-A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
-contract to what the C function's own documentation promises.
+At run time, the program checks both clauses around the foreign call and keeps
+those checks under `--remove-proved-checks`. A wrong `ensures` still misleads
+static proofs that rely on it, so keep such a contract to what the C function
+guarantees.
 
 ## Source: docs/book/index.md
 

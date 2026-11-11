@@ -27,10 +27,19 @@ Last updated: 2026-11-11
   in Rust. The `simd` module has float lane values `F64x2`,
   `F64x4`, `F32x4`, and `F32x8` (ADR-0087), and `range` loops with a
   literal step count on plain integers.
-- Remaining: nothing. Possible follow-ups are integer lanes, lane loads
-  from an `Array`, and counted loops over `Array` elements.
+- Gap work after the first table (2026-11-11): stepped loops have one
+  test in each iteration and lane loads two entry guards, and `I64x2`
+  and `I64x4` add checked `int64` lanes (ADR-0092). A float `matmul`
+  runs in register tiles and on several threads with the same bits
+  (ADR-0093).
+- Gaps that stay: NumPy is about twice as fast at `matmul` on one
+  thread because it fuses each multiply with its add. Rust is up to 1.5
+  times faster on two lane kernels in a host-CPU build.
+- Possible follow-ups: `int32` lanes, the joined integer check and
+  `matmul` tiles on AArch64, lane loads from an `Array`, and counted
+  loops over `Array` elements.
 
-## Six older compiler bugs (in progress)
+## Six older compiler bugs (complete)
 
 - Five programs the checker accepted and lowering refused, or the
   verifier could not prove, are fixed: a lambda that calls a method on a
@@ -38,7 +47,12 @@ Last updated: 2026-11-11
   `impl` for a union type, an explicit type argument naming the enclosing
   type parameter, and a `for` invariant that now holds after the loop.
   Details are in `2026-11-11-six-older-compiler-bugs.md`.
-- Remaining: the cost of a `mut self` method call on a list element.
+- A method call on a list element now works on the element in place:
+  about 2,800 instructions down to 36 for a class of numbers and 92 for a
+  class with a `str` field. Probes `element_mut_call` and
+  `element_plain_mut_call` record it.
+- Open: a call that is not inlined pays about 50 instructions for its
+  frame, which keeps the two probes at 7.8 and 4.0 times Rust.
 
 ## Streaming I/O and a deeper standard library (in progress)
 
