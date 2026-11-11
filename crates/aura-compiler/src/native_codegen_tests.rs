@@ -16706,8 +16706,7 @@ def main() -> int32:
         let mut param = writes.params[1].clone();
         param.ty = ty;
         let error = super::foreign::foreign_param_type(&param)
-            .err()
-            .expect("a pointer needs a list of scalars");
+            .expect_err("a pointer needs a list of scalars");
         assert!(error.contains("as an FFI pointer"), "{error}");
     }
 }
