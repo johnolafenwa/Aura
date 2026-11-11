@@ -129,6 +129,28 @@ Also fixed here: an element of a list of trait objects can be passed to a
 - No backend change: a trait object crosses a worker boundary as its box
   does.
 
+## Steps 5 and 6: speed
+
+- A shared `for` over a local `list[dyn Trait]` lends each element
+  (`lendable_list_iteration` in `mir.rs`); it used to copy each one.
+- A dispatched call on a lent element passes the element's box
+  (`dispatched_shared_receiver`, `pass_native_element`).
+- `emit_candidate_chain` compares the class access code in the box
+  header with each candidate class before the tests by type name.
+  `compile_borrowed_receiver_dispatch` skips the union probe for a box
+  that shows a class code.
+- `borrowing_functions` no longer excludes a method a runtime type
+  picks. Such a method keeps its shared receiver with the caller and
+  owns its parameters (`candidate_dispatched`).
+- Measured with the release compiler, instructions per call on the
+  `trait_object_call` probe: Rust 12.0, Aura 34.0 (2.8x). Before these
+  changes a call cost about 4,600 instructions. On a mixed probe of
+  30,000 shapes (two scalar classes and one with a `str` and a list):
+  Aura 12 ns a call, Python 60 ns, Rust 2 ns.
+- No cross-language program was added, so the 30-program suite stays
+  comparable with the release records. The operation probe is the
+  measure.
+
 ## How it is built
 
 - The checker and MIR before specialization use
@@ -168,10 +190,13 @@ Also fixed here: an element of a list of trait objects can be passed to a
   fails at run time with "type `T` has no MIR implementation". This is
   older than trait objects and needs no `Transfer`. Leaving the type
   argument to inference, `group.start(run_one, job)`, works.
-- A call still tries the trait's implementations one by one against the
-  box's type, a shared `match` copies the held value into its binding,
-  and a `for` over a list copies each element that holds a heap value.
-  Steps 5 and 6 remove these, with probes against Rust and Python.
+- A `mut self` call on a list element, `for tool in mut tools:
+  tool.run()`, takes the element out and stores it back, about 3,600
+  instructions. This is the same for a `list[Counter]` with no trait
+  object, so it is a list element limit, not a dispatch one.
+- A shared `match` copies the held value into its binding.
+- A receiver that is a generic class, an enum, or a scalar is found by
+  the tests by type name, which are slow.
 - `aura verify` does not model the three new rvalues yet (step 7).
 - A lambda whose body calls a method on a list element it captured,
   `lambda: items[0].area()`, fails with `AU4001` (loan flow). This is

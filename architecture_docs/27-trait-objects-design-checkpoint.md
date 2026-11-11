@@ -222,6 +222,33 @@ boundary.
   any other single-consumer result. No backend change was needed: a trait
   object already crosses a worker boundary as its box does.
 
+- **Steps 5 and 6 (2026-11-11).** Speed. Three changes, all in how
+  generated code calls a method on a trait object:
+  - A shared `for` over a local `list[dyn Trait]` lends each element
+    instead of copying it. The checker already holds every use of the
+    binding to a borrow, because a trait object is never copied.
+  - A call whose receiver is a lent list element passes the element's own
+    box to the implementation. The list moves its elements into boxes of
+    their own on first use (the `Boxes` list form).
+  - The call picks the implementation from the class access code in the
+    box header, one load and one compare per class, before the tests by
+    type name, which remain for a shared instance, a generic class, an
+    enum, and a scalar. A box that shows a class code skips the union
+    probe.
+  - A method a runtime type picks keeps its shared receiver with the
+    caller, as a statically called method does, so the call takes and
+    drops no reference.
+
+  The `trait_object_call` operation probe (three scalar classes in a
+  `list[dyn Solid]`) costs 34 instructions a call against Rust's 12 for
+  `Vec<Box<dyn Solid>>`, 2.8 times. Before, the same call cost about
+  4,600. On a mixed probe (two scalar classes and one that holds a `str`
+  and a list) a call takes 12 ns against Python's 60 ns and Rust's 2 ns.
+  Not done here: a `mut self` call on a list element, on a trait object or
+  on a class, still takes the element out and stores it back (about 3,600
+  instructions), and an instance takes two blocks of memory where Rust's
+  box takes one, which is most of the remaining time against Rust.
+
 ## Ratification Record
 
 - 2026-11-10 09:22 UTC: the owner chose "Approve all defaults" on the

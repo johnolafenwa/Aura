@@ -342,7 +342,12 @@ pub fn borrowing_functions(module: &MirModule) -> BTreeSet<String> {
                                         ..
                                     },
                                 ..
-                            } => dispatched_functions(dispatch, &mut reached_otherwise),
+                            // A method a runtime type picks keeps its
+                            // receiver with the caller, which lends the
+                            // boxed value (see `candidate_dispatched`).
+                            } if !matches!(dispatch, MethodDispatch::Candidates { .. }) => {
+                                dispatched_functions(dispatch, &mut reached_otherwise);
+                            }
                             _ => {}
                         }
                     }
@@ -388,6 +393,45 @@ fn borrows_anything(function: &MirFunction) -> bool {
             .any(|param| param.passing == MirReceiverKind::Borrow)
 }
 
+/// The functions a call of `module` picks by the receiver's runtime type.
+/// Such a call lends the receiver's box and passes every argument as an
+/// owning call does, so a function it may pick keeps its shared receiver
+/// with the caller and owns its parameters.
+fn candidate_dispatched(module: &MirModule) -> BTreeSet<&str> {
+    let mut dispatched = BTreeSet::new();
+    for function in module.functions.iter().chain(module.top_level.iter()) {
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                let (Instruction::Assign { value, .. } | Instruction::WriteLoan { value, .. }) =
+                    instruction
+                else {
+                    continue;
+                };
+                if let Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                            ..
+                        }
+                        | CallTarget::TraitMember {
+                            dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                            ..
+                        },
+                    ..
+                } = value
+                {
+                    dispatched.extend(
+                        candidates
+                            .iter()
+                            .map(|candidate| candidate.function.as_str()),
+                    );
+                }
+            }
+        }
+    }
+    dispatched
+}
+
 /// The functions `module` records as keeping their callers' shared
 /// parameters and shared receiver, with how each takes them. A recorded
 /// name the module no longer defines is left out.
@@ -410,11 +454,14 @@ pub(super) fn recorded_borrowing(
         (MirReceiverKind::Borrow, _) => MirReceiverKind::Value,
         (passing, _) => passing,
     };
+    let dispatched = candidate_dispatched(module);
     module
         .functions
         .iter()
         .filter(|function| module.borrowing.contains(&function.name))
         .map(|function| {
+            let kept = |passing: MirReceiverKind, ty: Option<&Type>| kept(passing, ty);
+            let owned_params = dispatched.contains(function.name.as_str());
             let receiver_type = function
                 .local_types
                 .iter()
@@ -427,7 +474,10 @@ pub(super) fn recorded_borrowing(
                 params: function
                     .params
                     .iter()
-                    .map(|param| kept(param.passing, Some(&param.ty)))
+                    .map(|param| match param.passing {
+                        MirReceiverKind::Borrow if owned_params => MirReceiverKind::Value,
+                        passing => kept(passing, Some(&param.ty)),
+                    })
                     .collect(),
             };
             (function.name.clone(), callee)

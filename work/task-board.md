@@ -33,9 +33,12 @@ Last updated: 2026-11-10
 - Step 4 is done: `Transfer` is a prelude marker trait. A trait with it
   as a supertrait admits only Transfer types, so its trait object
   crosses task and queue boundaries, and `T: Transfer` is a bound.
-- Next: element lends, fast dispatch with probes against Rust and
-  Python, then `aura verify`, the language server, the book chapter,
-  and the ADR.
+- Steps 5 and 6 are done: a loop lends each element, and a call picks
+  its implementation from the class code in the box. The
+  `trait_object_call` probe costs 34 instructions against Rust's 12
+  (2.8x, was about 4,600), and a call runs 5 times faster than Python.
+- Next: `aura verify`, the language server, the book chapter, and the
+  ADR. Open: `mut self` calls on list elements are slow for every class.
 
 ## Iterator bound and float64 gaps (complete)
 

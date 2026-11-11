@@ -13450,6 +13450,8 @@ def main() -> None:
 
 A trait object is one handle to a box that holds the value together with its type. A call reads the type from the box and runs that type's implementation. A conversion from a value that is already boxed, such as another erased value, reuses its box.
 
+A `for` loop over a `list[dyn Trait]` lends each element to the body and copies none. A call on a lent element of a class type compares a type number in the box, so it costs a few instructions more than a call the compiler resolves. A `mut self` call on a list element takes the element out and stores it back, as it does for a list of one class.
+
 ## Operator Traits
 
 When no builtin numeric or string operator rule applies, an operator requests a trait method:

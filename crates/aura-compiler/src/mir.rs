@@ -19746,7 +19746,9 @@ impl<'a> Lowerer<'a> {
         let Some(Type::Named(name, args)) = iterable_ty else {
             return false;
         };
-        if name != "list" || args.len() != 1 || !crate::mir_copies::lendable_loop_element(&args[0])
+        if name != "list"
+            || args.len() != 1
+            || !(crate::mir_copies::lendable_loop_element(&args[0]) || args[0].is_trait_object())
         {
             return false;
         }

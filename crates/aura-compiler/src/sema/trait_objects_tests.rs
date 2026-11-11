@@ -53,6 +53,8 @@ fn trait_object_programs_run() {
         run_pass!("trait_object_generic_impls"),
         run_pass!("trait_object_iterator_adapters"),
         run_pass!("trait_object_iterators"),
+        run_pass!("trait_object_loops"),
+        run_pass!("trait_object_shared_args"),
         run_pass!("trait_object_match"),
         run_pass!("trait_object_match_catch_all_only"),
         run_pass!("trait_object_match_expression"),
