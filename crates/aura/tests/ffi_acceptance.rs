@@ -177,6 +177,49 @@ def main() -> int32:
     assert_eq!(direct.stdout, mir.stdout);
 }
 
+/// Whether the host C toolchain links the system SQLite library.
+fn host_links_sqlite() -> bool {
+    let scratch = TempPackage::new(false);
+    let c_file = scratch.path.join("probe.c");
+    fs::write(
+        &c_file,
+        "const char *sqlite3_libversion(void);\nint main(void) { return sqlite3_libversion() == 0; }\n",
+    )
+    .expect("the probe source should be writable");
+    Command::new("cc")
+        .arg(&c_file)
+        .arg("-lsqlite3")
+        .arg("-o")
+        .arg(scratch.path.join("probe"))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+#[test]
+fn maintained_sqlite_example_runs_with_backend_parity() {
+    if !host_links_sqlite() {
+        eprintln!("the host has no SQLite library to link; the example needs one");
+        return;
+    }
+    let source = repository_root().join("examples/packages/sqlite_notes/src/main.au");
+    let expected = "1\n2\n3\n1: water the plants\n3: renew the library books\n\
+                    a row of 2 columns\nno such table: missing\n0\n";
+
+    let mir = run_mir(&source);
+    assert_success(&mir, "SQLite example MIR run");
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+
+    let output_dir = TempPackage::new(false);
+    let binary = output_dir.path.join("sqlite-notes-direct");
+    let build = build_direct(&source, &binary);
+    assert_success(&build, "SQLite example direct build");
+    let direct = Command::new(binary)
+        .output()
+        .expect("SQLite example direct binary should start");
+    assert_success(&direct, "SQLite example direct run");
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
 #[test]
 fn maintained_getpid_example_runs_with_backend_parity() {
     let package = repository_root().join("examples/packages/ffi_getpid");

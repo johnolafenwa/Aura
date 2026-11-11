@@ -1386,6 +1386,11 @@ impl CallTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirExternCall {
+    /// The name of the Aura declaration, which is not the C symbol when
+    /// the declaration has a `symbol` clause. Its trusted contract is
+    /// found by this name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub symbol: String,
     pub abi: String,
     pub params: Vec<MirExternParam>,
@@ -12640,6 +12645,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
+            name: function.decl.name.clone(),
             symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
             params: function

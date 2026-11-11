@@ -3243,7 +3243,7 @@ impl<'a> Exec<'a> {
                     fresh_target(self)
                 }
             },
-            CallTarget::Extern(call) if self.cx.decl(&call.symbol).is_some() => {
+            CallTarget::Extern(call) if self.cx.decl(&call.name).is_some() => {
                 // A trusted contract: the call proves the `requires` and
                 // the result and `mut` arguments have the `ensures`.
                 let mut pre = Vec::new();
@@ -3269,12 +3269,12 @@ impl<'a> Exec<'a> {
                     post.push((param.name.clone(), after));
                 }
                 let span = self.span;
-                self.call_requires(state, &call.symbol, &pre, span);
+                self.call_requires(state, &call.name, &pre, span);
                 let result = match target_type.as_ref().unwrap_or(&call.return_type) {
                     Type::Unit => Val::Unit,
                     ty => self.fresh(ty, target.unwrap_or("result")),
                 };
-                self.call_ensures(state, &call.symbol, &pre, &post, &result);
+                self.call_ensures(state, &call.name, &pre, &post, &result);
                 result
             }
             CallTarget::Extern(_) => {
