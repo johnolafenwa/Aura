@@ -86,7 +86,10 @@ A loop is proved one iteration at a time. On entering the loop, the verifier
 forgets the value of every local the loop body assigns, and keeps only what
 the loop's `invariant` clauses say about them. It proves each invariant on
 entry and after every iteration, and the code after the loop learns only
-the invariants and the condition that ended the loop.
+the invariants and the condition that ended the loop. After a `for` loop
+over a collection or an iterator, that is every invariant that does not
+read the loop target: one that reads it is checked only inside the body
+(see [Contracts](/manual/contracts)).
 
 ```aura
 def sum_to(n: int64) -> int64:

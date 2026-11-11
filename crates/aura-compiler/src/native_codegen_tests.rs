@@ -13976,7 +13976,8 @@ def main():
         .iter()
         .find(|function| function.name == "bump")
         .expect("bump should lower");
-    let (uses, lend_temps) = super::element_loans::native_element_loans(bump, |_| Vec::new());
+    let (uses, lend_temps) =
+        super::element_loans::native_element_loans(bump, |_| Vec::new(), |_| true);
     // Each loan named by the list it selects from (a nested selection
     // begins on another loan) and the place inside the element.
     let mut followed = BTreeSet::new();
@@ -14022,6 +14023,128 @@ def main():
     assert_eq!(lend_temps.len(), 5);
     // Generated code follows those it can when the program is emitted.
     emit_host_object(&mir).expect("element loan source should emit directly");
+}
+
+#[test]
+fn native_element_loans_follow_method_calls_on_list_elements() {
+    let source = r#"
+trait Grow:
+    def grow(mut self, by: int64) -> None
+    def size(self) -> int64
+
+class Dot:
+    r: int64
+
+    def reset(mut self) -> None:
+        self.r = 0
+
+class Named:
+    name: str
+    count: int64
+
+    def bump(mut self) -> None:
+        self.count += 1
+
+    def twice(mut self) -> None:
+        self.bump()
+        self.bump()
+
+    def restart(mut self) -> None:
+        self = Named(name="again", count=0)
+
+    def chain(mut self) -> None:
+        self.restart()
+
+    def get(self) -> int64:
+        return self.count
+
+impl Grow for Dot:
+    def grow(mut self, by: int64) -> None:
+        self.r += by
+
+    def size(self) -> int64:
+        return self.r
+
+impl Grow for Named:
+    def grow(mut self, by: int64) -> None:
+        self.count += by
+
+    def size(self) -> int64:
+        return self.count
+
+def work(dots: mut list[Dot], named: mut list[Named], shapes: mut list[dyn Grow]) -> int64:
+    dots[0].reset()
+    dots[1].grow(2)
+    named[0].twice()
+    named[1].restart()
+    named[2].grow(3)
+    shapes[0].grow(4)
+    for dot in mut dots:
+        dot.r += 1
+    for item in mut named:
+        item.count += 1
+    return named[0].get() + named[1].size() + dots[0].size() + shapes[1].size()
+
+def main():
+    mut dots = [Dot(r=1), Dot(r=2)]
+    mut named = [Named(name="a", count=1), Named(name="b", count=2), Named(name="c", count=3)]
+    mut shapes: list[dyn Grow] = [Dot(r=1) as dyn Grow, Named(name="d", count=4) as dyn Grow]
+    print(work(dots, named, shapes))
+"#;
+    let mir = lower_source_to_mir(source).expect("element call source should lower");
+    let receivers = mir
+        .classes
+        .iter()
+        .flat_map(|class| &class.methods)
+        .chain(mir.trait_impls.iter().flat_map(|imp| &imp.methods))
+        .map(|method| (method.function_name.clone(), method.receiver))
+        .collect::<HashMap<_, _>>();
+    // A method that assigns `self`, or calls one that does, may release
+    // the box it was given; the rest hand it back.
+    let keepers = super::element_loans::receiver_keepers(&mir, &receivers);
+    let mut kept = keepers.iter().map(String::as_str).collect::<Vec<_>>();
+    kept.sort_unstable();
+    assert_eq!(
+        kept,
+        [
+            "Dot.reset",
+            "Grow for Dot.grow",
+            "Grow for Named.grow",
+            "Named.bump",
+            "Named.twice"
+        ]
+    );
+    let work = mir
+        .functions
+        .iter()
+        .find(|function| function.name == "work")
+        .expect("work should lower");
+    let (uses, lend_temps) = super::element_loans::native_element_loans(
+        work,
+        |_| Vec::new(),
+        |method| keepers.contains(method),
+    );
+    // Every loan here is of a whole element, used by one method call or
+    // by a read and a write of a field by name.
+    let loans = work
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::BeginElementLoan { loan, .. } => Some(loan),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(loans.len(), 12);
+    assert!(loans.iter().all(|loan| uses.contains_key(*loan)));
+    // The lends to the class's own methods: `reset`, `twice`, `restart`,
+    // and `get`.
+    assert_eq!(lend_temps.len(), 4);
+    // No method keeps its receiver: the loans are still followed, and the
+    // emitter lends a record's words only.
+    let (strict, _) = super::element_loans::native_element_loans(work, |_| Vec::new(), |_| false);
+    assert_eq!(strict.len(), uses.len());
+    emit_host_object(&mir).expect("element call source should emit directly");
 }
 
 #[test]
@@ -16359,7 +16482,8 @@ fn direct_element_views_and_field_lists_read_in_place() {
             .iter()
             .find(|function| function.name == name)
             .expect("the function should lower");
-        let (uses, _) = super::element_loans::native_element_loans(function, |_| Vec::new());
+        let (uses, _) =
+            super::element_loans::native_element_loans(function, |_| Vec::new(), |_| true);
         uses.len()
     };
     // A read-only view of a class element whose fields are read, lent, and
@@ -17190,12 +17314,17 @@ def main():
             .any(|instruction| dispatched(instruction).is_some()),
         "the call should dispatch on the held type"
     );
-    let (lent, _) = super::element_loans::native_element_loans(total, |instruction| {
-        dispatched(instruction).into_iter().collect()
-    });
+    let (lent, _) = super::element_loans::native_element_loans(
+        total,
+        |instruction| dispatched(instruction).into_iter().collect(),
+        |_| true,
+    );
     assert_eq!(lent.len(), 1);
-    let (unlent, _) = super::element_loans::native_element_loans(total, |_| Vec::new());
-    assert!(unlent.is_empty());
+    // A call the analysis is not told borrows its receiver is still a
+    // method call on the loan: the loan is followed, and the emitter takes
+    // the element out for a method that does not hand its box back.
+    let (unlent, _) = super::element_loans::native_element_loans(total, |_| Vec::new(), |_| true);
+    assert_eq!(unlent.len(), 1);
 
     emit_host_object(&mir).expect("the trait object loop should compile directly");
 }
@@ -17279,5 +17408,20 @@ def main() -> int32:
             !referenced.contains(generic),
             "`{generic}` goes through the argument buffer: {referenced:?}"
         );
+    }
+}
+
+#[test]
+fn element_method_call_fixtures_emit_directly() {
+    for source in [
+        include_str!("../tests/fixtures/run-pass/element_method_calls_plain_classes.au"),
+        include_str!("../tests/fixtures/run-pass/element_method_calls_plain_trait_impls.au"),
+        include_str!("../tests/fixtures/run-pass/element_method_calls_boxed_and_dyn.au"),
+        include_str!("../tests/fixtures/run-pass/element_method_calls_shared_in_mut_loops.au"),
+        include_str!("../tests/fixtures/run-pass/element_method_calls_replacing_receivers.au"),
+        include_str!("../tests/fixtures/run-pass/element_method_calls_trait_impl_receivers.au"),
+    ] {
+        let mir = lower_source_to_mir(source).expect("element call fixture should lower");
+        emit_host_object(&mir).expect("element call fixture should emit directly");
     }
 }

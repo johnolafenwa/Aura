@@ -397,6 +397,13 @@ impl Resolver<'_, '_> {
             if call.field == "clone" && call.trait_name.is_none() {
                 return Ok(MethodDispatch::UnionClone);
             }
+            // `impl Named for int64 | None` implements the method for the
+            // union itself, so the call does not switch on the tag.
+            if let Some(method) = self.union_impl_method(receiver, call) {
+                return Ok(MethodDispatch::Static {
+                    function: method.function_name.clone(),
+                });
+            }
             let arms = members
                 .iter()
                 .map(|member| self.union_arm(member, call))
@@ -595,6 +602,40 @@ impl Resolver<'_, '_> {
         })
     }
 
+    /// The method an impl for a union type declares for a call on a
+    /// receiver of that union type.
+    fn union_impl_method(
+        &self,
+        receiver: &Type,
+        call: &MemberCall<'_>,
+    ) -> Option<&super::MirMethod> {
+        self.context
+            .trait_impls
+            .iter()
+            .filter(|trait_impl| {
+                matches!(trait_impl.for_type, Type::Union(_))
+                    && call
+                        .trait_name
+                        .is_none_or(|name| trait_impl.trait_name == name)
+            })
+            .filter(|trait_impl| {
+                let mut type_params = BTreeSet::new();
+                collect_type_params_from_type(&trait_impl.for_type, &mut type_params);
+                crate::sema::type_pattern_matches(
+                    &trait_impl.for_type,
+                    receiver,
+                    &type_params,
+                    &mut HashMap::new(),
+                )
+            })
+            .find_map(|trait_impl| {
+                trait_impl
+                    .methods
+                    .iter()
+                    .find(|method| method.name == call.field)
+            })
+    }
+
     /// The most specific trait impl method `field` for `ty`, through
     /// `trait_name` when given. Two equally specific impls resolve to none.
     fn trait_method(
@@ -657,6 +698,11 @@ impl Resolver<'_, '_> {
         }
         for trait_impl in self.context.trait_impls {
             if trait_name.is_some_and(|name| trait_impl.trait_name != name) {
+                continue;
+            }
+            // A receiver of a union type runs the union's own impl or
+            // switches on its tag, so it never picks from candidates.
+            if matches!(trait_impl.for_type, Type::Union(_)) {
                 continue;
             }
             if trait_impl.methods.iter().any(|method| method.name == field) {

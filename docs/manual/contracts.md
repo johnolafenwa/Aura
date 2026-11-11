@@ -204,12 +204,18 @@ def main():
 - A `while` invariant is checked before every test of the condition: on
   entry, after every iteration (including one that ends in `continue`),
   and when the condition ends the loop. A `break` leaves without a check.
-- A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target. A loop over a
-  `range(...)` call checks it once more when the range runs out, with the
-  target at the range's end (or at its start when the range is empty), so
-  after `for i in range(n)` the invariant holds with `i == n`. A `break`
-  leaves without a check.
+- A `for` invariant that reads the loop target is checked at the start of
+  every iteration, after the target is bound. A loop over a `range(...)`
+  call checks it once more when the range runs out, with the target at the
+  range's end (or at its start when the range is empty), so after
+  `for i in range(n)` the invariant holds with `i == n`.
+- A `for` invariant that does not read the loop target is checked like a
+  `while` invariant: before the loop asks for each element, so on entry,
+  after every iteration, and when the loop runs out. It holds after the
+  loop, also when the loop ran no iteration. In
+  `for value in values: invariant total >= 0`, the code after the loop may
+  rely on `total >= 0`.
+- A `break` leaves a `for` loop without a check.
 - `decreases measure` takes an `int64` measure. It is checked each time
   the body starts: the measure must be at least 0, and smaller than it was
   the previous time. A loop that keeps both rules must end. A `for` loop

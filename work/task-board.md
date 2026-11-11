@@ -2,6 +2,21 @@
 
 Last updated: 2026-11-11
 
+## Six older compiler bugs (complete)
+
+- Five programs the checker accepted and lowering refused, or the
+  verifier could not prove, are fixed: a lambda that calls a method on a
+  captured list's element, a local bound to a shared `match` binding, an
+  `impl` for a union type, an explicit type argument naming the enclosing
+  type parameter, and a `for` invariant that now holds after the loop.
+  Details are in `2026-11-11-six-older-compiler-bugs.md`.
+- A method call on a list element now works on the element in place:
+  about 2,800 instructions down to 36 for a class of numbers and 92 for a
+  class with a `str` field. Probes `element_mut_call` and
+  `element_plain_mut_call` record it.
+- Open: a call that is not inlined pays about 50 instructions for its
+  frame, which keeps the two probes at 7.8 and 4.0 times Rust.
+
 ## Streaming I/O and a deeper standard library (in progress)
 
 - Target: streamed HTTP bodies, line and chunk file reads, redirects,

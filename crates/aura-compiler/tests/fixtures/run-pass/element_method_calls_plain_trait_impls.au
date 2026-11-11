@@ -1,0 +1,70 @@
+trait Grow:
+    def grow(mut self, by: int64) -> None
+    def size(self) -> int64
+
+
+class Dot:
+    r: int64
+    weight: float32
+
+    def reset(mut self) -> int64:
+        old = self.r
+        self.r = 0
+        return old
+
+
+impl Grow for Dot:
+    def grow(mut self, by: int64) -> None:
+        self.r += by
+        self.weight = self.weight * 2.0
+
+    def size(self) -> int64:
+        return self.r
+
+
+class Board:
+    dots: list[Dot]
+    name: str
+
+
+def grow_all[T: Grow](items: mut list[T], by: int64) -> None:
+    for item in mut items:
+        item.grow(by)
+
+
+def main() -> None:
+    mut dots: list[Dot] = []
+    for i in range(6):
+        dots.append(Dot(r=i, weight=1.5))
+    for i in range(len(dots)):
+        dots[i].grow(i)
+    mut total: int64 = 0
+    for i in range(len(dots)):
+        total += dots[i].size()
+    print(total)
+    for dot in mut dots:
+        dot.grow(1)
+        total += dot.size()
+        if dot.r > 8:
+            total += dot.reset()
+    print(total)
+    grow_all(dots, 3)
+    print(dots[5].size())
+    print(dots[4].weight)
+    mut board = Board(dots=dots, name="b")
+    for i in range(len(board.dots)):
+        board.dots[i].grow(10)
+        board.dots[i].r += 1
+        total += board.dots[i].size()
+    print(total)
+    mut empty: list[Dot] = []
+    for dot in mut empty:
+        dot.grow(1)
+    print(len(empty))
+    mut grid: list[list[Dot]] = [[Dot(r=1, weight=1.0)], [Dot(r=2, weight=1.0), Dot(r=3, weight=1.0)]]
+    for row in mut grid:
+        for dot in mut row:
+            dot.grow(5)
+    grid[1][0].grow(100)
+    grid[1][1].r += 7
+    print(grid[1][0].size() + grid[1][1].size() + grid[0][0].size())

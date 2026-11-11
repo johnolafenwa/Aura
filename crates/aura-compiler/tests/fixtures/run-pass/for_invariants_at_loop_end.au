@@ -1,0 +1,104 @@
+# A `for` invariant that does not read the loop target is checked before
+# the loop asks for each element, so it also holds when the loop runs out.
+# One that reads the target is checked in the body, with the target bound.
+from iter import Generator
+
+
+class Counter:
+    count: int64
+
+
+def numbers(limit: int64) -> Generator[int64]:
+    mut i = 0
+    while i < limit:
+        yield i
+        i += 1
+
+
+def over_list(values: list[int64]) -> int64:
+    ensures result >= 0
+    mut sum = 0
+    for value in values:
+        invariant 0 <= sum and sum <= 1000000
+        if 0 <= value and value <= 100 and sum < 1000:
+            sum += value
+    return sum
+
+
+def over_enumerate(values: list[int64]) -> int64:
+    ensures result >= 0
+    mut hits = 0
+    for i, value in enumerate(values):
+        invariant 0 <= hits and hits <= 1000
+        invariant i >= 0
+        if value > 0 and hits < 1000:
+            hits += 1
+    return hits
+
+
+def over_dict(ages: dict[str, int64]) -> int64:
+    ensures result >= 0
+    mut adults = 0
+    for name, age in ages.items():
+        invariant 0 <= adults and adults <= 1000
+        if age >= 18 and adults < 1000:
+            adults += 1
+    return adults
+
+
+def over_mut(items: mut list[Counter]) -> int64:
+    ensures result >= 0
+    mut seen = 0
+    for item in mut items:
+        invariant 0 <= seen and seen <= 1000
+        if item.count < 100:
+            item.count += 1
+        if seen < 1000:
+            seen += 1
+    return seen
+
+
+def over_generator(limit: int64) -> int64:
+    ensures result >= 0
+    mut seen = 0
+    for value in numbers(limit):
+        invariant 0 <= seen and seen <= 1000
+        if value == 2:
+            continue
+        if seen < 1000:
+            seen += 1
+    return seen
+
+
+def over_set(values: set[int64]) -> int64:
+    ensures result >= 0
+    mut seen = 0
+    for value in values:
+        invariant 0 <= seen and seen <= 1000
+        if seen < 1000:
+            seen += 1
+    return seen
+
+
+def breaks(values: list[int64]) -> int64:
+    # `break` leaves without a check, so `last` may be negative here.
+    mut last = 0
+    for value in values:
+        invariant last >= 0
+        last = value
+        if value < 0:
+            break
+    return last
+
+
+def main():
+    print(over_list([1, 2, 3]))
+    print(over_list([]))
+    print(over_enumerate([1, -2, 3]))
+    print(over_dict({"a": 20, "b": 3}))
+    mut items = [Counter(count=1), Counter(count=2)]
+    print(over_mut(items))
+    print(items[1].count)
+    print(over_generator(5))
+    print(over_set({1, 2, 5}))
+    print(breaks([1, -2, 3]))

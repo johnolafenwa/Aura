@@ -1,0 +1,148 @@
+trait Shape:
+    def area(self) -> int64
+    def grow(mut self, by: int64) -> int64
+
+
+class Square:
+    side: int64
+    name: str
+
+    def twice(mut self) -> None:
+        self.bump()
+        self.bump()
+
+    def bump(mut self) -> None:
+        self.side += 1
+
+    def restart(mut self) -> None:
+        self = Square(side=1, name="again")
+
+    def rename(mut self, name: str) -> None:
+        self.name = name.clone()
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+    def grow(mut self, by: int64) -> int64:
+        self.side += by
+        return self.side
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+
+    def grow(mut self, by: int64) -> int64:
+        self.w += by
+        return self.w
+
+
+class Blob:
+    parts: list[int64]
+
+
+impl Shape for Blob:
+    def area(self) -> int64:
+        return len(self.parts)
+
+    def grow(mut self, by: int64) -> int64:
+        self = Blob(parts=[by, by])
+        return 2
+
+
+impl Shape for int64:
+    def area(self) -> int64:
+        return self
+
+    def grow(mut self, by: int64) -> int64:
+        self += by
+        return self
+
+
+class Board:
+    squares: list[Square]
+    shapes: list[dyn Shape]
+
+
+def grow_all[T: Shape](items: mut list[T], by: int64) -> int64:
+    mut sum: int64 = 0
+    for item in mut items:
+        sum += item.grow(by)
+    return sum
+
+
+def areas(shapes: list[dyn Shape]) -> int64:
+    mut sum: int64 = 0
+    for shape in shapes:
+        sum += shape.area()
+    return sum
+
+
+def main() -> None:
+    mut shapes: list[dyn Shape] = []
+    for i in range(3):
+        shapes.append(Square(side=i, name="s") as dyn Shape)
+        shapes.append(Rect(w=i, h=2) as dyn Shape)
+        shapes.append(Blob(parts=[1]) as dyn Shape)
+        shapes.append((i + 40) as dyn Shape)
+    mut total: int64 = 0
+    for round in range(3):
+        for shape in mut shapes:
+            total += shape.grow(1)
+        for i in range(len(shapes)):
+            total += shapes[i].grow(round)
+            total += shapes[i].area()
+    print(total)
+    print(areas(shapes))
+    mut squares: list[Square] = []
+    for i in range(6):
+        squares.append(Square(side=i, name="sq"))
+    for i in range(len(squares)):
+        squares[i].twice()
+        if i % 2 == 0:
+            squares[i].restart()
+        squares[i].rename("r")
+        total += squares[i].grow(i)
+    for square in mut squares:
+        square.twice()
+        if square.side > 8:
+            square.restart()
+            continue
+        square.side += 10
+        square.rename("loop")
+        if square.side > 100:
+            break
+    print(grow_all(squares, 2))
+    mut twin = squares.copy()
+    for square in mut twin:
+        square.grow(100)
+        square.twice()
+    for i in range(len(twin)):
+        twin[i].grow(1)
+    print(twin[1].side)
+    print(squares[1].side)
+    view first = squares[0]
+    print(first.side)
+    squares[0].grow(50)
+    print(squares[0].side)
+    print(squares[5].name)
+    mut board = Board(squares=squares, shapes=shapes)
+    for i in range(len(board.squares)):
+        board.squares[i].bump()
+        total += board.squares[i].grow(1)
+    for i in range(len(board.shapes)):
+        total += board.shapes[i].grow(1)
+    for square in mut board.squares:
+        square.twice()
+    for shape in mut board.shapes:
+        total += shape.grow(2)
+    print(total)
+    print(areas(board.shapes))
+    print(grow_all(board.shapes, 1))

@@ -75,6 +75,50 @@ in this file.
   [cross-language program](benchmarks/cross_language/README.md),
   `regex_scan`, runs five patterns over 200,000 log lines: Aura 0.83 s,
   Python 1.55 s, Rust 0.27 s. See the [Regex Module](docs/manual/regex.md).
+- A method call on a list element no longer takes the element out of the
+  list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
+  shared call by index (`items[i].get()`), any call in
+  `for item in mut items:`, and `item.count += 1` in such a loop cost 2,300
+  to 2,800 instructions each. They now cost 36 for a class of numbers and 92
+  for a class with a `str` field, with the method inlined, and a field
+  update in the loop costs 16 and 37. This covers a class's own methods,
+  trait methods, and `list[dyn Trait]` elements. `for item in items:
+  item.get()` on a class with a `str` field no longer clones each element
+  (1,615 instructions down to 46). The first pass over a list still pays
+  the old cost for about one element in eight while the list settles how
+  it stores its elements.
+- A `for` invariant that does not read the loop target is now checked
+  before the loop asks for each element, as a `while` invariant is: on
+  entry, after every iteration, and when the loop runs out. It holds after
+  the loop, so `aura verify` proves an `ensures` that relies on it, as in
+  `for value in values: invariant total >= 0`. Before, such an invariant was
+  checked only at the start of each iteration, the verifier learned nothing
+  from it after the loop, and it reported a counterexample for the
+  `ensures`. A program whose invariant fails only after the last iteration,
+  or on entry to a loop that runs no iteration, now stops with `AU4009`.
+  An invariant that reads the loop target is checked as before.
+- An `impl` for a union type, such as `impl Named for int64 | None:`, now
+  works for direct calls on a value of that type on both backends. Before,
+  the checker accepted it and the program failed with `AU4001` or did not
+  build. Such an `impl` does not make the union satisfy a trait bound or
+  convert to a trait object.
+- Fixed programs the checker accepted that then failed with `AU4001` under
+  `aura run` and did not build:
+  - a lambda that calls a method on an element of a captured list, as in
+    `lambda: items[0].area()`;
+  - a local bound to a name a shared `match` binds, as in
+    `case Square as square:` then `other = square`, or
+    `case Shape.Named(name):` then `label = name`;
+  - a local bound to another local that shares a borrowed value, as in
+    `first = param` then `second = first`.
+- Fixed an explicit type argument that names the enclosing function's type
+  parameter, as in `apply(run_one[T], job)` inside `def outer[T: Job]`.
+  Under `aura run` the call failed with "type `T` has no MIR implementation";
+  the built program was already right.
+- Fixed a generic bound written through an import alias, as in
+  `def show[T: sh.Named](value: T)` after `import shapes as sh`. A method
+  call on such a value failed with "requires an authoritative trait
+  identity"; the module's own name, `shapes.Named`, already worked.
 - Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
