@@ -739,7 +739,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice()),
+                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice().into()),
             )
             .unwrap()
         ),
@@ -752,7 +752,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![9, 8, 7, 6].into_boxed_slice()),
+                ArrayStorage::Int32(vec![9, 8, 7, 6].into_boxed_slice().into()),
             )
             .unwrap()
         ),
@@ -763,7 +763,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![11, 12, 13, 14].into_boxed_slice()),
+                ArrayStorage::Int32(vec![11, 12, 13, 14].into_boxed_slice().into()),
             )
             .unwrap()
         )
@@ -800,7 +800,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice()),
+                ArrayStorage::Int32(vec![2, 4, 6, 8].into_boxed_slice().into()),
             )
             .unwrap()
         )
@@ -913,7 +913,7 @@ fn direct_array_products_cross_the_native_abi() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int64(vec![19, 22, 43, 50].into_boxed_slice()),
+                ArrayStorage::Int64(vec![19, 22, 43, 50].into_boxed_slice().into()),
             )
             .unwrap()
         )
@@ -924,7 +924,7 @@ fn direct_array_products_cross_the_native_abi() {
         Value::Array(
             ArrayValue::new(
                 vec![2, 2].into_boxed_slice(),
-                ArrayStorage::Int64(vec![7, 10, 15, 22].into_boxed_slice()),
+                ArrayStorage::Int64(vec![7, 10, 15, 22].into_boxed_slice().into()),
             )
             .unwrap()
         )
@@ -1487,17 +1487,17 @@ fn direct_array_clone_uses_fallible_storage_copy_and_preserves_span() {
         unsafe { take_value(array) },
         "the direct clone kernel must preserve Array dtype, shape, and values"
     );
-    let source_storage = super::with_array(array, |array| match &array.storage {
+    let source_storage = super::with_array(array, |array| match &array.storage() {
         ArrayStorage::Int64(values) => values.as_ptr(),
         other => panic!("expected int64 source storage, found {other:?}"),
     });
-    let cloned_storage = super::with_array(cloned, |array| match &array.storage {
+    let cloned_storage = super::with_array(cloned, |array| match &array.storage() {
         ArrayStorage::Int64(values) => values.as_ptr(),
         other => panic!("expected int64 cloned storage, found {other:?}"),
     });
-    assert_ne!(
+    assert_eq!(
         source_storage, cloned_storage,
-        "explicit Array.clone must own an independent contiguous buffer"
+        "an Array clone shares the buffer until either Array is written"
     );
 
     let array_address = array as usize;
@@ -1571,10 +1571,13 @@ fn direct_array_constructor_shape_copy_reports_au4005_at_call_site() {
 #[test]
 fn direct_nested_array_collection_reads_and_clones_use_fallible_copy() {
     fn array_value(value: i32) -> Value {
-        Value::Array(ArrayValue {
-            shape: vec![1].into_boxed_slice(),
-            storage: ArrayStorage::Int32(vec![value].into_boxed_slice()),
-        })
+        Value::Array(
+            ArrayValue::new(
+                vec![1].into_boxed_slice(),
+                ArrayStorage::Int32(vec![value].into()),
+            )
+            .unwrap(),
+        )
     }
 
     fn allocation_diagnostic(invoke: impl FnOnce() + Send + 'static) -> crate::diag::Diagnostic {
@@ -27232,7 +27235,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
     };
     let int64 = array(
         vec![3],
-        ArrayStorage::Int64(vec![4, -5, 6].into_boxed_slice()),
+        ArrayStorage::Int64(vec![4, -5, 6].into_boxed_slice().into()),
     );
     let (elements, len) = view(int64);
     assert_eq!(len, 3);
@@ -27252,11 +27255,17 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
         "the view follows a write"
     );
 
-    let int32 = array(vec![2], ArrayStorage::Int32(vec![7, -8].into_boxed_slice()));
+    let int32 = array(
+        vec![2],
+        ArrayStorage::Int32(vec![7, -8].into_boxed_slice().into()),
+    );
     let (elements, len) = view(int32);
     assert_eq!((len, unsafe { *(elements as *const i32).add(1) }), (2, -8));
     assert_eq!(list_view_access(int32), DirectListAccess::ArrayInt32 as u32);
-    let float32 = array(vec![1], ArrayStorage::Float32(vec![1.5].into_boxed_slice()));
+    let float32 = array(
+        vec![1],
+        ArrayStorage::Float32(vec![1.5].into_boxed_slice().into()),
+    );
     let (elements, _) = view(float32);
     assert_eq!(unsafe { *(elements as *const f32) }, 1.5);
     assert_eq!(
@@ -27265,7 +27274,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
     );
     let float64 = array(
         vec![1],
-        ArrayStorage::Float64(vec![2.25].into_boxed_slice()),
+        ArrayStorage::Float64(vec![2.25].into_boxed_slice().into()),
     );
     let (elements, _) = view(float64);
     assert_eq!(unsafe { *(elements as *const f64) }, 2.25);
@@ -27276,7 +27285,7 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
 
     let grid = array(
         vec![2, 2],
-        ArrayStorage::Int64(vec![1, 2, 3, 4].into_boxed_slice()),
+        ArrayStorage::Int64(vec![1, 2, 3, 4].into_boxed_slice().into()),
     );
     assert_eq!(
         view(grid),

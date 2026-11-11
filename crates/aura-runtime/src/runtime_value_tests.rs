@@ -617,7 +617,7 @@ fn math_host_dispatch_rejects_wrong_runtime_types_and_arities_exactly() {
 fn dense_arrays_validate_shape_storage_and_deep_clone() {
     let array = ArrayValue::new(
         vec![2, 2].into_boxed_slice(),
-        ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+        ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice().into()),
     )
     .expect("matching row-major shape and storage should be accepted");
     assert_eq!(array.dtype(), ArrayDType::Int32);
@@ -631,14 +631,14 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
 
     let cloned = array.clone();
     let (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) =
-        (&array.storage, &cloned.storage)
+        (&array.storage(), &cloned.storage())
     else {
         panic!("test arrays should retain int32 storage");
     };
-    assert_ne!(
+    assert_eq!(
         source.as_ptr(),
         copy.as_ptr(),
-        "array clones must own independent contiguous buffers"
+        "array clones share one buffer until either is written"
     );
     assert_eq!(array, cloned);
 
@@ -646,40 +646,40 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
         .try_clone()
         .expect("explicit Array clones should use fallible storage copies");
     let (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) =
-        (&array.storage, &fallible_clone.storage)
+        (&array.storage(), &fallible_clone.storage())
     else {
         panic!("test arrays should retain int32 storage");
     };
-    assert_ne!(source.as_ptr(), copy.as_ptr());
+    assert_eq!(source.as_ptr(), copy.as_ptr());
     assert_ne!(array.shape.as_ptr(), fallible_clone.shape.as_ptr());
 
-    for allocation_budget in [0, 1] {
-        let clone_error =
-            super::with_array_allocation_budget(allocation_budget, || array.try_clone())
-                .expect_err("shape and storage allocation failures must remain recoverable");
-        assert_eq!(clone_error.code, "AU4005");
-    }
+    let clone_error = super::with_array_allocation_budget(0, || array.try_clone())
+        .expect_err("a shape allocation failure must remain recoverable");
+    assert_eq!(clone_error.code, "AU4005");
+    // The element buffer is shared, so a clone allocates nothing more.
+    super::with_array_allocation_budget(1, || array.try_clone())
+        .expect("a clone copies the shape and shares the elements");
     let shape_error = super::with_array_allocation_budget(0, || array.shape_value())
         .expect_err("shape materialization allocation failures must remain recoverable");
     assert_eq!(shape_error.code, "AU4005");
 
     let rank_error = ArrayValue::new(
         Vec::new().into_boxed_slice(),
-        ArrayStorage::Float64(vec![1.0].into_boxed_slice()),
+        ArrayStorage::Float64(vec![1.0].into_boxed_slice().into()),
     )
     .expect_err("rank-zero arrays are outside the Phase 7.3 surface");
     assert_eq!(rank_error.code, "AU4007");
 
     let shape_error = ArrayValue::new(
         vec![2, 3].into_boxed_slice(),
-        ArrayStorage::Int64(vec![1, 2].into_boxed_slice()),
+        ArrayStorage::Int64(vec![1, 2].into_boxed_slice().into()),
     )
     .expect_err("shape products must exactly match storage");
     assert_eq!(shape_error.code, "AU4007");
 
     let product_error = ArrayValue::new(
         vec![i64::MAX as usize, 3].into_boxed_slice(),
-        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
     .expect_err("shape products must be checked");
     assert_eq!(product_error.code, "AU4005");
@@ -693,13 +693,13 @@ fn dense_arrays_validate_shape_storage_and_deep_clone() {
 
     ArrayValue::new(
         vec![i64::MAX as usize, 2, 0].into_boxed_slice(),
-        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
     .expect("a zero dimension makes the checked row-major product zero regardless of axis order");
 
     let dimension_error = ArrayValue::new(
         vec![i64::MAX as usize + 1, 0].into_boxed_slice(),
-        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
     )
     .expect_err("every public shape dimension must fit the int64 shape surface");
     assert_eq!(dimension_error.code, "AU4005");
@@ -777,12 +777,12 @@ fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis()
         tail,
         ArrayValue::new(
             vec![1, 3].into_boxed_slice(),
-            ArrayStorage::Int32(vec![3, 4, 5].into_boxed_slice()),
+            ArrayStorage::Int32(vec![3, 4, 5].into_boxed_slice().into()),
         )
         .unwrap()
     );
     let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(tail_storage)) =
-        (&array.storage, &tail.storage)
+        (&array.storage(), &tail.storage())
     else {
         panic!("test arrays should retain int32 storage");
     };
@@ -800,7 +800,7 @@ fn dense_arrays_copy_vec_inputs_normalize_coordinates_and_slice_the_first_axis()
         updated,
         ArrayValue::new(
             vec![2, 3].into_boxed_slice(),
-            ArrayStorage::Int32(vec![-4; 6].into_boxed_slice()),
+            ArrayStorage::Int32(vec![-4; 6].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -819,18 +819,18 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
             .expect("every supported Array dtype should clone fallibly");
         assert_eq!(copy, *array);
         assert_ne!(copy.shape.as_ptr(), array.shape.as_ptr());
-        match (&array.storage, &copy.storage) {
+        match (&array.storage(), &copy.storage()) {
             (ArrayStorage::Int32(source), ArrayStorage::Int32(copy)) => {
-                assert_ne!(source.as_ptr(), copy.as_ptr());
+                assert_eq!(source.as_ptr(), copy.as_ptr());
             }
             (ArrayStorage::Int64(source), ArrayStorage::Int64(copy)) => {
-                assert_ne!(source.as_ptr(), copy.as_ptr());
+                assert_eq!(source.as_ptr(), copy.as_ptr());
             }
             (ArrayStorage::Float32(source), ArrayStorage::Float32(copy)) => {
-                assert_ne!(source.as_ptr(), copy.as_ptr());
+                assert_eq!(source.as_ptr(), copy.as_ptr());
             }
             (ArrayStorage::Float64(source), ArrayStorage::Float64(copy)) => {
-                assert_ne!(source.as_ptr(), copy.as_ptr());
+                assert_eq!(source.as_ptr(), copy.as_ptr());
             }
             _ => panic!("an Array clone must retain its exact dtype"),
         }
@@ -840,22 +840,22 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
         (
             ArrayDType::Int32,
             Value::Int(IntegerValue::from_i32(6)),
-            ArrayStorage::Int32(vec![6, 6].into_boxed_slice()),
+            ArrayStorage::Int32(vec![6, 6].into_boxed_slice().into()),
         ),
         (
             ArrayDType::Int64,
             Value::Int(IntegerValue::from_i64(7)),
-            ArrayStorage::Int64(vec![7, 7].into_boxed_slice()),
+            ArrayStorage::Int64(vec![7, 7].into_boxed_slice().into()),
         ),
         (
             ArrayDType::Float32,
             Value::Float(1.25),
-            ArrayStorage::Float32(vec![1.25, 1.25].into_boxed_slice()),
+            ArrayStorage::Float32(vec![1.25, 1.25].into_boxed_slice().into()),
         ),
         (
             ArrayDType::Float64,
             Value::Float(-2.5),
-            ArrayStorage::Float64(vec![-2.5, -2.5].into_boxed_slice()),
+            ArrayStorage::Float64(vec![-2.5, -2.5].into_boxed_slice().into()),
         ),
     ];
     for (dtype, value, storage) in full_cases {
@@ -894,7 +894,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
             .expect("int64 slicing should preserve dtype and normalized bounds"),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int64(vec![-7, -7].into_boxed_slice()),
+            ArrayStorage::Int64(vec![-7, -7].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -924,7 +924,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
             .expect("float32 slicing should preserve its narrowed storage"),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float32(vec![2.25, 2.25].into_boxed_slice()),
+            ArrayStorage::Float32(vec![2.25, 2.25].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -954,7 +954,7 @@ fn dense_arrays_all_dtypes_construct_clone_mutate_fill_and_slice_exactly() {
             .expect("float64 slicing should normalize negative bounds"),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float64(vec![8.5, 8.5].into_boxed_slice()),
+            ArrayStorage::Float64(vec![8.5, 8.5].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -970,22 +970,22 @@ fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutati
     let arrays = [
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+            ArrayStorage::Int32(vec![1, 2].into_boxed_slice().into()),
         )
         .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int64(vec![1, 2].into_boxed_slice()),
+            ArrayStorage::Int64(vec![1, 2].into_boxed_slice().into()),
         )
         .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice()),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice().into()),
         )
         .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float64(vec![1.0, 2.0].into_boxed_slice()),
+            ArrayStorage::Float64(vec![1.0, 2.0].into_boxed_slice().into()),
         )
         .unwrap(),
     ];
@@ -993,14 +993,32 @@ fn array_slices_report_storage_allocation_failure_for_every_dtype_without_mutati
     for array in arrays {
         let before = array.clone();
         let error =
-            super::with_array_allocation_budget(1, || array.slice_first_axis(Some(0), Some(1)))
-                .expect_err("the storage copy after the shape copy must remain fallible");
+            super::with_array_allocation_budget(0, || array.slice_first_axis(Some(0), Some(1)))
+                .expect_err("the shape copy must remain fallible");
         assert_eq!(error.code, "AU4005");
         assert_eq!(
             error.message,
-            "array slice could not allocate storage for 1 array elements"
+            "Array shape could not allocate storage for 1 array elements"
         );
         assert_eq!(array, before, "a failed slice must not mutate its source");
+        // A slice is a view: after the shape, it allocates nothing.
+        let mut slice =
+            super::with_array_allocation_budget(1, || array.slice_first_axis(Some(0), Some(1)))
+                .expect("a slice copies the shape and shares the elements");
+        // Writing the view copies its one element, and that copy can fail.
+        let first = slice.get(&[0]).unwrap();
+        let error = super::with_array_allocation_budget(0, || slice.set(&[0], first.clone()))
+            .expect_err("the copy before a write to a shared buffer must remain fallible");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            "Array element write could not allocate storage for 1 array elements"
+        );
+        slice.set(&[0], first).unwrap();
+        assert_eq!(
+            array, before,
+            "a write to a slice must not reach its source"
+        );
     }
 }
 
@@ -1128,7 +1146,7 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         Value::Array(
             ArrayValue::new(
                 vec![values.len()].into_boxed_slice(),
-                ArrayStorage::Int32(values.to_vec().into_boxed_slice()),
+                ArrayStorage::Int32(values.to_vec().into_boxed_slice().into()),
             )
             .unwrap(),
         )
@@ -1232,11 +1250,11 @@ fn array_containing_language_copies_preserve_reachable_structure_and_independenc
         for (source_array, copy_array) in source_arrays.into_iter().zip(copy_arrays) {
             assert_ne!(source_array.shape.as_ptr(), copy_array.shape.as_ptr());
             let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
-                (&source_array.storage, &copy_array.storage)
+                (&source_array.storage(), &copy_array.storage())
             else {
                 panic!("test arrays should retain int32 storage");
             };
-            assert_ne!(source_storage.as_ptr(), copy_storage.as_ptr());
+            assert_eq!(source_storage.as_ptr(), copy_storage.as_ptr());
         }
 
         if let Value::Vec(vector) = &mut copy {
@@ -1337,7 +1355,7 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
         elements: vec![Value::Array(
             ArrayValue::new(
                 vec![2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![4, 9].into_boxed_slice()),
+                ArrayStorage::Int32(vec![4, 9].into_boxed_slice().into()),
             )
             .unwrap(),
         )]
@@ -1353,10 +1371,6 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
         (
             1,
             "Array shape could not allocate storage for 1 array elements",
-        ),
-        (
-            2,
-            "Array.clone could not allocate storage for 2 array elements",
         ),
     ];
     for (successful_allocations, expected_message) in expected_failures {
@@ -1382,14 +1396,14 @@ fn array_containing_language_copy_reports_outer_shape_and_storage_allocation_fai
         panic!("list[Array[T]] slices should retain their element values");
     };
     let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(slice_storage)) =
-        (&source_array.storage, &slice_array.storage)
+        (&source_array.storage(), &slice_array.storage())
     else {
         panic!("test arrays should retain int32 storage");
     };
-    assert_ne!(
+    assert_eq!(
         source_storage.as_ptr(),
         slice_storage.as_ptr(),
-        "a successful Vec slice must own its nested Array storage"
+        "a Vec slice shares its nested Array storage until a write"
     );
 }
 
@@ -1453,7 +1467,7 @@ fn adr0038_partial_capture_copies_release_every_projected_value_after_failure() 
         Value::Array(
             ArrayValue::new(
                 vec![1].into_boxed_slice(),
-                ArrayStorage::Int32(vec![7].into_boxed_slice()),
+                ArrayStorage::Int32(vec![7].into_boxed_slice().into()),
             )
             .expect("the source Array should be valid before clone-failure injection"),
         )
@@ -1632,7 +1646,9 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                                 Value::Array(
                                     ArrayValue::new(
                                         vec![1].into_boxed_slice(),
-                                        ArrayStorage::Int32(vec![value as i32].into_boxed_slice()),
+                                        ArrayStorage::Int32(
+                                            vec![value as i32].into_boxed_slice().into(),
+                                        ),
                                     )
                                     .unwrap(),
                                 ),
@@ -1676,14 +1692,14 @@ fn deeply_recursive_reachable_array_copy_completes_on_a_512_kib_stack() {
                     "deep copies must preserve every node's payload order"
                 );
                 let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
-                    (&source_array.storage, &copy_array.storage)
+                    (&source_array.storage(), &copy_array.storage())
                 else {
                     panic!("test arrays should retain int32 storage");
                 };
-                assert_ne!(
+                assert_eq!(
                     source_storage.as_ptr(),
                     copy_storage.as_ptr(),
-                    "every deeply nested Array must own independent storage"
+                    "every deeply nested Array shares its buffer until it is written"
                 );
                 source_cursor = source_node
                     .fields
@@ -1741,7 +1757,9 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                                 Value::Array(
                                     ArrayValue::new(
                                         vec![1].into_boxed_slice(),
-                                        ArrayStorage::Int32(vec![value as i32].into_boxed_slice()),
+                                        ArrayStorage::Int32(
+                                            vec![value as i32].into_boxed_slice().into(),
+                                        ),
                                     )
                                     .unwrap(),
                                 ),
@@ -1784,14 +1802,14 @@ fn deeply_recursive_optional_link_array_copy_completes_on_a_512_kib_stack() {
                     "deep copies must preserve every node's payload order"
                 );
                 let (ArrayStorage::Int32(source_storage), ArrayStorage::Int32(copy_storage)) =
-                    (&source_array.storage, &copy_array.storage)
+                    (&source_array.storage(), &copy_array.storage())
                 else {
                     panic!("test arrays should retain int32 storage");
                 };
-                assert_ne!(
+                assert_eq!(
                     source_storage.as_ptr(),
                     copy_storage.as_ptr(),
-                    "every deeply nested Array must own independent storage"
+                    "every deeply nested Array shares its buffer until it is written"
                 );
                 source_cursor = source_node
                     .fields
@@ -1843,7 +1861,7 @@ fn array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack() {
                         Value::Array(
                             ArrayValue::new(
                                 vec![1].into_boxed_slice(),
-                                ArrayStorage::Int32(vec![7].into_boxed_slice()),
+                                ArrayStorage::Int32(vec![7].into_boxed_slice().into()),
                             )
                             .unwrap(),
                         ),
@@ -1893,12 +1911,12 @@ fn array_clone_failure_drops_a_completed_deep_sibling_on_a_small_stack() {
 fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
     let left = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int32(vec![i32::MAX, -2].into_boxed_slice()),
+        ArrayStorage::Int32(vec![i32::MAX, -2].into_boxed_slice().into()),
     )
     .unwrap();
     let right = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int32(vec![1, 3].into_boxed_slice()),
+        ArrayStorage::Int32(vec![1, 3].into_boxed_slice().into()),
     )
     .unwrap();
     let overflow = left
@@ -1912,7 +1930,7 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int32(vec![i32::MIN, 1].into_boxed_slice()),
+            ArrayStorage::Int32(vec![i32::MIN, 1].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -1925,14 +1943,14 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
         .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice()),
+            ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice().into()),
         )
         .unwrap()
     );
 
     let floats = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float32(vec![2.0, 4.0].into_boxed_slice()),
+        ArrayStorage::Float32(vec![2.0, 4.0].into_boxed_slice().into()),
     )
     .unwrap();
     assert_eq!(
@@ -1946,7 +1964,7 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice()),
+            ArrayStorage::Float32(vec![1.0, 2.0].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -1961,7 +1979,7 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float32(vec![6.0, 4.0].into_boxed_slice()),
+            ArrayStorage::Float32(vec![6.0, 4.0].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -1999,7 +2017,7 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
         .binary(
             &ArrayValue::new(
                 vec![1, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+                ArrayStorage::Int32(vec![1, 2].into_boxed_slice().into()),
             )
             .unwrap(),
             ArrayBinaryOp::Sub,
@@ -2014,7 +2032,7 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
     fn int32_array(values: &[i32]) -> ArrayValue {
         ArrayValue::new(
             vec![values.len()].into_boxed_slice(),
-            ArrayStorage::Int32(values.to_vec().into_boxed_slice()),
+            ArrayStorage::Int32(values.to_vec().into_boxed_slice().into()),
         )
         .unwrap()
     }
@@ -2089,12 +2107,12 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
 
     let int64_left = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int64(vec![6, -4].into_boxed_slice()),
+        ArrayStorage::Int64(vec![6, -4].into_boxed_slice().into()),
     )
     .unwrap();
     let int64_right = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int64(vec![5, 3].into_boxed_slice()),
+        ArrayStorage::Int64(vec![5, 3].into_boxed_slice().into()),
     )
     .unwrap();
     assert_eq!(
@@ -2107,7 +2125,7 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int64(vec![30, -12].into_boxed_slice()),
+            ArrayStorage::Int64(vec![30, -12].into_boxed_slice().into()),
         )
         .unwrap()
     );
@@ -2122,7 +2140,7 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int64(vec![4, 14].into_boxed_slice()),
+            ArrayStorage::Int64(vec![4, 14].into_boxed_slice().into()),
         )
         .unwrap(),
         "a scalar on the left must retain operand order"
@@ -2138,13 +2156,13 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Int64(vec![12, -8].into_boxed_slice()),
+            ArrayStorage::Int64(vec![12, -8].into_boxed_slice().into()),
         )
         .unwrap()
     );
     let int64_scalar_overflow = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int64(vec![3, i64::MAX].into_boxed_slice()),
+        ArrayStorage::Int64(vec![3, i64::MAX].into_boxed_slice().into()),
     )
     .unwrap()
     .scalar_binary(
@@ -2162,12 +2180,12 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
 
     let float32_left = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float32(vec![8.0, 9.0].into_boxed_slice()),
+        ArrayStorage::Float32(vec![8.0, 9.0].into_boxed_slice().into()),
     )
     .unwrap();
     let float32_right = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float32(vec![2.0, 3.0].into_boxed_slice()),
+        ArrayStorage::Float32(vec![2.0, 3.0].into_boxed_slice().into()),
     )
     .unwrap();
     for (operation, expected) in [
@@ -2189,7 +2207,7 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
     }
     let float32_zero_divisor = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float32(vec![2.0, 0.0].into_boxed_slice()),
+        ArrayStorage::Float32(vec![2.0, 0.0].into_boxed_slice().into()),
     )
     .unwrap();
     let float32_division_error = float32_left
@@ -2207,12 +2225,12 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
 
     let float64_left = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float64(vec![12.0, 15.0].into_boxed_slice()),
+        ArrayStorage::Float64(vec![12.0, 15.0].into_boxed_slice().into()),
     )
     .unwrap();
     let float64_right = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float64(vec![3.0, 5.0].into_boxed_slice()),
+        ArrayStorage::Float64(vec![3.0, 5.0].into_boxed_slice().into()),
     )
     .unwrap();
     for (operation, expected) in [
@@ -2243,14 +2261,14 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
             .unwrap(),
         ArrayValue::new(
             vec![2].into_boxed_slice(),
-            ArrayStorage::Float64(vec![4.0, 5.0].into_boxed_slice()),
+            ArrayStorage::Float64(vec![4.0, 5.0].into_boxed_slice().into()),
         )
         .unwrap()
     );
 
     let zero_divisor = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Float64(vec![2.0, 0.0].into_boxed_slice()),
+        ArrayStorage::Float64(vec![2.0, 0.0].into_boxed_slice().into()),
     )
     .unwrap();
     let error = float64_left
@@ -2271,7 +2289,7 @@ fn dense_array_arithmetic_preserves_dtype_operand_order_and_integer_modes() {
 fn dense_array_reductions_define_empty_and_dtype_behavior() {
     let ints = ArrayValue::new(
         vec![2, 2].into_boxed_slice(),
-        ArrayStorage::Int64(vec![4, -2, 7, 1].into_boxed_slice()),
+        ArrayStorage::Int64(vec![4, -2, 7, 1].into_boxed_slice().into()),
     )
     .unwrap();
     assert_eq!(
@@ -2293,7 +2311,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     let empty = ArrayValue::new(
         vec![0].into_boxed_slice(),
-        ArrayStorage::Int32(Vec::new().into_boxed_slice()),
+        ArrayStorage::Int32(Vec::new().into_boxed_slice().into()),
     )
     .unwrap();
     assert_eq!(
@@ -2313,7 +2331,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     let overflow = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice()),
+        ArrayStorage::Int32(vec![i32::MAX, 1].into_boxed_slice().into()),
     )
     .unwrap()
     .reduce(ArrayReduction::Sum)
@@ -2323,7 +2341,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     let int64_overflow = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int64(vec![i64::MAX, 1].into_boxed_slice()),
+        ArrayStorage::Int64(vec![i64::MAX, 1].into_boxed_slice().into()),
     )
     .unwrap()
     .reduce(ArrayReduction::Sum)
@@ -2336,7 +2354,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     let wide_mean = ArrayValue::new(
         vec![2].into_boxed_slice(),
-        ArrayStorage::Int32(vec![i32::MAX, i32::MAX].into_boxed_slice()),
+        ArrayStorage::Int32(vec![i32::MAX, i32::MAX].into_boxed_slice().into()),
     )
     .unwrap();
     assert_eq!(
@@ -2347,7 +2365,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
     assert_eq!(
         ArrayValue::new(
             vec![3].into_boxed_slice(),
-            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice()),
+            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice().into()),
         )
         .unwrap()
         .reduce(ArrayReduction::Min)
@@ -2357,7 +2375,7 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
     assert_eq!(
         ArrayValue::new(
             vec![3].into_boxed_slice(),
-            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice()),
+            ArrayStorage::Int32(vec![7, -4, 2].into_boxed_slice().into()),
         )
         .unwrap()
         .reduce(ArrayReduction::Max)
@@ -2367,7 +2385,11 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     let rounded_sum = ArrayValue::new(
         vec![3].into_boxed_slice(),
-        ArrayStorage::Float32(vec![16_777_216.0, 1.0, -16_777_216.0].into_boxed_slice()),
+        ArrayStorage::Float32(
+            vec![16_777_216.0, 1.0, -16_777_216.0]
+                .into_boxed_slice()
+                .into(),
+        ),
     )
     .unwrap();
     assert_eq!(
@@ -2378,14 +2400,14 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
 
     for (storage, expected_sum, expected_min, expected_max, expected_mean) in [
         (
-            ArrayStorage::Float32(vec![1.5, -2.0, 6.5].into_boxed_slice()),
+            ArrayStorage::Float32(vec![1.5, -2.0, 6.5].into_boxed_slice().into()),
             6.0,
             -2.0,
             6.5,
             2.0,
         ),
         (
-            ArrayStorage::Float64(vec![1.5, -2.0, 6.5].into_boxed_slice()),
+            ArrayStorage::Float64(vec![1.5, -2.0, 6.5].into_boxed_slice().into()),
             6.0,
             -2.0,
             6.5,
@@ -2408,9 +2430,9 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
     }
 
     for storage in [
-        ArrayStorage::Int64(Vec::new().into_boxed_slice()),
-        ArrayStorage::Float32(Vec::new().into_boxed_slice()),
-        ArrayStorage::Float64(Vec::new().into_boxed_slice()),
+        ArrayStorage::Int64(Vec::new().into_boxed_slice().into()),
+        ArrayStorage::Float32(Vec::new().into_boxed_slice().into()),
+        ArrayStorage::Float64(Vec::new().into_boxed_slice().into()),
     ] {
         let array = ArrayValue::new(vec![0].into_boxed_slice(), storage).unwrap();
         let expected = match array.dtype() {
@@ -2426,8 +2448,8 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
     }
 
     for storage in [
-        ArrayStorage::Float32(vec![1.0, f32::NAN, -2.0].into_boxed_slice()),
-        ArrayStorage::Float64(vec![1.0, f64::NAN, -2.0].into_boxed_slice()),
+        ArrayStorage::Float32(vec![1.0, f32::NAN, -2.0].into_boxed_slice().into()),
+        ArrayStorage::Float64(vec![1.0, f64::NAN, -2.0].into_boxed_slice().into()),
     ] {
         let array = ArrayValue::new(vec![3].into_boxed_slice(), storage).unwrap();
         for reduction in [
@@ -20135,7 +20157,7 @@ fn reference_integer_binary(
 }
 
 fn integer_array_values(array: &ArrayValue) -> Vec<i128> {
-    match &array.storage {
+    match &array.storage() {
         ArrayStorage::Int32(values) => values.iter().map(|value| *value as i128).collect(),
         ArrayStorage::Int64(values) => values.iter().map(|value| *value as i128).collect(),
         _ => panic!("integer kernels return integer storage"),

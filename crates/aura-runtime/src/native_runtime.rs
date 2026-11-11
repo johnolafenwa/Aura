@@ -2964,8 +2964,10 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room)
         }
-        Value::Array(array) if array.rank() == 1 => {
-            let (access, elements) = match &array.storage {
+        // A strided view has no element address to read in place, so it
+        // keeps the `None` access and every read calls the runtime.
+        Value::Array(array) if array.rank() == 1 && array.is_contiguous() => {
+            let (access, elements) = match array.storage() {
                 ArrayStorage::Int32(values) => {
                     (DirectListAccess::ArrayInt32, values.as_ptr() as usize)
                 }

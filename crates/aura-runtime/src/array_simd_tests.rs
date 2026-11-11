@@ -59,7 +59,10 @@ fn array(shape: &[usize], storage: ArrayStorage) -> ArrayValue {
 }
 
 fn float_array(shape: &[usize], values: Vec<f64>) -> ArrayValue {
-    array(shape, ArrayStorage::Float64(values.into_boxed_slice()))
+    array(
+        shape,
+        ArrayStorage::Float64(values.into_boxed_slice().into()),
+    )
 }
 
 fn float_bits(value: &Value) -> u64 {
@@ -565,21 +568,21 @@ fn array_matmul_checks_shapes_and_multiplies_each_dtype() {
     let product = a.matmul(&b).unwrap();
     assert_eq!(&*product.shape, &[2, 2]);
     assert_eq!(
-        product.storage,
+        product.storage(),
         ArrayStorage::Float64(vec![58.0, 64.0, 139.0, 154.0].into())
     );
     let v = float_array(&[3], vec![1.0, 0.5, -1.0]);
     let by_vector = a.matmul(&v).unwrap();
     assert_eq!(&*by_vector.shape, &[2]);
     assert_eq!(
-        by_vector.storage,
+        by_vector.storage(),
         ArrayStorage::Float64(vec![-1.0, 0.5].into())
     );
     let w = float_array(&[2], vec![1.0, -1.0]);
     let from_vector = w.matmul(&a).unwrap();
     assert_eq!(&*from_vector.shape, &[3]);
     assert_eq!(
-        from_vector.storage,
+        from_vector.storage(),
         ArrayStorage::Float64(vec![-3.0, -3.0, -3.0].into())
     );
 
@@ -588,22 +591,22 @@ fn array_matmul_checks_shapes_and_multiplies_each_dtype() {
         ArrayStorage::Float32(vec![1.0, 2.0, 3.0, 4.0].into()),
     );
     assert_eq!(
-        a32.matmul(&a32).unwrap().storage,
+        a32.matmul(&a32).unwrap().storage(),
         ArrayStorage::Float32(vec![7.0, 10.0, 15.0, 22.0].into())
     );
     let v32 = array(&[2], ArrayStorage::Float32(vec![1.0, 1.0].into()));
     assert_eq!(
-        a32.matmul(&v32).unwrap().storage,
+        a32.matmul(&v32).unwrap().storage(),
         ArrayStorage::Float32(vec![3.0, 7.0].into())
     );
     let i64s = array(&[2, 2], ArrayStorage::Int64(vec![1, 2, 3, 4].into()));
     assert_eq!(
-        i64s.matmul(&i64s).unwrap().storage,
+        i64s.matmul(&i64s).unwrap().storage(),
         ArrayStorage::Int64(vec![7, 10, 15, 22].into())
     );
     let i32s = array(&[2, 2], ArrayStorage::Int32(vec![1, 2, 3, 4].into()));
     assert_eq!(
-        i32s.matmul(&i32s).unwrap().storage,
+        i32s.matmul(&i32s).unwrap().storage(),
         ArrayStorage::Int32(vec![7, 10, 15, 22].into())
     );
     let big = array(&[1, 1], ArrayStorage::Int32(vec![i32::MAX].into()));

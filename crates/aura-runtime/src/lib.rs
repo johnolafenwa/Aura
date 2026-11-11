@@ -10,7 +10,9 @@ pub use aura_core::{diag, integer};
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]
 pub mod array_kernel_corpus;
+pub mod array_layout;
 pub mod array_simd;
+pub mod array_views;
 pub mod bytes_codec;
 pub mod c_layout;
 pub mod collection_index;
