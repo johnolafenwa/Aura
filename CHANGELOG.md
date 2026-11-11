@@ -7,6 +7,21 @@ in this file.
 
 ## Unreleased
 
+- FFI passes C strings. A `cstr` parameter takes a `str` and passes
+  NUL-terminated text, and a `cstr` result is copied into a `str`.
+  `cstr | None` is a pointer that may be null, in both directions.
+- FFI passes out-parameters. A `mut` scalar parameter such as
+  `exponent: mut int32` passes a pointer, and the variable holds what the
+  C function stored when the call returns.
+- `Handle | None` is a parameter type as well as a result type, and
+  `out: mut Handle | None` passes a pointer to a pointer, as
+  `sqlite3_open` takes. A `mut` scalar in an extern declaration was
+  `AU3004` before, and a `Handle | None` parameter was `AU2010`.
+- FFI passes lists of numbers as C arrays. A `ptr[float64]` parameter takes
+  a `list[float64]` and passes a pointer to its first element, with no
+  length and no copy. `mut ptr[T]` lets the C function write the elements.
+  `T` is any fixed-width scalar.
+
 ## VS Code extension 0.14.0 — 2026-11-10
 
 - Bundles language server 0.14.0. The semantic interface version stays 20.
@@ -138,20 +153,6 @@ format stays `v10`.
   call. `aura run` still reports `AU4005`.
 - An extern function can name its C symbol:
   `extern "C" def c_abs(x: int32) -> int32 symbol "abs"`.
-- FFI passes C strings. A `cstr` parameter takes a `str` and passes
-  NUL-terminated text, and a `cstr` result is copied into a `str`.
-  `cstr | None` is a pointer that may be null, in both directions.
-- FFI passes out-parameters. A `mut` scalar parameter such as
-  `exponent: mut int32` passes a pointer, and the variable holds what the
-  C function stored when the call returns.
-- `Handle | None` is a parameter type as well as a result type, and
-  `out: mut Handle | None` passes a pointer to a pointer, as
-  `sqlite3_open` takes. A `mut` scalar in an extern declaration was
-  `AU3004` before, and a `Handle | None` parameter was `AU2010`.
-- FFI passes lists of numbers as C arrays. A `ptr[float64]` parameter takes
-  a `list[float64]` and passes a pointer to its first element, with no
-  length and no copy. `mut ptr[T]` lets the C function write the elements.
-  `T` is any fixed-width scalar.
 - A class or `impl` type parameter can be bounded by a trait with
   associated types, as in `class Pipe[T, S: IntoIterator[T]]` or
   `impl[S: IntoIterator[int64]] Total for Holder[S]`. Methods can name
