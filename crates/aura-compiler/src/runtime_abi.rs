@@ -244,6 +244,7 @@ runtime_functions! {
     ArrayAssignInPlace => ("aura_direct_array_assign_in_place", [I64, I64, I64, I64, I64], Some(I64)),
     ArraySelectWords => ("aura_direct_array_select_words", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ArrayAssignWordsInPlace => ("aura_direct_array_assign_words_in_place", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
+    ArrayUpdateWordsInPlace => ("aura_direct_array_update_words_in_place", [I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     MapEmpty => ("aura_direct_map_empty", [], Some(I64)),
     MapLen => ("aura_direct_map_len", [I64], Some(I64)),
     MapIsEmpty => ("aura_direct_map_is_empty", [I64], Some(I64)),

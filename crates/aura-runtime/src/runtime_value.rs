@@ -24,6 +24,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+use crate::array_elementwise;
 use crate::array_layout::{self, ArrayBuf, Strides};
 use crate::array_simd;
 pub use crate::collection_index::{DictEntries, SetElements, SharedVec};
@@ -1758,7 +1759,7 @@ impl ArrayReduction {
         }
     }
 
-    const fn name(self) -> &'static str {
+    pub(crate) const fn name(self) -> &'static str {
         const NAMES: [&str; 6] = ["sum", "min", "max", "mean", "fast_sum", "fast_mean"];
         NAMES[self as usize]
     }
@@ -1774,6 +1775,20 @@ macro_rules! array_storage_map {
             ArrayStorage::Float64($values) => ArrayStorage::Float64($body),
         }
     };
+}
+
+pub(crate) use array_storage_map;
+
+impl ArrayStorage {
+    /// Whether another Array reads this storage's buffer.
+    pub fn is_shared(&self) -> bool {
+        match self {
+            Self::Int32(values) => values.is_shared(),
+            Self::Int64(values) => values.is_shared(),
+            Self::Float32(values) => values.is_shared(),
+            Self::Float64(values) => values.is_shared(),
+        }
+    }
 }
 
 impl ArrayValue {
@@ -2274,25 +2289,47 @@ impl ArrayValue {
         operation: ArrayBinaryOp,
         mode: IntegerArithmeticMode,
     ) -> Result<Self> {
-        if self.shape != other.shape || self.dtype() != other.dtype() {
-            return Err(Diagnostic::coded(
+        let mismatch = || {
+            Diagnostic::coded(
                 "AU4007",
                 format!(
-                    "array operands require the same shape and dtype, found {:?} {} and {:?} {}",
+                    "array operands require the same dtype and shapes that broadcast, found {:?} {} and {:?} {}",
                     self.shape,
                     self.dtype().runtime_type_name(),
                     other.shape,
                     other.dtype().runtime_type_name()
                 ),
-            ));
+            )
+        };
+        if self.dtype() != other.dtype() {
+            return Err(mismatch());
         }
-        let shape = self.try_shape()?;
-        let (left, right) = (self.elements()?, other.elements()?);
+        if self.shape == other.shape && self.strided.is_none() && other.strided.is_none() {
+            // Two blocks of one shape are one run of the kernel.
+            let shape = self.try_shape()?;
+            let storage = array_simd::widest(
+                #[inline(always)]
+                || Self::binary_storage(&self.base, &other.base, operation, mode),
+            )?;
+            return Self::new(shape, storage);
+        }
+        let shape =
+            array_layout::broadcast_shape(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        let left = array_layout::broadcast_layout(&self.shape, &self.layout(), &shape);
+        let right = array_layout::broadcast_layout(&other.shape, &other.layout(), &shape);
         let storage = array_simd::widest(
             #[inline(always)]
-            || Self::binary_storage(&left, &right, operation, mode),
+            || {
+                array_elementwise::binary_storage(
+                    &shape,
+                    (&self.base, &left),
+                    (&other.base, &right),
+                    operation,
+                    mode,
+                )
+            },
         )?;
-        Self::new(shape, storage)
+        Self::new(shape.into(), storage)
     }
 
     #[inline(always)]
@@ -2327,11 +2364,26 @@ impl ArrayValue {
         mode: IntegerArithmeticMode,
     ) -> Result<Self> {
         let shape = self.try_shape()?;
-        let elements = self.elements()?;
-        let storage = array_simd::widest(
-            #[inline(always)]
-            || Self::scalar_binary_storage(&elements, scalar, scalar_left, operation, mode),
-        )?;
+        let storage = match &self.strided {
+            None => array_simd::widest(
+                #[inline(always)]
+                || Self::scalar_binary_storage(&self.base, scalar, scalar_left, operation, mode),
+            )?,
+            // A strided view is read where it lies, one run at a time.
+            Some(layout) => array_simd::widest(
+                #[inline(always)]
+                || {
+                    array_elementwise::scalar_binary_storage(
+                        &self.shape,
+                        (&self.base, layout),
+                        scalar,
+                        scalar_left,
+                        operation,
+                        mode,
+                    )
+                },
+            )?,
+        };
         Self::new(shape, storage)
     }
 
@@ -2513,6 +2565,23 @@ impl ArrayValue {
                     ),
                 )),
             };
+        }
+        // A reordered sum over one strided run reads the elements where
+        // they lie.
+        if let (
+            Some(layout),
+            ArrayStorage::Float64(values),
+            [count],
+            ArrayReduction::FastSum | ArrayReduction::FastMean,
+        ) = (&self.strided, &self.base, &*self.shape, reduction)
+        {
+            let sum =
+                array_simd::striped_sum_strided(values, layout.offset, layout.strides[0], *count);
+            return Ok(canonical_float(if reduction == ArrayReduction::FastSum {
+                sum
+            } else {
+                sum / *count as f64
+            }));
         }
         match &*self.elements()? {
             ArrayStorage::Int32(values) => reduce_int32_array(values, reduction),
@@ -2827,7 +2896,7 @@ fn array_arithmetic_error(
 
 /// The primitive integer operations an `int32` or `int64` Array kernel
 /// runs on its storage.
-trait ArrayInteger: Copy + Default + std::ops::BitOr<Output = Self> {
+pub(crate) trait ArrayInteger: Copy + Default + std::ops::BitOr<Output = Self> {
     /// The wrapped result, and a mask that is negative when the exact
     /// result overflowed.
     fn overflowing(self, rhs: Self, operation: ArrayBinaryOp) -> (Self, Self);
@@ -2898,15 +2967,15 @@ fn integer_array_division_error() -> Diagnostic {
     )
 }
 
-/// One operand of an integer Array kernel: the other array's storage, or a
+/// One operand of an elementwise Array kernel: an array's storage, or a
 /// scalar repeated for every element.
 #[derive(Clone, Copy)]
-enum IntegerLanes<'a, T> {
+pub(crate) enum ArrayLanes<'a, T> {
     Array(&'a [T]),
     Scalar(T),
 }
 
-impl<'a, T: Copy> IntegerLanes<'a, T> {
+impl<'a, T: Copy> ArrayLanes<'a, T> {
     /// The operand's elements `start..start + len`. A scalar fills `buffer`
     /// once and lends its prefix, so every block zips two slices.
     #[inline(always)]
@@ -2925,48 +2994,135 @@ impl<'a, T: Copy> IntegerLanes<'a, T> {
 #[inline(always)]
 fn integer_array_kernel<T: ArrayInteger + Default>(
     len: usize,
-    left: IntegerLanes<'_, T>,
-    right: IntegerLanes<'_, T>,
+    left: ArrayLanes<'_, T>,
+    right: ArrayLanes<'_, T>,
     operation: ArrayBinaryOp,
     mode: IntegerArithmeticMode,
 ) -> Result<Vec<T>> {
+    let mut output = try_array_buffer(len, "array arithmetic result")?;
+    integer_array_kernel_into(&mut output, 0, len, left, right, operation, mode)?;
+    Ok(output)
+}
+
+/// `integer_array_kernel` appending to `output`, which has room for `len`
+/// more elements. `base` is the flat index of the first pair, for the
+/// index an overflow reports.
+#[inline(always)]
+pub(crate) fn integer_array_kernel_into<T: ArrayInteger + Default>(
+    output: &mut Vec<T>,
+    base: usize,
+    len: usize,
+    left: ArrayLanes<'_, T>,
+    right: ArrayLanes<'_, T>,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<()> {
     use ArrayBinaryOp::{Add, Mul, Sub};
     use IntegerArithmeticMode::{Checked, Saturating, Wrapping};
-    let mut output = try_array_buffer(len, "array arithmetic result")?;
     if operation == ArrayBinaryOp::Div {
         return if len == 0 {
-            Ok(output)
+            Ok(())
         } else {
             Err(integer_array_division_error())
         };
     }
     let blocks = IntegerBlocks { left, right, len };
     let first_overflow = match (mode, operation) {
-        (Checked, Add) => blocks.checked(&mut output, |l, r| l.overflowing(r, Add)),
-        (Checked, Sub) => blocks.checked(&mut output, |l, r| l.overflowing(r, Sub)),
-        (Checked, _) => blocks.checked(&mut output, |l, r| l.overflowing(r, Mul)),
-        (Wrapping, Add) => blocks.exact(&mut output, |l, r| l.wrapping(r, Add)),
-        (Wrapping, Sub) => blocks.exact(&mut output, |l, r| l.wrapping(r, Sub)),
-        (Wrapping, _) => blocks.exact(&mut output, |l, r| l.wrapping(r, Mul)),
-        (Saturating, Add) => blocks.exact(&mut output, |l, r| l.saturating(r, Add)),
-        (Saturating, Sub) => blocks.exact(&mut output, |l, r| l.saturating(r, Sub)),
-        (Saturating, _) => blocks.exact(&mut output, |l, r| l.saturating(r, Mul)),
+        (Checked, Add) => blocks.checked(output, |l, r| l.overflowing(r, Add)),
+        (Checked, Sub) => blocks.checked(output, |l, r| l.overflowing(r, Sub)),
+        (Checked, _) => blocks.checked(output, |l, r| l.overflowing(r, Mul)),
+        (Wrapping, Add) => blocks.exact(output, |l, r| l.wrapping(r, Add)),
+        (Wrapping, Sub) => blocks.exact(output, |l, r| l.wrapping(r, Sub)),
+        (Wrapping, _) => blocks.exact(output, |l, r| l.wrapping(r, Mul)),
+        (Saturating, Add) => blocks.exact(output, |l, r| l.saturating(r, Add)),
+        (Saturating, Sub) => blocks.exact(output, |l, r| l.saturating(r, Sub)),
+        (Saturating, _) => blocks.exact(output, |l, r| l.saturating(r, Mul)),
     };
     match first_overflow {
         Some(index) => Err(array_arithmetic_error(
             "AU4002",
             operation,
-            index,
+            base + index,
             "overflowed",
         )),
-        None => Ok(output),
+        None => Ok(()),
     }
+}
+
+/// One float kernel over `len` element pairs, appended to `output`, which
+/// has room for them. `base` is the flat index of the first pair, for the
+/// index a zero divisor reports. The operation is fixed in each loop, so
+/// every loop vectorizes.
+#[inline(always)]
+pub(crate) fn float_array_kernel_into<T>(
+    output: &mut Vec<T>,
+    base: usize,
+    len: usize,
+    left: ArrayLanes<'_, T>,
+    right: ArrayLanes<'_, T>,
+    operation: ArrayBinaryOp,
+    mode: IntegerArithmeticMode,
+) -> Result<()>
+where
+    T: Copy
+        + Default
+        + PartialEq
+        + std::ops::Add<Output = T>
+        + std::ops::Sub<Output = T>
+        + std::ops::Mul<Output = T>
+        + std::ops::Div<Output = T>,
+{
+    use ArrayLanes::{Array, Scalar};
+    validate_float_array_mode(mode)?;
+    if operation == ArrayBinaryOp::Div {
+        let zero = T::default();
+        let index = match right {
+            Array(values) => values[..len].iter().position(|value| *value == zero),
+            Scalar(scalar) => (scalar == zero && len > 0).then_some(0),
+        };
+        if let Some(index) = index {
+            return Err(array_arithmetic_error(
+                "AU4004",
+                operation,
+                base + index,
+                "has a zero divisor",
+            ));
+        }
+    }
+    macro_rules! each_pair {
+        ($apply:expr) => {
+            match (left, right) {
+                (Array(left), Array(right)) => output.extend(
+                    left[..len]
+                        .iter()
+                        .zip(&right[..len])
+                        .map(|(&left, &right)| $apply(left, right)),
+                ),
+                (Array(left), Scalar(right)) => {
+                    output.extend(left[..len].iter().map(|&left| $apply(left, right)))
+                }
+                (Scalar(left), Array(right)) => {
+                    output.extend(right[..len].iter().map(|&right| $apply(left, right)))
+                }
+                (Scalar(left), Scalar(right)) => {
+                    output.extend(std::iter::repeat_n($apply(left, right), len))
+                }
+            }
+        };
+    }
+    match operation {
+        ArrayBinaryOp::Add => each_pair!(|left: T, right: T| left + right),
+        ArrayBinaryOp::Sub => each_pair!(|left: T, right: T| left - right),
+        ArrayBinaryOp::Mul => each_pair!(|left: T, right: T| left * right),
+        ArrayBinaryOp::Div => each_pair!(|left: T, right: T| left / right),
+    }
+    Ok(())
 }
 
 /// The two operands of an integer kernel, walked in blocks.
 struct IntegerBlocks<'a, T> {
-    left: IntegerLanes<'a, T>,
-    right: IntegerLanes<'a, T>,
+    left: ArrayLanes<'a, T>,
+    right: ArrayLanes<'a, T>,
     len: usize,
 }
 
@@ -2975,9 +3131,9 @@ impl<T: Copy + Default> IntegerBlocks<'_, T> {
     /// elements there, until `run` returns `false`.
     #[inline(always)]
     fn each_block(&self, mut run: impl FnMut(usize, &[T], &[T]) -> bool) {
-        let fill = |lanes: IntegerLanes<'_, T>| match lanes {
-            IntegerLanes::Scalar(scalar) => [scalar; ARRAY_KERNEL_BLOCK],
-            IntegerLanes::Array(_) => [T::default(); ARRAY_KERNEL_BLOCK],
+        let fill = |lanes: ArrayLanes<'_, T>| match lanes {
+            ArrayLanes::Scalar(scalar) => [scalar; ARRAY_KERNEL_BLOCK],
+            ArrayLanes::Array(_) => [T::default(); ARRAY_KERNEL_BLOCK],
         };
         let (left_buffer, right_buffer) = (fill(self.left), fill(self.right));
         for start in (0..self.len).step_by(ARRAY_KERNEL_BLOCK) {
@@ -3039,8 +3195,8 @@ fn array_integer_binary<T: ArrayInteger + Default>(
 ) -> Result<Vec<T>> {
     integer_array_kernel(
         left.len(),
-        IntegerLanes::Array(left),
-        IntegerLanes::Array(&right[..left.len()]),
+        ArrayLanes::Array(left),
+        ArrayLanes::Array(&right[..left.len()]),
         operation,
         mode,
     )
@@ -3055,9 +3211,9 @@ fn array_integer_scalar_binary<T: ArrayInteger + Default>(
     mode: IntegerArithmeticMode,
 ) -> Result<Vec<T>> {
     let (left, right) = if scalar_left {
-        (IntegerLanes::Scalar(scalar), IntegerLanes::Array(values))
+        (ArrayLanes::Scalar(scalar), ArrayLanes::Array(values))
     } else {
-        (IntegerLanes::Array(values), IntegerLanes::Scalar(scalar))
+        (ArrayLanes::Array(values), ArrayLanes::Scalar(scalar))
     };
     integer_array_kernel(values.len(), left, right, operation, mode)
 }
@@ -3265,7 +3421,7 @@ fn array_float64_scalar_binary(
     Ok(output)
 }
 
-fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value> {
+pub(crate) fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value> {
     use array_simd::widest;
     match reduction {
         ArrayReduction::Sum | ArrayReduction::FastSum => {
@@ -3301,7 +3457,7 @@ fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value
     }
 }
 
-fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value> {
+pub(crate) fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value> {
     use array_simd::widest;
     match reduction {
         ArrayReduction::Sum | ArrayReduction::FastSum => {
@@ -3354,7 +3510,7 @@ fn strict_float_result(result: f64, has_nan: impl FnOnce() -> bool) -> Value {
     })
 }
 
-fn reduce_float32_array(values: &[f32], reduction: ArrayReduction) -> Result<Value> {
+pub(crate) fn reduce_float32_array(values: &[f32], reduction: ArrayReduction) -> Result<Value> {
     Ok(match reduction {
         ArrayReduction::Min => {
             canonical_float(array_simd::float_min(values).map_or(f64::NAN, f64::from))
@@ -3380,7 +3536,7 @@ fn reduce_float32_array(values: &[f32], reduction: ArrayReduction) -> Result<Val
     })
 }
 
-fn reduce_float64_array(values: &[f64], reduction: ArrayReduction) -> Result<Value> {
+pub(crate) fn reduce_float64_array(values: &[f64], reduction: ArrayReduction) -> Result<Value> {
     Ok(match reduction {
         ArrayReduction::Min => canonical_float(array_simd::float_min(values).unwrap_or(f64::NAN)),
         ArrayReduction::Max => canonical_float(array_simd::float_max(values).unwrap_or(f64::NAN)),

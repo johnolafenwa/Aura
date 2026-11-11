@@ -98,19 +98,19 @@ fn shape_error(message: String) -> Diagnostic {
 }
 
 /// The layout of a selection, held without allocating for a short shape.
-struct SelectedLayout {
-    shape: AxisVec<usize>,
-    offset: usize,
-    strides: AxisVec<isize>,
+pub(crate) struct SelectedLayout {
+    pub(crate) shape: AxisVec<usize>,
+    pub(crate) offset: usize,
+    pub(crate) strides: AxisVec<isize>,
 }
 
 impl SelectedLayout {
     /// Whether the selection is one row-major block.
-    fn is_row_major(&self) -> bool {
+    pub(crate) fn is_row_major(&self) -> bool {
         array_layout::is_row_major(&self.shape, &self.strides)
     }
 
-    fn strides(&self) -> Strides {
+    pub(crate) fn strides(&self) -> Strides {
         Strides {
             offset: self.offset,
             strides: self.strides.as_slice().into(),
@@ -122,7 +122,7 @@ impl ArrayValue {
     /// The shape, first position, and strides of the elements `selection`
     /// picks: one selector per leading axis. Axes without a selector are
     /// kept whole.
-    fn select_parts(&self, selection: &[ArrayAxisSelection]) -> Result<SelectedLayout> {
+    pub(crate) fn select_parts(&self, selection: &[ArrayAxisSelection]) -> Result<SelectedLayout> {
         let rank = self.rank();
         if selection.len() > rank {
             return Err(shape_error(format!(

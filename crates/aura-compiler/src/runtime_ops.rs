@@ -845,6 +845,8 @@ pub const ASSIGN_MEMBER: &str = "__assign";
 pub const SELECT_WORDS_MEMBER: &str = "__select_words";
 /// `__assign` for an index of one or two components.
 pub const ASSIGN_WORDS_MEMBER: &str = "__assign_words";
+/// `object[selection] op= value` for one or two components.
+pub const UPDATE_WORDS_MEMBER: &str = "__update_words";
 /// The private optional read a `for` loop over a borrowed collection lowers
 /// to.
 pub const INDEX_OPTION_MEMBER: &str = "__index_option";
@@ -995,8 +997,23 @@ const ASSIGN_WORDS_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("line"),
     CallableParam::required("column"),
 ];
-/// The position of `value` among [`ASSIGN_WORDS_PARAMS`].
+/// The position of `value` among [`ASSIGN_WORDS_PARAMS`] and
+/// [`UPDATE_WORDS_PARAMS`].
 pub const ASSIGN_WORDS_VALUE: usize = 8;
+const UPDATE_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("value"),
+    CallableParam::required("operation"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
 const KEY_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("key"),
     CallableParam::required("line"),
@@ -1798,6 +1815,10 @@ pub enum ArrayOp {
     /// `__assign_words(kind0, ..., step1, value, line, column)`: `Assign`
     /// for one or two components.
     AssignWords,
+    /// `__update_words(kind0, ..., step1, value, operation, line,
+    /// column)`: `object[selection] op= value` for one or two components.
+    /// `operation` is an Array binary operation code.
+    UpdateWords,
 }
 
 impl ArrayOp {
@@ -1834,6 +1855,7 @@ impl ArrayOp {
         ArrayOp::Assign,
         ArrayOp::SelectWords,
         ArrayOp::AssignWords,
+        ArrayOp::UpdateWords,
     ];
 
     const fn builtin_member(self) -> Option<BuiltinMember> {
@@ -1870,7 +1892,8 @@ impl ArrayOp {
             | ArrayOp::Select
             | ArrayOp::Assign
             | ArrayOp::SelectWords
-            | ArrayOp::AssignWords => return None,
+            | ArrayOp::AssignWords
+            | ArrayOp::UpdateWords => return None,
         })
     }
 
@@ -1915,6 +1938,7 @@ impl ArrayOp {
             ArrayOp::Assign => ASSIGN_MEMBER,
             ArrayOp::SelectWords => SELECT_WORDS_MEMBER,
             ArrayOp::AssignWords => ASSIGN_WORDS_MEMBER,
+            ArrayOp::UpdateWords => UPDATE_WORDS_MEMBER,
             _ => return None,
         })
     }
@@ -1928,6 +1952,7 @@ impl ArrayOp {
             ASSIGN_MEMBER => ArrayOp::Assign,
             SELECT_WORDS_MEMBER => ArrayOp::SelectWords,
             ASSIGN_WORDS_MEMBER => ArrayOp::AssignWords,
+            UPDATE_WORDS_MEMBER => ArrayOp::UpdateWords,
             _ => return None,
         })
     }
@@ -1938,6 +1963,7 @@ impl ArrayOp {
             ArrayOp::SetIndex | ArrayOp::Assign => SET_INDEX_PARAMS,
             ArrayOp::SelectWords => SELECT_WORDS_PARAMS,
             ArrayOp::AssignWords => ASSIGN_WORDS_PARAMS,
+            ArrayOp::UpdateWords => UPDATE_WORDS_PARAMS,
             ArrayOp::Slice => SLICE_PARAMS,
             _ => return None,
         })
@@ -1990,6 +2016,7 @@ impl ArrayOp {
             ArrayOp::Assign => helper(RuntimeFn::ArrayAssignInPlace),
             ArrayOp::SelectWords => helper(RuntimeFn::ArraySelectWords),
             ArrayOp::AssignWords => helper(RuntimeFn::ArrayAssignWordsInPlace),
+            ArrayOp::UpdateWords => helper(RuntimeFn::ArrayUpdateWordsInPlace),
         }
     }
 
@@ -2019,9 +2046,11 @@ impl ArrayOp {
             ArrayOp::Get | ArrayOp::Set => {
                 optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
             }
-            ArrayOp::Fill | ArrayOp::SetIndex | ArrayOp::Assign | ArrayOp::AssignWords => {
-                Type::Unit
-            }
+            ArrayOp::Fill
+            | ArrayOp::SetIndex
+            | ArrayOp::Assign
+            | ArrayOp::AssignWords
+            | ArrayOp::UpdateWords => Type::Unit,
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max
@@ -3106,7 +3135,9 @@ impl RuntimeOp {
             RuntimeOp::Set(_) => member(),
             RuntimeOp::Array(ArrayOp::SetIndex) => private(&[1]),
             RuntimeOp::Array(ArrayOp::Assign) => private(&[1]),
-            RuntimeOp::Array(ArrayOp::AssignWords) => private(&[ASSIGN_WORDS_VALUE]),
+            RuntimeOp::Array(ArrayOp::AssignWords | ArrayOp::UpdateWords) => {
+                private(&[ASSIGN_WORDS_VALUE])
+            }
             RuntimeOp::Array(
                 ArrayOp::Index | ArrayOp::Slice | ArrayOp::Select | ArrayOp::SelectWords,
             ) => private(&[]),

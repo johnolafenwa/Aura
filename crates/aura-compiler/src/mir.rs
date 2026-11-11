@@ -23739,6 +23739,57 @@ impl<'a> Lowerer<'a> {
     ) {
         let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
         let mut words = self.lower_array_selection_words(index);
+        let inline = words.len() <= aura_runtime::array_views::ARRAY_SELECTION_INLINE_WORDS;
+        let operation = assign.op.and_then(|op| match op {
+            BinaryOp::Add => Some(0_u128),
+            BinaryOp::Sub => Some(1),
+            BinaryOp::Mul => Some(2),
+            BinaryOp::Div => Some(3),
+            _ => None,
+        });
+        if let (true, Some(operation)) = (inline, operation) {
+            // One or two components update in one call, which works on
+            // the selected elements where they lie.
+            let value_is_array = matches!(
+                self.infer_expr_type(&assign.value),
+                Some(Type::Named(name, _)) if name == "Array"
+            );
+            let value_ty = if value_is_array {
+                &array_ty
+            } else {
+                element_ty
+            };
+            let value = self.lower_expr_for_owned_value(&assign.value, Some(value_ty));
+            let (_, _, mut args) = self.array_selection_call(words);
+            args.extend([
+                value,
+                Operand::Int(operation),
+                Operand::Int(assign.span.line as u128),
+                Operand::Int(assign.span.column as u128),
+            ]);
+            let temp = self.new_typed_temp(Type::Unit);
+            self.emit(Instruction::Assign {
+                target: temp,
+                value: Rvalue::Call {
+                    callee: CallTarget::Member {
+                        object: lowered_object,
+                        field: crate::runtime_ops::UPDATE_WORDS_MEMBER.to_string(),
+                        receiver_place,
+                        dispatch: None,
+                    },
+                    args: args
+                        .into_iter()
+                        .map(|value| MirArg {
+                            name: None,
+                            value,
+                            writeback_place: None,
+                        })
+                        .collect(),
+                    type_args: Default::default(),
+                },
+            });
+            return;
+        }
         if assign.op.is_some() {
             // The words are read twice, so each keeps the value it had
             // before the right-hand side ran.

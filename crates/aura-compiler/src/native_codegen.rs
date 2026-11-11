@@ -2135,6 +2135,8 @@ impl<'a> NativeCodegen<'a> {
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
             shaped_locals,
+            reusable_array_temporaries: reusable_array_temporaries(function),
+            array_binary_reuse: 0,
             shaped_boxes: HashSet::new(),
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
@@ -3621,6 +3623,12 @@ struct FunctionCompiler<'a> {
     /// The locals whose box always carries the tag of their type. See
     /// `shapes::shaped_locals`.
     shaped_locals: HashSet<String>,
+    /// Temporaries a binary operation moves out of their slot (see
+    /// `reusable_array_temporaries`).
+    reusable_array_temporaries: HashSet<String>,
+    /// The temporary flags of `aura_direct_array_binary` for the binary
+    /// operation being compiled: which operands are such temporaries.
+    array_binary_reuse: i64,
     /// The boxes the instruction being compiled read that carry the tag of
     /// their static type: from a shaped local, a call whose callee tags
     /// what it returns, or a variant that keeps its payloads in place.
@@ -6050,9 +6058,19 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(result);
                     }
                 }
+                // The result of nested Array arithmetic is read here and
+                // released next. The runtime may compute into its buffer.
+                let reusable = |operand: &Operand| {
+                    matches!(operand, Operand::Place(place)
+                        if self.reusable_array_temporaries.contains(place))
+                };
+                self.array_binary_reuse =
+                    i64::from(reusable(left)) << 1 | i64::from(reusable(right)) << 2;
                 let left = self.load_operand_with_integer_hint(left, left_integer_hint)?;
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
-                self.compile_binary(*op, left, right, Some(*span), *trap)
+                let result = self.compile_binary(*op, left, right, Some(*span), *trap);
+                self.array_binary_reuse = 0;
+                result
             }
             Rvalue::Call {
                 callee,
@@ -7358,7 +7376,10 @@ impl<'a> FunctionCompiler<'a> {
             };
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let scalar_left = self.builder.iconst(types::I64, scalar_left);
+            // An operand that is a temporary released after the call may
+            // lend its buffer to the result.
+            let flags = scalar_left | self.array_binary_reuse;
+            let scalar_left = self.builder.iconst(types::I64, flags);
             let operation = self
                 .builder
                 .iconst(types::I64, direct_array_binary_opcode(op)?);
@@ -15990,6 +16011,27 @@ impl<'a> FunctionCompiler<'a> {
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
+            ArrayOp::UpdateWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let value = self.load_operand(&args[SELECTION_WORDS].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                // The helper owns the value, as an assignment does.
+                words.push(self.transfer_owned_opaque_value(&value));
+                words.push(self.load_word(args[SELECTION_WORDS + 1], ScalarKind::Int64, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 2], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 3], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ArrayOp::Select => {
                 let selection = self.load_operand(&args[0].value)?;
                 let selection = self.ensure_opaque(selection)?;
@@ -18114,6 +18156,74 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
             .filter_map(MirFormatPart::operand)
             .any(reads_root))
     .then_some(root.as_str())
+}
+
+/// The temporaries that hold the result of Array arithmetic and are read
+/// once, by a later binary operation of the block that computes them:
+/// `%t1` in `%t1 = a + b; %t2 = %t1 * 0.5`. Nothing else observes such a
+/// temporary before it is released, so the operation that reads it may
+/// compute into its buffer.
+fn reusable_array_temporaries(function: &MirFunction) -> HashSet<String> {
+    let arrays = function
+        .local_types
+        .iter()
+        .filter(|local| {
+            local.name.starts_with("%t")
+                && matches!(&local.ty, Type::Named(name, _) if name == "Array")
+        })
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    if arrays.is_empty() {
+        return HashSet::new();
+    }
+    let mut reads = HashMap::<&str, usize>::new();
+    let mut writes = HashMap::<&str, usize>::new();
+    let mut candidates = HashSet::new();
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        let mut computed = HashSet::new();
+        for instruction in &block.instructions {
+            mentions.clear();
+            if matches!(instruction, Instruction::Release { .. }) {
+                // A release ends the temporary. It does not observe it.
+                continue;
+            }
+            crate::mir::instruction_place_mentions(instruction, &mut mentions);
+            if let Instruction::Assign { target, value } = instruction {
+                // Whether the mentions list a target or not, a write is
+                // not a read.
+                if let Some(position) = mentions.iter().position(|mention| *mention == target) {
+                    mentions.remove(position);
+                }
+                *writes.entry(target.as_str()).or_default() += 1;
+                if let Rvalue::Binary { left, right, .. } = value {
+                    for operand in [left, right] {
+                        if let Operand::Place(place) = operand {
+                            if computed.contains(place.as_str()) {
+                                candidates.insert(place.as_str());
+                            }
+                        }
+                    }
+                    if arrays.contains(target.as_str()) {
+                        computed.insert(target.as_str());
+                    }
+                }
+            }
+            for mention in &mentions {
+                let root = mention.split('.').next().unwrap_or(mention);
+                *reads.entry(root).or_default() += 1;
+            }
+        }
+        for mention in crate::mir::terminator_place_mentions(&block.terminator) {
+            let root = mention.split('.').next().unwrap_or(mention);
+            *reads.entry(root).or_default() += 1;
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|place| reads.get(place) == Some(&1) && writes.get(place) == Some(&1))
+        .map(str::to_string)
+        .collect()
 }
 
 fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {

@@ -30,7 +30,7 @@ use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
     StrOp, ASSIGN_MEMBER, ASSIGN_WORDS_MEMBER, INDEX_MEMBER, PERMUTE_MEMBER, SELECT_MEMBER,
-    SELECT_WORDS_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
+    SELECT_WORDS_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER, UPDATE_WORDS_MEMBER,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -7471,6 +7471,40 @@ impl MirRuntime {
                 ArrayAxisSelection::decode_inline(words)
                     .and_then(|(selection, count)| {
                         array_place_mut(env, object_place)?.assign_owned(&selection[..count], value)
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            UPDATE_WORDS_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 4);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let operation =
+                    array_selection_word(&values[ARRAY_SELECTION_INLINE_WORDS + 1].value)?;
+                let line = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 2].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 3].value.clone())?;
+                let value =
+                    std::mem::replace(&mut values[ARRAY_SELECTION_INLINE_WORDS].value, Value::Unit);
+                ArrayBinaryOp::from_code(operation)
+                    .ok_or_else(|| {
+                        Diagnostic::coded("AU4001", "invalid Array binary operation code")
+                    })
+                    .and_then(|operation| {
+                        let (selection, count) = ArrayAxisSelection::decode_inline(words)?;
+                        array_place_mut(env, object_place)?.update(
+                            &selection[..count],
+                            value,
+                            operation,
+                            IntegerArithmeticMode::Checked,
+                        )
                     })
                     .map_err(|mut error| {
                         error.span = Some(Span::new(line, column));

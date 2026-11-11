@@ -1424,8 +1424,8 @@ fn direct_array_kernel_failures_preserve_codes_and_source_spans() {
     let shape = integer_vector(IntegerKind::Int64, &[2]);
     let left_values = integer_vector(IntegerKind::Int32, &[1, 2]);
     let left = super::aura_direct_array_from_vec(0, left_values, shape, 1, 1);
-    let other_shape = integer_vector(IntegerKind::Int64, &[1, 2]);
-    let right_values = integer_vector(IntegerKind::Int32, &[1, 2]);
+    let other_shape = integer_vector(IntegerKind::Int64, &[3]);
+    let right_values = integer_vector(IntegerKind::Int32, &[1, 2, 3]);
     let right = super::aura_direct_array_from_vec(0, right_values, other_shape, 1, 1);
 
     let left_address = left as usize;

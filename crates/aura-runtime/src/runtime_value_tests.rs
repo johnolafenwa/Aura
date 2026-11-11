@@ -2016,14 +2016,14 @@ fn dense_array_kernels_cover_checked_arithmetic_broadcast_and_modes() {
     let shape_error = left
         .binary(
             &ArrayValue::new(
-                vec![1, 2].into_boxed_slice(),
-                ArrayStorage::Int32(vec![1, 2].into_boxed_slice().into()),
+                vec![3].into_boxed_slice(),
+                ArrayStorage::Int32(vec![1, 2, 3].into_boxed_slice().into()),
             )
             .unwrap(),
             ArrayBinaryOp::Sub,
             IntegerArithmeticMode::Checked,
         )
-        .expect_err("equal lengths do not make unequal shapes broadcast-compatible");
+        .expect_err("lengths two and three do not broadcast");
     assert_eq!(shape_error.code, "AU4007");
 }
 

@@ -10039,6 +10039,60 @@ pub extern "C-unwind" fn aura_direct_array_assign_words_in_place(
     })
 }
 
+/// `array.sum(axis)` and the other reductions along one axis.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_reduce_axis(
+    array: *mut OpaqueValue,
+    reduction: i64,
+    axis: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_reduction(reduction)
+            .and_then(|reduction| with_array(array, |array| array.reduce_axis(reduction, axis)));
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array[selection] op= value` for one or two components. The update
+/// owns the value, as an assignment does.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_update_words_in_place(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    value: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        let value = unsafe { consume_owned_value(value) };
+        let result = direct_array_operation(operation).and_then(|operation| {
+            let (selection, count) = crate::array_views::ArrayAxisSelection::decode_inline(words)?;
+            with_array_mut(array, |array| {
+                array.update(
+                    &selection[..count],
+                    value,
+                    operation,
+                    IntegerArithmeticMode::Checked,
+                )
+            })
+        });
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
 fn direct_array_selection(
     selection: *mut OpaqueValue,
 ) -> std::result::Result<Vec<crate::array_views::ArrayAxisSelection>, Diagnostic> {
@@ -10083,20 +10137,62 @@ pub extern "C-unwind" fn aura_direct_array_relayout(
     })
 }
 
+/// Set in the flags of `aura_direct_array_binary` when the left operand is
+/// a scalar.
+pub const ARRAY_BINARY_SCALAR_LEFT: i64 = 1;
+/// Set when the left operand is a temporary the caller releases next.
+pub const ARRAY_BINARY_LEFT_TEMPORARY: i64 = 2;
+/// Set when the right operand is a temporary the caller releases next.
+pub const ARRAY_BINARY_RIGHT_TEMPORARY: i64 = 4;
+
+/// Whether the caller's reference to `value` is the only one.
+unsafe fn is_sole_reference(value: *mut OpaqueValue) -> bool {
+    value
+        .as_ref()
+        .is_some_and(|value| value.ref_count.load(Ordering::Relaxed) == 1)
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_array_binary(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
-    scalar_left: i64,
+    flags: i64,
     operation: i64,
     arithmetic_mode: i64,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let scalar_left = flags;
         let operation = direct_array_result(direct_array_operation(operation), line, column);
         let arithmetic_mode =
             direct_array_result(direct_array_arithmetic_mode(arithmetic_mode), line, column);
+        // Generated code marks an operand that is a temporary it is about
+        // to release. A temporary no other reference reaches lends its
+        // buffer to the result.
+        let reusable = [
+            (ARRAY_BINARY_LEFT_TEMPORARY, left, right, true),
+            (ARRAY_BINARY_RIGHT_TEMPORARY, right, left, false),
+        ];
+        let scalar_left = scalar_left & ARRAY_BINARY_SCALAR_LEFT;
+        for (flag, temporary, other, temporary_left) in reusable {
+            if flags & flag == 0 || left == right || !unsafe { is_sole_reference(temporary) } {
+                continue;
+            }
+            let reused = unsafe {
+                with_value(other, |other| {
+                    value_mut(temporary, |temporary| match temporary {
+                        Value::Array(array) => {
+                            array.binary_reusing(other, temporary_left, operation, arithmetic_mode)
+                        }
+                        _ => None,
+                    })
+                })
+            };
+            if let Some(result) = reused {
+                return boxed_value(Value::Array(direct_array_result(result, line, column)));
+            }
+        }
         let evaluate = |left_value: &Value, right_value: &Value| {
             match (left_value, right_value) {
                 (Value::Array(left), Value::Array(right)) if scalar_left == 0 => {
