@@ -28987,6 +28987,42 @@ fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
 }
 
 #[test]
+fn every_regex_search_entry_reads_borrowed_handles() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"(?<digits>\d+)")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let number = compiled.elements[0].clone();
+    for (name, texts) in [
+        ("regex::__aura_is_match", &["a12b3"][..]),
+        ("regex::__aura_count", &["a12b3"][..]),
+        ("regex::__aura_find", &["a12b3"][..]),
+        ("regex::__aura_matches", &["a12b3"][..]),
+        ("regex::__aura_find_all", &["a12b3"][..]),
+        ("regex::__aura_captures", &["a12b3"][..]),
+        ("regex::__aura_group_index", &["digits"][..]),
+        ("regex::__aura_split", &["a12b3"][..]),
+        ("regex::__aura_replace", &["a12b3", "#"][..]),
+        ("regex::__aura_replace_all", &["a12b3", "#"][..]),
+    ] {
+        let arguments: Vec<*mut OpaqueValue> = std::iter::once(boxed_value(number.clone()))
+            .chain(texts.iter().map(|text| boxed_value(Value::string(*text))))
+            .collect();
+        let result = direct_host_builtin_call(name, &arguments);
+        assert!(!result.is_null(), "`{name}` returned no value");
+        unsafe {
+            release_value(result);
+            for argument in arguments {
+                release_value(argument);
+            }
+        }
+    }
+}
+
+#[test]
 fn direct_regex_reads_its_number_and_texts_through_borrowed_handles() {
     use crate::runtime_value::host_builtins::host_builtin_function;
     let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
