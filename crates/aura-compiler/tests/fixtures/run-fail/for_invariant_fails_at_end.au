@@ -1,0 +1,11 @@
+def last_of(values: list[int64]) -> int64:
+    mut last = 0
+    for value in values:
+        invariant last >= 0
+        last = value
+    return last
+
+
+def main():
+    print(last_of([1, 2]))
+    print(last_of([1, -2]))

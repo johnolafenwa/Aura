@@ -1,0 +1,67 @@
+# An explicit type argument may name the enclosing function's type
+# parameter: `run_one[T]` inside `outer[T]` is `run_one` for whatever type
+# `outer` was called with.
+trait Job:
+    def run(self) -> int64
+
+
+class Add:
+    n: int64
+
+
+class Scale:
+    by: int64
+
+
+impl Job for Add:
+    def run(self) -> int64:
+        return self.n + 1
+
+
+impl Job for Scale:
+    def run(self) -> int64:
+        return self.by * 10
+
+
+def run_one[T: Job](job: T) -> int64:
+    return job.run()
+
+
+def identity[T](value: own T) -> T:
+    return value
+
+
+def apply[T](f: def(T) -> int64, job: T) -> int64:
+    return f(job)
+
+
+def pass_on[T](f: def(own T) -> T, value: own T) -> T:
+    return f(value)
+
+
+def outer[T: Job](job: T) -> int64:
+    return apply(run_one[T], job)
+
+
+def twice[T: Job](job: T) -> int64:
+    f = run_one[T]
+    return f(job) + f(job)
+
+
+def forward[T](value: own T) -> T:
+    return pass_on(identity[T], value)
+
+
+def collect[T](value: own T) -> list[T]:
+    mut items = list[T]()
+    items.append(value)
+    return items
+
+
+def main() -> None:
+    print(outer(Add(n=3)))
+    print(outer(Scale(by=2)))
+    print(twice(Add(n=1)))
+    print(forward(3))
+    print(forward("text"))
+    print(len(collect("a")))

@@ -1,0 +1,93 @@
+# A name a shared `match` binds views a value its scrutinee keeps. A local
+# bound to that name shares the value, as a local bound to a borrowed
+# parameter does.
+class Square:
+    side: int64
+
+
+class Circle:
+    radius: int64
+    tags: list[str]
+
+
+enum Shape:
+    Dot(int64)
+    Named(str)
+    Pair(str, list[int64])
+
+
+def side(shape: Square | Circle) -> int64:
+    match shape:
+        case Square as square:
+            other = square
+            return other.side
+        case Circle as circle:
+            kept = circle
+            again = kept
+            return again.radius + len(again.tags)
+
+
+def borrowed(circle: Circle) -> int64:
+    first = circle
+    second = first
+    tags = second.tags
+    again = tags
+    return second.radius + len(again)
+
+
+def describe(shape: Shape) -> int64:
+    match shape:
+        case Shape.Named(name):
+            label = name
+            return label.len()
+        case Shape.Pair(name, values):
+            kept = values
+            title = name
+            return len(kept) + title.len()
+        case _:
+            return 0
+
+
+def local_scrutinee() -> int64:
+    shape = Shape.Pair("ab", [1, 2, 3])
+    mut total = 0
+    match shape:
+        case Shape.Pair(name, values):
+            kept = values
+            total += len(kept)
+        case _:
+            pass
+    match shape:
+        case Shape.Pair(name, values):
+            total += len(values) + name.len()
+        case _:
+            pass
+    return total
+
+
+def local_union() -> int64:
+    shape: Square | Circle = Circle(radius=2, tags=["a", "b"])
+    mut total = 0
+    match shape:
+        case Circle as circle:
+            other = circle
+            total += other.radius
+        case Square as square:
+            total += square.side
+    match shape:
+        case Circle as circle:
+            total += len(circle.tags)
+        case Square as square:
+            total += square.side
+    return total
+
+
+def main() -> None:
+    print(side(Square(side=3)))
+    print(side(Circle(radius=4, tags=["x"])))
+    print(borrowed(Circle(radius=5, tags=["x", "y"])))
+    print(describe(Shape.Named("abc")))
+    print(describe(Shape.Pair("ab", [1, 2])))
+    print(describe(Shape.Dot(1)))
+    print(local_scrutinee())
+    print(local_union())

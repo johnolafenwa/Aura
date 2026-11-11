@@ -1,0 +1,63 @@
+# An `impl` for a union type implements the trait for the union itself: a
+# call on a value of that type runs the impl's method, whichever member the
+# value holds.
+trait Named:
+    def name(self) -> str
+    def twice(self) -> str:
+        return self.name() + self.name()
+
+
+class Tag:
+    text: str
+
+
+class Plain:
+    id: int64
+
+
+impl Named for int64 | None:
+    def name(self) -> str:
+        match self:
+            case None:
+                return "nothing"
+            case value:
+                return f"int {value}"
+
+
+impl Named for Tag | str:
+    def name(self) -> str:
+        match self:
+            case Tag as tag:
+                return f"tag {tag.text}"
+            case str as text:
+                return f"text {text}"
+
+
+impl Named for Plain:
+    def name(self) -> str:
+        return f"plain {self.id}"
+
+
+def show[T: Named](value: T) -> str:
+    return value.name()
+
+
+def label(value: int64 | None) -> str:
+    return value.name()
+
+
+def main() -> None:
+    value: int64 | None = 3
+    print(value.name())
+    empty: int64 | None = None
+    print(empty.name())
+    print(empty.twice())
+    print(label(7))
+    either: Tag | str = Tag(text="a")
+    print(either.name())
+    other: Tag | str = "b"
+    print(other.twice())
+    values: list[int64 | None] = [1, None]
+    for item in values:
+        print(item.name())
+    print(show(Plain(id=9)))
