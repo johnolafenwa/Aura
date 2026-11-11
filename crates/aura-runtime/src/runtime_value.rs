@@ -1166,6 +1166,17 @@ impl VariantPayloads {
         }
     }
 
+    /// Payload `index` of a variant that keeps its payloads as values or
+    /// in a layout. A `json.Value` in a tape gives `None`: its payload is
+    /// read through the tape, and this path links none of that code.
+    pub fn stored(&self, index: usize) -> Option<Cow<'_, Value>> {
+        match self {
+            Self::Values(payloads) => payloads.get(index).map(Cow::Borrowed),
+            Self::Typed(typed) => typed.get(index),
+            Self::Json(_) => None,
+        }
+    }
+
     /// Payload `index` where it lies: a payload kept as a value or in a
     /// box of its own. A scalar kept in a layout's block has no `Value` to
     /// borrow and gives `None`.
@@ -1901,7 +1912,7 @@ impl ArrayValue {
             ))
         }));
         Ok(Value::Vec(VecValue {
-            element_type: SharedType::from(Type::named("int64")),
+            element_type: SharedType::named("int64"),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -10223,10 +10234,56 @@ impl Value {
                             rendered.push_str(enum_name);
                             rendered.push('.');
                             rendered.push_str(&variant.variant_name);
-                            if !variant.payloads.is_empty() {
+                            if let VariantPayloads::Json(node) = &variant.payloads {
+                                // Rendered from the tape. Making the payload
+                                // a list or dict value first would link the
+                                // list and dict code into every program that
+                                // prints, since `print` renders this way.
                                 rendered.push('(');
                                 actions.push(RenderAction::Static(")"));
-                                for (index, payload) in variant.payloads.iter().enumerate().rev() {
+                                match node.payload_parts() {
+                                    crate::json_tape::JsonPayloadParts::Text(text) => {
+                                        actions.push(RenderAction::Text(text));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Scalar(value) => {
+                                        actions.push(RenderAction::Owned(value));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Elements(elements) => {
+                                        actions.push(RenderAction::Static("]"));
+                                        let elements = elements.collect::<Vec<_>>();
+                                        for (index, element) in
+                                            elements.into_iter().enumerate().rev()
+                                        {
+                                            actions.push(RenderAction::Owned(element));
+                                            if index > 0 {
+                                                actions.push(RenderAction::Static(", "));
+                                            }
+                                        }
+                                        actions.push(RenderAction::Static("["));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Entries(entries) => {
+                                        actions.push(RenderAction::Static("}"));
+                                        let entries = entries.collect::<Vec<_>>();
+                                        for (index, (key, value)) in
+                                            entries.into_iter().enumerate().rev()
+                                        {
+                                            actions.push(RenderAction::Owned(value));
+                                            actions.push(RenderAction::Static(": "));
+                                            actions.push(RenderAction::Text(key));
+                                            if index > 0 {
+                                                actions.push(RenderAction::Static(", "));
+                                            }
+                                        }
+                                        actions.push(RenderAction::Static("{"));
+                                    }
+                                }
+                            } else if !variant.payloads.is_empty() {
+                                rendered.push('(');
+                                actions.push(RenderAction::Static(")"));
+                                for index in (0..variant.payloads.len()).rev() {
+                                    let Some(payload) = variant.payloads.stored(index) else {
+                                        continue;
+                                    };
                                     // A payload read out of a variant's block
                                     // renders as its value form renders it.
                                     let float32 = slots.is_some_and(|slots| {
@@ -19205,7 +19262,7 @@ impl json_codec::JsonTree for RuntimeJson {
             4,
             "Array",
             Value::Vec(VecValue {
-                element_type: SharedType::from(Type::named("json.Value")),
+                element_type: SharedType::named("json.Value"),
                 elements: elements.into(),
                 str_view: Default::default(),
             }),
@@ -20504,7 +20561,7 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("Ready"),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: SharedType::from(Type::named("Unknown")),
+            element_type: SharedType::named("Unknown"),
             elements: values.into(),
             str_view: Default::default(),
         })])
