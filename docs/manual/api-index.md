@@ -250,6 +250,34 @@ replacement text, and limits.
 | `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
 | `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
 
+
+## HTTP Client
+
+[HTTP Module](/manual/http) covers settings, body reading, server-sent
+events, kept connections, redirects, compression, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `http.get` | `get(url: str) -> Result[http.Response, io.Error]` | Sends a GET request. |
+| `http.post` | `post(url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a POST request with a text body. |
+| `http.request` | `request(method: str, url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a text body. |
+| `http.request_bytes` | `request_bytes(method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a byte body. |
+| `http.Client` | `Client(timeout=None, read_timeout=None, max_redirects=10, decompress=true, keep_alive=true, ca_file="")` | Request settings, with the methods `get`, `post`, `request`, and `request_bytes`. |
+| `http.idle_connections` | `idle_connections() -> int64` | The finished connections kept for reuse. |
+| `http.close_idle_connections` | `close_idle_connections() -> None` | Closes every kept connection. |
+| `Response.status` | `status: int64` | The status code. `reason` and `url` are the other public fields. |
+| `Response.ok` | `ok(self) -> bool` | Whether the status is from 200 to 299. |
+| `Response.header` | `header(self, name: str) -> str \| None` | A header value, found without regard to case. |
+| `Response.header_values` | `header_values(self, name: str) -> list[str]` | Every value of a header. |
+| `Response.headers` | `headers(self) -> dict[str, str]` | All headers, names in lower case. |
+| `Response.text` | `text(mut self) -> Result[str, io.Error]` | The rest of the body as text, up to 64 MiB. `text_up_to(max_bytes)` takes another limit. |
+| `Response.bytes` | `bytes(mut self) -> Result[list[uint8], io.Error]` | The rest of the body, up to 64 MiB. `bytes_up_to(max_bytes)` takes another limit. |
+| `Response.read_chunk` | `read_chunk(mut self, max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | The next bytes, or `None` at the end. |
+| `Response.read_line` | `read_line(mut self) -> Result[str \| None, io.Error]` | The next line, or `None` at the end. |
+| `Response.read_lines` | `read_lines(mut self, max_lines: int64) -> Result[list[str], io.Error]` | The next lines. An empty list is the end. |
+| `Response.read_event` | `read_event(mut self) -> Result[http.Event \| None, io.Error]` | The next server-sent event, with `event`, `data`, `id`, and `retry`. |
+| `Response.close` | `close(mut self) -> None` | Releases the connection. |
+
 ## Time
 
 [Time Module](/manual/time) covers instants and offsets, the system time
@@ -500,10 +528,6 @@ propagate.
 | `net.tls_listen` | `tls_listen(address: str, cert_pem_path: str, key_pem_path: str) -> Result[net.TlsListener, io.Error]` |
 | `net.tls_connect` | `tls_connect(address: str, server_name: str, ca_pem_path: str) -> Result[net.TlsStream, io.Error]` |
 | `net.tls_connect_timeout` | `tls_connect_timeout(address: str, server_name: str, ca_pem_path: str, timeout: Duration) -> Result[net.TlsStream, io.Error]` |
-| `net.http_request_text` | `http_request_text(method: str, url: str, body: str, headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_text_timeout` | `http_request_text_timeout(method: str, url: str, body: str, headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes` | `http_request_bytes(method: str, url: str, bytes: list[uint8], headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: str, url: str, bytes: list[uint8], headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
 
 ## Network Resource Methods
 
@@ -556,11 +580,6 @@ and repeated headers.
 | `net.HttpExchange` | `body_bytes` | `body_bytes() -> list[uint8]` |
 | `net.HttpExchange` | `respond_text` | `respond_text(status: int32, text: own str, headers: own dict[str, str]) -> Result[None, io.Error]` |
 | `net.HttpExchange` | `respond_bytes` | `respond_bytes(status: int32, bytes: own list[uint8], headers: own dict[str, str]) -> Result[None, io.Error]` |
-| `net.HttpResponse` | `status` | `status() -> int32` |
-| `net.HttpResponse` | `reason` | `reason() -> str` |
-| `net.HttpResponse` | `headers` | `headers() -> dict[str, str]` |
-| `net.HttpResponse` | `text` | `text() -> Result[str, io.Error]` |
-| `net.HttpResponse` | `bytes` | `bytes() -> list[uint8]` |
 | `net.WebSocketListener` | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` |
 | `net.WebSocketListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.WebSocket` | `send_text` | `send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |

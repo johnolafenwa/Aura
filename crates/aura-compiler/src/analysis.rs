@@ -1897,6 +1897,10 @@ impl<'a> AnalysisBuilder<'a> {
                     });
                 }
                 for function in namespace.functions.values() {
+                    // The host half of a builtin module is not public API.
+                    if function.decl.name.starts_with("__aura_") {
+                        continue;
+                    }
                     completions.push(AnalysisCompletion {
                         name: function.decl.name.clone(),
                         kind: "function".to_string(),
@@ -1958,7 +1962,14 @@ impl<'a> AnalysisBuilder<'a> {
         let base_name = base_type_name(receiver_type);
 
         if let Some(class_info) = self.class_info_for_type_name(base_name) {
+            // A private member of a class from another module cannot be
+            // named here, so it is not offered.
+            let outside =
+                !class_info.is_builtin && class_info.module_name != self.program.module_name;
             for (name, field) in &class_info.fields {
+                if outside && !field.public {
+                    continue;
+                }
                 completions.push(AnalysisCompletion {
                     name: name.clone(),
                     kind: "field".to_string(),
@@ -1971,6 +1982,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if name == crate::sema::INITIALIZER_NAME
                     || name == crate::ast::CLASS_INVARIANT_METHOD
                 {
+                    continue;
+                }
+                if outside && !method.decl.public {
                     continue;
                 }
                 completions.push(member_completion(name, &method.decl));

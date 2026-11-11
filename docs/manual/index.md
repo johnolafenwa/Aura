@@ -97,6 +97,8 @@ scope, terminology, authority, and conformance language.
   linear-time search, groups, replacement, and splitting.
 - [Time Module](/manual/time): the clocks, `DateTime` with fixed offsets,
   Duration arithmetic, RFC 3339, and pattern formatting and parsing.
+- [HTTP Module](/manual/http): the HTTP client, with streamed bodies,
+  server-sent events, redirects, kept connections, and decompression.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
   exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact

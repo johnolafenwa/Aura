@@ -9843,14 +9843,6 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Unit)
     );
     assert_eq!(
-        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "reason"),
-        Some(Type::named("str"))
-    );
-    assert_eq!(
-        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "close"),
-        Some(Type::Unit)
-    );
-    assert_eq!(
         member_result_type(&lowerer, &Type::named("net.WebSocketListener"), "close"),
         Some(Type::Unit)
     );

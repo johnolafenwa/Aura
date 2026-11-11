@@ -7987,19 +7987,6 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
             result(Type::Unit, io_error.clone()),
         );
     }
-    assert_member_type("net.HttpResponse", "status", Type::named("int32"));
-    assert_member_type("net.HttpResponse", "reason", string.clone());
-    assert_member_type(
-        "net.HttpResponse",
-        "headers",
-        Type::Named("dict".to_string(), vec![string.clone(), string.clone()]),
-    );
-    assert_member_type(
-        "net.HttpResponse",
-        "text",
-        result(string.clone(), io_error.clone()),
-    );
-    assert_member_type("net.HttpResponse", "bytes", vec_of(uint8.clone()));
 
     assert_member_type(
         "net.WebSocketListener",

@@ -173,8 +173,8 @@ boundary rather than assuming it is transferable or exporting an inferred
 Transfer obligation.
 
 Owned host-result snapshots are classified by their stored data:
-`process.Completed`, `net.HttpResponse`, and `net.UdpDatagram` are Transfer,
-while their live Child, exchange, and socket sources are not. Queue payload
+`process.Completed` and `net.UdpDatagram` are Transfer,
+while their live Child and socket sources are not. Queue payload
 Transfer is checked by construction and `put`/`try_put`; handle-only operations
 do not recheck the payload.
 

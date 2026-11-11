@@ -37,20 +37,10 @@ public class Response:
     public def header(self, name: str) -> str | None:
         """The value of header `name`, compared without regard to case.
         A header sent more than once has its values joined with ", "."""
-        wanted = name.to_lower()
-        mut found = false
-        mut joined = ""
-        mut index = 0
-        while index < self.fields.len():
-            if self.fields[index] == wanted:
-                if found:
-                    joined += ", "
-                joined += self.fields[index + 1]
-                found = true
-            index += 2
-        if found:
-            return joined
-        return None
+        values = self.header_values(name)
+        if values.is_empty():
+            return None
+        return ", ".join(values)
 
     public def header_values(self, name: str) -> list[str]:
         """Every value of header `name`, in the order sent."""

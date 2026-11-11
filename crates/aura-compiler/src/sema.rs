@@ -12340,6 +12340,7 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "UdpDatagram")
                                 | ("net", "HttpListener")
                                 | ("net", "HttpExchange")
+                                | ("http", "Stream")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")

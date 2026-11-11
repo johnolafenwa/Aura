@@ -4390,9 +4390,10 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     const prelude = [
       "import io",
       "import fs",
+      "import http",
       "import net",
       "",
-      "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: net.HttpResponse, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:"
+      "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: http.Response, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:"
     ];
     const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
     const completionsForLine = async (line) => {
@@ -4445,10 +4446,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(netNames.has("connect_timeout"));
     assert.ok(netNames.has("udp_bind"));
     assert.ok(netNames.has("http_listen"));
-    assert.ok(netNames.has("http_request_text"));
-    assert.ok(netNames.has("http_request_text_timeout"));
-    assert.ok(netNames.has("http_request_bytes"));
-    assert.ok(netNames.has("http_request_bytes_timeout"));
+    assert.ok(!netNames.has("http_request_text"));
     assert.ok(netNames.has("websocket_listen"));
     assert.ok(netNames.has("websocket_connect"));
     assert.ok(netNames.has("websocket_connect_timeout"));
@@ -4459,7 +4457,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(netNames.has("tls_connect"));
     assert.ok(netNames.has("tls_connect_timeout"));
     assert.ok(netNames.has("UdpSocket"));
-    assert.ok(netNames.has("HttpResponse"));
+    assert.ok(!netNames.has("HttpResponse"));
     assert.ok(netNames.has("TlsStream"));
 
     const streamNames = await completionsForLine("    stream.");
@@ -4500,6 +4498,20 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(responseNames.has("headers"));
     assert.ok(responseNames.has("text"));
     assert.ok(responseNames.has("bytes"));
+    assert.ok(responseNames.has("read_chunk"));
+    assert.ok(responseNames.has("read_lines"));
+    assert.ok(responseNames.has("read_event"));
+    assert.ok(!responseNames.has("stream"));
+
+    const httpNames = await completionsForLine("    http.");
+    assert.ok(httpNames.has("get"));
+    assert.ok(httpNames.has("post"));
+    assert.ok(httpNames.has("request"));
+    assert.ok(httpNames.has("request_bytes"));
+    assert.ok(httpNames.has("Client"));
+    assert.ok(httpNames.has("Response"));
+    assert.ok(httpNames.has("Event"));
+    assert.ok(!httpNames.has("__aura_send"));
 
     const socketNames = await completionsForLine("    socket.");
     assert.ok(socketNames.has("send_text"));

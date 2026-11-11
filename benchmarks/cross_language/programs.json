@@ -54,6 +54,11 @@
     "bench": ["3000"],
     "expected": "http_api requests=100 stored=65 statuses=22105 quantities=1373 body_bytes=2830"
   },
+  "http_stream": {
+    "check": ["2000"],
+    "bench": ["400000"],
+    "expected": "http_stream lines=2000 value_sum=101776294 retries=255 events=500 event_bytes=15276 last_id=499 requests=20 body_bytes=250 connections=1"
+  },
   "image_filters": {
     "check": ["20"],
     "bench": ["1000"],

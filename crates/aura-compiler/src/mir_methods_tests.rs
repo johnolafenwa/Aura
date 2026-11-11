@@ -394,7 +394,7 @@ fn opaque_receivers_dispatch_on_every_type_that_declares_the_method() {
         Err("no type declares `.fly` for `Widget`".to_string())
     );
     assert_eq!(
-        resolve_call(&Type::named("net.HttpResponse"), "close", None, false),
+        resolve_call(&Type::named("net.HttpExchange"), "close", None, false),
         Ok(MethodDispatch::Nothing)
     );
 }

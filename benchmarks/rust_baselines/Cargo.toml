@@ -90,6 +90,11 @@ path = "../cross_language/http_api/http_api.rs"
 required-features = ["cross-language"]
 
 [[bin]]
+name = "http_stream"
+path = "../cross_language/http_stream/http_stream.rs"
+required-features = ["cross-language"]
+
+[[bin]]
 name = "image_filters"
 path = "../cross_language/image_filters/image_filters.rs"
 required-features = ["cross-language"]

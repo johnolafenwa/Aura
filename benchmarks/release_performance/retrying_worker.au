@@ -1,3 +1,4 @@
+import http
 import io
 import net
 
@@ -65,16 +66,9 @@ def request_with_retry(address: str, path: str, kind: int32, max_attempts: int32
     mut attempt: int32 = 1
 
     while true:
-        response = try net.http_request_text_timeout(
-            "GET",
-            "http://" + address + path,
-            "",
-            {},
-            5s
-        )
         mut status: int32 = 0
-        with http_response = response:
-            status = http_response.status()
+        with response = try http.Client(timeout=5s).get("http://" + address + path):
+            status = response.status as int32
 
         if status != 503 or attempt == max_attempts:
             return Result.Ok(status)

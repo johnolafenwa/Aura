@@ -5329,12 +5329,6 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             "runtime has no member `net.HttpExchange.unknown`",
         ),
         (
-            named("net.HttpResponse"),
-            "unknown",
-            Vec::new(),
-            "runtime has no member `net.HttpResponse.unknown`",
-        ),
-        (
             named("net.WebSocketListener"),
             "unknown",
             Vec::new(),
@@ -6126,22 +6120,6 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             ],
             result(Type::Unit),
         ),
-        (
-            named("net.HttpResponse"),
-            "reason",
-            Vec::new(),
-            Type::named("str"),
-        ),
-        (
-            named("net.HttpResponse"),
-            "headers",
-            Vec::new(),
-            Type::Named(
-                "dict".to_string(),
-                vec![Type::named("str"), Type::named("str")],
-            ),
-        ),
-        (named("net.HttpResponse"), "bytes", Vec::new(), vec_uint8()),
         (
             named("net.WebSocket"),
             "send_bytes",
@@ -8225,6 +8203,7 @@ fn direct_backend_builtin_call_surface_compiles_across_success_and_error_matrix(
     let success_source = r#"
 import fs
 import io
+import http
 import net
 
 def main() -> int32:
@@ -8257,7 +8236,7 @@ def main() -> int32:
     parsedf = parse_float64("7.0")
     headers: dict[str, str] = {"X-Test": "ok"}
     body: list[uint8] = [1 as uint8, 2 as uint8]
-    http_bytes = net.http_request_bytes_timeout("POST", "http://127.0.0.1/", body, headers, 5ms)
+    http_bytes = http.request_bytes("POST", "http://127.0.0.1/", body, headers)
     values: list[int32] = list[int32]()
     names: set[str] = set[str]()
     counts: dict[str, int32] = dict[str, int32]()

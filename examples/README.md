@@ -272,7 +272,7 @@ compiler, CLI, and language-server regression tests cover them instead.
 | `tcp_echo.au` | Builtin `net.listen(...)`, `net.connect(...)`, `TcpListener.accept()`, `TcpStream.read_line()`, `TcpStream.write_all(...)`, and `with` cleanup on network resources | `echo:ping` |
 | `tcp_bytes.au` | TCP byte reads and writes with timeouts through `connect_timeout(...)`, `read_exact(...)`, `read_bytes(...)`, and `write_bytes(...)` | `4`, `116` |
 | `udp_echo.au` | UDP binding, datagram receive and send, and `net.UdpDatagram` | `udp:ping`, `ping` |
-| `http_roundtrip.au` | HTTP listener and request helpers on the shared evented runtime scheduler, plus `HttpExchange` and `HttpResponse` | `200`, `POST:/hello:body:ok` |
+| `http_roundtrip.au` | An HTTP listener and an `http` client request on the shared evented runtime scheduler, plus `HttpExchange` and `http.Response` | `200`, `POST:/hello:body:ok` |
 | `websocket_roundtrip.au` | WebSocket listener and connect helpers with timeouts on the nonblocking socket runtime | `ws:hi` |
 | `unix_tls_roundtrip.au` | A Unix-socket and TLS roundtrip with an embedded self-signed certificate. Unix only. | `unix:ping`, `9` |
 
