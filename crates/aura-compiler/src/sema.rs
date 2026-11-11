@@ -338,17 +338,15 @@ fn validate_ffi_signature(
 
     for (index, param) in decl.params.iter().enumerate() {
         if matches!(param.ty.kind, crate::ast::TypeRefKind::Function { .. }) {
-            return Err(Diagnostic::coded_at(
-                "AU2005",
-                param.ty.span,
-                format!(
-                    "FFI callbacks are reserved; parameter `{}` cannot use a function type",
-                    param.name
-                ),
-            )
-            .with_help(
-                "write a named Aura wrapper around a fixed extern declaration; C-to-Aura callbacks are not supported in FFI v0",
-            ));
+            let ty = lower_type(
+                &param.ty,
+                type_names,
+                type_arities,
+                canonical_type_names,
+                &BTreeMap::new(),
+            )?;
+            validate_ffi_callback(&param.name, param.mode, &ty, param.ty.span)?;
+            continue;
         }
         if ffi_type_ref_is_raw_pointer(&param.ty) {
             return Err(Diagnostic::coded_at(
@@ -538,6 +536,62 @@ pub(crate) fn validate_ffi_struct_fields(
         .with_help(
             "a C struct holds fixed-width scalars and other `extern \"C\"` classes; keep a pointer to anything else in an opaque handle",
         ));
+    }
+    Ok(())
+}
+
+/// Checks a callback parameter of an extern function: a function type
+/// whose parameters are scalars, by value or through a `mut` pointer, and
+/// whose result is a scalar or nothing.
+fn validate_ffi_callback(
+    param_name: &str,
+    mode: ParamMode,
+    ty: &Type,
+    span: crate::diag::Span,
+) -> Result<()> {
+    let help = "a callback takes fixed-width scalars, `mut` scalars for pointers to one, and returns a scalar or `None`";
+    if mode != ParamMode::Default {
+        return Err(Diagnostic::coded_at(
+            "AU3004",
+            span,
+            format!("callback parameter `{param_name}` cannot be `own` or `mut`"),
+        ));
+    }
+    let Type::Function {
+        params,
+        return_type,
+    } = ty
+    else {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!("callback parameter `{param_name}` must be a plain `def(...) -> T` type"),
+        )
+        .with_help(help));
+    };
+    for (index, param) in params.iter().enumerate() {
+        if !ffi_scalar_type(&param.ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "parameter {} of callback `{param_name}` cannot cross the C boundary as `{}`",
+                    index + 1,
+                    param.ty
+                ),
+            )
+            .with_help(help));
+        }
+    }
+    if **return_type != Type::Unit && !ffi_scalar_type(return_type) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!(
+                "callback `{param_name}` cannot return `{return_type}` across the C boundary"
+            ),
+        )
+        .with_help(help));
     }
     Ok(())
 }
@@ -10881,6 +10935,39 @@ impl<'a> FunctionChecker<'a> {
                     span,
                     format!("{display_name} does not take type arguments"),
                 ));
+            }
+            // C gets the address of code, so a callback argument is a
+            // named function, which has no captured environment.
+            for (index, param) in function.decl.params.iter().enumerate() {
+                if !matches!(function.signature.params[index], Type::Function { .. }) {
+                    continue;
+                }
+                let argument = args
+                    .iter()
+                    .find(|argument| argument.name.as_deref() == Some(param.name.as_str()))
+                    .or_else(|| args.get(index).filter(|argument| argument.name.is_none()));
+                let Some(argument) = argument else {
+                    continue;
+                };
+                let named = match &argument.value.kind {
+                    ExprKind::Name(name) if !locals.contains_key(name) => {
+                        self.resolve_function_info(name)
+                    }
+                    _ => None,
+                };
+                if !named.is_some_and(|callback| callback.decl.type_params.is_empty()) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2005",
+                        argument.span,
+                        format!(
+                            "callback argument `{}` of {display_name} must name a top-level function",
+                            param.name
+                        ),
+                    )
+                    .with_help(
+                        "C receives a plain function pointer, so the callback cannot be a lambda, a closure, a method, a generic function, or a function held in a variable",
+                    ));
+                }
             }
             return self.type_check_callable_args(
                 &display_name,

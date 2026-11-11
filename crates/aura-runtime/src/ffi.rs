@@ -68,6 +68,8 @@ pub enum FfiType {
     Struct(&'static CStruct),
     /// A pointer to a C struct the foreign function may read and write.
     StructPointer(&'static CStruct),
+    /// A pointer to code the foreign function may call: a callback.
+    Callback,
 }
 
 /// A scalar a foreign function reads and writes through a pointer.
@@ -173,6 +175,109 @@ impl FfiScalar {
     }
 }
 
+/// One parameter of a [`CCallback`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct CCallbackParam {
+    pub scalar: FfiScalar,
+    /// The parameter is a pointer to the scalar, which the callback reads
+    /// and may write.
+    pub pointer: bool,
+}
+
+/// The C signature of a callback: a function the foreign code calls.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub struct CCallback {
+    pub params: Vec<CCallbackParam>,
+    /// `None` for a callback that returns nothing.
+    pub result: Option<FfiScalar>,
+}
+
+/// What a callback's code runs: a function over the call's frame. The
+/// frame holds one word for each parameter, as [`FfiScalar::word`] gives
+/// it, and then one for the result. A pointer parameter's word is the
+/// scalar it points to, and the word the function leaves there is stored
+/// back through the pointer. The result word starts as zero.
+pub type CallbackHandler = Box<dyn Fn(&mut [u64])>;
+
+struct CallbackState {
+    signature: CCallback,
+    handler: CallbackHandler,
+}
+
+unsafe extern "C" fn callback_entry(
+    _cif: &libffi::low::ffi_cif,
+    result: &mut u64,
+    args: *const *const c_void,
+    state: &CallbackState,
+) {
+    let params = &state.signature.params;
+    let mut frame = vec![0_u64; params.len() + 1];
+    let mut pointees = Vec::with_capacity(params.len());
+    for (index, param) in params.iter().enumerate() {
+        // SAFETY: libffi passes one pointer for each parameter of the
+        // signature the closure was made for, to storage of that type.
+        let argument = unsafe { *args.add(index) } as *mut u8;
+        let source = match param.pointer {
+            true => unsafe { *(argument as *const *mut u8) },
+            false => argument,
+        };
+        pointees.push(source);
+        if !source.is_null() {
+            // SAFETY: the storage holds a scalar of this size. A pointer
+            // parameter's pointee is the caller's to keep valid.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    source,
+                    frame.as_mut_ptr().add(index).cast::<u8>(),
+                    param.scalar.size(),
+                );
+            }
+        }
+    }
+    (state.handler)(&mut frame);
+    for ((index, param), target) in params.iter().enumerate().zip(pointees) {
+        if param.pointer && !target.is_null() {
+            // SAFETY: as for the read above.
+            unsafe {
+                std::ptr::copy_nonoverlapping(
+                    frame.as_ptr().add(index).cast::<u8>(),
+                    target,
+                    param.scalar.size(),
+                );
+            }
+        }
+    }
+    let word = frame[params.len()];
+    // libffi reads an integer result narrower than a register as a whole
+    // register, extended as its type says, and a float in its own size.
+    match state.signature.result {
+        None => {}
+        Some(FfiScalar::I8) => *result = word as i8 as i64 as u64,
+        Some(FfiScalar::I16) => *result = word as i16 as i64 as u64,
+        Some(FfiScalar::I32) => *result = word as i32 as i64 as u64,
+        Some(_) => *result = word,
+    }
+}
+
+/// The address of new code with the C signature `signature` that runs
+/// `handler`. The code lives until the process ends, so foreign code may
+/// keep the address.
+pub fn callback_code(signature: CCallback, handler: CallbackHandler) -> usize {
+    let scalar = |param: &CCallbackParam| match param.pointer {
+        true => Type::pointer(),
+        false => scalar_type(param.scalar),
+    };
+    let cif = Cif::new(
+        signature.params.iter().map(scalar).collect::<Vec<_>>(),
+        signature.result.map_or_else(Type::void, scalar_type),
+    );
+    let state: &'static CallbackState = Box::leak(Box::new(CallbackState { signature, handler }));
+    let closure = libffi::middle::Closure::new(cif, callback_entry, state);
+    let code = *closure.code_ptr() as usize;
+    std::mem::forget(closure);
+    code
+}
+
 impl fmt::Display for FfiType {
     fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
         formatter.write_str(match self {
@@ -181,6 +286,7 @@ impl fmt::Display for FfiType {
             Self::PointerMut(scalar) => return write!(formatter, "mut ptr[{}]", scalar.ffi_type()),
             Self::Struct(layout) => return write!(formatter, "struct {}", layout.name),
             Self::StructPointer(layout) => return write!(formatter, "mut struct {}", layout.name),
+            Self::Callback => "callback",
             Self::Unit => "None",
             Self::Bool => "bool",
             Self::I8 => "int8",
@@ -269,6 +375,8 @@ pub enum FfiValue {
     Elements(FfiScalar, Vec<u64>),
     /// The bytes of a C struct, `size` of them, laid out as C lays it out.
     Struct(&'static CStruct, Vec<u8>),
+    /// The address of code with a C signature, as [`callback_code`] makes.
+    Callback(usize),
 }
 
 impl FfiValue {
@@ -289,6 +397,7 @@ impl FfiValue {
             Self::String(_) => FfiType::StringView,
             Self::Bytes(_) => FfiType::BytesView,
             Self::OpaqueHandle(_) => FfiType::OpaqueHandle,
+            Self::Callback(_) => FfiType::Callback,
             Self::Elements(scalar, _) => FfiType::Pointer(*scalar),
             Self::Struct(layout, _) => FfiType::Struct(layout),
         }
@@ -627,6 +736,10 @@ fn append_argument(
             types.push(Type::f64());
             values.push(AbiArgument::F64(*value));
         }
+        (FfiType::Callback, FfiValue::Callback(code)) => {
+            types.push(Type::pointer());
+            values.push(AbiArgument::ConstPointer(*code as *const u8));
+        }
         (FfiType::StringView, FfiValue::String(value)) => {
             let pointer = if value.is_empty() {
                 std::ptr::null()
@@ -755,7 +868,8 @@ fn result_type(ffi_type: FfiType) -> Result<Type, FfiError> {
         | FfiType::OpaqueHandleOut
         | FfiType::Pointer(_)
         | FfiType::PointerMut(_)
-        | FfiType::StructPointer(_) => {
+        | FfiType::StructPointer(_)
+        | FfiType::Callback => {
             return Err(FfiError::UnsupportedReturnType(ffi_type));
         }
     })
@@ -1419,6 +1533,146 @@ mod tests {
                 .collect(),
         }
         .interned()
+    }
+
+    unsafe extern "C" fn apply_callback(
+        callback: unsafe extern "C" fn(i32, *mut i16, f32, bool) -> i8,
+        value: i32,
+        slot: *mut i16,
+    ) -> i64 {
+        let first = unsafe { callback(value, slot, 0.5, true) };
+        let second = unsafe { callback(value, std::ptr::null_mut(), 1.5, false) };
+        i64::from(first) * 1000 + i64::from(second)
+    }
+
+    unsafe extern "C" fn fold_callback(
+        callback: unsafe extern "C" fn(f64, u64) -> f64,
+        step: unsafe extern "C" fn(),
+    ) -> f64 {
+        unsafe {
+            step();
+            step();
+            callback(callback(1.0, 2), u64::MAX)
+        }
+    }
+
+    #[test]
+    fn callbacks_run_a_handler_over_the_frame_of_each_call() {
+        let signature = CCallback {
+            params: vec![
+                CCallbackParam {
+                    scalar: FfiScalar::I32,
+                    pointer: false,
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::I16,
+                    pointer: true,
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::F32,
+                    pointer: false,
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::Bool,
+                    pointer: false,
+                },
+            ],
+            result: Some(FfiScalar::I8),
+        };
+        let seen = std::rc::Rc::new(std::cell::RefCell::new(Vec::new()));
+        let log = seen.clone();
+        let code = callback_code(
+            signature,
+            Box::new(move |frame| {
+                log.borrow_mut().push(frame.to_vec());
+                // The pointee comes back doubled, and the result is negative.
+                frame[1] = u64::from((frame[1] as i16).wrapping_mul(2) as u16);
+                frame[4] = u64::from((-(frame[0] as i32) as i8) as u8);
+            }),
+        );
+        let mut slot: i16 = -21;
+        let result = call(
+            apply_callback as *const (),
+            FfiSignature::new(
+                vec![FfiType::Callback, FfiType::I32, FfiType::Out(FfiScalar::I16)],
+                FfiType::I64,
+            ),
+            &mut [
+                FfiValue::Callback(code),
+                FfiValue::I32(7),
+                FfiValue::I16(slot),
+            ],
+        );
+        assert_eq!(result, Ok(FfiValue::I64(-7 * 1000 - 7)));
+        slot = slot.wrapping_mul(2);
+        let seen = seen.borrow();
+        assert_eq!(
+            seen[0],
+            [
+                7,
+                u64::from((-21_i16) as u16),
+                u64::from(0.5_f32.to_bits()),
+                1,
+                0
+            ]
+        );
+        // A null pointer argument reads as zero and is not written.
+        assert_eq!(seen[1], [7, 0, u64::from(1.5_f32.to_bits()), 0, 0]);
+        assert_eq!(slot, -42);
+        assert_eq!(FfiType::Callback.to_string(), "callback");
+        assert_eq!(FfiValue::Callback(code).ffi_type(), FfiType::Callback);
+
+        let floats = CCallback {
+            params: vec![
+                CCallbackParam {
+                    scalar: FfiScalar::F64,
+                    pointer: false,
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::U64,
+                    pointer: false,
+                },
+            ],
+            result: Some(FfiScalar::F64),
+        };
+        let fold = callback_code(
+            floats,
+            Box::new(|frame| {
+                let sum = f64::from_bits(frame[0]) + (frame[1] % 1000) as f64;
+                frame[2] = sum.to_bits();
+            }),
+        );
+        let steps = std::rc::Rc::new(std::cell::Cell::new(0));
+        let counter = steps.clone();
+        let step = callback_code(
+            CCallback {
+                params: Vec::new(),
+                result: None,
+            },
+            Box::new(move |frame| {
+                assert_eq!(frame.len(), 1);
+                counter.set(counter.get() + 1);
+            }),
+        );
+        let result = call(
+            fold_callback as *const (),
+            FfiSignature::new(vec![FfiType::Callback, FfiType::Callback], FfiType::F64),
+            &mut [FfiValue::Callback(fold), FfiValue::Callback(step)],
+        );
+        assert_eq!(result, Ok(FfiValue::F64(3.0 + 615.0)));
+        assert_eq!(steps.get(), 2);
+        assert_eq!(
+            call(
+                fold_callback as *const (),
+                FfiSignature::new(vec![FfiType::Callback, FfiType::Callback], FfiType::F64),
+                &mut [FfiValue::Callback(fold), FfiValue::U64(1)],
+            ),
+            Err(FfiError::ArgumentTypeMismatch {
+                index: 1,
+                expected: FfiType::Callback,
+                actual: FfiType::U64,
+            })
+        );
     }
 
     #[test]

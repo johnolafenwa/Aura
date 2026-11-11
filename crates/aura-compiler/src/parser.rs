@@ -894,12 +894,6 @@ impl Parser {
                     "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
                 ));
             }
-            if matches!(kind, TokenKind::KwDef) {
-                return Err(parse_error(
-                    self.tokens[index].span,
-                    "FFI v0 does not support callback parameters or returns",
-                ));
-            }
             if matches!(kind, TokenKind::Star) {
                 return Err(parse_error(
                     self.tokens[index].span,

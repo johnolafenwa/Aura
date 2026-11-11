@@ -6363,13 +6363,20 @@ impl MirRuntime {
             .iter()
             .zip(&call.params)
             .map(|(argument, param)| match (&param.c_struct, param.pointer) {
+                _ if matches!(param.ty, Type::Function { .. }) => {
+                    ffi_callback_from_runtime(&argument.value, &param.ty)
+                }
                 (Some(layout), _) => ffi_struct_from_runtime(&argument.value, layout),
                 (None, true) => ffi_elements_from_runtime(&argument.value, &param.ty),
                 (None, false) => ffi_value_from_runtime(&argument.value, &param.ty),
             })
             .collect::<Result<Vec<_>>>()?;
 
+        // A callback the foreign function calls re-enters this interpreter.
+        let outer = CALLBACK_RUNTIME.replace(self);
         let result = dispatch(&call.symbol, &signature, &mut arguments);
+        CALLBACK_RUNTIME.set(outer);
+        let callback_failure = CALLBACK_FAILURE.take();
 
         // A `mut` parameter is copy-in/out: fixed-length bytes, one
         // scalar, or one nullable handle. Apply what the engine read back
@@ -6407,6 +6414,9 @@ impl MirRuntime {
             env.write_place(place, written)?;
         }
 
+        if let Some(failure) = callback_failure {
+            return Err(failure);
+        }
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
         if let FfiValue::Struct(layout, bytes) = &result {
             return struct_runtime_value(layout, bytes, &call.symbol);
@@ -6417,6 +6427,53 @@ impl MirRuntime {
                 format!("FFI call to `{}` failed: {}", call.symbol, error.message),
             )
         })
+    }
+
+    /// Calls the function `name` with the arguments C passed in `frame`,
+    /// and leaves its result and what it wrote to its `mut` parameters
+    /// there.
+    fn call_from_c(
+        &mut self,
+        name: &str,
+        signature: &crate::ffi::CCallback,
+        frame: &mut [u64],
+    ) -> Result<()> {
+        let function = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{name}`")))?;
+        let mut args = Vec::with_capacity(signature.params.len());
+        for (param, word) in signature.params.iter().zip(frame.iter()) {
+            let ty = scalar_field_type(param.scalar);
+            // C code can pass any byte as a `bool`. Nonzero is true.
+            let word = match param.scalar {
+                crate::ffi::FfiScalar::Bool => u64::from(*word as u8 != 0),
+                _ => *word,
+            };
+            let crossed = param
+                .scalar
+                .value(word)
+                .map_err(|error| ffi_runtime_diagnostic(name, error))?;
+            args.push(EvaluatedMirArg {
+                name: None,
+                value: runtime_value_from_ffi(crossed, &ty)?,
+                ty: Some(ty),
+                writeback_place: None,
+            });
+        }
+        let outcome = self.call_function(&function, None, args)?;
+        for (index, value) in outcome.updated_params {
+            let scalar = signature.params[index].scalar;
+            let crossed = ffi_value_from_runtime(&value, &scalar_field_type(scalar))?;
+            frame[index] = scalar.word(&crossed).unwrap_or_default();
+        }
+        let value = outcome.value.into_result()?;
+        if let Some(scalar) = signature.result {
+            let crossed = ffi_value_from_runtime(&value, &scalar_field_type(scalar))?;
+            frame[signature.params.len()] = scalar.word(&crossed).unwrap_or_default();
+        }
+        Ok(())
     }
 
     fn evaluate_function_value_call(
@@ -10756,6 +10813,9 @@ enum BlockOutcome {
 }
 
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
+    if matches!(param.ty, Type::Function { .. }) {
+        return Ok(FfiType::Callback);
+    }
     if let Some(layout) = &param.c_struct {
         return Ok(match param.passing {
             MirReceiverKind::BorrowMut => FfiType::StructPointer(layout.interned()),
@@ -10932,6 +10992,119 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         }
         .ok_or_else(mismatch),
         _ => Err(mismatch()),
+    }
+}
+
+thread_local! {
+    /// The interpreter whose foreign call is running on this thread: the
+    /// one a callback from C re-enters. Null outside a foreign call.
+    static CALLBACK_RUNTIME: std::cell::Cell<*mut MirRuntime> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// The failure of a callback that ran during the current foreign
+    /// call. It is raised when the foreign function returns.
+    static CALLBACK_FAILURE: std::cell::RefCell<Option<Diagnostic>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The C signature of a callback parameter of type `ty`, a function type
+/// the checker admitted: scalars by value or through `mut`, and a scalar
+/// or no result.
+pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
+    use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
+    let scalar = |ty: &Type| match ty {
+        Type::Named(name, args) if args.is_empty() => {
+            let name = if name == "int" { "int64" } else { name.as_str() };
+            [
+                FfiScalar::Bool,
+                FfiScalar::I8,
+                FfiScalar::I16,
+                FfiScalar::I32,
+                FfiScalar::I64,
+                FfiScalar::U8,
+                FfiScalar::U16,
+                FfiScalar::U32,
+                FfiScalar::U64,
+                FfiScalar::F32,
+                FfiScalar::F64,
+            ]
+            .into_iter()
+            .find(|scalar| scalar.ffi_type().to_string() == name)
+        }
+        _ => None,
+    };
+    let Type::Function {
+        params,
+        return_type,
+    } = ty
+    else {
+        return None;
+    };
+    let params = params
+        .iter()
+        .map(|param| {
+            Some(CCallbackParam {
+                scalar: scalar(&param.ty)?,
+                pointer: param.passing == crate::ast::ReceiverKind::BorrowMut,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let result = match &**return_type {
+        Type::Unit => None,
+        other => Some(scalar(other)?),
+    };
+    Some(CCallback { params, result })
+}
+
+/// The address of C code that calls the named function `value` holds, for
+/// a callback parameter of type `ty`. One piece of code serves every call
+/// that passes the same function with the same signature.
+fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    type Codes = HashMap<(String, crate::ffi::CCallback), usize>;
+    static CODES: std::sync::Mutex<Option<Codes>> = std::sync::Mutex::new(None);
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI callback of type `{ty}` needs a named function, found `{}`",
+                value.render()
+            ),
+        )
+    };
+    let (Value::Function(function), Some(signature)) = (value, callback_signature(ty)) else {
+        return Err(mismatch());
+    };
+    if function.closure_environment.is_some() {
+        return Err(mismatch());
+    }
+    let name = function.name.clone();
+    let mut codes = CODES.lock().unwrap_or_else(|poison| poison.into_inner());
+    let code = *codes
+        .get_or_insert_with(HashMap::new)
+        .entry((name.clone(), signature.clone()))
+        .or_insert_with(|| {
+            let shape = signature.clone();
+            crate::ffi::callback_code(
+                signature,
+                Box::new(move |frame| run_callback(&name, &shape, frame)),
+            )
+        });
+    Ok(FfiValue::Callback(code))
+}
+
+/// Runs the Aura function `name` for one call from C. The frame holds the
+/// arguments and takes the results, as `callback_code` describes.
+fn run_callback(name: &str, signature: &crate::ffi::CCallback, frame: &mut [u64]) {
+    let runtime = CALLBACK_RUNTIME.get();
+    // After one callback fails, C gets zeros until its function returns.
+    if runtime.is_null() || CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+        return;
+    }
+    // SAFETY: the pointer is the interpreter that is waiting in the
+    // foreign call this callback runs under, on this thread. It does
+    // nothing else until that call returns.
+    let runtime = unsafe { &mut *runtime };
+    if let Err(diagnostic) = runtime.call_from_c(name, signature, frame) {
+        CALLBACK_FAILURE.set(Some(diagnostic));
     }
 }
 
