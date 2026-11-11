@@ -15284,6 +15284,28 @@ impl<'a> Lowerer<'a> {
                     Some(Type::named("int64")),
                     Some(args[0].clone()),
                 ),
+                // `values[a:b, i] = value` writes a scalar or an Array
+                // through the selection.
+                Some(Type::Named(name, args))
+                    if name == "Array"
+                        && args.len() == 1
+                        && crate::parser::index_has_slice(index) =>
+                {
+                    let value_is_array = matches!(
+                        self.infer_expr_type(&assign.value),
+                        Some(Type::Named(name, _)) if name == "Array"
+                    );
+                    (
+                        crate::runtime_ops::SELECT_MEMBER.to_string(),
+                        crate::runtime_ops::ASSIGN_MEMBER.to_string(),
+                        Some(array_selection_type(index)),
+                        Some(if value_is_array {
+                            Type::Named(name.clone(), args.clone())
+                        } else {
+                            args[0].clone()
+                        }),
+                    )
+                }
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => (
                     INTERNAL_VEC_INDEX_FIELD.to_string(),
                     INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
@@ -15303,7 +15325,7 @@ impl<'a> Lowerer<'a> {
                     self.span_absolute_index(object, relative, index.span)
                 }
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
-                    self.lower_array_coordinate_expr(index)
+                    self.lower_array_index_expr(index)
                 }
                 // The checker lets a compound assignment borrow a `str` or
                 // `bytes` key, so the write back stores a clone of it.
@@ -21330,7 +21352,7 @@ impl<'a> Lowerer<'a> {
                         self.span_absolute_index(object, relative, index.span)
                     }
                     Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
-                        self.lower_array_coordinate_expr(index)
+                        self.lower_array_index_expr(index)
                     }
                     _ => self.lower_expr_at_sequence_point(index, None),
                 };
@@ -21341,6 +21363,11 @@ impl<'a> Lowerer<'a> {
                 let field = match object_type {
                     Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => {
                         INTERNAL_MAP_INDEX_FIELD.to_string()
+                    }
+                    Some(Type::Named(name, _))
+                        if name == "Array" && crate::parser::index_has_slice(index) =>
+                    {
+                        crate::runtime_ops::SELECT_MEMBER.to_string()
                     }
                     _ => INTERNAL_VEC_INDEX_FIELD.to_string(),
                 };
@@ -21528,6 +21555,70 @@ impl<'a> Lowerer<'a> {
             }
             _ => {}
         }
+    }
+
+    /// `values[start:end:step]` on an `Array`: a one-component selection.
+    fn lower_array_stepped_slice(
+        &mut self,
+        object: &Expr,
+        bounds: &[Option<&Argument>],
+        colon_span: Span,
+        result: &str,
+    ) {
+        use aura_runtime::array_views::{
+            ARRAY_SELECTION_HAS_END, ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_SLICE,
+        };
+        let lowered_object = self.lower_expr_at_sequence_point(object, None);
+        let receiver_place = match &lowered_object {
+            Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+            _ => self.render_place_expr_option(object),
+        };
+        let mut kind = ARRAY_SELECTION_SLICE;
+        let mut words = vec![Operand::Int(0)];
+        for (bound, flag) in bounds
+            .iter()
+            .zip([ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_HAS_END, 0])
+        {
+            let bound = bound.expect("a stepped slice binds every position");
+            if matches!(bound.value.kind, ExprKind::BuiltinOmitted) {
+                words.push(Operand::Int(0));
+            } else {
+                kind |= flag;
+                words.push(self.lower_index_domain_expr(&bound.value));
+            }
+        }
+        words[0] = Operand::Int(kind as u128);
+        let element_types = vec![Type::named("int64"); words.len()];
+        let selection = self.new_typed_temp(Type::Tuple(element_types.clone()));
+        self.emit(Instruction::Assign {
+            target: selection.clone(),
+            value: Rvalue::TupleLiteral {
+                elements: words,
+                element_types,
+            },
+        });
+        let arg = |value| MirArg {
+            name: None,
+            value,
+            writeback_place: None,
+        };
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: lowered_object,
+                    field: crate::runtime_ops::SELECT_MEMBER.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: vec![
+                    arg(Operand::Place(selection)),
+                    arg(Operand::Int(colon_span.line as u128)),
+                    arg(Operand::Int(colon_span.column as u128)),
+                ],
+                type_args: Default::default(),
+            },
+        });
     }
 
     /// Calls the list method `field` on the list in `place` for its effect.
@@ -21872,6 +21963,10 @@ impl<'a> Lowerer<'a> {
         let object_ty = self
             .infer_expr_type(object)
             .expect("checked stepped slice object should have a type");
+        if matches!(&object_ty, Type::Named(name, _) if name == "Array") {
+            self.lower_array_stepped_slice(object, bounds, colon_span, result);
+            return;
+        }
         // A `view` of a slice has its base's list type and a hidden range.
         let span_element = match &object_ty {
             Type::Named(name, args) if name == "Span" && args.len() == 1 => Some(args[0].clone()),
@@ -23120,6 +23215,65 @@ impl<'a> Lowerer<'a> {
                 value,
                 ty: target,
                 span: expr.span,
+            },
+        });
+        Operand::Place(temp)
+    }
+
+    /// The index of an `Array` read or write: its coordinates, or the
+    /// selection words when a component is a slice.
+    fn lower_array_index_expr(&mut self, index: &Expr) -> Operand {
+        if crate::parser::index_has_slice(index) {
+            self.lower_array_selection_expr(index)
+        } else {
+            self.lower_array_coordinate_expr(index)
+        }
+    }
+
+    /// The selection words of an `Array` index with a slice among its
+    /// components, as a tuple of `int64`: a kind word, start, end, and
+    /// step per component, which the runtime decodes
+    /// (`aura_runtime::array_views`). Components are evaluated left to
+    /// right, and a slice's start, end, and step in that order.
+    fn lower_array_selection_expr(&mut self, index: &Expr) -> Operand {
+        use aura_runtime::array_views::{
+            ARRAY_SELECTION_HAS_END, ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_INDEX,
+            ARRAY_SELECTION_SLICE,
+        };
+        let components = match &index.kind {
+            ExprKind::Tuple(elements) => elements.as_slice(),
+            _ => std::slice::from_ref(index),
+        };
+        let mut words = Vec::with_capacity(components.len() * 4);
+        for component in components {
+            let Some(slice) = crate::parser::array_axis_slice_parts(component) else {
+                words.push(Operand::Int(ARRAY_SELECTION_INDEX as u128));
+                words.push(self.lower_index_domain_expr(component));
+                words.extend([Operand::Int(0), Operand::Int(0)]);
+                continue;
+            };
+            let mut kind = ARRAY_SELECTION_SLICE;
+            if slice.start.is_some() {
+                kind |= ARRAY_SELECTION_HAS_START;
+            }
+            if slice.end.is_some() {
+                kind |= ARRAY_SELECTION_HAS_END;
+            }
+            words.push(Operand::Int(kind as u128));
+            for (part, default) in [(slice.start, 0), (slice.end, 0), (slice.step, 1)] {
+                words.push(match part {
+                    Some(part) => self.lower_index_domain_expr(part),
+                    None => Operand::Int(default),
+                });
+            }
+        }
+        let element_types = vec![Type::named("int64"); words.len()];
+        let temp = self.new_typed_temp(Type::Tuple(element_types.clone()));
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::TupleLiteral {
+                elements: words,
+                element_types,
             },
         });
         Operand::Place(temp)
@@ -26394,9 +26548,13 @@ impl<'a> Lowerer<'a> {
                         .expect("fixed builtin argument should declare a passing mode");
                     let expected = if class_name == "Array" && class_args.len() == 1 {
                         match (builtin_member, index) {
-                            (BuiltinMember::ArrayGet | BuiltinMember::ArraySet, 0) => {
-                                Some(Type::Named("list".to_string(), vec![Type::named("int64")]))
-                            }
+                            (
+                                BuiltinMember::ArrayGet
+                                | BuiltinMember::ArraySet
+                                | BuiltinMember::ArrayReshape
+                                | BuiltinMember::ArrayPermute,
+                                0,
+                            ) => Some(Type::Named("list".to_string(), vec![Type::named("int64")])),
                             (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
                                 Some(class_args[0].clone())
                             }
@@ -28627,6 +28785,15 @@ impl<'a> Lowerer<'a> {
                     Type::Named(name, args) if name == "dict" && args.len() == 2 => {
                         Some(args[1].clone())
                     }
+                    // An index with a slice among its components selects
+                    // an Array, and one of coordinates alone an element.
+                    Type::Named(name, args)
+                        if name == "Array"
+                            && args.len() == 1
+                            && crate::parser::index_has_slice(index) =>
+                    {
+                        Some(Type::Named(name, args))
+                    }
                     Type::Named(name, args) if name == "Array" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -29910,6 +30077,15 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
         ExprKind::Group(inner) => tuple_constant_index(inner),
         _ => None,
     }
+}
+
+/// The type of an `Array` selection's words: four `int64` per component.
+fn array_selection_type(index: &Expr) -> Type {
+    let components = match &index.kind {
+        ExprKind::Tuple(elements) => elements.len(),
+        _ => 1,
+    };
+    Type::Tuple(vec![Type::named("int64"); components * 4])
 }
 
 fn array_coordinate_type(expr: &Expr) -> Type {

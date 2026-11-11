@@ -9940,6 +9940,87 @@ pub extern "C-unwind" fn aura_direct_array_slice(
     })
 }
 
+/// `array[selection]` for an index with a slice among its components. The
+/// result is a view that shares the Array's buffer (ADR-0088).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_select(
+    array: *mut OpaqueValue,
+    selection: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let selection = direct_array_result(direct_array_selection(selection), line, column);
+        let view = with_array(array, |array| array.select(&selection));
+        boxed_value(Value::Array(direct_array_result(view, line, column)))
+    })
+}
+
+/// `array[selection] = value`, where `value` is a scalar or an Array that
+/// broadcasts to the selected shape.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_assign_in_place(
+    array: *mut OpaqueValue,
+    selection: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let selection = direct_array_result(direct_array_selection(selection), line, column);
+        // A copy of the value shares an Array's buffer, and it lets
+        // `values[:] = values` read and write through one box.
+        let value = unsafe { value_ref(value) };
+        let result = with_array_mut(array, |array| array.assign(&selection, &value));
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+fn direct_array_selection(
+    selection: *mut OpaqueValue,
+) -> std::result::Result<Vec<crate::array_views::ArrayAxisSelection>, Diagnostic> {
+    let words = direct_array_coordinates(selection)?;
+    crate::array_views::ArrayAxisSelection::decode(&words)
+}
+
+/// `array.reshape(shape)` for a zero `kind`, and `array.permute(axes)`
+/// for a one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_reshape(
+    array: *mut OpaqueValue,
+    axes: *mut OpaqueValue,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let axes = direct_array_result(direct_array_coordinates(axes), line, column);
+        let result = with_array(array, |array| match kind {
+            0 => array.reshape(&axes),
+            _ => array.permute(&axes),
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array.flatten()` for a zero `kind`, and `array.transpose()` for a one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_relayout(
+    array: *mut OpaqueValue,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = with_array(array, |array| match kind {
+            0 => array.reshape(&[-1]),
+            _ => array.transpose(),
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_array_binary(
     left: *mut OpaqueValue,

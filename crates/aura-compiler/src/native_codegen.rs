@@ -15659,6 +15659,50 @@ impl<'a> FunctionCompiler<'a> {
                 let boxed = self.owned_opaque_result(results, element_ty);
                 self.coerce_value(boxed, &element_direct_ty)
             }
+            ArrayOp::Reshape | ArrayOp::Permute => {
+                let axes = self.load_operand(&args[0].value)?;
+                let axes = self.ensure_opaque(axes)?;
+                words.push(axes.values[0]);
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::Flatten | ArrayOp::Transpose => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::Select => {
+                let selection = self.load_operand(&args[0].value)?;
+                let selection = self.ensure_opaque(selection)?;
+                let line = self.load_word(args[1], int32, true)?;
+                let column = self.load_word(args[2], int32, true)?;
+                let results = self
+                    .runtime_call_results(function, &[array, selection.values[0], line, column]);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::Assign => {
+                let selection = self.load_operand(&args[0].value)?;
+                let selection = self.ensure_opaque(selection)?;
+                // The value is an Array of the receiver's type, or one
+                // element.
+                let value = self.load_operand(&args[1].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                let line = self.load_word(args[2], int32, true)?;
+                let column = self.load_word(args[3], int32, true)?;
+                let results = self.runtime_call_results(
+                    function,
+                    &[array, selection.values[0], value.values[0], line, column],
+                );
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max

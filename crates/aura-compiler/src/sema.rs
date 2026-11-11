@@ -1548,19 +1548,76 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// Checks the components of an `Array` index, in source order: each
+    /// coordinate, and each part of a slice `start:end:step`. Returns
+    /// whether a component is a slice, which makes the index select an
+    /// Array and not one element.
     fn check_array_index_type(
         &self,
         index: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let coordinates = match &index.kind {
             ExprKind::Tuple(elements) => elements.as_slice(),
             _ => std::slice::from_ref(index),
         };
+        let mut selects = false;
         for coordinate in coordinates {
-            self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
+            let Some(slice) = crate::parser::array_axis_slice_parts(coordinate) else {
+                self.check_index_domain_type(
+                    coordinate,
+                    coordinate.span,
+                    "Array indices",
+                    locals,
+                )?;
+                continue;
+            };
+            selects = true;
+            for part in [slice.start, slice.end, slice.step].into_iter().flatten() {
+                self.check_index_domain_type(part, part.span, "slice endpoints and steps", locals)?;
+            }
         }
-        Ok(())
+        Ok(selects)
+    }
+
+    /// Rejects a slice among the components of an index into anything but
+    /// an `Array`. `assigned` names an assignment target, which keeps the
+    /// guidance a slice assignment to a list or `str` has always had.
+    fn reject_slice_index_outside_array(
+        &self,
+        index: &Expr,
+        object_ty: &Type,
+        assigned: bool,
+    ) -> Result<()> {
+        let components = match &index.kind {
+            ExprKind::Tuple(elements) => elements.as_slice(),
+            _ => std::slice::from_ref(index),
+        };
+        let Some(slice) = components
+            .iter()
+            .find_map(crate::parser::array_axis_slice_parts)
+        else {
+            return Ok(());
+        };
+        if array_element_type(object_ty).is_some() {
+            return Ok(());
+        }
+        if assigned {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                slice.colon_span,
+                "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+            )
+            .with_help("an `Array[T]` accepts slice assignment: `values[1:3] = 0.0`"));
+        }
+        Err(Diagnostic::coded_at(
+            "AU2003",
+            slice.colon_span,
+            format!(
+                "a slice among the components of an index is available only for `Array[T]`, found `{object_ty}`"
+            ),
+        )
+        .with_help("slice a list or `str` with one slice, such as `values[1:3]`"))
     }
 
     /// The closed member set of a `Span[T]` view (ADR-0061, B2). The
@@ -5818,10 +5875,18 @@ impl<'a> FunctionChecker<'a> {
 
             let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
             let locals_before_index = locals.clone();
+            self.reject_slice_index_outside_array(index, &object_ty, true)?;
             self.reject_mutable_returned_view_value(index, locals, false)?;
+            // `values[1:3] = ...` assigns an Array of the target's type, or
+            // one element that fills the selection.
+            let mut selection_element = None;
             let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
-                self.check_array_index_type(index, locals)?;
-                target_ty
+                if self.check_array_index_type(index, locals)? {
+                    selection_element = Some(target_ty);
+                    object_ty.clone()
+                } else {
+                    target_ty
+                }
             } else if let Some(target_ty) = vec_element_type(&object_ty).cloned() {
                 self.check_vec_index_type(index, index.span, locals)?;
                 if assign.op.is_some() && !self.is_copy_type(&target_ty) {
@@ -5881,7 +5946,10 @@ impl<'a> FunctionChecker<'a> {
             self.reject_retained_access_overlap(&retained_target, &index_borrowed_places)?;
             // `counts[name] += 1` reads an existing entry, so it only borrows a
             // `str` or `bytes` key; lowering clones it for the write back.
-            if !(assign.op.is_some() && compound_index_borrows_key(&object_ty)) {
+            // The parts of a selection are integers, which a read copies.
+            if selection_element.is_none()
+                && !(assign.op.is_some() && compound_index_borrows_key(&object_ty))
+            {
                 self.consume_direct_read_expr(index, locals)?;
             }
             let index_moved_accesses = self.newly_moved_place_accesses(
@@ -5892,7 +5960,13 @@ impl<'a> FunctionChecker<'a> {
             );
             self.reject_retained_access_overlap(&retained_target, &index_moved_accesses)?;
             let locals_before_value = locals.clone();
-            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(&target_ty))?;
+            // A numeric literal assigned through a selection takes the
+            // Array's dtype, as it does next to an Array operand.
+            let value_hint = match &selection_element {
+                Some(element) if Self::is_numeric_literal_expr(&assign.value) => element,
+                _ => &target_ty,
+            };
+            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(value_hint))?;
             self.reject_mutable_returned_view_value(&assign.value, locals, false)?;
             if assign.op.is_none() {
                 self.reject_owned_view_value(
@@ -5933,7 +6007,17 @@ impl<'a> FunctionChecker<'a> {
                 value_ty
             };
 
-            if final_value_ty != target_ty {
+            if let Some(element) = &selection_element {
+                if final_value_ty != target_ty && final_value_ty != *element {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        assign.span,
+                        format!(
+                            "cannot assign value of type `{final_value_ty}` through a slice of `{target_ty}`; assign `{target_ty}` or `{element}`"
+                        ),
+                    ));
+                }
+            } else if final_value_ty != target_ty {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -9384,6 +9468,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 let locals_before_index = locals.clone();
+                self.reject_slice_index_outside_array(index, &object_ty, false)?;
                 if let Type::Tuple(element_types) = &object_ty {
                     let tuple_index = match &index.kind {
                         ExprKind::Int(value) => usize::try_from(*value).ok(),
@@ -9437,7 +9522,7 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(element_ty);
                 }
                 if let Some(element_ty) = array_element_type(&object_ty).cloned() {
-                    self.check_array_index_type(index, locals)?;
+                    let selects = self.check_array_index_type(index, locals)?;
                     let retained_base = self
                         .retained_place_access(
                             object,
@@ -9454,7 +9539,9 @@ impl<'a> FunctionChecker<'a> {
                         &mut index_borrowed_places,
                     )?;
                     self.reject_retained_access_overlap(&retained_base, &index_borrowed_places)?;
-                    return Ok(element_ty);
+                    // An index with a slice among its components selects
+                    // an Array that shares the source's elements.
+                    return Ok(if selects { object_ty } else { element_ty });
                 }
                 if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
                     self.check_vec_index_type(index, index.span, locals)?;
@@ -11504,19 +11591,31 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             "internal error: a stepped slice should bind its object",
                         )?;
+                        if matches!(values_arg.value.kind, ExprKind::BuiltinOmitted) {
+                            // A slice component outside an index: the
+                            // parser writes one only between brackets.
+                            return Err(Diagnostic::coded_at(
+                                "AU2003",
+                                span,
+                                "a slice among the components of an index is available only for `Array[T]`",
+                            ));
+                        }
                         let object_ty =
                             span_as_list_type(self.type_of_expr(&values_arg.value, locals)?);
                         let element_ty = vec_element_type(&object_ty).cloned();
-                        if element_ty.is_none() && object_ty != Type::named("str") {
+                        if element_ty.is_none()
+                            && object_ty != Type::named("str")
+                            && array_element_type(&object_ty).is_none()
+                        {
                             return Err(Diagnostic::coded_at(
                                 "AU2003",
                                 values_arg.span,
                                 format!(
-                                    "stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `{object_ty}`"
+                                    "stepped slicing is available only for `Array[T]`, `list[T]`, `Span[T]`, and `str`, found `{object_ty}`"
                                 ),
                             )
                             .with_help(
-                                "drop the step, or convert the value to a list or str before slicing",
+                                "drop the step, or convert the value to an Array, list, or str before slicing",
                             ));
                         }
                         self.apply_builtin_function_argument_passing(
@@ -13026,6 +13125,28 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::ArrayFastSum => Ok(dtype.clone()),
                                 BuiltinMember::ArrayMean | BuiltinMember::ArrayFastMean => {
                                     Ok(Type::named("float64"))
+                                }
+                                BuiltinMember::ArrayFlatten | BuiltinMember::ArrayTranspose => {
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayReshape | BuiltinMember::ArrayPermute => {
+                                    let axes = ordered_args[0].expect(
+                                        "Array shape operation binding should retain its argument",
+                                    );
+                                    let expected =
+                                        Type::Named("list".to_string(), vec![Type::named("int64")]);
+                                    let actual =
+                                        self.type_of_expr_hint(&axes.value, locals, Some(&expected))?;
+                                    if actual != expected {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            axes.span,
+                                            format!(
+                                                "`Array.{field}` expects `list[int64]`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    Ok(receiver_ty.clone())
                                 }
                                 BuiltinMember::ArrayDot | BuiltinMember::ArrayMatmul => {
                                     let other = ordered_args[0]

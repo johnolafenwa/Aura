@@ -29,8 +29,10 @@ use crate::mir::{
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
-    StrOp, INDEX_MEMBER, PERMUTE_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
+    StrOp, ASSIGN_MEMBER, INDEX_MEMBER, PERMUTE_MEMBER, SELECT_MEMBER, SLICE_STEP_MEMBER,
+    SORT_BY_KEYS_MEMBER, SORT_MEMBER,
 };
+use aura_runtime::array_views::ArrayAxisSelection;
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
     claim_task_result_observations, clone_json_codec_source, concat_text_checked,
@@ -7337,6 +7339,61 @@ impl MirRuntime {
                         error
                     })?;
                 Ok(Value::Unit)
+            }
+            SELECT_MEMBER => {
+                let values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), 3);
+                let words = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                ArrayAxisSelection::decode(&words)
+                    .and_then(|selection| array_place_ref(env, object_place)?.select(&selection))
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })
+            }
+            ASSIGN_MEMBER => {
+                let values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), 4);
+                let words = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[2].value.clone())?;
+                let column = self.mir_index_from_value(values[3].value.clone())?;
+                ArrayAxisSelection::decode(&words)
+                    .and_then(|selection| {
+                        array_place_mut(env, object_place)?.assign(&selection, &values[1].value)
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            "reshape" | "permute" => {
+                let values = evaluate_named_args(args, env)?;
+                let name = if field == "reshape" { "shape" } else { "axes" };
+                let bound = bind_builtin_args(&[name], values)?;
+                let axes = array_coordinates_from_runtime(&bound[0].value)?;
+                let array = array_place_ref(env, object_place)?;
+                if field == "reshape" {
+                    array.reshape(&axes)
+                } else {
+                    array.permute(&axes)
+                }
+                .map(Value::Array)
+            }
+            "flatten" => {
+                debug_assert!(args.is_empty());
+                array_place_ref(env, object_place)?
+                    .reshape(&[-1])
+                    .map(Value::Array)
+            }
+            "transpose" => {
+                debug_assert!(args.is_empty());
+                array_place_ref(env, object_place)?
+                    .transpose()
+                    .map(Value::Array)
             }
             "fill" => {
                 let values = evaluate_named_args(args, env)?;

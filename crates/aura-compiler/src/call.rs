@@ -408,6 +408,8 @@ const ARRAY_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const ARRAY_OTHER_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "other", ReceiverKind::Borrow)];
+const ARRAY_AXES_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "axes", ReceiverKind::Borrow)];
 const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const ARITHMETIC_RHS_PARAMS: [BuiltinParam; 1] =
@@ -1242,6 +1244,10 @@ pub enum BuiltinMember {
     ArrayFastMean,
     ArrayDot,
     ArrayMatmul,
+    ArrayReshape,
+    ArrayFlatten,
+    ArrayTranspose,
+    ArrayPermute,
     ArrayWrappingAdd,
     ArrayWrappingSub,
     ArrayWrappingMul,
@@ -1574,6 +1580,10 @@ impl BuiltinMember {
             ("Array", "fast_mean") => Some(Self::ArrayFastMean),
             ("Array", "dot") => Some(Self::ArrayDot),
             ("Array", "matmul") => Some(Self::ArrayMatmul),
+            ("Array", "reshape") => Some(Self::ArrayReshape),
+            ("Array", "flatten") => Some(Self::ArrayFlatten),
+            ("Array", "transpose") => Some(Self::ArrayTranspose),
+            ("Array", "permute") => Some(Self::ArrayPermute),
             ("Array", "wrapping_add") => Some(Self::ArrayWrappingAdd),
             ("Array", "wrapping_sub") => Some(Self::ArrayWrappingSub),
             ("Array", "wrapping_mul") => Some(Self::ArrayWrappingMul),
@@ -1821,6 +1831,10 @@ impl BuiltinMember {
             Self::ArrayFastMean => "fast_mean",
             Self::ArrayDot => "dot",
             Self::ArrayMatmul => "matmul",
+            Self::ArrayReshape => "reshape",
+            Self::ArrayFlatten => "flatten",
+            Self::ArrayTranspose => "transpose",
+            Self::ArrayPermute => "permute",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
             Self::VecClone | Self::MapClone => "copy",
@@ -2039,6 +2053,10 @@ impl BuiltinMember {
             Self::ArrayFastMean => "fast_mean() -> float64",
             Self::ArrayDot => "dot(other: Array[T]) -> T",
             Self::ArrayMatmul => "matmul(other: Array[T]) -> Array[T]",
+            Self::ArrayReshape => "reshape(shape: list[int64]) -> Array[T]",
+            Self::ArrayFlatten => "flatten() -> Array[T]",
+            Self::ArrayTranspose => "transpose() -> Array[T]",
+            Self::ArrayPermute => "permute(axes: list[int64]) -> Array[T]",
             Self::ArrayWrappingAdd => "wrapping_add(rhs: Array[T] | T) -> Array[T]",
             Self::ArrayWrappingSub => "wrapping_sub(rhs: Array[T] | T) -> Array[T]",
             Self::ArrayWrappingMul => "wrapping_mul(rhs: Array[T] | T) -> Array[T]",
@@ -2374,6 +2392,16 @@ impl BuiltinMember {
             Self::ArrayMatmul => {
                 "Returns the matrix product of two Arrays whose inner dimensions agree."
             }
+            Self::ArrayReshape => {
+                "Returns the elements under a new shape with the same element count. One dimension may be `-1`, which takes the length the others leave."
+            }
+            Self::ArrayFlatten => "Returns the elements as a rank-1 Array, in row-major order.",
+            Self::ArrayTranspose => {
+                "Returns the Array with its axes in reverse order, so a matrix's rows become its columns."
+            }
+            Self::ArrayPermute => {
+                "Returns the Array with its axes reordered: axis `i` of the result is axis `axes[i]` of the receiver."
+            }
             Self::ArrayWrappingAdd
             | Self::ArrayWrappingSub
             | Self::ArrayWrappingMul => {
@@ -2636,6 +2664,8 @@ impl BuiltinMember {
             | Self::ArrayMean
             | Self::ArrayFastSum
             | Self::ArrayFastMean
+            | Self::ArrayFlatten
+            | Self::ArrayTranspose
             | Self::VecLen
             | Self::VecIsEmpty
             | Self::VecClone
@@ -2754,6 +2784,12 @@ impl BuiltinMember {
             }
             Self::ArrayDot | Self::ArrayMatmul => {
                 BuiltinCallShape::fixed(&ARRAY_OTHER_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayReshape => {
+                BuiltinCallShape::fixed(&ARRAY_SHAPE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayPermute => {
+                BuiltinCallShape::fixed(&ARRAY_AXES_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::ArrayMap => {
                 BuiltinCallShape::fixed(&ARRAY_CALLBACK_PARAMS, CallConvention::PositionalOrNamed)

@@ -835,6 +835,11 @@ pub const SET_INDEX_MEMBER: &str = "__set_index";
 pub const SLICE_MEMBER: &str = "__slice";
 /// The private member a stepped slice `items[a:b:k]` lowers to.
 pub const SLICE_STEP_MEMBER: &str = "__slice_step";
+/// The private member an `Array` index with a slice among its components
+/// lowers to, such as `values[i, a:b]`.
+pub const SELECT_MEMBER: &str = "__select";
+/// The private member an assignment through such an index lowers to.
+pub const ASSIGN_MEMBER: &str = "__assign";
 /// The private optional read a `for` loop over a borrowed collection lowers
 /// to.
 pub const INDEX_OPTION_MEMBER: &str = "__index_option";
@@ -1732,6 +1737,10 @@ pub enum ArrayOp {
     FastMean,
     Dot,
     Matmul,
+    Reshape,
+    Flatten,
+    Transpose,
+    Permute,
     WrappingAdd,
     WrappingSub,
     WrappingMul,
@@ -1744,6 +1753,13 @@ pub enum ArrayOp {
     SetIndex,
     /// `__slice(start, has_start, end, has_end, line, column)`.
     Slice,
+    /// `__select(selection, line, column)`: an index with a slice among
+    /// its components. `selection` is a tuple of `int64` words, four per
+    /// component (see `aura_runtime::array_views`).
+    Select,
+    /// `__assign(selection, value, line, column)`: an assignment through
+    /// such an index.
+    Assign,
 }
 
 impl ArrayOp {
@@ -1763,6 +1779,10 @@ impl ArrayOp {
         ArrayOp::FastMean,
         ArrayOp::Dot,
         ArrayOp::Matmul,
+        ArrayOp::Reshape,
+        ArrayOp::Flatten,
+        ArrayOp::Transpose,
+        ArrayOp::Permute,
         ArrayOp::WrappingAdd,
         ArrayOp::WrappingSub,
         ArrayOp::WrappingMul,
@@ -1772,6 +1792,8 @@ impl ArrayOp {
         ArrayOp::Index,
         ArrayOp::SetIndex,
         ArrayOp::Slice,
+        ArrayOp::Select,
+        ArrayOp::Assign,
     ];
 
     const fn builtin_member(self) -> Option<BuiltinMember> {
@@ -1792,13 +1814,21 @@ impl ArrayOp {
             ArrayOp::FastMean => M::ArrayFastMean,
             ArrayOp::Dot => M::ArrayDot,
             ArrayOp::Matmul => M::ArrayMatmul,
+            ArrayOp::Reshape => M::ArrayReshape,
+            ArrayOp::Flatten => M::ArrayFlatten,
+            ArrayOp::Transpose => M::ArrayTranspose,
+            ArrayOp::Permute => M::ArrayPermute,
             ArrayOp::WrappingAdd => M::ArrayWrappingAdd,
             ArrayOp::WrappingSub => M::ArrayWrappingSub,
             ArrayOp::WrappingMul => M::ArrayWrappingMul,
             ArrayOp::SaturatingAdd => M::ArraySaturatingAdd,
             ArrayOp::SaturatingSub => M::ArraySaturatingSub,
             ArrayOp::SaturatingMul => M::ArraySaturatingMul,
-            ArrayOp::Index | ArrayOp::SetIndex | ArrayOp::Slice => return None,
+            ArrayOp::Index
+            | ArrayOp::SetIndex
+            | ArrayOp::Slice
+            | ArrayOp::Select
+            | ArrayOp::Assign => return None,
         })
     }
 
@@ -1820,6 +1850,10 @@ impl ArrayOp {
             M::ArrayFastMean => ArrayOp::FastMean,
             M::ArrayDot => ArrayOp::Dot,
             M::ArrayMatmul => ArrayOp::Matmul,
+            M::ArrayReshape => ArrayOp::Reshape,
+            M::ArrayFlatten => ArrayOp::Flatten,
+            M::ArrayTranspose => ArrayOp::Transpose,
+            M::ArrayPermute => ArrayOp::Permute,
             M::ArrayWrappingAdd => ArrayOp::WrappingAdd,
             M::ArrayWrappingSub => ArrayOp::WrappingSub,
             M::ArrayWrappingMul => ArrayOp::WrappingMul,
@@ -1835,6 +1869,8 @@ impl ArrayOp {
             ArrayOp::Index => INDEX_MEMBER,
             ArrayOp::SetIndex => SET_INDEX_MEMBER,
             ArrayOp::Slice => SLICE_MEMBER,
+            ArrayOp::Select => SELECT_MEMBER,
+            ArrayOp::Assign => ASSIGN_MEMBER,
             _ => return None,
         })
     }
@@ -1844,14 +1880,16 @@ impl ArrayOp {
             INDEX_MEMBER => ArrayOp::Index,
             SET_INDEX_MEMBER => ArrayOp::SetIndex,
             SLICE_MEMBER => ArrayOp::Slice,
+            SELECT_MEMBER => ArrayOp::Select,
+            ASSIGN_MEMBER => ArrayOp::Assign,
             _ => return None,
         })
     }
 
     const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
         Some(match self {
-            ArrayOp::Index => INDEX_PARAMS,
-            ArrayOp::SetIndex => SET_INDEX_PARAMS,
+            ArrayOp::Index | ArrayOp::Select => INDEX_PARAMS,
+            ArrayOp::SetIndex | ArrayOp::Assign => SET_INDEX_PARAMS,
             ArrayOp::Slice => SLICE_PARAMS,
             _ => return None,
         })
@@ -1885,6 +1923,12 @@ impl ArrayOp {
             ArrayOp::FastMean => spanned(RuntimeFn::ArrayReduce, &[5]),
             ArrayOp::Dot => spanned(RuntimeFn::ArrayDot, &[]),
             ArrayOp::Matmul => spanned(RuntimeFn::ArrayMatmul, &[]),
+            // The shape operations pass a kind word: 0 reshape, 1 permute
+            // with their list, and 0 flatten, 1 transpose without one.
+            ArrayOp::Reshape => spanned(RuntimeFn::ArrayReshape, &[0]),
+            ArrayOp::Permute => spanned(RuntimeFn::ArrayReshape, &[1]),
+            ArrayOp::Flatten => spanned(RuntimeFn::ArrayRelayout, &[0]),
+            ArrayOp::Transpose => spanned(RuntimeFn::ArrayRelayout, &[1]),
             ArrayOp::WrappingAdd => spanned(RuntimeFn::ArrayBinary, &[0, 0, 1]),
             ArrayOp::WrappingSub => spanned(RuntimeFn::ArrayBinary, &[0, 1, 1]),
             ArrayOp::WrappingMul => spanned(RuntimeFn::ArrayBinary, &[0, 2, 1]),
@@ -1894,6 +1938,8 @@ impl ArrayOp {
             ArrayOp::Index => helper(RuntimeFn::ArrayIndex),
             ArrayOp::SetIndex => helper(RuntimeFn::ArraySetIndexInPlace),
             ArrayOp::Slice => helper(RuntimeFn::ArraySlice),
+            ArrayOp::Select => helper(RuntimeFn::ArraySelect),
+            ArrayOp::Assign => helper(RuntimeFn::ArrayAssignInPlace),
         }
     }
 
@@ -1907,6 +1953,11 @@ impl ArrayOp {
             ArrayOp::Len => Type::named("int64"),
             ArrayOp::Clone
             | ArrayOp::Matmul
+            | ArrayOp::Reshape
+            | ArrayOp::Flatten
+            | ArrayOp::Transpose
+            | ArrayOp::Permute
+            | ArrayOp::Select
             | ArrayOp::WrappingAdd
             | ArrayOp::WrappingSub
             | ArrayOp::WrappingMul
@@ -1917,7 +1968,7 @@ impl ArrayOp {
             ArrayOp::Get | ArrayOp::Set => {
                 optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
             }
-            ArrayOp::Fill | ArrayOp::SetIndex => Type::Unit,
+            ArrayOp::Fill | ArrayOp::SetIndex | ArrayOp::Assign => Type::Unit,
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max

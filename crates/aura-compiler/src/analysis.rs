@@ -4190,6 +4190,10 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::ArrayLen => Some(Type::named("int64")),
                 BuiltinMember::ArrayClone
                 | BuiltinMember::ArrayMatmul
+                | BuiltinMember::ArrayReshape
+                | BuiltinMember::ArrayFlatten
+                | BuiltinMember::ArrayTranspose
+                | BuiltinMember::ArrayPermute
                 | BuiltinMember::ArrayWrappingAdd
                 | BuiltinMember::ArrayWrappingSub
                 | BuiltinMember::ArrayWrappingMul
@@ -7985,6 +7989,10 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ArrayFastMean,
         BuiltinMember::ArrayDot,
         BuiltinMember::ArrayMatmul,
+        BuiltinMember::ArrayReshape,
+        BuiltinMember::ArrayFlatten,
+        BuiltinMember::ArrayTranspose,
+        BuiltinMember::ArrayPermute,
         BuiltinMember::ArrayWrappingAdd,
         BuiltinMember::ArrayWrappingSub,
         BuiltinMember::ArrayWrappingMul,

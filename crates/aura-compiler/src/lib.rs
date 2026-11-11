@@ -125,7 +125,9 @@ pub mod native_runtime_coverage {
     pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
-        aura_direct_array_clone, aura_direct_array_dot, aura_direct_array_fill_in_place,
+        aura_direct_array_assign_in_place, aura_direct_array_clone, aura_direct_array_dot,
+        aura_direct_array_fill_in_place, aura_direct_array_relayout, aura_direct_array_reshape,
+        aura_direct_array_select,
         aura_direct_array_from_vec, aura_direct_array_full, aura_direct_array_get,
         aura_direct_array_index, aura_direct_array_len, aura_direct_array_map,
         aura_direct_array_matmul, aura_direct_array_reduce, aura_direct_array_set_in_place,
