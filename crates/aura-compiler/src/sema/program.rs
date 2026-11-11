@@ -413,7 +413,7 @@ pub struct ExternFunctionInfo {
     pub c_struct_params: Vec<Option<crate::c_layout::CStruct>>,
     /// The C layout of an `extern "C" class` result.
     pub c_struct_result: Option<crate::c_layout::CStruct>,
-    /// For each opaque handle type the call can produce that declares a
+    /// For each opaque handle type the signature names that declares a
     /// `drop` function, the C symbol of that function.
     pub handle_drops: BTreeMap<String, String>,
 }

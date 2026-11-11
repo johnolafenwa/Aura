@@ -33297,3 +33297,71 @@ class Counter:
         );
     }
 }
+
+#[test]
+fn ffi_opaque_classes_name_an_extern_drop_function() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Database drop close_db
+extern "C" opaque class Cursor
+extern "C" def open_db(path: cstr, out: mut Database | None) -> int32
+extern "C" def find_db(path: cstr) -> Database | None
+extern "C" def new_db() -> Database
+extern "C" def close_db(db: own Database) -> int32 symbol "sqlite3_close"
+extern "C" def cursor(db: Database) -> Cursor
+extern "C" def rows(cursor: Cursor) -> int32
+"#,
+    )
+    .expect("a drop clause that names a closing function should check");
+    assert_eq!(
+        program.opaque_handles["Database"].drop_symbol.as_deref(),
+        Some("sqlite3_close")
+    );
+    assert_eq!(program.opaque_handles["Cursor"].drop_symbol, None);
+    let drops = |name: &str| {
+        program.extern_functions[name]
+            .handle_drops
+            .iter()
+            .map(|(class, symbol)| format!("{class}={symbol}"))
+            .collect::<Vec<_>>()
+    };
+    for producer in ["open_db", "find_db", "new_db"] {
+        assert_eq!(drops(producer), ["Database=sqlite3_close"], "{producer}");
+    }
+    assert!(drops("rows").is_empty());
+
+    for (source, message) in [
+        (
+            "extern \"C\" opaque class Database drop close_db\n",
+            "`drop` of opaque class `Database` names `close_db`, which is not an `extern \"C\"` function of this module",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\ndef close_db(db: own Database) -> None:\n    pass\n",
+            "which is not an `extern \"C\"` function of this module",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: Database) -> None\n",
+            "`drop` function `close_db` of opaque class `Database` must take one `own Database` parameter and return a scalar or nothing",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database, flags: int32) -> None\n",
+            "must take one `own Database` parameter",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" opaque class Other\nextern \"C\" def close_db(db: own Other) -> None\n",
+            "must take one `own Database` parameter",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database) -> cstr\n",
+            "return a scalar or nothing",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database) -> Database | None\n",
+            "return a scalar or nothing",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source).expect_err(message);
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+}

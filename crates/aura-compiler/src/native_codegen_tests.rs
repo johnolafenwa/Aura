@@ -17021,3 +17021,49 @@ def main() -> int32:
         .iter()
         .any(|name| name.contains("ffi_callback")));
 }
+
+#[test]
+fn direct_ffi_codegen_names_the_drop_function_of_a_handle() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" opaque class Plain
+extern "C" def st_open(id: int32) -> Store
+extern "C" def st_find(id: int32) -> Store | None
+extern "C" def st_make(id: int32, out: mut Store | None) -> int32
+extern "C" def st_close(store: own Store) -> int32
+extern "C" def st_plain() -> Plain
+
+def main() -> int32:
+    store = st_open(1)
+    mut slot: Store | None = st_find(2)
+    status = st_make(3, slot)
+    plain = st_plain()
+    return status + st_close(store)
+"#,
+    );
+    let object = emit_host_object(&module).expect("handles with a drop function should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "st_close",
+        "aura_direct_ffi_handle",
+        "aura_direct_ffi_stored_handle",
+        "aura_direct_ffi_give_up_handle",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // A handle type with no drop clause references no release function.
+    let plain = lower_ffi_source_to_mir(
+        "extern \"C\" opaque class Plain\nextern \"C\" def st_plain() -> Plain\nextern \"C\" def st_done(plain: own Plain) -> None\n\ndef main() -> int32:\n    plain = st_plain()\n    return 0\n",
+    );
+    let object = emit_host_object(&plain).expect("a plain handle should emit");
+    assert!(!object_referenced_symbols(&object)
+        .iter()
+        .any(|name| name.contains("st_done")));
+}

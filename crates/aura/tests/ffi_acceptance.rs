@@ -616,11 +616,47 @@ int32_t fx_until_failure(int32_t (*f)(int32_t)) {
     for (int32_t i = 3; i >= -1; i--) last = f(i);
     return last;
 }
+typedef struct { int32_t id; } fx_crate;
+static int32_t fx_crates = 0;
+static int32_t fx_closed[64];
+static int32_t fx_closes = 0;
+fx_crate *fx_crate_open(int32_t id) {
+    if (id < 0) return NULL;
+    fx_crate *made = malloc(sizeof(fx_crate));
+    made->id = id;
+    fx_crates++;
+    return made;
+}
+int32_t fx_crate_id(const fx_crate *held) { return held->id; }
+int32_t fx_crate_close(fx_crate *held) {
+    fx_closed[fx_closes++ % 64] = held->id;
+    fx_crates--;
+    free(held);
+    return 0;
+}
+int32_t fx_crates_open(void) { return fx_crates; }
+int32_t fx_crate_closes(void) { return fx_closes; }
+int32_t fx_crate_closed(int32_t index) { return fx_closed[index]; }
+int32_t fx_crate_make(int32_t id, fx_crate **out) { *out = fx_crate_open(id); return *out ? 0 : 1; }
+void fx_crate_keep(fx_crate **slot) { if (*slot) (*slot)->id += 100; }
+void fx_crate_swap(fx_crate **slot, int32_t id) { fx_crate_close(*slot); *slot = fx_crate_open(id); }
 Flag fx_bad_struct_flag(void) { Flag f; *(uint8_t *)&f.ok = 9; return f; }
 void fx_bad_struct_out(Flag *f) { *(uint8_t *)&f->ok = 9; }
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
+extern "C" opaque class Crate drop fx_crate_close
+
+extern "C" def fx_crate_open(id: int32) -> Crate
+extern "C" def fx_crate_find(id: int32) -> Crate | None symbol "fx_crate_open"
+extern "C" def fx_crate_id(held: Crate) -> int32
+extern "C" def fx_crate_close(held: own Crate) -> int32
+extern "C" def fx_crates_open() -> int32
+extern "C" def fx_crate_closes() -> int32
+extern "C" def fx_crate_closed(index: int32) -> int32
+extern "C" def fx_crate_make(id: int32, out: mut Crate | None) -> int32
+extern "C" def fx_crate_keep(slot: mut Crate | None) -> None
+extern "C" def fx_crate_swap(slot: mut Crate | None, id: int32) -> None
 
 extern "C" def fx_widen_i8(v: int8) -> int64
 extern "C" def fx_widen_i16(v: int16) -> int64
@@ -1336,6 +1372,131 @@ def main() -> int32:
         0 32767 0 7 9 127 -1.5 false\n\
         4\n3063.5\n2000035100\n1.375\n18446744073709551615\n11\nfalse\n\
         kept 2\nkept 3\n7\n[12, 9, 9, 3, 0, -4]\n28000\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn handles_with_a_drop_function_are_released_once_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Shelf:
+    label: str
+    held: Crate
+
+def report(step: str) -> None:
+    mut closed: list[int32] = []
+    mut index: int32 = 0
+    while index < fx_crate_closes():
+        closed.append(fx_crate_closed(index))
+        index = index + 1
+    print(f"{step}: open {fx_crates_open()} closed {closed}")
+
+def scoped() -> int32:
+    held = fx_crate_open(1)
+    return fx_crate_id(held)
+
+def closed_by_hand() -> None:
+    held = fx_crate_open(2)
+    fx_crate_close(held)
+    report("by hand, before return")
+
+def taken(held: own Crate) -> int32:
+    return fx_crate_id(held) + 1000
+
+def in_a_class() -> str:
+    shelf = Shelf(label="top", held=fx_crate_open(4))
+    return f"{shelf.label} {fx_crate_id(shelf.held)}"
+
+def in_a_list() -> int64:
+    mut crates: list[Crate] = []
+    crates.append(fx_crate_open(5))
+    crates.append(fx_crate_open(6))
+    crates.append(fx_crate_open(7))
+    fx_crate_close(crates.pop())
+    return len(crates)
+
+def replaced() -> None:
+    mut held = fx_crate_open(8)
+    held = fx_crate_open(9)
+    report("replaced, before return")
+    print(fx_crate_id(held))
+
+def found() -> None:
+    match fx_crate_find(-1):
+        case None:
+            print("none")
+        case Crate as held:
+            print(fx_crate_id(held))
+    match fx_crate_find(10):
+        case None:
+            print("none")
+        case Crate as held:
+            print(fx_crate_id(held))
+
+def stored() -> None:
+    mut slot: Crate | None = None
+    print(fx_crate_make(11, slot))
+    fx_crate_keep(slot)
+    fx_crate_keep(slot)
+    match slot:
+        case None:
+            print("none")
+        case Crate as held:
+            print(fx_crate_id(held))
+    fx_crate_swap(slot, 12)
+    report("swapped, before return")
+    print(fx_crate_make(-1, slot))
+    report("stored over, before return")
+
+def main() -> int32:
+    print(scoped())
+    report("scoped")
+    closed_by_hand()
+    report("by hand")
+    print(taken(fx_crate_open(3)))
+    report("taken")
+    print(in_a_class())
+    report("class")
+    print(in_a_list())
+    report("list")
+    replaced()
+    report("replaced")
+    found()
+    report("found")
+    stored()
+    report("stored")
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "MIR handle drop fixture");
+    assert_success(&direct, "direct handle drop fixture");
+    // The last call stores a null pointer over the crate the place
+    // held, so that crate is no longer the program's to release.
+    let expected = "1\n\
+scoped: open 0 closed [1]\n\
+by hand, before return: open 0 closed [1, 2]\n\
+by hand: open 0 closed [1, 2]\n\
+1003\n\
+taken: open 0 closed [1, 2, 3]\n\
+top 4\n\
+class: open 0 closed [1, 2, 3, 4]\n\
+2\n\
+list: open 0 closed [1, 2, 3, 4, 7, 5, 6]\n\
+replaced, before return: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8]\n\
+9\n\
+replaced: open 0 closed [1, 2, 3, 4, 7, 5, 6, 8, 9]\n\
+none\n\
+10\n\
+found: open 0 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10]\n\
+0\n\
+211\n\
+swapped, before return: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
+1\n\
+stored over, before return: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
+stored: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
+";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
 }

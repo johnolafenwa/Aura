@@ -5,7 +5,7 @@ use aura_core::diag::Diagnostic;
 use aura_core::types::Type;
 
 use super::super::{
-    aura_direct_release_value, aura_direct_string_literal, boxed_value,
+    aura_direct_release_value, aura_direct_retain_value, aura_direct_string_literal, boxed_value,
     with_direct_task_runtime_scope, with_task_runtime_error_capture, with_value, OpaqueValue,
 };
 use super::{
@@ -698,4 +698,103 @@ fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     aura_direct_ffi_callback_check();
     unsafe { aura_direct_ffi_callback_guard(doubles, later.as_mut_ptr()) };
     assert_eq!(later, [21, 42]);
+}
+
+static RELEASED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());
+
+unsafe extern "C" fn note_release(address: *mut c_void) {
+    RELEASED.lock().expect("release log").push(address as usize);
+}
+
+/// How many times the handle drop function ran for `address`.
+fn releases_of(address: *mut c_void) -> usize {
+    let released = RELEASED.lock().expect("release log");
+    released
+        .iter()
+        .filter(|released| **released == address as usize)
+        .count()
+}
+
+#[test]
+fn a_handle_with_a_drop_function_releases_its_object_once() {
+    use super::{aura_direct_ffi_give_up_handle, aura_direct_ffi_stored_handle};
+    let name = "Database";
+    let mut targets = [0_u8; 5];
+    let address =
+        |index: usize| -> *mut c_void { targets.as_ptr().wrapping_add(index) as *mut c_void };
+    let open = |index: usize| unsafe {
+        aura_direct_ffi_handle(
+            address(index),
+            name.as_ptr(),
+            name.len(),
+            Some(note_release),
+        )
+    };
+    unsafe {
+        // Letting go of the last copy of the handle releases the object.
+        let dropped = open(0);
+        aura_direct_retain_value(dropped);
+        aura_direct_release_value(dropped);
+        assert_eq!(releases_of(address(0)), 0, "one owner is left");
+        aura_direct_release_value(dropped);
+        assert_eq!(releases_of(address(0)), 1);
+
+        // A handle a foreign function took is not the program's to release.
+        let taken = open(1);
+        aura_direct_ffi_give_up_handle(taken);
+        assert!(aura_direct_ffi_handle_address(taken).is_null());
+        aura_direct_release_value(taken);
+        assert_eq!(releases_of(address(1)), 0);
+        let text = string_value("x");
+        aura_direct_ffi_give_up_handle(text);
+        aura_direct_release_value(text);
+
+        // A place whose address the function left alone keeps its handle.
+        let held = open(2);
+        let kept = aura_direct_ffi_stored_handle(
+            held,
+            address(2),
+            name.as_ptr(),
+            name.len(),
+            Some(note_release),
+        );
+        aura_direct_release_value(held);
+        assert_eq!(releases_of(address(2)), 0, "the kept handle still owns it");
+        aura_direct_release_value(kept);
+        assert_eq!(releases_of(address(2)), 1);
+
+        // Another address is a new handle, and the old object is given up.
+        let held = open(3);
+        let stored = aura_direct_ffi_stored_handle(
+            held,
+            address(4),
+            name.as_ptr(),
+            name.len(),
+            Some(note_release),
+        );
+        aura_direct_release_value(held);
+        assert_eq!(aura_direct_ffi_handle_address(stored), address(4));
+        aura_direct_release_value(stored);
+        assert_eq!((releases_of(address(3)), releases_of(address(4))), (0, 1));
+
+        // A null address over a handle, and any address over `None`.
+        let held = open(3);
+        let cleared = aura_direct_ffi_stored_handle(
+            held,
+            std::ptr::null_mut(),
+            name.as_ptr(),
+            name.len(),
+            Some(note_release),
+        );
+        assert!(cleared.is_null());
+        aura_direct_release_value(held);
+        assert_eq!(releases_of(address(3)), 0);
+        let none = aura_direct_ffi_none();
+        let first =
+            aura_direct_ffi_stored_handle(none, address(3), name.as_ptr(), name.len(), None);
+        aura_direct_release_value(none);
+        aura_direct_release_value(first);
+        assert_eq!(releases_of(address(3)), 0, "a type with no drop function");
+    }
+    targets[0] = 1;
 }

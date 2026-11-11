@@ -1398,7 +1398,7 @@ pub struct MirExternCall {
     /// returns by value.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub c_struct_result: Option<crate::c_layout::CStruct>,
-    /// For each opaque handle type the call can produce whose declaration
+    /// For each opaque handle type the signature names whose declaration
     /// has a `drop` clause, the C symbol of the function that releases a
     /// handle the program still owns.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]

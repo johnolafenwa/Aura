@@ -24641,3 +24641,94 @@ def main() -> int32:
     );
     assert_eq!(frame, [7]);
 }
+
+#[test]
+fn ffi_handles_with_a_drop_function_release_their_object() {
+    // The C allocator stands in for a library: `free` is the drop function
+    // of a block, and `posix_memalign` stores one through a pointer.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" opaque class Block drop free
+extern "C" def malloc(size: uint64) -> Block
+extern "C" def calloc(count: uint64, size: uint64) -> Block | None
+extern "C" def posix_memalign(out: mut Block | None, alignment: uint64, size: uint64) -> int32
+extern "C" def free(block: own Block) -> None
+
+def dropped() -> None:
+    block = malloc(64)
+
+def main() -> int32:
+    dropped()
+    free(malloc(32))
+    mut slot: Block | None = calloc(4, 8)
+    status = posix_memalign(slot, 64, 256)
+    if slot is None:
+        return -1
+    return status
+"#,
+    );
+    let output = super::run_trusted(&module).expect("blocks should be released");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(0));
+
+    // A drop function no loaded library defines fails the call that would
+    // make the handle.
+    let missing = lower_ffi_runtime_source(
+        r#"
+extern "C" opaque class Block drop aura_no_such_release
+extern "C" def malloc(size: uint64) -> Block
+extern "C" def aura_no_such_release(block: own Block) -> None
+
+def main() -> int32:
+    block = malloc(8)
+    return 0
+"#,
+    );
+    let error = super::run_trusted(&missing).expect_err("the drop function is missing");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("aura_no_such_release"),
+        "{}",
+        error.message
+    );
+
+    // What a `mut Handle | None` place holds after a call.
+    static RELEASED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    unsafe extern "C" fn note(_: *mut std::ffi::c_void) {
+        RELEASED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let released = || RELEASED.load(std::sync::atomic::Ordering::SeqCst);
+    let mut targets = [0_u8; 2];
+    let first: *mut std::ffi::c_void = targets.as_mut_ptr().cast();
+    let second = first.wrapping_add(1);
+    let handle = |address| {
+        Value::FfiHandle(
+            FfiHandleValue::owned("Block".to_string(), address, Some(note))
+                .expect("a non-null address"),
+        )
+    };
+    let written = |address| {
+        crate::ffi::FfiValue::OpaqueHandle(
+            crate::ffi::OpaqueHandle::new(address).expect("non-null"),
+        )
+    };
+    // The same address keeps the handle, with its owner.
+    let held = handle(first);
+    let kept = super::stored_handle(&held, &written(first)).expect("the handle is kept");
+    drop(held);
+    assert_eq!(released(), 0);
+    drop(kept);
+    assert_eq!(released(), 1);
+    // Another address, or null, gives the object up.
+    let held = handle(first);
+    assert!(super::stored_handle(&held, &written(second)).is_none());
+    drop(held);
+    let held = handle(first);
+    assert!(super::stored_handle(&held, &crate::ffi::FfiValue::Unit).is_none());
+    drop(held);
+    assert_eq!(released(), 1);
+    // A place that held `None` decides nothing.
+    assert!(super::stored_handle(&Value::Unit, &written(first)).is_none());
+}

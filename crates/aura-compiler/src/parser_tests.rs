@@ -5656,3 +5656,37 @@ fn extern_c_classes_are_copy_classes_of_fields_only() {
         assert!(error.message.contains(message), "{}", error.message);
     }
 }
+
+#[test]
+fn an_opaque_class_names_its_drop_function() {
+    let module = parse(concat!(
+        "extern \"C\" opaque class Database drop sqlite3_close\n",
+        "extern \"C\" opaque class Plain\n",
+    ))
+    .expect("a drop clause should parse");
+    let drops: Vec<Option<&str>> = module
+        .items
+        .iter()
+        .map(|item| match item {
+            Item::ExternOpaqueClass(decl) => decl.drop.as_ref().map(|(name, _)| name.as_str()),
+            other => panic!("expected an opaque class, found {other:?}"),
+        })
+        .collect();
+    assert_eq!(drops, [Some("sqlite3_close"), None]);
+    let shape = |item: &Item| serde_json::to_value(item).expect("an item serializes");
+    assert!(shape(&module.items[0])
+        .to_string()
+        .contains("sqlite3_close"));
+    assert!(
+        !shape(&module.items[1]).to_string().contains("drop"),
+        "a class with no drop clause serializes as before"
+    );
+
+    let error = parse("extern \"C\" opaque class Database drop\n")
+        .expect_err("a drop clause needs a function name");
+    assert_eq!(error.code, "AU1101");
+    assert!(error
+        .help
+        .iter()
+        .any(|help| help.contains("drop sqlite3_close")));
+}
