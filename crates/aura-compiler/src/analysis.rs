@@ -1955,6 +1955,20 @@ impl<'a> AnalysisBuilder<'a> {
             }
             return completions;
         }
+        // A trait object offers the methods of its trait and its
+        // supertraits that one call can serve.
+        if receiver_type.is_trait_object() {
+            let bounds = self.trait_object_bounds(receiver_type);
+            let mut completions = self.trait_bound_member_completions(&bounds);
+            completions.retain(|completion| {
+                !bounds.iter().any(|bound| {
+                    self.trait_info_named(&bound.trait_name)
+                        .and_then(|info| info.methods.get(&completion.name))
+                        .is_some_and(|method| crate::sema::dyn_call_obstacle(method).is_some())
+                })
+            });
+            return completions;
+        }
         let base_name = base_type_name(receiver_type);
 
         if let Some(class_info) = self.class_info_for_type_name(base_name) {
@@ -2590,10 +2604,49 @@ impl<'a> AnalysisBuilder<'a> {
         })
     }
 
+    /// The trait `name` names: one of this module, or `module.Trait` of an
+    /// imported one.
+    fn trait_info_named(&self, name: &str) -> Option<&crate::sema::TraitInfo> {
+        if let Some(info) = self.program.traits.get(name) {
+            return Some(info);
+        }
+        let (module, leaf) = name.rsplit_once('.')?;
+        self.module_namespace(module)?.traits.get(leaf)
+    }
+
+    /// The bounds a trait object type stands for: its trait, then each
+    /// supertrait, once.
+    fn trait_object_bounds(&self, ty: &Type) -> Vec<TraitBound> {
+        let mut bounds: Vec<TraitBound> = ty.trait_object_bound().into_iter().collect();
+        let mut next = 0;
+        while let Some(bound) = bounds.get(next).cloned() {
+            next += 1;
+            let Some(info) = self.trait_info_named(&bound.trait_name) else {
+                continue;
+            };
+            for supertrait in &info.supertraits {
+                let mut supertrait = supertrait.clone();
+                // A supertrait of an imported trait is named from that
+                // trait's module.
+                if self.trait_info_named(&supertrait.trait_name).is_none() {
+                    supertrait.trait_name =
+                        format!("{}.{}", info.module_name, supertrait.trait_name);
+                }
+                if !bounds
+                    .iter()
+                    .any(|seen| seen.trait_name == supertrait.trait_name)
+                {
+                    bounds.push(supertrait);
+                }
+            }
+        }
+        bounds
+    }
+
     fn trait_bound_member_completions(&self, bounds: &[TraitBound]) -> Vec<AnalysisCompletion> {
         let mut completions = Vec::new();
         for bound in bounds {
-            let Some(trait_info) = self.program.traits.get(&bound.trait_name) else {
+            let Some(trait_info) = self.trait_info_named(&bound.trait_name) else {
                 continue;
             };
             for method in trait_info.methods.values() {
@@ -3842,13 +3895,17 @@ impl<'a> AnalysisBuilder<'a> {
         &crate::sema::TraitMethodInfo,
         TraitBound,
     )> {
-        let Type::TypeParam(type_param) = receiver_type else {
-            return None;
+        let object_bounds = self.trait_object_bounds(receiver_type);
+        let bounds = match receiver_type {
+            Type::TypeParam(type_param) => {
+                &scope
+                    .values()
+                    .find(|binding| binding.ty == Type::TypeParam(type_param.clone()))?
+                    .trait_bounds
+            }
+            _ if receiver_type.is_trait_object() => &object_bounds,
+            _ => return None,
         };
-        let bounds = &scope
-            .values()
-            .find(|binding| binding.ty == Type::TypeParam(type_param.clone()))?
-            .trait_bounds;
 
         let mut selected: Option<(
             &crate::sema::TraitInfo,
@@ -3856,7 +3913,7 @@ impl<'a> AnalysisBuilder<'a> {
             TraitBound,
         )> = None;
         for bound in bounds {
-            let Some(trait_info) = self.program.traits.get(&bound.trait_name) else {
+            let Some(trait_info) = self.trait_info_named(&bound.trait_name) else {
                 continue;
             };
             let Some(method) = trait_info.methods.get(field) else {

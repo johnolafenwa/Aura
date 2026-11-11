@@ -13,7 +13,7 @@ Last updated: 2026-11-10
   count; `docdb` and `json_roundtrip` now beat Python. Details are in
   `2026-11-10-v0.14.0-preview-release.md`.
 
-## Trait objects (in progress)
+## Trait objects (complete)
 
 - `dyn Trait`: a value of any type that implements a trait, so a list can
   hold an open set of types. The ratified design is in
@@ -37,8 +37,11 @@ Last updated: 2026-11-10
   its implementation from the class code in the box. The
   `trait_object_call` probe costs 34 instructions against Rust's 12
   (2.8x, was about 4,600), and a call runs 5 times faster than Python.
-- Next: `aura verify`, the language server, the book chapter, and the
-  ADR. Open: `mut self` calls on list elements are slow for every class.
+- Step 7 is done: `aura verify` follows a trait object made from a
+  known type, the editor completes and resolves trait object calls, the
+  book has section 10.5, and the decision is ADR-0081.
+- Open, for every class and not only trait objects: a `mut self` call on
+  a list element takes the element out and stores it back.
 
 ## Iterator bound and float64 gaps (complete)
 

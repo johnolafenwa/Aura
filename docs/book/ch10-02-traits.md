@@ -249,7 +249,9 @@ trait declares. Where nothing names the type, say it yourself with `as`:
 type back, `match` asks for it by name: `case Book as book:` runs when the
 item is a book, and a final `case _:` takes everything else. To hand a trait
 object to a task, declare the trait with `Transfer` as a supertrait, as
-[Chapter 15](/book/ch15-01-tasks-and-task-groups) explains.
+[Chapter 15](/book/ch15-01-tasks-and-task-groups) explains. We'll come
+back to trait objects in [their own section](/book/ch10-05-trait-objects) at
+the end of this chapter.
 
 ### Traits are nominal
 

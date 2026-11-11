@@ -12,6 +12,7 @@ const KEYWORDS = [
   "class",
   "continue",
   "def",
+  "dyn",
   "elif",
   "else",
   "enum",

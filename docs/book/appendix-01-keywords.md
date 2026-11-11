@@ -106,6 +106,8 @@ although doing so tends to confuse readers.
 - `self` names the receiver in a method.
 - `Self` refers to the current type inside a trait or an `impl`.
 - `copy` makes a class a copy class when it appears directly before `class`.
+- `dyn` begins a trait object type when a trait name follows it: `dyn Tool`
+  is a value of any type that implements `Tool`.
 - `None` is the unit value, and the "nothing here" member of a `T | None`
   union.
 - `is` appears only in `value is None` and `value is not None`. Aura has no

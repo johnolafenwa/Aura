@@ -32,7 +32,7 @@ pub(super) struct ExposedTrait<'a> {
 }
 
 /// Why a trait method cannot be called through a trait object.
-fn dyn_call_obstacle(method: &TraitMethodInfo) -> Option<String> {
+pub(crate) fn dyn_call_obstacle(method: &TraitMethodInfo) -> Option<String> {
     if method.decl.receiver.is_none() {
         return Some(
             "it takes no `self`, so there is no value to choose an implementation from".to_string(),

@@ -31,6 +31,14 @@ in this file.
   picks its implementation from a type number in the value's box. One call
   costs 34 instructions against 12 for Rust's `Box<dyn Trait>`, down from
   about 4,600, and runs about 5 times faster than the same loop in Python.
+- `aura verify` follows a trait object the function made from a value of a
+  known type: a call on it relies on that type's own contract, and a `match`
+  type arm on it is decided. A trait object the function receives still
+  gives the trait method's contract.
+- Editor: completion, hover, go to definition, references, and signature
+  help work on a method call on a trait object, and `dyn` is highlighted
+  before a trait name.
+- The book has a new section 10.5, "Trait objects".
 - Fixed: a trait object dispatches on the exact type it holds. A `float32`
   and a `float64` that both implement the trait no longer run each other's
   method, `Cell[float32]` no longer runs the method of `Cell[float64]` on

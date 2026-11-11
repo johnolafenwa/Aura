@@ -197,7 +197,6 @@ Also fixed here: an element of a list of trait objects can be passed to a
 - A shared `match` copies the held value into its binding.
 - A receiver that is a generic class, an enum, or a scalar is found by
   the tests by type name, which are slow.
-- `aura verify` does not model the three new rvalues yet (step 7).
 - A lambda whose body calls a method on a list element it captured,
   `lambda: items[0].area()`, fails with `AU4001` (loan flow). This is
   older than trait objects: it happens with `list[Label]` too.
@@ -205,3 +204,22 @@ Also fixed here: an element of a list of trait objects can be passed to a
   new name, `case Square as square:` then `other = square`, fails with
   `AU4001`. This is older than trait objects too, and the same code on a
   trait object works.
+
+## Step 7: verify, editor, book, ADR (2026-11-11)
+
+- `aura verify` models the three rvalues. A trait object made from a value
+  of a known type keeps that type and value, so `shape.area()` uses the
+  implementation's own `ensures` and a type arm is decided. Tests:
+  `a_trait_object_made_from_a_known_type_keeps_that_type_and_its_value` and
+  `a_trait_object_of_an_unknown_type_gives_only_the_trait_contract` in
+  `verify_tests.rs`. All 74 verifier tests pass on the pinned Z3 5.3.3.
+- Completion, hover, go to definition, references, and signature help work
+  on trait object calls (`analysis.rs`: `trait_object_bounds`,
+  `trait_info_named`). The grammar and the recovery keyword list know `dyn`.
+- Book section 10.5 `docs/book/ch10-05-trait-objects.md`; the chapter
+  summary moved there from 10.4. ADR-0081.
+- Found while probing, not caused by trait objects: `aura verify` cannot
+  prove `ensures result >= 0` for a `for value in values:` loop with
+  `invariant sum >= 0` whose body does `sum += value` under a guard. The
+  counterexample it prints is `len(values) = 0`. Reported to the
+  coordinator.

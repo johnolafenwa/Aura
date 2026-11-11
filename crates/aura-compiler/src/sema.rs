@@ -28,6 +28,7 @@ mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod trait_objects;
+pub(crate) use trait_objects::dyn_call_obstacle;
 mod traits;
 pub(crate) use traits::{
     binary_operator_trait, hidden_bound_type_params, merge_trait_bounds, self_type_substitutions,

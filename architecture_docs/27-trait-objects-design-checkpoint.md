@@ -256,3 +256,19 @@ boundary.
   `match` type arms (F1), `trait Tool: Transfer:` for tasks (H1), and the
   speed bar of 3x Rust `dyn` and faster than Python. The remaining
   defaults (C1, D1, I1) were approved with them.
+
+### Step 7 (2026-11-11)
+
+- `aura verify`: a conversion gives a value that keeps the held type and the
+  value (`Val::Held`). A call on it runs the implementation of that type with
+  its own contract, a `mut self` call leaves a trait object of the same type,
+  and `TraitObjectHolds` and `TraitObjectTake` are decided. Two paths that
+  hold one type merge their values. A trait object the function receives, or
+  one merged from different types, is unknown, and a call on it relies on the
+  trait method's contract as before.
+- Editor: completion after `.` on a trait object lists the methods of its
+  trait and supertraits that are callable on a trait object. Hover, go to
+  definition, references, and signature help resolve those calls, for a
+  trait of this module or an imported one. The grammar marks `dyn` before a
+  trait name.
+- The book has section 10.5, "Trait objects". The decision is ADR-0081.

@@ -99,3 +99,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 71. [ADR-0071: Task groups live in `with`, and a child failure cancels the group](0071-task-groups-in-with-and-failure-cancellation.md) — Accepted; `AU2019`, and asyncio-style sibling cancellation
 72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
+81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type

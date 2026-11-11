@@ -11330,3 +11330,76 @@ def main():
         hover_for("repeated")
     );
 }
+
+#[test]
+fn analysis_completes_and_resolves_members_of_trait_objects() {
+    let source = [
+        "trait Named:",
+        "    def name(self) -> str",
+        "",
+        "trait Tool: Named:",
+        "    def run(mut self, input: str) -> str:",
+        "        \"\"\"Run the tool once.\"\"\"",
+        "        return input.clone()",
+        "    def same(self, other: Self) -> bool",
+        "    def make() -> Self",
+        "",
+        "class Echo:",
+        "    prefix: str",
+        "",
+        "impl Named for Echo:",
+        "    def name(self) -> str:",
+        "        return \"echo\"",
+        "",
+        "impl Tool for Echo:",
+        "    def same(self, other: Echo) -> bool:",
+        "        return true",
+        "    def make() -> Echo:",
+        "        return Echo(prefix=\"\")",
+        "",
+        "def main():",
+        "    mut tools: list[dyn Tool] = [Echo(prefix=\"> \")]",
+        "    for tool in mut tools:",
+        "        print(tool.run(\"x\"))",
+        "        print(tool.name())",
+        "    print(tools[0].name())",
+        "    match tools[0]:",
+        "        case Echo as echo:",
+        "            print(echo.prefix)",
+        "        case _:",
+        "            pass",
+        "",
+    ]
+    .join("\n");
+    let output = analyze_source(&source);
+    assert!(output.diagnostics.is_empty(), "{:?}", output.diagnostics);
+    // A trait object offers the methods of its trait and its supertraits
+    // that one call can serve: `same` names `Self` and `make` has no
+    // receiver.
+    for (line, character) in [(26usize, 19usize), (28, 19)] {
+        let mut names = completion_names(&source, line, character, Some('.'));
+        names.sort();
+        assert_eq!(names, ["name", "run"], "line {line}");
+    }
+    let occurrence = |line: usize, character: usize| {
+        output
+            .occurrences
+            .iter()
+            .find(|occurrence| occurrence.line == line && occurrence.start_character == character)
+            .unwrap_or_else(|| panic!("no occurrence at {line}:{character}"))
+    };
+    let run = occurrence(26, 19);
+    assert!(
+        run.hover.contains("run(mut self, input: str) -> str"),
+        "{}",
+        run.hover
+    );
+    assert!(run.hover.contains("Run the tool once."), "{}", run.hover);
+    assert_eq!(run.definition.as_ref().map(|range| range.line), Some(4));
+    // A supertrait's method resolves to the supertrait's declaration.
+    let name = occurrence(27, 19);
+    assert_eq!(name.definition.as_ref().map(|range| range.line), Some(1));
+    assert!(occurrence(26, 14).hover.contains("dyn Tool"));
+    // A type arm binds the held value with its own type.
+    assert!(occurrence(31, 18).hover.contains("Echo"));
+}
