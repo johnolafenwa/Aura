@@ -33,21 +33,40 @@ fn normalized(text: &str) -> String {
 #[test]
 fn trait_object_programs_run() {
     let fixtures = [
+        run_pass!("trait_object_as_cast"),
         run_pass!("trait_object_assignment"),
         run_pass!("trait_object_borrowed_conversion"),
         run_pass!("trait_object_builtin_impls"),
         run_pass!("trait_object_callables"),
         run_pass!("trait_object_containers"),
+        run_pass!("trait_object_conversion_sources"),
         run_pass!("trait_object_display"),
         run_pass!("trait_object_element_borrows"),
+        run_pass!("trait_object_exact_builtin_types"),
+        run_pass!("trait_object_exact_type_arguments"),
         run_pass!("trait_object_expressions"),
         run_pass!("trait_object_fields"),
+        run_pass!("trait_object_float_mut_calls"),
+        run_pass!("trait_object_float_widths"),
         run_pass!("trait_object_generic_arguments"),
         run_pass!("trait_object_generic_bounds"),
+        run_pass!("trait_object_generic_impls"),
+        run_pass!("trait_object_iterator_adapters"),
+        run_pass!("trait_object_iterators"),
+        run_pass!("trait_object_loops"),
+        run_pass!("trait_object_shared_args"),
+        run_pass!("trait_object_match"),
+        run_pass!("trait_object_match_catch_all_only"),
+        run_pass!("trait_object_match_expression"),
+        run_pass!("trait_object_match_places"),
+        run_pass!("trait_object_mut_element_argument"),
         run_pass!("trait_object_mut_methods"),
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
         run_pass!("trait_object_supertraits"),
+        run_pass!("trait_object_transfer"),
+        run_pass!("trait_object_transfer_shapes"),
+        run_pass!("trait_object_value_positions"),
         run_pass!("trait_object_views"),
     ];
     for (name, source, expected) in fixtures {
@@ -62,6 +81,7 @@ fn trait_objects_cross_module_boundaries() {
         run_pass!("trait_object_imported"),
         run_pass!("trait_object_imported_namespace"),
         run_pass!("trait_object_imported_renamed"),
+        run_pass!("trait_object_transfer_imported"),
     ];
     for (name, _, expected) in fixtures {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -75,6 +95,131 @@ fn trait_objects_cross_module_boundaries() {
 #[test]
 fn trait_object_misuse_is_rejected() {
     let fixtures = [
+        check_fail!(
+            "trait_object_match_arm_after_catch_all",
+            "AU2013",
+            "duplicate or unreachable type arm"
+        ),
+        check_fail!(
+            "trait_object_match_arm_duplicate",
+            "AU2013",
+            "duplicate or unreachable type arm"
+        ),
+        check_fail!(
+            "trait_object_match_arm_lacks_impl",
+            "AU2013",
+            "type arm `Plain` can never match"
+        ),
+        check_fail!(
+            "trait_object_match_arm_names_trait_object",
+            "AU2013",
+            "type arm `dyn Other` names a trait object"
+        ),
+        check_fail!(
+            "trait_object_match_binding_is_shared",
+            "AU3003",
+            "cannot assign through immutable place `square.side`"
+        ),
+        check_fail!(
+            "trait_object_match_binding_moves",
+            "AU3002",
+            "cannot move `label` out of a shared match on `shape`"
+        ),
+        check_fail!(
+            "trait_object_match_binding_mut_alias",
+            "AU3002",
+            "shared values cannot be bound with `mut`"
+        ),
+        check_fail!(
+            "trait_object_match_or_pattern_types",
+            "AU2013",
+            "every alternative in an or-pattern must bind the same names"
+        ),
+        check_fail!(
+            "trait_object_match_scrutinee_is_shared",
+            "AU3002",
+            "cannot mutate `shape` while `shape` remains shared by a bare match"
+        ),
+        check_fail!(
+            "trait_object_match_class_pattern",
+            "AU2040",
+            "class pattern `Square` does not match scrutinee type `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_match_expression_needs_catch_all",
+            "AU2013",
+            "match on `dyn Shape` needs a final `case _:`"
+        ),
+        check_fail!(
+            "trait_object_match_literal_arm",
+            "AU2002",
+            "literal pattern `1` does not match scrutinee type `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_match_moves",
+            "AU3001",
+            "use of moved value `shape`"
+        ),
+        check_fail!(
+            "trait_object_match_mut_needs_mutable",
+            "AU3002",
+            "`match mut` requires a mutable place scrutinee"
+        ),
+        check_fail!(
+            "trait_object_match_needs_catch_all",
+            "AU2013",
+            "match on `dyn Shape` needs a final `case _:`"
+        ),
+        check_fail!(
+            "trait_object_match_own_borrowed_parameter",
+            "AU3002",
+            "parameter `shape` is borrowed; declare it as `own dyn Shape` to take ownership"
+        ),
+        check_fail!(
+            "trait_object_match_own_element",
+            "AU3005",
+            "cannot implicitly copy `dyn Shape` out of a list index"
+        ),
+        check_fail!(
+            "trait_object_cast_borrowed_parameter",
+            "AU3002",
+            "parameter `square` is borrowed; declare it as `own Square` to take ownership"
+        ),
+        check_fail!(
+            "trait_object_cast_element",
+            "AU3005",
+            "cannot implicitly copy `Square` out of a list index"
+        ),
+        check_fail!(
+            "trait_object_cast_lacks_impl",
+            "AU2002",
+            "cannot convert `Other` to `dyn Shape`"
+        ),
+        check_fail!(
+            "trait_object_cast_moves",
+            "AU3001",
+            "use of moved value `square`"
+        ),
+        check_fail!(
+            "trait_object_cast_mut_argument",
+            "AU2051",
+            "a conversion to a trait object makes a new value, so it cannot be changed in place"
+        ),
+        check_fail!(
+            "trait_object_cast_mut_receiver",
+            "AU2051",
+            "a conversion to a trait object makes a new value, so it cannot be changed in place"
+        ),
+        check_fail!(
+            "trait_object_cast_needs_trait",
+            "AU2050",
+            "`dyn` needs a trait, and `Square` is not a trait"
+        ),
+        check_fail!(
+            "trait_object_cast_view_source",
+            "AU3004",
+            "a view source must be an addressable local"
+        ),
         check_fail!(
             "trait_object_element_append",
             "AU3005",
@@ -179,6 +324,41 @@ fn trait_object_misuse_is_rejected() {
             "trait_object_not_transfer",
             "AU3008",
             "task argument `shape` cannot cross a task boundary because `dyn Shape` is a trait object, "
+        ),
+        check_fail!(
+            "trait_object_not_transfer_queue",
+            "AU3008",
+            "Queue payload `dyn Plain` cannot cross a worker boundary because `dyn Plain` is a trait object, "
+        ),
+        check_fail!(
+            "trait_object_transfer_bound_unmet",
+            "AU3008",
+            "type `Dice` does not satisfy the bound `Transfer` because field `rng` of `Dice`"
+        ),
+        check_fail!(
+            "trait_object_transfer_conversion",
+            "AU2002",
+            "binding `item` has annotated type `dyn prelude.Transfer`, but value has type `Dice`"
+        ),
+        check_fail!(
+            "trait_object_transfer_generic_impl_unbounded",
+            "AU3008",
+            "impl of `Job` for `Box[T]` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_holds_plain_object",
+            "AU3008",
+            "impl of `Job` for `Holder` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_not_transfer",
+            "AU3008",
+            "impl of `Job` for `Dice` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_written",
+            "AU3008",
+            "`Transfer` cannot be implemented for `Sum`"
         ),
         check_fail!(
             "trait_object_reserved_name",
@@ -424,6 +604,63 @@ fn a_trait_object_converts_to_its_supertraits_only() {
         error
             .message
             .contains("takes a `dyn Named` variable, found `dyn Tool`"),
+        "{error:?}"
+    );
+}
+
+const JOB: &str = "trait Job: Transfer:\n    def run(self) -> int64\n\nclass Sum:\n    values: list[int64]\n\nimpl Job for Sum:\n    def run(self) -> int64:\n        return len(self.values)\n\n";
+
+#[test]
+fn a_transfer_supertrait_makes_the_trait_object_transfer() {
+    let accepted = [
+        // A task argument, a task result, and a queue payload.
+        "def work(job: own dyn Job) -> dyn Job:\n    return job\n\ndef main() -> None:\n    with TaskGroup() as group:\n        task = group.start(work, Sum(values=[1]) as dyn Job)\n        _ = task.result()\n    queue = Queue[dyn Job]()\n    _ = queue.put(Sum(values=[2]))\n",
+        // A subtrait inherits the property.
+        "trait Fast: Job:\n    def speed(self) -> int64\n\ndef main() -> None:\n    queue = Queue[dyn Fast]()\n",
+        // A type parameter bounded by the trait, or by `Transfer` itself.
+        "def send[T: Job](value: own T) -> None:\n    queue = Queue[T]()\n    _ = queue.put(value)\n\ndef keep[T: Transfer](value: own T) -> None:\n    queue = Queue[T]()\n    _ = queue.put(value)\n\ndef main() -> None:\n    send(Sum(values=[1]))\n    keep(Sum(values=[1]) as dyn Job)\n    keep(\"text\")\n",
+        // A class that holds one is Transfer too.
+        "class Batch:\n    jobs: list[dyn Job]\n\ndef main() -> None:\n    queue = Queue[Batch]()\n",
+    ];
+    for body in accepted {
+        if let Err(error) = check_source(&format!("{JOB}{body}")) {
+            panic!("should be accepted: {error:?}\n{body}");
+        }
+    }
+}
+
+#[test]
+fn dyn_transfer_holds_any_transfer_value_without_naming_the_trait_elsewhere() {
+    // `dyn Transfer` is the only mention of the prelude trait.
+    let source = "class Sum:\n    values: list[int64]\n\ndef main() -> None:\n    items: list[dyn Transfer] = [1, Sum(values=[1]), \"text\"]\n    queue = Queue[dyn Transfer]()\n    print(len(items))\n";
+    if let Err(error) = check_source(source) {
+        panic!("should be accepted: {error:?}");
+    }
+    let refused = "import random\n\nclass Dice:\n    rng: random.Rng\n\ndef main() -> None:\n    item: dyn Transfer = Dice(rng=random.Rng(1))\n";
+    let error = match check_source(refused) {
+        Ok(_) => panic!("should be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU2002", "{error:?}");
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.starts_with("`Dice` is not Transfer: field `rng` of `Dice`")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_trait_the_program_names_transfer_is_not_the_marker() {
+    let source = "trait Transfer:\n    def go(self) -> int64\n\ntrait Job: Transfer:\n    def run(self) -> int64\n\nclass Sum:\n    values: list[int64]\n\nimpl Transfer for Sum:\n    def go(self) -> int64:\n        return 2\n\nimpl Job for Sum:\n    def run(self) -> int64:\n        return self.go()\n\ndef main() -> None:\n    queue = Queue[dyn Job]()\n";
+    let error = match check_source(source) {
+        Ok(_) => panic!("should be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU3008", "{error:?}");
+    assert!(
+        error.message.contains("`dyn Job` is a trait object"),
         "{error:?}"
     );
 }

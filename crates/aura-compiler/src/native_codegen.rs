@@ -1192,6 +1192,35 @@ impl<'a> NativeCodegen<'a> {
         )
     }
 
+    /// The receiver of a trait method call that picks its implementation
+    /// at run time, when every implementation it may pick only reads its
+    /// receiver: the call may lend a list element's box as the receiver.
+    fn dispatched_shared_receiver<'i>(&self, instruction: &'i Instruction) -> Option<&'i Operand> {
+        let Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::TraitMember {
+                            object,
+                            dispatch: Some(MethodDispatch::Candidates { candidates, .. }),
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } = instruction
+        else {
+            return None;
+        };
+        candidates
+            .iter()
+            .all(|candidate| {
+                self.method_receivers.get(&candidate.function)
+                    == Some(&Some(MirReceiverKind::Borrow))
+            })
+            .then_some(object)
+    }
+
     fn emit_function(
         &mut self,
         builder: &mut dyn FunctionBackend,
@@ -1604,6 +1633,9 @@ impl<'a> NativeCodegen<'a> {
         );
         let (native_loan_uses, element_lend_temps) =
             element_loans::native_element_loans(function, |instruction| {
+                if let Some(receiver) = self.dispatched_shared_receiver(instruction) {
+                    return vec![receiver];
+                }
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
                     self.borrowing.get(name)
                 })
@@ -4184,6 +4216,21 @@ impl<'a> FunctionCompiler<'a> {
         }
     }
 
+    /// Converts `value`, whose type may be a union at run time, to the
+    /// value a trait object holds (see `aura_direct_trait_object_from`).
+    fn trait_object_from_runtime_value(
+        &mut self,
+        value: ValueRef,
+        held: &Type,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxed = self.ensure_opaque(value)?;
+        let transferred = self.transfer_owned_opaque_value(&boxed);
+        let call = self
+            .builder
+            .call(self.runtime[RuntimeFn::TraitObjectFrom], &[transferred]);
+        Ok(self.owned_opaque_result(call.results, held.clone()))
+    }
+
     fn owned_opaque_result(&mut self, values: Vec<Val>, ty: Type) -> ValueRef {
         let value = ValueRef {
             values,
@@ -5724,6 +5771,42 @@ impl<'a> FunctionCompiler<'a> {
             Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => {
                 let integer_hint = target.scalar_kind().filter(|kind| kind.is_integer());
                 self.load_operand_with_integer_hint(operand, integer_hint)
+            }
+            Rvalue::TraitObject { value, held } => {
+                let source = ensure_direct_type(held, &self.classes, "trait object source")?;
+                let loaded = self.load_operand_for_target(value, &source)?;
+                let loaded = self.coerce_value(loaded, &source)?;
+                match held {
+                    Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(), "float32" | "float64") =>
+                    {
+                        self.float_trait_object(loaded, name == "float32")
+                    }
+                    // A value known here only by a type parameter, or a
+                    // union a specialized copy substituted for one, may be
+                    // a union at run time. The trait object holds its
+                    // active member.
+                    Type::Union(_) => self.trait_object_from_runtime_value(loaded, held),
+                    Type::TypeParam(name) if !name.starts_with("dyn ") => {
+                        self.trait_object_from_runtime_value(loaded, held)
+                    }
+                    _ => Ok(loaded),
+                }
+            }
+            Rvalue::TraitObjectHolds { value, ty } => {
+                let loaded = self.load_operand(value)?;
+                let raw = self.ensure_opaque(loaded)?;
+                let holds = self.value_matches_runtime_type(raw.values[0], ty)?;
+                self.release_all_temporary_owned();
+                Ok(ValueRef {
+                    values: vec![holds],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                })
+            }
+            Rvalue::TraitObjectTake { value, ty } => {
+                let loaded = self.load_operand(value)?;
+                let held = ensure_direct_type(ty, &self.classes, "trait object member")?;
+                self.coerce_value(loaded, &held)
             }
             Rvalue::NoneTest { value } => {
                 // Lowering tests a union's `None` member through
@@ -7729,7 +7812,16 @@ impl<'a> FunctionCompiler<'a> {
                 ..
             } => {
                 let dispatch = required_dispatch(dispatch, field)?;
-                let object = self.load_operand(object)?;
+                // A followed loan of a list element lends the element's
+                // box to the implementation the dispatch picks.
+                let lent = match object {
+                    Operand::Place(place) => self.pass_native_element(place)?,
+                    _ => None,
+                };
+                let object = match lent {
+                    Some(lent) => lent,
+                    None => self.load_operand(object)?,
+                };
                 self.compile_dispatch(object, field, dispatch, receiver_place.as_deref(), args)
             }
         }
@@ -14143,9 +14235,44 @@ impl<'a> FunctionCompiler<'a> {
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
-        let (result, writebacks) = self.split_call_results(&method_function_name, results)?;
+        let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
+        if mutable_receiver {
+            // The receiver's place comes first. A float a trait object
+            // holds goes back into it with its width.
+            if let (Some(place), Some(updated)) = (writeback_places.first(), writebacks.first()) {
+                let single = match updated.ty {
+                    DirectType::Scalar(ScalarKind::Float32) => Some(true),
+                    DirectType::Scalar(ScalarKind::Float64) => Some(false),
+                    _ => None,
+                };
+                let erased = matches!(
+                    self.type_of_place(place),
+                    Ok(DirectType::Opaque(Type::TypeParam(name))) if name.starts_with("dyn ")
+                );
+                if let (Some(single), true) = (single, erased) {
+                    writebacks[0] = self.float_trait_object(updated.clone(), single)?;
+                }
+            }
+        }
         self.apply_writeback_places(&writeback_places, writebacks)?;
         Ok(result)
+    }
+
+    /// Boxes a float as the value a trait object holds. A boxed float does
+    /// not say its width, so the trait object keeps it beside the float:
+    /// `float32` and `float64` may implement the trait differently.
+    fn float_trait_object(
+        &mut self,
+        float: ValueRef,
+        single: bool,
+    ) -> std::result::Result<ValueRef, String> {
+        let boxed = self.ensure_opaque(float)?;
+        let single = self.builder.iconst(types::I64, i64::from(single));
+        self.builder.call(
+            self.runtime[RuntimeFn::TraitObjectFloat],
+            &[boxed.values[0], single],
+        );
+        Ok(boxed)
     }
 
     /// Emits a resolved runtime operation on its loaded receiver. The op
@@ -15614,12 +15741,26 @@ impl<'a> FunctionCompiler<'a> {
         let result_ty = self.dynamic_result_type(candidates)?;
         let join_block = self.builder.create_block();
         let result_vars = self.declare_temporary_result_storage(&result_ty)?;
+        let union_block = self.builder.create_block();
+        let plain_block = self.builder.create_block();
+        // A box that shows a class's access code keeps an instance in that
+        // class's layout, so it is no union and needs no probe.
+        let probe_block = self.builder.create_block();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let access = self.emit_list_access(raw.values[0], &layout);
+        let instance = self.builder.icmp_imm(
+            IntCC::UnsignedGreaterThanOrEqual,
+            access,
+            i64::from(aura_runtime::native_runtime::FIRST_CLASS_ACCESS),
+        );
+        self.builder
+            .brif(instance, plain_block, &[], probe_block, &[]);
+        self.builder.switch_to_block(probe_block);
+        self.builder.seal_block(probe_block);
         let probe = self
             .builder
             .call(self.runtime[RuntimeFn::ValueIsUnion], &[raw.values[0]]);
         let is_union = probe.results[0];
-        let union_block = self.builder.create_block();
-        let plain_block = self.builder.create_block();
         self.builder
             .brif(is_union, union_block, &[], plain_block, &[]);
         let caller_owned = self.layout_scratch.clone();
@@ -15707,20 +15848,65 @@ impl<'a> FunctionCompiler<'a> {
         result_vars: &[Var],
         join_block: Blk,
     ) -> std::result::Result<(), String> {
-        let mut current_fallthrough = None;
         // Every runtime candidate starts from the same ownership state. Emitting
         // one candidate's taken edge can consume or release an owned projected
         // receiver, but that edge is skipped when control falls through to the
         // next candidate. Keep the compile-time ledger path-local so a later
         // candidate still emits the release owed by its runtime path.
         let caller_owned = self.layout_scratch.clone();
-        for candidate in candidates {
+        let then_blocks = candidates
+            .iter()
+            .map(|_| self.builder.create_block())
+            .collect::<Vec<_>>();
+
+        // A box that keeps an instance in its class's layout shows the
+        // class's access code, so one load and one compare per candidate
+        // class picks the implementation (trait objects step 6). Any other
+        // receiver, such as a shared instance, an enum, or a scalar, takes
+        // the tests by type name below.
+        let mut codes = Vec::new();
+        for (index, candidate) in candidates.iter().enumerate() {
+            let Type::Named(name, args) = &candidate.ty else {
+                continue;
+            };
+            if !args.is_empty() || !self.classes.contains_key(name) {
+                continue;
+            }
+            if let Some(record) = self
+                .plain_records
+                .class_record(name, self.builder.module())?
+            {
+                codes.push((index, record.access()));
+            }
+        }
+        if !codes.is_empty() {
+            let layout = aura_runtime::native_runtime::direct_list_layout();
+            let actual = self.emit_list_access(object.values[0], &layout);
+            for (index, code) in codes {
+                let matches = self.builder.icmp_imm(IntCC::Equal, actual, code);
+                let next = self.builder.create_block();
+                self.builder
+                    .brif(matches, then_blocks[index], &[], next, &[]);
+                self.builder.switch_to_block(next);
+                self.builder.seal_block(next);
+            }
+        }
+        for (candidate, then_block) in candidates.iter().zip(&then_blocks) {
             self.layout_scratch = caller_owned.clone();
             let matched = self.value_matches_runtime_type(object.values[0], &candidate.ty)?;
-            let then_block = self.builder.create_block();
             let else_block = self.builder.create_block();
-            self.builder.brif(matched, then_block, &[], else_block, &[]);
+            self.builder
+                .brif(matched, *then_block, &[], else_block, &[]);
+            self.builder.switch_to_block(else_block);
+            self.builder.seal_block(else_block);
+        }
+        self.layout_scratch = caller_owned.clone();
+        self.emit_pending_cleanups(true)?;
+        self.builder.trap(TrapCode::User(1));
+
+        for (candidate, then_block) in candidates.iter().zip(then_blocks) {
             self.builder.switch_to_block(then_block);
+            self.builder.seal_block(then_block);
             self.layout_scratch = caller_owned.clone();
             let call_result = self.compile_method_call(
                 &candidate.function,
@@ -15732,16 +15918,6 @@ impl<'a> FunctionCompiler<'a> {
             self.store_result_vars(result_vars, &coerced_result)?;
             self.release_all_temporary_owned();
             self.builder.jump(join_block, &[]);
-            self.builder.seal_block(then_block);
-            self.builder.switch_to_block(else_block);
-            self.layout_scratch = caller_owned.clone();
-            current_fallthrough = Some(else_block);
-        }
-        if let Some(else_block) = current_fallthrough {
-            self.builder.switch_to_block(else_block);
-            self.emit_pending_cleanups(true)?;
-            self.builder.trap(TrapCode::User(1));
-            self.builder.seal_block(else_block);
         }
         Ok(())
     }
@@ -17201,6 +17377,9 @@ fn validate_rvalue(
         Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } => Ok(()),
         Rvalue::Use(operand)
         | Rvalue::CallableAdapt { value: operand, .. }
+        | Rvalue::TraitObject { value: operand, .. }
+        | Rvalue::TraitObjectTake { value: operand, .. }
+        | Rvalue::TraitObjectHolds { value: operand, .. }
         | Rvalue::NoneTest { value: operand }
         | Rvalue::UnionInject { value: operand, .. } => validate_operand(operand),
         Rvalue::ModuleConstant { .. } => Ok(()),

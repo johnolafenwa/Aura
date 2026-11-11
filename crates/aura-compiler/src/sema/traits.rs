@@ -522,6 +522,26 @@ impl<'a> FunctionChecker<'a> {
             .iter()
             .map(|supertrait| substitute_trait_bound(supertrait, &substitutions))
         {
+            // `Transfer` has no implementations: the type's structure
+            // decides it.
+            if self.bound_is_transfer(&supertrait, &trait_info.module_name) {
+                let Some(reason) = self.transfer_failure(&trait_impl.for_type) else {
+                    continue;
+                };
+                return Err(Diagnostic::coded_at(
+                    "AU3008",
+                    trait_impl.decl.span,
+                    format!(
+                        "impl of `{}` for `{}` requires a Transfer type, because the trait has `Transfer` as a supertrait, and {reason}",
+                        trait_impl.trait_name, trait_impl.for_type
+                    ),
+                )
+                .with_help(if super::has_unresolved_type_params(&trait_impl.for_type) {
+                    "bound each type parameter the type holds with `Transfer`, as in `impl[T: Transfer] ...`"
+                } else {
+                    "implement the trait only for types made of Transfer components, or drop `Transfer` from the trait's supertraits"
+                }));
+            }
             let implemented_elsewhere = self
                 .trait_impls_in_scope()
                 .filter(|candidate| {
@@ -662,6 +682,9 @@ impl<'a> FunctionChecker<'a> {
         bound: &TraitBound,
         bound_module: &str,
     ) -> bool {
+        if self.bound_is_transfer(bound, bound_module) {
+            return self.transfer_failure(ty).is_none();
+        }
         let wanted = self.trait_bound_identity(bound, bound_module);
         if let Type::TypeParam(name) = ty {
             let current = self
@@ -1383,6 +1406,10 @@ impl<'a> FunctionChecker<'a> {
     }
 
     pub(super) fn type_implements_trait_bound(&self, ty: &Type, bound: &TraitBound) -> bool {
+        // `Transfer` is decided by the structure of the type, not an `impl`.
+        if self.bound_is_transfer(bound, self.module_name) {
+            return self.transfer_failure(ty).is_none();
+        }
         if let Type::Union(union) = ty {
             return matches!(
                 self.union_satisfies_trait_bound(union, ty, bound, crate::diag::Span::new(0, 0)),
@@ -1430,6 +1457,20 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         for bound in bounds {
+            // `Transfer` is decided by the structure of the type.
+            if self.bound_is_transfer(bound, self.module_name) {
+                let Some(reason) = self.transfer_failure(ty) else {
+                    continue;
+                };
+                return Err(Diagnostic::coded_at(
+                    "AU3008",
+                    span,
+                    format!("type `{ty}` does not satisfy the bound `Transfer` because {reason}"),
+                )
+                .with_help(
+                    "pass a value made only from Transfer components; keep capabilities and host resources on their owning worker",
+                ));
+            }
             let mut presentation = bound.clone();
             // An unresolved hidden `S.Iter` was never written: show the
             // bound as `IntoIterator[T]`.

@@ -1,0 +1,5 @@
+error[AU2040]: class pattern `Square` does not match scrutinee type `dyn Shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_class_pattern.au:29:14
+   |
+29 |         case Square(side=side):
+   |              ^

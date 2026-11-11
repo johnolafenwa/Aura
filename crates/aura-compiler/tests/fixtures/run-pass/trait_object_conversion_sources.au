@@ -1,0 +1,104 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+class Label:
+    text: str
+    hits: list[int64]
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def wrap[T: Shape](item: own T) -> dyn Shape:
+    return item
+
+def wrap_as[T: Shape](item: own T) -> dyn Shape:
+    return item as dyn Shape
+
+def collect_all[T: Shape](items: own list[T]) -> list[dyn Shape]:
+    mut out: list[dyn Shape] = []
+    for item in own items:
+        out.append(item)
+    return out
+
+def describe_union(value: own Square | Rect) -> str:
+    match own value:
+        case Square as square:
+            boxed: dyn Shape = square
+            return boxed.describe()
+        case Rect as rect:
+            return (rect as dyn Shape).describe()
+
+def area_of(shape: dyn Shape) -> int64:
+    return shape.area()
+
+def main() -> None:
+    either: Square | Rect = Rect(w=3, h=3)
+    print(area_of(either))
+    held: dyn Shape = either
+    print(held.describe())
+    other: Square | Rect = Square(side=7)
+    print((other as dyn Shape).describe())
+    print(wrap(Square(side=2)).area())
+    print(wrap_as(Rect(w=2, h=3)).area())
+    all_shapes = collect_all([Square(side=1), Square(side=2)])
+    print(len(all_shapes))
+    print(all_shapes[1].area())
+    print(describe_union(Rect(w=1, h=1)))
+    print(describe_union(Square(side=3)))
+    mut maybe: dyn Shape | None = None
+    maybe = Square(side=5)
+    if maybe is not None:
+        print(maybe.area())
+    match mut maybe:
+        case None:
+            print("none")
+        case dyn Shape as shape:
+            shape.grow(1)
+            print(shape.area())
+    if maybe is not None:
+        print(maybe.area())
+    nested = wrap(wrap(Square(side=4)))
+    print(nested.area())
+    mut grown: dyn Shape = other
+    grown.grow(1)
+    print(grown.describe())
+    labelled: Square | Label = Label(text="tag", hits=[1, 2])
+    print(area_of(labelled))
+    kept: dyn Shape = labelled
+    print(kept.describe())

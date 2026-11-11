@@ -30,6 +30,7 @@ This prints `42` twice.
 - A type parameter cannot stand for a type arm either. `case V as inner` is rejected with `AU2013`, because `V` is not proved disjoint from the other arms. Use `case None` and a catch-all.
 - A matching type arm is irrefutable when the scrutinee type has collapsed to one member.
 - Type patterns may also appear inside nominal enum payload patterns.
+- A trait object matches the same way on the type of the value it holds. Its match always needs a catch-all. See [Matching On The Held Type](/manual/generics-and-traits#matching-on-the-held-type).
 
 ### Coverage
 
@@ -629,7 +630,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2001` | Unknown enum type, variant, or payload type. |
 | `AU2002` | Generic inference or bound failure. Constructor or payload type mismatch. Literal-pattern type mismatch. A non-Boolean guard. Alternative binding type mismatch. Incompatible match-expression results. |
 | `AU2004` | Invalid variant-constructor argument binding. |
-| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
+| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. A trait object match with no final `case _:`, or with an arm that can never match. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
 | `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |

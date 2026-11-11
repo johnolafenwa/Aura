@@ -1,0 +1,166 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+def kind(shape: dyn Shape) -> str:
+    match shape:
+        case Square as square:
+            return f"square {square.side}"
+        case Label as label:
+            return f"label {label.text} {len(label.hits)}"
+        case _:
+            return f"other {shape.name()}"
+
+
+def widen(shape: mut dyn Shape) -> None:
+    match mut shape:
+        case Square as square:
+            square.side += 10
+        case Rect as rect:
+            rect.grow(1)
+            rect.w += 100
+        case Label as label:
+            label.hits.append(7)
+            label.text = "relabelled"
+        case _:
+            pass
+
+
+def unwrap_square(shape: own dyn Shape) -> Square:
+    match own shape:
+        case Square as square:
+            return square
+        case other:
+            return Square(side=other.area())
+
+
+def side_or_zero(shape: dyn Shape) -> int64:
+    match shape:
+        case Square as square if square.side > 3:
+            return square.side
+        case Square as square:
+            return -square.side
+        case _:
+            return 0
+
+
+def early(shapes: mut list[dyn Shape]) -> int64:
+    for shape in mut shapes:
+        match mut shape:
+            case Square as square:
+                square.side += 1
+                if square.side > 5:
+                    return square.side
+                continue
+            case Rect as rect:
+                rect.w = 0
+                break
+            case _:
+                pass
+    return -1
+
+
+def main() -> None:
+    print(kind(Square(side=2)))
+    print(kind(Label(text="x", hits=[1, 2])))
+    print(kind(Rect(w=1, h=2)))
+    mut shapes: list[dyn Shape] = [
+        Square(side=1),
+        Rect(w=1, h=1),
+        Label(text="l", hits=[]),
+    ]
+    for shape in mut shapes:
+        widen(shape)
+    for shape in shapes:
+        print(shape.describe())
+        print(kind(shape))
+    widen(shapes[0])
+    print(shapes[0].area())
+    match shapes[2]:
+        case Label as label:
+            print(label.text)
+        case _:
+            print("no label")
+    match mut shapes[1]:
+        case Rect as rect:
+            rect.h = 1
+        case _:
+            pass
+    print(shapes[1].area())
+    print(unwrap_square(Square(side=9)).side)
+    print(unwrap_square(Rect(w=2, h=3)).side)
+    print(side_or_zero(Square(side=5)))
+    print(side_or_zero(Square(side=2)))
+    print(side_or_zero(Rect(w=2, h=3)))
+    mut more: list[dyn Shape] = [
+        Square(side=3),
+        Label(text="q", hits=[]),
+        Square(side=5),
+        Rect(w=3, h=3),
+        Square(side=1),
+    ]
+    print(early(more))
+    print(more[0].area())
+    print(more[2].area())
+    mut again: list[dyn Shape] = [Square(side=1), Rect(w=3, h=3), Square(side=9)]
+    print(early(again))
+    print(again[1].area())
+    print(again[2].area())
+    maybe: dyn Shape | None = Square(side=4)
+    match maybe:
+        case None:
+            print("none")
+        case dyn Shape as shape:
+            match shape:
+                case Square as square:
+                    print(square.side)
+                case _:
+                    print("not square")

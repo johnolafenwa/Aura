@@ -28,6 +28,7 @@ mod property_reads_tests;
 mod resolve;
 use resolve::{find_namespace_in_modules, reject_reserved_type_name, validate_type_params};
 mod trait_objects;
+pub(crate) use trait_objects::dyn_call_obstacle;
 mod traits;
 pub(crate) use traits::{
     binary_operator_trait, hidden_bound_type_params, merge_trait_bounds, self_type_substitutions,
@@ -1846,6 +1847,12 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         if let Some(object_ty) = self.trait_object_in_type(ty) {
+            // A unique Task right moves its result out, so a trait object
+            // that crossed the task boundary comes back without a copy. A
+            // Transfer type holds no `random.Rng` either.
+            if transfers_unique_task_result && self.transfer_failure(ty).is_none() {
+                return Ok(());
+            }
             return Err(Diagnostic::coded_at(
                 "AU3007",
                 span,
@@ -8151,6 +8158,9 @@ impl<'a> FunctionChecker<'a> {
                     self.canonical_type_names,
                     &self.type_params,
                 )?;
+                if target_ty.is_trait_object() {
+                    return self.type_trait_object_cast(expr, value, locals, &target_ty);
+                }
                 let source_ty = if is_float_type(&target_ty) && Self::is_integer_literal_expr(value)
                 {
                     // An explicit integer-to-float cast retains its exactness-
@@ -15872,6 +15882,9 @@ impl<'a> FunctionChecker<'a> {
                 }
                 if receiver_ty.is_trait_object() {
                     if let Some(method) = self.trait_object_method(&receiver_ty, field, span)? {
+                        if method.decl.receiver == Some(ReceiverKind::BorrowMut) {
+                            self.reject_mutable_trait_object_cast(object)?;
+                        }
                         let receiver_borrows = self.prepare_method_receiver_borrows(
                             field,
                             method.decl.receiver,
@@ -16873,6 +16886,11 @@ impl<'a> FunctionChecker<'a> {
                 }
                 let declared = binding.ty.clone();
                 Ok(self.narrowed_member_object_type(expr, declared, locals))
+            }
+            // A conversion to a trait object is a value of the trait
+            // object type, not the place it converts.
+            ExprKind::Cast { ty, .. } if ty.as_trait_object().is_some() => {
+                self.type_of_expr(expr, locals)
             }
             ExprKind::Group(inner)
             | ExprKind::Cast { expr: inner, .. }

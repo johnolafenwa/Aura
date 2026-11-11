@@ -1,0 +1,182 @@
+# A shared loop over a list of trait objects lends each element to the
+# body, and a call picks its implementation from the type the box holds.
+
+
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+
+
+class Square:
+    side: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+class Cell[T]:
+    value: T
+    size: int64
+
+
+enum Dot:
+    Small
+    Sized(int64)
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+
+
+impl[T] Shape for Cell[T]:
+    def area(self) -> int64:
+        return self.size
+    def name(self) -> str:
+        return "cell"
+    def grow(mut self, by: int64) -> None:
+        self.size += by
+
+
+impl Shape for Dot:
+    def area(self) -> int64:
+        match self:
+            case Dot.Small:
+                return 1
+            case Dot.Sized(size):
+                return size
+    def name(self) -> str:
+        return "dot"
+    def grow(mut self, by: int64) -> None:
+        self = Dot.Sized(self.area() + by)
+
+
+impl Shape for int64:
+    def area(self) -> int64:
+        return self
+    def name(self) -> str:
+        return "int"
+    def grow(mut self, by: int64) -> None:
+        self += by
+
+
+def describe(shape: dyn Shape) -> str:
+    return f"{shape.name()} {shape.area()}"
+
+
+def total(shapes: list[dyn Shape]) -> int64:
+    mut sum = 0
+    for shape in shapes:
+        sum += shape.area()
+    return sum
+
+
+def first_big(shapes: list[dyn Shape], limit: int64) -> str:
+    for shape in shapes:
+        if shape.area() < limit:
+            continue
+        return shape.name()
+    return "none"
+
+
+def kinds(shapes: list[dyn Shape]) -> int64:
+    mut squares = 0
+    for shape in shapes:
+        match shape:
+            case Square as square:
+                squares += square.side
+            case _:
+                pass
+    return squares
+
+
+def build() -> list[dyn Shape]:
+    return [
+        Square(side=2),
+        Label(text="note", hits=[1, 2]),
+        Cell(value="x", size=5),
+        Dot.Small,
+        7,
+        Cell(value=1.5, size=6),
+        Dot.Sized(4),
+    ]
+
+
+class Scene:
+    shapes: list[dyn Shape]
+
+    def total(self) -> int64:
+        mut sum = 0
+        for shape in self.shapes:
+            sum += shape.area()
+        return sum
+
+
+def main() -> None:
+    mut shapes = build()
+    print(total(shapes))
+    for shape in shapes:
+        print(describe(shape))
+    print(first_big(shapes, 6))
+    print(first_big(shapes, 100))
+    print(kinds(shapes))
+
+    # Nested loops lend from the same list twice.
+    mut pairs = 0
+    for left in shapes:
+        for right in shapes:
+            if left.area() == right.area():
+                pairs += 1
+    print(pairs)
+
+    # A loop with `break`, and an index loop.
+    mut seen = 0
+    for shape in shapes:
+        if shape.name() == "dot":
+            break
+        seen += 1
+    print(seen)
+    mut by_index = 0
+    for i in range(len(shapes)):
+        by_index += shapes[i].area()
+    print(by_index)
+
+    # Changes between loops are seen by the next loop.
+    for shape in mut shapes:
+        shape.grow(1)
+    print(total(shapes))
+    shapes.append(Square(side=10))
+    _ = shapes.pop(0)
+    shapes[0].grow(3)
+    print(total(shapes))
+    for shape in shapes:
+        print(describe(shape))
+
+    # What a loop reads from an element outlives the loan.
+    mut names: list[str] = []
+    for shape in shapes:
+        names.append(shape.name())
+    print(", ".join(names))
+
+    # An empty list, a list in a field, and a list built in place.
+    empty: list[dyn Shape] = []
+    print(total(empty))
+    scene = Scene(shapes=build())
+    print(scene.total())
+    print(total(build()))

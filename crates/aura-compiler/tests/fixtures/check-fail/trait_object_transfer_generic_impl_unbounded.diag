@@ -1,0 +1,6 @@
+error[AU3008]: impl of `Job` for `Box[T]` requires a Transfer type, because the trait has `Transfer` as a supertrait, and field `value` of `Box` -> type parameter `T` has no compiler-proven Transfer specialization
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_generic_impl_unbounded.au:14:1
+   |
+14 | impl[T] Job for Box[T]:
+   | ^
+  = help: bound each type parameter the type holds with `Transfer`, as in `impl[T: Transfer] ...`

@@ -1,0 +1,15 @@
+trait Job: Transfer:
+    def run(self) -> int64
+
+trait Plain:
+    def go(self) -> int64
+
+class Holder:
+    inner: dyn Plain
+
+impl Job for Holder:
+    def run(self) -> int64:
+        return self.inner.go()
+
+def main() -> None:
+    print(1)

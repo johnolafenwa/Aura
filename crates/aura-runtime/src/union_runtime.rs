@@ -16,7 +16,7 @@
 //! member that the instruction's union cannot admit is rejected, so forged or
 //! mismatched MIR still fails closed.
 
-use crate::runtime_value::Value;
+use crate::runtime_value::{UnionValue, Value};
 use aura_core::types::{Type, UnionType};
 use std::sync::Arc;
 
@@ -61,6 +61,7 @@ pub fn runtime_member_type(value: &Value) -> Option<Type> {
         Value::Duration(_) => Some(Type::named("Duration")),
         Value::Rng(_) => Some(Type::named("random.Rng")),
         Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
+        Value::TraitObject(object) => Some(Type::clone(&object.held)),
         Value::Range(_) => Some(Type::named("Range")),
         Value::Function(function) => Some(function.signature.clone()),
         Value::Unit => Some(Type::Unit),
@@ -97,10 +98,16 @@ pub fn is_none_value(value: &Value) -> bool {
     matches!(member_identity(value), Some(Type::Unit))
 }
 
+/// The member of its union type that a union value currently holds, as the
+/// union type declares it.
+pub fn active_member_type(union: &UnionValue) -> Option<&Type> {
+    union.union_type.union_members()?.get(union.member_index)
+}
+
 /// The concrete identity of the member a value currently holds.
 pub fn member_identity(value: &Value) -> Option<Type> {
     match value {
-        Value::Union(union) => match union.union_type.union_members()?.get(union.member_index)? {
+        Value::Union(union) => match active_member_type(union)? {
             Type::TypeParam(_) => runtime_member_type(&union.payload),
             member => Some(member.clone()),
         },

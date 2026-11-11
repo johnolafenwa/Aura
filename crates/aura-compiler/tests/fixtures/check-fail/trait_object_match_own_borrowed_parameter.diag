@@ -1,0 +1,7 @@
+error[AU3002]: parameter `shape` is borrowed; declare it as `own dyn Shape` to take ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_own_borrowed_parameter.au:29:15
+   |
+29 |     match own shape:
+   |               ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_own_borrowed_parameter.au:28:7: parameter `shape` is borrowed here
+  = help: declare the parameter as `own dyn Shape` when the function should consume this non-cloneable value

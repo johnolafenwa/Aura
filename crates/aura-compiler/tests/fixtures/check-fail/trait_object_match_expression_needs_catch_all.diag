@@ -1,0 +1,6 @@
+error[AU2013]: match on `dyn Shape` needs a final `case _:`, because a trait object can hold any type that implements its trait
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_expression_needs_catch_all.au:29:12
+   |
+29 |     return match shape:
+   |            ^
+  = help: add `case _:` after the type arms

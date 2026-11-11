@@ -3920,7 +3920,14 @@ impl Parser {
     }
 
     fn next_starts_numeric_cast_type(&self) -> bool {
-        matches!(self.peek_kind(1), Some(TokenKind::KwMut | TokenKind::KwOwn))
+        // `value as dyn Trait` converts to a trait object. `dyn` alone is
+        // an ordinary name, as in `with open() as dyn:`.
+        let starts_trait_object = matches!(
+            self.peek_kind(1),
+            Some(TokenKind::Identifier(name)) if name == crate::sema::TRAIT_OBJECT_TYPE_NAME
+        ) && matches!(self.peek_kind(2), Some(TokenKind::Identifier(_)));
+        starts_trait_object
+            || matches!(self.peek_kind(1), Some(TokenKind::KwMut | TokenKind::KwOwn))
             || matches!(
                 self.peek_kind(1),
                 Some(TokenKind::Identifier(name))

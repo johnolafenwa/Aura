@@ -1,0 +1,141 @@
+trait Named:
+    def name(self) -> str
+
+
+class Cell[T]:
+    value: T
+
+
+enum Maybe[T]:
+    Some(T)
+    Nothing
+
+
+enum Color:
+    Red
+    Green
+
+
+impl Named for int64:
+    def name(self) -> str:
+        return "int64"
+
+
+impl Named for int32:
+    def name(self) -> str:
+        return "int32"
+
+
+impl Named for str:
+    def name(self) -> str:
+        return "str"
+
+
+impl Named for bool:
+    def name(self) -> str:
+        return "bool"
+
+
+impl Named for list[int64]:
+    def name(self) -> str:
+        return "list[int64]"
+
+
+impl Named for list[str]:
+    def name(self) -> str:
+        return "list[str]"
+
+
+impl Named for dict[str, int64]:
+    def name(self) -> str:
+        return "dict[str, int64]"
+
+
+impl Named for Cell[int64]:
+    def name(self) -> str:
+        return "Cell[int64]"
+
+
+impl Named for Cell[str]:
+    def name(self) -> str:
+        return "Cell[str]"
+
+
+impl Named for Maybe[int64]:
+    def name(self) -> str:
+        return "Maybe[int64]"
+
+
+impl Named for Maybe[str]:
+    def name(self) -> str:
+        return "Maybe[str]"
+
+
+impl Named for Color:
+    def name(self) -> str:
+        return "Color"
+
+
+def tell(item: dyn Named) -> str:
+    return match item:
+        case int64 as number: f"int64 {number + 1}"
+        case int32 as small: f"int32 {small}"
+        case str as text: f"str {text}!"
+        case bool as flag: f"bool {flag}"
+        case list[int64] as numbers: f"list[int64] of {len(numbers)}"
+        case list[str] as texts: f"list[str] of {len(texts)}"
+        case dict[str, int64] as table: f"dict of {len(table)}"
+        case Cell[int64] as cell: f"Cell[int64] {cell.value}"
+        case Cell[str] as cell: f"Cell[str] {cell.value}"
+        case Maybe[int64] as maybe: f"Maybe[int64] {inner(maybe)}"
+        case Maybe[str] as maybe: "Maybe[str]"
+        case Color as color: "Color"
+        case _: f"other {item.name()}"
+
+
+def inner(maybe: Maybe[int64]) -> int64:
+    match maybe:
+        case Maybe.Some(value):
+            return value
+        case Maybe.Nothing:
+            return -1
+
+
+def count(items: list[dyn Named]) -> int64:
+    mut total = 0
+    for item in items:
+        total += match item:
+            case int64 as number: number
+            case list[int64] as numbers: len(numbers)
+            case _: 0
+    return total
+
+
+def main() -> None:
+    small: int32 = 5
+    empty: list[str] = []
+    nothing: Maybe[int64] = Maybe.Nothing
+    words: Maybe[str] = Maybe.Nothing
+    items: list[dyn Named] = [
+        1,
+        small,
+        "text",
+        true,
+        [1, 2, 3],
+        empty,
+        {"a": 1},
+        Cell(value=7),
+        Cell(value="c"),
+        Maybe.Some(9),
+        nothing,
+        words,
+        Color.Green,
+    ]
+    for item in items:
+        print(tell(item))
+    print(count(items))
+    last: dyn Named = "moved"
+    text = match own last:
+        case str as owned: owned
+        case _: "none"
+    print(text)

@@ -1,0 +1,6 @@
+error[AU3008]: Queue payload `dyn Plain` cannot cross a worker boundary because `dyn Plain` is a trait object, and the type it holds is not known to be Transfer; declare its trait with `Transfer` as a supertrait to admit only Transfer types
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_not_transfer_queue.au:19:13
+   |
+19 |     queue = Queue[dyn Plain]()
+   |             ^
+  = help: use a Queue payload made only from Transfer components; keep capabilities and host resources on their owning worker

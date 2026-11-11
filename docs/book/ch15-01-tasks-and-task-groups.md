@@ -532,6 +532,12 @@ cross include `random.Rng`, a `TaskGroup`, and views. You can't declare a type
 `Transfer` yourself; it is always derived, so there's no way to claim a type is
 safe when it isn't.
 
+A trait object needs one more word, because the compiler can't see the type it
+holds. Write `Transfer` as a supertrait, `trait Job: Transfer:`, and only
+transferable types may implement `Job`. A `dyn Job` can then go to a task or
+through a queue like any other owned value. A generic function asks for the
+same thing with a bound, `def send[T: Transfer](value: own T)`.
+
 Two kinds of handle are the exception that makes communication possible. A
 `Queue` handle and a `Task` handle can be passed to any task, because their
 internal state is synchronized by the runtime. Everything else moves as owned,

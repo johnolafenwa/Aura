@@ -461,3 +461,52 @@ fn boundaries_reject_a_cleanup_whose_place_has_no_exit() {
         assert!(error.contains(expected), "{error}");
     }
 }
+
+#[test]
+fn a_method_a_trait_object_call_may_pick_keeps_its_receiver_and_owns_its_arguments() {
+    let source = r#"
+trait Scorer:
+    def score(self, word: str) -> int64
+
+class Length:
+    bonus: int64
+
+class Prefix:
+    start: str
+
+impl Scorer for Length:
+    def score(self, word: str) -> int64:
+        return len(word) + self.bonus
+
+impl Scorer for Prefix:
+    def score(self, word: str) -> int64:
+        if word.starts_with(self.start):
+            return 1
+        return 0
+
+def total(scorers: list[dyn Scorer], word: str) -> int64:
+    mut sum = 0
+    for scorer in scorers:
+        sum += scorer.score(word)
+    return sum
+
+def main():
+    scorers: list[dyn Scorer] = [Length(bonus=1), Prefix(start="a")]
+    print(total(scorers, "apple"))
+"#;
+    let module = crate::lower_source_to_mir(source).expect("the source should lower");
+    let context = crate::mir::MirLoanValidationContext::new(&module).expect("context should build");
+    let mut picked = 0;
+    for function in &module.functions {
+        if !function.name.contains("score") {
+            continue;
+        }
+        let callee = context
+            .borrowing_function(&function.name)
+            .expect("a dispatched method should record its convention");
+        assert_eq!(callee.receiver, Some(crate::mir::MirReceiverKind::Borrow));
+        assert_eq!(callee.params, vec![crate::mir::MirReceiverKind::Value]);
+        picked += 1;
+    }
+    assert_eq!(picked, 2);
+}

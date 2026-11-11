@@ -1,0 +1,6 @@
+error[AU3008]: type `Dice` does not satisfy the bound `Transfer` because field `rng` of `Dice` -> `random.Rng` is a stateful generator and is not Transfer
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_transfer_bound_unmet.au:27:11
+   |
+27 |     print(send(Dice(rng=random.Rng(1))))
+   |           ^
+  = help: pass a value made only from Transfer components; keep capabilities and host resources on their owning worker
