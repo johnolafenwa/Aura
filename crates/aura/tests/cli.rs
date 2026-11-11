@@ -8822,6 +8822,44 @@ fn build_produces_a_runnable_binary() {
 }
 
 #[test]
+fn counted_loops_over_scalar_lists_build_to_vector_instructions() {
+    let temp = TempDir::new("aura-vector-loops");
+    let source_path = temp.path().join("app.au");
+    let source = "def scale(values: mut list[float64], factor: float64) -> None:\n    for i in range(len(values)):\n        values[i] *= factor\n\ndef saxpy(a: float64, xs: list[float64], ys: mut list[float64]) -> None:\n    for i in range(len(xs)):\n        y = ys[i]\n        ys[i] = a * xs[i] + y\n\ndef main() -> None:\n    mut values = [0.5, 0.25, 0.125, 2.0, 4.0]\n    mut sums = [1.0, 2.0, 3.0, 4.0, 5.0]\n    scale(values, 3.0)\n    saxpy(2.0, values, sums)\n    print(sums)\n";
+    fs::write(&source_path, source).unwrap();
+    let output_path = temp.path().join("app");
+    let prefix = temp.path().join("ir");
+    let build = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .env("AURA_DUMP_LLVM_IR", &prefix)
+        .output()
+        .expect("failed to run aura build");
+    assert!(
+        build.status.success(),
+        "the build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = generated_binary(&output_path).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&run.stdout),
+        "[4.0, 3.5, 3.75, 16.0, 29.0]\n"
+    );
+    // The loops' copies for a plain list read and write whole vectors of
+    // elements: no bounds check or runtime call is left in them.
+    let vector_accesses = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ll"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .filter(|ir| ir.contains("x double>, ptr"))
+        .count();
+    assert!(vector_accesses > 0, "no unit loads a vector of elements");
+}
+
+#[test]
 fn build_and_run_accept_a_target_cpu() {
     let temp = TempDir::new("aura-target-cpu");
     let source_path = temp.path().join("app.au");

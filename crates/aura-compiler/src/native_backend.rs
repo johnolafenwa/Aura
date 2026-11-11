@@ -571,6 +571,11 @@ pub(crate) trait FunctionBackend {
     fn iconst(&mut self, ty: ScalarType, value: i64) -> Val;
     fn f64const(&mut self, value: f64) -> Val;
     fn iadd(&mut self, left: Val, right: Val) -> Val;
+    /// The address `offset` bytes past the address `base`: the same word
+    /// as `iadd`, which a load or a store through it reaches as an offset
+    /// from `base`, so loop analyses see an element's address advance
+    /// with its index.
+    fn element_address(&mut self, base: Val, offset: Val) -> Val;
     fn iadd_imm(&mut self, value: Val, imm: i64) -> Val;
     fn isub(&mut self, left: Val, right: Val) -> Val;
     fn imul(&mut self, left: Val, right: Val) -> Val;

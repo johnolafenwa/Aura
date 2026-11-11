@@ -1,0 +1,6 @@
+error[AU4003]: list index `3` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/counted_loop_writes_past_its_list.au:3:9
+  |
+3 |         xs[i] = i
+  |         ^
+  = note: Aura call chain (innermost first): fill at 1:1 -> main at 5:1

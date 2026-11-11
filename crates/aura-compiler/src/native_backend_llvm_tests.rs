@@ -1263,6 +1263,34 @@ fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
     assert!(!ir.contains("select"), "{ir}");
     assert!(ir.contains(", 7\n"), "{ir}");
     assert_eq!(ir.matches("icmp slt i64").count(), 2, "{ir}");
+    // The entry favors the copy, so its values keep the registers.
+    assert!(ir.contains("!{!\"branch_weights\", i32 16, i32 1}"), "{ir}");
+}
+
+#[test]
+fn element_addresses_are_offsets_from_one_pointer() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "element", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let [base, index] = builder.block_params(entry)[..] else {
+            unreachable!("two parameters")
+        };
+        let offset = builder.imul_imm(index, 8);
+        let address = builder.element_address(base, offset);
+        let element = builder.load(types::I64, MemFlags::trusted(), address, 0);
+        // The address is still a word a caller can pass on.
+        let sum = builder.iadd(element, address);
+        builder.return_(&[sum]);
+    });
+    let ir = ir(&module);
+    // The access indexes from the base as a pointer, which LLVM's loop
+    // passes follow, and the word is the plain sum.
+    assert!(ir.contains("getelementptr i8, ptr"), "{ir}");
+    assert_eq!(ir.matches("inttoptr").count(), 1, "{ir}");
 }
 
 #[test]

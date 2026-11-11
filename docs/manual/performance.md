@@ -1648,6 +1648,51 @@ now counts as having its type from the start, and appending an `int64` to a
 passes it on, as `regex_match` does for every byte, no longer pays a
 runtime type check for each pass.
 
+### Counted Loops Over Number Lists
+
+A loop that walks a list of numbers by index runs without a bounds check
+on each element, and LLVM turns it into vector instructions when the
+arithmetic allows it:
+
+```aura
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = a * xs[i] + y
+```
+
+Native code checks once, where the loop starts, that every index the loop
+will use is inside its list. When the check holds, the loop runs a copy
+with no per-element check. When it does not, the loop runs as written and
+stops with `AU4003` at the access that leaves the list, so the result is
+the same either way.
+
+The loop qualifies when:
+
+- **The list** is a `list` of one fixed-width number type or `bool`, and
+  the loop does not resize it.
+- **The counter** is an `int64` that only moves up by a constant: a
+  `for i in range(...)` without a step, or a `while i < n:` loop with
+  `i += 2`.
+- **The bound** is `len(xs)`, a constant, or a variable the loop does not
+  assign.
+- **Each index** is the counter plus or minus a constant, such as
+  `xs[i - 1]` and `xs[i + 1]`.
+
+These loops stay scalar:
+
+- **A float sum** such as `total += xs[i]`. Aura adds in source order.
+  Use `Array.fast_sum()` or `Array.dot()` for a reordered sum.
+- **Checked integer arithmetic** on the elements. Each operation can
+  report overflow.
+- **A loop in a program that starts tasks.** Each iteration checks
+  whether to yield.
+
+On `benchmarks/simd`, five such loops over `float64` lists run at the
+speed of the same loops in Rust, and 40 to 400 times faster than in
+Python. `aura build --target-cpu native` lets the loops use the host's
+widest registers.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and

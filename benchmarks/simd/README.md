@@ -1,4 +1,4 @@
-# Array kernels
+# Array kernels and list loops
 
 The Array kernels of ADR-0085 and ADR-0086 beside the same work in Rust,
 in NumPy, and in plain Python: the left-to-right `sum`, the reordered
@@ -70,3 +70,38 @@ What the numbers say:
   1,024 elements the call costs as much as the kernel, and at one million
   the memory does. `min` and `max` show the width most clearly.
 - Plain Python is 5 to 400 times slower than Aura on every row.
+
+## List loops
+
+`loops.au`, `loops.rs`, and `loops.py` run the same five indexed loops
+over `list[float64]`, a Rust `Vec<f64>` behind slices, and a Python list:
+`scale` multiplies in place, `saxpy` adds a multiple of one list to
+another, `blur` averages each element with its neighbors, `clamp` writes
+back the elements outside a range, and `dot` adds products from left to
+right. `run.sh` runs them after the kernels. Aura and Rust are each
+built for the generic CPU and for the host CPU.
+
+| Loop | Elements | Repetitions | Aura | Aura, native | Rust | Rust, native | Python |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `scale` | 1,024 | 400,000 | 58 | 62 | 62 | 82 | 22,800 |
+| `saxpy` | 1,024 | 400,000 | 129 | 86 | 96 | 81 | 20,900 |
+| `blur` | 1,024 | 400,000 | 297 | 305 | 291 | 291 | 45,700 |
+| `clamp` | 1,024 | 400,000 | 355 | 89 | 349 | 98 | 21,100 |
+| `dot` | 1,024 | 400,000 | 283 | 293 | 284 | 297 | 22,900 |
+| `scale` | 1,000,000 | 300 | 124 | 101 | 97 | 108 | 11,200 |
+| `saxpy` | 1,000,000 | 300 | 194 | 196 | 191 | 199 | 14,300 |
+| `blur` | 1,000,000 | 300 | 231 | 221 | 238 | 229 | 27,800 |
+| `clamp` | 1,000,000 | 300 | 264 | 103 | 263 | 123 | 12,400 |
+| `dot` | 1,000,000 | 300 | 229 | 242 | 230 | 262 | 10,600 |
+
+Aura and Rust print the same checksum on every row. Python runs one
+hundredth of the repetitions, so its checksums differ and its column is
+the measured time multiplied by 100.
+
+- Aura is within the run-to-run spread of Rust on every row, and 40 to
+  400 times faster than Python.
+- `scale` and `saxpy` compile to packed multiplies and adds in both
+  languages. `clamp` needs a masked store, which the generic x86-64 CPU
+  lacks, so it is four times faster in a build for the host CPU.
+- `blur` and `dot` are scalar in both languages. `blur` divides, and
+  `dot` adds in source order, which no compiler may reorder.

@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- Native code runs a counted loop over a list of numbers, such as
+  `for i in range(len(xs)): ys[i] = a * xs[i] + ys[i]`, with one range
+  check where the loop starts instead of one per element, and LLVM
+  vectorizes it. Indexes a constant away from the counter, `while` loops
+  with a constant step, and `mut` list parameters qualify. Five such loops
+  in `benchmarks/simd` now run at the speed of the same loops in Rust. An
+  index out of range still stops at the access that reaches it.
 - Arrays: `left.dot(right)` is the inner product of two Arrays of the same
   shape, and `left.matmul(right)` is the matrix product of `[n, k]` with
   `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Integer products are

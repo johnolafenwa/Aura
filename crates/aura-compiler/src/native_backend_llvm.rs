@@ -76,6 +76,11 @@ const MEMORY_NONE: u64 = 0;
 /// edge, as Clang weighs `__builtin_expect`.
 const COLD_BRANCH_WEIGHTS: (u64, u64) = (1, 2000);
 
+/// The `branch_weights` of the branch into a loop's versioned copy against
+/// the loop as written. The register allocator keeps the values of the
+/// likelier loop in registers when the two share them.
+const VERSIONED_LOOP_WEIGHTS: (u64, u64) = (16, 1);
+
 /// The stack of a thread that writes one unit, as large as a main
 /// thread's.
 const UNIT_THREAD_STACK: usize = 8 << 20;
@@ -609,6 +614,8 @@ enum UnaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BinaryOp {
     Iadd,
+    /// `Iadd` of an address and a byte offset (see `element_address`).
+    ElementAddress,
     Isub,
     Imul,
     /// `+`, `-`, and `*` that do not wrap as signed (`Nsw`) or unsigned
@@ -684,6 +691,8 @@ struct BlockIr {
     insts: Vec<u32>,
     sealed: bool,
     cold: bool,
+    /// A copy of a loop that runs while its checks hold at entry.
+    versioned: bool,
     in_layout: bool,
     predecessors: Vec<u32>,
     /// The value each variable last got in this block.
@@ -979,6 +988,7 @@ impl FunctionIr {
             let mut entry = BlockIr {
                 sealed: true,
                 cold: original.cold,
+                versioned: true,
                 in_layout: true,
                 ..BlockIr::default()
             };
@@ -1417,6 +1427,10 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn iadd(&mut self, left: Val, right: Val) -> Val {
         self.binary(BinaryOp::Iadd, left, right)
+    }
+
+    fn element_address(&mut self, base: Val, offset: Val) -> Val {
+        self.binary(BinaryOp::ElementAddress, base, offset)
     }
 
     fn iadd_imm(&mut self, value: Val, imm: i64) -> Val {
@@ -2561,11 +2575,35 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn address(&self, address: Val, offset: i32) -> Result<PointerValue<'ctx>, String> {
-        let pointer = built(self.builder.build_int_to_ptr(
-            self.int(address)?,
-            self.context.ptr_type(AddressSpace::default()),
-            "",
-        ))?;
+        let element = self.ir.value_defs[address.0 as usize]
+            .map(|inst| &self.ir.insts[inst as usize].op)
+            .and_then(|op| match op {
+                Op::Binary(BinaryOp::ElementAddress, base, index) => Some((*base, *index)),
+                _ => None,
+            });
+        let pointer = match element {
+            // An element's address is a GEP from the storage's address,
+            // which scalar evolution follows through a loop. An integer
+            // sum turned into a pointer is opaque to it.
+            Some((base, index)) => {
+                let base = built(self.builder.build_int_to_ptr(
+                    self.int(base)?,
+                    self.context.ptr_type(AddressSpace::default()),
+                    "",
+                ))?;
+                // SAFETY: a byte offset from an integer address needs no
+                // bounds; the GEP is not `inbounds`.
+                built(unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), base, &[self.int(index)?], "")
+                })?
+            }
+            None => built(self.builder.build_int_to_ptr(
+                self.int(address)?,
+                self.context.ptr_type(AddressSpace::default()),
+                "",
+            ))?,
+        };
         if offset == 0 {
             return Ok(pointer);
         }
@@ -2982,10 +3020,13 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     /// edges are both cold, or neither, keeps LLVM's own estimate.
     fn weigh_cold_edges(&self, branch: InstructionValue<'ctx>, then_block: Blk, else_block: Blk) {
         let cold = |block: Blk| self.ir.blocks[block.0 as usize].cold;
+        let versioned = |block: Blk| self.ir.blocks[block.0 as usize].versioned;
         let (rare, common) = COLD_BRANCH_WEIGHTS;
         let (then_weight, else_weight) = match (cold(then_block), cold(else_block)) {
             (true, false) => (rare, common),
             (false, true) => (common, rare),
+            // The loop as written stays warm: lists in other forms run it.
+            _ if versioned(then_block) && !versioned(else_block) => VERSIONED_LOOP_WEIGHTS,
             _ => return,
         };
         let weight = |value: u64| self.context.i32_type().const_int(value, false).into();
@@ -3104,7 +3145,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         };
         let ty = left.get_type();
         let value = match op {
-            BinaryOp::Iadd => self.builder.build_int_add(left, right, ""),
+            BinaryOp::Iadd | BinaryOp::ElementAddress => {
+                self.builder.build_int_add(left, right, "")
+            }
             BinaryOp::Isub => self.builder.build_int_sub(left, right, ""),
             BinaryOp::Imul => self.builder.build_int_mul(left, right, ""),
             BinaryOp::IaddNsw => self.builder.build_int_nsw_add(left, right, ""),

@@ -1,0 +1,82 @@
+import sys
+
+
+def scale(xs: mut list[float64], factor: float64):
+    for i in range(len(xs)):
+        xs[i] *= factor
+
+
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = a * xs[i] + y
+
+
+def blur(xs: list[float64], out: mut list[float64]):
+    for i in range(1, len(xs) - 1):
+        out[i] = (xs[i - 1] + xs[i] + xs[i + 1]) / 3.0
+
+
+def clamp(xs: mut list[float64], low: float64, high: float64):
+    for i in range(len(xs)):
+        x = xs[i]
+        if x < low:
+            xs[i] = low
+        elif x > high:
+            xs[i] = high
+
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut total = 0.0
+    for i in range(len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+
+def checksum(xs: list[float64]) -> float64:
+    mut total = 0.0
+    for x in xs:
+        total += x
+    return total
+
+
+def run(n: int64, reps: int64) -> None:
+    mut xs: list[float64] = []
+    mut ys: list[float64] = []
+    mut out: list[float64] = []
+    for i in range(n):
+        xs.append((i % 1000).to_float() * 0.5 + 1.0)
+        ys.append((i % 1000).to_float() * 0.25 - 3.0)
+        out.append(0.0)
+
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        scale(ys, 1.0000001)
+    print(f"scale {n} {sys.monotonic_time_ms() - start} {checksum(ys)}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        saxpy(0.0000001, xs, ys)
+    print(f"saxpy {n} {sys.monotonic_time_ms() - start} {checksum(ys)}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        blur(ys, out)
+    print(f"blur {n} {sys.monotonic_time_ms() - start} {checksum(out)}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        clamp(out, -1.0, 200.0)
+    print(f"clamp {n} {sys.monotonic_time_ms() - start} {checksum(out)}")
+
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += dot(xs, ys)
+    print(f"dot {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def main() -> int32:
+    run(1024, 400000)
+    run(1000000, 300)
+    return 0

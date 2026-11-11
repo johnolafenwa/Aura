@@ -1,0 +1,10 @@
+def add_into(xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = y + xs[i]
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0]
+    mut ys = [1.0, 2.0]
+    add_into(xs, ys)
+    print(ys)

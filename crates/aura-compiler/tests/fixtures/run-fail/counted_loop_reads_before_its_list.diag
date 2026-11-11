@@ -1,0 +1,6 @@
+error[AU4003]: list index `-4` is out of bounds for length `3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/counted_loop_reads_before_its_list.au:4:21
+  |
+4 |         total += xs[i - 4]
+  |                     ^
+  = note: Aura call chain (innermost first): sum_before at 1:1 -> main at 7:1

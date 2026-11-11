@@ -9,9 +9,10 @@ Last updated: 2026-11-11
   explicit vector types. Details are in `2026-11-11-simd.md`.
 - Done: AVX2 copies of the Array kernels chosen at run time,
   `--target-cpu`, `Array.fast_sum`, `fast_mean`, `dot`, and `matmul`
-  (ADR-0085, ADR-0086).
-- Remaining: loops over lists and Arrays that LLVM can vectorize, and
-  explicit vector types.
+  (ADR-0085, ADR-0086). Counted loops over lists of numbers run with
+  one range check at entry and vectorize, at the speed of the same loops
+  in Rust.
+- Remaining: explicit vector types.
 
 ## Streaming I/O and a deeper standard library (in progress)
 

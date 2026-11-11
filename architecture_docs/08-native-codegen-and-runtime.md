@@ -320,6 +320,52 @@ store the element without a runtime call or a box.
   its first use, and caches it in a variable. A write on a call without a
   sink then costs one compare.
 
+### Counted Loops Over Scalar Lists
+
+A loop that walks a list of numbers by index compiles to a second copy
+with no bounds check, no storage reload, and no slow path. LLVM
+vectorizes that copy when the arithmetic allows it.
+
+```aura fragment
+for i in range(len(xs)):
+    ys[i] = a * xs[i] + ys[i]
+```
+
+- **Views read once.** `native_codegen_list_snapshots.rs` finds each loop
+  that reads or writes scalar elements of a list it does not resize. The
+  block that enters the loop reads the list's form, length, and element
+  address into variables. `version_blocks` copies the loop. The copy
+  reads the variables, and the loop as written reads the list each time.
+- **Range proofs.** `native_codegen_range_loops.rs` finds the loop's
+  counters: an `int64` local the loop only advances by a positive
+  constant, compared `counter < bound` in a block that branches into the
+  loop. The bound is a local the loop does not assign, a constant, or the
+  list's own length. A dataflow pass follows the counter through copies
+  and constant offsets, so `xs[i - 1]` and `xs[i + 1]` are known too.
+- **Entry guards.** An access at distance `d` from the counter is in
+  range on every iteration when the counter starts at `-d` or more and
+  `bound + d` is at most the length. The entry block checks both once,
+  with the form, the element type, and, for a `mut` parameter, that the
+  caller registered no write-through sink. The copy runs only when all
+  hold. Otherwise the loop runs as written and reports an index out of
+  range at the access that reaches it.
+- **What the copy drops.** A covered access keeps no bounds check, no
+  check for room, and no sink test. A checked sum of a place in range and
+  a constant, such as the counter's advance, keeps no overflow check: the
+  guards bound it by the list's length.
+- **Addresses.** An element address is `element_address(base, offset)`,
+  which LLVM sees as a `getelementptr` from one pointer. A sum of two
+  words converted to a pointer hides the stride from the loop vectorizer.
+- **Branch weight.** The branch into the copy carries a 16 to 1 weight.
+  The register allocator then keeps the copy's values in registers when
+  both loops feed one result.
+
+Limits: a float reduction such as `total += xs[i]` keeps its order, so
+it stays scalar. Checked integer arithmetic on the elements stays scalar.
+A function in a program that starts tasks polls for a yield on every
+loop iteration, which also keeps the loop scalar. `Array` element loops
+are not covered.
+
 ### Integer Widths, Casts, And Constants
 
 Every fixed-width scalar runs in machine words, so code over bytes, hashes,

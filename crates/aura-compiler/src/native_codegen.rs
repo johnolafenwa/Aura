@@ -1940,10 +1940,6 @@ impl<'a> NativeCodegen<'a> {
             |list| {
                 list != "self"
                     && !explicit_locals.loans.contains(list)
-                    && !writeback_locals.iter().any(|(writeback, _)| writeback == list)
-                    && !function.params.iter().any(|param| {
-                        param.name == list && param.passing == MirReceiverKind::BorrowMut
-                    })
                     && matches!(
                         variable_types.get(list),
                         Some(DirectType::Opaque(Type::Named(name, args)))
@@ -1974,7 +1970,17 @@ impl<'a> NativeCodegen<'a> {
                 variable
             });
             variable_index += 4;
+            let range = range_loops::range_proof(function, &region, |place| {
+                !place.contains(['.', '['])
+                    && matches!(
+                        variable_types.get(place),
+                        Some(DirectType::Scalar(ScalarKind::Int64))
+                    )
+            });
+            let sink = mutable_param_indices.get(&region.list).copied();
             list_snapshots::ListSnapshot {
+                range,
+                sink,
                 region,
                 ok,
                 access,
@@ -2076,6 +2082,7 @@ impl<'a> NativeCodegen<'a> {
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
+            current_snapshot_instruction: 0,
             pending_snapshot_pads: Vec::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
@@ -3367,6 +3374,8 @@ struct FunctionCompiler<'a> {
     snapshot_vals: HashMap<Val, usize>,
     /// The MIR block being compiled.
     current_snapshot_label: String,
+    /// The position in its block of the instruction being compiled.
+    current_snapshot_instruction: usize,
     /// The blocks the terminator being compiled jumps through to enter
     /// loops, with each one's target and snapshots, filled once it is done.
     pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
@@ -4406,6 +4415,7 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
             }
+            self.current_snapshot_instruction = instruction_index;
             if let Some(fused) =
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
@@ -4418,6 +4428,8 @@ impl<'a> FunctionCompiler<'a> {
             self.str_append_root = None;
             compiled?;
         }
+        // No range proof names the terminator.
+        self.current_snapshot_instruction = usize::MAX;
         // A retain before the terminator pays for the value a `Return`
         // hands back.
         self.layout_scratch.consumers =
@@ -6573,6 +6585,15 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.umul_overflow(left, right)
             }
         };
+        let mut overflow = overflow;
+        if let Some(snapshot) = self.range_exact().filter(|_| kind.is_signed()) {
+            // The loop's copy for a qualifying view bounded the operands
+            // where it was entered.
+            let none = self.builder.iconst(types::I64, 0);
+            let wide = self.builder.uextend(types::I64, overflow);
+            let wide = self.keep_in_copy(snapshot, none, wide);
+            overflow = self.builder.icmp_imm(IntCC::NotEqual, wide, 0);
+        }
         self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
         Ok(result)
     }
@@ -11634,7 +11655,7 @@ impl<'a> FunctionCompiler<'a> {
         let position =
             self.emit_list_view_bounds_check(array, coordinate.values[0], &layout, slow_block);
         let offset = self.builder.imul_imm(position, size);
-        let element = self.builder.iadd(elements, offset);
+        let element = self.builder.element_address(elements, offset);
         let value = match kind {
             ScalarKind::Int32 => self.builder.sload32(flags, element, 0),
             ScalarKind::Float32 => {
@@ -11916,22 +11937,34 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
         let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
         // Room covers every element of unshared storage, and a list with
         // shared storage has none.
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
-        let unshared = self
+        let capacity = self
+            .builder
+            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let mut unshared = self
             .builder
             .icmp(IntCC::UnsignedLessThan, position, capacity);
+        if let Some(snapshot) = self
+            .snapshot_vals
+            .get(&list)
+            .copied()
+            .filter(|index| self.list_snapshots[*index].region.writes)
+        {
+            // A loop that writes the list runs its copy only while the
+            // storage is unshared, and a position in range has room there.
+            let one = self.builder.iconst(types::I64, 1);
+            let room = self.builder.uextend(types::I64, unshared);
+            let room = self.keep_in_copy(snapshot, one, room);
+            unshared = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
+        }
         self.builder
             .brif(unshared, store_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(store_block);
         self.builder.seal_block(store_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let element = self.scalar_list_element(elements, position, stride);
         self.store_scalar_list_element(kind, bits, element);
         self.builder.jump(join_block, &[]);
@@ -11953,7 +11986,7 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             self.builder.imul_imm(position, stride)
         };
-        self.builder.iadd(elements, offset)
+        self.builder.element_address(elements, offset)
     }
 
     /// The bits of the unboxed `kind` element at `element`: an integer
@@ -12015,11 +12048,20 @@ impl<'a> FunctionCompiler<'a> {
         let zero = self.builder.iconst(types::I64, 0);
         let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
         let from_end = self.builder.iadd(len, index);
-        let position = self.builder.select(negative, from_end, index);
+        let mut position = self.builder.select(negative, from_end, index);
         // One unsigned compare also rejects a position below zero.
-        let out_of_range = self
+        let mut out_of_range = self
             .builder
             .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        if let Some(snapshot) = self.range_covered(list) {
+            // The loop's copy for a qualifying view checked the whole
+            // range where it was entered, so the index is the position
+            // there.
+            let outside = self.builder.uextend(types::I64, out_of_range);
+            let outside = self.keep_in_copy(snapshot, zero, outside);
+            out_of_range = self.builder.icmp_imm(IntCC::NotEqual, outside, 0);
+            position = self.keep_in_copy(snapshot, index, position);
+        }
         let in_range = self.builder.create_block();
         self.builder.brif(out_of_range, slow, &[], in_range, &[]);
         self.builder.switch_to_block(in_range);
@@ -13758,7 +13800,13 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
-        let sink = self.current_mutable_sink(index);
+        let mut sink = self.current_mutable_sink(index);
+        if let Some(snapshot) = self.snapshot_of_root(root) {
+            // The loop's copy for a qualifying view runs only with no
+            // sink.
+            let none = self.builder.iconst(types::I64, 0);
+            sink = self.keep_in_copy(snapshot, none, sink);
+        }
         let active = self.builder.icmp_imm(IntCC::NotEqual, sink, 0);
         let publish = self.builder.create_block();
         let done = self.builder.create_block();
@@ -18855,6 +18903,8 @@ mod list_snapshots;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_range_loops.rs"]
+mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
