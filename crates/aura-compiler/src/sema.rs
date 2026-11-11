@@ -1846,6 +1846,12 @@ impl<'a> FunctionChecker<'a> {
             ));
         }
         if let Some(object_ty) = self.trait_object_in_type(ty) {
+            // A unique Task right moves its result out, so a trait object
+            // that crossed the task boundary comes back without a copy. A
+            // Transfer type holds no `random.Rng` either.
+            if transfers_unique_task_result && self.transfer_failure(ty).is_none() {
+                return Ok(());
+            }
             return Err(Diagnostic::coded_at(
                 "AU3007",
                 span,

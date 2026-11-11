@@ -1,0 +1,70 @@
+# Trait objects in tasks: `trait Job: Transfer:` admits only Transfer
+# types, so a `dyn Job` may be a task argument and a `Queue` payload.
+
+
+trait Job: Transfer:
+    def name(self) -> str
+    def run(self) -> int64
+
+
+class Sum:
+    values: list[int64]
+
+
+class Count:
+    text: str
+    letter: str
+
+
+impl Job for Sum:
+    def name(self) -> str:
+        return "sum"
+    def run(self) -> int64:
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+
+
+impl Job for Count:
+    def name(self) -> str:
+        return f"count {self.letter}"
+    def run(self) -> int64:
+        return self.text.count(self.letter)
+
+
+def run_one(job: own dyn Job) -> str:
+    return f"{job.name()} = {job.run()}"
+
+
+def drain(jobs: Queue[dyn Job], results: Queue[str]) -> None:
+    # Each job arrives as a `dyn Job`: the worker never names its type.
+    for job in jobs:
+        _ = results.put(run_one(job))
+    results.close()
+
+
+def main() -> None:
+    # One task per job. The job moves into its task.
+    work: list[dyn Job] = [Sum(values=[1, 2, 3]), Count(text="banana", letter="a")]
+    with TaskGroup() as group:
+        mut tasks: list[Task[str]] = []
+        for job in own work:
+            tasks.append(group.start(run_one, job))
+        for task in own tasks:
+            match task.result():
+                case TaskResult.Ready(line):
+                    print(line)
+                case _:
+                    print("a job failed")
+
+    # One worker that takes jobs from a queue.
+    jobs = Queue[dyn Job]()
+    results = Queue[str]()
+    with TaskGroup() as group:
+        group.start_soon(drain, jobs, results)
+        _ = jobs.put(Sum(values=[10, 20]))
+        _ = jobs.put(Count(text="mississippi", letter="s"))
+        jobs.close()
+        for line in results:
+            print(line)

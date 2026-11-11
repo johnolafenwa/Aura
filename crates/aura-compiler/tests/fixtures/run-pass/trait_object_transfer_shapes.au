@@ -1,0 +1,143 @@
+trait Job: Transfer:
+    def run(self) -> int64
+
+trait Fast: Job:
+    def speed(self) -> int64
+
+trait Step[T]: Transfer:
+    def apply(self, value: T) -> T
+
+class Sum:
+    values: list[int64]
+
+class Box[T]:
+    value: T
+
+enum Plan:
+    Wait(int64)
+    Stop
+
+class Add:
+    by: int64
+
+class Batch:
+    name: str
+    jobs: list[dyn Job]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        return len(self.values)
+
+impl Fast for Sum:
+    def speed(self) -> int64:
+        return 9
+
+impl[T: Transfer] Job for Box[T]:
+    def run(self) -> int64:
+        return 7
+
+impl Job for Plan:
+    def run(self) -> int64:
+        match self:
+            case Plan.Wait(ticks):
+                return ticks
+            case Plan.Stop:
+                return 0
+
+impl Job for int64:
+    def run(self) -> int64:
+        return self + 1
+
+impl Step[int64] for Add:
+    def apply(self, value: int64) -> int64:
+        return value + self.by
+
+def work(job: own dyn Job) -> int64:
+    return job.run()
+
+def quick(job: own dyn Fast) -> int64:
+    return job.run() + job.speed()
+
+def stepped(step: own dyn Step[int64], start: int64) -> int64:
+    return step.apply(start)
+
+def batch_total(batch: own Batch) -> int64:
+    mut total = 0
+    for job in batch.jobs:
+        total += job.run()
+    return total
+
+def spawn[T: Job](job: own T) -> int64:
+    with TaskGroup() as group:
+        task = group.start(run_one, job)
+        match task.result():
+            case TaskResult.Ready(value):
+                return value
+            case _:
+                return -1
+
+def run_one[T: Job](job: own T) -> int64:
+    return job.run()
+
+def send[T: Transfer](value: own T) -> int64:
+    queue = Queue[T]()
+    _ = queue.put(value)
+    match queue.get():
+        case QueueReceive.Item(_):
+            return 1
+        case _:
+            return 0
+
+def kind(value: dyn Transfer) -> str:
+    match value:
+        case int64 as number:
+            return f"int {number}"
+        case Sum as sum:
+            return f"sum of {len(sum.values)}"
+        case _:
+            return "something else"
+
+def pick(job: own dyn Job | None) -> int64:
+    match job:
+        case None:
+            return -1
+        case dyn Job as found:
+            return found.run()
+
+def main() -> None:
+    with TaskGroup() as group:
+        a = group.start(work, Box(value="x") as dyn Job)
+        b = group.start(work, Plan.Wait(5) as dyn Job)
+        c = group.start(work, 41 as dyn Job)
+        d = group.start(quick, Sum(values=[1]) as dyn Fast)
+        e = group.start(stepped, Add(by=3) as dyn Step[int64], 4)
+        f = group.start(batch_total, Batch(name="all", jobs=[Sum(values=[1, 2]), Plan.Stop, 9]))
+        print(a.result())
+        print(b.result())
+        print(c.result())
+        print(d.result())
+        print(e.result())
+        print(f.result())
+    print(spawn(Sum(values=[1, 2, 3])))
+    fast: dyn Fast = Sum(values=[1, 2])
+    job: dyn Job = fast
+    print(spawn(job))
+    print(send(Sum(values=[1])))
+    print(send(4))
+    again: dyn Job = Plan.Wait(2)
+    print(send(again))
+    anything: list[dyn Transfer] = [1, Sum(values=[1, 2]), "text"]
+    for item in anything:
+        print(kind(item))
+    more: dyn Fast = Sum(values=[3])
+    wide: dyn Transfer = more
+    print(kind(wide))
+    table: dict[str, dyn Job] = {"one": Sum(values=[1])}
+    pairs: list[(str, dyn Job)] = [("two", Plan.Wait(2))]
+    with TaskGroup() as group:
+        g = group.start(pick, Sum(values=[1, 1]) as dyn Job)
+        h = group.start(pick, None)
+        print(g.result())
+        print(h.result())
+    print(send(table))
+    print(send(pairs))

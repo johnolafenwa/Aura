@@ -208,6 +208,20 @@ boundary.
   union already uses, so `return`, `break`, and `continue` write back too.
   A shared or `mut` match on `items[i]` inspects the element in place.
 
+- **Step 4 (2026-11-10).** `Transfer` is a marker trait in the prelude
+  (`std/prelude.au`). It has no implementations: wherever a bound or a
+  supertrait names it, the checker asks the structural property instead
+  (`transfer_failure`). A trait with `Transfer` in its supertrait closure
+  admits only Transfer types, checked at each `impl` (`AU3008`), so its
+  trait object is Transfer. A type parameter is Transfer when one of its
+  bounds reaches the marker, which is what lets
+  `impl[T: Transfer] Job for Box[T]:` pass the `impl` check and lets a
+  generic function send a `T`. `impl Transfer for T:` is refused. A trait
+  the program itself names `Transfer` is an ordinary trait and changes
+  nothing. `Task.result()` moves a Transfer trait object out as it moves
+  any other single-consumer result. No backend change was needed: a trait
+  object already crosses a worker boundary as its box does.
+
 ## Ratification Record
 
 - 2026-11-10 09:22 UTC: the owner chose "Approve all defaults" on the

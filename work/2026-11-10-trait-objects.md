@@ -103,6 +103,32 @@ Also fixed here: an element of a list of trait objects can be passed to a
   `TraitObjectTake { value, ty }` copies or moves the held value out.
   `match mut` reuses the write-back path of `match mut` on a union.
 
+## Step 4: `trait Job: Transfer:`
+
+- `Transfer` is a marker trait in the prelude. A module names it without
+  an import, as it names `Ord`. It has no methods and no implementations.
+- Wherever a bound or a supertrait names the marker, the checker asks the
+  structural Transfer property of the type (`transfer_failure`) instead
+  of looking for an `impl`.
+- `trait Job: Transfer:` admits only Transfer types. `impl Job for Dice:`
+  reports `AU3008` when `Dice` holds a `random.Rng`, and names the field.
+  A generic type states the condition: `impl[T: Transfer] Job for Box[T]:`.
+- So `dyn Job` is Transfer, and so is the trait object of a trait that
+  extends `Job`. It is a task argument, a task result (`Task.result()`
+  moves it out), and a `Queue` payload, alone or inside a list, a
+  dictionary, a tuple, a union, or a class.
+- `T: Transfer`, and `T: Job`, make a type parameter Transfer inside a
+  generic function, and each call proves the bound for its type argument.
+  An unbounded type parameter is refused as before.
+- `dyn Transfer` holds any Transfer value. It has no methods, so a type
+  arm is how the value is used.
+- `impl Transfer for T:` reports `AU3008`. A trait the program itself
+  names `Transfer` is an ordinary trait and is not the marker.
+- A prelude trait named only after `dyn` is now found. Before, the
+  on-demand prelude import looked only for "unknown trait" errors.
+- No backend change: a trait object crosses a worker boundary as its box
+  does.
+
 ## How it is built
 
 - The checker and MIR before specialization use
@@ -127,7 +153,7 @@ Also fixed here: an element of a list of trait objects can be passed to a
 
 ## Checked
 
-- 34 run-pass fixtures and 49 check-fail fixtures named `trait_object_*`.
+- 37 run-pass fixtures and 56 check-fail fixtures named `trait_object_*`.
   Each run-pass program prints the same on the interpreter and as a
   native binary, and the native binaries are clean under valgrind.
 - Unit tests in `aura-runtime` for the two new runtime entry points.
@@ -137,8 +163,11 @@ Also fixed here: an element of a list of trait objects can be passed to a
 
 ## Known gaps, for the next steps
 
-- `trait Tool: Transfer:` is not built yet, so a trait object cannot
-  cross a task boundary.
+- An explicit type argument that names the enclosing function's own type
+  parameter, `apply(run_one[T], job)` or `group.start(run_one[T], job)`,
+  fails at run time with "type `T` has no MIR implementation". This is
+  older than trait objects and needs no `Transfer`. Leaving the type
+  argument to inference, `group.start(run_one, job)`, works.
 - A call still tries the trait's implementations one by one against the
   box's type, a shared `match` copies the held value into its binding,
   and a `for` over a list copies each element that holds a heap value.

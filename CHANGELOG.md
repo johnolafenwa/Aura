@@ -25,7 +25,16 @@ in this file.
   so one function can return any of several iterator types. `match` on a
   trait object selects on the type it holds with `case Type as name:` arms
   and a final `case _:`, under a bare `match`, `match mut`, and `match own`.
-  Trait objects in tasks come next.
+- Trait objects in tasks. `Transfer` is now a prelude trait that names the
+  property the compiler derives. `trait Job: Transfer:` admits only Transfer
+  types, so `dyn Job` may be a task argument, a task result, and a `Queue`
+  payload, alone or inside a list, a dictionary, a tuple, a union, or a
+  class. An `impl` of such a trait for a type that is not Transfer reports
+  `AU3008` and names the field. `T: Transfer` is a bound, so a generic
+  function may send a `T` to a task or a queue, and
+  `impl[T: Transfer] Job for Box[T]:` states the same for a generic type.
+  `dyn Transfer` holds a value of any Transfer type. `impl Transfer for T:`
+  is refused: a type is Transfer when every part of it is.
 - Fixed: a trait object dispatches on the exact type it holds. A `float32`
   and a `float64` that both implement the trait no longer run each other's
   method, `Cell[float32]` no longer runs the method of `Cell[float64]` on

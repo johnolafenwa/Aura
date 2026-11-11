@@ -1815,6 +1815,18 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             )?;
             super::display::validate_display_methods(impl_decl)?;
         }
+        // `Transfer` is a property of a type's structure. An `impl` could
+        // only claim it for a type that does not have it.
+        if super::trait_objects::is_transfer_marker(trait_info) {
+            return Err(Diagnostic::coded_at(
+                "AU3008",
+                impl_decl.span,
+                format!("`Transfer` cannot be implemented for `{for_type}`: a type is Transfer when every part of it is"),
+            )
+            .with_help(
+                "remove this `impl`; a class or enum made only from Transfer components is Transfer already",
+            ));
+        }
         // The target must be a named outer type (`Box[T]`): a bare type
         // parameter has no nominal identity, and a bare tuple has no nominal
         // dispatch table on the direct backend.

@@ -19,9 +19,12 @@ Last updated: 2026-11-10
 - Step 3 is done: `match` on a trait object with `case Type as name:`
   arms and a required catch-all, under a bare `match`, `match mut`, and
   `match own`.
-- Next: `trait Tool: Transfer:`, element lends, fast dispatch with
-  probes against Rust and Python, then `aura verify`, the language
-  server, the book chapter, and the ADR.
+- Step 4 is done: `Transfer` is a prelude marker trait. A trait with it
+  as a supertrait admits only Transfer types, so its trait object
+  crosses task and queue boundaries, and `T: Transfer` is a bound.
+- Next: element lends, fast dispatch with probes against Rust and
+  Python, then `aura verify`, the language server, the book chapter,
+  and the ADR.
 
 ## Iterator bound and float64 gaps (complete)
 

@@ -62,6 +62,8 @@ fn trait_object_programs_run() {
         run_pass!("trait_object_own_receivers"),
         run_pass!("trait_object_returns"),
         run_pass!("trait_object_supertraits"),
+        run_pass!("trait_object_transfer"),
+        run_pass!("trait_object_transfer_shapes"),
         run_pass!("trait_object_value_positions"),
         run_pass!("trait_object_views"),
     ];
@@ -77,6 +79,7 @@ fn trait_objects_cross_module_boundaries() {
         run_pass!("trait_object_imported"),
         run_pass!("trait_object_imported_namespace"),
         run_pass!("trait_object_imported_renamed"),
+        run_pass!("trait_object_transfer_imported"),
     ];
     for (name, _, expected) in fixtures {
         let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
@@ -319,6 +322,41 @@ fn trait_object_misuse_is_rejected() {
             "trait_object_not_transfer",
             "AU3008",
             "task argument `shape` cannot cross a task boundary because `dyn Shape` is a trait object, "
+        ),
+        check_fail!(
+            "trait_object_not_transfer_queue",
+            "AU3008",
+            "Queue payload `dyn Plain` cannot cross a worker boundary because `dyn Plain` is a trait object, "
+        ),
+        check_fail!(
+            "trait_object_transfer_bound_unmet",
+            "AU3008",
+            "type `Dice` does not satisfy the bound `Transfer` because field `rng` of `Dice`"
+        ),
+        check_fail!(
+            "trait_object_transfer_conversion",
+            "AU2002",
+            "binding `item` has annotated type `dyn prelude.Transfer`, but value has type `Dice`"
+        ),
+        check_fail!(
+            "trait_object_transfer_generic_impl_unbounded",
+            "AU3008",
+            "impl of `Job` for `Box[T]` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_holds_plain_object",
+            "AU3008",
+            "impl of `Job` for `Holder` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_not_transfer",
+            "AU3008",
+            "impl of `Job` for `Dice` requires a Transfer type"
+        ),
+        check_fail!(
+            "trait_object_transfer_impl_written",
+            "AU3008",
+            "`Transfer` cannot be implemented for `Sum`"
         ),
         check_fail!(
             "trait_object_reserved_name",
@@ -564,6 +602,63 @@ fn a_trait_object_converts_to_its_supertraits_only() {
         error
             .message
             .contains("takes a `dyn Named` variable, found `dyn Tool`"),
+        "{error:?}"
+    );
+}
+
+const JOB: &str = "trait Job: Transfer:\n    def run(self) -> int64\n\nclass Sum:\n    values: list[int64]\n\nimpl Job for Sum:\n    def run(self) -> int64:\n        return len(self.values)\n\n";
+
+#[test]
+fn a_transfer_supertrait_makes_the_trait_object_transfer() {
+    let accepted = [
+        // A task argument, a task result, and a queue payload.
+        "def work(job: own dyn Job) -> dyn Job:\n    return job\n\ndef main() -> None:\n    with TaskGroup() as group:\n        task = group.start(work, Sum(values=[1]) as dyn Job)\n        _ = task.result()\n    queue = Queue[dyn Job]()\n    _ = queue.put(Sum(values=[2]))\n",
+        // A subtrait inherits the property.
+        "trait Fast: Job:\n    def speed(self) -> int64\n\ndef main() -> None:\n    queue = Queue[dyn Fast]()\n",
+        // A type parameter bounded by the trait, or by `Transfer` itself.
+        "def send[T: Job](value: own T) -> None:\n    queue = Queue[T]()\n    _ = queue.put(value)\n\ndef keep[T: Transfer](value: own T) -> None:\n    queue = Queue[T]()\n    _ = queue.put(value)\n\ndef main() -> None:\n    send(Sum(values=[1]))\n    keep(Sum(values=[1]) as dyn Job)\n    keep(\"text\")\n",
+        // A class that holds one is Transfer too.
+        "class Batch:\n    jobs: list[dyn Job]\n\ndef main() -> None:\n    queue = Queue[Batch]()\n",
+    ];
+    for body in accepted {
+        if let Err(error) = check_source(&format!("{JOB}{body}")) {
+            panic!("should be accepted: {error:?}\n{body}");
+        }
+    }
+}
+
+#[test]
+fn dyn_transfer_holds_any_transfer_value_without_naming_the_trait_elsewhere() {
+    // `dyn Transfer` is the only mention of the prelude trait.
+    let source = "class Sum:\n    values: list[int64]\n\ndef main() -> None:\n    items: list[dyn Transfer] = [1, Sum(values=[1]), \"text\"]\n    queue = Queue[dyn Transfer]()\n    print(len(items))\n";
+    if let Err(error) = check_source(source) {
+        panic!("should be accepted: {error:?}");
+    }
+    let refused = "import random\n\nclass Dice:\n    rng: random.Rng\n\ndef main() -> None:\n    item: dyn Transfer = Dice(rng=random.Rng(1))\n";
+    let error = match check_source(refused) {
+        Ok(_) => panic!("should be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU2002", "{error:?}");
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.starts_with("`Dice` is not Transfer: field `rng` of `Dice`")),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn a_trait_the_program_names_transfer_is_not_the_marker() {
+    let source = "trait Transfer:\n    def go(self) -> int64\n\ntrait Job: Transfer:\n    def run(self) -> int64\n\nclass Sum:\n    values: list[int64]\n\nimpl Transfer for Sum:\n    def go(self) -> int64:\n        return 2\n\nimpl Job for Sum:\n    def run(self) -> int64:\n        return self.go()\n\ndef main() -> None:\n    queue = Queue[dyn Job]()\n";
+    let error = match check_source(source) {
+        Ok(_) => panic!("should be rejected"),
+        Err(error) => error,
+    };
+    assert_eq!(error.code, "AU3008", "{error:?}");
+    assert!(
+        error.message.contains("`dyn Job` is a trait object"),
         "{error:?}"
     );
 }

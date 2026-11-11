@@ -13,6 +13,18 @@
 use super::traits::{resolved_trait_method, ResolvedTraitMethodInfo};
 use super::*;
 
+/// The prelude marker trait for values that may cross a task boundary. No
+/// `impl` is written for it: a type satisfies it when its structure is
+/// Transfer. A trait that names it as a supertrait admits only Transfer
+/// types, so its trait object is Transfer too.
+pub(crate) const TRANSFER_TRAIT: &str = "Transfer";
+
+/// Whether a checked trait is the prelude `Transfer` marker rather than a
+/// same-named user trait.
+pub(super) fn is_transfer_marker(info: &TraitInfo) -> bool {
+    info.module_name == super::prelude::PRELUDE_MODULE_NAME && info.decl.name == TRANSFER_TRAIT
+}
+
 /// One trait a trait object exposes, with its type arguments.
 pub(super) struct ExposedTrait<'a> {
     pub(super) info: &'a TraitInfo,
@@ -130,6 +142,42 @@ impl<'a> FunctionChecker<'a> {
         find_namespace_in_modules(self.module_registry, module)
             .and_then(|namespace| namespace.all_traits.get(name))
             .or_else(|| self.trait_info_by_canonical_name(&format!("{module}.{name}")))
+    }
+
+    /// Whether `bound`, written in `module`, names the prelude `Transfer`
+    /// marker.
+    pub(super) fn bound_is_transfer(&self, bound: &TraitBound, module: &str) -> bool {
+        let leaf = bound.trait_name.rsplit('.').next();
+        leaf == Some(TRANSFER_TRAIT)
+            && bound.trait_args.is_empty()
+            && self.trait_bound_identity(bound, module)
+                == Type::named(format!(
+                    "{}.{TRANSFER_TRAIT}",
+                    super::prelude::PRELUDE_MODULE_NAME
+                ))
+                .canonical_key(self.module_name, self.canonical_type_names)
+    }
+
+    /// Whether every value a trait object of type `ty` can hold is
+    /// Transfer: its trait, or one of its supertraits, is the prelude
+    /// `Transfer` marker.
+    pub(super) fn trait_object_is_transfer(&self, ty: &Type) -> bool {
+        self.trait_object_traits(ty)
+            .iter()
+            .any(|exposed| is_transfer_marker(exposed.info))
+    }
+
+    /// Whether the type parameter `name` is bounded, directly or through a
+    /// supertrait, by the prelude `Transfer` marker.
+    pub(super) fn type_param_is_transfer(&self, name: &str) -> bool {
+        let ty = Type::TypeParam(name.to_string());
+        self.type_param_bounds.get(name).is_some_and(|bounds| {
+            bounds.iter().any(|bound| {
+                self.trait_bound_closure(bound, &ty)
+                    .iter()
+                    .any(|candidate| self.bound_is_transfer(candidate, self.module_name))
+            })
+        })
     }
 
     /// Every trait a trait object type exposes: its own trait first, then
@@ -478,6 +526,15 @@ impl<'a> FunctionChecker<'a> {
                 return Some(format!(
                     "a function value does not implement a trait; put it in a class that implements `{trait_leaf}`"
                 ));
+            }
+            let marker = self
+                .trait_info_by_canonical_name(trait_name)
+                .is_some_and(is_transfer_marker);
+            if marker {
+                // No `impl` makes a type Transfer; its structure does.
+                return self
+                    .transfer_failure(actual)
+                    .map(|reason| format!("`{actual}` is not Transfer: {reason}"));
             }
             if actual.names_trait_object() || matches!(actual, Type::Union(_)) {
                 return None;

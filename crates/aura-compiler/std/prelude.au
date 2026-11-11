@@ -23,6 +23,14 @@ public trait From[Source]:
     def from(value: own Source) -> Self
 
 
+public trait Transfer:
+    """A value that may cross a task boundary. No `impl` is written for it:
+    a type is Transfer when its structure is. As a supertrait,
+    `trait Job: Transfer:`, it admits only Transfer types, so `dyn Job`
+    may cross a task boundary too."""
+    pass
+
+
 public trait ResultMethods[T, E]:
     """Methods on `Result[T, E]`."""
     def is_ok(self) -> bool

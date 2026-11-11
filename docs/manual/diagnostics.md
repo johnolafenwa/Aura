@@ -405,6 +405,11 @@ The `AU3008` guidance follows these rules:
   not claim that all borrowed Copy captures fail.
 - It never proposes an `impl Transfer`. An ordinary user trait also named
   `Transfer`, and its implementations, do not alter the structural property.
+- For a trait object it recommends declaring the trait with the prelude
+  `Transfer` as a supertrait. An `impl` of such a trait for a type that is not
+  Transfer reports `AU3008` at the `impl`, and so does `impl Transfer for T:`.
+- A type argument that does not meet a `T: Transfer` bound reports `AU3008`
+  at the call, with the same path to the leaf.
 
 A task callable contract that returns a view also reports `AU3008`.
 

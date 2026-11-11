@@ -310,6 +310,7 @@ printed-output order unless they coordinate that order explicitly.
 | `task_group_associated_method.au` | Starting associated methods without `self` through `TaskGroup.start(...)` | `5`, `7` |
 | `queue_put_timeout.au` | `Queue.put(timeout=...)` with explicit send-failure handling | `sent`, `4` |
 | `task_group_queue_sum.au` | Queue-driven coordination inside a `TaskGroup()` scope | `3` |
+| `trait_object_jobs.au` | Trait objects in tasks: `trait Job: Transfer:` admits only Transfer types, so a `dyn Job` moves into a task and through a `Queue[dyn Job]` to a worker that never names its type | `sum = 6`, `count a = 3`, `sum = 30`, `count s = 4` |
 | `task_group_cancel.au` | Cooperative cancellation with `group.cancel()` and `cancelled()` | `0`, `1` |
 | `yield_now.au` | Explicit cooperative scheduling between bounded chunks of CPU work. Ordinary loop backedges also get amortized scheduling checks that the compiler inserts. | Three numbered steps each for `alpha` and `beta`. The exact interleaving is unspecified on purpose. |
 | `typed_select.au` | Typed heterogeneous selection over Queue, Task, and relative-Duration sources, including deterministic lowest-index priority | `SelectOutcome.Queue(0, QueueReceive.Item(queued))`, `TaskResult.Ready(42)`, `SelectOutcome.Task(0, TaskResult.Ready(42))`, `SelectOutcome.Deadline(0)` |

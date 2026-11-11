@@ -1003,7 +1003,42 @@ A trait object is an owned value. It moves on assignment and it is never copied:
 - It does not define `==`.
 - Reading an element out of a collection would copy it, so `tool = tools[0]` reports `AU3005`. Use `view tool = tools[0]`, or take the element out with `pop` or `remove`.
 - A method call on an element, `tools[0].run(input)`, borrows the element where it is. So does passing an element to a shared or `mut` parameter.
-- A trait object is not Transfer, so it cannot cross a task boundary.
+- A trait object is Transfer only when its trait says so. See [Trait Objects In Tasks](#trait-objects-in-tasks).
+
+### Trait Objects In Tasks
+
+A trait object crosses a task boundary when its trait has `Transfer` as a supertrait. `Transfer` is the prelude trait for the property the compiler derives from a type's structure, described in [Concurrency](/manual/concurrency#typing-rules).
+
+```aura
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+
+def work(job: own dyn Job) -> int64:
+    return job.run()
+
+def main() -> None:
+    with TaskGroup() as group:
+        task = group.start(work, Sum(values=[1, 2, 3]) as dyn Job)
+        print(task.result())
+```
+
+- `trait Job: Transfer:` admits only Transfer types. An `impl Job for T:` where `T` is not Transfer reports `AU3008` and names the field that is not Transfer.
+- So every value a `dyn Job` can hold is Transfer, and `dyn Job` is Transfer. It can be a task argument, a task result, and a `Queue` payload. So can a list, a dictionary, a tuple, a union, or a class that holds one.
+- A trait that extends `Job` inherits the property: with `trait Fast: Job:`, `dyn Fast` is Transfer too.
+- A trait object of any other trait is not Transfer, and sending one reports `AU3008`.
+- No `impl Transfer for T:` is written, and one reports `AU3008`. A type is Transfer when every part of it is.
+- `Transfer` is a bound as well. `def send[T: Transfer](value: own T)` accepts every Transfer type and may put `value` in a `Queue[T]` or hand it to a task. A generic implementation states it the same way: `impl[T: Transfer] Job for Box[T]:`.
+- `dyn Transfer` holds a value of any Transfer type. It has no methods, so a [type arm](#matching-on-the-held-type) is the way to use the value.
 
 ### Representation
 
@@ -1031,7 +1066,7 @@ Builtin rules come first:
 - `/` on equal integer operands is rejected with the integer-division teaching diagnostic. It is not dispatched to `Div.div`. `/` still requests `Div.div` for an applicable non-numeric user type.
 - The divisor-sign rule for `%` describes builtin numeric remainder. `Mod.mod` on a user type has the semantics of that implementation.
 
-`Ord`, `Add`, and `From` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
+`Ord`, `Add`, `From`, and the marker trait `Transfer` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
 
 ```aura
 trait Add[Rhs, Out]:
@@ -1148,7 +1183,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait object names one trait. Trait objects in tasks are not available yet.
+- A trait object names one trait. It crosses a task boundary only when that trait has `Transfer` as a supertrait.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 

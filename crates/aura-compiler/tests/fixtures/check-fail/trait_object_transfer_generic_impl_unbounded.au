@@ -1,0 +1,19 @@
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        return len(self.values)
+
+class Box[T]:
+    value: T
+
+impl[T] Job for Box[T]:
+    def run(self) -> int64:
+        return 7
+
+def main() -> None:
+    print(Box(value=1).run())
