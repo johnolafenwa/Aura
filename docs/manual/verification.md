@@ -348,9 +348,9 @@ wrapped integer, or a broken contract. So the
 flag is off by default for now. It becomes the default for release builds
 once differential testing of such builds against the interpreter covers it.
 
-A trusted contract on an `extern "C"` function is the other thing a proof
-relies on without checking. The verifier cannot read C, so it takes the
-`ensures` as given:
+A contract on an `extern "C"` function is the other boundary a proof relies on
+without reading its body. The verifier cannot read C, so it proves each
+`requires` at the call and assumes each `ensures` after it:
 
 ```aura fragment
 extern "C" def clamp_index(i: int64, n: int64) -> int64:
@@ -358,5 +358,7 @@ extern "C" def clamp_index(i: int64, n: int64) -> int64:
     ensures 0 <= result and result < n
 ```
 
-A wrong `ensures` there makes proofs that rely on it wrong too. Keep such a
-contract to what the C function's own documentation promises.
+At run time, the program checks both clauses around the foreign call and keeps
+those checks under `--remove-proved-checks`. A wrong `ensures` still misleads
+static proofs that rely on it, so keep such a contract to what the C function
+guarantees.

@@ -10616,6 +10616,9 @@ pub fn lower_implicit(program: &Program) -> MirModule {
 /// arguments.
 pub(crate) fn public_function_name(name: &str) -> String {
     let name = name
+        .split_once("::__extern_contract")
+        .map_or(name, |(public, _)| public);
+    let name = name
         .split_once("::__default_")
         .map_or(name, |(public, _)| public);
     let mut public = String::with_capacity(name.len());
@@ -10837,6 +10840,9 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     );
 
     push_display_wrappers(program, &mut functions);
+    if !VERIFICATION.with(std::cell::Cell::get) {
+        push_extern_contract_wrappers(program, &mut functions, &mut seen_function_names);
+    }
 
     let mut constants = Vec::new();
     let mut seen_constants = BTreeSet::new();
@@ -11769,6 +11775,183 @@ fn lower_default_function(
     })
 }
 
+fn extern_contract_wrapper_name(
+    program_module_name: &str,
+    function: &crate::sema::ExternFunctionInfo,
+) -> String {
+    let base = if function.module_name == program_module_name {
+        function.decl.name.clone()
+    } else {
+        imported_module_function_name(&function.module_name, &function.decl.name)
+    };
+    format!("{base}::__extern_contract")
+}
+
+fn push_extern_contract_wrappers(
+    program: &Program,
+    functions: &mut Vec<MirFunction>,
+    seen_function_names: &mut BTreeSet<String>,
+) {
+    fn visit_namespace(
+        program: &Program,
+        namespace: &ModuleNamespace,
+        functions: &mut Vec<MirFunction>,
+        seen_function_names: &mut BTreeSet<String>,
+    ) {
+        for extern_fn in namespace
+            .extern_functions
+            .values()
+            .chain(namespace.all_extern_functions.values())
+        {
+            if extern_fn.contract_decl.is_none() {
+                continue;
+            }
+            let wrapper_name = extern_contract_wrapper_name(&program.module_name, extern_fn);
+            if seen_function_names.insert(wrapper_name.clone()) {
+                functions.extend(lower_extern_contract_wrapper(
+                    program,
+                    &wrapper_name,
+                    extern_fn,
+                ));
+            }
+        }
+        for child in namespace
+            .modules
+            .values()
+            .chain(namespace.imported_modules.values())
+        {
+            visit_namespace(program, child, functions, seen_function_names);
+        }
+    }
+
+    for extern_fn in program.extern_functions.values() {
+        if extern_fn.contract_decl.is_none() {
+            continue;
+        }
+        let wrapper_name = extern_contract_wrapper_name(&program.module_name, extern_fn);
+        if seen_function_names.insert(wrapper_name.clone()) {
+            functions.extend(lower_extern_contract_wrapper(
+                program,
+                &wrapper_name,
+                extern_fn,
+            ));
+        }
+    }
+    for namespace in program.module_registry.values() {
+        visit_namespace(program, namespace, functions, seen_function_names);
+    }
+}
+
+fn lower_extern_contract_wrapper(
+    program: &Program,
+    wrapper_name: &str,
+    function: &crate::sema::ExternFunctionInfo,
+) -> Vec<MirFunction> {
+    let Some(contract_decl) = &function.contract_decl else {
+        return Vec::new();
+    };
+    let return_type = &function.signature.return_type;
+    let params = function
+        .decl
+        .params
+        .iter()
+        .zip(
+            function
+                .signature
+                .params
+                .iter()
+                .zip(function.signature.param_passings.iter()),
+        )
+        .map(|(param, (ty, passing))| MirParam {
+            name: param.name.clone(),
+            passing: lower_receiver_kind(*passing),
+            ty: ty.clone(),
+            default_function: None,
+            keyword_only: param.keyword_only,
+        })
+        .collect::<Vec<_>>();
+    let mut lowerer = Lowerer::new(
+        program,
+        wrapper_name,
+        &function.module_name,
+        return_type.clone(),
+        BTreeMap::new(),
+    )
+    .with_metadata_owner(ClosureOwner::Function(wrapper_name.to_string()));
+    for ((param, ty), passing) in function
+        .decl
+        .params
+        .iter()
+        .zip(function.signature.params.iter())
+        .zip(function.signature.param_passings.iter())
+    {
+        lowerer.local_types.insert(param.name.clone(), ty.clone());
+        if *passing != ReceiverKind::Value {
+            lowerer.non_owning_roots.insert(param.name.clone());
+        }
+    }
+    lowerer.lower_contract_checks(contract_decl, crate::ast::ContractKind::Requires);
+    let olds = contract_decl
+        .contracts
+        .iter()
+        .flat_map(|clause| clause.olds.iter())
+        .map(|old| (old.name.clone(), lowerer.lower_old_value(&old.expr)))
+        .collect::<std::collections::HashMap<_, _>>();
+    let has_olds = !olds.is_empty();
+    if has_olds {
+        lowerer.scoped_names.push(olds);
+    }
+    let return_place = lowerer.new_typed_temp(return_type.clone());
+    let extern_args = params
+        .iter()
+        .map(|param| MirArg {
+            name: Some(param.name.clone()),
+            value: if param.passing == MirReceiverKind::Value
+                && !type_is_copy_in_program(&param.ty, program)
+            {
+                Operand::MovePlace(param.name.clone())
+            } else {
+                Operand::Place(param.name.clone())
+            },
+            writeback_place: (param.passing == MirReceiverKind::BorrowMut)
+                .then(|| param.name.clone()),
+        })
+        .collect();
+    lowerer.emit(Instruction::Assign {
+        target: return_place.clone(),
+        value: Rvalue::Call {
+            callee: CallTarget::Extern(Lowerer::extern_call_target(function)),
+            args: extern_args,
+            type_args: Default::default(),
+        },
+    });
+    if contract_decl
+        .contracts
+        .iter()
+        .any(|clause| clause.kind == crate::ast::ContractKind::Ensures)
+    {
+        lowerer.scoped_names.push(std::collections::HashMap::from([(
+            crate::sema::CONTRACT_RESULT_NAME.to_string(),
+            return_place.clone(),
+        )]));
+        lowerer.lower_contract_checks(contract_decl, crate::ast::ContractKind::Ensures);
+        lowerer.scoped_names.pop();
+    }
+    if has_olds {
+        lowerer.scoped_names.pop();
+    }
+    let value = lowerer.move_place_for_type(return_place, return_type);
+    lowerer.terminate(Terminator::Return(value));
+    lowerer.finish_with_generated(MirFunctionSpec {
+        name: wrapper_name.to_string(),
+        span: function.decl.span,
+        receiver: None,
+        params,
+        return_type: return_type.clone(),
+        default_return: default_return_operand(return_type),
+    })
+}
+
 fn grouped_mir_expr(expr: &Expr) -> &Expr {
     match &expr.kind {
         ExprKind::Group(inner) => grouped_mir_expr(inner),
@@ -12636,13 +12819,20 @@ impl<'a> Lowerer<'a> {
         let ExprKind::Call { callee, .. } = &expr.kind else {
             return false;
         };
-        let ExprKind::Name(name) = &callee.kind else {
-            return false;
-        };
-        !self.local_types.contains_key(&self.render_local_name(name))
-            && self
-                .resolve_function_info(name)
-                .is_some_and(|function| function.decl.lemma)
+        match &callee.kind {
+            ExprKind::Name(name) => {
+                !self.local_types.contains_key(&self.render_local_name(name))
+                    && self
+                        .resolve_function_info(name)
+                        .is_some_and(|function| function.decl.lemma)
+            }
+            ExprKind::Member { object, field } => self
+                .infer_module_path(object)
+                .and_then(|module_path| self.module_namespace(&module_path))
+                .and_then(|namespace| namespace.functions.get(field))
+                .is_some_and(|function| function.decl.lemma),
+            _ => false,
+        }
     }
 
     fn resolve_function_info(&self, name: &str) -> Option<&crate::sema::FunctionInfo> {
@@ -12655,6 +12845,17 @@ impl<'a> Lowerer<'a> {
         self.current_module_namespace()
             .and_then(|namespace| namespace.all_extern_functions.get(name))
             .or_else(|| self.program.extern_functions.get(name))
+    }
+
+    fn extern_callee_target(&self, function: &crate::sema::ExternFunctionInfo) -> CallTarget {
+        if !VERIFICATION.with(std::cell::Cell::get) && function.contract_decl.is_some() {
+            CallTarget::Name(extern_contract_wrapper_name(
+                &self.program.module_name,
+                function,
+            ))
+        } else {
+            CallTarget::Extern(Self::extern_call_target(function))
+        }
     }
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
@@ -17383,10 +17584,22 @@ impl<'a> Lowerer<'a> {
     ) -> Type {
         let member = self.lower_type_ref_with_provenance(ty);
         if let Some(Type::Union(union)) = scrutinee_ty {
-            if let Some(canonical) = union.members.iter().find(|candidate| {
-                **candidate == member || crate::union_runtime::member_matches(candidate, &member)
-            }) {
+            let member_key = member.canonical_key(self.module_name, &BTreeMap::new());
+            if let Some((_, canonical)) = union
+                .keys
+                .iter()
+                .zip(&union.members)
+                .find(|(key, candidate)| *candidate == &member || **key == member_key)
+            {
                 return canonical.clone();
+            }
+            let matches = union
+                .members
+                .iter()
+                .filter(|candidate| crate::union_runtime::member_matches(candidate, &member))
+                .collect::<Vec<_>>();
+            if let [canonical] = matches.as_slice() {
+                return (*canonical).clone();
             }
         }
         member
@@ -20045,6 +20258,27 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(condition_block)));
 
         self.switch_to(after_block);
+        let site = format!(
+            "iterator {}:{}",
+            while_stmt.span.line, while_stmt.span.column
+        );
+        if self.binding_is_visible(&site) {
+            let place = self.render_local_name(&site);
+            self.emit(Instruction::Eval {
+                value: Operand::Place(place),
+            });
+        } else {
+            for position in 0.. {
+                let indexed = format!("{site} {position}");
+                if !self.binding_is_visible(&indexed) {
+                    break;
+                }
+                let place = self.render_local_name(&indexed);
+                self.emit(Instruction::Eval {
+                    value: Operand::Place(place),
+                });
+            }
+        }
     }
 
     fn lower_comprehension(
@@ -24918,7 +25152,7 @@ impl<'a> Lowerer<'a> {
                             self.emit(Instruction::Assign {
                                 target: temp.clone(),
                                 value: Rvalue::Call {
-                                    callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                                    callee: self.extern_callee_target(&function),
                                     args: lowered_args,
                                     type_args: Default::default(),
                                 },
@@ -25585,7 +25819,7 @@ impl<'a> Lowerer<'a> {
                     self.emit(Instruction::Assign {
                         target: temp.clone(),
                         value: Rvalue::Call {
-                            callee: CallTarget::Extern(Self::extern_call_target(&function)),
+                            callee: self.extern_callee_target(&function),
                             args: lowered_args,
                             type_args: Default::default(),
                         },

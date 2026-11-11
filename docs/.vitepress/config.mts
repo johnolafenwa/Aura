@@ -28,6 +28,9 @@ export default defineConfig({
   markdown: {
     lineNumbers: true,
     languages: [AURA_LANGUAGE],
+    languageAlias: {
+      ebnf: 'txt'
+    },
     languageLabel: {
       aura: AURA_LANGUAGE_LABEL
     },

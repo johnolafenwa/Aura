@@ -446,13 +446,20 @@ impl FunctionChecker<'_> {
         let ExprKind::Call { callee, args } = &expr.kind else {
             return None;
         };
-        let ExprKind::Name(name) = &callee.kind else {
-            return None;
-        };
-        self.functions
-            .get(name)
-            .is_some_and(|function| function.decl.lemma)
-            .then_some(args.as_slice())
+        match &callee.kind {
+            ExprKind::Name(name) => self
+                .resolve_function_info(name)
+                .is_some_and(|function| function.decl.lemma)
+                .then_some(args.as_slice()),
+            ExprKind::Member { object, field } => {
+                let module_path = self.infer_module_path(object)?;
+                self.module_namespace(&module_path)
+                    .and_then(|namespace| namespace.functions.get(field))
+                    .is_some_and(|function| function.decl.lemma)
+                    .then_some(args.as_slice())
+            }
+            _ => None,
+        }
     }
 
     /// A lemma call written as a statement is erased at run time, so its
@@ -472,7 +479,13 @@ impl FunctionChecker<'_> {
             return Ok(());
         }
         for arg in args {
-            self.reject_impure(&arg.value, "an argument of a lemma call", &mut Vec::new())?;
+            let mut receivers = Vec::new();
+            self.reject_impure(&arg.value, "an argument of a lemma call", &mut receivers)?;
+            self.check_receivers(
+                receivers,
+                &mut locals.clone(),
+                "an argument of a lemma call",
+            )?;
         }
         Ok(())
     }
@@ -509,24 +522,52 @@ impl FunctionChecker<'_> {
         if self.in_spec.get() {
             return Ok(());
         }
-        let name = match &expr.kind {
-            ExprKind::Name(name) => name,
-            ExprKind::Call { callee, .. } => match &callee.kind {
-                ExprKind::Name(name) => name,
-                _ => return Ok(()),
-            },
-            _ => return Ok(()),
+        let target = match &expr.kind {
+            ExprKind::Call { callee, .. } => callee.as_ref(),
+            _ => expr,
         };
-        if locals.contains_key(name) || !self.is_spec_function(name) {
-            return Ok(());
+        match &target.kind {
+            ExprKind::Name(name) => {
+                if locals.contains_key(name) || !self.is_spec_function(name) {
+                    return Ok(());
+                }
+                Err(Diagnostic::coded_at(
+                    CODE,
+                    expr.span,
+                    format!(
+                        "`{name}` is a `spec def`; only contract clauses and other `spec def` bodies may use it"
+                    ),
+                ))
+            }
+            ExprKind::Member { object, field } => {
+                let Some(module_path) = self.infer_module_path(object) else {
+                    return Ok(());
+                };
+                if let ExprKind::Name(root) = &object.kind {
+                    if locals
+                        .get(root)
+                        .is_some_and(|binding| !matches!(binding.ty, Type::Module(_)))
+                    {
+                        return Ok(());
+                    }
+                }
+                let is_spec = self
+                    .module_namespace(&module_path)
+                    .and_then(|namespace| namespace.functions.get(field))
+                    .is_some_and(|function| function.decl.spec);
+                if !is_spec {
+                    return Ok(());
+                }
+                Err(Diagnostic::coded_at(
+                    CODE,
+                    expr.span,
+                    format!(
+                        "`{module_path}.{field}` is a `spec def`; only contract clauses and other `spec def` bodies may use it"
+                    ),
+                ))
+            }
+            _ => Ok(()),
         }
-        Err(Diagnostic::coded_at(
-            CODE,
-            expr.span,
-            format!(
-                "`{name}` is a `spec def`; only contract clauses and other `spec def` bodies may use it"
-            ),
-        ))
     }
 
     fn is_spec_function(&self, name: &str) -> bool {
@@ -534,8 +575,8 @@ impl FunctionChecker<'_> {
             .is_some_and(|function| function.decl.spec)
     }
 
-    /// [`reject_impure_condition`] with this module's `spec def` functions
-    /// allowed.
+    /// [`reject_impure_condition`] with visible `spec def` functions and
+    /// methods allowed.
     fn reject_impure<'e>(
         &self,
         expr: &'e Expr,
@@ -553,18 +594,48 @@ impl FunctionChecker<'_> {
         )
     }
 
-    /// Whether some class of this module has a `spec def` method `name`.
+    /// Whether some visible class or imported module has a `spec def` member
+    /// `name`.
     fn is_spec_method_name(&self, name: &str) -> bool {
+        fn namespace_has_spec(namespace: &super::ModuleNamespace, name: &str) -> bool {
+            namespace
+                .functions
+                .get(name)
+                .or_else(|| namespace.all_functions.get(name))
+                .is_some_and(|function| function.decl.spec)
+                || namespace
+                    .classes
+                    .values()
+                    .chain(namespace.all_classes.values())
+                    .any(|class| {
+                        class
+                            .methods
+                            .get(name)
+                            .is_some_and(|method| method.decl.spec)
+                    })
+                || namespace
+                    .modules
+                    .values()
+                    .any(|child| namespace_has_spec(child, name))
+        }
         self.classes.values().any(|class| {
             class
                 .methods
                 .get(name)
                 .is_some_and(|method| method.decl.spec)
-        })
+        }) || self
+            .module_registry
+            .values()
+            .any(|namespace| namespace_has_spec(namespace, name))
+            || self
+                .imported_modules
+                .values()
+                .any(|namespace| namespace_has_spec(namespace, name))
     }
 
     /// Checks that each method a pure condition calls by name is a read-only
-    /// builtin method, or a `spec def` method of the receiver's class.
+    /// builtin method, a `spec def` method of the receiver's class, or a
+    /// `spec def` function accessed through an imported module.
     fn check_receivers(
         &self,
         receivers: Vec<(&Expr, &str)>,
@@ -573,9 +644,17 @@ impl FunctionChecker<'_> {
     ) -> Result<()> {
         for (receiver, method) in receivers {
             let ty = self.with_spec(|| self.type_of_expr(receiver, scope))?;
+            if let Type::Module(module_path) = &ty {
+                let spec_fn = self
+                    .module_namespace(module_path)
+                    .and_then(|namespace| namespace.functions.get(method))
+                    .is_some_and(|function| function.decl.spec);
+                if spec_fn {
+                    continue;
+                }
+            }
             let spec_method = matches!(&ty, Type::Named(class, _) if self
-                .classes
-                .get(class)
+                .resolve_class_info(class)
                 .and_then(|class| class.methods.get(method))
                 .is_some_and(|method| method.decl.spec));
             if spec_method {

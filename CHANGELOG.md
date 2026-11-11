@@ -64,6 +64,37 @@ in this file.
 - A 31st [cross-language program](benchmarks/cross_language/README.md),
   `stream_io`, reads a log in line batches and 64 KiB chunks with gzip and
   HMAC on each chunk: Aura 766 ms, Python 938 ms, Rust 430 ms.
+- Security and soundness fixes from the 2026-11-10 review.
+  - `aura verify` now reads the contracts, class invariants, `spec def`
+    functions, and `lemma def` functions of imported modules, proves an
+    imported lemma's body before relying on it, and checks that a default
+    argument is well-defined.
+  - A contract on an `extern "C"` function is checked when the program
+    runs: a broken `requires` or `ensures` stops it with `AU4009`, and
+    `--remove-proved-checks` keeps these checks (ADR-0084).
+  - A union of two classes or enums with the same name from different
+    modules, such as `alpha.Item | Item`, selects the right member.
+  - A generator left waiting when a `for` loop ends early is closed at that
+    point on `aura run` too, so its `with` exits run before the code after
+    the loop and a trap in one stops the program.
+  - A recursive `spec def` verifies for concrete arguments and for calls
+    that recurse at most eight levels; deeper calls report the limit.
+  - Git dependencies accept only `https://`, `ssh://`, `git@host:path`, and
+    local paths, never materialize symlinks, and a package's `src` must stay
+    inside the package. `--offline` and `AURA_OFFLINE=1` forbid network git
+    access, and the editor runs the compiler offline.
+  - `library_paths` entries may not contain `..`, a dependency's must stay
+    inside the dependency, and `aura build --no-rpath` leaves them out of
+    the binary's run-time search path.
+  - `aura run` stages a freshly built program in a private directory, loads
+    foreign libraries privately, and refuses a foreign symbol that resolves
+    into `aura` itself (ADR-0084).
+  - An HTTP method must be a token and a response status must be 100 to 999;
+    TLS `read_line` and `read_exact` have the size limits TCP streams have.
+  - `aura upgrade` and `install.sh` download over HTTPS only.
+  - The VS Code extension runs commands as structured tasks, quotes
+    PowerShell arguments literally, and never runs a bare `aura` from the
+    workspace directory; a newer save cancels a running `aura verify`.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

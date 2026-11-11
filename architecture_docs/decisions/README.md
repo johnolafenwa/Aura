@@ -101,3 +101,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 73. [ADR-0073: Streaming file reads, gzip, and HMAC](0073-streaming-reads-gzip-and-hmac.md) — Accepted; `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip` module, and `bytes.hmac_sha256`
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
 81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
+84. [ADR-0084: Foreign contracts are checked when the program runs, and `aura run` loads libraries privately](0084-foreign-contracts-run-and-libraries-load-privately.md) — Accepted; `AU4009` checks around contracted `extern "C"` calls, kept under `--remove-proved-checks`; `RTLD_LOCAL` loading and host symbols refused

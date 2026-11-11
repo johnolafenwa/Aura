@@ -90,6 +90,7 @@ fn an_append_within_capacity_needs_the_room_already_there() {
 }
 
 #[test]
+#[allow(clippy::cmp_owned)]
 fn a_text_converts_compares_and_formats_as_its_bytes() {
     use std::collections::HashSet;
     let owned = String::from("path/name");

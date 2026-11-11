@@ -3450,6 +3450,186 @@ fn only_declared_float_inputs_are_fixed() {
     assert!(preludes("plain").0.is_empty());
 }
 
+#[test]
+fn cross_module_contracts_invariants_specs_and_lemmas_are_verified() {
+    if smt::SolverCommand::find(None).is_err() {
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("aura_verify_xmod_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("src")).expect("src");
+    std::fs::write(
+        dir.join("Aura.toml"),
+        "[package]\nname = \"xmod\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n",
+    )
+    .expect("manifest");
+    std::fs::write(
+        dir.join("src/bank.au"),
+        r#"spec def private_positive(x: int64) -> bool:
+    return x > 0
+
+public spec def within_limit(amount: int64, balance: int64) -> bool:
+    return private_positive(amount) and amount <= balance
+
+public class Account:
+    public balance: int64
+    invariant self.balance >= 0
+
+    public spec def ok_balance(self) -> bool:
+        return self.balance >= 0
+
+    public def deposit(mut self, amount: int64):
+        requires amount > 0
+        ensures self.balance == old(self.balance) + amount
+        self.balance += amount
+
+public def withdraw(balance: int64, amount: int64) -> int64:
+    requires within_limit(amount, balance)
+    ensures result == balance - amount
+    return balance - amount
+
+public lemma def bogus_bounds(xs: list[int64]):
+    ensures len(xs) >= 5
+    pass
+
+public extern "C" def clamp_idx(i: int64, n: int64) -> int64 symbol "c_clamp_idx":
+    requires n > 0
+    ensures 0 <= result and result < n
+"#,
+    )
+    .expect("bank.au");
+
+    let main = dir.join("src/main.au");
+    std::fs::write(
+        &main,
+        r#"import bank
+from bank import Account, withdraw, within_limit, bogus_bounds, clamp_idx
+
+def bad_invariant() -> bool:
+    bad_acc = Account(balance=-5)
+    return bad_acc.ok_balance()
+
+def bad_extern_requires() -> int64:
+    return clamp_idx(0, 0)
+
+def bad_fn_requires() -> int64:
+    return withdraw(10, 99)
+
+def good_calls() -> int64:
+    requires within_limit(3, 10)
+    requires bank.within_limit(4, 10)
+    mut acc = Account(balance=10)
+    acc.deposit(5)
+    assert acc.balance == 15
+    idx = clamp_idx(99, 4)
+    xs = [10, 20, 30, 40]
+    return xs[idx] + withdraw(10, 3)
+
+def uses_unproved_imported_lemma(xs: list[int64]) -> int64:
+    bogus_bounds(xs)
+    return xs[0]
+
+def main():
+    print(good_calls())
+"#,
+    )
+    .expect("main.au");
+
+    let program = crate::check_path(&main).expect("cross-module contracts check");
+    let module = crate::mir::lower_for_verification(&program);
+    let options = Options {
+        prove_sites: true,
+        ..Default::default()
+    };
+    let report = verify_module(&program, &module, &options).expect("verifies");
+    let open = open_checks(&report);
+    assert!(
+        open.iter()
+            .any(|item| item.starts_with("5 class invariant failed")),
+        "imported class invariant violation must fail verification: {open:?}"
+    );
+    assert!(
+        open.iter()
+            .any(|item| item.starts_with("9 requires failed")),
+        "imported extern with symbol requires violation must fail verification: {open:?}"
+    );
+    assert!(
+        open.iter()
+            .any(|item| item.starts_with("12 requires failed")),
+        "imported function requires violation must fail verification: {open:?}"
+    );
+    assert!(
+        open.iter().any(|item| item.contains("ensures failed")),
+        "unproved imported lemma must surface an open obligation: {open:?}"
+    );
+    assert!(
+        report.proved_sites.is_empty(),
+        "an unproved imported lemma must clear proved_sites: {:?}",
+        report.proved_sites
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn default_argument_well_definedness_is_verified() {
+    assert_open(
+        r#"
+def boom(x: int64 = 1 // 0) -> int64:
+    return x
+
+def main():
+    print(boom())
+"#,
+        &["2 division by zero failed"],
+    );
+}
+
+#[test]
+fn recursive_spec_defs_verify_for_concrete_and_bounded_inputs_and_reject_unbounded() {
+    assert_proved(
+        r#"
+spec def tri_rec(n: int64) -> int64:
+    return 0 if n <= 0 else n + tri_rec(n - 1)
+
+def concrete_tri() -> int64:
+    ensures result == tri_rec(4)
+    return 10
+
+def bounded_tri(n: int64) -> int64:
+    requires 0 <= n and n <= 5
+    ensures result == tri_rec(n)
+    mut i = 0
+    mut acc = 0
+    while i < n:
+        invariant 0 <= i and i <= n
+        invariant acc == tri_rec(i)
+        decreases n - i
+        i += 1
+        acc += i
+    return acc
+
+def main():
+    print(concrete_tri())
+    print(bounded_tri(4))
+"#,
+    );
+
+    assert_open(
+        r#"
+spec def loop_forever(n: int64) -> int64:
+    return loop_forever(n)
+
+def impossible(n: int64) -> int64:
+    ensures result == loop_forever(n)
+    return 0
+
+def main():
+    print(impossible(1))
+"#,
+        &["6 ensures failed", "7 assert failed"],
+    );
+}
+
 const TRAIT_OBJECT_SHAPES: &str = r#"
 trait Shape:
     def area(self) -> int64:
@@ -3604,5 +3784,35 @@ def main():
             "38 ensures failed",
             "45 ensures failed",
         ],
+    );
+}
+
+#[test]
+fn a_recursive_spec_def_past_its_unfolding_limit_says_so() {
+    let Some(report) = verify(
+        r#"
+spec def tri(n: int64) -> int64:
+    return 0 if n <= 0 else n + tri(n - 1)
+
+def total(n: int64) -> int64:
+    requires n >= 0
+    ensures result == tri(n)
+    return 0
+
+def main():
+    print(total(3))
+"#,
+    ) else {
+        return;
+    };
+    let messages: Vec<&str> = report
+        .obligations
+        .iter()
+        .filter(|obligation| obligation.status != Status::Proved)
+        .map(|obligation| obligation.message.as_str())
+        .collect();
+    assert!(
+        messages.contains(&"`spec def tri` needs at most 8 levels of recursion here"),
+        "{messages:?}"
     );
 }

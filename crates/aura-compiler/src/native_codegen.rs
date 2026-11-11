@@ -5225,7 +5225,9 @@ impl<'a> FunctionCompiler<'a> {
                 }
             }
             Instruction::Eval { value } => {
+                let baseline = self.layout_scratch.clone();
                 let _ = self.load_operand(value)?;
+                self.release_temporary_owned_since(&baseline);
             }
             Instruction::PushCleanup { place, .. } => {
                 self.set_cleanup_active(place, true)?;

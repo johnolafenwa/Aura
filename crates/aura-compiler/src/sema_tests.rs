@@ -2693,10 +2693,11 @@ def main():
         ("left >= right", ">="),
         ("left < middle <= right", "<"),
     ] {
-        let middle = expression
-            .contains("middle")
-            .then_some("    middle = acquire()\n")
-            .unwrap_or("");
+        let middle = if expression.contains("middle") {
+            "    middle = acquire()\n"
+        } else {
+            ""
+        };
         let source = format!(
             r#"
 extern "C" opaque class Handle
@@ -7811,6 +7812,7 @@ fn namespace(path: &str) -> ModuleNamespace {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checker<'a>(
     module_name: &'a str,
     type_names: &'a TypeDefinitions,
@@ -16918,7 +16920,6 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
         None,
         "unknown name `Lookup`",
     );
-    drop(expect_error);
 
     assert_eq!(
         checker
@@ -18695,7 +18696,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         .expect_err("wrong explicit type arg arity should fail");
     assert!(builtin_arity.message.contains("expects 1 type argument"));
     let removed_option = checker
-        .explicit_builtin_type("Option", &[int_ty.clone()], span)
+        .explicit_builtin_type("Option", std::slice::from_ref(&int_ty), span)
         .expect_err("the removed builtin `Option` is an ordinary unknown name");
     assert!(removed_option.message.contains("unknown name `Option`"));
     let builtin_missing = checker
@@ -20218,19 +20219,13 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
         .message
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
 
-    for source in [
-        "trait Show:\n    def show(self, text: str) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own str) -> int32:\n        return self.value\n",
-    ] {
-        let error = crate::check_source(source)
-            .expect_err("a trait impl passing mismatch should fail");
-        assert!(
-            error
-                .message
-                .contains("does not match the trait signature"),
-            "unexpected diagnostic: {}",
-            error.message
-        );
-    }
+    let source = "trait Show:\n    def show(self, text: str) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own str) -> int32:\n        return self.value\n";
+    let error = crate::check_source(source).expect_err("a trait impl passing mismatch should fail");
+    assert!(
+        error.message.contains("does not match the trait signature"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
 
     crate::check_source(
         "trait Identity:\n    def identity(self, value: own str) -> str\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(self, renamed: own str) -> str:\n        return renamed\n",

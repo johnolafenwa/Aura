@@ -661,3 +661,110 @@ fn host_tables_link_only_on_the_host_they_name() {
     assert_eq!(mir.stdout, b"55\n");
     assert_eq!(direct.stdout, b"55\n");
 }
+
+#[test]
+fn extern_c_contracts_enforce_requires_and_ensures_at_runtime_on_both_backends() {
+    let package = TempPackage::new(true);
+    package.c_library("aurafixture", FIXTURE_LIBRARY);
+    package.manifest("\n[ffi]\nlibraries = [\"aurafixture\"]\nlibrary_paths = [\"native\"]\n");
+
+    // 1. Valid requires & ensures succeed on both backends.
+    let ok_source = package.source(
+        r#"extern "C" def fx_i32(v: int64) -> int32:
+    requires v >= 0 and v <= 100
+    ensures result == v as int32
+
+def main() -> int32:
+    print(fx_i32(42))
+    return 0
+"#,
+    );
+    let (mir_ok, direct_ok) = run_on_both_backends(&package, &ok_source);
+    assert_success(&mir_ok, "MIR valid extern contract");
+    assert_success(&direct_ok, "direct valid extern contract");
+    assert_eq!(mir_ok.stdout, b"42\n");
+    assert_eq!(direct_ok.stdout, b"42\n");
+
+    // 2. Violated `requires` traps with AU4009 on both backends.
+    let bad_req = package.source(
+        r#"extern "C" def fx_i32(v: int64) -> int32:
+    requires v >= 0
+
+def main() -> int32:
+    print(fx_i32(-5))
+    return 0
+"#,
+    );
+    let (mir_req, direct_req) = run_on_both_backends(&package, &bad_req);
+    for (name, out) in [("mir", mir_req), ("direct", direct_req)] {
+        assert!(
+            !out.status.success(),
+            "{name} must reject violated extern requires"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("AU4009"),
+            "{name} expected AU4009, got: {stderr}"
+        );
+    }
+
+    // 3. Violated `ensures` traps with AU4009 on both backends AND under `--remove-proved-checks`
+    // before any downstream proved unchecked index can read out-of-bounds memory.
+    let bad_ensures = package.source(
+        r#"extern "C" def fx_i32(v: int64) -> int32:
+    ensures 0 <= result and result < 2
+
+def main() -> int32:
+    xs = [10, 20]
+    idx = fx_i32(99) as int64
+    print(xs[idx])
+    return 0
+"#,
+    );
+    let (mir_ens, direct_ens) = run_on_both_backends(&package, &bad_ensures);
+    for (name, out) in [("mir", mir_ens), ("direct", direct_ens)] {
+        assert!(
+            !out.status.success(),
+            "{name} must reject violated extern ensures"
+        );
+        let stderr = String::from_utf8_lossy(&out.stderr);
+        assert!(
+            stderr.contains("AU4009"),
+            "{name} expected AU4009, got: {stderr}"
+        );
+    }
+
+    let solver_available = ["z3", "cvc5"].iter().any(|name| {
+        std::env::var_os("PATH")
+            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+    }) || std::env::var_os("AURA_SMT_SOLVER").is_some();
+    if solver_available {
+        let proved_bin = package.path.join("ffi-bad-ensures-proved");
+        let build = Command::new(aura_bin())
+            .args([
+                "build",
+                "--backend",
+                "direct",
+                "--remove-proved-checks",
+                "-o",
+            ])
+            .arg(&proved_bin)
+            .arg(&bad_ensures)
+            .output()
+            .expect("aura build --remove-proved-checks should start");
+        assert_success(&build, "direct FFI --remove-proved-checks build");
+        let proved_run = Command::new(&proved_bin)
+            .current_dir(std::env::temp_dir())
+            .output()
+            .expect("direct FFI --remove-proved-checks binary should start");
+        assert!(
+            !proved_run.status.success(),
+            "--remove-proved-checks binary must trap on violated extern ensures"
+        );
+        let stderr = String::from_utf8_lossy(&proved_run.stderr);
+        assert!(
+            stderr.contains("AU4009"),
+            "--remove-proved-checks expected AU4009, got: {stderr}"
+        );
+    }
+}

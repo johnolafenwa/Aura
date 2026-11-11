@@ -1,7 +1,9 @@
 .DS_Store
 node_modules/
 *.vsix
-.DS_Store
+*.swp
+*.swo
+*~
 .playwright-cli/
 
 # Historical evaluation output belongs in fixtures or external archives, not Git.

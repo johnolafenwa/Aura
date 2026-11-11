@@ -50,7 +50,7 @@ case "$(uname -s)-$(uname -m)" in
     ;;
   Darwin-arm64 | Darwin-x86_64)
     check_bottle
-    brew list llvm@22 >/dev/null 2>&1 || brew install llvm@22
+    brew list llvm@22 >/dev/null 2>&1 || HOMEBREW_NO_AUTO_UPDATE=1 brew install llvm@22 </dev/null
     prefix=$(brew --prefix llvm@22)
     installed=$("$prefix/bin/llvm-config" --version)
     if [ "${installed%%.*}" != "${version%%.*}" ]; then

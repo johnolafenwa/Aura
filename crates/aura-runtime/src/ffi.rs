@@ -551,14 +551,106 @@ pub unsafe fn call_host_function(
 }
 
 #[cfg(unix)]
+#[derive(Default)]
+struct LoadedLibraries {
+    by_request: std::collections::BTreeSet<(u8, String, Vec<PathBuf>)>,
+    loaded_names: std::collections::BTreeSet<(u8, String)>,
+    handles: Vec<usize>,
+}
+
+#[cfg(unix)]
+fn loaded_libraries_registry() -> &'static std::sync::Mutex<LoadedLibraries> {
+    static LOADED: std::sync::OnceLock<std::sync::Mutex<LoadedLibraries>> =
+        std::sync::OnceLock::new();
+    LOADED.get_or_init(|| std::sync::Mutex::new(LoadedLibraries::default()))
+}
+
+#[cfg(unix)]
+fn host_image_base() -> *mut libc::c_void {
+    let mut info = std::mem::MaybeUninit::<libc::Dl_info>::zeroed();
+    // SAFETY: `host_image_base` is a valid code address inside this binary image,
+    // and `info` points to writable `Dl_info` storage.
+    let ok = unsafe { libc::dladdr(host_image_base as *const libc::c_void, info.as_mut_ptr()) };
+    if ok != 0 {
+        // SAFETY: `dladdr` initialized `info` on non-zero return.
+        unsafe { info.assume_init().dli_fbase }
+    } else {
+        std::ptr::null_mut()
+    }
+}
+
+#[cfg(unix)]
+fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
+    if symbol.starts_with("aura_direct_")
+        || symbol.starts_with("aura_debug_")
+        || symbol.starts_with("LLVM")
+        || symbol.starts_with("_ZN")
+        || symbol.starts_with("__rust_")
+        || symbol == "rust_eh_personality"
+    {
+        return true;
+    }
+    if pointer.is_null() {
+        return false;
+    }
+    let mut info = std::mem::MaybeUninit::<libc::Dl_info>::zeroed();
+    // SAFETY: `pointer` is a non-null symbol address returned by the dynamic loader
+    // (or a test probe function pointer) and `info` is writable.
+    if unsafe { libc::dladdr(pointer, info.as_mut_ptr()) } != 0 {
+        // SAFETY: `dladdr` succeeded and populated `info`.
+        let info = unsafe { info.assume_init() };
+        let self_base = host_image_base();
+        if !self_base.is_null() && info.dli_fbase == self_base {
+            return true;
+        }
+        if !info.dli_fname.is_null() {
+            // SAFETY: `dli_fname` is a loader-owned NUL-terminated path string.
+            let image_name = unsafe { std::ffi::CStr::from_ptr(info.dli_fname) }.to_string_lossy();
+            if let Some(base_name) = Path::new(image_name.as_ref())
+                .file_name()
+                .and_then(|n| n.to_str())
+            {
+                if base_name.starts_with("libLLVM") || base_name.starts_with("LLVM") {
+                    return true;
+                }
+            }
+        }
+    }
+    false
+}
+
+#[cfg(unix)]
 fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     let c_symbol = CString::new(symbol).map_err(|_| FfiError::InvalidSymbolName)?;
+    let handles = loaded_libraries_registry()
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .handles
+        .clone();
+    for handle in handles {
+        // SAFETY: `handle` is a live `dlopen` handle kept for the lifetime of the
+        // process, and `c_symbol` is NUL terminated.
+        let ptr = unsafe {
+            libc::dlerror();
+            libc::dlsym(handle as *mut libc::c_void, c_symbol.as_ptr())
+        };
+        if let Some(function) = HostFunction::new(ptr) {
+            return Ok(function);
+        }
+    }
+
     // SAFETY: `c_symbol` is NUL terminated. Clearing dlerror before dlsym lets
     // us distinguish a stale loader error from this lookup.
     let pointer = unsafe {
         libc::dlerror();
         libc::dlsym(libc::RTLD_DEFAULT, c_symbol.as_ptr())
     };
+    if !pointer.is_null() && is_internal_host_symbol(symbol, pointer) {
+        return Err(FfiError::SymbolNotFound {
+            symbol: symbol.to_owned(),
+            detail: "symbol resolves to internal Aura host image".to_owned(),
+        });
+    }
     HostFunction::new(pointer).ok_or_else(|| {
         // SAFETY: dlerror returns either null or a loader-owned NUL-terminated
         // string that remains valid until the next loader call on this thread.
@@ -613,8 +705,19 @@ fn system_library_directories() -> Vec<PathBuf> {
     directories
 }
 
+#[cfg(unix)]
+fn parse_soname_version(suffix: &str) -> Option<Vec<u64>> {
+    if suffix.is_empty() {
+        return None;
+    }
+    suffix
+        .split('.')
+        .map(|part| part.parse::<u64>().ok())
+        .collect()
+}
+
 /// The files in `directory` that are versions of `file_name`, such as
-/// `libsqlite3.so.0` for `libsqlite3.so`, in name order.
+/// `libsqlite3.so.0` for `libsqlite3.so`, sorted by descending numeric version.
 #[cfg(unix)]
 fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     let prefix = format!("{file_name}.");
@@ -627,23 +730,40 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
                 .collect::<Vec<_>>()
         })
         .unwrap_or_default();
-    files.sort();
+    files.sort_by(|left, right| {
+        let left_ver = left
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix(&prefix))
+            .and_then(parse_soname_version);
+        let right_ver = right
+            .file_name()
+            .and_then(|n| n.to_str())
+            .and_then(|n| n.strip_prefix(&prefix))
+            .and_then(parse_soname_version);
+        match (left_ver, right_ver) {
+            (Some(l), Some(r)) => r.cmp(&l).then_with(|| left.cmp(right)),
+            (Some(_), None) => std::cmp::Ordering::Less,
+            (None, Some(_)) => std::cmp::Ordering::Greater,
+            (None, None) => left.cmp(right),
+        }
+    });
     files
 }
 
 #[cfg(unix)]
-fn open_library(path: &Path) -> Result<(), String> {
+fn open_library(path: &Path) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
     let c_path = CString::new(path.as_os_str().as_bytes())
         .map_err(|_| "the path contains a NUL byte".to_string())?;
-    // SAFETY: `c_path` is NUL terminated. The handle is never closed, so the
-    // library stays loaded for the life of the process.
+    // SAFETY: `c_path` is NUL terminated. `RTLD_LOCAL` keeps loaded FFI symbols
+    // out of `RTLD_DEFAULT`; the returned handle is retained in `LoadedLibraries`.
     let handle = unsafe {
         libc::dlerror();
-        libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL)
+        libc::dlopen(c_path.as_ptr(), libc::RTLD_NOW | libc::RTLD_LOCAL)
     };
     if !handle.is_null() {
-        return Ok(());
+        return Ok(handle as usize);
     }
     // SAFETY: dlerror returns null or a loader-owned NUL-terminated string
     // that stays valid until this thread's next loader call.
@@ -692,11 +812,11 @@ fn framework_candidates(name: &str) -> Vec<PathBuf> {
 /// [`call_process_symbol`] finds its symbols. The failure names `library`
 /// and gives the loader's reason for the first candidate.
 #[cfg(unix)]
-fn load_first(library: &str, candidates: &[PathBuf]) -> Result<(), FfiError> {
+fn load_first(library: &str, candidates: &[PathBuf]) -> Result<usize, FfiError> {
     let mut first_failure = None;
     for candidate in candidates {
         match open_library(candidate) {
-            Ok(()) => return Ok(()),
+            Ok(handle) => return Ok(handle),
             Err(detail) => first_failure = first_failure.or(Some(detail)),
         }
     }
@@ -707,35 +827,63 @@ fn load_first(library: &str, candidates: &[PathBuf]) -> Result<(), FfiError> {
 }
 
 /// Loads every library and framework a program links into this process,
-/// once each, so the symbols resolve as they do in a built program. The
-/// libraries stay loaded. Frameworks exist only on macOS and are skipped
-/// elsewhere.
+/// once per `(kind, name, canonical_search_paths)` tuple, so the symbols
+/// resolve via explicit `RTLD_LOCAL` handles as they do in a built program.
+/// Frameworks exist only on macOS and are skipped elsewhere.
 #[cfg(unix)]
 pub fn load_libraries(
     libraries: &[String],
     search_paths: &[PathBuf],
     frameworks: &[String],
 ) -> Result<(), FfiError> {
-    static LOADED: std::sync::Mutex<std::collections::BTreeSet<String>> =
-        std::sync::Mutex::new(std::collections::BTreeSet::new());
+    const KIND_LIBRARY: u8 = 0;
+    const KIND_FRAMEWORK: u8 = 1;
+
+    let raw_paths = search_paths.to_vec();
+    let canonical_paths = search_paths
+        .iter()
+        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .collect::<Vec<_>>();
     let frameworks = frameworks.iter().filter(|_| cfg!(target_os = "macos"));
     let wanted = libraries
         .iter()
         .map(|name| {
             (
-                format!("l{name}"),
+                KIND_LIBRARY,
                 name,
+                raw_paths.clone(),
+                canonical_paths.clone(),
                 library_candidates(name, search_paths),
             )
         })
-        .chain(frameworks.map(|name| (format!("f{name}"), name, framework_candidates(name))));
-    let mut loaded = LOADED
+        .chain(frameworks.map(|name| {
+            (
+                KIND_FRAMEWORK,
+                name,
+                Vec::new(),
+                Vec::new(),
+                framework_candidates(name),
+            )
+        }));
+    let mut loaded = loaded_libraries_registry()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
-    for (key, name, candidates) in wanted {
-        if !loaded.contains(&key) {
-            load_first(name, &candidates)?;
-            loaded.insert(key);
+    for (kind, name, req_raw, req_canon, candidates) in wanted {
+        let raw_key = (kind, name.clone(), req_raw);
+        let canon_key = (kind, name.clone(), req_canon);
+        let bare_satisfied =
+            raw_key.2.is_empty() && loaded.loaded_names.contains(&(kind, name.clone()));
+        if !bare_satisfied
+            && !loaded.by_request.contains(&raw_key)
+            && !loaded.by_request.contains(&canon_key)
+        {
+            let handle = load_first(name, &candidates)?;
+            if !loaded.handles.contains(&handle) {
+                loaded.handles.push(handle);
+            }
+            loaded.loaded_names.insert((kind, name.clone()));
+            loaded.by_request.insert(raw_key);
+            loaded.by_request.insert(canon_key);
         }
     }
     Ok(())
@@ -1475,5 +1623,117 @@ mod tests {
         } else {
             assert_eq!(missing, Ok(()));
         }
+    }
+
+    #[cfg(unix)]
+    #[no_mangle]
+    pub extern "C" fn aura_ffi_host_internal_probe_for_test() -> i32 {
+        77
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn versioned_library_files_sort_numerically_descending() {
+        let directory = scratch_directory("version-order");
+        for suffix in ["0", "1", "2", "10", "1.2", "1.10"] {
+            std::fs::write(directory.join(format!("libver.so.{suffix}")), b"")
+                .expect("touch versioned file");
+        }
+        let ordered = versioned_library_files(&directory, "libver.so")
+            .into_iter()
+            .map(|path| {
+                path.file_name()
+                    .expect("file name")
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect::<Vec<_>>();
+        std::fs::remove_dir_all(&directory).expect("cleanup scratch directory");
+        assert_eq!(
+            ordered,
+            [
+                "libver.so.10",
+                "libver.so.2",
+                "libver.so.1.10",
+                "libver.so.1.2",
+                "libver.so.1",
+                "libver.so.0",
+            ]
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn load_libraries_keys_cache_by_search_paths_uses_rtld_local_and_hides_host_symbols() {
+        // 1. Host executable symbols must not be callable via default process lookup.
+        assert!(is_internal_host_symbol(
+            "custom_symbol_inside_host_image",
+            aura_ffi_host_internal_probe_for_test as *const libc::c_void
+        ));
+        assert!(is_internal_host_symbol(
+            "aura_direct_frame_stack",
+            std::ptr::null()
+        ));
+        assert!(is_internal_host_symbol(
+            "LLVMContextCreate",
+            std::ptr::null()
+        ));
+        let getpid_ptr = unsafe { libc::dlsym(libc::RTLD_DEFAULT, c"getpid".as_ptr()) };
+        assert!(!getpid_ptr.is_null());
+        assert!(!is_internal_host_symbol("getpid", getpid_ptr));
+        assert!(
+            matches!(
+                call_fixture("aura_ffi_host_internal_probe_for_test"),
+                Err(FfiError::SymbolNotFound { .. })
+            ),
+            "internal host binary symbols must not be exposed to FFI lookup"
+        );
+
+        // 2. Loaded FFI libraries must use RTLD_LOCAL (not leaked into RTLD_DEFAULT)
+        //    while remaining callable through explicit handle lookup.
+        let local_dir = scratch_directory("rtld-local");
+        let local_file = local_dir.join(&library_file_names("aura_ffi_fixture_local")[0]);
+        build_fixture_library(&local_file, "aura_ffi_fixture_local_only", 91);
+        load_libraries(
+            &["aura_ffi_fixture_local".to_owned()],
+            std::slice::from_ref(&local_dir),
+            &[],
+        )
+        .expect("load local fixture library");
+        assert_eq!(
+            call_fixture("aura_ffi_fixture_local_only"),
+            Ok(FfiValue::I32(91))
+        );
+        let leaked_ptr = unsafe {
+            let sym = CString::new("aura_ffi_fixture_local_only").unwrap();
+            libc::dlsym(libc::RTLD_DEFAULT, sym.as_ptr())
+        };
+        std::fs::remove_dir_all(&local_dir).expect("cleanup local_dir");
+        assert!(
+            leaked_ptr.is_null(),
+            "dlopen must use RTLD_LOCAL rather than polluting RTLD_DEFAULT"
+        );
+
+        // 3. Libraries with the same logical name under distinct search_paths must both load.
+        let dir_a = scratch_directory("same-name-a");
+        let dir_b = scratch_directory("same-name-b");
+        let file_name = &library_file_names("aura_ffi_same_name")[0];
+        build_fixture_library(&dir_a.join(file_name), "aura_ffi_same_name_from_a", 11);
+        build_fixture_library(&dir_b.join(file_name), "aura_ffi_same_name_from_b", 22);
+
+        let names = ["aura_ffi_same_name".to_owned()];
+        load_libraries(&names, std::slice::from_ref(&dir_a), &[]).expect("load from dir_a");
+        load_libraries(&names, std::slice::from_ref(&dir_b), &[]).expect("load from dir_b");
+
+        assert_eq!(
+            call_fixture("aura_ffi_same_name_from_a"),
+            Ok(FfiValue::I32(11))
+        );
+        assert_eq!(
+            call_fixture("aura_ffi_same_name_from_b"),
+            Ok(FfiValue::I32(22))
+        );
+        std::fs::remove_dir_all(&dir_a).expect("cleanup dir_a");
+        std::fs::remove_dir_all(&dir_b).expect("cleanup dir_b");
     }
 }

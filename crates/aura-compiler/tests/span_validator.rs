@@ -139,7 +139,8 @@ fn forged_span_calls_are_refused_by_the_interpreter() {
             args.truncate(arity);
         }
     };
-    let cases: Vec<(Box<dyn FnOnce(&mut Value)>, &str)> = vec![
+    type MutatorCase<'a> = (Box<dyn FnOnce(&mut Value)>, &'a str);
+    let cases: Vec<MutatorCase<'_>> = vec![
         (
             // A private member no op names stays a member call.
             Box::new(|call: &mut Value| {

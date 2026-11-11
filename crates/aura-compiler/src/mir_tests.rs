@@ -13281,8 +13281,10 @@ fn batch1_loan_ancestor_walks_stop_on_cycles() {
 #[test]
 fn batch1_loan_path_budgets_reject_oversized_expansions() {
     let function = batch1_test_function("budget");
-    let mut state = ValidatedLoanState::default();
-    state.active_path_bytes = MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES;
+    let state = ValidatedLoanState {
+        active_path_bytes: MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES,
+        ..Default::default()
+    };
     let error = validate_active_loan_path_budget(&function, "loan", &state, 1)
         .expect_err("a full path budget admits no new loan");
     assert!(
