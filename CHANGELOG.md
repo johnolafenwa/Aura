@@ -41,6 +41,11 @@ in this file.
   the same at every width. `AURA_ARRAY_KERNELS=baseline` turns the wide
   copies off. A float `min` and `max` now compare many elements at once,
   and order `-0.0` below `0.0`.
+- A `for` loop over `range(start, stop, step)` with a literal step tests
+  its bound once in each iteration, and a lane load or store adds two
+  conditions to the loop's entry whatever its lane count. The lane
+  kernels of `benchmarks/simd` run up to twice as fast as before on a
+  baseline build.
 - `aura build --target-cpu <name>` and `aura run --target-cpu <name>`
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it

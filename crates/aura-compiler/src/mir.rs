@@ -19369,6 +19369,8 @@ impl<'a> Lowerer<'a> {
         // The cursor, the last value it advances from, and the step of a
         // counted range with a step above 1.
         let mut stepped_advance = None;
+        // The block a counted range binds its target in.
+        let mut stepped_next = dispatch_block;
 
         match iterable_ty {
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
@@ -19379,7 +19381,7 @@ impl<'a> Lowerer<'a> {
                     .take()
                     .expect("the guard checked the counted range");
                 if step > 1 {
-                    let last = self.lower_stepped_range_last(&stop, step, for_stmt.span);
+                    let last = self.lower_stepped_range_last(&cursor, &stop, step, for_stmt.span);
                     stepped_advance = Some((cursor.clone(), last, step));
                 }
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
@@ -19406,7 +19408,7 @@ impl<'a> Lowerer<'a> {
                 } else {
                     Some(binding)
                 };
-                self.lower_counted_range_test(
+                stepped_next = self.lower_counted_range_test(
                     step_binding,
                     cursor,
                     stop,
@@ -19904,9 +19906,13 @@ impl<'a> Lowerer<'a> {
         self.switch_to(safepoint_block);
         self.emit(Instruction::Safepoint);
         if let Some((cursor, last, step)) = stepped_advance {
+            // The advance stays below `stop`, so the next iteration starts
+            // without the loop's first test.
             self.lower_stepped_range_advance(cursor, last, step, for_stmt.span, after_block);
+            self.terminate(Terminator::Goto(self.label(stepped_next)));
+        } else {
+            self.terminate(Terminator::Goto(self.label(dispatch_block)));
         }
-        self.terminate(Terminator::Goto(self.label(dispatch_block)));
 
         self.switch_to(after_block);
     }
@@ -19997,19 +20003,20 @@ impl<'a> Lowerer<'a> {
         (cursor, end, step)
     }
 
-    /// The last cursor value a stepped range advances from: an iteration at
+    /// The bound a stepped range's cursor advances below: an iteration at
     /// `cursor` has a successor when `cursor + step < stop`, which is
-    /// `cursor < stop - step`. A negative `stop` keeps `stop` itself, since
-    /// `stop - step` could pass the least `int64`: every cursor is then
-    /// negative, the advance cannot overflow, and the loop's own test ends
-    /// it.
+    /// `cursor < stop - step`. When `stop - step` would pass the least
+    /// `int64`, no iteration has a successor, and the bound is the first
+    /// cursor, which no cursor is below.
     fn lower_stepped_range_last(
         &mut self,
+        cursor: &str,
         stop: &str,
         step: u128,
         span: crate::diag::Span,
     ) -> String {
-        let last = self.new_typed_temp(Type::named("int64"));
+        let int64 = Type::named("int64");
+        let last = self.new_typed_temp(int64.clone());
         let negative = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
             target: negative.clone(),
@@ -20021,22 +20028,54 @@ impl<'a> Lowerer<'a> {
                 trap: ArithmeticTrap::None,
             },
         });
-        let keep_block = self.new_block("for_range_last_stop");
+        let low_block = self.new_block("for_range_last_low");
+        let keep_block = self.new_block("for_range_last_first");
         let back_block = self.new_block("for_range_last_back");
         let ready_block = self.new_block("for_range_ready");
         self.terminate(Terminator::Branch {
             condition: Operand::Place(negative),
+            then_label: self.label(low_block),
+            else_label: self.label(back_block),
+        });
+        self.switch_to(low_block);
+        // A negative `stop` is below `int64` min plus the step exactly when
+        // `stop + int64 max` is below the step less one. The sum is at
+        // least -1, so it never traps.
+        let raised = self.new_typed_temp(int64);
+        self.emit(Instruction::Assign {
+            target: raised.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(stop.to_string()),
+                right: Operand::Int(i64::MAX as u128),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
+        let passes = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: passes.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(raised),
+                right: Operand::Int(step - 1),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(passes),
             then_label: self.label(keep_block),
             else_label: self.label(back_block),
         });
         self.switch_to(keep_block);
         self.emit(Instruction::Assign {
             target: last.clone(),
-            value: Rvalue::Use(Operand::Place(stop.to_string())),
+            value: Rvalue::Use(Operand::Place(cursor.to_string())),
         });
         self.terminate(Terminator::Goto(self.label(ready_block)));
         self.switch_to(back_block);
-        // `stop` is at least 0 and the step at most `int64` max, so the
+        // `stop` is at least `int64` min plus the step here, so the
         // difference never traps.
         self.emit(Instruction::Assign {
             target: last.clone(),
@@ -20053,10 +20092,12 @@ impl<'a> Lowerer<'a> {
         last
     }
 
-    /// Ends a stepped range's iteration: leaves the loop when the cursor
-    /// has no successor below `stop`, and otherwise advances it. The
-    /// advance never traps: the cursor is below `last` (see
-    /// `lower_stepped_range_last`). The caller jumps back to the test.
+    /// Ends a stepped range's iteration: advances the cursor while it is
+    /// below `last` (see `lower_stepped_range_last`), and otherwise leaves
+    /// the loop. The advance never traps, and the cursor it leaves is
+    /// below `stop`, so the caller jumps to the block that binds the
+    /// target. The loop then has this one test, which lets LLVM count its
+    /// iterations.
     fn lower_stepped_range_advance(
         &mut self,
         cursor: String,
@@ -20065,22 +20106,22 @@ impl<'a> Lowerer<'a> {
         span: crate::diag::Span,
         after_block: usize,
     ) {
-        let done = self.new_typed_temp(Type::named("bool"));
+        let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
-            target: done.clone(),
+            target: more.clone(),
             value: Rvalue::Binary {
-                op: BinaryOp::LessEq,
-                left: Operand::Place(last),
-                right: Operand::Place(cursor.clone()),
+                op: BinaryOp::Less,
+                left: Operand::Place(cursor.clone()),
+                right: Operand::Place(last),
                 span,
                 trap: ArithmeticTrap::None,
             },
         });
         let advance_block = self.new_block("for_range_step");
         self.terminate(Terminator::Branch {
-            condition: Operand::Place(done),
-            then_label: self.label(after_block),
-            else_label: self.label(advance_block),
+            condition: Operand::Place(more),
+            then_label: self.label(advance_block),
+            else_label: self.label(after_block),
         });
         self.switch_to(advance_block);
         self.emit(Instruction::Assign {
@@ -20101,7 +20142,7 @@ impl<'a> Lowerer<'a> {
     /// stays below `stop`, which is at most `int64` max. A larger step
     /// advances where the iteration ends (see
     /// `lower_stepped_range_advance`). The blocks are the loop's body and
-    /// the block after the loop.
+    /// the block after the loop. Returns the block that binds the cursor.
     fn lower_counted_range_test(
         &mut self,
         binding: Option<String>,
@@ -20110,7 +20151,7 @@ impl<'a> Lowerer<'a> {
         step: u128,
         span: crate::diag::Span,
         (body_block, after_block): (usize, usize),
-    ) {
+    ) -> usize {
         let next_block = self.new_block("for_range_next");
         let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
@@ -20150,6 +20191,7 @@ impl<'a> Lowerer<'a> {
             });
         }
         self.terminate(Terminator::Goto(self.label(body_block)));
+        next_block
     }
 
     fn lower_list_iteration_by_loan(

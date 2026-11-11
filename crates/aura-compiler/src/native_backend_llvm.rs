@@ -932,13 +932,17 @@ impl FunctionIr {
         selects: &[(Val, Option<i64>)],
         entries: &[crate::native_backend::VersionEntry],
     ) -> bool {
-        let mut members = blocks
+        // The copies keep the order of the layout, where each value is
+        // defined before the blocks that use it. A block may be created
+        // long before it gets its first instruction, so the order of the
+        // block numbers is not that order.
+        let set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        let members = self
+            .layout
             .iter()
-            .map(|block| block.0)
-            .filter(|block| self.blocks[*block as usize].in_layout)
+            .copied()
+            .filter(|block| set.contains(block))
             .collect::<Vec<_>>();
-        members.sort_unstable();
-        members.dedup();
         let set = members.iter().copied().collect::<HashSet<_>>();
         let mut defined = HashSet::new();
         for block in &members {

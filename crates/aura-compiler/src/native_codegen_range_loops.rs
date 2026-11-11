@@ -70,6 +70,38 @@ pub(super) enum RangeGuard {
     Within { bound: RangeBound, distance: i64 },
 }
 
+/// The guards that imply the rest: for each local the greatest value it
+/// must reach, and for each bound the greatest distance that must fit in the
+/// list. A lane load asks for one of each per lane, and the entry of the loop
+/// then tests two conditions in place of two per lane.
+fn strongest(guards: Vec<RangeGuard>) -> Vec<RangeGuard> {
+    let mut kept: Vec<RangeGuard> = Vec::new();
+    for new in guards {
+        let same = kept.iter_mut().find_map(|old| match (old, &new) {
+            (
+                RangeGuard::AtLeast { place, least },
+                RangeGuard::AtLeast {
+                    place: other,
+                    least: more,
+                },
+            ) if place == other => Some((least, *more)),
+            (
+                RangeGuard::Within { bound, distance },
+                RangeGuard::Within {
+                    bound: other,
+                    distance: more,
+                },
+            ) if bound == other => Some((distance, *more)),
+            _ => None,
+        });
+        match same {
+            Some((held, more)) => *held = (*held).max(more),
+            None => kept.push(new),
+        }
+    }
+    kept
+}
+
 /// The accesses of one list in one loop that stay in range while the
 /// guards hold.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -480,9 +512,34 @@ fn counters(
     found
 }
 
-/// The places known to be in range: each with the counter it follows and
-/// its distance from it.
-type Known<'f> = HashMap<&'f str, (usize, i64)>;
+/// What a place in range is measured from.
+#[derive(Clone, Copy, Debug, Eq, PartialEq, Ord, PartialOrd, Hash)]
+enum Source {
+    /// The counter of this index in the list of counters, on the edge on
+    /// which it is below its limit.
+    Test(usize),
+    /// What the counter of this index held when the loop was entered.
+    Entry(usize),
+}
+
+/// The most ways a place may be in range at one point.
+const MAX_FACTS: usize = 4;
+
+/// The places known to be in range. A place holds, for one of its facts,
+/// the value of the fact's source plus the fact's distance. Which fact
+/// holds depends on the path taken, so an access is covered only when
+/// every fact covers it. The facts are sorted.
+type Known<'f> = HashMap<&'f str, Vec<(Source, i64)>>;
+
+/// The facts that hold after either `left` or `right` did, or `None` when
+/// they are too many to follow.
+fn either(left: &[(Source, i64)], right: &[(Source, i64)]) -> Option<Vec<(Source, i64)>> {
+    let mut facts = left.to_vec();
+    facts.extend_from_slice(right);
+    facts.sort_unstable();
+    facts.dedup();
+    (facts.len() <= MAX_FACTS).then_some(facts)
+}
 
 /// Applies `instruction` to the places in range.
 fn step<'f>(
@@ -497,9 +554,15 @@ fn step<'f>(
             return None;
         }
         let (source, distance) = affine_value(block, position, value, MAX_CHAIN)?;
-        let (counter, base) = *known.get(source?)?;
-        let distance = base.checked_add(distance)?;
-        (distance.abs() <= MAX_DISTANCE).then_some((target, (counter, distance)))
+        let facts = known
+            .get(source?)?
+            .iter()
+            .map(|(source, base)| {
+                let distance = base.checked_add(distance)?;
+                (distance.abs() <= MAX_DISTANCE).then_some((*source, distance))
+            })
+            .collect::<Option<Vec<_>>>()?;
+        Some((target, facts))
     });
     known.retain(|place, _| !changes(instruction, place));
     if let Some((target, fact)) = derived {
@@ -554,17 +617,24 @@ pub(super) fn range_proof(
                 && counter.then_label == next
                 && successors.iter().filter(|other| **other == next).count() == 1
             {
-                known.insert(counter.name.as_str(), (index, 0));
+                known.insert(counter.name.as_str(), vec![(Source::Test(index), 0)]);
             }
         }
         known
     }
     // Each block's places in range at its start: `None` until an edge
-    // reaches it. A block the loop is entered at starts with none.
+    // reaches it. A block the loop is entered at starts with each counter
+    // holding what it held at the entry.
+    let mut at_entry = Known::new();
+    for (index, counter) in counters.iter().enumerate() {
+        at_entry
+            .entry(counter.name.as_str())
+            .or_insert_with(|| vec![(Source::Entry(index), 0)]);
+    }
     let mut at_start = HashMap::<&str, Option<Known<'_>>>::new();
     for block in &blocks {
         let entered = region.entries.iter().any(|(_, to)| *to == block.label);
-        at_start.insert(block.label.as_str(), entered.then(Known::new));
+        at_start.insert(block.label.as_str(), entered.then(|| at_entry.clone()));
     }
     let mut pending = blocks
         .iter()
@@ -592,8 +662,9 @@ pub(super) fn range_proof(
                 None => arriving,
                 Some(existing) => existing
                     .iter()
-                    .filter(|(place, fact)| arriving.get(*place) == Some(fact))
-                    .map(|(place, fact)| (*place, *fact))
+                    .filter_map(|(place, facts)| {
+                        Some((*place, either(facts, arriving.get(*place)?)?))
+                    })
                     .collect(),
             };
             if slot.as_ref() != Some(&merged) {
@@ -624,54 +695,75 @@ pub(super) fn range_proof(
         let mut known = start.clone();
         for (position, instruction) in block.instructions.iter().enumerate() {
             if let Some((list, index, kind)) = scalar_access(instruction) {
-                if let (true, Some(&(index_of_counter, distance))) =
-                    (list == region.list, known.get(index))
-                {
-                    let counter = &counters[index_of_counter];
-                    // The counter is never below the constants it is set
-                    // to, and the guard covers its value at the entry.
-                    let above_zero = counter
-                        .least_reset
-                        .is_none_or(|least| least.saturating_add(distance) >= 0);
-                    let within = match &counter.limit {
-                        Limit::Fixed(_) => true,
-                        Limit::LengthOf { list: measured, .. } => measured == list && distance <= 0,
-                    };
-                    if above_zero && within && element.is_none_or(|known| known == kind) {
-                        element = Some(kind);
-                        covered.insert((block.label.clone(), position));
-                        bounded.insert(index_of_counter);
-                        guard(
-                            &mut guards,
-                            RangeGuard::AtLeast {
-                                place: counter.name.clone(),
-                                least: -distance,
-                            },
-                        );
-                        match &counter.limit {
-                            Limit::Fixed(bound) => guard(
-                                &mut guards,
-                                RangeGuard::Within {
+                let facts = known
+                    .get(index)
+                    .filter(|_| list == region.list && element.is_none_or(|known| known == kind));
+                // The guards of every way the index may be in range, or
+                // `None` when one of them cannot be guarded.
+                let needed = facts.and_then(|facts| {
+                    let mut needed = Vec::new();
+                    for &(source, distance) in facts {
+                        let (Source::Test(of) | Source::Entry(of)) = source;
+                        let counter = &counters[of];
+                        needed.push(RangeGuard::AtLeast {
+                            place: counter.name.clone(),
+                            least: -distance,
+                        });
+                        match (source, &counter.limit) {
+                            // The index is the counter's value at the
+                            // entry plus the distance.
+                            (Source::Entry(_), _) => needed.push(RangeGuard::Within {
+                                bound: RangeBound::Place(counter.name.clone()),
+                                distance: distance.checked_add(1)?,
+                            }),
+                            // The counter is never below the constants it
+                            // is set to, and the guard covers its value at
+                            // the entry.
+                            (Source::Test(_), _)
+                                if counter
+                                    .least_reset
+                                    .is_some_and(|least| least.saturating_add(distance) < 0) =>
+                            {
+                                return None;
+                            }
+                            (Source::Test(_), Limit::Fixed(bound)) => {
+                                needed.push(RangeGuard::Within {
                                     bound: bound.clone(),
                                     distance,
-                                },
-                            ),
+                                });
+                            }
                             // The bound and its temporaries hold a length
                             // of the list once the loop assigns them.
                             // Until then they hold what they held at the
                             // entry, which the guards cover.
-                            Limit::LengthOf { place, sources, .. } => {
+                            (
+                                Source::Test(_),
+                                Limit::LengthOf {
+                                    place,
+                                    sources,
+                                    list: measured,
+                                },
+                            ) => {
+                                if measured != list || distance > 0 {
+                                    return None;
+                                }
                                 for place in std::iter::once(place).chain(sources) {
-                                    guard(
-                                        &mut guards,
-                                        RangeGuard::Within {
-                                            bound: RangeBound::Place(place.clone()),
-                                            distance: 0,
-                                        },
-                                    );
+                                    needed.push(RangeGuard::Within {
+                                        bound: RangeBound::Place(place.clone()),
+                                        distance: 0,
+                                    });
                                 }
                             }
                         }
+                    }
+                    Some(needed)
+                });
+                if let (Some(needed), Some(facts)) = (needed, facts) {
+                    element = Some(kind);
+                    covered.insert((block.label.clone(), position));
+                    bounded.extend(facts.iter().map(|(source, _)| *source));
+                    for new in needed {
+                        guard(&mut guards, new);
                     }
                 }
             }
@@ -683,15 +775,21 @@ pub(super) fn range_proof(
                 },
             )) = assigned(instruction)
             {
-                let sum = affine_value(block, position, value, MAX_CHAIN)
+                // The sum is exact when every way its operand may be in
+                // range keeps the result near a bounded source.
+                let sources = affine_value(block, position, value, MAX_CHAIN)
                     .and_then(|(source, distance)| Some((known.get(source?)?, distance)))
-                    .and_then(|((counter, base), distance)| {
-                        Some((*counter, base.checked_add(distance)?))
+                    .and_then(|(facts, distance)| {
+                        facts
+                            .iter()
+                            .map(|(source, base)| {
+                                let distance = base.checked_add(distance)?;
+                                (distance.abs() <= MAX_DISTANCE).then_some(*source)
+                            })
+                            .collect::<Option<Vec<_>>>()
                     });
-                if let Some((counter, distance)) = sum {
-                    if distance.abs() <= MAX_DISTANCE {
-                        sums.push((counter, block.label.clone(), position));
-                    }
+                if let Some(sources) = sources {
+                    sums.push((sources, block.label.clone(), position));
                 }
             }
             step(&mut known, block, position, &usable);
@@ -699,12 +797,12 @@ pub(super) fn range_proof(
     }
     let exact = sums
         .into_iter()
-        .filter(|(counter, _, _)| bounded.contains(counter))
+        .filter(|(sources, _, _)| sources.iter().all(|source| bounded.contains(source)))
         .map(|(_, label, position)| (label, position))
         .collect();
     Some(RangeProof {
         element: element?,
-        guards,
+        guards: strongest(guards),
         covered,
         exact,
     })

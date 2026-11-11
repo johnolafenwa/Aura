@@ -120,12 +120,12 @@ Milliseconds for 1,024 elements, 400,000 times:
 
 | Kernel | Lane class | Aura | Aura, native | Rust | Rust, native | Python |
 | --- | --- | ---: | ---: | ---: | ---: | ---: |
-| `dot` | `F64x4` | 99 | 83 | 189 | 121 | 13,100 |
-| `saxpy` | `F64x4` | 133 | 124 | 217 | 59 | 15,000 |
-| `norms` | `F64x4` | 449 | 436 | 441 | 442 | 45,500 |
-| `clamp` | `F64x4` | 169 | 87 | 149 | 61 | 29,600 |
-| `absdiff` | `F32x8` | 105 | 56 | 280 | 23 | 17,000 |
-| `sum8` | `F32x8` | 114 | 78 | 98 | 72 | 6,400 |
+| `dot` | `F64x4` | 80 | 66 | 145 | 132 | 13,100 |
+| `saxpy` | `F64x4` | 94 | 91 | 215 | 62 | 15,000 |
+| `norms` | `F64x4` | 442 | 444 | 434 | 441 | 45,500 |
+| `clamp` | `F64x4` | 84 | 56 | 151 | 67 | 29,600 |
+| `absdiff` | `F32x8` | 49 | 46 | 262 | 32 | 17,000 |
+| `sum8` | `F32x8` | 95 | 84 | 93 | 77 | 6,400 |
 
 Aura and Rust print the same checksum on every row. Python runs one
 hundredth of the repetitions and adds in source order, so its checksums
@@ -134,9 +134,12 @@ differ and its column is the measured time multiplied by 100.
 - On a generic build Aura is at or ahead of Rust on every row. Rust keeps
   a bounds check on each load and store. Aura checks the range of every
   lane once, where the loop starts.
-- On a build for the host CPU Rust is about twice as fast on `saxpy`,
-  `clamp`, and `absdiff`, where it unrolls further with 256-bit
-  registers. Aura stays within three times of Rust on every row.
+- On a build for the host CPU, which has 512-bit registers, Rust is
+  about one and a half times as fast on `saxpy` and `absdiff`. Its loop
+  vectorizer turns the struct loop into 512-bit instructions and unrolls
+  it four times. Aura keeps the width the program wrote. About a fifth
+  of Aura's time on those rows is the cost of entering the function,
+  which is the same for any list length.
 - `dot` with `F64x4` takes a third of the time of the scalar `dot` in
   the list loop table above, which has to add in source order.
 - `norms` is bound by the square root, which costs the same in every

@@ -5184,8 +5184,8 @@ def main():
     else {
         panic!("unexpected counted binding: {:?}", next.instructions);
     };
-    // The last value an iteration may start from is `stop - step`, taken
-    // only when `stop` is not negative, so it cannot overflow.
+    // The last value an iteration may advance from is below `stop - step`,
+    // taken only when the difference cannot overflow.
     let [back] = labelled("_for_range_last_back_")[..] else {
         panic!("one counted loop should compute its last value");
     };
@@ -5226,7 +5226,7 @@ def main():
         .find(|block| {
             matches!(
                 &block.terminator,
-                Terminator::Branch { else_label, .. } if *else_label == step.label
+                Terminator::Branch { then_label, .. } if *then_label == step.label
             )
         })
         .expect("a block should branch to the advance");
@@ -5234,13 +5234,30 @@ def main():
         instruction,
         Instruction::Assign {
             value: Rvalue::Binary {
-                op: BinaryOp::LessEq,
-                right: Operand::Place(right),
+                op: BinaryOp::Less,
+                left: Operand::Place(left),
                 ..
             },
             ..
-        } if right == cursor
+        } if left == cursor
     )));
+    // The advance goes back to the block that binds the counter, so the
+    // loop has one test for each iteration after the first.
+    assert!(matches!(
+        &step.terminator,
+        Terminator::Goto(label) if *label == next.label
+    ));
+    // A `stop` too low to subtract the step from leaves one iteration.
+    let [first] = labelled("_for_range_last_first_")[..] else {
+        panic!("one counted loop should handle a stop near the least int64");
+    };
+    assert!(matches!(
+        first.instructions.as_slice(),
+        [Instruction::Assign {
+            value: Rvalue::Use(Operand::Place(from)),
+            ..
+        }] if from == cursor
+    ));
 }
 
 #[test]

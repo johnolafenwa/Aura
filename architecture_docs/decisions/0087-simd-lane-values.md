@@ -96,9 +96,19 @@ things in Aura shape the answer:
   did. A lane loop is written `for i in range(0, len(xs) - 3, 4)`, and it
   ran a thousand times slower through a `Range` value.
 - **The count is exact at the limits of `int64`.** The loop tests
-  `i < stop` at the top. After the body it advances only while
-  `i <= last`, where `last` is `stop - step` when `stop` is not negative
-  and `stop` otherwise, so the addition cannot overflow.
+  `i < stop` once, before the first iteration. After the body it advances
+  only while `i < last`, where `last` is `stop - step`, so the addition
+  cannot overflow and the next value is below `stop`. When `stop` is too
+  close to the least `int64` to subtract the step from, `last` is the
+  start, and the loop runs once.
+- **Each iteration after the first has that one test.** LLVM can then
+  count the iterations, and a lane loop compiles to the lane instructions,
+  an add, a compare, and a jump.
+- **The range proof of a counted loop follows both ways into the body**:
+  from the entry, where the index is the start, and from the advance,
+  where it is below `last + step`. It keeps the strongest guard for each
+  local, so a lane load of eight elements adds two conditions to the
+  loop's entry and not sixteen.
 - **A step that is not a positive literal, and a loop with `invariant`
   clauses, keep the `Range` value.**
 
@@ -127,8 +137,16 @@ things in Aura shape the answer:
 ## Consequences
 
 - A dot product over 1,024 `float64` elements with `F64x4` runs about
-  three times as fast as the scalar loop, and at the speed of the same
-  lane struct in Rust. `benchmarks/simd` has six such kernels.
+  three times as fast as the scalar loop. `benchmarks/simd` has six such
+  kernels. On a baseline build each is at or ahead of the same lane struct
+  in Rust. On a build for a CPU with 512-bit registers Rust is up to one
+  and a half times as fast on two of them, because its loop vectorizer
+  widens and unrolls the struct loop, and Aura keeps the width the
+  program wrote.
+- **Lane classes of 8 `float64` or 16 `float32` were measured and left
+  out.** On the AVX-512 host they ran no faster than `F64x4` and `F32x8`:
+  LLVM keeps 256-bit registers on that CPU, and what remains at 1,024
+  elements is the cost of entering the function.
 - Both backends print the same bits for every lane operation, and a
   build for a wider CPU changes speed only.
 - A program that starts tasks polls for a yield in each loop iteration,

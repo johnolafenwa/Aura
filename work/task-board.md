@@ -17,7 +17,6 @@ Last updated: 2026-11-11
 - Remaining: nothing. Possible follow-ups are integer lanes, lane loads
   from an `Array`, and counted loops over `Array` elements.
 
-
 ## Six older compiler bugs (complete)
 
 - Five programs the checker accepted and lowering refused, or the

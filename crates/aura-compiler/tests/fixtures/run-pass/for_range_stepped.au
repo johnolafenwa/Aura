@@ -14,6 +14,13 @@ def pairs(xs: list[int64]) -> int64:
     return total
 
 
+def pairs_from(xs: list[int64], start: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(start, len(xs) - 1, 2):
+        total += xs[i] * xs[i + 1]
+    return total
+
+
 def main():
     for i in range(1, 12, 4):
         print(i)
@@ -23,6 +30,13 @@ def main():
         print(i)
     low: int64 = -9223372036854775807
     for i in range(low - 1, low + 2, 2):
+        print(i)
+    # A stop too close to the least int64 to subtract the step from.
+    for i in range(low - 1, low, 3):
+        print(i)
+    for i in range(low - 1, low + 2, 3):
+        print(i)
+    for i in range(low - 1, low + 3, 3):
         print(i)
     for i in range(-10, -3, 3):
         if i == -7:
@@ -56,6 +70,11 @@ def main():
     print(shifted)
     print(pairs([1, 2, 3, 4, 5]))
     print(pairs([]))
+    print(pairs_from([1, 2, 3, 4, 5], 1))
+    print(pairs_from([1, 2, 3, 4, 5], 3))
+    print(pairs_from([1, 2, 3, 4, 5], 4))
+    print(pairs_from([1, 2, 3, 4, 5], -2))
+    print(pairs_from([7], 0))
 
     # A step that is not a positive literal still counts the same values.
     step = 4
