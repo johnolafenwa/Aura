@@ -123,5 +123,15 @@
     "count": 100000,
     "plan_step": "trait objects 6",
     "measures": "one method call on each element of a `list[dyn Solid]` that holds three classes"
+  },
+  "element_mut_call": {
+    "count": 100000,
+    "plan_step": "element method calls",
+    "measures": "`counters[i].bump(2)`, a `mut self` method call on an element of a list of a class with a `str` field"
+  },
+  "element_plain_mut_call": {
+    "count": 100000,
+    "plan_step": "element method calls",
+    "measures": "`tallies[i].bump(2)`, a `mut self` method call on an element of a list of a class of two integers"
   }
 }

@@ -18,6 +18,17 @@ class Counter:
     name: str
     count: int64
 
+    def bump(mut self, by: int64) -> None:
+        self.count += by
+
+
+class Tally:
+    count: int64
+    step: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by * self.step
+
 
 enum Shape:
     Circle(float64)
@@ -392,6 +403,32 @@ def trait_object_call(n: int64, run: bool) -> int64:
     return total + solids.len()
 
 
+# Both phases make one pass first: the first calls on a list's elements
+# settle how the list stores them, and the probe measures the calls after.
+def element_mut_call(n: int64, run: bool) -> int64:
+    mut counters = list[Counter]()
+    for i in range(n):
+        counters.append(Counter(name="c", count=i))
+    for i in range(counters.len()):
+        counters[i].bump(1)
+    if run:
+        for i in range(counters.len()):
+            counters[i].bump(2)
+    return counters[n - 1].count
+
+
+def element_plain_mut_call(n: int64, run: bool) -> int64:
+    mut tallies = list[Tally]()
+    for i in range(n):
+        tallies.append(Tally(count=i, step=i % 3))
+    for i in range(tallies.len()):
+        tallies[i].bump(1)
+    if run:
+        for i in range(tallies.len()):
+            tallies[i].bump(2)
+    return tallies[n - 1].count
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -443,6 +480,10 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return str_format(n, run)
     elif operation == "trait_object_call":
         return trait_object_call(n, run)
+    elif operation == "element_mut_call":
+        return element_mut_call(n, run)
+    elif operation == "element_plain_mut_call":
+        return element_plain_mut_call(n, run)
     return -1
 
 

@@ -1,0 +1,46 @@
+trait Shape:
+    def area(self) -> int64
+
+
+class Square:
+    side: int64
+    name: str
+
+    def label(self) -> str:
+        return self.name + "!"
+
+    def size(self) -> int64:
+        return self.side
+
+    def bump(mut self) -> None:
+        self.side += 1
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+
+def main() -> None:
+    mut squares: list[Square] = []
+    for i in range(6):
+        squares.append(Square(side=i, name="sq"))
+    mut total: int64 = 0
+    mut text = ""
+    for round in range(3):
+        for square in mut squares:
+            total += square.area()
+            total += square.size()
+            text = square.label()
+            square.bump()
+            total += square.size()
+        for i in range(len(squares)):
+            total += squares[i].area()
+            total += squares[i].size()
+            text = squares[i].label()
+            squares[i].bump()
+        for square in squares:
+            total += square.area() + square.size()
+            text = square.label()
+    print(total)
+    print(text)
