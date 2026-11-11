@@ -6092,6 +6092,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
             methods: Vec::new(),
             span: Span::new(1, 1),
             doc: None,
+            c_layout: false,
         },
         type_param_bounds: Default::default(),
         fields: std::collections::BTreeMap::from([(

@@ -243,6 +243,7 @@ package authorization.
 | `local_path_dependencies/app/` | `Aura.toml`, `src/`, a sibling path dependency, and a package-local helper module | `12` |
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
 | `ffi_getpid/` | An FFI v0 package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
+| `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
 
 Run commands:
 
@@ -253,6 +254,9 @@ Run commands:
 - `ffi_getpid/`, on a Unix-family host, through both backends:
   - `cargo run -p aura -- run --backend mir examples/packages/ffi_getpid/src/main.au`
   - `cargo run -p aura -- run --backend direct examples/packages/ffi_getpid/src/main.au`
+- `sqlite_notes/`, on a host with the SQLite library and its linker file
+  (`libsqlite3-dev` on Debian and Ubuntu, built in on macOS):
+  `cargo run -p aura -- run examples/packages/sqlite_notes/src/main.au`
 
 `Aura.toml` also supports git dependencies with `git`, `rev`, `tag`, or
 `branch`. The default branch is `main`. Git dependencies need cached git

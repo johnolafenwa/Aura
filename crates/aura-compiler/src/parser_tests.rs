@@ -215,12 +215,16 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
         "FFI v0 does not support variadic declarations; declare fixed parameters explicitly"
     );
 
+    // A callback parameter is a function type, which the checker judges.
     let callback = parse("extern \"C\" def visit(callback: def(int32) -> None) -> int32\n")
-        .expect_err("FFI v0 reserves callbacks");
-    assert_eq!(
-        callback.message,
-        "FFI v0 does not support callback parameters or returns"
-    );
+        .expect("a callback parameter parses");
+    let Item::ExternFunction(visit) = &callback.items[0] else {
+        panic!("expected an extern function");
+    };
+    assert!(matches!(
+        visit.params[0].ty.kind,
+        TypeRefKind::Function { .. }
+    ));
 
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
         .expect_err("FFI v0 reserves raw pointer syntax");
@@ -4255,7 +4259,7 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
             "extern \"C\" opaque class Handle extra\n",
             "expected Newline",
         ),
-        ("extern \"C\" class Handle\n", "expected KwDef"),
+        ("extern \"C\" class Handle\n", "expected Colon"),
         ("extern \"C\" def \n", "expected identifier"),
         ("extern \"C\" def read -> int32\n", "expected LParen"),
         (
@@ -5525,6 +5529,101 @@ fn extern_functions_take_a_symbol_clause_after_the_result() {
 }
 
 #[test]
+fn extern_functions_read_cstr_as_str_and_mark_where_it_was() {
+    let module = parse(concat!(
+        "extern \"C\" def open(path: cstr, mode: cstr | None, flags: int32) -> cstr\n",
+        "extern \"C\" def find(name: str) -> None | cstr\n",
+        "extern \"C\" def getpid() -> int32\n",
+    ))
+    .expect("cstr is a type an extern declaration can name");
+    let externs: Vec<&ExternFunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+
+    let named = |ty: &TypeRef| match &ty.kind {
+        TypeRefKind::Named { name, .. } => name.clone(),
+        TypeRefKind::Union(members) => members
+            .iter()
+            .map(|member| match &member.kind {
+                TypeRefKind::Named { name, .. } => name.clone(),
+                other => panic!("expected a named member, found {other:?}"),
+            })
+            .collect::<Vec<_>>()
+            .join("|"),
+        other => panic!("expected a named type, found {other:?}"),
+    };
+    let open = externs[0];
+    assert_eq!(open.c_string_params, [true, true, false]);
+    assert!(open.c_string_result);
+    assert_eq!(named(&open.params[0].ty), "str");
+    assert_eq!(named(&open.params[1].ty), "str|None");
+    assert_eq!(named(&open.return_type), "str");
+    assert!(open.c_string_param(1) && !open.c_string_param(2) && !open.c_string_param(3));
+
+    let find = externs[1];
+    assert_eq!(find.c_string_params, [false]);
+    assert!(find.c_string_result);
+    assert_eq!(named(&find.return_type), "None|str");
+
+    let shape = shape_of(open);
+    assert_eq!(
+        shape["c_string_params"],
+        serde_json::json!([true, true, false])
+    );
+    assert_eq!(shape["c_string_result"], true);
+    let plain = shape_of(externs[2]);
+    assert!(
+        plain.get("c_string_params").is_none() && plain.get("c_string_result").is_none(),
+        "a declaration without cstr serializes as before: {plain}"
+    );
+    assert!(shape_of(find).get("c_string_params").is_none());
+}
+
+#[test]
+fn extern_functions_read_ptr_as_list_and_mark_where_it_was() {
+    let module = parse(concat!(
+        "extern \"C\" def dot(a: ptr[float64], out: mut ptr[float64], n: int64) -> float64\n",
+        "extern \"C\" def sum(bytes: list[uint8]) -> uint64\n",
+    ))
+    .expect("ptr[T] is a type an extern parameter can name");
+    let externs: Vec<&ExternFunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::ExternFunction(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    let dot = externs[0];
+    assert_eq!(dot.pointer_params, [true, true, false]);
+    assert!(dot.pointer_param(1) && !dot.pointer_param(2) && !dot.pointer_param(3));
+    for param in &dot.params[..2] {
+        match &param.ty.kind {
+            TypeRefKind::Named { name, args } => {
+                assert_eq!(name, "list");
+                assert_eq!(args.len(), 1);
+            }
+            other => panic!("expected a named type, found {other:?}"),
+        }
+    }
+    assert_eq!(dot.params[1].mode, ParamMode::BorrowMut);
+    let shape = shape_of(dot);
+    assert_eq!(
+        shape["pointer_params"],
+        serde_json::json!([true, true, false])
+    );
+    assert!(
+        shape_of(externs[1]).get("pointer_params").is_none(),
+        "a declaration without ptr serializes as before"
+    );
+}
+
+#[test]
 fn extern_symbol_clauses_reject_missing_and_malformed_names() {
     let missing = parse("extern \"C\" def f() -> int32 symbol abs\n")
         .expect_err("the symbol name must be a string");
@@ -5556,4 +5655,86 @@ fn public_copy_class_is_a_class_and_public_constants_still_parse() {
         module.constants.as_slice(),
         [constant] if constant.public && constant.name == "copy"
     ));
+}
+
+#[test]
+fn extern_c_classes_are_copy_classes_of_fields_only() {
+    let module = parse(concat!(
+        "extern \"C\" class Point:\n    x: float64\n    y: float64\n\n",
+        "public extern \"C\" class Span:\n    \"\"\"A pair of points.\"\"\"\n    lo: Point\n    hi: Point\n\n",
+        "class Plain:\n    x: int32\n",
+    ))
+    .expect("an extern C class is a class");
+    let classes: Vec<&ClassDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Class(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert!(classes[0].c_layout && classes[0].copy && !classes[0].public);
+    assert!(classes[1].c_layout && classes[1].copy && classes[1].public);
+    assert_eq!(classes[1].fields.len(), 2);
+    assert!(!classes[2].c_layout && !classes[2].copy);
+    assert!(module.items[0].declares_ffi() && !module.items[2].declares_ffi());
+
+    let shape = |class: &ClassDecl| serde_json::to_value(class).expect("a class serializes");
+    assert_eq!(shape(classes[0])["c_layout"], serde_json::json!(true));
+    assert!(
+        shape(classes[2]).get("c_layout").is_none(),
+        "an ordinary class serializes as before"
+    );
+
+    for (source, message) in [
+        (
+            "extern \"C\" class Box[T]:\n    value: T\n",
+            "`extern \"C\"` class `Box` cannot have type parameters",
+        ),
+        (
+            "extern \"C\" class Point:\n    x: int32\n    def get(self) -> int32:\n        return self.x\n",
+            "`extern \"C\"` class `Point` declares only fields",
+        ),
+        (
+            "extern \"C\" class Point:\n    x: int32 = 1\n",
+            "field `x` of `extern \"C\"` class `Point` cannot have a default value",
+        ),
+    ] {
+        let error = parse(source).expect_err("the class is not a C struct");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
+fn an_opaque_class_names_its_drop_function() {
+    let module = parse(concat!(
+        "extern \"C\" opaque class Database drop sqlite3_close\n",
+        "extern \"C\" opaque class Plain\n",
+    ))
+    .expect("a drop clause should parse");
+    let drops: Vec<Option<&str>> = module
+        .items
+        .iter()
+        .map(|item| match item {
+            Item::ExternOpaqueClass(decl) => decl.drop.as_ref().map(|(name, _)| name.as_str()),
+            other => panic!("expected an opaque class, found {other:?}"),
+        })
+        .collect();
+    assert_eq!(drops, [Some("sqlite3_close"), None]);
+    let shape = |item: &Item| serde_json::to_value(item).expect("an item serializes");
+    assert!(shape(&module.items[0])
+        .to_string()
+        .contains("sqlite3_close"));
+    assert!(
+        !shape(&module.items[1]).to_string().contains("drop"),
+        "a class with no drop clause serializes as before"
+    );
+
+    let error = parse("extern \"C\" opaque class Database drop\n")
+        .expect_err("a drop clause needs a function name");
+    assert_eq!(error.code, "AU1101");
+    assert!(error
+        .help
+        .iter()
+        .any(|help| help.contains("drop sqlite3_close")));
 }

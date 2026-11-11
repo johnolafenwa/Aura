@@ -1410,10 +1410,28 @@ impl CallTarget {
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct MirExternCall {
+    /// The name of the Aura declaration, which is not the C symbol when
+    /// the declaration has a `symbol` clause. Its trusted contract is
+    /// found by this name.
+    #[serde(default, skip_serializing_if = "String::is_empty")]
+    pub name: String,
     pub symbol: String,
     pub abi: String,
     pub params: Vec<MirExternParam>,
     pub return_type: Type,
+    /// The result is NUL-terminated text, `const char *`, copied into the
+    /// `str` or `str | None` of `return_type`.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string_result: bool,
+    /// The C layout of an `extern "C" class` result, which the function
+    /// returns by value.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct_result: Option<crate::c_layout::CStruct>,
+    /// For each opaque handle type the signature names whose declaration
+    /// has a `drop` clause, the C symbol of the function that releases a
+    /// handle the program still owns.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub handle_drops: BTreeMap<String, String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -1421,6 +1439,18 @@ pub struct MirExternParam {
     pub name: String,
     pub passing: MirReceiverKind,
     pub ty: Type,
+    /// The `str` or `str | None` of `ty` crosses as NUL-terminated text,
+    /// `const char *`, and not as a pointer and a length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub c_string: bool,
+    /// The `list[T]` of `ty` crosses as a pointer to its first element,
+    /// with no length.
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub pointer: bool,
+    /// The C layout of an `extern "C" class` argument: passed by value, or
+    /// by pointer when `passing` is mutable.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub c_struct: Option<crate::c_layout::CStruct>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -12654,6 +12684,7 @@ impl<'a> Lowerer<'a> {
 
     fn extern_call_target(function: &crate::sema::ExternFunctionInfo) -> MirExternCall {
         MirExternCall {
+            name: function.decl.name.clone(),
             symbol: function.decl.link_name().to_string(),
             abi: function.decl.abi.clone(),
             params: function
@@ -12667,13 +12698,20 @@ impl<'a> Lowerer<'a> {
                         .iter()
                         .zip(&function.signature.param_passings),
                 )
-                .map(|(param, (ty, passing))| MirExternParam {
+                .enumerate()
+                .map(|(index, (param, (ty, passing)))| MirExternParam {
                     name: param.name.clone(),
                     passing: lower_receiver_kind(*passing),
                     ty: ty.clone(),
+                    c_string: function.decl.c_string_param(index),
+                    pointer: function.decl.pointer_param(index),
+                    c_struct: function.c_struct_params.get(index).cloned().flatten(),
                 })
                 .collect(),
             return_type: function.signature.return_type.clone(),
+            c_string_result: function.decl.c_string_result,
+            c_struct_result: function.c_struct_result.clone(),
+            handle_drops: function.handle_drops.clone(),
         }
     }
 

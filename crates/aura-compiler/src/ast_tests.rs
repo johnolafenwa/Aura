@@ -51,6 +51,7 @@ fn item_name_matches_decl_name() {
         methods: vec![],
         span: Span::new(1, 1),
         doc: None,
+        c_layout: false,
     });
     let enum_item = Item::Enum(EnumDecl {
         public: true,
@@ -72,6 +73,9 @@ fn item_name_matches_decl_name() {
         return_type: dummy_type("int32"),
         span: Span::new(1, 1),
         contracts: Vec::new(),
+        c_string_params: Vec::new(),
+        c_string_result: false,
+        pointer_params: Vec::new(),
     });
     let extern_opaque_item = Item::ExternOpaqueClass(ExternOpaqueClassDecl {
         public: true,
@@ -79,6 +83,7 @@ fn item_name_matches_decl_name() {
         name: "ProcessHandle".to_string(),
         name_span: Span::new(1, 25),
         span: Span::new(1, 1),
+        drop: None,
     });
     let trait_item = Item::Trait(TraitDecl {
         public: true,

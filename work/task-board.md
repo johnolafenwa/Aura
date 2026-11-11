@@ -22,7 +22,7 @@ Last updated: 2026-11-11
   `regex`. All four programs beat Python; against Rust `stream_io` is 2.0
   times, `http_stream` 1.5, `date_time` 1.9, and `regex_scan` 3.0.
 
-## Release 0.14.0-preview (in progress)
+## Release 0.14.0-preview (complete)
 
 - Cut from `main` @ `33910bd` after the first steps of FFI v1 (#259) and
   trait objects (#261): compact JSON storage, the rest of lean values,
@@ -30,8 +30,9 @@ Last updated: 2026-11-11
   classes, implementations, enums, and supertraits, `IntoIterator` for
   lists, the verification leftovers, and the `float32` soundness fix. 30
   programs 13.1 s -> 11.3 s against 0.13.0 with the same instruction
-  count; `docdb` and `json_roundtrip` now beat Python. Details are in
-  `2026-11-10-v0.14.0-preview-release.md`.
+  count; `docdb` and `json_roundtrip` now beat Python. Published
+  2026-11-11 (tag `3507f338` on `10d43c5e`, release run `43003654986`).
+  Details are in `2026-11-10-v0.14.0-preview-release.md`.
 
 ## Trait objects (complete)
 
@@ -89,9 +90,15 @@ Last updated: 2026-11-11
 - Target: wrap real C libraries. Plan and measurements are in
   `2026-11-10-ffi-v1.md`.
 - Done: library linking from `[ffi]`, direct native calls, and the `symbol`
-  clause (ADR-0074).
-- Remaining: C strings and out-parameters, structs, callbacks, handle
-  destructors, a SQLite example, and benchmarks against Rust and Python.
+  clause (ADR-0074). `cstr` arguments and results, `mut` scalar
+  out-parameters, and `Handle | None` and `mut Handle | None` parameters
+  (ADR-0075). `ptr[T]` and `mut ptr[T]` array pointers over scalar lists
+  (ADR-0076). `extern "C" class` structs by value and by pointer (ADR-0077).
+  Named functions as C callbacks over scalars (ADR-0080). `drop`
+  functions that release opaque handles (ADR-0083), and the
+  `examples/packages/sqlite_notes` binding of SQLite.
+- Remaining: `Array[T]` as a pointer, closures as callbacks, and structs
+  or text in callbacks.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

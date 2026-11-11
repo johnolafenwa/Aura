@@ -6441,32 +6441,67 @@ impl MirRuntime {
             .iter()
             .map(ffi_type_for_extern_param)
             .collect::<Result<Vec<_>>>()?;
-        let result_type = ffi_type_for_extern_result(&call.return_type)?;
+        let result_type = match &call.c_struct_result {
+            Some(layout) => FfiType::Struct(layout.interned()),
+            None => ffi_type_for_extern_result(&call.return_type, call.c_string_result)?,
+        };
         let signature = FfiSignature::new(parameter_types, result_type);
         let mut arguments = ordered
             .iter()
             .zip(&call.params)
-            .map(|(argument, param)| ffi_value_from_runtime(&argument.value, &param.ty))
+            .map(|(argument, param)| match (&param.c_struct, param.pointer) {
+                _ if matches!(param.ty, Type::Function { .. }) => {
+                    ffi_callback_from_runtime(&argument.value, &param.ty)
+                }
+                (Some(layout), _) => ffi_struct_from_runtime(&argument.value, layout),
+                (None, true) => ffi_elements_from_runtime(&argument.value, &param.ty),
+                (None, false) => ffi_value_from_runtime(&argument.value, &param.ty),
+            })
             .collect::<Result<Vec<_>>>()?;
 
-        let result = dispatch(&call.symbol, &signature, &mut arguments);
+        // The foreign function owns each handle it takes as `own` from
+        // here on, so the handle's `drop` function does not run for it.
+        for (argument, param) in ordered.iter().zip(&call.params) {
+            if let (MirReceiverKind::Value, Value::FfiHandle(handle)) =
+                (param.passing, &argument.value)
+            {
+                handle.give_up();
+            }
+        }
 
-        // Mutable byte views are fixed-length copy-in/out values. Apply the
-        // engine's updated scratch bytes to the original Aura place before
-        // interpreting the foreign return, so both backends share the same
-        // post-call state even when return validation traps.
-        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(&arguments) {
+        // A callback the foreign function calls re-enters this interpreter.
+        let outer = CALLBACK_RUNTIME.replace(self);
+        let result = dispatch(&call.symbol, &signature, &mut arguments);
+        CALLBACK_RUNTIME.set(outer);
+        let callback_failure = CALLBACK_FAILURE.take();
+
+        // A `mut` parameter is copy-in/out: fixed-length bytes, one
+        // scalar, or one nullable handle. Apply what the engine read back
+        // to the original Aura place before interpreting the foreign
+        // return, so both backends share the same post-call state even
+        // when return validation traps.
+        for ((param, argument), ffi_value) in call.params.iter().zip(&ordered).zip(arguments) {
             if param.passing != MirReceiverKind::BorrowMut {
                 continue;
             }
-            let FfiValue::Bytes(bytes) = ffi_value else {
-                return Err(Diagnostic::coded(
-                    "AU4005",
-                    format!(
-                        "FFI call to `{}` failed: mutable parameter `{}` did not marshal as bytes",
-                        call.symbol, param.name
-                    ),
-                ));
+            let written = match ffi_value {
+                FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
+                FfiValue::Elements(scalar, words) => {
+                    elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?
+                }
+                FfiValue::Struct(layout, bytes) => {
+                    struct_runtime_value(layout, &bytes, &call.symbol)?
+                }
+                other => match stored_handle(&argument.value, &other) {
+                    Some(kept) => kept,
+                    None => runtime_value_from_ffi_with(other, &param.ty, &call.handle_drops)
+                        .map_err(|error| {
+                            Diagnostic::coded(
+                                "AU4005",
+                                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                            )
+                        })?,
+                },
             };
             let place = argument.writeback_place.as_deref().ok_or_else(|| {
                 Diagnostic::coded(
@@ -6477,16 +6512,71 @@ impl MirRuntime {
                     ),
                 )
             })?;
-            env.write_place(place, bytes_runtime_value(bytes))?;
+            env.write_place(place, written)?;
         }
 
+        if let Some(failure) = callback_failure {
+            return Err(failure);
+        }
         let result = result.map_err(|error| ffi_runtime_diagnostic(&call.symbol, error))?;
-        runtime_value_from_ffi(result, &call.return_type).map_err(|error| {
-            Diagnostic::coded(
-                "AU4005",
-                format!("FFI call to `{}` failed: {}", call.symbol, error.message),
-            )
-        })
+        if let FfiValue::Struct(layout, bytes) = &result {
+            return struct_runtime_value(layout, bytes, &call.symbol);
+        }
+        runtime_value_from_ffi_with(result, &call.return_type, &call.handle_drops).map_err(
+            |error| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!("FFI call to `{}` failed: {}", call.symbol, error.message),
+                )
+            },
+        )
+    }
+
+    /// Calls the function `name` with the arguments C passed in `frame`,
+    /// and leaves its result and what it wrote to its `mut` parameters
+    /// there.
+    fn call_from_c(
+        &mut self,
+        name: &str,
+        signature: &crate::ffi::CCallback,
+        frame: &mut [u64],
+    ) -> Result<()> {
+        let function = self
+            .functions
+            .get(name)
+            .cloned()
+            .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{name}`")))?;
+        let mut args = Vec::with_capacity(signature.params.len());
+        for (param, word) in signature.params.iter().zip(frame.iter()) {
+            let ty = scalar_field_type(param.scalar);
+            // C code can pass any byte as a `bool`. Nonzero is true.
+            let word = match param.scalar {
+                crate::ffi::FfiScalar::Bool => u64::from(*word as u8 != 0),
+                _ => *word,
+            };
+            let crossed = param
+                .scalar
+                .value(word)
+                .map_err(|error| ffi_runtime_diagnostic(name, error))?;
+            args.push(EvaluatedMirArg {
+                name: None,
+                value: runtime_value_from_ffi(crossed, &ty)?,
+                ty: Some(ty),
+                writeback_place: None,
+            });
+        }
+        let outcome = self.call_function(&function, None, args)?;
+        for (index, value) in outcome.updated_params {
+            let scalar = signature.params[index].scalar;
+            let crossed = ffi_value_from_runtime(&value, &scalar_field_type(scalar))?;
+            frame[index] = scalar.word(&crossed).unwrap_or_default();
+        }
+        let value = outcome.value.into_result()?;
+        if let Some(scalar) = signature.result {
+            let crossed = ffi_value_from_runtime(&value, &scalar_field_type(scalar))?;
+            frame[signature.params.len()] = scalar.word(&crossed).unwrap_or_default();
+        }
+        Ok(())
     }
 
     fn evaluate_function_value_call(
@@ -10767,23 +10857,54 @@ enum BlockOutcome {
 }
 
 fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
-    match (&param.ty, param.passing) {
-        (Type::Named(name, args), MirReceiverKind::BorrowMut)
-            if name == "list" && args.as_slice() == [Type::named("uint8")] =>
-        {
-            Ok(FfiType::BytesViewMut)
-        }
-        // Semantic analysis rejects every union parameter (AU2010); the
-        // nullable-handle form is result-only.
-        (ty @ Type::Union(_), _) => Err(Diagnostic::coded(
-            "AU4005",
-            format!("union FFI parameter type `{ty}` reached MIR execution"),
-        )),
-        (ty, _) => ffi_type_for_extern_result(ty),
+    if matches!(param.ty, Type::Function { .. }) {
+        return Ok(FfiType::Callback);
+    }
+    if let Some(layout) = &param.c_struct {
+        return Ok(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::StructPointer(layout.interned()),
+            _ => FfiType::Struct(layout.interned()),
+        });
+    }
+    if param.pointer {
+        let scalar = pointer_element(&param.ty)?.1;
+        return Ok(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::PointerMut(scalar),
+            _ => FfiType::Pointer(scalar),
+        });
+    }
+    let by_value = ffi_type_for_extern_result(&param.ty, param.c_string)?;
+    if param.passing != MirReceiverKind::BorrowMut {
+        return Ok(by_value);
+    }
+    // A `mut` parameter passes a pointer the function reads and writes.
+    match by_value {
+        FfiType::BytesView => Ok(FfiType::BytesViewMut),
+        FfiType::NullableOpaqueHandle => Ok(FfiType::OpaqueHandleOut),
+        other => crate::ffi::FfiScalar::of(other)
+            .map(FfiType::Out)
+            .ok_or_else(|| {
+                Diagnostic::coded(
+                    "AU4005",
+                    format!(
+                        "mutable FFI parameter type `{}` reached MIR execution",
+                        param.ty
+                    ),
+                )
+            }),
     }
 }
 
-fn ffi_type_for_extern_result(ty: &Type) -> Result<FfiType> {
+/// The boundary type of a result of source type `ty`, which is also the
+/// by-value boundary type of a parameter. `c_string` marks a `str` or
+/// `str | None` that crosses as NUL-terminated text.
+fn ffi_type_for_extern_result(ty: &Type, c_string: bool) -> Result<FfiType> {
+    if c_string {
+        return Ok(match ty {
+            Type::Union(_) => FfiType::NullableCString,
+            _ => FfiType::CString,
+        });
+    }
     let ffi_type = match ty {
         Type::Unit => FfiType::Unit,
         Type::Named(name, args) if args.is_empty() => match name.as_str() {
@@ -10907,7 +11028,292 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
                 .collect::<Result<Vec<_>>>()?;
             Ok(FfiValue::Bytes(bytes))
         }
+        // `Handle | None` or `cstr | None`: the active member crosses, and
+        // `None` crosses as a null pointer.
+        Type::Union(_) => match value {
+            Value::Union(union) => ffi_nullable_from_runtime(&union.payload),
+            bare => ffi_nullable_from_runtime(bare),
+        }
+        .ok_or_else(mismatch),
         _ => Err(mismatch()),
+    }
+}
+
+thread_local! {
+    /// The interpreter whose foreign call is running on this thread: the
+    /// one a callback from C re-enters. Null outside a foreign call.
+    static CALLBACK_RUNTIME: std::cell::Cell<*mut MirRuntime> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+    /// The failure of a callback that ran during the current foreign
+    /// call. It is raised when the foreign function returns.
+    static CALLBACK_FAILURE: std::cell::RefCell<Option<Diagnostic>> =
+        const { std::cell::RefCell::new(None) };
+}
+
+/// The C signature of a callback parameter of type `ty`, a function type
+/// the checker admitted: scalars by value or through `mut`, and a scalar
+/// or no result.
+pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
+    use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
+    let scalar = |ty: &Type| match ty {
+        Type::Named(name, args) if args.is_empty() => {
+            let name = if name == "int" {
+                "int64"
+            } else {
+                name.as_str()
+            };
+            [
+                FfiScalar::Bool,
+                FfiScalar::I8,
+                FfiScalar::I16,
+                FfiScalar::I32,
+                FfiScalar::I64,
+                FfiScalar::U8,
+                FfiScalar::U16,
+                FfiScalar::U32,
+                FfiScalar::U64,
+                FfiScalar::F32,
+                FfiScalar::F64,
+            ]
+            .into_iter()
+            .find(|scalar| scalar.ffi_type().to_string() == name)
+        }
+        _ => None,
+    };
+    let Type::Function {
+        params,
+        return_type,
+    } = ty
+    else {
+        return None;
+    };
+    let params = params
+        .iter()
+        .map(|param| {
+            Some(CCallbackParam {
+                scalar: scalar(&param.ty)?,
+                pointer: param.passing == crate::ast::ReceiverKind::BorrowMut,
+            })
+        })
+        .collect::<Option<Vec<_>>>()?;
+    let result = match &**return_type {
+        Type::Unit => None,
+        other => Some(scalar(other)?),
+    };
+    Some(CCallback { params, result })
+}
+
+/// The address of C code that calls the named function `value` holds, for
+/// a callback parameter of type `ty`. One piece of code serves every call
+/// that passes the same function with the same signature.
+fn ffi_callback_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    type Codes = HashMap<(String, crate::ffi::CCallback), usize>;
+    static CODES: std::sync::Mutex<Option<Codes>> = std::sync::Mutex::new(None);
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI callback of type `{ty}` needs a named function, found `{}`",
+                value.render()
+            ),
+        )
+    };
+    let (Value::Function(function), Some(signature)) = (value, callback_signature(ty)) else {
+        return Err(mismatch());
+    };
+    if function.closure_environment.is_some() {
+        return Err(mismatch());
+    }
+    let name = function.name.clone();
+    let mut codes = CODES.lock().unwrap_or_else(|poison| poison.into_inner());
+    let code = *codes
+        .get_or_insert_with(HashMap::new)
+        .entry((name.clone(), signature.clone()))
+        .or_insert_with(|| {
+            let shape = signature.clone();
+            crate::ffi::callback_code(
+                signature,
+                Box::new(move |frame| run_callback(&name, &shape, frame)),
+            )
+        });
+    Ok(FfiValue::Callback(code))
+}
+
+/// Runs the Aura function `name` for one call from C. The frame holds the
+/// arguments and takes the results, as `callback_code` describes.
+fn run_callback(name: &str, signature: &crate::ffi::CCallback, frame: &mut [u64]) {
+    let runtime = CALLBACK_RUNTIME.get();
+    // After one callback fails, C gets zeros until its function returns.
+    if runtime.is_null() || CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+        return;
+    }
+    // SAFETY: the pointer is the interpreter that is waiting in the
+    // foreign call this callback runs under, on this thread. It does
+    // nothing else until that call returns.
+    let runtime = unsafe { &mut *runtime };
+    if let Err(diagnostic) = runtime.call_from_c(name, signature, frame) {
+        CALLBACK_FAILURE.set(Some(diagnostic));
+    }
+}
+
+/// The Aura type of a scalar field of a C struct.
+fn scalar_field_type(scalar: crate::ffi::FfiScalar) -> Type {
+    Type::named(scalar.ffi_type().to_string())
+}
+
+/// The instance `value` as the bytes of the C struct `layout`.
+fn ffi_struct_from_runtime(value: &Value, layout: &crate::c_layout::CStruct) -> Result<FfiValue> {
+    let layout = layout.interned();
+    let mut bytes = vec![0_u8; layout.size()];
+    write_struct_bytes(value, layout, &mut bytes)?;
+    Ok(FfiValue::Struct(layout, bytes))
+}
+
+/// Writes each field of the instance `value` at its offset in `bytes`,
+/// which holds the C struct `layout`.
+fn write_struct_bytes(
+    value: &Value,
+    layout: &crate::c_layout::CStruct,
+    bytes: &mut [u8],
+) -> Result<()> {
+    use crate::c_layout::CFieldKind;
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI value for C struct `{}` has incompatible runtime shape `{}`",
+                layout.name,
+                value.render()
+            ),
+        )
+    };
+    let Value::Instance(instance) = value else {
+        return Err(mismatch());
+    };
+    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+        let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
+        match &field.kind {
+            CFieldKind::Scalar(scalar) => {
+                let crossed = ffi_value_from_runtime(&held, &scalar_field_type(*scalar))?;
+                let word = scalar.word(&crossed).ok_or_else(mismatch)?;
+                let size = scalar.size();
+                bytes[offset..offset + size].copy_from_slice(&word.to_le_bytes()[..size]);
+            }
+            CFieldKind::Struct(inner) => {
+                write_struct_bytes(&held, inner, &mut bytes[offset..offset + inner.size()])?;
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The instance the bytes of the C struct `layout` describe, as a foreign
+/// function left them.
+fn struct_runtime_value(
+    layout: &crate::c_layout::CStruct,
+    bytes: &[u8],
+    symbol: &str,
+) -> Result<Value> {
+    use crate::c_layout::CFieldKind;
+    let mut fields = BTreeMap::new();
+    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+        let value = match &field.kind {
+            CFieldKind::Scalar(scalar) => {
+                let size = scalar.size();
+                let mut word = [0_u8; 8];
+                word[..size].copy_from_slice(&bytes[offset..offset + size]);
+                let crossed = scalar
+                    .value(u64::from_le_bytes(word))
+                    .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
+                runtime_value_from_ffi(crossed, &scalar_field_type(*scalar))?
+            }
+            CFieldKind::Struct(inner) => {
+                struct_runtime_value(inner, &bytes[offset..offset + inner.size()], symbol)?
+            }
+        };
+        fields.insert(field.name.clone(), value);
+    }
+    Ok(Value::Instance(InstanceValue {
+        class_name: aura_runtime::runtime_value::RuntimeName::from(layout.name.clone()),
+        fields: fields.into(),
+    }))
+}
+
+/// The element type of `ty`, the `list[T]` of a `ptr[T]` parameter, and the
+/// scalar it crosses as.
+fn pointer_element(ty: &Type) -> Result<(&Type, crate::ffi::FfiScalar)> {
+    let element = match ty {
+        Type::Named(_, args) => args.first(),
+        _ => None,
+    };
+    element
+        .and_then(|element| {
+            let by_value = ffi_type_for_extern_result(element, false).ok()?;
+            Some((element, crate::ffi::FfiScalar::of(by_value)?))
+        })
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4005",
+                format!("pointer FFI parameter type `{ty}` reached MIR execution"),
+            )
+        })
+}
+
+/// The scalars of the list `value` for a `ptr[T]` parameter of type `ty`.
+fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
+    let (element_type, scalar) = pointer_element(ty)?;
+    let mismatch = || {
+        Diagnostic::coded(
+            "AU4005",
+            format!(
+                "FFI value for source type `{ty}` has incompatible runtime shape `{}`",
+                value.render()
+            ),
+        )
+    };
+    let Value::Vec(vector) = value else {
+        return Err(mismatch());
+    };
+    let words = vector
+        .elements
+        .iter()
+        .map(|element| {
+            let element = ffi_value_from_runtime(&element, element_type)?;
+            scalar.word(&element).ok_or_else(mismatch)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(FfiValue::Elements(scalar, words))
+}
+
+/// The list a `mut ptr[T]` argument of type `ty` holds after the call.
+fn elements_runtime_value(
+    scalar: crate::ffi::FfiScalar,
+    words: &[u64],
+    ty: &Type,
+    symbol: &str,
+) -> Result<Value> {
+    let element_type = pointer_element(ty)?.0.clone();
+    let elements = words
+        .iter()
+        .map(|word| {
+            let element = scalar
+                .value(*word)
+                .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
+            runtime_value_from_ffi(element, &element_type)
+        })
+        .collect::<Result<Vec<_>>>()?;
+    Ok(Value::Vec(VecValue {
+        element_type: aura_runtime::runtime_value::SharedType::from(element_type),
+        elements: elements.into_iter().collect(),
+        str_view: Default::default(),
+    }))
+}
+
+fn ffi_nullable_from_runtime(payload: &Value) -> Option<FfiValue> {
+    match payload {
+        Value::Unit => Some(FfiValue::Unit),
+        Value::String(text) => Some(FfiValue::String(text.to_string())),
+        other => opaque_handle_from_runtime(other),
     }
 }
 
@@ -10954,6 +11360,57 @@ fn bytes_runtime_value(bytes: &[u8]) -> Value {
 }
 
 fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
+    runtime_value_from_ffi_with(value, ty, &BTreeMap::new())
+}
+
+/// What a `mut Handle | None` place holds after a foreign call that left
+/// `written` in it, when that is decided by the handle it held `before`.
+/// An address the function did not change keeps that handle. Any other
+/// address ends the program's ownership of the object the place held.
+fn stored_handle(before: &Value, written: &FfiValue) -> Option<Value> {
+    let held = match before {
+        Value::Union(union) => &union.payload,
+        bare => bare,
+    };
+    let Value::FfiHandle(handle) = held else {
+        return None;
+    };
+    if matches!(written, FfiValue::OpaqueHandle(now) if now.as_ptr() == handle.as_ptr()) {
+        return Some(before.clone());
+    }
+    handle.give_up();
+    None
+}
+
+/// A new handle of the opaque type `class_name` for a non-null address a
+/// foreign function returned. `drops` names the function that releases a
+/// handle of the type, when its declaration has a `drop` clause.
+fn ffi_handle_value(
+    class_name: &str,
+    handle: &crate::ffi::OpaqueHandle,
+    drops: &BTreeMap<String, String>,
+) -> Result<Value> {
+    let drop = match drops.get(class_name) {
+        // SAFETY: the checker admits only an extern function that takes
+        // the handle as its one parameter.
+        Some(symbol) => Some(
+            unsafe { crate::ffi::handle_drop(symbol) }
+                .map_err(|error| ffi_runtime_diagnostic(symbol, error))?,
+        ),
+        None => None,
+    };
+    FfiHandleValue::owned(class_name.to_string(), handle.as_ptr(), drop)
+        .map(Value::FfiHandle)
+        .ok_or_else(|| Diagnostic::coded("AU4005", "FFI function returned a null opaque handle"))
+}
+
+/// The Aura value of `value`, which a foreign function returned or stored,
+/// as the type `ty`.
+fn runtime_value_from_ffi_with(
+    value: FfiValue,
+    ty: &Type,
+    drops: &BTreeMap<String, String>,
+) -> Result<Value> {
     let mismatch = |actual: FfiType| {
         Diagnostic::coded(
             "AU4005",
@@ -11012,12 +11469,20 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
         (FfiValue::F64(value), Type::Named(name, args)) if name == "float64" && args.is_empty() => {
             Ok(Value::Float(value))
         }
+        (FfiValue::String(text), Type::Named(name, args)) if name == "str" && args.is_empty() => {
+            Ok(Value::String(text.into()))
+        }
+        (FfiValue::String(text), Type::Union(union)) => {
+            if !union.members.contains(&Type::named("str")) {
+                return Err(mismatch(FfiType::NullableCString));
+            }
+            Ok(crate::union_runtime::coerce_union_boundary(
+                Value::String(text.into()),
+                ty,
+            ))
+        }
         (FfiValue::OpaqueHandle(handle), Type::Named(class_name, args)) if args.is_empty() => {
-            FfiHandleValue::new(class_name.clone(), handle.as_ptr())
-                .map(Value::FfiHandle)
-                .ok_or_else(|| {
-                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
-                })
+            ffi_handle_value(class_name, &handle, drops)
         }
         // A `Handle | None` result (ADR-0052 A10): non-null constructs the
         // owned handle member, null constructs `None`.
@@ -11031,11 +11496,7 @@ fn runtime_value_from_ffi(value: FfiValue, ty: &Type) -> Result<Value> {
             let Type::Named(class_name, _) = member else {
                 unreachable!("checked handle member")
             };
-            let payload = FfiHandleValue::new(class_name.clone(), handle.as_ptr())
-                .map(Value::FfiHandle)
-                .ok_or_else(|| {
-                    Diagnostic::coded("AU4005", "FFI function returned a null opaque handle")
-                })?;
+            let payload = ffi_handle_value(class_name, &handle, drops)?;
             crate::union_runtime::inject_union_member(union, index, payload)
                 .map_err(|message| Diagnostic::coded("AU4005", message))
         }

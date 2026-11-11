@@ -1046,3 +1046,108 @@ fn uint8_mut_does_not_write_through_storage_another_list_shares() {
     assert_eq!(first.as_uint8(), Some(&[7, 2, 3][..]));
     assert_eq!(second.as_uint8(), Some(&[1, 2, 3][..]));
 }
+
+#[test]
+fn scalar_forms_lend_their_elements_as_a_c_array() {
+    let forms = [
+        (ListForm::Int64, vec![int(-1), int(2)], 8),
+        (
+            ListForm::Float64,
+            vec![Value::Float(1.5), Value::Float(2.5)],
+            8,
+        ),
+        (
+            ListForm::Bool,
+            vec![Value::Bool(true), Value::Bool(false)],
+            1,
+        ),
+        (
+            ListForm::Int8,
+            vec![typed(-1, IntegerKind::Int8), typed(2, IntegerKind::Int8)],
+            1,
+        ),
+        (
+            ListForm::Int16,
+            vec![typed(-1, IntegerKind::Int16), typed(2, IntegerKind::Int16)],
+            2,
+        ),
+        (ListForm::Int32, vec![int32(-1), int32(2)], 4),
+        (
+            ListForm::Uint8,
+            vec![typed(255, IntegerKind::Uint8), typed(2, IntegerKind::Uint8)],
+            1,
+        ),
+        (
+            ListForm::Uint16,
+            vec![
+                typed(65535, IntegerKind::Uint16),
+                typed(2, IntegerKind::Uint16),
+            ],
+            2,
+        ),
+        (
+            ListForm::Uint32,
+            vec![typed(7, IntegerKind::Uint32), typed(2, IntegerKind::Uint32)],
+            4,
+        ),
+        (
+            ListForm::Uint64,
+            vec![typed(7, IntegerKind::Uint64), typed(2, IntegerKind::Uint64)],
+            8,
+        ),
+        (
+            ListForm::Float32,
+            vec![Value::Float(0.5), Value::Float(1.5)],
+            4,
+        ),
+    ];
+    for (form, values, size) in forms {
+        let boxed = ListElements::Values(values.clone().into());
+        assert_eq!(
+            boxed.scalars(form),
+            None,
+            "{form:?}: boxed values lend nothing"
+        );
+        let scalar = boxed.in_scalar_form(form).expect("the values fit the form");
+        assert_eq!(scalar.form(), form);
+        assert_eq!(exact_list(&scalar), exact(&values));
+        assert!(scalar.scalars(form).is_some());
+
+        // A list in another form moves to the scalar form, and writes
+        // through the address reach the list.
+        let mut list = boxed.clone();
+        let first = list.scalars_mut(form).expect("the values fit the form");
+        assert_eq!(list.form(), form);
+        // SAFETY: the list holds two elements of `size` bytes each.
+        unsafe {
+            let bytes = std::slice::from_raw_parts_mut(first, 2 * size);
+            let (head, tail) = bytes.split_at_mut(size);
+            head.swap_with_slice(tail);
+        }
+        let swapped = [values[1].clone(), values[0].clone()];
+        assert_eq!(exact_list(&list), exact(&swapped));
+        assert_eq!(
+            exact_list(&boxed),
+            exact(&values),
+            "the source keeps its own"
+        );
+
+        // A list another list shares storage with is copied first.
+        let mut shared = scalar.clone();
+        let first = shared.scalars_mut(form).expect("a scalar list");
+        // SAFETY: as above.
+        unsafe { std::slice::from_raw_parts_mut(first, 2 * size).fill(0) };
+        assert_eq!(exact_list(&scalar), exact(&values));
+    }
+
+    let mut text = ListElements::Values(vec![Value::string("a")].into());
+    assert!(text.in_scalar_form(ListForm::Float64).is_none());
+    assert!(text.in_scalar_form(ListForm::Float32).is_none());
+    assert_eq!(text.scalars_mut(ListForm::Int64), None);
+    assert_eq!(
+        text.scalars_mut(ListForm::Values),
+        None,
+        "boxed values are no C array"
+    );
+    assert_eq!(text.len(), 1, "a list that cannot move keeps its elements");
+}

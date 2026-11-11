@@ -2018,6 +2018,156 @@ extern "C" def scalars(a: bool, b: int8, c: int16, d: int32, e: int64, f: int, g
 }
 
 #[test]
+fn ffi_admits_c_text_out_parameters_and_nullable_handle_parameters() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Handle
+extern "C" def open(path: cstr, flags: cstr | None, out: mut Handle | None) -> int32
+extern "C" def message(handle: Handle | None) -> cstr
+extern "C" def column(handle: Handle, index: int32, length: mut int32, found: mut bool) -> cstr | None
+
+def main() -> int32:
+    mut handle: Handle | None = None
+    status = open("db", None, handle)
+    mut length: int32 = 0
+    mut found = false
+    text = message(handle)
+    if handle is None:
+        return status
+    cell = column(handle, 0, length, found)
+    if cell is None:
+        return length
+    return status + (len(text) as int32) + (len(cell) as int32)
+"#,
+    )
+    .expect("C text, out-parameters and nullable handle parameters should check");
+
+    let open = &program.extern_functions["open"];
+    assert_eq!(open.decl.c_string_params, [true, true, false]);
+    assert!(open.decl.c_string_param(0) && !open.decl.c_string_param(9));
+    assert!(!open.decl.c_string_result);
+    assert_eq!(open.signature.params[0], Type::named("str"));
+    assert!(matches!(open.signature.params[1], Type::Union(_)));
+    let message = &program.extern_functions["message"];
+    assert!(message.decl.c_string_result);
+    assert_eq!(message.signature.return_type, Type::named("str"));
+    assert!(program.extern_functions["column"].decl.c_string_result);
+
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: cstr | int32) -> None
+"#,
+            "parameter `value` must be exactly `cstr` or `cstr | None` to pass C text",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad() -> cstr | int32
+"#,
+            "a C text result must be exactly `cstr` or `cstr | None`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: str | None) -> None
+"#,
+            "only `Handle | None` and `cstr | None` are marshalled",
+            "AU2010",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported FFI type must fail");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_admits_pointer_parameters_over_scalar_lists() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" def dot(a: ptr[float64], b: ptr[float64], n: int64) -> float64
+extern "C" def scale(v: mut ptr[float32], n: int64, k: float32) -> None
+extern "C" def flags(v: mut ptr[bool], w: ptr[uint16]) -> None
+
+def run() -> float64:
+    xs: list[float64] = [1.0, 2.0]
+    mut ys: list[float32] = [1.0]
+    scale(ys, 1, 2.0)
+    return dot(xs, xs, 2)
+"#,
+    )
+    .expect("pointer parameters over scalar lists should check");
+    let dot = &program.extern_functions["dot"];
+    assert_eq!(dot.decl.pointer_params, [true, true, false]);
+    assert_eq!(
+        dot.signature.params[0],
+        Type::Named("list".to_string(), vec![Type::named("float64")])
+    );
+
+    let rejected = [
+        (
+            r#"extern "C" def bad(value: ptr[str]) -> None
+"#,
+            "pointer parameter `value` must point to a fixed-width scalar type",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" opaque class Handle
+extern "C" def bad(value: mut ptr[Handle]) -> None
+"#,
+            "pointer parameter `value` must point to a fixed-width scalar type",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(value: own ptr[int32]) -> None
+"#,
+            "pointer parameter `value` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"extern "C" def bad(value: list[float64]) -> None
+"#,
+            "only `list[uint8]` is supported as an FFI byte view",
+            "AU2002",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported FFI type must fail");
+        assert_eq!(diagnostic.code, code, "{source}");
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    // An argument is a list of the element type, not a list of another.
+    let diagnostic = check_ffi_source_for_test(
+        r#"
+extern "C" def dot(a: ptr[float64], n: int64) -> float64
+
+def run() -> float64:
+    xs: list[int32] = [1, 2]
+    return dot(xs, 2)
+"#,
+    )
+    .expect_err("a list of another element type is another type");
+    assert_eq!(diagnostic.code, "AU2002", "{}", diagnostic.message);
+    assert!(
+        diagnostic
+            .message
+            .contains("argument type mismatch for extern function `dot`"),
+        "{}",
+        diagnostic.message
+    );
+}
+
+#[test]
 fn ffi_v0_validates_views_and_opaque_handle_capabilities() {
     check_ffi_source_for_test(
         r#"
@@ -2033,12 +2183,23 @@ extern "C" def acquire() -> Handle
         (
             r#"extern "C" def bad(value: own int32) -> None
 "#,
-            "fixed-width scalar parameter `value` must use the bare capability",
+            "fixed-width scalar parameter `value` cannot be `own`",
         ),
         (
-            r#"extern "C" def bad(value: mut int32) -> None
+            r#"extern "C" def bad(value: own cstr) -> None
 "#,
-            "fixed-width scalar parameter `value` must use the bare capability",
+            "cstr parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" def bad(value: mut cstr | None) -> None
+"#,
+            "cstr parameter `value` must use the bare capability",
+        ),
+        (
+            r#"extern "C" opaque class Handle
+extern "C" def bad(value: own Handle | None) -> None
+"#,
+            "nullable handle parameter `value` cannot be `own`",
         ),
         (
             r#"extern "C" def bad(value: own str) -> None
@@ -2102,10 +2263,10 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: def(int32) -> int32) -> None
+            r#"extern "C" def bad(value: def(str) -> int32) -> None
 "#,
-            "FFI v0 does not support callback parameters or returns",
-            "AU1101",
+            "parameter 1 of callback `value` cannot cross the C boundary as `str`",
+            "AU2002",
         ),
         (
             r#"extern "C" def bad(value: Ptr[uint8]) -> None
@@ -2116,7 +2277,7 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
         (
             r#"extern "C" def bad() -> str
 "#,
-            "FFI v0 cannot return a str view",
+            "an extern function cannot return a str view",
             "AU2002",
         ),
         (
@@ -7691,6 +7852,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         methods: Vec::new(),
         span: Span::new(1, 1),
         doc: None,
+        c_layout: false,
     }
 }
 
@@ -30946,7 +31108,7 @@ fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
 }
 
 #[test]
-fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
+fn ffi_signature_validation_admits_function_typed_parameters_and_reserves_returns() {
     let span = Span::new(1, 1);
     let callback_type = || TypeRef::function(vec![type_ref("int32")], type_ref("int32"), span);
     let decl =
@@ -30960,13 +31122,16 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             return_type,
             span,
             contracts: Vec::new(),
+            c_string_params: Vec::new(),
+            c_string_result: false,
+            pointer_params: Vec::new(),
         };
     let opaque_handles = BTreeMap::new();
     let type_names = TypeDefinitions::default();
     let type_arities = BTreeMap::new();
     let canonical_type_names = BTreeMap::new();
 
-    let parameter = validate_ffi_signature(
+    validate_ffi_signature(
         &decl(
             vec![crate::ast::Param {
                 name: "callback".to_string(),
@@ -30979,21 +31144,17 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
             type_ref("int32"),
         ),
         &opaque_handles,
+        &BTreeMap::new(),
         &type_names,
         &type_arities,
         &canonical_type_names,
     )
-    .expect_err("callback parameters are reserved in FFI v0");
-    assert_eq!(parameter.code, "AU2005");
-    assert_eq!(
-        parameter.message,
-        "FFI callbacks are reserved; parameter `callback` cannot use a function type"
-    );
-    assert!(!parameter.help.is_empty());
+    .expect("a function-typed parameter is a callback");
 
     let returned = validate_ffi_signature(
         &decl(Vec::new(), callback_type()),
         &opaque_handles,
+        &BTreeMap::new(),
         &type_names,
         &type_arities,
         &canonical_type_names,
@@ -32849,6 +33010,313 @@ fn ghost_locals_are_pure_and_read_only_by_ghost_code() {
         let error = crate::check_source(source).expect_err(source);
         assert_eq!(error.code, code, "{source}: {}", error.message);
         assert!(error.message.contains(message), "{source}: {}", error.message);
+    }
+}
+
+#[test]
+fn ffi_admits_c_structs_by_value_and_by_pointer() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Point:
+    x: float64
+    y: float64
+
+extern "C" class Rect:
+    lo: Point
+    hi: Point
+    tag: int8
+
+extern "C" def length(p: Point) -> float64
+extern "C" def grow(s: mut Rect, by: float64) -> None
+extern "C" def middle(s: Rect) -> Point
+
+def run() -> float64:
+    mut rect = Rect(lo=Point(x=0.0, y=0.0), hi=Point(x=2.0, y=2.0), tag=1)
+    grow(rect, 1.0)
+    kept = rect
+    return length(middle(rect)) + kept.hi.x
+"#,
+    )
+    .expect("C structs should check");
+    use crate::c_layout::CFieldKind;
+    use crate::ffi::FfiScalar;
+    let length = &program.extern_functions["length"];
+    let point = length.c_struct_params[0]
+        .as_ref()
+        .expect("a struct parameter");
+    assert_eq!(point.name, "Point");
+    assert_eq!(point.fields[1].name, "y");
+    assert_eq!(point.fields[1].kind, CFieldKind::Scalar(FfiScalar::F64));
+    assert!(length.c_struct_result.is_none());
+    let grow = &program.extern_functions["grow"];
+    let rect = grow.c_struct_params[0].as_ref().expect("a struct pointer");
+    assert_eq!(rect.fields[0].kind, CFieldKind::Struct(point.clone()));
+    assert_eq!((rect.size(), rect.align()), (40, 8));
+    assert!(grow.c_struct_params[1].is_none());
+    assert_eq!(
+        program.extern_functions["middle"].c_struct_result.as_ref(),
+        Some(point)
+    );
+
+    let rejected = [
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: own P) -> None
+"#,
+            "C struct parameter `p` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"copy class Q:
+    x: int32
+extern "C" class P:
+    q: Q
+"#,
+            "field `q` of `extern \"C\"` class `P`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    name: str
+"#,
+            "field `name` of `extern \"C\"` class `P` has type `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: (int32, int32)
+"#,
+            "field `x` of `extern \"C\"` class `P`",
+            "AU2002",
+        ),
+        (
+            r#"class Q:
+    x: int32
+extern "C" def bad(q: Q) -> None
+"#,
+            "does not support parameter type `Q`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: P | None) -> None
+"#,
+            "union parameter `p` cannot cross the C boundary",
+            "AU2010",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def poke(p: mut P) -> None
+def run() -> None:
+    poke(P(x=1))
+"#,
+            "must be a mutable place",
+            "AU2004",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported struct use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_admits_named_functions_as_c_callbacks() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+extern "C" def each(visit: def(value: float64, flag: bool) -> None, scale: float32) -> None
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def show(value: float64, flag: bool) -> None:
+    print(value)
+
+def run() -> None:
+    mut values: list[int32] = [3, 1, 2]
+    qsort(values, 3, 4, ascending)
+    each(scale=2.0, visit=show)
+"#,
+    )
+    .expect("named functions should check as callbacks");
+    let compare = &program.extern_functions["qsort"].signature.params[3];
+    let Type::Function {
+        params,
+        return_type,
+    } = compare
+    else {
+        panic!("a callback parameter keeps its function type, found {compare}");
+    };
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].passing, ReceiverKind::BorrowMut);
+    assert_eq!(**return_type, Type::named("int32"));
+
+    let declarations = r#"extern "C" def each(visit: def(value: int32) -> int32) -> None
+def twice(value: int32) -> int32:
+    return value * 2
+def same[T](value: T) -> T:
+    return value
+class Counter:
+    step: int32
+    def add(self, value: int32) -> int32:
+        return value + self.step
+"#;
+    let rejected = [
+        (
+            "def run() -> None:\n    each(lambda value: value * 2)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    held = twice\n    each(held)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    each(visit=same)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    counter = Counter(step=1)\n    each(counter.add)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+    ];
+    for (body, message, code) in rejected {
+        let diagnostic = check_ffi_source_for_test(&format!("{declarations}{body}"))
+            .expect_err("only a named function is a callback");
+        assert_eq!(diagnostic.code, code, "{body}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    // A function of another signature is a type mismatch, as for any call.
+    check_ffi_source_for_test(&format!(
+        "{declarations}def wide(value: int64) -> int32:\n    return 0\ndef run() -> None:\n    each(wide)\n"
+    ))
+    .expect_err("the callback type is the declared one");
+
+    let bad_declarations = [
+        (
+            "extern \"C\" def bad(f: def(text: str) -> None) -> None\n",
+            "parameter 1 of callback `f` cannot cross the C boundary as `str`",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: def(values: list[int32]) -> None) -> None\n",
+            "parameter 1 of callback `f` cannot cross the C boundary as `list[int32]`",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: def(value: int32) -> str) -> None\n",
+            "callback `f` cannot return `str` across the C boundary",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: mut def(value: int32) -> None) -> None\n",
+            "callback parameter `f` cannot be `own` or `mut`",
+            "AU3004",
+        ),
+        (
+            "extern \"C\" def bad() -> def(value: int32) -> None\n",
+            "an extern declaration cannot return a function value",
+            "AU2005",
+        ),
+    ];
+    for (source, message, code) in bad_declarations {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the callback type must be rejected");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_opaque_classes_name_an_extern_drop_function() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" opaque class Database drop close_db
+extern "C" opaque class Cursor
+extern "C" def open_db(path: cstr, out: mut Database | None) -> int32
+extern "C" def find_db(path: cstr) -> Database | None
+extern "C" def new_db() -> Database
+extern "C" def close_db(db: own Database) -> int32 symbol "sqlite3_close"
+extern "C" def cursor(db: Database) -> Cursor
+extern "C" def rows(cursor: Cursor) -> int32
+"#,
+    )
+    .expect("a drop clause that names a closing function should check");
+    assert_eq!(
+        program.opaque_handles["Database"].drop_symbol.as_deref(),
+        Some("sqlite3_close")
+    );
+    assert_eq!(program.opaque_handles["Cursor"].drop_symbol, None);
+    let drops = |name: &str| {
+        program.extern_functions[name]
+            .handle_drops
+            .iter()
+            .map(|(class, symbol)| format!("{class}={symbol}"))
+            .collect::<Vec<_>>()
+    };
+    for producer in ["open_db", "find_db", "new_db"] {
+        assert_eq!(drops(producer), ["Database=sqlite3_close"], "{producer}");
+    }
+    assert!(drops("rows").is_empty());
+
+    for (source, message) in [
+        (
+            "extern \"C\" opaque class Database drop close_db\n",
+            "`drop` of opaque class `Database` names `close_db`, which is not an `extern \"C\"` function of this module",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\ndef close_db(db: own Database) -> None:\n    pass\n",
+            "which is not an `extern \"C\"` function of this module",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: Database) -> None\n",
+            "`drop` function `close_db` of opaque class `Database` must take one `own Database` parameter and return a scalar or nothing",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database, flags: int32) -> None\n",
+            "must take one `own Database` parameter",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" opaque class Other\nextern \"C\" def close_db(db: own Other) -> None\n",
+            "must take one `own Database` parameter",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database) -> cstr\n",
+            "return a scalar or nothing",
+        ),
+        (
+            "extern \"C\" opaque class Database drop close_db\nextern \"C\" def close_db(db: own Database) -> Database | None\n",
+            "return a scalar or nothing",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source).expect_err(message);
+        assert_eq!(error.code, "AU2005", "{source}");
+        assert!(error.message.contains(message), "{}", error.message);
     }
 }
 

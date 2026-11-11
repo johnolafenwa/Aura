@@ -727,10 +727,14 @@ fn public_serialized_mir_api_runs_safe_payloads_and_rejects_forged_ffi() {
                     target: "process_id".to_string(),
                     value: Rvalue::Call {
                         callee: CallTarget::Extern(MirExternCall {
+                            name: String::new(),
                             symbol: "getpid".to_string(),
                             abi: "C".to_string(),
                             params: Vec::new(),
                             return_type: Type::named("int32"),
+                            c_string_result: false,
+                            c_struct_result: None,
+                            handle_drops: std::collections::BTreeMap::new(),
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),

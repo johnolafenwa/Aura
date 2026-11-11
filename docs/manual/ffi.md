@@ -3,7 +3,7 @@
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers or callbacks.
+code. It is not a general system for pointers.
 
 ## Package Opt-In
 
@@ -108,7 +108,20 @@ public extern "C" opaque class ProcessHandle
 public extern "C" def getpid() -> int32
 extern "C" def inspect(label: str, data: list[uint8]) -> uint64
 extern "C" def update(data: mut list[uint8]) -> None
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
 extern "C" def close(handle: own ProcessHandle) -> None
+
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
 
 def main() -> int32:
     print(getpid() > 0)
@@ -138,8 +151,11 @@ The rules for these declarations:
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
+- **C structs.** A struct declaration is written `extern "C" class Name:`
+  with a block of fields. It has no methods, invariants, field defaults, or
+  type parameters. See [Structs](#structs).
 
-Raw pointer syntax, callback types, and `...` variadics are reserved. The
+Raw pointer syntax and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
 opaque handle. An extern declaration is direct-call-only, so it cannot be used
 as a first-class function value.
@@ -159,7 +175,9 @@ The accepted scalar types are fixed:
 | `int` | the exact `int64` alias; `int64` is preferred in ABI declarations |
 | `None` | return-only void result |
 
-Scalar parameters must be bare, because their bits are passed by value. These
+A bare scalar parameter passes its bits by value. A `mut` scalar parameter
+passes a pointer, as [Out-Parameters](#out-parameters) describes. A list of
+scalars passes as a C array, as [Array Pointers](#array-pointers) describes. These
 types have no FFI representation: `int128`, `uint128`, `intsize`,
 `uintsize`, `Duration`, tuples, user classes, enums, generic types, and
 arbitrary collection types.
@@ -186,7 +204,237 @@ callee must not keep it.
 
 The checker rejects `own str`, `mut str`, and `own list[uint8]`. An extern
 function cannot return a text or byte view, because FFI has no foreign
-allocator or lifetime contract.
+allocator or lifetime contract. It can return [C text](#c-text), which is
+copied.
+
+### C Text
+
+`cstr` is the C spelling of a `str`: UTF-8 bytes that end at a NUL byte,
+`const char *` in C. The name is a type only in an extern declaration. The
+Aura side of the call passes and receives a `str`.
+
+```aura fragment
+extern "C" def strlen(text: cstr) -> uint64
+extern "C" def getenv(name: cstr) -> cstr | None
+
+def main() -> int32:
+    print(strlen("hello"))
+    home = getenv("HOME")
+    if home is None:
+        return 1
+    print(home)
+    return 0
+```
+
+| Declaration | C type | Aura type | Contract |
+| --- | --- | --- | --- |
+| `text: cstr` | `const char *` | `str` | a NUL-terminated copy, valid during the call |
+| `text: cstr \| None` | `const char *` | `str \| None` | the same, and `None` passes a null pointer |
+| `-> cstr` | `const char *` | `str` | the text is copied into a new `str` |
+| `-> cstr \| None` | `const char *` | `str \| None` | the same, and a null pointer is `None` |
+
+- **Arguments.** Aura copies the text, adds the NUL, and frees the copy when
+  the call returns. The callee must not keep the pointer. A `str` literal
+  passes the program's constant bytes with no copy. Text that holds a NUL
+  byte cannot be a C string, so the call fails with `AU4005` before the
+  function runs.
+- **Results.** Aura copies the bytes up to the NUL into a new `str` and never
+  frees the C pointer. That fits a result the library owns, such as
+  `sqlite3_errmsg` or `getenv`. A result the caller must free leaks. Declare
+  such a function to return an opaque handle, and free it through the
+  library.
+- **Validation.** A null `-> cstr` result fails with `AU4005`, and so does a
+  result that is not UTF-8.
+
+A `cstr` parameter must be bare. The checker rejects `own cstr` and
+`mut cstr` with `AU3004`. To let C fill a buffer, pass `mut list[uint8]`.
+
+### Out-Parameters
+
+A `mut` scalar parameter passes a pointer to the scalar, such as
+`int32_t *`. The argument is a mutable variable or field. The function reads
+the value it holds and may store another, which the variable holds when the
+call returns.
+
+```aura fragment
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+
+def main() -> int32:
+    mut exponent: int32 = 0
+    fraction = frexp(48.0, exponent)
+    print(fraction)
+    print(exponent)
+    return 0
+```
+
+This prints `0.75` and `6`. Every scalar type of the table above can be an
+out-parameter. The pointer is valid only during the call. A `mut bool` that
+comes back as a byte other than `0` or `1` fails with `AU4001`. The checker
+rejects an `own` scalar with `AU3004`.
+
+### Array Pointers
+
+`ptr[T]` is a pointer to the first of a run of scalars, such as
+`const double *` in C. The name is a type only in an extern parameter. The
+argument is a `list[T]`, and its elements are laid out as a C array of `T`.
+
+```aura fragment
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
+
+def main() -> int32:
+    mut averages: list[float64] = [0.0, 0.0, 0.0]
+    if getloadavg(averages, 3) != 3:
+        return 1
+    print(averages)
+    return 0
+```
+
+| Declaration | C type | Argument | Contract |
+| --- | --- | --- | --- |
+| `values: ptr[T]` | `const T *` | a `list[T]` | the function reads the elements |
+| `values: mut ptr[T]` | `T *` | a mutable `list[T]` | the function reads and writes the elements |
+
+`T` is any scalar type of the [Scalars](#scalars) table.
+
+- **No length.** Only the pointer crosses. Pass the count as an argument of
+  its own, the way the C function expects it. A function that reads or
+  writes past the end of the list has undefined behavior.
+- **Lifetime.** The pointer is valid only during the call. The callee must
+  not keep it.
+- **Empty lists.** An empty list passes a null pointer.
+- **Reads.** A function must not write through a `ptr[T]`. Declare the
+  parameter `mut ptr[T]` if it does.
+- **Writes.** What the function writes through a `mut ptr[T]` is in the list
+  when the call returns. The list keeps its length. A `mut ptr[bool]` list
+  that comes back with a byte other than `0` or `1` fails with `AU4001`.
+
+A built program passes the address of the list's own storage, with no copy,
+when the list keeps its elements unboxed. Lists of scalars do. The checker
+rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
+with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
+form for bytes with a length.
+
+### Structs
+
+`extern "C" class` declares a C struct. Its fields are laid out as a C
+compiler lays out a struct with the same fields in the same order, with the
+same padding.
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def clock_gettime(clock: int32, time: mut Timespec) -> int32
+
+def main() -> int32:
+    parts = div(17, 5)
+    print(parts.quot)
+    print(parts.rem)
+    mut now = Timespec(seconds=0, nanoseconds=0)
+    if clock_gettime(0, now) != 0:
+        return 1
+    print(now.seconds > 0)
+    return 0
+```
+
+| Declaration | C type | Argument | Contract |
+| --- | --- | --- | --- |
+| `value: Name` | `struct name` | a `Name` value | the struct crosses by value |
+| `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
+| `-> Name` | `struct name` | | the struct comes back by value |
+
+- **Fields.** A field is a scalar of the [Scalars](#scalars) table or
+  another `extern "C"` class, which is held inline as a nested struct. Any
+  other field type is `AU2002`. The class needs at least one field.
+- **An ordinary value.** In Aura code the class is a `copy class`. Construct
+  it with keyword arguments, read and assign its fields, and keep it in a
+  list or another class. It has no C identity until it crosses.
+- **By value.** A `Name` parameter or result is passed the way the C calling
+  convention passes that struct: in registers when it is small, and in
+  memory otherwise.
+- **By pointer.** A `mut Name` parameter passes the address of a C copy of
+  the argument. When the call returns, the argument holds the fields the
+  function left there. Use it for `const struct name *` as well, since Aura
+  has no read-only struct pointer. The argument must be a mutable place.
+  The pointer is valid only during the call.
+- **Booleans.** A `bool` field that comes back with a byte other than `0` or
+  `1` fails with `AU4001`.
+
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. A `ptr[Name]` array of
+structs is not available. C unions, bit-fields, fixed-size array fields,
+pointer fields, and packed or over-aligned structs have no spelling. Declare
+a pointer field as `uint64` only when the code never dereferences it.
+
+Struct layout and passing follow the System V convention on x86-64 and the
+standard procedure call convention on AArch64, for Linux and macOS. On
+AArch64, a struct argument that the convention would split between the last
+free registers and the stack is a build error. Move the parameter earlier or
+pass it as `mut Name`.
+
+### Callbacks
+
+A parameter of function type is a C function pointer. The argument is a
+named Aura function, and the C function calls it.
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+| Callback parameter | C type | Meaning |
+| --- | --- | --- |
+| `value: T` | `T` | a scalar by value |
+| `value: mut T` | `T *` | a pointer to one scalar, read on entry and written back on return |
+| `-> T` | `T` | a scalar result |
+| `-> None` | `void` | no result |
+
+`T` is any scalar type of the [Scalars](#scalars) table.
+
+- **Named functions only.** The argument names a top-level function with
+  exactly the declared parameter and result types. A lambda, a closure, a
+  method, a generic function, and a function held in a variable are
+  `AU2005`. C receives a plain code address, so the function has no
+  captured values. A `void *` user-data parameter that C passes through is
+  declared `uint64`.
+- **Pointer parameters.** `mut T` is also the spelling for `const T *`. A
+  null pointer reads as zero and is not written.
+- **Booleans.** A `bool` argument from C is `true` for any nonzero byte.
+- **Lifetime.** The code address stays valid for the life of the program.
+  The C library may keep it and call it during a later foreign call.
+- **Threads.** C must call the function on the thread that made the foreign
+  call, while a foreign call is running. A call from a thread the C library
+  started has undefined behavior.
+- **Suspension.** A callback should not wait on a task, a `Queue`, or a
+  timer. Other tasks would run while the C function is still on the stack.
+- **Failures.** A failure in the callback, such as an index out of range,
+  does not unwind through the C function. The callback returns zero to C,
+  later callbacks return zero without running, and the foreign call fails
+  with the callback's diagnostic when the C function returns.
+
+A callback parameter or result of any other type is `AU2002`: text, lists,
+structs, and handles do not cross in a callback. An extern function cannot
+return a function, and a callback parameter cannot be `own` or `mut`.
 
 ### Opaque Handles
 
@@ -197,24 +445,96 @@ Aura.
   the Aura handle.
 - An `own Handle` parameter consumes the handle. This is normally a foreign
   close or free operation.
-- `mut Handle` is reserved.
+- `mut Handle` is reserved. Use `mut Handle | None` for a pointer the
+  function stores a handle through.
 - Handles are not Copy, not cloneable, and never `Transfer`. They cannot cross
   a task or Queue boundary.
 - A null `-> Handle` result is an Aura runtime failure, `AU4005`.
 
-### Nullable Handle Results
+### Drop Functions
 
-One nullable form exists. An extern result whose normalized type is exactly a
-declared opaque handle plus `None` crosses C as one pointer. Write it as
-`-> Handle | None` or through an alias of that shape. A null pointer becomes
-`None`, and a non-null pointer becomes the owned handle. No union tag or
-aggregate crosses C.
+A `drop` clause names the C function that releases the object behind a
+handle. Aura calls it when the program lets go of a handle it still owns.
+
+```aura fragment
+extern "C" opaque class Database drop sqlite3_close
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close(db: own Database) -> int32
+
+def opens() -> bool:
+    mut found: Database | None = None
+    sqlite3_open(":memory:", found)
+    return found is not None
+```
+
+`opens` returns without a call of `sqlite3_close`, and the database is
+closed when `found` goes out of scope.
+
+- **The function.** It is an extern function of the same module. It takes
+  the handle as its one parameter, declared `own`, and returns a scalar or
+  nothing. Any other shape, or a name that is not such a function, is
+  `AU2005`. Aura discards the result.
+- **When it runs.** The function runs once, when the last owner of the
+  handle goes away: a variable goes out of scope or is assigned another
+  value, or a list, tuple, class instance, or enum payload that holds the
+  handle is dropped. That covers a normal return and `try` propagation. A
+  handle the program still holds when the process ends, after `main`
+  returns or a runtime failure stops it, may not be released.
+- **Giving a handle up.** A handle passed to an `own` parameter of any
+  extern function belongs to that function. The `drop` function does not
+  run for it. So an explicit close is still allowed, and it is the way to
+  read the status the function returns.
+- **Out-parameters.** After a call with a `mut Handle | None` argument, a
+  pointer the function did not change keeps the handle the place held. A
+  pointer it changed is a new handle, and the object the place held is no
+  longer the program's: the `drop` function does not run for it.
+- **Order.** The order in which handles that go out of scope together are
+  released is not specified, and the two backends may differ. When one C
+  object must outlive another, release the dependent one first with an
+  explicit call, keep it in a narrower scope, or name a `drop` function
+  that tolerates either order, such as `sqlite3_close_v2`.
+- **Borrowed pointers.** Every handle of the type is released, however it
+  was made. A C function that returns a pointer its library keeps must
+  return a different opaque class, one with no `drop` clause.
+- **The interpreter** looks the function up when a call first makes a
+  handle of the type. A missing symbol is `AU4005` at that call.
+
+### Nullable Handles
+
+A type that is exactly a declared opaque handle plus `None` crosses C as one
+pointer, where null is `None`. Write it as `Handle | None` or through an
+alias of that shape. No union tag or aggregate crosses C.
+
+| Declaration | C type | Meaning |
+| --- | --- | --- |
+| `-> Handle \| None` | `T *` | a null result is `None`, and any other is the owned handle |
+| `handle: Handle \| None` | `T *` | `None` passes a null pointer |
+| `out: mut Handle \| None` | `T **` | the function reads and stores a pointer through it |
+
+The `mut` form is how C constructors that report a status return their
+object:
+
+```aura fragment
+extern "C" opaque class Database
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close(db: own Database) -> int32
+
+def main() -> int32:
+    mut found: Database | None = None
+    status = sqlite3_open(":memory:", found)
+    if found is None:
+        return status
+    return sqlite3_close(found)
+```
+
+The variable holds what the function stored when the call returns: a handle,
+or `None` for a null pointer. Aura does not release the handle the variable
+held before the call. The checker rejects `own Handle | None` with `AU3004`.
 
 The checker rejects every other union shape with `AU2010`. That includes
-optional scalars, strings, byte views, nullable parameters, and several handle
-alternatives. These need an explicit C adapter. Mutable byte-view writeback
-still happens before result translation. The resulting handle follows every
-opaque-handle rule.
+optional scalars, byte views, and several handle alternatives. These need an
+explicit C adapter. Every `mut` argument is stored back before the result is
+validated. The resulting handle follows every opaque-handle rule.
 
 ### Handles Inside Other Values
 
@@ -276,6 +596,10 @@ match the declaration.
 | Scalar | Copied into an ABI slot. |
 | Bare `str`, `list[uint8]`, or opaque handle | Stays owned by the caller and is usable after the call. |
 | `mut list[uint8]` | Needs an exclusive mutable place. In-place byte updates are visible after return. |
+| `cstr` | Copied for the call. The caller keeps its `str`. |
+| `mut` scalar or `mut Handle \| None` | Needs an exclusive mutable place, which holds what the function stored after return. |
+| `ptr[T]` | The list stays owned by the caller and is usable after the call. |
+| `mut ptr[T]` | Needs an exclusive mutable list. In-place element updates are visible after return. |
 | `own` opaque handle | Moves before the call and cannot be used afterward. |
 
 The declared capability is exact. Aura inserts no implicit clone, ownership
@@ -283,10 +607,10 @@ conversion, or pointer-lifetime extension. A foreign call may have
 irreversible external effects. Evaluating a later argument or validating the
 result does not undo earlier evaluation, the foreign call, or foreign writes.
 
-Opaque handles have no automatic foreign destructor. A binding package must
-declare and call the right consuming C function. Dropping an unconsumed handle
-discards only Aura's wrapper. It may leak the foreign resource if the native
-API needs explicit destruction.
+An opaque class with no `drop` clause has no foreign destructor. A binding
+package must declare and call the right consuming C function. Dropping an
+unconsumed handle of such a class discards only Aura's wrapper. It may leak
+the foreign resource if the native API needs explicit destruction.
 
 Printing, f-string interpolation, and `str(...)` render a handle as
 `<opaque TypeName>`, using its canonical Aura type name. The pointer address
@@ -296,17 +620,17 @@ never appears in source-visible output or diagnostics.
 
 | Code | Cause |
 | --- | --- |
-| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, and opaque-handle tables, including a returned `str` or `list[uint8]` view. |
+| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
+| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
-| `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
-| `AU2010` | A union result or parameter other than the `Handle \| None` result form. |
+| `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, a function as an extern result, or a `drop` clause that does not name an extern function taking the handle as its one `own` parameter. |
+| `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
-| `AU3004` | An invalid scalar, view, or handle capability. |
+| `AU3004` | An invalid scalar, view, C text, pointer, struct, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
-| `AU4001` | A non-canonical C boolean result: the returned byte was neither `0` nor `1`. |
-| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle result, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
+| `AU4001` | A non-canonical C boolean: the byte a function returned, stored through a `mut bool` or a `mut ptr[bool]`, or left in a `bool` field of a struct, was neither `0` nor `1`. |
+| `AU4005` | A recoverable runtime boundary failure: a null opaque-handle or `cstr` result, a `cstr` result that is not UTF-8, a `cstr` argument that holds a NUL byte, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
 stop before entry, and post-call failures are raised after return.
@@ -322,13 +646,21 @@ are outside Aura's memory-safety guarantees.
 The native backend and the interpreter share one validated ABI description.
 The native backend emits the C call itself. The interpreter builds each call
 at run time. They agree on argument layout, ownership, mutable views,
-results, and Aura diagnostics. The maintained `examples/packages/ffi_getpid`
+results, and Aura diagnostics. The maintained `examples/packages/sqlite_notes` package binds the system
+SQLite library with handles, `drop` functions, C text, out-parameters, and
+a callback. The maintained `examples/packages/ffi_getpid`
 package and the FFI acceptance tests run the same declarations on both.
 
 A foreign call from a built program costs about what the same call costs
 from C. A scalar call such as `labs` takes under a nanosecond more than the
 function itself. A `str` or `list[uint8]` argument adds a few nanoseconds to
-find its bytes, and a `str` literal adds nothing.
+find its bytes, and a `str` literal adds nothing. A `cstr` argument or
+result costs one allocation and one copy, about 20 to 40 nanoseconds. An
+out-parameter costs a store and a load. A `ptr[T]` argument costs a few
+loads to find the list's elements. A struct argument or result costs a
+store and a load for each field. A callback costs about 4 ns more
+than a C function pointer, for the frame that guards the C caller against
+a failure.
 
 Library loading and symbol lookup in the interpreter are implemented on
 Unix-family hosts. On other hosts, a call there fails with the runtime
@@ -339,11 +671,16 @@ declaration must still name the host's actual C symbol.
 
 FFI does not:
 
-- define C structs or unions, or pass enums
+- define C unions, bit-fields, or array fields, or pass enums
+- pass an array of structs, or a struct that holds a pointer Aura can follow
 - allocate foreign memory or expose pointer arithmetic
-- return views
-- represent nullable handles beyond the `Handle | None` result form
-- accept callbacks or variadics
+- return views, or free a `cstr` result
+- pass typed pointers to anything but one scalar, one handle, or the
+  elements of a list of scalars
+- pass an `Array[T]` as a pointer
+- accept variadics
+- pass a closure as a callback, or pass text, lists, structs, or handles to
+  one
 - offer asynchronous foreign calls
 
 Aura does not infer C ABI layout outside the tables above.
@@ -362,11 +699,17 @@ Implemented:
 - library, search path, and framework settings in `[ffi]`, with host tables
 - bodyless `extern "C"` functions, the `symbol` clause, and opaque handles
 - fixed-width scalars and pointer-length views
+- `cstr` arguments and results, and `cstr | None`
+- `mut` scalar out-parameters
+- `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
+- `extern "C"` classes passed and returned by value, and passed by pointer
+- named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
-- the `Handle | None` result form
+- `Handle | None` results and parameters, and `mut Handle | None`
+- `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
-other nullable shapes, and foreign aggregate layout. Aura does not infer them
+Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
+other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 
 Design record:

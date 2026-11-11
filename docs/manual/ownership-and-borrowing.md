@@ -474,7 +474,7 @@ FFI is the foreign function interface. FFI v0 views are temporary call-boundary 
 
 An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper for one non-null foreign pointer. A bare handle parameter retains it. `own Handle` consumes it. `mut Handle` is unavailable.
 
-Aura does not call a foreign destructor automatically, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
+A handle whose class declares a `drop` function is released with it when the program lets go of the handle. Without the clause, Aura does not call a foreign destructor, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
 
 See [FFI](/manual/ffi) for the complete ABI and failure boundary.
 

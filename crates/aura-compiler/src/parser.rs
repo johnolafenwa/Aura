@@ -773,6 +773,17 @@ impl Parser {
                     "`extern` opaque classes have no Aura body; remove `:` and the indented block",
                 ));
             }
+            let drop = if matches!(self.peek_kind_at(self.index), Some(TokenKind::Identifier(word)) if word == "drop")
+            {
+                self.bump();
+                Some(self.expect_identifier_with_span().map_err(|error| {
+                    error.with_help(
+                        "name the extern function that releases the handle, such as `drop sqlite3_close`",
+                    )
+                })?)
+            } else {
+                None
+            };
             self.expect_newline()?;
             return Ok(Item::ExternOpaqueClass(ExternOpaqueClassDecl {
                 public,
@@ -780,7 +791,12 @@ impl Parser {
                 name,
                 name_span,
                 span,
+                drop,
             }));
+        }
+
+        if self.at_simple(&TokenKind::KwClass) {
+            return Ok(Item::Class(self.parse_extern_class(public)?));
         }
 
         self.expect_keyword(TokenKind::KwDef)?;
@@ -790,7 +806,7 @@ impl Parser {
         }
         self.reject_reserved_ffi_signature_syntax()?;
         self.expect_simple(TokenKind::LParen)?;
-        let (_, params) = self.parse_params(false)?;
+        let (_, mut params) = self.parse_params(false)?;
         self.expect_simple(TokenKind::RParen)?;
         if params.iter().any(|param| param.default.is_some()) {
             return Err(parse_error(
@@ -808,13 +824,22 @@ impl Parser {
                 "`extern` function declarations require an explicit return type; write `-> None` when the function returns no value",
             ));
         }
-        let (return_type, view_return) = self.parse_return_annotation(span)?;
+        let (mut return_type, view_return) = self.parse_return_annotation(span)?;
         if view_return.is_some() {
             return Err(parse_error(
                 span,
                 "`extern` functions cannot return Aura views",
             ));
         }
+        let c_string_params = params
+            .iter_mut()
+            .map(|param| take_c_string(&mut param.ty))
+            .collect();
+        let pointer_params = params
+            .iter_mut()
+            .map(|param| take_pointer(&mut param.ty))
+            .collect();
+        let c_string_result = take_c_string(&mut return_type);
         let symbol = self.parse_extern_symbol_clause()?;
         // An indented block holds only the trusted contract.
         let contracts = if self.eat_simple(&TokenKind::Colon).is_some() {
@@ -832,6 +857,9 @@ impl Parser {
             symbol,
             params,
             return_type,
+            c_string_params,
+            pointer_params,
+            c_string_result,
             span,
             contracts,
         }))
@@ -879,12 +907,6 @@ impl Parser {
                 return Err(parse_error(
                     self.tokens[index].span,
                     "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
-                ));
-            }
-            if matches!(kind, TokenKind::KwDef) {
-                return Err(parse_error(
-                    self.tokens[index].span,
-                    "FFI v0 does not support callback parameters or returns",
                 ));
             }
             if matches!(kind, TokenKind::Star) {
@@ -1119,7 +1141,51 @@ impl Parser {
             methods,
             span,
             doc,
+            c_layout: false,
         })
+    }
+
+    /// Parses the class of an `extern "C" class` declaration: a `copy`
+    /// class of fields only, laid out as a C struct.
+    fn parse_extern_class(&mut self, public: bool) -> Result<ClassDecl> {
+        let mut class = self.parse_class(public)?;
+        let name = &class.name;
+        let rejected = if !class.type_params.is_empty() {
+            Some((
+                class.span,
+                format!("`extern \"C\"` class `{name}` cannot have type parameters"),
+            ))
+        } else if let Some(method) = class.methods.first() {
+            Some((
+                method.span,
+                format!(
+                    "`extern \"C\"` class `{name}` declares only fields; a C struct has no methods or invariants"
+                ),
+            ))
+        } else if let Some(field) = class.fields.iter().find(|field| field.default.is_some()) {
+            Some((
+                field.span,
+                format!(
+                    "field `{}` of `extern \"C\"` class `{name}` cannot have a default value",
+                    field.name
+                ),
+            ))
+        } else if class.fields.is_empty() {
+            Some((
+                class.span,
+                format!(
+                    "`extern \"C\"` class `{name}` needs at least one field; declare `extern \"C\" opaque class {name}` for a type whose layout C keeps to itself"
+                ),
+            ))
+        } else {
+            None
+        };
+        if let Some((span, message)) = rejected {
+            return Err(parse_error(span, message));
+        }
+        class.copy = true;
+        class.c_layout = true;
+        Ok(class)
     }
 
     fn parse_enum(&mut self, public: bool) -> Result<EnumDecl> {
@@ -5666,4 +5732,38 @@ pub(crate) fn mentions_ghost(expr: &Expr) -> bool {
     let mut found = false;
     visit(&mut expr.clone(), &mut found);
     found
+}
+
+/// Rewrites `ptr[T]` to `list[T]` in the type of an extern parameter, and
+/// reports whether it was there. `ptr[T]` is how a `list[T]` crosses as a
+/// pointer to its first element and names no type of its own.
+fn take_pointer(ty: &mut TypeRef) -> bool {
+    match &mut ty.kind {
+        TypeRefKind::Named { name, args } if name == "ptr" && args.len() == 1 => {
+            *name = "list".to_string();
+            true
+        }
+        _ => false,
+    }
+}
+
+/// Rewrites `cstr`, alone or as a member of a union, to `str` in the type
+/// of an extern parameter or result, and reports whether it was there.
+/// `cstr` is the C spelling of an Aura `str` and names no type of its own.
+fn take_c_string(ty: &mut TypeRef) -> bool {
+    match &mut ty.kind {
+        TypeRefKind::Named { name, args } if name == "cstr" && args.is_empty() => {
+            *name = "str".to_string();
+            true
+        }
+        TypeRefKind::Union(members) => {
+            // Every member is rewritten, so the walk does not stop early.
+            let mut found = false;
+            for member in members {
+                found |= take_c_string(member);
+            }
+            found
+        }
+        _ => false,
+    }
 }

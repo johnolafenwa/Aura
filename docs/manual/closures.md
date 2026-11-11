@@ -388,7 +388,7 @@ A `from self` result has no value type. A bound method that returns a view of it
 ### Language Limits
 
 - Closures are expression-only and contextually typed.
-- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, FFI callbacks, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
+- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
 - Owned callable storage holds owned captures only. Loan captures stay in local loan closures.
 - A stored callable may return a view of one explicit parameter, but never of a captured receiver.
 - Explicit capture lists accept local identifiers. Project a field into a named view before capturing it.
