@@ -2348,6 +2348,65 @@ Array[float64](shape=[2, 2], values=[2.0, 12.0, 6.0, 8.0])\n\
 }
 
 #[test]
+fn mir_arrays_run_products_and_reordered_reductions() {
+    let source = r#"
+def main():
+    left = Array[int64].from_list([1, 2, 3, 4], [2, 2])
+    right = Array[int64].from_list([5, 6, 7, 8], [2, 2])
+    print(left.dot(other=right))
+    print(left.matmul(right))
+    print(left.fast_sum())
+    print(left.fast_mean())
+    weights = Array[float64].from_list([0.5, 0.25], [2])
+    table = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    print(table.matmul(weights))
+    print(weights.matmul(table))
+    print(weights.dot(weights))
+    print(table.fast_sum())
+"#;
+    let output = crate::run_source(source).expect("Array products should execute in MIR");
+    assert_eq!(
+        output.stdout,
+        "\
+70\n\
+Array[int64](shape=[2, 2], values=[19, 22, 43, 50])\n\
+10\n\
+2.5\n\
+Array[float64](shape=[2], values=[1.0, 2.5])\n\
+Array[float64](shape=[2], values=[1.25, 2.0])\n\
+0.3125\n\
+10.0\n"
+    );
+
+    for (source, code, message) in [
+        (
+            "def main():\n    left = Array[int64].zeros([2])\n    right = Array[int64].zeros([3])\n    print(left.dot(right))\n",
+            "AU4007",
+            "dot",
+        ),
+        (
+            "def main():\n    left = Array[int64].zeros([2, 3])\n    print(left.matmul(left))\n",
+            "AU4007",
+            "array matmul requires shapes",
+        ),
+        (
+            "def main():\n    left = Array[float64].zeros([0])\n    print(left.fast_mean())\n",
+            "AU4007",
+            "",
+        ),
+        (
+            "def main():\n    left = Array[int64].full([2], 9223372036854775807)\n    print(left.dot(left))\n",
+            "AU4002",
+            "array dot overflowed at flat index 0",
+        ),
+    ] {
+        let diagnostic = crate::run_source(source).expect_err(source);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert!(diagnostic.message.contains(message), "{diagnostic:?}");
+    }
+}
+
+#[test]
 fn mir_arrays_preserve_named_argument_order_and_capturing_map_results() {
     let source = r#"
 def shape() -> list[int64]:

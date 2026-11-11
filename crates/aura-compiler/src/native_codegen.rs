@@ -15597,10 +15597,27 @@ impl<'a> FunctionCompiler<'a> {
                     Type::Named("Array".to_string(), vec![result_type]),
                 ))
             }
-            ArrayOp::Sum | ArrayOp::Min | ArrayOp::Max | ArrayOp::Mean => {
+            ArrayOp::Dot | ArrayOp::Matmul => {
+                let other = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(other)?;
+                words.push(other.values[0]);
                 self.push_runtime_call_words(call, &mut words);
                 let results = self.runtime_call_results(function, &words);
-                let target = if op == ArrayOp::Mean {
+                if op == ArrayOp::Matmul {
+                    return Ok(self.owned_opaque_result(results, array_ty));
+                }
+                let boxed = self.owned_opaque_result(results, element_ty);
+                self.coerce_value(boxed, &element_direct_ty)
+            }
+            ArrayOp::Sum
+            | ArrayOp::Min
+            | ArrayOp::Max
+            | ArrayOp::Mean
+            | ArrayOp::FastSum
+            | ArrayOp::FastMean => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                let target = if matches!(op, ArrayOp::Mean | ArrayOp::FastMean) {
                     DirectType::Scalar(ScalarKind::Float64)
                 } else {
                     element_direct_ty

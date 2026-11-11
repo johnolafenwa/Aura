@@ -1336,3 +1336,76 @@ fn foreign_symbols_declare_once_and_calls_extend_narrow_arguments() {
         "narrow C arguments carry their extension: {ir}"
     );
 }
+
+#[test]
+fn target_cpu_names_follow_the_architecture() {
+    use crate::native_backend::{target_cpu_names, target_cpu_names_for};
+
+    assert_eq!(target_cpu_names_for("aarch64"), ["generic", "native"]);
+    assert_eq!(
+        target_cpu_names_for("x86_64"),
+        ["generic", "native", "x86-64-v2", "x86-64-v3", "x86-64-v4"]
+    );
+    assert_eq!(
+        target_cpu_names(),
+        target_cpu_names_for(std::env::consts::ARCH)
+    );
+}
+
+#[test]
+fn target_cpu_is_checked_and_names_the_host_for_native() {
+    use crate::native_backend::{set_target_cpu, target_cpu, target_cpu_identity};
+
+    let error = set_target_cpu("pentium-9").expect_err("an unknown CPU should be refused");
+    assert!(
+        error.starts_with("unknown target CPU `pentium-9`; this host accepts `generic`, `native`"),
+        "{error}"
+    );
+    assert_eq!(target_cpu(), "generic");
+    assert_eq!(target_cpu_identity(), "generic");
+
+    // Other tests compile objects while this one runs. A `native` object
+    // runs on this machine, so the window is harmless to them.
+    set_target_cpu("native").expect("`native` is accepted on every host");
+    let name = target_cpu();
+    let identity = target_cpu_identity();
+    let machine = host_target_machine();
+    set_target_cpu("generic").expect("`generic` is accepted on every host");
+
+    assert_eq!(name, "native");
+    assert!(identity.starts_with("native:"), "{identity}");
+    assert_eq!(identity, super::host_cpu_identity());
+    let machine = machine.expect("the host CPU should make a machine");
+    assert_eq!(
+        machine.get_cpu().to_string_lossy(),
+        inkwell::targets::TargetMachine::get_host_cpu_name().to_string_lossy()
+    );
+    assert_eq!(target_cpu(), "generic");
+}
+
+#[test]
+fn optimized_ir_is_written_beside_the_named_prefix() {
+    let context = Context::create();
+    let module = context.create_module("dumped");
+    let function = module.add_function("answer", context.i64_type().fn_type(&[], false), None);
+    let builder = context.create_builder();
+    builder.position_at_end(context.append_basic_block(function, "entry"));
+    builder
+        .build_return(Some(&context.i64_type().const_int(42, false)))
+        .expect("the return should build");
+
+    let directory = std::env::temp_dir().join(format!("aura-ir-dump-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).expect("the directory should be created");
+    let prefix = directory.join("program");
+    super::dump_unit_ir(&module, prefix.clone().into_os_string(), 3)
+        .expect("the IR should be written");
+    let text = std::fs::read_to_string(directory.join("program.3.ll"))
+        .expect("the unit's IR file should exist");
+    assert!(text.contains("define i64 @answer()"), "{text}");
+
+    let missing = directory.join("absent").join("program");
+    let error = super::dump_unit_ir(&module, missing.into_os_string(), 0)
+        .expect_err("a missing directory should fail");
+    assert!(error.starts_with("failed to write LLVM IR"), "{error}");
+    std::fs::remove_dir_all(&directory).expect("the directory should be removed");
+}

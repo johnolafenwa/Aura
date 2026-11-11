@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+- Arrays: `left.dot(right)` is the inner product of two Arrays of the same
+  shape, and `left.matmul(right)` is the matrix product of `[n, k]` with
+  `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Integer products are
+  checked and report `AU4002`. `matmul` gives the bits of the plain
+  three-loop program.
+- Arrays: `fast_sum()` and `fast_mean()` add in a fixed order built for
+  wide registers, about four times faster than `sum()` on one million
+  `float64` elements. The order is the same on every CPU, so the result is
+  reproducible. It can differ from `sum()` in the last digits.
+- Array kernels use 256-bit AVX2 instructions on an x86-64 CPU that has
+  them, chosen when the program starts, with no build option. Results are
+  the same at every width. `AURA_ARRAY_KERNELS=baseline` turns the wide
+  copies off. A float `min` and `max` now compare many elements at once,
+  and order `-0.0` below `0.0`.
+- `aura build --target-cpu <name>` and `aura run --target-cpu <name>`
+  compile the program for `generic` (the default), `native`, or on x86-64
+  `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
+  when the option is absent.
 - Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,

@@ -38,6 +38,66 @@ fn optimizes() -> bool {
     true
 }
 
+/// The CPU names `--target-cpu` accepts on every host (ADR-0085).
+const PORTABLE_TARGET_CPUS: &[&str] = &["generic", "native"];
+/// The x86-64 microarchitecture levels, which LLVM knows as CPU names.
+const X86_64_TARGET_CPUS: &[&str] = &["x86-64-v2", "x86-64-v3", "x86-64-v4"];
+
+static TARGET_CPU: std::sync::RwLock<&'static str> = std::sync::RwLock::new("generic");
+
+/// The CPU names host objects can be compiled for on `arch`.
+fn target_cpu_names_for(arch: &str) -> Vec<&'static str> {
+    let mut names = PORTABLE_TARGET_CPUS.to_vec();
+    if arch == "x86_64" {
+        names.extend_from_slice(X86_64_TARGET_CPUS);
+    }
+    names
+}
+
+/// The CPU names host objects can be compiled for on this host.
+pub fn target_cpu_names() -> Vec<&'static str> {
+    target_cpu_names_for(std::env::consts::ARCH)
+}
+
+/// Compiles every later host object for the CPU `name`: `generic`, the
+/// default, runs on every CPU of the host's architecture; `native` uses
+/// every instruction the build machine's CPU has; and a level such as
+/// `x86-64-v3` uses that level's instructions.
+pub fn set_target_cpu(name: &str) -> Result<(), String> {
+    let names = target_cpu_names();
+    let Some(known) = names.iter().find(|known| **known == name) else {
+        return Err(format!(
+            "unknown target CPU `{name}`; this host accepts {}",
+            names
+                .iter()
+                .map(|known| format!("`{known}`"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    *TARGET_CPU
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = known;
+    Ok(())
+}
+
+/// The CPU name host objects are compiled for.
+pub fn target_cpu() -> &'static str {
+    *TARGET_CPU
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// What decides the instructions host objects may use: the target CPU
+/// name, and for `native` the build machine's CPU and its features. A
+/// cache of built programs keys on it.
+pub fn target_cpu_identity() -> String {
+    match target_cpu() {
+        "native" => llvm::host_cpu_identity(),
+        name => name.to_string(),
+    }
+}
+
 /// The module backend for the host, which the emitter writes one object
 /// through.
 pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {

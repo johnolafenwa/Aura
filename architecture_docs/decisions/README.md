@@ -106,3 +106,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 80. [ADR-0080: FFI passes a named function as a C callback](0080-ffi-callbacks.md) — Accepted; function-typed extern parameters over scalars, with a failure parked until the C function returns
 81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
 83. [ADR-0083: An opaque handle names the C function that releases it](0083-ffi-handle-drop-functions.md) — Accepted; `drop` clause on `extern "C" opaque class`, run once when the last owner goes away
+85. [ADR-0085: A program picks its target CPU, and Array kernels pick theirs at run time](0085-target-cpu-and-kernel-dispatch.md) — Accepted; `--target-cpu`, `AURA_TARGET_CPU`, AVX2 copies of the Array kernels chosen at run time, the same results at every width
+86. [ADR-0086: Arrays gain `dot`, `matmul`, and reductions in a fixed vectorized order](0086-array-products-and-reordered-reductions.md) — Accepted; `fast_sum` and `fast_mean` over 32 partial sums, checked integer products, strict-order `matmul`

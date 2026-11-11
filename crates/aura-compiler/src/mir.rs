@@ -26129,6 +26129,9 @@ impl<'a> Lowerer<'a> {
                             (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
                                 Some(class_args[0].clone())
                             }
+                            (BuiltinMember::ArrayDot | BuiltinMember::ArrayMatmul, 0) => {
+                                Some(Type::Named("Array".to_string(), class_args.clone()))
+                            }
                             (
                                 BuiltinMember::ArrayWrappingAdd
                                 | BuiltinMember::ArrayWrappingSub

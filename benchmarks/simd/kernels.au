@@ -1,0 +1,65 @@
+import sys
+
+
+def vector(n: int64, scale: float64, shift: float64) -> Array[float64]:
+    mut values: list[float64] = []
+    for i in range(n):
+        values.append((i % 1000).to_float() * scale + shift)
+    return Array[float64].from_list(values, [n])
+
+
+def reductions(n: int64, reps: int64) -> None:
+    a = vector(n, 0.5, 1.0)
+    b = vector(n, 0.25, -3.0)
+
+    mut acc = 0.0
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += a.sum()
+    print(f"sum {n} {sys.monotonic_time_ms() - start} {acc}")
+
+    acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += a.fast_sum()
+    print(f"fast_sum {n} {sys.monotonic_time_ms() - start} {acc}")
+
+    acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += a.dot(b)
+    print(f"dot {n} {sys.monotonic_time_ms() - start} {acc}")
+
+    acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += a.min() + a.max()
+    print(f"min_max {n} {sys.monotonic_time_ms() - start} {acc}")
+
+    acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        c = a + b
+        acc += c[n - 1]
+    print(f"add {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def products(m: int64, reps: int64) -> None:
+    mut values: list[float64] = []
+    for i in range(m * m):
+        values.append((i % 97).to_float() * 0.01)
+    p = Array[float64].from_list(values, [m, m])
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        q = p.matmul(p)
+        acc += q[m - 1, m - 1]
+    print(f"matmul {m} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def main() -> int32:
+    reductions(1024, 400000)
+    reductions(1000000, 300)
+    products(64, 2000)
+    products(512, 4)
+    return 0

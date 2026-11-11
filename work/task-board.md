@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-11
 
+## SIMD (in progress)
+
+- Target: the four pieces John asked for on 2026-11-11: wider Array
+  kernels, more vectorized Array kernels, vectorizable user loops, and
+  explicit vector types. Details are in `2026-11-11-simd.md`.
+- Done: AVX2 copies of the Array kernels chosen at run time,
+  `--target-cpu`, `Array.fast_sum`, `fast_mean`, `dot`, and `matmul`
+  (ADR-0085, ADR-0086).
+- Remaining: loops over lists and Arrays that LLVM can vectorize, and
+  explicit vector types.
+
 ## Streaming I/O and a deeper standard library (in progress)
 
 - Target: streamed HTTP bodies, line and chunk file reads, redirects,

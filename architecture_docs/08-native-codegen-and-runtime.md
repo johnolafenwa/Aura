@@ -491,7 +491,11 @@ constants. `finish` then lowers the whole object to LLVM IR in one context:
   `willreturn`. A branch to a cold block gets `branch_weights` of 1 to
   2000.
 - The target machine uses the host triple, the generic CPU, and PIC, and
-  the module runs `default<O3>`.
+  the module runs `default<O3>`. `--target-cpu` names another CPU
+  (ADR-0085): `native` passes the host's CPU name and feature list, and
+  an x86-64 level passes its name.
+- `AURA_DUMP_LLVM_IR=<prefix>` writes each unit's IR after the passes to
+  `<prefix>.<unit>.ll`, for a compiler developer.
 - On ELF every defined function gets its own `.text.<symbol>` section after
   the passes run, so `--gc-sections` drops the ones nothing calls. LLVM
   marks Mach-O objects `MH_SUBSECTIONS_VIA_SYMBOLS`, so `-dead_strip` works

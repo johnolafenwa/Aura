@@ -1,0 +1,5 @@
+error[AU2002]: `Array.matmul` expects `Array[float64]`, found `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_matmul_requires_an_array.au:3:23
+  |
+3 |     print(left.matmul(2.0))
+  |                       ^

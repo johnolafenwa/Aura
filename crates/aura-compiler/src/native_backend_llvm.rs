@@ -425,6 +425,9 @@ impl LlvmModule {
             }
         }
         place_functions_in_own_sections(&module, &machine.get_triple());
+        if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
+            dump_unit_ir(&module, prefix, unit)?;
+        }
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
             Err(error) => Err(format!("LLVM failed to write the object: {error}")),
@@ -491,6 +494,38 @@ fn target_machine(triple: &TargetTriple) -> Result<TargetMachine, String> {
     target_machine_at(triple, OptimizationLevel::Default)
 }
 
+/// Writes the optimized IR of unit `unit` to `<prefix>.<unit>.ll`, where a
+/// compiler developer reads it (`AURA_DUMP_LLVM_IR=<prefix>`).
+fn dump_unit_ir(
+    module: &Module<'_>,
+    prefix: std::ffi::OsString,
+    unit: usize,
+) -> Result<(), String> {
+    let mut path = prefix;
+    path.push(format!(".{unit}.ll"));
+    module
+        .print_to_file(&path)
+        .map_err(|error| format!("failed to write LLVM IR: {error}"))
+}
+
+/// The build machine's CPU name and feature string, as LLVM detects them.
+fn host_cpu() -> (String, String) {
+    (
+        TargetMachine::get_host_cpu_name()
+            .to_string_lossy()
+            .into_owned(),
+        TargetMachine::get_host_cpu_features()
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// The build machine's CPU and features in one string.
+pub(super) fn host_cpu_identity() -> String {
+    let (cpu, features) = host_cpu();
+    format!("native:{cpu}:{features}")
+}
+
 /// A machine for `triple` that optimizes at `level`, whose target must
 /// already be initialized.
 fn target_machine_at(
@@ -499,12 +534,17 @@ fn target_machine_at(
 ) -> Result<TargetMachine, String> {
     let target = Target::from_triple(triple)
         .map_err(|error| format!("LLVM has no target for {triple}: {error}"))?;
-    // A generic CPU keeps objects the same on every host of one target.
+    // The default, a generic CPU, keeps objects the same on every host of
+    // one target. `native` names the build machine's CPU and its features.
+    let (cpu, features) = match super::target_cpu() {
+        "native" => host_cpu(),
+        name => (name.to_string(), String::new()),
+    };
     target
         .create_target_machine(
             triple,
-            "generic",
-            "",
+            &cpu,
+            &features,
             level,
             RelocMode::PIC,
             CodeModel::Default,

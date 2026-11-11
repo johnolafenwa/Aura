@@ -213,7 +213,8 @@ Array[float64](shape=[2, 2], values=[0.72, 0.88, 0.95, 0.64])
 
 `scores + 5.0` adds five to every element and returns a new array.
 `scores * weights` multiplies the two arrays element by element, which is
-*not* matrix multiplication; Aura arrays don't have that. `+`, `-`, `*`, and,
+*not* matrix multiplication; that's the `matmul` method you'll meet later in
+this section. `+`, `-`, `*`, and,
 for floating-point arrays, `/` all work this way, with either two arrays or
 an array and a single number. `map` applies a function to every element and
 returns a new array of the results. `sum`, `min`, and `max` reduce the whole
@@ -422,6 +423,45 @@ of a deliberately small array type: you get exact, predictable arithmetic,
 and for column operations you sometimes write the loop. The last two lines
 subtract the class mean from every score in one step and report how far the
 lowest and highest scores sit from it.
+
+### Products and Faster Sums
+
+Two arrays of the same shape have a *dot product*, the sum of their
+matching elements multiplied together, and two tables whose inner sizes
+agree have a *matrix product*. Both are methods:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0],
+        [2, 3],
+    )
+    weights = Array[float64].from_list([0.2, 0.3, 0.5], [3])
+    final = scores.matmul(weights)
+    print(final)
+    print(weights.dot(weights))
+```
+
+<span class="caption">Listing 8-22: A weighted grade with `matmul`</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[2], values=[88.3, 88.3])
+0.38
+```
+
+`scores` has shape `[2, 3]` and `weights` has shape `[3]`, so the product
+has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
+into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
+
+`sum` adds from left to right, which is the order you'd add by hand and the
+slowest order for a CPU. When an array is large and the last digit doesn't
+matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
+times faster. The order is the same on every machine, so the answer is
+still reproducible. It just isn't always the same last digit as `sum`.
 
 Arrays have a few more limits worth knowing before you plan a program around
 them. They live in ordinary memory on the CPU. They have no equality, so `a

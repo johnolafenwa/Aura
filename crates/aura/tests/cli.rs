@@ -8822,6 +8822,84 @@ fn build_produces_a_runnable_binary() {
 }
 
 #[test]
+fn build_and_run_accept_a_target_cpu() {
+    let temp = TempDir::new("aura-target-cpu");
+    let source_path = temp.path().join("app.au");
+    let source = "def scale(values: mut list[float64], factor: float64) -> None:\n    for i in range(len(values)):\n        values[i] *= factor\n\ndef main() -> None:\n    mut values = [0.1, 0.2, 0.3, 0.7, 1.1]\n    scale(values, 3.0)\n    print(values)\n    left = Array[float64].from_list([0.1, 0.2, 0.3, 0.4], [2, 2])\n    print(left.matmul(left))\n    print(left.dot(left))\n";
+    fs::write(&source_path, source).unwrap();
+    let cache = temp.path().join("cache");
+
+    let mut outputs = Vec::new();
+    for cpu in ["generic", "native"] {
+        let output_path = temp.path().join(cpu);
+        let build = Command::new(aura_bin())
+            .args(["build", "--target-cpu", cpu, "-o"])
+            .arg(&output_path)
+            .arg(&source_path)
+            .output()
+            .expect("failed to run aura build --target-cpu");
+        assert!(
+            build.status.success(),
+            "a `{cpu}` build should succeed, stderr was:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        let run = generated_binary(&output_path).output().unwrap();
+        assert!(run.status.success());
+        outputs.push(String::from_utf8_lossy(&run.stdout).into_owned());
+    }
+    assert_eq!(outputs[0], outputs[1], "the CPU must not change a result");
+
+    let from_environment = Command::new(aura_bin())
+        .args(["run", "--backend", "direct"])
+        .arg(&source_path)
+        .env("AURA_TARGET_CPU", "native")
+        .env("AURA_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run aura run with AURA_TARGET_CPU");
+    assert!(from_environment.status.success());
+    assert_eq!(
+        String::from_utf8_lossy(&from_environment.stdout),
+        outputs[0]
+    );
+
+    let with_equals = Command::new(aura_bin())
+        .args(["run", "--backend", "direct", "--target-cpu=generic"])
+        .arg(&source_path)
+        .env("AURA_TARGET_CPU", "native")
+        .env("AURA_CACHE_DIR", &cache)
+        .output()
+        .expect("failed to run aura run --target-cpu=generic");
+    assert!(with_equals.status.success());
+    assert_eq!(String::from_utf8_lossy(&with_equals.stdout), outputs[0]);
+
+    for arguments in [
+        vec!["build", "--target-cpu", "pentium-9", "-o", "unused"],
+        vec!["run", "--target-cpu"],
+    ] {
+        let refused = Command::new(aura_bin())
+            .args(&arguments)
+            .arg(&source_path)
+            .current_dir(temp.path())
+            .output()
+            .expect("failed to run aura with a bad target CPU");
+        assert_eq!(refused.status.code(), Some(2), "{arguments:?}");
+    }
+    let unknown = Command::new(aura_bin())
+        .args(["build", "--target-cpu", "pentium-9", "-o", "unused"])
+        .arg(&source_path)
+        .current_dir(temp.path())
+        .output()
+        .unwrap();
+    let message = String::from_utf8_lossy(&unknown.stderr);
+    assert!(
+        message.contains(
+            "aura: unknown target CPU `pentium-9`; this host accepts `generic`, `native`"
+        ),
+        "{message}"
+    );
+}
+
+#[test]
 fn build_debug_keeps_dwarf_and_the_debugger_renderer() {
     let temp = TempDir::new("aura-build-debug");
     let source_path = temp.path().join("app.au");

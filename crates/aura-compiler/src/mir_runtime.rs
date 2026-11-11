@@ -7371,12 +7371,27 @@ impl MirRuntime {
                 }
                 ArrayValue::from_values(&output_type, shape, mapped).map(Value::Array)
             }
-            "sum" | "min" | "max" | "mean" => {
+            "dot" | "matmul" => {
+                let bound = bind_mir_arg_refs(&["other"], args)?;
+                let other = borrow_mir_operand(&bound[0].value, env)?;
+                let array = array_place_ref(env, object_place)?;
+                let Value::Array(other) = other.as_value() else {
+                    unreachable!("semantic analysis types an Array product operand as an Array")
+                };
+                if field == "dot" {
+                    array.dot(other)
+                } else {
+                    array.matmul(other).map(Value::Array)
+                }
+            }
+            "sum" | "min" | "max" | "mean" | "fast_sum" | "fast_mean" => {
                 debug_assert!(args.is_empty());
                 let reduction = match field {
                     "sum" => ArrayReduction::Sum,
                     "min" => ArrayReduction::Min,
                     "max" => ArrayReduction::Max,
+                    "fast_sum" => ArrayReduction::FastSum,
+                    "fast_mean" => ArrayReduction::FastMean,
                     _ => {
                         debug_assert_eq!(field, "mean");
                         ArrayReduction::Mean

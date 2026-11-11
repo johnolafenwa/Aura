@@ -1037,6 +1037,10 @@ def main():
     minimum = values.min()
     maximum = values.max()
     average = values.mean()
+    print(values.fast_sum())
+    print(values.fast_mean())
+    print(values.dot(copied))
+    print(values.matmul(copied))
     print(rows)
     print(added)
     print(scaled)
@@ -1066,6 +1070,8 @@ def main():
         "aura_direct_array_binary",
         "aura_direct_array_map",
         "aura_direct_array_reduce",
+        "aura_direct_array_dot",
+        "aura_direct_array_matmul",
     ] {
         assert!(
             referenced.iter().any(|symbol| symbol.contains(required)),

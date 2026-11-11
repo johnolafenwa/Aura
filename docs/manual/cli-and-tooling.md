@@ -28,6 +28,7 @@ aura check app.au
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -162,6 +163,42 @@ A debug build runs slower than a normal one. A union, a callable, and a
 class with a field that is itself more than one word are not shown yet. A
 value whose last use has passed has already been released, so it reads
 `<unset>` or null.
+
+### Target CPU
+
+`aura build` and `aura run` compile for a generic CPU of the host
+architecture, so a built binary runs on every machine of that architecture.
+`--target-cpu <name>` picks another instruction set for the program's
+compiled code:
+
+| Name | Instruction set |
+| --- | --- |
+| `generic` | The baseline of the architecture. This is the default. |
+| `native` | Everything the CPU of the build machine has. |
+| `x86-64-v2` | x86-64 only: SSE4.2 and POPCNT. |
+| `x86-64-v3` | x86-64 only: AVX2, FMA, and BMI2. |
+| `x86-64-v4` | x86-64 only: AVX-512. |
+
+```bash
+aura build --target-cpu native -o app app.au
+```
+
+- `AURA_TARGET_CPU` names the CPU when the option is absent. The option
+  wins.
+- A name the host does not accept ends the command with exit status 2 and
+  lists the accepted names.
+- A binary built for a CPU runs only on a CPU with those instructions. On
+  an older CPU it stops with an illegal-instruction signal. A `native`
+  build is for the machine that builds it.
+- The choice does not change a result. Aura never fuses a multiply and an
+  add, so a `native` build prints the same floats as a `generic` one.
+- The name is part of the native cache key. For `native` the key holds the
+  CPU and feature list that LLVM detects.
+- The MIR backend ignores the option.
+
+The Array kernels in the runtime do not need the option. They pick the widest
+copy the CPU has when the program starts. See
+[Kernel Width](/manual/numeric-arrays#kernel-width).
 
 ### Keeping Native Symbols For Profiling
 

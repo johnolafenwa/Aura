@@ -1726,6 +1726,12 @@ pub enum ArrayOp {
     Min,
     Max,
     Mean,
+    /// `sum` and `mean` with a float Array's elements added in the fixed
+    /// vectorized order of ADR-0086.
+    FastSum,
+    FastMean,
+    Dot,
+    Matmul,
     WrappingAdd,
     WrappingSub,
     WrappingMul,
@@ -1753,6 +1759,10 @@ impl ArrayOp {
         ArrayOp::Min,
         ArrayOp::Max,
         ArrayOp::Mean,
+        ArrayOp::FastSum,
+        ArrayOp::FastMean,
+        ArrayOp::Dot,
+        ArrayOp::Matmul,
         ArrayOp::WrappingAdd,
         ArrayOp::WrappingSub,
         ArrayOp::WrappingMul,
@@ -1778,6 +1788,10 @@ impl ArrayOp {
             ArrayOp::Min => M::ArrayMin,
             ArrayOp::Max => M::ArrayMax,
             ArrayOp::Mean => M::ArrayMean,
+            ArrayOp::FastSum => M::ArrayFastSum,
+            ArrayOp::FastMean => M::ArrayFastMean,
+            ArrayOp::Dot => M::ArrayDot,
+            ArrayOp::Matmul => M::ArrayMatmul,
             ArrayOp::WrappingAdd => M::ArrayWrappingAdd,
             ArrayOp::WrappingSub => M::ArrayWrappingSub,
             ArrayOp::WrappingMul => M::ArrayWrappingMul,
@@ -1802,6 +1816,10 @@ impl ArrayOp {
             M::ArrayMin => ArrayOp::Min,
             M::ArrayMax => ArrayOp::Max,
             M::ArrayMean => ArrayOp::Mean,
+            M::ArrayFastSum => ArrayOp::FastSum,
+            M::ArrayFastMean => ArrayOp::FastMean,
+            M::ArrayDot => ArrayOp::Dot,
+            M::ArrayMatmul => ArrayOp::Matmul,
             M::ArrayWrappingAdd => ArrayOp::WrappingAdd,
             M::ArrayWrappingSub => ArrayOp::WrappingSub,
             M::ArrayWrappingMul => ArrayOp::WrappingMul,
@@ -1841,7 +1859,8 @@ impl ArrayOp {
 
     /// The helper call. A public member passes a zero source line and
     /// column, and `map` passes its result dtype code after its callback.
-    /// A reduction passes its kind word, 0 sum, 1 min, 2 max, 3 mean. An
+    /// A reduction passes its kind word, 0 sum, 1 min, 2 max, 3 mean, 4
+    /// fast_sum, 5 fast_mean. An
     /// arithmetic method passes a zero scalar-left word, its operation word,
     /// 0 add, 1 sub, 2 mul, and its mode word, 1 wrapping, 2 saturating.
     const fn runtime_call(self) -> RuntimeCall {
@@ -1862,6 +1881,10 @@ impl ArrayOp {
             ArrayOp::Min => spanned(RuntimeFn::ArrayReduce, &[1]),
             ArrayOp::Max => spanned(RuntimeFn::ArrayReduce, &[2]),
             ArrayOp::Mean => spanned(RuntimeFn::ArrayReduce, &[3]),
+            ArrayOp::FastSum => spanned(RuntimeFn::ArrayReduce, &[4]),
+            ArrayOp::FastMean => spanned(RuntimeFn::ArrayReduce, &[5]),
+            ArrayOp::Dot => spanned(RuntimeFn::ArrayDot, &[]),
+            ArrayOp::Matmul => spanned(RuntimeFn::ArrayMatmul, &[]),
             ArrayOp::WrappingAdd => spanned(RuntimeFn::ArrayBinary, &[0, 0, 1]),
             ArrayOp::WrappingSub => spanned(RuntimeFn::ArrayBinary, &[0, 1, 1]),
             ArrayOp::WrappingMul => spanned(RuntimeFn::ArrayBinary, &[0, 2, 1]),
@@ -1883,6 +1906,7 @@ impl ArrayOp {
             ArrayOp::Shape => Type::Named("list".to_string(), vec![Type::named("int64")]),
             ArrayOp::Len => Type::named("int64"),
             ArrayOp::Clone
+            | ArrayOp::Matmul
             | ArrayOp::WrappingAdd
             | ArrayOp::WrappingSub
             | ArrayOp::WrappingMul
@@ -1894,8 +1918,13 @@ impl ArrayOp {
                 optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
             }
             ArrayOp::Fill | ArrayOp::SetIndex => Type::Unit,
-            ArrayOp::Sum | ArrayOp::Min | ArrayOp::Max | ArrayOp::Index => return dtype,
-            ArrayOp::Mean => Type::named("float64"),
+            ArrayOp::Sum
+            | ArrayOp::Min
+            | ArrayOp::Max
+            | ArrayOp::FastSum
+            | ArrayOp::Dot
+            | ArrayOp::Index => return dtype,
+            ArrayOp::Mean | ArrayOp::FastMean => Type::named("float64"),
             ArrayOp::Map => match args.first() {
                 Some(Some(
                     Type::Function { return_type, .. } | Type::Closure { return_type, .. },

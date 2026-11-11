@@ -4189,6 +4189,7 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 BuiltinMember::ArrayLen => Some(Type::named("int64")),
                 BuiltinMember::ArrayClone
+                | BuiltinMember::ArrayMatmul
                 | BuiltinMember::ArrayWrappingAdd
                 | BuiltinMember::ArrayWrappingSub
                 | BuiltinMember::ArrayWrappingMul
@@ -4205,10 +4206,14 @@ impl<'a> AnalysisBuilder<'a> {
                 }
                 BuiltinMember::ArrayFill => Some(Type::Unit),
                 BuiltinMember::ArrayMap => None,
-                BuiltinMember::ArraySum | BuiltinMember::ArrayMin | BuiltinMember::ArrayMax => {
-                    receiver_type.type_arguments().first().cloned()
+                BuiltinMember::ArraySum
+                | BuiltinMember::ArrayMin
+                | BuiltinMember::ArrayMax
+                | BuiltinMember::ArrayFastSum
+                | BuiltinMember::ArrayDot => receiver_type.type_arguments().first().cloned(),
+                BuiltinMember::ArrayMean | BuiltinMember::ArrayFastMean => {
+                    Some(Type::named("float64"))
                 }
-                BuiltinMember::ArrayMean => Some(Type::named("float64")),
                 BuiltinMember::VecLen => Some(Type::named("int64")),
                 BuiltinMember::VecIsEmpty => Some(Type::named("bool")),
                 BuiltinMember::VecClone => Some(receiver_type.clone()),
@@ -7976,6 +7981,10 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ArrayMin,
         BuiltinMember::ArrayMax,
         BuiltinMember::ArrayMean,
+        BuiltinMember::ArrayFastSum,
+        BuiltinMember::ArrayFastMean,
+        BuiltinMember::ArrayDot,
+        BuiltinMember::ArrayMatmul,
         BuiltinMember::ArrayWrappingAdd,
         BuiltinMember::ArrayWrappingSub,
         BuiltinMember::ArrayWrappingMul,

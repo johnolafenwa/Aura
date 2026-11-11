@@ -1262,6 +1262,16 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             "mutable receiver",
         ),
         (
+            "def main():\n    values = Array[float64].zeros(shape=[1])\n    other = Array[float32].zeros(shape=[1])\n    print(values.dot(other))\n",
+            "AU2002",
+            "`Array.dot` expects `Array[float64]`, found `Array[float32]`",
+        ),
+        (
+            "def main():\n    values = Array[int64].zeros(shape=[1, 1])\n    print(values.matmul(other=2))\n",
+            "AU2002",
+            "`Array.matmul` expects `Array[int64]`",
+        ),
+        (
             "def main():\n    values = Array[int32].zeros(shape=[1])\n    other = Array[int64].zeros(shape=[1])\n    print(values.wrapping_add(rhs=other))\n",
             "AU2002",
             "expects `Array[int32]` or `int32`",

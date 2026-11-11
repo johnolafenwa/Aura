@@ -136,6 +136,10 @@ ownership, diagnostics, and backend behavior.
 | `Array.min` | `min() -> T` | Smallest element. An empty Array is `AU4007`. |
 | `Array.max` | `max() -> T` | Largest element. An empty Array is `AU4007`. |
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
+| `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
+| `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
+| `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 

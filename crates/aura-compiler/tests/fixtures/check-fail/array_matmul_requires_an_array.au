@@ -1,0 +1,3 @@
+def main():
+    left = Array[float64].zeros([2, 2])
+    print(left.matmul(2.0))
