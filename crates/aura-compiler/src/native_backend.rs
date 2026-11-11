@@ -629,6 +629,8 @@ pub(crate) trait FunctionBackend {
     fn fmul(&mut self, left: Val, right: Val) -> Val;
     fn fdiv(&mut self, left: Val, right: Val) -> Val;
     fn fneg(&mut self, value: Val) -> Val;
+    /// The correctly rounded square root, NaN for a negative value.
+    fn fsqrt(&mut self, value: Val) -> Val;
     fn fcmp(&mut self, cond: FloatCC, left: Val, right: Val) -> Val;
     fn fpromote(&mut self, ty: ScalarType, value: Val) -> Val;
     fn fdemote(&mut self, ty: ScalarType, value: Val) -> Val;

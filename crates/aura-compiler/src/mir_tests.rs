@@ -5134,6 +5134,258 @@ def main():
 }
 
 #[test]
+fn for_over_a_stepped_range_call_counts_and_never_steps_past_its_last_value() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut total: int64 = 0
+    for i in range(2, 50, 4):
+        if i == 10:
+            continue
+        total += i
+    step = 3
+    for j in range(0, 9, step):
+        total += j
+    for k in range(9, 0, -3):
+        total += k
+    for m in range(0, 9, 0 + 3):
+        total += m
+    print(total)
+"#,
+    )
+    .expect("stepped range loops should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    // Only a positive literal step counts. The other three keep the
+    // Range value and its iteration.
+    let range_loops = main
+        .blocks
+        .iter()
+        .filter(|block| matches!(block.terminator, Terminator::ForRange { .. }))
+        .count();
+    assert_eq!(range_loops, 3);
+    let labelled = |part: &str| {
+        main.blocks
+            .iter()
+            .filter(|block| block.label.contains(part))
+            .collect::<Vec<_>>()
+    };
+    // The body binds the counter and does not advance it.
+    let [next] = labelled("_for_range_next_")[..] else {
+        panic!("one counted loop should bind its counter");
+    };
+    let [Instruction::Assign {
+        value: Rvalue::Use(Operand::Place(cursor)),
+        ..
+    }] = next.instructions.as_slice()
+    else {
+        panic!("unexpected counted binding: {:?}", next.instructions);
+    };
+    // The last value an iteration may start from is `stop - step`, taken
+    // only when `stop` is not negative, so it cannot overflow.
+    let [back] = labelled("_for_range_last_back_")[..] else {
+        panic!("one counted loop should compute its last value");
+    };
+    assert!(matches!(
+        back.instructions.as_slice(),
+        [Instruction::Assign {
+            value: Rvalue::Binary {
+                op: BinaryOp::Sub,
+                right: Operand::Int(4),
+                ..
+            },
+            ..
+        }]
+    ));
+    // The advance happens only below that last value.
+    let [step] = labelled("_for_range_step_")[..] else {
+        panic!("one counted loop should advance by its step");
+    };
+    let [Instruction::Assign {
+        target,
+        value:
+            Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(left),
+                right: Operand::Int(4),
+                trap: ArithmeticTrap::Overflow,
+                ..
+            },
+    }] = step.instructions.as_slice()
+    else {
+        panic!("unexpected counted advance: {:?}", step.instructions);
+    };
+    assert_eq!(target, cursor);
+    assert_eq!(left, cursor);
+    let latch = main
+        .blocks
+        .iter()
+        .find(|block| {
+            matches!(
+                &block.terminator,
+                Terminator::Branch { else_label, .. } if *else_label == step.label
+            )
+        })
+        .expect("a block should branch to the advance");
+    assert!(latch.instructions.iter().any(|instruction| matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Binary {
+                op: BinaryOp::LessEq,
+                right: Operand::Place(right),
+                ..
+            },
+            ..
+        } if right == cursor
+    )));
+}
+
+#[test]
+fn a_stepped_range_with_an_invariant_keeps_its_range_value() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut total: int64 = 0
+    for i in range(0, 8, 2):
+        invariant total >= 0
+        total += i
+    print(total)
+"#,
+    )
+    .expect("the loop should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    assert!(main
+        .blocks
+        .iter()
+        .any(|block| matches!(block.terminator, Terminator::ForRange { .. })));
+}
+
+/// The calls of `name` in `function` that name `callee` anywhere.
+fn calls_naming(function: &MirFunction, callee: &str) -> usize {
+    function
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::Call { callee: target, .. },
+                ..
+            } => format!("{target:?}").contains(callee),
+            _ => false,
+        })
+        .count()
+}
+
+#[test]
+fn simd_loads_and_stores_of_a_local_list_lower_as_element_accesses() {
+    let module = crate::lower_source_to_mir(
+        r#"
+from simd import F64x4, F32x8
+import simd
+
+class Buffer:
+    data: list[float64]
+
+def direct(xs: list[float64], out: mut list[float64], i: int64):
+    lanes = F64x4.load(xs, i + 1)
+    (lanes + lanes).store(out, i)
+    simd.F64x2.load(xs, i).store(out, i)
+
+def wide(xs: mut list[float32]):
+    F32x8.load(xs, 0).store(xs, 0)
+
+def kept(buffer: Buffer, xs: list[float64]) -> float64:
+    loader = F64x4.load
+    named = F64x4.load(values=xs, at=0)
+    field = F64x4.load(buffer.data, 0)
+    return loader(xs, 0).sum() + named.sum() + field.sum()
+
+def main():
+    mut out = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    direct(xs, out, 0)
+    mut small: list[float32] = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0]
+    wide(small)
+    print(kept(Buffer(data=[1.0, 2.0, 3.0, 4.0]), xs))
+"#,
+    )
+    .expect("lane loads and stores should lower");
+    let function = |name: &str| {
+        module
+            .functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    // Element reads and writes are the list's scalar index calls.
+    let reads = |function: &MirFunction| calls_naming(function, "(IndexScalar");
+    let writes = |function: &MirFunction| calls_naming(function, "(SetIndexScalar");
+
+    let direct = function("direct");
+    assert_eq!(calls_naming(direct, "load"), 0);
+    assert_eq!(calls_naming(direct, "store"), 0);
+    assert_eq!(reads(direct), 6);
+    assert_eq!(writes(direct), 6);
+
+    let wide = function("wide");
+    assert_eq!(reads(wide), 8);
+    assert_eq!(writes(wide), 8);
+
+    // A function value, named arguments, and a list that is not a local
+    // all call the method.
+    let kept = function("kept");
+    assert_eq!(reads(kept), 0);
+    assert!(calls_naming(kept, "load") >= 2, "{kept:?}");
+}
+
+#[test]
+fn simd_lane_counts_come_from_the_class_name() {
+    use super::simd::simd_lane_count;
+    assert_eq!(simd_lane_count("F64x2"), Some(2));
+    assert_eq!(simd_lane_count("F64x4"), Some(4));
+    assert_eq!(simd_lane_count("F32x8"), Some(8));
+    for name in ["F64", "I64x4", "F64x3", "F64xx", "Lanes", "F16x4"] {
+        assert_eq!(simd_lane_count(name), None, "{name}");
+    }
+}
+
+#[test]
+fn a_user_class_named_like_a_lane_class_keeps_its_own_load() {
+    let module = crate::lower_source_to_mir(
+        r#"
+class F64x4:
+    total: float64
+
+    def load(values: list[float64], at: int64) -> F64x4:
+        return F64x4(total=values[at] * 2.0)
+
+    def store(self, values: mut list[float64], at: int64):
+        values[at] = self.total
+
+def main():
+    mut xs = [1.0, 2.0]
+    F64x4.load(xs, 1).store(xs, 0)
+    print(xs)
+"#,
+    )
+    .expect("the class should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    assert_eq!(calls_naming(main, "load"), 1);
+    assert_eq!(calls_naming(main, "store"), 1);
+}
+
+#[test]
 fn every_ordinary_for_form_uses_a_fresh_scoped_target_slot() {
     let module = crate::lower_source_to_mir(
         r#"

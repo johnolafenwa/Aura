@@ -4597,7 +4597,9 @@ test("compiler bridge exposes control-plane module completions", async () => {
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control", "gzip"];
+    const modules = [
+      "sys", "path", "json", "toml", "log", "metrics", "trace", "control", "gzip", "simd"
+    ];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
       const line = `    ${moduleName}.`;
@@ -4626,6 +4628,10 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const gzipNames = await completionNames("gzip");
     for (const expected of ["compress", "decompress", "Error"]) {
       assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
+    }
+    const simdNames = await completionNames("simd");
+    for (const expected of ["F64x2", "F64x4", "F32x4", "F32x8"]) {
+      assert.ok(simdNames.has(expected), `simd completion should include ${expected}`);
     }
 
     const retryCompletion = (await completions("control")).find(

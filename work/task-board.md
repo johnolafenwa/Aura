@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-11
 
-## SIMD (in progress)
+## SIMD (complete)
 
 - Target: the four pieces John asked for on 2026-11-11: wider Array
   kernels, more vectorized Array kernels, vectorizable user loops, and
@@ -11,8 +11,11 @@ Last updated: 2026-11-11
   `--target-cpu`, `Array.fast_sum`, `fast_mean`, `dot`, and `matmul`
   (ADR-0085, ADR-0086). Counted loops over lists of numbers run with
   one range check at entry and vectorize, at the speed of the same loops
-  in Rust.
-- Remaining: explicit vector types.
+  in Rust. The `simd` module has float lane values `F64x2`,
+  `F64x4`, `F32x4`, and `F32x8` (ADR-0087), and `range` loops with a
+  literal step count on plain integers.
+- Remaining: nothing. Possible follow-ups are integer lanes, lane loads
+  from an `Array`, and counted loops over `Array` elements.
 
 ## Streaming I/O and a deeper standard library (in progress)
 

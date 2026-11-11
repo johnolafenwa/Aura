@@ -1,0 +1,6 @@
+error[AU4003]: list index `6` is out of bounds for length `6`
+ --> crates/aura-compiler/tests/fixtures/run-fail/simd_load_reads_past_its_list.au:7:24
+  |
+7 |         total += F64x4.load(xs, i).sum()
+  |                        ^
+  = note: Aura call chain (innermost first): sum_lanes at 4:1 -> main at 11:1

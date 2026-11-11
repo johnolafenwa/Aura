@@ -469,6 +469,60 @@ them. They live in ordinary memory on the CPU. They have no equality, so `a
 [Manual](/manual/numeric-arrays) lists exactly what's there, along with
 measured performance against NumPy and Rust.
 
+### Several Floats at Once
+
+Sometimes the kernel you need isn't one of the Array methods, and you write
+a loop over a list of floats. Most such loops are fast already. A running
+float sum is the exception: Aura adds in the order you wrote, one element
+at a time, because any other order can change the last digit.
+
+The `simd` module lets you pick a faster order yourself. Its *lane values*
+hold a few floats side by side, and one `+` or `*` works on all of them.
+`F64x4` holds four `float64` lanes:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+```
+
+<span class="caption">Listing 8-23: A dot product four elements at a time</span>
+
+```console
+$ aura run src/main.au
+29.0
+```
+
+`splat` fills every lane with one number, and `load(xs, i)` reads the four
+elements starting at `i`. The first loop steps by four and stops while
+four elements are still left, so `acc` ends up holding four separate
+running sums. `acc.sum()` adds them together, and the second loop picks up
+the one to three elements at the end.
+
+In a native build each lane value lives in the CPU's vector registers, and
+this loop runs about three times as fast as the one-at-a-time version. The
+answer is the same on every machine and in `aura run`, because every
+operation is defined lane by lane. It can differ in the last digit from a
+plain left-to-right sum, since the additions happen in a different order.
+
+There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
+[Manual](/manual/simd) has the full list.
+
 ## Summary
 
 You now know the collections that most Aura programs are built from. Lists

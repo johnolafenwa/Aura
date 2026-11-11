@@ -79,7 +79,7 @@ const COLD_BRANCH_WEIGHTS: (u64, u64) = (1, 2000);
 /// The `branch_weights` of the branch into a loop's versioned copy against
 /// the loop as written. The register allocator keeps the values of the
 /// likelier loop in registers when the two share them.
-const VERSIONED_LOOP_WEIGHTS: (u64, u64) = (16, 1);
+const VERSIONED_LOOP_WEIGHTS: (u64, u64) = (2000, 1);
 
 /// The stack of a thread that writes one unit, as large as a main
 /// thread's.
@@ -600,6 +600,7 @@ impl Op {
 enum UnaryOp {
     Ineg,
     Fneg,
+    Fsqrt,
     Uextend,
     Ireduce,
     Bitcast,
@@ -1618,6 +1619,11 @@ impl FunctionBackend for LlvmFunction<'_> {
     fn fneg(&mut self, value: Val) -> Val {
         let ty = self.ir.ty(value);
         self.unary(UnaryOp::Fneg, ty, value)
+    }
+
+    fn fsqrt(&mut self, value: Val) -> Val {
+        let ty = self.ir.ty(value);
+        self.unary(UnaryOp::Fsqrt, ty, value)
     }
 
     fn fcmp(&mut self, cond: FloatCC, left: Val, right: Val) -> Val {
@@ -3065,6 +3071,18 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             UnaryOp::Ineg => built(self.builder.build_int_neg(value.into_int_value(), ""))?.into(),
             UnaryOp::Fneg => {
                 built(self.builder.build_float_neg(value.into_float_value(), ""))?.into()
+            }
+            UnaryOp::Fsqrt => {
+                let value = value.into_float_value();
+                let intrinsic = Intrinsic::find("llvm.sqrt")
+                    .and_then(|intrinsic| {
+                        intrinsic.get_declaration(self.object.module, &[value.get_type().into()])
+                    })
+                    .ok_or_else(|| "LLVM has no `llvm.sqrt` intrinsic".to_string())?;
+                built(self.builder.build_call(intrinsic, &[value.into()], ""))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "`llvm.sqrt` returned no value".to_string())?
             }
             UnaryOp::Uextend => built(self.builder.build_int_z_extend(
                 value.into_int_value(),

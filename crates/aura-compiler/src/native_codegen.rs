@@ -936,6 +936,12 @@ impl<'a> NativeCodegen<'a> {
             {
                 object.mark_inline(func_id);
             }
+            // A lane method is a few scalar instructions per lane (see
+            // `std/simd.au`). Inlined, LLVM joins the lanes of a whole
+            // expression into vector instructions.
+            if function.module_name == SIMD_MODULE && frameless_leaf(function, &classes) {
+                object.mark_inline(func_id);
+            }
             functions.insert(function.name.clone(), func_id);
             let thunk_signature = thunk_signature();
             let thunk_id = try_or_string_error!(
@@ -14710,14 +14716,10 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         match op {
-            ScalarOp::Sqrt => {
-                let results =
-                    self.runtime_call_results(self.runtime[call.function], &[object.values[0]]);
-                Ok(ValueRef {
-                    values: results,
-                    ty: object.ty,
-                })
-            }
+            ScalarOp::Sqrt => Ok(ValueRef {
+                values: vec![self.builder.fsqrt(object.values[0])],
+                ty: object.ty,
+            }),
             ScalarOp::DurationToMilliseconds | ScalarOp::DurationToSeconds => {
                 let mut words = vec![object.values[0]];
                 self.push_runtime_call_words(call, &mut words);
@@ -16449,6 +16451,9 @@ fn declare_runtime_helper(
 /// safepoint or a debugger mark, so a `--debug` build keeps every frame.
 /// MIR names a method `Class.method`.
 const FAST_ADVANCE_SUFFIX: &str = ".__aura_advance";
+
+/// The builtin module of lane classes (ADR-0087).
+const SIMD_MODULE: &str = "simd";
 /// The largest advance method inlined into each loop that calls it.
 const FAST_ADVANCE_INLINE_BLOCKS: usize = 64;
 
@@ -16500,6 +16505,22 @@ fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -
     if !locals_are_words {
         return false;
     }
+    // A float local or literal: float division and the float forms of
+    // `abs` and `sqrt` are instructions that cannot fail.
+    let float_operand = |operand: &Operand| match operand {
+        Operand::Float(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .map(|local| (&local.name, &local.ty))
+            .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+            .any(|(name, ty)| {
+                name == place
+                    && matches!(ty, Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
+            }),
+        _ => false,
+    };
     function.blocks.iter().all(|block| {
         let instructions = block
             .instructions
@@ -16516,12 +16537,23 @@ fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -
                     Rvalue::Binary {
                         op, left, right, ..
                     } => {
-                        !matches!(
-                            op,
-                            BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow
-                        ) && plain_operand(left)
-                            && plain_operand(right)
+                        let total = match op {
+                            BinaryOp::Div => float_operand(left) && float_operand(right),
+                            BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow => false,
+                            _ => true,
+                        };
+                        total && plain_operand(left) && plain_operand(right)
                     }
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Function(FunctionOp::Abs | FunctionOp::Sqrt),
+                                receiver: None,
+                                ..
+                            },
+                        args,
+                        ..
+                    } => matches!(args.as_slice(), [argument] if float_operand(&argument.value)),
                     Rvalue::Unary { value, .. } => plain_operand(value),
                     Rvalue::UnionTagTest { .. } => true,
                     Rvalue::UnionTakePayload { .. } => true,

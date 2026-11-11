@@ -608,7 +608,8 @@ pub(super) fn range_proof(
     let mut element = None;
     let mut guards = Vec::new();
     let mut covered = HashSet::new();
-    // Sums of a place in range and a constant, by counter.
+    // Sums of a place in range and a constant, by counter, and the
+    // counters whose bound the guards hold below the list's length.
     let mut sums = Vec::new();
     let mut bounded = HashSet::new();
     let guard = |guards: &mut Vec<RangeGuard>, new: RangeGuard| {
@@ -623,9 +624,10 @@ pub(super) fn range_proof(
         let mut known = start.clone();
         for (position, instruction) in block.instructions.iter().enumerate() {
             if let Some((list, index, kind)) = scalar_access(instruction) {
-                if let (true, Some(&(counter, distance))) = (list == region.list, known.get(index))
+                if let (true, Some(&(index_of_counter, distance))) =
+                    (list == region.list, known.get(index))
                 {
-                    let counter = &counters[counter];
+                    let counter = &counters[index_of_counter];
                     // The counter is never below the constants it is set
                     // to, and the guard covers its value at the entry.
                     let above_zero = counter
@@ -638,7 +640,7 @@ pub(super) fn range_proof(
                     if above_zero && within && element.is_none_or(|known| known == kind) {
                         element = Some(kind);
                         covered.insert((block.label.clone(), position));
-                        bounded.insert(counter.name.as_str());
+                        bounded.insert(index_of_counter);
                         guard(
                             &mut guards,
                             RangeGuard::AtLeast {
@@ -697,7 +699,7 @@ pub(super) fn range_proof(
     }
     let exact = sums
         .into_iter()
-        .filter(|(counter, _, _)| bounded.contains(counters[*counter].name.as_str()))
+        .filter(|(counter, _, _)| bounded.contains(counter))
         .map(|(_, label, position)| (label, position))
         .collect();
     Some(RangeProof {

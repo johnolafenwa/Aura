@@ -1672,8 +1672,8 @@ The loop qualifies when:
 - **The list** is a `list` of one fixed-width number type or `bool`, and
   the loop does not resize it.
 - **The counter** is an `int64` that only moves up by a constant: a
-  `for i in range(...)` without a step, or a `while i < n:` loop with
-  `i += 2`.
+  `for i in range(...)`, with or without a positive literal step such as
+  `range(0, n, 4)`, or a `while i < n:` loop with `i += 2`.
 - **The bound** is `len(xs)`, a constant, or a variable the loop does not
   assign.
 - **Each index** is the counter plus or minus a constant, such as
@@ -1682,7 +1682,8 @@ The loop qualifies when:
 These loops stay scalar:
 
 - **A float sum** such as `total += xs[i]`. Aura adds in source order.
-  Use `Array.fast_sum()` or `Array.dot()` for a reordered sum.
+  Use `Array.fast_sum()` or `Array.dot()` for a reordered sum, or keep the
+  sum in a lane value from the [SIMD module](/manual/simd).
 - **Checked integer arithmetic** on the elements. Each operation can
   report overflow.
 - **A loop in a program that starts tasks.** Each iteration checks
@@ -1692,6 +1693,11 @@ On `benchmarks/simd`, five such loops over `float64` lists run at the
 speed of the same loops in Rust, and 40 to 400 times faster than in
 Python. `aura build --target-cpu native` lets the loops use the host's
 widest registers.
+
+A `for` over `range(start, stop, step)` whose step is a positive integer
+literal counts on plain integers, as a range without a step does. Any
+other step, such as a variable or a negative number, makes a `Range` value
+and asks it for each element, which is far slower.
 
 ## Performance Direction
 

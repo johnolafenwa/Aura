@@ -356,15 +356,55 @@ for i in range(len(xs)):
 - **Addresses.** An element address is `element_address(base, offset)`,
   which LLVM sees as a `getelementptr` from one pointer. A sum of two
   words converted to a pointer hides the stride from the loop vectorizer.
-- **Branch weight.** The branch into the copy carries a 16 to 1 weight.
+- **Branch weight.** The branch into the copy carries a 2000 to 1 weight.
   The register allocator then keeps the copy's values in registers when
   both loops feed one result.
 
 Limits: a float reduction such as `total += xs[i]` keeps its order, so
-it stays scalar. Checked integer arithmetic on the elements stays scalar.
+it stays scalar unless it is kept in a `simd` lane value. Checked integer arithmetic on the elements stays scalar.
 A function in a program that starts tasks polls for a yield on every
 loop iteration, which also keeps the loop scalar. `Array` element loops
 are not covered.
+
+A `for` over `range(start, stop, step)` with a positive literal step
+lowers to the same counted shape. The header tests `cursor < stop`. The
+block after the body tests `last <= cursor`, where `last` is
+`stop - step` for a `stop` that is not negative, and adds the step only
+when the test fails. The addition therefore cannot overflow, the loop is
+exact at the limits of `int64`, and the range proof drops its overflow
+check like any other advance.
+
+### SIMD Lane Values
+
+The `simd` module (ADR-0087) is Aura source in `std/simd.au`: Copy
+classes such as `F64x4` with one float field for each lane, and methods
+that compute lane by lane. The interpreter runs them as written. Native
+code reaches vector instructions in three steps.
+
+```aura fragment
+acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+```
+
+- **Loads and stores become element accesses.** `mir_simd.rs` lowers a
+  direct positional call of `load` or `store` on a local list as the
+  constructor over `xs[i]`, `xs[i + 1]`, and so on, or as the element
+  writes, with the index and the stored value in temporaries. The range
+  proof above then covers every lane with one entry guard, and a trap
+  reports the call. Other calls run the method.
+- **Lane methods are inlined.** `mark_inline` marks each `simd` function
+  that is a frameless leaf, so LLVM copies it into its caller across
+  codegen units. Float division, `abs`, and `sqrt` no longer need a
+  frame, and `sqrt` is `llvm.sqrt` in place of a runtime call.
+- **SLP joins the lanes.** After inlining, a lane value is a handful of
+  unboxed floats. LLVM's SLP vectorizer turns four matching float
+  operations into one vector operation, at the width `--target-cpu`
+  allows. A `float32` lane is widened to `float64` in generated code and
+  narrowed after each operation, which LLVM folds to `float32` vector
+  arithmetic where the result is the same.
+
+A trap inside a lane method that was called, such as a division by a
+zero lane, carries `<std>/simd.au` as its file, so the report does not
+point at an unrelated line of the program.
 
 ### Integer Widths, Casts, And Constants
 

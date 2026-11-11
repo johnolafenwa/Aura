@@ -15820,11 +15820,12 @@ def main():
     // Unoptimized, so constant arguments do not fold the calls away.
     let object = emit_unoptimized_object(&mir).expect("scalar math source should emit directly");
     let referenced = object_referenced_symbols(&object);
-    for symbol in [
-        "aura_direct_sqrt_f64",
-        "aura_direct_round_f64",
-        "aura_direct_fail_narrow_overflow",
-    ] {
+    // A square root is one instruction, with no call.
+    assert!(
+        !referenced.iter().any(|name| name.contains("sqrt")),
+        "a square root should not be a call, referenced: {referenced:?}"
+    );
+    for symbol in ["aura_direct_round_f64", "aura_direct_fail_narrow_overflow"] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
             "scalar math should call `{symbol}`, referenced: {referenced:?}"

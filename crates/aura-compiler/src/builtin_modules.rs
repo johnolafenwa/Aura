@@ -2492,6 +2492,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         // The prelude's traits and implementations are Aura source in
         // `std/prelude.au`.
         "prelude" => Some(function_only_namespace("prelude", Vec::new())),
+        // The lane classes are Aura source in `std/simd.au`.
+        "simd" => Some(function_only_namespace("simd", Vec::new())),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
@@ -2627,6 +2629,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "json"
             | "iter"
             | "prelude"
+            | "simd"
             | "toml"
             | "log"
             | "metrics"
@@ -2644,7 +2647,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
-        "json", "iter", "prelude", "toml", "log", "metrics", "trace",
+        "json", "iter", "prelude", "simd", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

@@ -7,6 +7,17 @@ in this file.
 
 ## Unreleased
 
+- New `simd` module with lane values that hold several floats and work on
+  all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
+  `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,
+  `abs`, `sqrt`, `mul_add`, `sum`, and `to_list`. Native code keeps the
+  lanes in vector registers. Every result is defined lane by lane, so it
+  is the same on every CPU and under `aura run`. A dot product with
+  `F64x4` runs about three times as fast as the scalar loop.
+- `for i in range(start, stop, step)` with a positive integer literal
+  step now counts on plain integers in both backends and qualifies for
+  the counted loop check below. It was about a thousand times slower.
+- A float `sqrt` is one instruction in native code instead of a call.
 - Native code runs a counted loop over a list of numbers, such as
   `for i in range(len(xs)): ys[i] = a * xs[i] + ys[i]`, with one range
   check where the loop starts instead of one per element, and LLVM

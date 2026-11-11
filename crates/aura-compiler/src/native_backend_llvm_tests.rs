@@ -1264,7 +1264,10 @@ fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
     assert!(ir.contains(", 7\n"), "{ir}");
     assert_eq!(ir.matches("icmp slt i64").count(), 2, "{ir}");
     // The entry favors the copy, so its values keep the registers.
-    assert!(ir.contains("!{!\"branch_weights\", i32 16, i32 1}"), "{ir}");
+    assert!(
+        ir.contains("!{!\"branch_weights\", i32 2000, i32 1}"),
+        "{ir}"
+    );
 }
 
 #[test]
@@ -1291,6 +1294,23 @@ fn element_addresses_are_offsets_from_one_pointer() {
     // passes follow, and the word is the plain sum.
     assert!(ir.contains("getelementptr i8, ptr"), "{ir}");
     assert_eq!(ir.matches("inttoptr").count(), 1, "{ir}");
+}
+
+#[test]
+fn square_roots_are_the_llvm_intrinsic() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::F64], &[types::F64]);
+    define(&mut module, "root", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let value = builder.block_params(entry)[0];
+        let root = builder.fsqrt(value);
+        builder.return_(&[root]);
+    });
+    let ir = ir(&module);
+    assert!(ir.contains("call double @llvm.sqrt.f64(double"), "{ir}");
 }
 
 #[test]

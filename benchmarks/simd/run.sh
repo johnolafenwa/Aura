@@ -1,7 +1,8 @@
 #!/usr/bin/env bash
 # Runs the Aura, Rust, NumPy, and plain Python sides of the Array kernel
 # benchmark, then the Aura, Rust, and Python sides of the list loop
-# benchmark. Each prints `<name> <size> <milliseconds> <checksum>`.
+# benchmark, and the same three sides of the lane value benchmark. Each
+# prints `<name> <size> <milliseconds> <checksum>`.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -42,3 +43,18 @@ rustc -C opt-level=3 -C target-cpu=native -o "$OUT/loops_rust_native" "$HERE/loo
 "$OUT/loops_rust_native"
 echo "== loops: python, 1/100 of the repetitions"
 python3 "$HERE/loops.py"
+
+"$AURA" build --backend direct -o "$OUT/lanes_aura" "$HERE/lanes.au" >/dev/null
+"$AURA" build --backend direct --target-cpu native -o "$OUT/lanes_aura_native" "$HERE/lanes.au" >/dev/null
+echo "== lanes: aura"
+"$OUT/lanes_aura"
+echo "== lanes: aura, target-cpu=native"
+"$OUT/lanes_aura_native"
+echo "== lanes: rust"
+rustc -C opt-level=3 -o "$OUT/lanes_rust" "$HERE/lanes.rs"
+"$OUT/lanes_rust"
+echo "== lanes: rust, target-cpu=native"
+rustc -C opt-level=3 -C target-cpu=native -o "$OUT/lanes_rust_native" "$HERE/lanes.rs"
+"$OUT/lanes_rust_native"
+echo "== lanes: python, 1/100 of the repetitions"
+python3 "$HERE/lanes.py"

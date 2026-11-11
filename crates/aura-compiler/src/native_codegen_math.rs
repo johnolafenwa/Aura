@@ -12,7 +12,8 @@
 //! - `abs` negates a negative integer and clears a float's sign bit. The
 //!   absolute value of a signed kind's smallest value does not fit and
 //!   stops the program, as unboxing the helper's result did.
-//! - `sqrt` of a float and `round` of a float call word helpers.
+//! - `sqrt` of a float is the instruction, and `round` of a float calls a
+//!   word helper.
 //!
 //! The result has the first argument's layout, as the helpers' results do:
 //! a literal first argument is an `int64` or a `float64`, and `round` of a
@@ -108,8 +109,8 @@ impl FunctionCompiler<'_> {
             }
             (FunctionOp::Sqrt, [MathOperand::Local(kind)]) if kind.is_float() => {
                 let value = self.load_math_operand(&args[0].value, *kind)?;
-                let root = self.runtime_call_results(self.runtime[RuntimeFn::SqrtF64], &[value]);
-                self.math_result(root[0], *kind).map(Some)
+                let root = self.builder.fsqrt(value);
+                self.math_result(root, *kind).map(Some)
             }
             (FunctionOp::Round, [MathOperand::Local(kind)]) if kind.is_float() => {
                 let value = self.load_math_operand(&args[0].value, *kind)?;

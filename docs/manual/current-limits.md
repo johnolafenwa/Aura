@@ -118,6 +118,14 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
 
+### SIMD Lane Values
+
+- The `simd` module has float lanes only: `F64x2`, `F64x4`, `F32x4`, and `F32x8`. There are no integer lanes, lane comparisons, masks, shuffles, or fused multiply-add.
+- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
+- A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
+- The interpreter backend computes each lane as a separate float.
+
 ### Foreign Functions
 
 - The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.

@@ -8860,6 +8860,62 @@ fn counted_loops_over_scalar_lists_build_to_vector_instructions() {
 }
 
 #[test]
+fn simd_lane_values_build_to_vector_instructions() {
+    let temp = TempDir::new("aura-simd-lanes");
+    let source_path = repo_root().join("examples/numbers/simd_lanes.au");
+    let expected =
+        "29.0\n[0.0, 0.25, 1.0, 0.75, 0.0, 1.0, 0.0, 1.0, 1.0, 0.0]\n[2.0, 3.0, 4.0, 5.0]\n32.0\n";
+    let interpreted = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run");
+    assert!(interpreted.status.success());
+    assert_eq!(String::from_utf8_lossy(&interpreted.stdout), expected);
+
+    let output_path = temp.path().join("app");
+    let prefix = temp.path().join("ir");
+    let build = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .env("AURA_DUMP_LLVM_IR", &prefix)
+        .output()
+        .expect("failed to run aura build");
+    assert!(
+        build.status.success(),
+        "the build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = generated_binary(&output_path).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+    // The lane methods are copied into the loops, where the lanes of a
+    // value become one vector: the loops multiply and compare whole
+    // vectors and call no lane method.
+    let units = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ll"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>();
+    // How many lanes one vector holds follows the target's registers.
+    let lines = units.iter().flat_map(|ir| ir.lines()).collect::<Vec<_>>();
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("fmul <") && line.contains(" x double>")),
+        "no unit multiplies float64 lanes as one vector"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("store <") && line.contains(" x float>")),
+        "no unit stores float32 lanes as one vector"
+    );
+}
+
+#[test]
 fn build_and_run_accept_a_target_cpu() {
     let temp = TempDir::new("aura-target-cpu");
     let source_path = temp.path().join("app.au");

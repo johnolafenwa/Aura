@@ -224,6 +224,24 @@ Every input above uses shared access and stays usable after the call. An
 cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
 
+## SIMD
+
+[SIMD Module](/manual/simd) covers the lane classes, exact results, and how
+loads and stores work in a counted loop. `V` is one of `simd.F64x2`,
+`simd.F64x4`, `simd.F32x4`, and `simd.F32x8`, and `E` is its element type.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | Reads one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V.store` | `store(self, values: mut list[E], at: int64)` | Writes one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V` operators | `+`, `-`, `*`, `/`, unary `-` | The operation in each lane. Division by a zero lane traps with `AU4004`. |
+| `V.min`, `V.max` | `min(self, other: V) -> V` | The lesser or greater lane, `other` when the comparison is false. |
+| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. |
+| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. |
+| `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
+| `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
+
 ## Gzip
 
 [Gzip Module](/manual/gzip) covers levels, multi-member streams, the output

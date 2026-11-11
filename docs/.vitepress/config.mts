@@ -95,6 +95,7 @@ export default defineConfig({
             { text: 'Execution Model', link: '/manual/execution-model' },
             { text: 'Collections', link: '/manual/collections' },
             { text: 'Numeric Arrays', link: '/manual/numeric-arrays' },
+            { text: 'SIMD Module', link: '/manual/simd' },
             { text: 'Math Module', link: '/manual/math' },
             { text: 'Bytes, Codecs, And SHA-256', link: '/manual/bytes' },
             { text: 'Gzip Module', link: '/manual/gzip' },

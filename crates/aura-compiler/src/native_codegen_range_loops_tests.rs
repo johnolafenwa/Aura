@@ -83,6 +83,22 @@ def reset_from_local(xs: list[int64], n: int64, back: int64) -> int64:
             i = back
     return total
 
+def two_tests(xs: list[int64], n: int64, m: int64) -> int64:
+    mut total: int64 = 0
+    mut i: int64 = 0
+    while i < n:
+        total += xs[i]
+        i += 1000
+        if i < m:
+            i += 5
+    return total
+
+def stepped(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for i in range(0, len(xs) - 1, 2):
+        total += xs[i] + xs[i + 1]
+    return total
+
 def main():
     mut ys = [1.0, 2.0, 3.0]
     xs = [0.5, 0.25, 0.125]
@@ -101,6 +117,8 @@ def main():
     print(moving_bound(ints, 9))
     print(unrelated(ints, 3, 2))
     print(reset_from_local(ints, 9, 9))
+    print(two_tests(ints, 9, 2000))
+    print(stepped(ints))
 "#;
 
 fn function(name: &str) -> MirFunction {
@@ -296,4 +314,24 @@ fn sums_of_a_place_in_range_and_a_constant_are_exact() {
             }
         ));
     }
+}
+
+#[test]
+fn a_sum_is_exact_only_below_a_bound_the_guards_hold() {
+    // `i += 1000` follows the test against `n`, which the access at `i`
+    // holds below the length. `i += 5` follows a test against `m`, which
+    // nothing bounds, so it keeps its overflow check.
+    let xs = proof("two_tests", "xs");
+    assert_eq!(xs.covered.len(), 1, "{xs:?}");
+    assert_eq!(xs.exact.len(), 1, "{xs:?}");
+}
+
+#[test]
+fn a_stepped_range_loop_covers_its_accesses_and_its_advance() {
+    let xs = proof("stepped", "xs");
+    assert_eq!(xs.covered.len(), 2, "{xs:?}");
+    assert_eq!(at_least(&xs.guards), vec![-1, 0]);
+    assert_eq!(within(&xs.guards), vec![0, 1]);
+    // The index sum `i + 1` and the advance by 2 where the iteration ends.
+    assert_eq!(xs.exact.len(), 2, "{xs:?}");
 }
