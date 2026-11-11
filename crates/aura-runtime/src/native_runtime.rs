@@ -4368,6 +4368,20 @@ fn expect_i32_value(value: &Value, label: &str) -> i32 {
     }
 }
 
+fn expect_i64_value(value: &Value, label: &str) -> i64 {
+    match value {
+        Value::Int(number) => number
+            .as_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .unwrap_or_else(|| runtime_error(format!("`{}` expects `int64`", label))),
+        other => runtime_error(format!(
+            "`{}` expects `int64`, found `{}`",
+            label,
+            value_type_name(other)
+        )),
+    }
+}
+
 fn expect_headers_map(value: &Value, label: &str) -> Vec<(String, String)> {
     match value {
         Value::Map(map)
@@ -14889,6 +14903,10 @@ host_builtin_entries! {
     owned "log::warn" => aura_host_log_warn(host_builtins::host_log_warn);
     owned "log::error" => aura_host_log_error(host_builtins::host_log_error);
     owned "trace::event" => aura_host_trace_event(host_builtins::host_trace_event);
+    owned "bytes::hmac_sha256" => aura_host_bytes_hmac_sha256(host_builtins::host_bytes_hmac_sha256);
+    owned "bytes::constant_time_eq" => aura_host_bytes_constant_time_eq(host_builtins::host_bytes_constant_time_eq);
+    owned "gzip::compress" => aura_host_gzip_compress(host_builtins::host_gzip_compress);
+    owned "gzip::decompress" => aura_host_gzip_decompress(host_builtins::host_gzip_decompress);
     borrowed "json::parse" => aura_host_json_parse(direct_json_parse);
     borrowed "json::dumps" => aura_host_json_dumps(direct_json_dumps);
     borrowed "json::is_null" => aura_host_json_is_null(direct_json_is_null);
@@ -17018,6 +17036,67 @@ pub extern "C-unwind" fn aura_direct_file_read_bytes(file: *mut OpaqueValue) -> 
             "expected `fs.File`, found `{}`",
             value_type_name(other)
         )),
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_read_line(file: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // The handle is cloned out of its box: a read that goes to the
+        // blocking pool parks the task, and no box access may span that.
+        let line = match unsafe { value_ref(file) } {
+            Value::File(file) => file.read_line(),
+            other => runtime_error(format!(
+                "expected `fs.File`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match line {
+            Ok(line) => boxed_value(result_ok(optional_str_value(line))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_read_lines(
+    file: *mut OpaqueValue,
+    max_lines: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let max_lines = expect_i64_value(&unsafe { value_ref(max_lines) }, "read_lines(...)");
+        let lines = match unsafe { value_ref(file) } {
+            Value::File(file) => file.read_lines(max_lines),
+            other => runtime_error(format!(
+                "expected `fs.File`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match lines {
+            Ok(lines) => boxed_value(result_ok(lines)),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_read_chunk(
+    file: *mut OpaqueValue,
+    max_bytes: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let max_bytes = expect_i64_value(&unsafe { value_ref(max_bytes) }, "read_chunk(...)");
+        let chunk = match unsafe { value_ref(file) } {
+            Value::File(file) => file.read_chunk(max_bytes),
+            other => runtime_error(format!(
+                "expected `fs.File`, found `{}`",
+                value_type_name(other)
+            )),
+        };
+        match chunk {
+            Ok(chunk) => boxed_value(result_ok(optional_bytes_value(chunk.map(bytes_vec_value)))),
+            Err(error) => boxed_value(result_err(io_error(error))),
+        }
     })
 }
 

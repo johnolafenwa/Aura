@@ -1,0 +1,7 @@
+import fs
+import io
+
+def copy() -> Result[None, io.Error]:
+    file = try fs.open("data.txt")
+    line = try file.read_line(80)
+    return Result.Ok(None)

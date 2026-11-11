@@ -7859,6 +7859,24 @@ fn analysis_builtin_member_types_cover_io_network_and_process_surfaces() {
         "read_bytes",
         result(vec_of(uint8.clone()), io_error.clone()),
     );
+    assert_member_type(
+        "fs.File",
+        "read_line",
+        result(crate::sema::optional_type(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "fs.File",
+        "read_lines",
+        result(vec_of(string.clone()), io_error.clone()),
+    );
+    assert_member_type(
+        "fs.File",
+        "read_chunk",
+        result(
+            crate::sema::optional_type(vec_of(uint8.clone())),
+            io_error.clone(),
+        ),
+    );
     for field in ["write_all", "write_bytes", "flush"] {
         assert_member_type("fs.File", field, result(Type::Unit, io_error.clone()));
     }

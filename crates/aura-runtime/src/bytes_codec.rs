@@ -217,6 +217,36 @@ pub fn sha256_string(text: &str) -> Result<Vec<u8>, BytesCodecError> {
     sha256_bytes(text.as_bytes())
 }
 
+/// The block size of SHA-256 in bytes, which HMAC pads its key to.
+const SHA256_BLOCK_BYTES: usize = 64;
+
+/// HMAC-SHA256 of `message` under `key` (RFC 2104), as 32 raw bytes.
+pub fn hmac_sha256(key: &[u8], message: &[u8]) -> Result<Vec<u8>, BytesCodecError> {
+    let mut block = [0u8; SHA256_BLOCK_BYTES];
+    if key.len() > SHA256_BLOCK_BYTES {
+        block[..32].copy_from_slice(&Sha256::digest(key));
+    } else {
+        block[..key.len()].copy_from_slice(key);
+    }
+    let mut inner = Sha256::new();
+    inner.update(block.map(|byte| byte ^ 0x36));
+    inner.update(message);
+    let mut outer = Sha256::new();
+    outer.update(block.map(|byte| byte ^ 0x5c));
+    outer.update(inner.finalize());
+    let digest = outer.finalize();
+    let mut output = try_byte_buffer(digest.len())?;
+    output.copy_from_slice(&digest);
+    Ok(output)
+}
+
+/// Whether `left` and `right` hold the same bytes, in time that depends on
+/// their lengths only and not on where they first differ.
+pub fn constant_time_eq(left: &[u8], right: &[u8]) -> bool {
+    use subtle::ConstantTimeEq as _;
+    left.ct_eq(right).into()
+}
+
 fn checked_codec_output_len(output_len: Option<usize>) -> Result<usize, BytesResourceError> {
     match output_len {
         Some(output_len) if output_len <= MAX_CODEC_OUTPUT_LEN => Ok(output_len),

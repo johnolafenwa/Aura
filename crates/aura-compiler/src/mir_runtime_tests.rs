@@ -14,13 +14,13 @@ use crate::mir::{
 };
 use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
-    lookup_found, lookup_missing, optional_absent, optional_present, optional_str_value,
-    poll_ready, poll_unavailable, ArrayStorage, ArrayValue, ChannelValue, EnumVariantValue,
-    FfiHandleValue, FileValue, HttpListenerValue, HttpResponseValue, InstanceValue, MapValue,
-    ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue,
-    RangeValue, SetValue, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue, WebSocketListenerValue,
-    WebSocketValue,
+    lookup_found, lookup_missing, optional_absent, optional_bytes_value, optional_present,
+    optional_str_value, poll_ready, poll_unavailable, ArrayStorage, ArrayValue, ChannelValue,
+    EnumVariantValue, FfiHandleValue, FileValue, HttpListenerValue, HttpResponseValue,
+    InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig,
+    ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue, TcpStreamValue,
+    TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, Value,
+    VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{optional_type, Type};
 use rcgen::generate_simple_self_signed;
@@ -7585,6 +7585,73 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
         bytes_vec_value(b"hello".to_vec())
     );
     read_file.close();
+
+    std::fs::write(&read_path, "one\ntwo").expect("read fixture should be rewritten");
+    let read_file = FileValue::open(read_path.to_str().expect("temp path should be utf-8"))
+        .expect("read fixture should reopen");
+    let first_line = runtime
+        .evaluate_file_method(read_file.clone(), "read_line", &[], &mut env)
+        .expect("file read_line should succeed");
+    assert_eq!(
+        result_ok_payload(first_line),
+        optional_str_value(Some("one".to_string()))
+    );
+    let chunk = runtime
+        .evaluate_file_method(
+            read_file.clone(),
+            "read_chunk",
+            &[mir_arg(Some("max_bytes"), Operand::Int(2))],
+            &mut env,
+        )
+        .expect("file read_chunk should succeed");
+    assert_eq!(
+        result_ok_payload(chunk),
+        optional_bytes_value(Some(bytes_vec_value(b"tw".to_vec())))
+    );
+    let bad_chunk_count = runtime
+        .evaluate_file_method(
+            read_file.clone(),
+            "read_chunk",
+            &[mir_arg(Some("max_bytes"), Operand::Bool(true))],
+            &mut env,
+        )
+        .expect_err("file read_chunk should reject a non-integer count");
+    assert!(bad_chunk_count.message.contains("read_chunk(...)"));
+    let rest = runtime
+        .evaluate_file_method(
+            read_file.clone(),
+            "read_lines",
+            &[mir_arg(Some("max_lines"), Operand::Int(8))],
+            &mut env,
+        )
+        .expect("file read_lines should succeed");
+    assert_eq!(result_ok_payload(rest).render(), "[o]");
+    let bad_line_count = runtime
+        .evaluate_file_method(
+            read_file.clone(),
+            "read_lines",
+            &[mir_arg(Some("max_lines"), Operand::Bool(true))],
+            &mut env,
+        )
+        .expect_err("file read_lines should reject a non-integer count");
+    assert!(bad_line_count.message.contains("read_lines(...)"));
+    read_file.close();
+    for (method, args) in [
+        ("read_line", Vec::new()),
+        (
+            "read_lines",
+            vec![mir_arg(Some("max_lines"), Operand::Int(2))],
+        ),
+        (
+            "read_chunk",
+            vec![mir_arg(Some("max_bytes"), Operand::Int(2))],
+        ),
+    ] {
+        let closed = runtime
+            .evaluate_file_method(read_file.clone(), method, &args, &mut env)
+            .expect("a read of a closed file is a typed error");
+        enum_payloads(closed, "Result", "Err");
+    }
 
     let write_file = FileValue::create(write_path.to_str().expect("temp path should be utf-8"))
         .expect("write fixture should open");

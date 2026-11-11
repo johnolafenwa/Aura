@@ -12,6 +12,7 @@ crate-type = ["rlib", "staticlib"]
 aura-core = { path = "../aura-core" }
 base64 = "0.22"
 corosensei = "0.3.3"
+flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }
 getrandom = "0.2"
 hashbrown = { version = "0.16", default-features = false }
 httparse = "1"
@@ -23,6 +24,7 @@ rustls = { version = "0.23", default-features = false, features = ["logging", "r
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
 sha2 = "0.10"
+subtle = "2"
 toml = "0.8"
 tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"

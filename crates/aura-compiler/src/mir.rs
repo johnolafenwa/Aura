@@ -29766,7 +29766,7 @@ fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -
     let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
     if matches!(
         qualified_name.as_str(),
-        "io.Error" | "process.Error" | "bytes.Error" | "json.Value" | "json.Error"
+        "io.Error" | "process.Error" | "bytes.Error" | "gzip.Error" | "json.Value" | "json.Error"
     ) {
         return qualified_name;
     }

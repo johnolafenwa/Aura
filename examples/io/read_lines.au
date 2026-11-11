@@ -1,0 +1,77 @@
+import fs
+import io
+
+
+# Count a file's lines and words a batch of lines at a time. The loop holds
+# one batch in memory, however large the file is.
+def count(path: str) -> Result[None, io.Error]:
+    mut lines = 0
+    mut words = 0
+    with file = try fs.open(path):
+        while true:
+            batch = try file.read_lines(2)
+            if batch.is_empty():
+                break
+            for line in batch:
+                lines += 1
+                words += line.split_whitespace().len()
+    print(f"{lines} lines, {words} words")
+    return Result.Ok(None)
+
+
+# Read one header line, then the rest of the file in one piece. Every read
+# continues where the last one stopped.
+def header_and_body(path: str) -> Result[None, io.Error]:
+    with file = try fs.open(path):
+        match try file.read_line():
+            case str as header:
+                print(header)
+            case None:
+                print("empty file")
+        body = try file.read_all()
+        print(body.byte_len())
+    return Result.Ok(None)
+
+
+# Copy a file in fixed-size chunks. Every chunk is full except the last.
+def copy(source: str, target: str) -> Result[int64, io.Error]:
+    mut chunks = 0
+    with reader = try fs.open(source):
+        with writer = try fs.create(target):
+            while true:
+                match try reader.read_chunk(16):
+                    case list[uint8] as chunk:
+                        chunks += 1
+                        try writer.write_bytes(chunk)
+                    case None:
+                        break
+    return Result.Ok(chunks)
+
+
+def run() -> Result[None, io.Error]:
+    source = "/tmp/aura-read-lines-example.txt"
+    target = "/tmp/aura-read-lines-example.copy"
+    try fs.write_string(
+        source.clone(),
+        "the quick brown fox\r\njumps over\n\nthe lazy dog",
+    )
+    try count(source.clone())
+    try header_and_body(source.clone())
+    print(try copy(source.clone(), target.clone()))
+    print(
+        (try fs.read_to_string(target.clone())) == (
+            try fs.read_to_string(source.clone())
+        )
+    )
+    try fs.remove_file(source)
+    try fs.remove_file(target)
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1

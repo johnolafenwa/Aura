@@ -416,6 +416,10 @@ const FILE_WRITE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "text", ReceiverKind::Borrow)];
 const FILE_WRITE_BYTES_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "bytes", ReceiverKind::Borrow)];
+const MAX_BYTES_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "max_bytes", ReceiverKind::Borrow)];
+const MAX_LINES_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "max_lines", ReceiverKind::Borrow)];
 const VALUE_TIMEOUT_PARAMS: [BuiltinParam; 2] = [
     builtin_param!(required, "value", ReceiverKind::Value),
     builtin_param!(optional, "timeout", ReceiverKind::Borrow),
@@ -1297,6 +1301,9 @@ pub enum BuiltinMember {
     TaskGroupCancel,
     FileReadAll,
     FileReadBytes,
+    FileReadLine,
+    FileReadLines,
+    FileReadChunk,
     FileWriteAll,
     FileWriteBytes,
     FileFlush,
@@ -1643,6 +1650,9 @@ impl BuiltinMember {
             ("TaskGroup", "cancel") => Some(Self::TaskGroupCancel),
             ("fs.File", "read_all") => Some(Self::FileReadAll),
             ("fs.File", "read_bytes") => Some(Self::FileReadBytes),
+            ("fs.File", "read_line") => Some(Self::FileReadLine),
+            ("fs.File", "read_lines") => Some(Self::FileReadLines),
+            ("fs.File", "read_chunk") => Some(Self::FileReadChunk),
             ("fs.File", "write_all") => Some(Self::FileWriteAll),
             ("fs.File", "write_bytes") => Some(Self::FileWriteBytes),
             ("fs.File", "flush") => Some(Self::FileFlush),
@@ -1855,6 +1865,9 @@ impl BuiltinMember {
             Self::TaskGroupCancel => "cancel",
             Self::FileReadAll => "read_all",
             Self::FileReadBytes => "read_bytes",
+            Self::FileReadLine => "read_line",
+            Self::FileReadLines => "read_lines",
+            Self::FileReadChunk => "read_chunk",
             Self::FileWriteAll => "write_all",
             Self::FileWriteBytes => "write_bytes",
             Self::FileFlush => "flush",
@@ -2093,6 +2106,9 @@ impl BuiltinMember {
             Self::TaskGroupCancel => "cancel() -> None",
             Self::FileReadAll => "read_all() -> Result[str, io.Error]",
             Self::FileReadBytes => "read_bytes() -> Result[list[uint8], io.Error]",
+            Self::FileReadLine => "read_line() -> Result[str | None, io.Error]",
+            Self::FileReadLines => "read_lines(max_lines: int64) -> Result[list[str], io.Error]",
+            Self::FileReadChunk => "read_chunk(max_bytes: int64) -> Result[list[uint8] | None, io.Error]",
             Self::FileWriteAll => "write_all(text: str) -> Result[None, io.Error]",
             Self::FileWriteBytes => "write_bytes(bytes: list[uint8]) -> Result[None, io.Error]",
             Self::FileFlush => "flush() -> Result[None, io.Error]",
@@ -2445,6 +2461,9 @@ impl BuiltinMember {
             }
             Self::FileReadAll => "Reads the remaining file contents into a `str`.",
             Self::FileReadBytes => "Reads the remaining file contents into `list[uint8]`.",
+            Self::FileReadLine => "Reads the next UTF-8 line of the file without its line ending, returning `None` at the end of the file.",
+            Self::FileReadLines => "Reads the next `max_lines` UTF-8 lines of the file without their line endings, or the fewer that remain. An empty list means the end of the file.",
+            Self::FileReadChunk => "Reads the next `max_bytes` bytes of the file, or the fewer that remain, returning `None` at the end of the file.",
             Self::FileWriteAll => "Writes all of `text` to the file, returning an `io.Error` on failure.",
             Self::FileWriteBytes => "Writes all of `bytes` to the file, returning an `io.Error` on failure.",
             Self::FileFlush => "Flushes pending file writes to the operating system.",
@@ -2606,6 +2625,7 @@ impl BuiltinMember {
             | Self::TaskGroupCancel
             | Self::FileReadAll
             | Self::FileReadBytes
+            | Self::FileReadLine
             | Self::FileFlush
             | Self::FileSync
             | Self::FileClose
@@ -2812,6 +2832,12 @@ impl BuiltinMember {
             }
             Self::FileWriteBytes => {
                 BuiltinCallShape::fixed(&FILE_WRITE_BYTES_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::FileReadChunk => {
+                BuiltinCallShape::fixed(&MAX_BYTES_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::FileReadLines => {
+                BuiltinCallShape::fixed(&MAX_LINES_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::TcpStreamWriteAll
             | Self::UnixStreamWriteAll

@@ -59,6 +59,10 @@
     ],
     "serde_json": [
       "serde_json::"
+    ],
+    "gzip": [
+      "flate2::",
+      "zlib_rs::"
     ]
   },
   "subjects": {
@@ -75,7 +79,8 @@
         "http",
         "httparse",
         "url",
-        "serde_json"
+        "serde_json",
+        "gzip"
       ],
       "known_present": [
         "libffi",
@@ -95,7 +100,8 @@
         "mir_interpreter",
         "toml",
         "http",
-        "httparse"
+        "httparse",
+        "gzip"
       ],
       "present": [
         "serde_json"
@@ -115,7 +121,8 @@
         "analysis",
         "builtin_registry",
         "mir_interpreter",
-        "toml"
+        "toml",
+        "gzip"
       ],
       "present": [
         "serde_json"
@@ -132,7 +139,8 @@
         "mir_interpreter",
         "http",
         "httparse",
-        "serde_json"
+        "serde_json",
+        "gzip"
       ],
       "present": [
         "rustls",
@@ -148,7 +156,8 @@
         "analysis",
         "builtin_registry",
         "mir_interpreter",
-        "serde_json"
+        "serde_json",
+        "gzip"
       ],
       "present": [
         "tungstenite",

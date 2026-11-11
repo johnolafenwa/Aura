@@ -28,7 +28,7 @@ Every filesystem API returns `Result[..., io.Error]`, except `fs.exists(...)`, w
 | `fs.create` | `create(path: str) -> Result[fs.File, io.Error]` | Creates or truncates a file for writing. |
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending. Creates it if needed. |
 
-The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. Aura 0.14 has no chunked file-read API. To process a larger file, use a host-side helper or split the data before Aura reads it.
+The 256 MiB read cap is part of the API contract. It also applies to `fs.File.read_all()` and `fs.File.read_bytes()`. To process a larger file, or to keep memory flat on any file, open it and read it in pieces with `read_lines`, `read_line`, or `read_chunk` (see [Reading A File In Pieces](#reading-a-file-in-pieces)).
 
 `fs.read_dir` has a known defect. It reports a failure to open the directory. After the directory is open, it silently skips any entry whose metadata or read operation fails. If you need a complete, audited directory listing, check the result with a host helper until the defect is fixed.
 
@@ -48,11 +48,57 @@ def show_file() -> Result[None, io.Error]:
 | --- | --- | --- |
 | `read_all` | `read_all() -> Result[str, io.Error]` | Reads the remaining contents as strict UTF-8 text. Capped at 256 MiB. |
 | `read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads the remaining contents as raw bytes. Capped at 256 MiB. |
+| `read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads the next line as strict UTF-8 text, without its LF or CRLF. `None` at the end of the file. |
+| `read_lines` | `read_lines(max_lines: int64) -> Result[list[str], io.Error]` | Reads the next `max_lines` lines, or the fewer that remain. An empty list at the end of the file. |
+| `read_chunk` | `read_chunk(max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | Reads the next `max_bytes` bytes, or the fewer that remain. `None` at the end of the file. |
 | `write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of `text` to the file. The bytes may wait in the handle's write buffer. |
 | `write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all the raw bytes to the file. The bytes may wait in the handle's write buffer. |
 | `flush` | `flush() -> Result[None, io.Error]` | Hands buffered writes to the operating system. |
 | `sync` | `sync() -> Result[None, io.Error]` | Flushes buffered writes, then waits until the file's data and metadata reach storage. This is `fsync`. |
 | `close` | `close() -> None` | Flushes buffered writes and closes the handle. Any later use is invalid. |
+
+### Reading A File In Pieces
+
+`read_all` and `read_bytes` return everything that is left in one value. The three methods below return a piece at a time, so a program can work through a file of any size in constant memory:
+
+```aura
+import fs
+import io
+
+def count(path: str) -> Result[(int64, int64), io.Error]:
+    mut lines = 0
+    mut words = 0
+    with file = try fs.open(path):
+        while true:
+            batch = try file.read_lines(1024)
+            if batch.is_empty():
+                break
+            for line in batch:
+                lines += 1
+                words += line.split_whitespace().len()
+    return Result.Ok((lines, words))
+
+def main():
+    match fs.write_string("notes.txt", "one two\nthree\n"):
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+    match count("notes.txt"):
+        case Result.Ok((lines, words)):
+            print(f"{lines} lines, {words} words")
+        case Result.Err(error):
+            print(error)
+```
+
+The program prints `2 lines, 3 words`.
+
+- **Lines.** A line ends at a line feed. The returned text has neither the line feed nor a carriage return right before it, so files with LF and with CRLF endings read the same. The last line needs no line feed. A file that ends with a line feed has no empty line after it, and an empty file has no lines. Each line must be UTF-8. A line that is not returns `io.Error.InvalidData`, the line is skipped, and the next read continues after it. A line longer than 64 MiB returns `io.Error.InvalidData` as well.
+- **`read_lines`** returns exactly `max_lines` lines until the file runs out, then the remaining lines, then an empty list. When a line in the middle of a batch is not UTF-8, the call returns the lines before it, and the next call reports the bad line on its own. `max_lines` must be from 1 to 1,048,576. Any other count returns `io.Error.InvalidInput`.
+- **`read_line`** returns one line per call. Prefer `read_lines` in a loop over a whole file. It builds a batch in one call and is several times faster per line.
+- **`read_chunk`** returns exactly `max_bytes` bytes until the file runs out, then the bytes that remain, then `None`. It does no decoding. `max_bytes` must be from 1 to 268,435,456 (256 MiB). Any other count returns `io.Error.InvalidInput`.
+
+The handle reads ahead: it asks the operating system for 64 KiB at first and up to 1 MiB at a time once a file is being read from start to end, and serves lines and chunks from that buffer. All five read methods share one position, so a program can read a header with `read_line` and the rest with `read_chunk` or `read_all`. The end of the file is not remembered. After `None` or an empty list, a later call returns data that another program has appended since.
 
 ### Write Buffering
 
@@ -111,6 +157,14 @@ def append_line(path: str, line: str) -> Result[None, io.Error]:
     return Result.Ok(None)
 ```
 
+## Example: Read A File In Pieces
+
+This program counts lines in batches, reads a header line and then the rest of the file, and copies a file in 16-byte chunks:
+
+<<< ../../examples/io/read_lines.au{aura}
+
+It prints `4 lines, 9 words`, `the quick brown fox`, `24`, `3`, and `true`.
+
 ## Example: Replace A File Atomically
 
 Write the new contents to a temporary file, call `sync()`, and rename it over the target. A reader then sees either the old file or the new one, never a partial write.
@@ -147,7 +201,7 @@ The signatures in the one-shot and `fs.File` tables are normative.
 - Text reads produce `str`. Binary reads produce `list[uint8]`.
 - `fs.open`, `fs.create`, and `fs.append` produce `fs.File`, a non-copy resource type.
 
-`fs.File.write_all`, `write_bytes`, `flush`, `sync`, and `close` need a mutable receiver place. `read_all` and `read_bytes` work through a shared receiver, even though the host file cursor advances.
+`fs.File.write_all`, `write_bytes`, `flush`, `sync`, and `close` need a mutable receiver place. `read_all`, `read_bytes`, `read_line`, `read_lines`, and `read_chunk` work through a shared receiver, even though the host file cursor advances.
 
 The ordinary static rules check a method called on the wrong type, a wrong argument type, and an ignored `Result` where a `try` expression needs one.
 
@@ -200,11 +254,11 @@ Host filesystem results can differ by operating system and environment. Those di
 
 ## Limits And Implementation-Defined Behavior
 
-Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content.
+Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content. One `read_chunk` call returns at most 256 MiB, one `read_lines` call at most 1,048,576 lines, and one line is at most 64 MiB.
 
 Aura 0.14 has none of these:
 
-- chunked file reading
+- seeking to a position in a file
 - recursive directory operations
 - transactional writes
 - a one-call atomic replace helper. Use `sync()` and `fs.rename` as shown above.
@@ -222,6 +276,6 @@ After a directory is open, an entry that fails during enumeration is skipped. On
 
 Aura 0.14 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
 
-The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.14 has no chunked or asynchronous file access, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.14 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
 
-Design record: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md).
+Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0073: Streaming reads, gzip, and HMAC](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0073-streaming-reads-gzip-and-hmac.md).

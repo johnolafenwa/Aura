@@ -33,8 +33,8 @@ use super::{
     RangeValue, ReactorSubscription, RecvValueResult, RngValue, SetValue, TaskCancelledSignal,
     TaskExecutionResult, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TryRecvResult, TupleValue, UdpDatagramValue, UdpSocketValue, Value, VecValue,
-    WebSocketListenerValue, FILE_WRITE_BUFFER_BYTES, MAX_FILESYSTEM_READ_BYTES,
-    MAX_STREAM_READ_BYTES,
+    WebSocketListenerValue, FILE_READ_BUFFER_BYTES, FILE_WRITE_BUFFER_BYTES,
+    MAX_FILESYSTEM_READ_BYTES, MAX_STREAM_READ_BYTES,
 };
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
@@ -12258,6 +12258,314 @@ fn file_writes_on_a_read_handle_fail_at_once() {
     file.close();
 }
 
+fn open_for_reading(path: &std::path::Path) -> FileValue {
+    FileValue::open(path.to_str().expect("temp path should be valid UTF-8"))
+        .expect("file open should succeed")
+}
+
+#[test]
+fn file_read_line_returns_each_line_without_its_ending() {
+    let temp = TempDir::new("aura-file-read-line");
+    let path = temp.path().join("lines.txt");
+    fs::write(&path, "first\r\nsecond\n\nlast").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    let mut lines = Vec::new();
+    while let Some(line) = file.read_line().expect("line read should succeed") {
+        lines.push(line);
+    }
+    assert_eq!(lines, ["first", "second", "", "last"]);
+    assert_eq!(
+        file.read_line().expect("a read at the end succeeds"),
+        None,
+        "the end of the file is reported again"
+    );
+
+    // A file that grows after its end was reported yields the new lines.
+    let mut writer = fs::OpenOptions::new()
+        .append(true)
+        .open(&path)
+        .expect("fixture should reopen");
+    writer
+        .write_all(b"\nlater\n")
+        .expect("append should succeed");
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some(String::new())
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("later".to_string())
+    );
+    assert_eq!(file.read_line().expect("line read should succeed"), None);
+    file.close();
+    assert_eq!(
+        file.read_line()
+            .expect_err("a closed handle cannot read")
+            .to_string(),
+        "resource is closed"
+    );
+
+    let empty_path = temp.path().join("empty.txt");
+    fs::write(&empty_path, "").expect("fixture should be written");
+    let empty = open_for_reading(&empty_path);
+    assert_eq!(empty.read_line().expect("line read should succeed"), None);
+}
+
+#[test]
+fn file_read_line_spans_read_buffers_and_rejects_invalid_text() {
+    let temp = TempDir::new("aura-file-read-line-long");
+    let path = temp.path().join("long.txt");
+    let long = "x".repeat(FILE_READ_BUFFER_BYTES * 2 + 17);
+    let mut contents = format!("{long}\nshort\n").into_bytes();
+    contents.extend_from_slice(b"bad \xff line\nafter\n");
+    fs::write(&path, &contents).expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some(long)
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("short".to_string())
+    );
+    let error = file
+        .read_line()
+        .expect_err("a line that is not UTF-8 is an error");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(
+        file.read_line().expect("the next line is still readable"),
+        Some("after".to_string())
+    );
+
+    let writer_path = temp.path().join("writer.txt");
+    let writer = unregistered_buffered_file(&writer_path);
+    writer
+        .write_all("pending")
+        .expect("buffered write should succeed");
+    writer
+        .read_line()
+        .expect_err("a handle created for writing cannot read");
+    assert_eq!(
+        fs::read(&writer_path).expect("file should be readable"),
+        b"pending",
+        "a line read flushes the handle's own writes first"
+    );
+}
+
+fn batch_of_lines(file: &FileValue, max_lines: i64) -> Vec<String> {
+    match file
+        .read_lines(max_lines)
+        .expect("batch line read should succeed")
+    {
+        Value::Vec(lines) => lines.elements.iter().map(|line| line.render()).collect(),
+        other => panic!("expected a list of lines, found {other:?}"),
+    }
+}
+
+#[test]
+fn file_read_lines_returns_full_batches_then_the_remainder() {
+    let temp = TempDir::new("aura-file-read-lines");
+    let path = temp.path().join("lines.txt");
+    let long = "y".repeat(FILE_READ_BUFFER_BYTES + 9);
+    fs::write(&path, format!("a\r\nb\n\n{long}\nc\nd")).expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert_eq!(batch_of_lines(&file, 2), ["a", "b"]);
+    assert_eq!(
+        batch_of_lines(&file, 2),
+        [String::new(), long],
+        "a batch spans read buffers"
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("c".to_string()),
+        "single and batch reads share one position"
+    );
+    assert_eq!(batch_of_lines(&file, 5), ["d"]);
+    assert!(
+        batch_of_lines(&file, 5).is_empty(),
+        "an empty batch is the end"
+    );
+
+    for invalid in [0, -3, i64::MAX] {
+        let error = file
+            .read_lines(invalid)
+            .expect_err("the line count has a range");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+    file.close();
+    assert_eq!(
+        file.read_lines(1)
+            .expect_err("a closed handle cannot read")
+            .to_string(),
+        "resource is closed"
+    );
+}
+
+#[test]
+fn file_read_lines_returns_the_lines_before_invalid_text_first() {
+    let temp = TempDir::new("aura-file-read-lines-invalid");
+    let path = temp.path().join("mixed.txt");
+    fs::write(&path, b"good\nbad \xff\nnext\nlast \xfe").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert_eq!(batch_of_lines(&file, 8), ["good"]);
+    let error = file
+        .read_lines(8)
+        .expect_err("the invalid line is reported on its own");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(batch_of_lines(&file, 8), ["next"]);
+    let error = file
+        .read_lines(8)
+        .expect_err("an invalid last line is reported on its own");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert!(batch_of_lines(&file, 8).is_empty());
+
+    let writer_path = temp.path().join("writer.txt");
+    let writer = unregistered_buffered_file(&writer_path);
+    writer
+        .read_lines(1)
+        .expect_err("a handle created for writing cannot read");
+}
+
+#[test]
+fn file_read_lines_checks_text_again_after_a_chunk_splits_a_character() {
+    let temp = TempDir::new("aura-file-read-lines-split");
+    let path = temp.path().join("split.txt");
+    fs::write(&path, "one\n\u{e9}t\u{e9}\nthree\nfour\n").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    // The first batch checks every buffered line at once.
+    assert_eq!(batch_of_lines(&file, 1), ["one"]);
+    // One byte of the two-byte character leaves the rest of the line
+    // starting inside it.
+    assert_eq!(file.read_chunk(1).expect("chunk read"), Some(vec![0xc3]));
+    let error = file
+        .read_lines(4)
+        .expect_err("half a character is not text");
+    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
+    assert_eq!(batch_of_lines(&file, 4), ["three", "four"]);
+    assert!(batch_of_lines(&file, 4).is_empty());
+}
+
+#[test]
+fn file_read_lines_reads_a_large_file_through_growing_fills() {
+    let temp = TempDir::new("aura-file-read-lines-large");
+    let path = temp.path().join("large.txt");
+    let expected = (0..200_000)
+        .map(|index| format!("line {index} caf\u{e9}"))
+        .collect::<Vec<_>>();
+    fs::write(&path, expected.join("\r\n")).expect("fixture should be written");
+    let file = open_for_reading(&path);
+    let mut lines = Vec::new();
+    loop {
+        let batch = batch_of_lines(&file, 4096);
+        if batch.is_empty() {
+            break;
+        }
+        lines.extend(batch);
+    }
+    assert_eq!(lines, expected);
+}
+
+#[test]
+fn file_read_lines_keeps_the_lines_before_an_invalid_line_in_a_checked_buffer() {
+    let temp = TempDir::new("aura-file-read-lines-checked");
+    let path = temp.path().join("checked.txt");
+    fs::write(&path, b"a\nb\nbad \xff\nc\nd\n").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert_eq!(batch_of_lines(&file, 1), ["a"]);
+    assert_eq!(batch_of_lines(&file, 8), ["b"]);
+    file.read_lines(8)
+        .expect_err("the invalid line is reported");
+    assert_eq!(batch_of_lines(&file, 8), ["c", "d"]);
+}
+
+#[test]
+fn file_read_chunk_returns_full_chunks_then_the_remainder() {
+    let temp = TempDir::new("aura-file-read-chunk");
+    let path = temp.path().join("data.bin");
+    let contents = (0..FILE_READ_BUFFER_BYTES * 2 + 5)
+        .map(|index| (index % 251) as u8)
+        .collect::<Vec<_>>();
+    fs::write(&path, &contents).expect("fixture should be written");
+
+    let file = open_for_reading(&path);
+    let mut read = Vec::new();
+    let mut sizes = Vec::new();
+    while let Some(chunk) = file.read_chunk(1000).expect("chunk read should succeed") {
+        sizes.push(chunk.len());
+        read.extend_from_slice(&chunk);
+    }
+    assert_eq!(read, contents);
+    let (last, full) = sizes.split_last().expect("the file has chunks");
+    assert!(full.iter().all(|size| *size == 1000));
+    assert_eq!(*last, contents.len() % 1000);
+    assert_eq!(
+        file.read_chunk(1).expect("a read at the end succeeds"),
+        None
+    );
+
+    // One chunk larger than the read buffer comes straight from the file.
+    let large = open_for_reading(&path);
+    assert_eq!(
+        large
+            .read_chunk(i64::try_from(contents.len() + 1).expect("length fits int64"))
+            .expect("chunk read should succeed"),
+        Some(contents.clone())
+    );
+
+    for invalid in [0, -1, i64::MAX] {
+        let error = large
+            .read_chunk(invalid)
+            .expect_err("the byte count has a range");
+        assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+    }
+    large.close();
+    assert_eq!(
+        large
+            .read_chunk(1)
+            .expect_err("a closed handle cannot read")
+            .to_string(),
+        "resource is closed"
+    );
+}
+
+#[test]
+fn file_line_chunk_and_whole_reads_share_one_position() {
+    let temp = TempDir::new("aura-file-read-mixed");
+    let path = temp.path().join("mixed.txt");
+    fs::write(&path, "head\nbody bytes\ntail line\nrest of the file")
+        .expect("fixture should be written");
+
+    let file = open_for_reading(&path);
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("head".to_string())
+    );
+    assert_eq!(
+        file.read_chunk(4).expect("chunk read should succeed"),
+        Some(b"body".to_vec())
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some(" bytes".to_string())
+    );
+    assert_eq!(
+        file.read_all().expect("whole read should succeed"),
+        "tail line\nrest of the file"
+    );
+    assert_eq!(file.read_line().expect("line read should succeed"), None);
+
+    let bytes = open_for_reading(&path);
+    assert_eq!(
+        bytes.read_chunk(5).expect("chunk read should succeed"),
+        Some(b"head\n".to_vec())
+    );
+    assert_eq!(
+        bytes.read_bytes().expect("whole read should succeed"),
+        b"body bytes\ntail line\nrest of the file"
+    );
+    assert_eq!(bytes.read_bytes().expect("whole read should succeed"), b"");
+}
+
 #[test]
 fn file_writes_wait_for_a_handle_another_thread_holds() {
     let temp = TempDir::new("aura-file-buffer-contended");
@@ -12286,6 +12594,74 @@ fn file_writes_wait_for_a_handle_another_thread_holds() {
     file.close();
     file.write_bytes(b"x")
         .expect_err("a closed handle cannot write");
+}
+
+#[test]
+fn file_piece_reads_wait_for_a_handle_another_thread_holds() {
+    let temp = TempDir::new("aura-file-read-contended");
+    let path = temp.path().join("shared.txt");
+    fs::write(&path, "one\ntwo\nthree\nrest").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    let held = file.inner.file.lock().expect("lock should not be poisoned");
+    let reader = file.clone();
+    let reads = thread::spawn(move || {
+        let line = reader.read_line().expect("contended line read");
+        let batch = batch_of_lines(&reader, 2);
+        let chunk = reader.read_chunk(2).expect("contended chunk read");
+        (line, batch, chunk)
+    });
+    thread::sleep(StdDuration::from_millis(50));
+    drop(held);
+    let (line, batch, chunk) = reads.join().expect("reader should finish");
+    assert_eq!(line.as_deref(), Some("one"));
+    assert_eq!(batch, ["two", "three"]);
+    assert_eq!(chunk, Some(b"re".to_vec()));
+
+    // A handle held while its lines are already buffered still answers
+    // through the blocking pool.
+    let held = file.inner.file.lock().expect("lock should not be poisoned");
+    let reader = file.clone();
+    let rest = thread::spawn(move || batch_of_lines(&reader, 4));
+    thread::sleep(StdDuration::from_millis(50));
+    drop(held);
+    assert_eq!(rest.join().expect("reader should finish"), ["st"]);
+
+    file.close();
+    file.read_line().expect_err("a closed handle cannot read");
+    file.read_lines(1).expect_err("a closed handle cannot read");
+    file.read_chunk(1).expect_err("a closed handle cannot read");
+    for count in [0, -1, i64::MAX] {
+        assert_eq!(
+            file.read_lines(count)
+                .expect_err("the line count is checked first")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+        assert_eq!(
+            file.read_chunk(count)
+                .expect_err("the byte count is checked first")
+                .kind(),
+            io::ErrorKind::InvalidInput
+        );
+    }
+}
+
+#[test]
+fn file_read_buffer_gives_back_the_memory_of_a_very_long_line() {
+    let temp = TempDir::new("aura-file-read-long-line");
+    let path = temp.path().join("long.txt");
+    let long = "x".repeat(super::FILE_READ_BUFFER_KEEP_BYTES + 10);
+    fs::write(&path, format!("{long}\nshort\n")).expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert_eq!(batch_of_lines(&file, 1), [long]);
+    assert_eq!(batch_of_lines(&file, 4), ["short"]);
+    assert!(batch_of_lines(&file, 4).is_empty());
+    let held = file.inner.file.lock().expect("lock should not be poisoned");
+    let open = held.as_ref().expect("the file is open");
+    assert!(
+        open.read.bytes.len() <= super::FILE_READ_BUFFER_KEEP_BYTES,
+        "an emptied large buffer is freed"
+    );
 }
 
 #[test]
@@ -19104,6 +19480,166 @@ fn bytes_host_builtins_route_resource_only_codecs() {
     .expect("bytes builtins are recognized")
     .expect("hashing succeeds");
     assert!(matches!(digest, Value::Vec(vector) if vector.elements.len() == 32));
+}
+
+fn host_bytes(value: Value) -> Vec<u8> {
+    super::host_bytes_from_runtime(&value, "test").expect("a byte list")
+}
+
+fn int64(value: i64) -> Value {
+    Value::Int(IntegerValue::from_i64(value))
+}
+
+#[test]
+fn hmac_and_constant_time_eq_host_builtins_read_boxed_and_unboxed_byte_lists() {
+    let call = |name: &str, args: Vec<Value>| super::evaluate_host_builtin(name, args);
+    let key = runtime_bytes(b"Jefe");
+    let message = runtime_bytes(b"what do ya want for nothing?");
+    let mac = call("bytes::hmac_sha256", vec![key.clone(), message.clone()]).unwrap();
+    assert_eq!(
+        crate::bytes_codec::hex_encode(&host_bytes(mac.clone())).unwrap(),
+        "5bdcc146bf60754e6a042426089575c75a003f089d2739839dec58b964ec3843"
+    );
+    // A byte list whose elements are boxed integers reads the same.
+    let boxed_key = Value::Vec(VecValue {
+        element_type: super::SharedType::named("uint8"),
+        elements: super::ListElements::Values(
+            b"Jefe"
+                .iter()
+                .map(|byte| {
+                    Value::Int(
+                        IntegerValue::from_typed_unsigned(u128::from(*byte), IntegerKind::Uint8)
+                            .unwrap(),
+                    )
+                })
+                .collect::<Vec<_>>()
+                .into(),
+        ),
+        str_view: Default::default(),
+    });
+    assert_eq!(
+        call("bytes::hmac_sha256", vec![boxed_key, message.clone()]).unwrap(),
+        mac
+    );
+    assert_eq!(
+        call("bytes::constant_time_eq", vec![mac.clone(), mac.clone()]).unwrap(),
+        Value::Bool(true)
+    );
+    assert_eq!(
+        call("bytes::constant_time_eq", vec![mac.clone(), key.clone()]).unwrap(),
+        Value::Bool(false)
+    );
+
+    for name in ["bytes::hmac_sha256", "bytes::constant_time_eq"] {
+        assert!(call(name, vec![key.clone()]).is_err());
+        let display = name.replace("::", ".");
+        for args in [
+            vec![Value::Unit, key.clone()],
+            vec![key.clone(), Value::String("text".into())],
+        ] {
+            let error = call(name, args).expect_err("only byte lists are accepted");
+            assert_eq!(error.code, "AU4001");
+            assert_eq!(
+                error.message,
+                format!("`{display}` expects a runtime `list[uint8]` value")
+            );
+        }
+    }
+}
+
+#[test]
+fn gzip_host_builtins_round_trip_and_report_bad_data_as_values() {
+    let call = |name: &str, args: Vec<Value>| super::evaluate_host_builtin(name, args);
+    let data = b"hello hello hello hello hello aura".repeat(20);
+    let packed = call("gzip::compress", vec![runtime_bytes(&data), int64(6)]).unwrap();
+    assert!(host_bytes(packed.clone()).len() < data.len());
+    assert_eq!(
+        call("gzip::decompress", vec![packed.clone(), int64(1 << 20)]).unwrap(),
+        result_ok(runtime_bytes(&data))
+    );
+    let stored = call("gzip::compress", vec![runtime_bytes(&data), int64(0)]).unwrap();
+    assert!(host_bytes(stored).len() > data.len());
+    let empty = call("gzip::compress", vec![runtime_bytes(b""), int64(9)]).unwrap();
+    assert_eq!(
+        call("gzip::decompress", vec![empty, int64(0)]).unwrap(),
+        result_ok(runtime_bytes(b""))
+    );
+
+    let error_variant = |value: Value| match value {
+        Value::EnumVariant(result) if result.variant_name == "Err" => {
+            match result.payloads.get(0).map(std::borrow::Cow::into_owned) {
+                Some(Value::EnumVariant(error)) => {
+                    assert_eq!(error.enum_name, "gzip.Error");
+                    (
+                        error.variant_name.to_string(),
+                        error.payloads.get(0).map(std::borrow::Cow::into_owned),
+                    )
+                }
+                other => panic!("expected a gzip error, found {other:?}"),
+            }
+        }
+        other => panic!("expected an error result, found {other:?}"),
+    };
+    assert_eq!(
+        error_variant(call("gzip::decompress", vec![packed.clone(), int64(10)]).unwrap()),
+        ("OutputTooLarge".to_string(), Some(int64(10)))
+    );
+    let (variant, message) =
+        error_variant(call("gzip::decompress", vec![runtime_bytes(&data), int64(64)]).unwrap());
+    assert_eq!(variant, "InvalidData");
+    assert!(matches!(message, Some(Value::String(text)) if !text.is_empty()));
+    assert_eq!(
+        error_variant(call("gzip::decompress", vec![runtime_bytes(b""), int64(64)]).unwrap()),
+        (
+            "InvalidData".to_string(),
+            Some(Value::string("the input is empty"))
+        )
+    );
+
+    let trap = |name: &str, args: Vec<Value>| {
+        let error = call(name, args).expect_err("a contract violation stops the program");
+        assert_eq!(error.code, "AU4001");
+        error.message
+    };
+    for level in [-1, 10] {
+        assert_eq!(
+            trap("gzip::compress", vec![runtime_bytes(&data), int64(level)]),
+            format!("`gzip.compress` requires a level from 0 to 9, found `{level}`")
+        );
+    }
+    assert_eq!(
+        trap("gzip::compress", vec![runtime_bytes(&data), Value::Unit]),
+        "`gzip.compress` expects argument 2 to be `int64`"
+    );
+    assert_eq!(
+        trap("gzip::compress", vec![Value::Unit, int64(6)]),
+        "`gzip.compress` expects a runtime `list[uint8]` value"
+    );
+    assert_eq!(
+        trap("gzip::decompress", vec![packed.clone(), int64(-1)]),
+        format!(
+            "`gzip.decompress` requires a byte limit from 0 to {}, found `-1`",
+            i32::MAX
+        )
+    );
+    assert_eq!(
+        trap("gzip::decompress", vec![packed.clone(), int64(1 << 40)]),
+        format!(
+            "`gzip.decompress` requires a byte limit from 0 to {}, found `{}`",
+            i32::MAX,
+            1i64 << 40
+        )
+    );
+    assert_eq!(
+        trap("gzip::decompress", vec![packed.clone(), Value::Bool(true)]),
+        "`gzip.decompress` expects argument 2 to be `int64`"
+    );
+    assert_eq!(
+        trap("gzip::decompress", vec![Value::Unit, int64(1)]),
+        "`gzip.decompress` expects a runtime `list[uint8]` value"
+    );
+    assert!(call("gzip::compress", vec![runtime_bytes(&data)]).is_err());
+    assert!(call("gzip::decompress", vec![packed]).is_err());
 }
 
 #[cfg(unix)]

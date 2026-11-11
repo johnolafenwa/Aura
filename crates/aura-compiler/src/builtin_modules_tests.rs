@@ -240,6 +240,10 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "log::warn",
         "log::error",
         "trace::event",
+        "bytes::hmac_sha256",
+        "bytes::constant_time_eq",
+        "gzip::compress",
+        "gzip::decompress",
     ] {
         assert!(
             host_builtin_metadata(name).is_some(),
@@ -403,10 +407,12 @@ fn bytes_namespace_exposes_shared_byte_vector_codecs_and_typed_errors() {
         vec![
             "base64_decode",
             "base64_encode",
+            "constant_time_eq",
             "ends_with",
             "find",
             "hex_decode",
             "hex_encode",
+            "hmac_sha256",
             "sha256",
             "sha256_string",
             "starts_with",
@@ -894,4 +900,78 @@ fn builtin_root_module_names_match_their_namespaces() {
         );
         assert!(super::builtin_module_namespace(&[name.to_string()]).is_none());
     }
+}
+
+#[test]
+fn gzip_namespace_declares_bounded_decompression_and_a_typed_error() {
+    use crate::sema::Type;
+
+    let namespace =
+        builtin_module_namespace(&["gzip".to_string()]).expect("gzip should be builtin");
+    assert!(super::is_builtin_root_module("gzip"));
+    assert!(super::builtin_module_registry().contains_key("gzip"));
+    assert_eq!(
+        namespace
+            .functions
+            .keys()
+            .map(String::as_str)
+            .collect::<Vec<_>>(),
+        vec!["compress", "decompress"]
+    );
+    let bytes = Type::Named("list".to_string(), vec![Type::named("uint8")]);
+    let compress = &namespace.functions["compress"];
+    assert_eq!(compress.signature.return_type, bytes);
+    assert_eq!(
+        compress
+            .decl
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.default.is_some()))
+            .collect::<Vec<_>>(),
+        vec![("data", false), ("level", true)]
+    );
+    let decompress = &namespace.functions["decompress"];
+    assert_eq!(
+        decompress.signature.return_type,
+        Type::Named("Result".to_string(), vec![bytes, Type::named("gzip.Error")])
+    );
+    assert_eq!(
+        decompress
+            .decl
+            .params
+            .iter()
+            .map(|param| (param.name.as_str(), param.default.is_some()))
+            .collect::<Vec<_>>(),
+        vec![("data", false), ("max_bytes", true)]
+    );
+    let error = &namespace.enums["Error"];
+    assert_eq!(
+        error
+            .decl
+            .variants
+            .iter()
+            .map(|variant| variant.name.as_str())
+            .collect::<Vec<_>>(),
+        vec!["InvalidData", "OutputTooLarge"]
+    );
+
+    let checked = crate::check_source(
+        r#"import gzip
+
+def unpack(data: list[uint8]) -> str:
+    match own gzip.decompress(gzip.compress(data, level=1), max_bytes=64):
+        case Result.Ok(plain):
+            return f"{plain.len()}"
+        case Result.Err(gzip.Error.InvalidData(message)):
+            return message
+        case Result.Err(gzip.Error.OutputTooLarge(limit_bytes)):
+            return f"{limit_bytes}"
+"#,
+    );
+    checked.expect("gzip calls with defaults and named arguments should type-check");
+    let error = crate::check_source(
+        "import gzip\n\ndef pack(text: str) -> list[uint8]:\n    return gzip.compress(text)\n",
+    )
+    .expect_err("gzip.compress takes bytes, not text");
+    assert!(error.message.contains("list[uint8]"), "{}", error.message);
 }
