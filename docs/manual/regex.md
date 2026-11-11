@@ -25,7 +25,6 @@ import regex
 | `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | `text` with every match replaced. |
 | `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between the matches. |
 | `Regex.pattern` | `pattern(self) -> str` | The pattern text the value was compiled from. |
-| `Regex.copy` | `copy(self) -> regex.Regex` | Another `Regex` for the same compiled pattern. |
 | `Captures.len` | `len(self) -> int64` | The number of groups, the whole match included. |
 | `Captures.get` | `get(self, index: int64) -> str \| None` | The text of group `index`. Group `0` is the whole match. |
 | `Captures.name` | `name(self, name: str) -> str \| None` | The text of the group named `name`. |
@@ -72,9 +71,9 @@ pattern as written. In an ordinary string literal the same pattern is
 `"\\d+"`.
 
 Compile a pattern once and keep the `Regex`: in a local, a class field, or a
-parameter. A `Regex` is a small value that names the compiled pattern. Like
-any class value it moves when assigned, and `copy()` returns another `Regex`
-for the same pattern, so several owners or tasks can each hold one.
+parameter. A `Regex` is a small copy value that names the compiled pattern,
+so assigning it or passing it to a task copies it, and every copy searches
+with the same compiled pattern. Printing a `Regex` shows its pattern text.
 Compiling a pattern text a second time is cheap, because the runtime finds
 the pattern it already knows.
 
@@ -192,4 +191,4 @@ so results match. A program that does not import `regex` does not link it.
 - `split` has no limit on the number of pieces.
 - A search always starts at the beginning of the text.
 
-Design record: [ADR-0075: Regular expressions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0075-regular-expressions.md).
+Design record: [ADR-0078: Regular expressions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0078-regular-expressions.md).

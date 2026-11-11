@@ -1,4 +1,4 @@
-# ADR-0075: Regular expressions
+# ADR-0078: Regular expressions
 
 - Status: Accepted
 - Date: 2026-11-10
@@ -37,7 +37,6 @@ Regex.replace(text, replacement) -> str
 Regex.replace_all(text, replacement) -> str
 Regex.split(text) -> list[str]
 Regex.pattern() -> str
-Regex.copy() -> regex.Regex
 ```
 
 - A pattern is compiled explicitly and the result is a value. There are no
@@ -78,8 +77,9 @@ Two other representations were built and measured first:
   starts with empty scratch space and rebuilds it on the first search,
   about 49 microseconds per call.
 
-The number makes the field private state that only `regex.compile` and
-`Regex.copy` can produce, so a `Regex` always names a pattern the table
+`Regex` is a `copy class`, so a program copies it freely and every copy
+names the same compiled pattern. The number is private state that only
+`regex.compile` produces, so a `Regex` always names a pattern the table
 holds.
 
 The table never forgets a pattern text. A program that compiles an

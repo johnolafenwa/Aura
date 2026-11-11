@@ -44,6 +44,7 @@ every sample with the commit.
 | `binary_trees` | Allocation: builds and walks many complete binary trees (Benchmarks Game) |
 | `bytecode_vm` | A two-pass assembler and a stack-machine dispatch loop running three programs |
 | `csv_aggregate` | Parses a CSV sales export and aggregates it by region, product, and month |
+| `date_time` | The `time` module over generated instants: RFC 3339 text out and back, Duration arithmetic, calendar fields, and a log layout out and back |
 | `docdb` | A schemaless JSON document database with a primary and a secondary index, saved and reloaded as JSON lines |
 | `file_io` | Writes and reads a line log, a binary record file, and a directory of small files |
 | `graph_paths` | BFS, Dijkstra with a binary heap, and union-find on a random graph |
@@ -159,6 +160,13 @@ times Python's time and 3.9 times Rust's. Rust's `regex` crate is the engine
 under both the Aura and the Rust program, so the difference is the cost of
 handing each result to the program as Aura values. It is not in the table or
 the totals above either.
+
+`date_time` was added the same day with the `time` module. At 200,000
+instants it takes 0.77 s in Aura, 4.1 s in Python (`datetime`), and 0.16 s
+in Rust (`chrono`): 0.19 times Python's time and 4.8 times Rust's. Most of
+Aura's time is in the calls that write and read text, each of which crosses
+into the runtime with boxed integer arguments. It is not in the table or the
+totals above either.
 
 0.13.0 brings the Batch 8 multicore runtime and the first JSON steps of
 the lean-values work:

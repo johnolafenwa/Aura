@@ -91,7 +91,43 @@ fn regex_source_part_adds_the_typed_api_to_the_host_searches() {
         assert!(merged.classes.contains_key(name), "missing `regex.{name}`");
     }
     assert!(merged.enums.contains_key("Error"));
+    assert!(merged.classes["Regex"].decl.copy, "a Regex is one integer");
     assert!(imports_source_part(
         &crate::parse_source("import regex\n").expect("source parses")
     ));
+}
+
+#[test]
+fn time_source_part_adds_date_time_to_the_host_clocks() {
+    let host = builtin_module_namespace(&path("time")).expect("time is builtin");
+    let part = source_part("time").expect("time has a source part");
+    for name in part.functions.keys() {
+        assert!(
+            !host.functions.contains_key(name),
+            "source function `{name}` must not shadow a host function"
+        );
+    }
+    let merged = importable_builtin_namespace(&path("time")).expect("time is importable");
+    for name in [
+        "now",
+        "now_local",
+        "monotonic",
+        "utc",
+        "from_unix",
+        "from_unix_ms",
+        "parse",
+        "parse_rfc3339",
+    ] {
+        assert!(merged.functions.contains_key(name), "missing `time.{name}`");
+    }
+    for name in ["days_from_civil", "civil_year", "checked", "parsed"] {
+        assert!(
+            !merged.functions.contains_key(name),
+            "`time.{name}` is a private helper"
+        );
+    }
+    let date_time = &merged.classes["DateTime"];
+    assert!(date_time.decl.copy, "a DateTime is three integers");
+    assert!(date_time.decl.public);
+    assert!(merged.enums.contains_key("Error"));
 }

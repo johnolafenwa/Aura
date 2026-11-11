@@ -7,6 +7,18 @@ in this file.
 
 ## Unreleased
 
+- New `time` module: `time.now()`, `time.utc(...)`, `time.from_unix(...)`,
+  and `time.parse_rfc3339(...)` return a `time.DateTime`, an instant with
+  the UTC offset its calendar fields are read at. It has field methods,
+  exact arithmetic with `Duration`, `to_offset` and `to_local`, RFC 3339
+  text, and `format` and `parse` with `%` directives. `time.monotonic()`
+  measures intervals. The 33rd
+  [cross-language program](benchmarks/cross_language/README.md),
+  `date_time`, takes 0.77 s for 200,000 instants where Python's `datetime`
+  takes 4.1 s and Rust's `chrono` 0.16 s. See the
+  [Time Module](docs/manual/time.md).
+- Fixed: `public copy class Name:` was read as a module constant named
+  `copy` and reported `AU1101`.
 - New `regex` module: `regex.compile(pattern)` returns a `regex.Regex`
   that tests, finds, captures, replaces, and splits. Every search runs in
   time linear in the text, positions count Unicode scalar values as `str`

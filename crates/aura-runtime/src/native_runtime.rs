@@ -14877,6 +14877,15 @@ host_builtin_entries! {
     owned "bytes::constant_time_eq" => aura_host_bytes_constant_time_eq(host_builtins::host_bytes_constant_time_eq);
     owned "gzip::compress" => aura_host_gzip_compress(host_builtins::host_gzip_compress);
     owned "gzip::decompress" => aura_host_gzip_decompress(host_builtins::host_gzip_decompress);
+    owned "time::__aura_now" => aura_host_time_now(crate::runtime_value::time_host::host_time_now);
+    owned "time::__aura_monotonic" => aura_host_time_monotonic(crate::runtime_value::time_host::host_time_monotonic);
+    owned "time::__aura_local_offset_minutes" => aura_host_time_local_offset_minutes(crate::runtime_value::time_host::host_time_local_offset_minutes);
+    owned "time::__aura_duration_parts" => aura_host_time_duration_parts(crate::runtime_value::time_host::host_time_duration_parts);
+    owned "time::__aura_duration" => aura_host_time_duration(crate::runtime_value::time_host::host_time_duration);
+    owned "time::__aura_rfc3339" => aura_host_time_rfc3339(crate::runtime_value::time_host::host_time_rfc3339);
+    owned "time::__aura_format" => aura_host_time_format(crate::runtime_value::time_host::host_time_format);
+    owned "time::__aura_parse_rfc3339" => aura_host_time_parse_rfc3339(crate::runtime_value::time_host::host_time_parse_rfc3339);
+    owned "time::__aura_parse" => aura_host_time_parse(crate::runtime_value::time_host::host_time_parse);
     owned "regex::__aura_compile" => aura_host_regex_compile(crate::runtime_value::regex_host::host_regex_compile);
     owned "regex::__aura_pattern" => aura_host_regex_pattern(crate::runtime_value::regex_host::host_regex_pattern);
     owned "regex::__aura_escape" => aura_host_regex_escape(crate::runtime_value::regex_host::host_regex_escape);

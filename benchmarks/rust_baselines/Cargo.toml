@@ -14,12 +14,14 @@ hmac = { version = "=0.12.1", optional = true }
 sha2 = { version = "=0.10.9", optional = true }
 # `regex_scan` uses the regex engine Aura's runtime links.
 regex = { version = "=1.13.1", optional = true }
+# `date_time` uses the date and time crate most Rust programs use.
+chrono = { version = "=0.4.42", default-features = false, features = ["std"], optional = true }
 
 [features]
 # The cross-language programs in ../cross_language and the operation probes
 # in ../operation_probes. Off by default, so the release-performance
 # references build exactly as before.
-cross-language = ["dep:serde_json", "dep:flate2", "dep:hmac", "dep:sha2", "dep:regex", "tokio/sync"]
+cross-language = ["dep:serde_json", "dep:flate2", "dep:hmac", "dep:sha2", "dep:regex", "dep:chrono", "tokio/sync"]
 
 [profile.release]
 opt-level = 3
@@ -55,6 +57,11 @@ required-features = ["cross-language"]
 [[bin]]
 name = "csv_aggregate"
 path = "../cross_language/csv_aggregate/csv_aggregate.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "date_time"
+path = "../cross_language/date_time/date_time.rs"
 required-features = ["cross-language"]
 
 [[bin]]

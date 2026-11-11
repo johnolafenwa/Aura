@@ -1768,6 +1768,81 @@ fn regex_namespace() -> ModuleNamespace {
     )
 }
 
+/// The host part of `time`: the clocks, the system time zone, and date and
+/// time text. `DateTime` and the calendar arithmetic are Aura source in
+/// `std/time.au`.
+fn time_namespace() -> ModuleNamespace {
+    let text = || type_ref("str", Vec::new());
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let duration = || type_ref("Duration", Vec::new());
+    let tuple = |elements: Vec<TypeRef>| TypeRef::tuple(elements, false, builtin_span());
+    let instant = || {
+        vec![
+            value_param("seconds", int64()),
+            value_param("nanos", int64()),
+            value_param("offset", int64()),
+        ]
+    };
+    let parsed = || tuple(vec![boolean(), int64(), int64(), int64(), text()]);
+    function_only_namespace(
+        "time",
+        vec![
+            function_info(
+                "time",
+                "__aura_now",
+                Vec::new(),
+                tuple(vec![int64(), int64()]),
+            ),
+            function_info("time", "__aura_monotonic", Vec::new(), duration()),
+            function_info(
+                "time",
+                "__aura_local_offset_minutes",
+                vec![value_param("seconds", int64())],
+                int64(),
+            ),
+            function_info(
+                "time",
+                "__aura_duration_parts",
+                vec![value_param("amount", duration())],
+                tuple(vec![int64(), int64()]),
+            ),
+            function_info(
+                "time",
+                "__aura_duration",
+                vec![
+                    value_param("seconds", int64()),
+                    value_param("nanos", int64()),
+                ],
+                duration(),
+            ),
+            function_info("time", "__aura_rfc3339", instant(), text()),
+            function_info(
+                "time",
+                "__aura_format",
+                {
+                    let mut params = instant();
+                    params.push(value_param("pattern", text()));
+                    params
+                },
+                tuple(vec![boolean(), text()]),
+            ),
+            function_info(
+                "time",
+                "__aura_parse_rfc3339",
+                vec![value_param("text", text())],
+                parsed(),
+            ),
+            function_info(
+                "time",
+                "__aura_parse",
+                vec![value_param("text", text()), value_param("pattern", text())],
+                parsed(),
+            ),
+        ],
+    )
+}
+
 fn control_namespace() -> ModuleNamespace {
     let result_type = type_ref(
         "Result",
@@ -2564,6 +2639,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
         "regex" => Some(regex_namespace()),
+        "time" => Some(time_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2576,8 +2652,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "gzip", "regex", "json", "iter", "toml", "metrics", "log",
-    "trace", "random",
+    "sys", "path", "math", "bytes", "gzip", "regex", "time", "json", "iter", "toml", "metrics",
+    "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2702,6 +2778,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "bytes"
             | "gzip"
             | "regex"
+            | "time"
             | "json"
             | "iter"
             | "prelude"
@@ -2722,7 +2799,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
-        "regex", "json", "iter", "prelude", "toml", "log", "metrics", "trace",
+        "regex", "time", "json", "iter", "prelude", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

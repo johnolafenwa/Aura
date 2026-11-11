@@ -48,17 +48,13 @@ public class Captures:
         return self.get(regex.__aura_group_index(self.pattern, name))
 
 
-public class Regex:
+public copy class Regex:
     """A compiled regular expression. Build one with `regex.compile`."""
     number: int64
 
     public def pattern(self) -> str:
         """The pattern text this was compiled from."""
         return regex.__aura_pattern(self.number)
-
-    public def copy(self) -> Regex:
-        """Another `Regex` for the same compiled pattern."""
-        return Regex(number=self.number)
 
     public def is_match(self, text: str) -> bool:
         """Whether the pattern matches anywhere in `text`."""
@@ -115,6 +111,11 @@ public class Regex:
     public def split(self, text: str) -> list[str]:
         """The pieces of `text` between the matches."""
         return regex.__aura_split(self.number, text)
+
+
+impl Display for Regex:
+    def display(self) -> str:
+        return self.pattern()
 
 
 public def compile(pattern: str) -> Result[Regex, Error]:

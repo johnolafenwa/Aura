@@ -24,6 +24,11 @@
     "bench": ["200000"],
     "expected": "csv_aggregate rows=1000 bytes=36496 revenue=938446855 products=422 busiest_month=96 regions=north:180059757 south:133367555 east:171656437 west:151435481 central:156262053 coastal:145665572 top=SKU-83:226 SKU-278:197 SKU-472:193 SKU-370:192 SKU-77:184"
   },
+  "date_time": {
+    "check": ["2000"],
+    "bench": ["200000"],
+    "expected": "date_time instants=2000 parsed=2000 ordered=2000 weekdays=7948 year_days=368088 fields=4208297 bytes=109841 checksum=159800593"
+  },
   "docdb": {
     "check": ["200", "{workdir}"],
     "bench": ["50000", "{workdir}"],

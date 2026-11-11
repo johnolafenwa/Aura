@@ -410,13 +410,16 @@ not there yet:
 ```aura fragment
 def append_history(report: str) -> Result[None, io.Error]:
     with file = try fs.append("history.log"):
-        try file.write_all(f"run at {sys.unix_time_ms()}\n")
+        try file.write_all(f"run at {time.now()}\n")
         try file.write_all(report)
     return Result.Ok(None)
 ```
 
-`sys.unix_time_ms()` gives milliseconds since the Unix epoch, which is enough
-to tell runs apart. The two `write_all` calls land in the handle's buffer and
+`time.now()` is the current date and time, and an f-string writes it in the
+RFC 3339 form, such as `2026-11-10T20:14:38.250Z`, which sorts correctly as
+text and which every log tool can read. (Add `import time` at the top of the
+file. The [Time Module](/manual/time) page covers offsets, arithmetic, and
+other layouts.) The two `write_all` calls land in the handle's buffer and
 reach the file when the `with` block closes it. If you only need to add one
 string, `fs.append_string(path, text)` does the open, write, and close in one
 call, as `fs.write_string` does for replacing.
@@ -447,6 +450,7 @@ and appends to the history.
 import fs
 import io
 import sys
+import time
 
 enum Probe:
     File(path: str)
@@ -517,7 +521,7 @@ def save(path: str, text: str) -> Result[None, io.Error]:
 
 def append_history(report: str) -> Result[None, io.Error]:
     with file = try fs.append("history.log"):
-        try file.write_all(f"run at {sys.unix_time_ms()}\n")
+        try file.write_all(f"run at {time.now()}\n")
         try file.write_all(report)
     return Result.Ok(None)
 

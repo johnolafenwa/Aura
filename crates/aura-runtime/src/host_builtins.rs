@@ -659,7 +659,10 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "regex::__aura_compile" => regex_host::host_regex_compile,
         "regex::__aura_pattern" => regex_host::host_regex_pattern,
         "regex::__aura_escape" => regex_host::host_regex_escape,
-        other => return regex_host::regex_host_function(other),
+        other => {
+            return regex_host::regex_host_function(other)
+                .or_else(|| time_host::time_host_function(other))
+        }
     };
     Some(function)
 }

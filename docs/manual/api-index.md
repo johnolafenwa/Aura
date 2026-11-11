@@ -249,7 +249,30 @@ replacement text, and limits.
 | `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | Replaces every match. |
 | `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
 | `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
-| `Regex.copy` | `copy(self) -> regex.Regex` | Another `Regex` for the same compiled pattern. |
+
+## Time
+
+[Time Module](/manual/time) covers instants and offsets, the system time
+zone, RFC 3339 text, the pattern directives, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `time.now` | `now() -> time.DateTime` | The current instant, read at UTC. |
+| `time.now_local` | `now_local() -> time.DateTime` | The current instant, read at the system time zone's current offset. |
+| `time.monotonic` | `monotonic() -> Duration` | A reading of a clock that never goes backward. Subtract two readings. |
+| `time.utc` | `utc(year: int64, month: int64, day: int64, hour: int64 = 0, minute: int64 = 0, second: int64 = 0, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from calendar fields at UTC. A field out of range or a date that does not exist returns `time.Error.Invalid`. |
+| `time.from_unix` | `from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix seconds. |
+| `time.from_unix_ms` | `from_unix_ms(milliseconds: int64) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix milliseconds. |
+| `time.parse_rfc3339` | `parse_rfc3339(text: str) -> Result[time.DateTime, time.Error]` | Parses RFC 3339 text and keeps its offset. |
+| `time.parse` | `parse(text: str, pattern: str) -> Result[time.DateTime, time.Error]` | Parses text laid out by `%` directives. |
+| `DateTime` fields | `year()`, `month()`, `day()`, `date()`, `hour()`, `minute()`, `second()`, `nanosecond()`, `weekday()`, `day_of_year()`, `offset_minutes()` | Calendar fields at the value's offset. `weekday()` is 1 for Monday to 7 for Sunday. |
+| `DateTime.unix` | `unix(self) -> int64`, `unix_ms(self) -> int64` | Seconds or milliseconds since 1970-01-01T00:00:00Z, rounded down. |
+| `DateTime.to_utc` | `to_utc(self) -> time.DateTime` | The same instant at UTC. `to_offset(minutes)` and `to_local()` read it at another offset. |
+| `DateTime.add` | `add(self, amount: Duration) -> time.DateTime`, `sub(self, amount: Duration) -> time.DateTime` | Exact arithmetic. Traps when the result leaves the years 1 to 9999. |
+| `DateTime.since` | `since(self, earlier: time.DateTime) -> Duration` | The time between two instants. |
+| `DateTime.is_before` | `is_before(self, other) -> bool`, `is_after(self, other) -> bool`, `same_instant(self, other) -> bool` | Compare instants, whatever their offsets. |
+| `DateTime.to_rfc3339` | `to_rfc3339(self) -> str` | RFC 3339 text. `print` and f-strings show the same text. |
+| `DateTime.format` | `format(self, pattern: str) -> Result[str, time.Error]` | Text laid out by `%` directives. |
 
 ## Collections
 

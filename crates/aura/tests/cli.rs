@@ -11974,6 +11974,28 @@ fn run_and_direct_backends_run_regex_log_example() {
 }
 
 #[test]
+fn run_and_direct_backends_run_timestamps_example() {
+    let expected = "2026-11-10T20:14:38.250Z\n2026-11-10 is day 314, weekday 2\n1794341678250\n2026-11-11T01:44:38.250+05:30\n11 1:44\ntrue\n2027-01-09T20:14:38.250Z\n5184000.0\ntrue\nSaturday 09 January 2027, 08:14 PM\nday 29 is not in month 2 of 2026\n2026-11-10T20:14:38Z\ntrue\ntrue\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/time/timestamps.au"))
+        .output()
+        .expect("failed to run aura run on timestamps example");
+    assert!(
+        output.status.success(),
+        "run should succeed for timestamps example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/time/timestamps.au",
+        "timestamps-direct",
+        expected,
+    );
+}
+
+#[test]
 fn run_executes_tcp_echo_example() {
     let fixture = repo_root().join("examples/io/tcp_echo.au");
     let output = Command::new(aura_bin())

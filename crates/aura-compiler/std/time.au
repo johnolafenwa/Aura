@@ -1,0 +1,351 @@
+# The Aura-source part of the builtin `time` module. The compiler checks
+# this file as module `time` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. A `DateTime` is three
+# integers: an instant as Unix seconds and nanoseconds, and the offset from
+# UTC its calendar fields are read at. Calendar arithmetic is done here; the
+# clock, the local zone, and text formatting and parsing are host functions.
+import time
+
+
+public enum Error:
+    """Why a date and time could not be built or parsed."""
+    Invalid(message: str)
+
+
+# The instants a `DateTime` holds run from 0001-01-01T00:00:00Z, Unix second
+# -62135596800, to 9999-12-31T23:59:59Z, Unix second 253402300799. An offset
+# is a whole number of minutes strictly inside one day, at most 1439.
+
+
+public copy class DateTime:
+    """An instant, and the offset from UTC at which its calendar fields are
+    read. Build one with `time.now`, `time.utc`, `time.from_unix`, or a
+    parse function."""
+    unix_seconds: int64
+    subsecond_nanos: int64
+    utc_offset_minutes: int64
+
+    public def unix(self) -> int64:
+        """Whole seconds since 1970-01-01T00:00:00Z, rounded down."""
+        return self.unix_seconds
+
+    public def unix_ms(self) -> int64:
+        """Whole milliseconds since 1970-01-01T00:00:00Z, rounded down."""
+        return self.unix_seconds * 1000 + self.subsecond_nanos // 1000000
+
+    public def nanosecond(self) -> int64:
+        """The nanoseconds past the whole second, from 0 to 999,999,999."""
+        return self.subsecond_nanos
+
+    public def offset_minutes(self) -> int64:
+        """Minutes east of UTC at which the calendar fields are read."""
+        return self.utc_offset_minutes
+
+    def local_seconds(self) -> int64:
+        return self.unix_seconds + self.utc_offset_minutes * 60
+
+    def local_days(self) -> int64:
+        return self.local_seconds() // 86400
+
+    public def year(self) -> int64:
+        return civil_year(self.local_days())
+
+    public def month(self) -> int64:
+        """The month, from 1 to 12."""
+        return civil_month(self.local_days())
+
+    public def day(self) -> int64:
+        """The day of the month, from 1 to 31."""
+        return civil_day(self.local_days())
+
+    public def date(self) -> (int64, int64, int64):
+        """The year, month, and day together."""
+        days = self.local_days()
+        return (civil_year(days), civil_month(days), civil_day(days))
+
+    public def hour(self) -> int64:
+        return self.local_seconds() % 86400 // 3600
+
+    public def minute(self) -> int64:
+        return self.local_seconds() % 3600 // 60
+
+    public def second(self) -> int64:
+        return self.local_seconds() % 60
+
+    public def weekday(self) -> int64:
+        """The day of the week, from 1 for Monday to 7 for Sunday."""
+        # 1970-01-01 was a Thursday.
+        return (self.local_days() + 3) % 7 + 1
+
+    public def day_of_year(self) -> int64:
+        """The day of the year, from 1 to 366."""
+        days = self.local_days()
+        return days - days_from_civil(civil_year(days), 1, 1) + 1
+
+    public def to_utc(self) -> DateTime:
+        """The same instant read at UTC."""
+        return DateTime(
+            unix_seconds=self.unix_seconds,
+            subsecond_nanos=self.subsecond_nanos,
+            utc_offset_minutes=0,
+        )
+
+    public def to_offset(self, minutes: int64) -> Result[DateTime, Error]:
+        """The same instant read `minutes` east of UTC."""
+        if minutes < -1439 or minutes > 1439:
+            return Result.Err(
+                Error.Invalid(message=f"offset of {minutes} minutes is a day or more")
+            )
+        return Result.Ok(
+            DateTime(
+                unix_seconds=self.unix_seconds,
+                subsecond_nanos=self.subsecond_nanos,
+                utc_offset_minutes=minutes,
+            )
+        )
+
+    public def to_local(self) -> DateTime:
+        """The same instant read at the offset the system's time zone has at
+        that instant."""
+        return DateTime(
+            unix_seconds=self.unix_seconds,
+            subsecond_nanos=self.subsecond_nanos,
+            utc_offset_minutes=time.__aura_local_offset_minutes(self.unix_seconds),
+        )
+
+    public def add(self, amount: Duration) -> DateTime:
+        """The instant `amount` later, at the same offset. Traps when the
+        result leaves the years 1 to 9999."""
+        (seconds, nanos) = time.__aura_duration_parts(amount)
+        mut total_seconds = self.unix_seconds + seconds
+        mut total_nanos = self.subsecond_nanos + nanos
+        if total_nanos >= 1000000000:
+            total_nanos -= 1000000000
+            total_seconds += 1
+        assert (
+            total_seconds >= -62135596800 and total_seconds <= 253402300799
+        ), "time.DateTime arithmetic left the years 1 to 9999"
+        return DateTime(
+            unix_seconds=total_seconds,
+            subsecond_nanos=total_nanos,
+            utc_offset_minutes=self.utc_offset_minutes,
+        )
+
+    public def sub(self, amount: Duration) -> DateTime:
+        """The instant `amount` earlier, at the same offset. Traps when the
+        result leaves the years 1 to 9999."""
+        return self.add(amount * -1)
+
+    public def since(self, earlier: DateTime) -> Duration:
+        """The time from `earlier` to this instant. It is negative when
+        `earlier` is the later of the two."""
+        return time.__aura_duration(
+            self.unix_seconds - earlier.unix_seconds,
+            self.subsecond_nanos - earlier.subsecond_nanos,
+        )
+
+    public def is_before(self, other: DateTime) -> bool:
+        """Whether this instant is earlier than `other`, whatever their
+        offsets."""
+        if self.unix_seconds != other.unix_seconds:
+            return self.unix_seconds < other.unix_seconds
+        return self.subsecond_nanos < other.subsecond_nanos
+
+    public def is_after(self, other: DateTime) -> bool:
+        """Whether this instant is later than `other`, whatever their
+        offsets."""
+        return other.is_before(self)
+
+    public def same_instant(self, other: DateTime) -> bool:
+        """Whether both are the same instant, whatever their offsets."""
+        return (
+            self.unix_seconds == other.unix_seconds
+            and self.subsecond_nanos == other.subsecond_nanos
+        )
+
+    public def to_rfc3339(self) -> str:
+        """The date and time as RFC 3339 text, such as
+        `2026-11-10T20:14:38Z` or `2026-11-10T21:14:38.250+01:00`."""
+        return time.__aura_rfc3339(
+            self.unix_seconds, self.subsecond_nanos, self.utc_offset_minutes
+        )
+
+    public def format(self, pattern: str) -> Result[str, Error]:
+        """The date and time written as `pattern` directs, where `%Y`,
+        `%m`, `%d`, `%H`, `%M`, `%S` and the other directives stand for
+        fields."""
+        (ok, text) = time.__aura_format(
+            self.unix_seconds, self.subsecond_nanos, self.utc_offset_minutes, pattern
+        )
+        if ok:
+            return Result.Ok(text)
+        return Result.Err(Error.Invalid(message=text))
+
+
+impl Display for DateTime:
+    def display(self) -> str:
+        return self.to_rfc3339()
+
+
+def days_from_civil(year: int64, month: int64, day: int64) -> int64:
+    # Days from 1970-01-01 to a proleptic Gregorian date, for years from 1.
+    # A year runs from March, so a leap day is the last day of its year.
+    mut shifted_year = year
+    if month <= 2:
+        shifted_year -= 1
+    era = shifted_year // 400
+    year_of_era = shifted_year - era * 400
+    mut shifted_month = month - 3
+    if month <= 2:
+        shifted_month = month + 9
+    day_of_year = (153 * shifted_month + 2) // 5 + day - 1
+    day_of_era = year_of_era * 365 + year_of_era // 4 - year_of_era // 100 + day_of_year
+    return era * 146097 + day_of_era - 719468
+
+
+# The date of a count of days from 1970-01-01 is read one field at a time,
+# so that a field method returns an integer and builds no tuple. The three
+# helpers below share their first steps: the day within a 400-year era,
+# the year within the era, and the day within a year that runs from March.
+def day_of_era(days: int64) -> int64:
+    shifted = days + 719468
+    return shifted - shifted // 146097 * 146097
+
+
+def year_of_era(era_day: int64) -> int64:
+    return (era_day - era_day // 1460 + era_day // 36524 - era_day // 146096) // 365
+
+
+def march_day_of_year(era_day: int64, era_year: int64) -> int64:
+    return era_day - (365 * era_year + era_year // 4 - era_year // 100)
+
+
+def civil_year(days: int64) -> int64:
+    era_day = day_of_era(days)
+    era_year = year_of_era(era_day)
+    year = era_year + (days + 719468) // 146097 * 400
+    # January and February belong to the next calendar year.
+    if (5 * march_day_of_year(era_day, era_year) + 2) // 153 >= 10:
+        return year + 1
+    return year
+
+
+def civil_month(days: int64) -> int64:
+    era_day = day_of_era(days)
+    shifted_month = (5 * march_day_of_year(era_day, year_of_era(era_day)) + 2) // 153
+    if shifted_month >= 10:
+        return shifted_month - 9
+    return shifted_month + 3
+
+
+def civil_day(days: int64) -> int64:
+    era_day = day_of_era(days)
+    year_day = march_day_of_year(era_day, year_of_era(era_day))
+    return year_day - (153 * ((5 * year_day + 2) // 153) + 2) // 5 + 1
+
+
+def days_in_month(year: int64, month: int64) -> int64:
+    if month == 2:
+        if year % 4 == 0 and (year % 100 != 0 or year % 400 == 0):
+            return 29
+        return 28
+    if month == 4 or month == 6 or month == 9 or month == 11:
+        return 30
+    return 31
+
+
+def checked(seconds: int64, nanos: int64, offset: int64) -> Result[DateTime, Error]:
+    if seconds < -62135596800 or seconds > 253402300799:
+        return Result.Err(Error.Invalid(message="the year is outside 1 to 9999"))
+    return Result.Ok(
+        DateTime(unix_seconds=seconds, subsecond_nanos=nanos, utc_offset_minutes=offset)
+    )
+
+
+public def now() -> DateTime:
+    """The current instant from the system clock, read at UTC."""
+    (seconds, nanos) = time.__aura_now()
+    return DateTime(unix_seconds=seconds, subsecond_nanos=nanos, utc_offset_minutes=0)
+
+
+public def now_local() -> DateTime:
+    """The current instant, read at the system time zone's current offset."""
+    return now().to_local()
+
+
+public def monotonic() -> Duration:
+    """The time since an arbitrary fixed point in the past, from a clock
+    that never goes backward. Subtract two readings to time something."""
+    return time.__aura_monotonic()
+
+
+public def from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[DateTime, Error]:
+    """The instant `seconds` and `nanosecond` after 1970-01-01T00:00:00Z,
+    read at UTC."""
+    if nanosecond < 0 or nanosecond > 999999999:
+        return Result.Err(
+            Error.Invalid(message=f"nanosecond {nanosecond} is outside 0 to 999999999")
+        )
+    return checked(seconds, nanosecond, 0)
+
+
+public def from_unix_ms(milliseconds: int64) -> Result[DateTime, Error]:
+    """The instant `milliseconds` after 1970-01-01T00:00:00Z, read at UTC."""
+    seconds = milliseconds // 1000
+    return checked(seconds, (milliseconds - seconds * 1000) * 1000000, 0)
+
+
+public def utc(
+    year: int64,
+    month: int64,
+    day: int64,
+    hour: int64 = 0,
+    minute: int64 = 0,
+    second: int64 = 0,
+    nanosecond: int64 = 0,
+) -> Result[DateTime, Error]:
+    """The instant with these calendar fields at UTC."""
+    if year < 1 or year > 9999:
+        return Result.Err(Error.Invalid(message=f"year {year} is outside 1 to 9999"))
+    if month < 1 or month > 12:
+        return Result.Err(Error.Invalid(message=f"month {month} is outside 1 to 12"))
+    if day < 1 or day > days_in_month(year, month):
+        return Result.Err(
+            Error.Invalid(message=f"day {day} is not in month {month} of {year}")
+        )
+    if hour < 0 or hour > 23:
+        return Result.Err(Error.Invalid(message=f"hour {hour} is outside 0 to 23"))
+    if minute < 0 or minute > 59:
+        return Result.Err(Error.Invalid(message=f"minute {minute} is outside 0 to 59"))
+    if second < 0 or second > 59:
+        return Result.Err(Error.Invalid(message=f"second {second} is outside 0 to 59"))
+    if nanosecond < 0 or nanosecond > 999999999:
+        return Result.Err(
+            Error.Invalid(message=f"nanosecond {nanosecond} is outside 0 to 999999999")
+        )
+    seconds = days_from_civil(year, month, day) * 86400 + hour * 3600 + minute * 60 + second
+    return Result.Ok(
+        DateTime(unix_seconds=seconds, subsecond_nanos=nanosecond, utc_offset_minutes=0)
+    )
+
+
+def parsed(
+    ok: bool, seconds: int64, nanos: int64, offset: int64, message: str
+) -> Result[DateTime, Error]:
+    if not ok:
+        return Result.Err(Error.Invalid(message=message.clone()))
+    return checked(seconds, nanos, offset)
+
+
+public def parse_rfc3339(text: str) -> Result[DateTime, Error]:
+    """Parses RFC 3339 text such as `2026-11-10T20:14:38Z` or
+    `2026-11-10T21:14:38.25+01:00`. The result keeps the text's offset."""
+    (ok, seconds, nanos, offset, message) = time.__aura_parse_rfc3339(text)
+    return parsed(ok, seconds, nanos, offset, message)
+
+
+public def parse(text: str, pattern: str) -> Result[DateTime, Error]:
+    """Parses `text` written as `pattern` directs, with the directives of
+    `DateTime.format`. A pattern without `%z` reads the fields at UTC."""
+    (ok, seconds, nanos, offset, message) = time.__aura_parse(text, pattern)
+    return parsed(ok, seconds, nanos, offset, message)

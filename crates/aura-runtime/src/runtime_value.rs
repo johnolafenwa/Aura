@@ -67,6 +67,8 @@ mod generator;
 pub mod host_builtins;
 #[path = "regex_host.rs"]
 pub mod regex_host;
+#[path = "time_host.rs"]
+pub mod time_host;
 pub use generator::{
     generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,

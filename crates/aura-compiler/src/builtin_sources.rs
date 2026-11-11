@@ -17,6 +17,7 @@ const JSON_SOURCE: &str = include_str!("../std/json.au");
 const ITER_SOURCE: &str = include_str!("../std/iter.au");
 const PRELUDE_SOURCE: &str = include_str!("../std/prelude.au");
 const REGEX_SOURCE: &str = include_str!("../std/regex.au");
+const TIME_SOURCE: &str = include_str!("../std/time.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
@@ -24,6 +25,7 @@ fn module_source(name: &str) -> Option<&'static str> {
         "iter" => Some(ITER_SOURCE),
         "prelude" => Some(PRELUDE_SOURCE),
         "regex" => Some(REGEX_SOURCE),
+        "time" => Some(TIME_SOURCE),
         _ => None,
     }
 }
