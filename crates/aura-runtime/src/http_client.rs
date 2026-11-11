@@ -1374,8 +1374,28 @@ pub fn http_send(
 
 /// The body of an `http.Response`: the value of the private `http.Stream`
 /// type. Copies share one body.
+///
+/// The body is held behind a trait object. Closing and dropping a value
+/// are part of every program, and through the trait object they reach the
+/// client's code only in a program that makes a request, so a program
+/// that makes none does not link the client or its decoders.
 #[derive(Clone)]
-pub struct HttpResponseValue(Arc<Mutex<Option<Box<HttpBody>>>>);
+pub struct HttpResponseValue(Arc<Mutex<Option<Box<dyn StreamBody>>>>);
+
+trait StreamBody: Send {
+    fn close_body(&mut self);
+    fn body(&mut self) -> &mut HttpBody;
+}
+
+impl StreamBody for HttpBody {
+    fn close_body(&mut self) {
+        self.close();
+    }
+
+    fn body(&mut self) -> &mut HttpBody {
+        self
+    }
+}
 
 impl PartialEq for HttpResponseValue {
     fn eq(&self, other: &Self) -> bool {
@@ -1405,7 +1425,7 @@ impl HttpResponseValue {
         let Some(mut body) = taken else {
             return Err(closed_resource_error());
         };
-        let result = operation(&mut body);
+        let result = operation(body.body());
         *lock_mutex(&self.0) = Some(body);
         result
     }
@@ -1413,7 +1433,7 @@ impl HttpResponseValue {
     pub fn close(&self) {
         let taken = lock_mutex(&self.0).take();
         if let Some(mut body) = taken {
-            body.close();
+            body.close_body();
             *lock_mutex(&self.0) = Some(body);
         }
     }

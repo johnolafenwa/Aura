@@ -11,7 +11,7 @@ Last updated: 2026-11-11
 - Done: `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip`
   module, `bytes.hmac_sha256`, and `bytes.constant_time_eq` (ADR-0073).
 - Done: the `regex` module (ADR-0078) and the `time` module (ADR-0079).
-- Done: the `http` client module (ADR-0080), which replaces
+- Done: the `http` client module (ADR-0082), which replaces
   `net.http_request_*`.
 - Remaining: the streaming reference agent and a faster `read_line()`.
 

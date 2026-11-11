@@ -1203,6 +1203,8 @@ scope, terminology, authority, and conformance language.
   linear-time search, groups, replacement, and splitting.
 - [Time Module](/manual/time): the clocks, `DateTime` with fixed offsets,
   Duration arithmetic, RFC 3339, and pattern formatting and parsing.
+- [HTTP Module](/manual/http): the HTTP client, with streamed bodies,
+  server-sent events, redirects, kept connections, and decompression.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
   exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact
@@ -1514,6 +1516,33 @@ replacement text, and limits.
 | `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
 | `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
 
+## HTTP Client
+
+[HTTP Module](/manual/http) covers settings, body reading, server-sent
+events, kept connections, redirects, compression, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `http.get` | `get(url: str) -> Result[http.Response, io.Error]` | Sends a GET request. |
+| `http.post` | `post(url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a POST request with a text body. |
+| `http.request` | `request(method: str, url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a text body. |
+| `http.request_bytes` | `request_bytes(method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a byte body. |
+| `http.Client` | `Client(timeout=None, read_timeout=None, max_redirects=10, decompress=true, keep_alive=true, ca_file="")` | Request settings, with the methods `get`, `post`, `request`, and `request_bytes`. |
+| `http.idle_connections` | `idle_connections() -> int64` | The finished connections kept for reuse. |
+| `http.close_idle_connections` | `close_idle_connections() -> None` | Closes every kept connection. |
+| `Response.status` | `status: int64` | The status code. `reason` and `url` are the other public fields. |
+| `Response.ok` | `ok(self) -> bool` | Whether the status is from 200 to 299. |
+| `Response.header` | `header(self, name: str) -> str \| None` | A header value, found without regard to case. |
+| `Response.header_values` | `header_values(self, name: str) -> list[str]` | Every value of a header. |
+| `Response.headers` | `headers(self) -> dict[str, str]` | All headers, names in lower case. |
+| `Response.text` | `text(mut self) -> Result[str, io.Error]` | The rest of the body as text, up to 64 MiB. `text_up_to(max_bytes)` takes another limit. |
+| `Response.bytes` | `bytes(mut self) -> Result[list[uint8], io.Error]` | The rest of the body, up to 64 MiB. `bytes_up_to(max_bytes)` takes another limit. |
+| `Response.read_chunk` | `read_chunk(mut self, max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | The next bytes, or `None` at the end. |
+| `Response.read_line` | `read_line(mut self) -> Result[str \| None, io.Error]` | The next line, or `None` at the end. |
+| `Response.read_lines` | `read_lines(mut self, max_lines: int64) -> Result[list[str], io.Error]` | The next lines. An empty list is the end. |
+| `Response.read_event` | `read_event(mut self) -> Result[http.Event \| None, io.Error]` | The next server-sent event, with `event`, `data`, `id`, and `retry`. |
+| `Response.close` | `close(mut self) -> None` | Releases the connection. |
+
 ## Time
 
 [Time Module](/manual/time) covers instants and offsets, the system time
@@ -1764,10 +1793,6 @@ propagate.
 | `net.tls_listen` | `tls_listen(address: str, cert_pem_path: str, key_pem_path: str) -> Result[net.TlsListener, io.Error]` |
 | `net.tls_connect` | `tls_connect(address: str, server_name: str, ca_pem_path: str) -> Result[net.TlsStream, io.Error]` |
 | `net.tls_connect_timeout` | `tls_connect_timeout(address: str, server_name: str, ca_pem_path: str, timeout: Duration) -> Result[net.TlsStream, io.Error]` |
-| `net.http_request_text` | `http_request_text(method: str, url: str, body: str, headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_text_timeout` | `http_request_text_timeout(method: str, url: str, body: str, headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes` | `http_request_bytes(method: str, url: str, bytes: list[uint8], headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: str, url: str, bytes: list[uint8], headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
 
 ## Network Resource Methods
 
@@ -1820,11 +1845,6 @@ and repeated headers.
 | `net.HttpExchange` | `body_bytes` | `body_bytes() -> list[uint8]` |
 | `net.HttpExchange` | `respond_text` | `respond_text(status: int32, text: own str, headers: own dict[str, str]) -> Result[None, io.Error]` |
 | `net.HttpExchange` | `respond_bytes` | `respond_bytes(status: int32, bytes: own list[uint8], headers: own dict[str, str]) -> Result[None, io.Error]` |
-| `net.HttpResponse` | `status` | `status() -> int32` |
-| `net.HttpResponse` | `reason` | `reason() -> str` |
-| `net.HttpResponse` | `headers` | `headers() -> dict[str, str]` |
-| `net.HttpResponse` | `text` | `text() -> Result[str, io.Error]` |
-| `net.HttpResponse` | `bytes` | `bytes() -> list[uint8]` |
 | `net.WebSocketListener` | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` |
 | `net.WebSocketListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.WebSocket` | `send_text` | `send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |
@@ -7291,7 +7311,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling.
 - A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
-- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message. The 16 MiB covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap.
+- The HTTP server accepts at most 64 headers and 16 MiB of wire data per request. The 16 MiB covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The `http` client reads a response body in pieces without a total cap; its whole-body reads stop at 64 MiB by default and 256 MiB at most.
 - WebSocket messages are capped at 64 MiB. Individual frames and write buffers are capped at 16 MiB.
 - Byte-codec inputs have no separate byte-count cap. Byte conversions and the hex and padded-base64 codecs check each fresh destination against a fixed 2,147,483,647-byte safety ceiling first.
 - Crossing that codec output ceiling, or failing allocation, traps with `AU4005`. The ceiling is independent of the public str and `list` length domains.
@@ -7301,7 +7321,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
-- High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses. Redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
+- The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.14 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
@@ -12084,9 +12104,9 @@ _ = process.run(["/bin/echo", "hi"], stdout=process.pipe(), group=true)
 ```
 
 ```aura
-import net
+import http
 
-_ = net.http_request_text_timeout(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={}, timeout=2s)
+_ = http.request(method="POST", url="http://127.0.0.1:8080/jobs", body="{}", headers={})
 ```
 
 The module pages and the [API Index](/manual/api-index) are authoritative for builtin parameter names, defaults, and return types.
@@ -15016,6 +15036,207 @@ that does not call `gzip` does not link it.
 
 Design record: [ADR-0073: Streaming reads, gzip, and HMAC](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0073-streaming-reads-gzip-and-hmac.md).
 
+## Source: docs/manual/http.md
+
+# HTTP Module
+
+The `http` module is the HTTP client. A request returns an `http.Response`
+as soon as the status and headers have arrived. The body stays on the
+connection and the program reads it whole, in chunks, by line, or as
+server-sent events. The client follows redirects, keeps connections for
+reuse, and decodes gzip and deflate bodies.
+
+```aura
+import http
+import io
+
+def fetch(url: str) -> Result[str, io.Error]:
+    mut response = try http.get(url)
+    if not response.ok():
+        return Result.Err(io.Error.Other(f"status {response.status}"))
+    return response.text()
+```
+
+The HTTP server is in the [`net` module](/manual/network).
+
+## Public API
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `http.get` | `get(url: str) -> Result[http.Response, io.Error]` | Sends a GET request. |
+| `http.post` | `post(url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a POST request with a text body. |
+| `http.request` | `request(method: str, url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a text body. |
+| `http.request_bytes` | `request_bytes(method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a byte body. |
+| `http.idle_connections` | `idle_connections() -> int64` | The finished connections kept for reuse. |
+| `http.close_idle_connections` | `close_idle_connections() -> None` | Closes every kept connection. |
+| `http.Client` | `Client(timeout=None, read_timeout=None, max_redirects=10, decompress=true, keep_alive=true, ca_file="")` | The settings of a request. It has the methods `get`, `post`, `request`, and `request_bytes` with the signatures above. |
+
+The module functions use the default settings. They are the same as the
+methods of `http.Client()`.
+
+`http.Response`:
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `status` | `status: int64` | The status code. |
+| `reason` | `reason: str` | The reason phrase. When the server sends none, the standard phrase of the status. |
+| `url` | `url: str` | The URL the response came from, after any redirects. |
+| `ok` | `ok(self) -> bool` | Whether the status is from 200 to 299. |
+| `header` | `header(self, name: str) -> str \| None` | The value of a header. The name is compared without regard to case. A header sent more than once has its values joined with `", "`. |
+| `header_values` | `header_values(self, name: str) -> list[str]` | Every value of a header, in the order sent. |
+| `headers` | `headers(self) -> dict[str, str]` | All headers, with names in lower case. |
+| `text` | `text(mut self) -> Result[str, io.Error]` | The rest of the body as UTF-8 text. |
+| `bytes` | `bytes(mut self) -> Result[list[uint8], io.Error]` | The rest of the body. |
+| `text_up_to` | `text_up_to(mut self, max_bytes: int64) -> Result[str, io.Error]` | The rest of the body as text, when it is at most `max_bytes` long. |
+| `bytes_up_to` | `bytes_up_to(mut self, max_bytes: int64) -> Result[list[uint8], io.Error]` | The rest of the body, when it is at most `max_bytes` long. |
+| `read_chunk` | `read_chunk(mut self, max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | The next bytes of the body, or `None` at its end. |
+| `read_line` | `read_line(mut self) -> Result[str \| None, io.Error]` | The next line without its line ending, or `None` at the end. |
+| `read_lines` | `read_lines(mut self, max_lines: int64) -> Result[list[str], io.Error]` | The next lines, at most `max_lines`. An empty list is the end. |
+| `read_event` | `read_event(mut self) -> Result[http.Event \| None, io.Error]` | The next server-sent event, or `None` at the end. |
+| `close` | `close(mut self) -> None` | Releases the connection. |
+
+`http.Event` has the fields `event: str`, `data: str`, `id: str`, and
+`retry: Duration | None`.
+
+## Requests
+
+A URL starts with `http://` or `https://`. HTTPS checks the server
+certificate against the built-in roots, or against the PEM file named by
+`ca_file` when it is not empty.
+
+The client adds `Host`, `User-Agent`, `Accept`, `Accept-Encoding`,
+`Connection`, and `Content-Length`. A header the caller gives replaces
+the one the client would add. A method that is not an HTTP token, a header
+with a line break, and a URL the client cannot parse all fail with
+`io.Error.InvalidInput` before anything is sent.
+
+A status such as 404 or 500 is a response, not an error. `Result.Err` means
+that no response arrived.
+
+## Settings
+
+| Field | Default | Meaning |
+| --- | --- | --- |
+| `timeout` | `None` | The limit from the start of a request to the arrival of the response head, redirects included. `None` waits without limit. |
+| `read_timeout` | `None` | The limit of each read of the response body. |
+| `max_redirects` | `10` | The redirects followed before the request fails. `0` returns each redirect response to the caller. |
+| `decompress` | `true` | Ask for gzip and deflate bodies and decode them. |
+| `keep_alive` | `true` | Keep finished connections and use them for later requests. |
+| `ca_file` | `""` | A PEM file of certificate authorities to trust instead of the built-in roots. |
+
+```aura
+import http
+import io
+
+def fetch_status(url: str) -> Result[int64, io.Error]:
+    client = http.Client(timeout=2s, max_redirects=0)
+    response = try client.get(url)
+    return Result.Ok(response.status)
+```
+
+A request that passes its limit fails with `io.Error.TimedOut`. A request
+in a cancelled task fails with `io.Error.Cancelled`.
+
+## Reading The Body
+
+`text` and `bytes` read the rest of the body. They fail with
+`io.Error.InvalidData` when the body is larger than 64 MiB. `text_up_to`
+and `bytes_up_to` take another limit, up to 256 MiB. A response that
+declares a longer body fails before any of it is read.
+
+`read_chunk` returns the bytes that have arrived, at most `max_bytes`, and
+waits only when none have. `read_line` accepts `\n` and `\r\n` line
+endings. `read_lines` waits for one line and returns it with the lines that
+have already arrived, so one call hands over many lines when the body
+arrives quickly and still returns each line promptly when it arrives
+slowly.
+
+```aura
+import http
+import io
+
+def count_lines(url: str) -> Result[int64, io.Error]:
+    mut total = 0
+    with response = try http.get(url):
+        while true:
+            lines = try response.read_lines(1024)
+            if lines.len() == 0:
+                break
+            total += lines.len()
+    return Result.Ok(total)
+```
+
+The reading methods can be mixed. Each one continues where the last one
+stopped.
+
+## Server-Sent Events
+
+`read_event` reads a `text/event-stream` body one event at a time. It
+joins the `data` lines of an event with newlines, names an event without an
+`event` field `"message"`, keeps the last `id` the stream sent, and skips
+comment lines. An event without `data` is not returned. Lines must end with
+`\n` or `\r\n`.
+
+```aura
+import http
+import io
+
+def print_events(url: str) -> Result[None, io.Error]:
+    with stream = try http.get(url):
+        while true:
+            event = try stream.read_event()
+            if event is None:
+                break
+            print(f"{event.event}: {event.data}")
+    return Result.Ok(None)
+```
+
+## Connections
+
+A response owns its connection until the body has been read to its end.
+The connection then goes back to the client for the next request to the
+same scheme, host, port, and `ca_file`. Closing or dropping a response
+before the end of its body closes the connection, because the unread part
+cannot be skipped safely. `with` closes the response at the end of its
+block.
+
+The kept connections belong to the process and are shared by every task.
+At most 8 are kept for one host and 64 in all, and one that has been idle
+for 90 seconds is closed. When a kept connection turns out to be closed by
+the server, the client opens a new one and sends the request again. It
+does this only when no part of a response arrived, and only for a request
+that failed while being written or whose method is safe to repeat (`GET`,
+`HEAD`, `PUT`, `DELETE`, `OPTIONS`, `TRACE`).
+
+`keep_alive=false` sends `Connection: close` and never keeps the
+connection.
+
+## Redirects
+
+The client follows statuses 301, 302, 303, 307, and 308 that carry a
+`Location` header. After 303, and after 301 or 302 in answer to a `POST`,
+the next request is a `GET` without a body. After 307 and 308 the method
+and body are kept. When the redirect leads to another scheme, host, or
+port, the client drops the `Authorization`, `Cookie`, and
+`Proxy-Authorization` headers. A request that meets more than
+`max_redirects` redirects fails with `io.Error.Other`.
+
+## Compression
+
+The client sends `Accept-Encoding: gzip, deflate` and decodes a body with
+either `Content-Encoding`. The reading methods return decoded bytes, and
+the size limits count decoded bytes. With `decompress=false`, or when the
+caller sets `Accept-Encoding`, the body is returned as sent.
+
+## Limits
+
+- The client speaks HTTP/1.1. It does not speak HTTP/2 or HTTP/3.
+- It does not use proxies and does not keep cookies.
+- A request body is sent whole. It cannot be streamed.
+- A response head is limited to 256 KiB and 64 headers, and one line of a
+  body to 64 MiB.
+- Server-sent event lines that end with a lone `\r` are not supported.
+
 ## Source: docs/manual/io.md
 
 # I/O Module
@@ -17101,7 +17322,7 @@ The `net` module provides networking resources that cooperate with Aura's task s
 
 - TCP listeners and streams
 - UDP sockets and datagrams
-- HTTP listeners, exchanges, and client responses
+- HTTP listeners and exchanges
 - WebSocket listeners and sockets
 - Unix domain sockets on Unix hosts
 - TLS listeners and streams
@@ -17257,34 +17478,15 @@ UDP preserves datagram boundaries.
 
 The listener rejects malformed HTTP requests. A malformed request does not leave the listener permanently broken. Request bodies can use content-length or chunked framing.
 
-An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
+An incoming HTTP request is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
 
 Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.14 high-level HTTP API.
 
 ## HTTP Client
 
-| API | Signature | Contract |
-| --- | --- | --- |
-| `net.http_request_text` | `http_request_text(method: str, url: str, body: str, headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` | Sends an HTTP request with a text body. |
-| `net.http_request_text_timeout` | `http_request_text_timeout(method: str, url: str, body: str, headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` | Sends a text request with a deadline. |
-| `net.http_request_bytes` | `http_request_bytes(method: str, url: str, bytes: list[uint8], headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` | Sends an HTTP request with a byte body. |
-| `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: str, url: str, bytes: list[uint8], headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` | Sends a byte request with a deadline. |
-
-`net.HttpResponse`:
-
-| API | Signature | Contract |
-| --- | --- | --- |
-| `status` | `status() -> int32` | Returns the numeric status code. |
-| `reason` | `reason() -> str` | Returns the reason phrase. |
-| `headers` | `headers() -> dict[str, str]` | Returns the response headers. |
-| `text` | `text() -> Result[str, io.Error]` | Decodes the body as UTF-8. |
-| `bytes` | `bytes() -> list[uint8]` | Returns the raw response body. |
-
-Use the byte request and response APIs for binary payloads or an unknown encoding.
-
-Client URLs can use `http://` or `https://`. HTTPS validates the server certificate. Responses can use content-length, chunked transfer encoding, or connection-close framing. The same limits of 16 MiB per incoming message and 64 headers apply.
-
-The high-level HTTP helpers in 0.14 do not follow redirects, pool connections, speak HTTP/2, use proxies, decompress bodies, or take a custom-CA argument.
+The HTTP client is the [`http` module](/manual/http). It streams response
+bodies, follows redirects, keeps connections for reuse, and decodes gzip
+and deflate bodies.
 
 ## WebSocket
 
@@ -17464,7 +17666,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 | TCP whole text reads, TCP line reads, and single byte-count reads | 64 MiB |
 | TCP, Unix, and TLS exact counts | `1..=67108864` |
 | UDP receive counts | `1..=65535` |
-| Incoming parsed HTTP message | 16 MiB of wire data and 64 headers |
+| Incoming HTTP request | 16 MiB of wire data and 64 headers |
 | WebSocket message | 64 MiB |
 | WebSocket frame and write buffer | 16 MiB |
 | TLS handshake | hard 10-second cap, plus any shorter caller deadline |
@@ -17475,7 +17677,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 - WebSocket listeners cannot be closed. WebSocket cancellation coverage is incomplete. WebSocket close discards host close errors.
 - Unix sockets are unavailable on non-Unix hosts. `unix_listen` does not replace a path that is not a socket.
 
-These are absent: redirects, connection pooling, HTTP/2, proxies, decompression, custom-CA arguments on the high-level helpers, and lossless repeated-header APIs.
+These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs. The limits of the HTTP client are in the [`http` module](/manual/http#limits).
 
 ## Status
 
@@ -18349,7 +18551,7 @@ A separate `Transfer` check applies to task captures, task results, Queue constr
 
 | Category | Types |
 | --- | --- |
-| Qualifies | Copy values, `str`, and aggregates made entirely from transferable components. `process.Completed`, `net.HttpResponse`, and `net.UdpDatagram`, which are owned snapshot data rather than live resources. |
+| Qualifies | Copy values, `str`, and aggregates made entirely from transferable components. `process.Completed` and `net.UdpDatagram`, which are owned snapshot data rather than live resources. |
 | Does not qualify | `random.Rng`, `TaskGroup`, and live host resources, including `process.Child`, `net.HttpExchange`, and `net.UdpSocket`. |
 
 A Copy value read through shared or mutable access is a narrow exception. Task capture materializes an independent owned snapshot, so no capability crosses. A non-copy access cannot be captured this way, because the child would need ownership of the value.
@@ -23997,7 +24199,7 @@ Queue construction, `put`, and `try_put` separately require the payload `T` to b
 
 An individual host type can join the Transfer set only through a later design decision that proves its thread safety.
 
-Owned data returned from a host operation is classified by the data it stores, not by where it came from. Examples are completed output and structural error values. `process.Completed`, `net.HttpResponse`, and `net.UdpDatagram` are explicitly Transfer owned snapshots. Their live sources, `process.Child`, `net.HttpExchange`, and `net.UdpSocket`, are not.
+Owned data returned from a host operation is classified by the data it stores, not by where it came from. Examples are completed output and structural error values. `process.Completed` and `net.UdpDatagram` are explicitly Transfer owned snapshots. Their live sources, `process.Child` and `net.UdpSocket`, are not.
 
 **Copy snapshots.** Reading a Copy value through shared or mutable access produces an independent owned snapshot. It does not transport the capability. That snapshot may cross when its type is `Transfer`. Non-copy access cannot use this exception, because value capture would require ownership.
 
@@ -24050,7 +24252,8 @@ Builtin modules provide these types. Their names are reserved.
 | `fs` | `fs.File` |
 | `json` | `json.Value`, `json.Error` |
 | `random` | `random.Rng` |
-| `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.HttpResponse`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
+| `http` | `http.Client`, `http.Response`, `http.Event` |
+| `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
 | `process` | `process.Child`, `process.Pipe`, `process.Completed`, `process.Supervisor`, `process.ExitStatus`, `process.Wait`, `process.Stdio`, `process.Error`, `process.RestartPolicy`, `process.SupervisorEvent`, `process.SupervisorWait` |
 
 Scope a resource with `with` or close it explicitly.
@@ -47838,16 +48041,16 @@ server failed: io.Error.AddrInUse
 
 ## The HTTP probe
 
-Now the client side. `net.http_request_text_timeout` sends one request and
-returns a `net.HttpResponse`. Add `import net` to *src/main.au* and write
-`fetch`:
+Now the client side. The client lives in its own module, `http`. An
+`http.Client` holds the settings of a request, and its `get` method sends
+one and returns an `http.Response`. Add `import http` to *src/main.au* and
+write `fetch`:
 
 ```aura fragment
 def fetch(url: str) -> str:
-    headers: dict[str, str] = {}
-    match own net.http_request_text_timeout("GET", url, "", headers, 2s):
+    match own http.Client(timeout=2s).get(url):
         case Result.Ok(response):
-            status = response.status()
+            status = response.status
             if status >= 200 and status < 400:
                 return "ok"
             return f"failed (HTTP {status})"
@@ -47864,11 +48067,18 @@ and point the last arm of `run_check` at it:
             return fetch(url)
 ```
 
-The arguments are the method, the URL, a text body (empty for a `GET`), a
-header dictionary, and the deadline. The empty dictionary needs its type
-written out, because there is nothing in `{}` for the compiler to infer it
-from. There are four client functions: text or byte bodies, each with and
-without a timeout. For a check, always use a timeout.
+`http.get(url)` does the same with the default settings, which wait without
+limit. For a check, always set a timeout. The client also has `post`, and
+`request` and `request_bytes` for any method with a text or byte body and a
+header dictionary. It follows redirects, so the status we see is the one at
+the end of the chain.
+
+The response arrives as soon as its status and headers do. We only look at
+the status here, so we never read the body, and dropping the response
+closes its connection. A program that wants the body calls `text()` or
+`bytes()`, or reads it in pieces with `read_chunk`, `read_line`,
+`read_lines`, or, for a server that streams events, `read_event`. The
+[HTTP Module](/manual/http) page has the details.
 
 Notice the two different ways a check can fail here, as with commands. A
 response with status `404` or `500` is a successful request that brought bad
@@ -48216,9 +48426,9 @@ gate a CI job or a deploy script.
 
 ```aura
 import fs
+import http
 import io
 import json
-import net
 import process
 import sys
 
@@ -48291,10 +48501,9 @@ def run_command(argv: list[str], timeout: Duration) -> str:
             return f"error ({error})"
 
 def fetch(url: str, timeout: Duration) -> str:
-    headers: dict[str, str] = {}
-    match own net.http_request_text_timeout("GET", url, "", headers, timeout):
+    match own http.Client(timeout=timeout).get(url):
         case Result.Ok(response):
-            status = response.status()
+            status = response.status
             if status >= 200 and status < 400:
                 return "ok"
             return f"failed (HTTP {status})"

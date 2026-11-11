@@ -1,4 +1,4 @@
-# ADR-0080: The `http` client module
+# ADR-0082: The `http` client module
 
 - Status: Accepted
 - Date: 2026-11-11

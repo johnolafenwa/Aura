@@ -133,7 +133,7 @@ How it got there, from a first version at 9.8 s:
 
 ## Step 3: the `http` client (work completed, 2026-11-11)
 
-- The `http` module (ADR-0080) replaces `net.http_request_*` and
+- The `http` module (ADR-0082) replaces `net.http_request_*` and
   `net.HttpResponse`. `Client`, `Response`, and `Event` are Aura classes in
   `std/http.au`; the runtime half is `crates/aura-runtime/src/http_client.rs`
   with ten host functions and the opaque `http.Stream`.
