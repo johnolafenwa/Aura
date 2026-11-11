@@ -96,7 +96,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
-- Slice steps and slice assignment are reserved `AU2005` forms.
+- Slice assignment to a list or `str` is a reserved `AU2005` form.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
@@ -111,10 +111,10 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numeric Arrays
 
-- Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
+- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, a matrix product over more than two dimensions, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
-- First-axis slices are fresh owned copies.
+- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting between two Arrays, mixed promotion, equality, a matrix product over more than two dimensions, `for` iteration, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
 

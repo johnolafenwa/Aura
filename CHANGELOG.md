@@ -7,6 +7,27 @@ in this file.
 
 ## Unreleased
 
+- Arrays: an index takes a coordinate or a slice on each axis, with steps:
+  `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`, `grid[::-1]`. An index
+  with a slice has type `Array[T]`. Bounds follow the list rules and never
+  clamp.
+- Arrays: `reshape(shape)`, `flatten()`, `transpose()`, and
+  `permute(axes)`. One `reshape` dimension may be `-1`.
+- Arrays: slice assignment. `grid[0, :] = 1`, `grid[:, 3] = column`, and
+  `grid[1:, :2] += 0.5` write every selected element. The value may read
+  the Array it is assigned into, so `values[1:] = values[:-1]` shifts the
+  elements. Slice assignment to a list or `str` is still `AU2005`.
+- Arrays share storage. `clone()`, slices, `reshape`, `transpose`, and
+  `permute` no longer copy elements, and cost the same for any element
+  count. An Array is still a value: a write to an Array that shares its
+  elements copies them first, so no Array sees a write made through
+  another. `clone()` of a slice copies only the slice (ADR-0088).
+- Changed: `array[start:end]` shares the source's elements instead of
+  copying the rows. Programs print the same results. A stepped slice of
+  an Array, `array[::2]`, is accepted instead of `AU2003`.
+- `aura fmt` keeps the space after a comma before a slice colon:
+  `grid[1, :]`.
+
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
   `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,

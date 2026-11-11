@@ -1188,9 +1188,12 @@ scope, terminology, authority, and conformance language.
 - [Collections](/manual/collections): `list[T]`, `dict[K, V]`, and `set[T]`,
   with literals, eager owned comprehensions and slices, iteration, mutation,
   and eager list algorithms that take callables.
-- [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`
-  with four numeric dtypes, first-axis owned slices, reductions, native
+- [Numeric Arrays](/manual/numeric-arrays): row-major `Array[T]`
+  with four numeric dtypes, slices and reshapes that share storage, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
+- [SIMD Module](/manual/simd): lane values of two, four, or eight floats
+  that native code keeps in vector registers, with loads and stores over
+  lists and results that are the same on every machine.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1396,6 +1399,10 @@ ownership, diagnostics, and backend behavior.
 | `Array.min` | `min() -> T` | Smallest element. An empty Array is `AU4007`. |
 | `Array.max` | `max() -> T` | Largest element. An empty Array is `AU4007`. |
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
+| `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
+| `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
+| `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 
@@ -1479,6 +1486,24 @@ Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
 cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
+
+## SIMD
+
+[SIMD Module](/manual/simd) covers the lane classes, exact results, and how
+loads and stores work in a counted loop. `V` is one of `simd.F64x2`,
+`simd.F64x4`, `simd.F32x4`, and `simd.F32x8`, and `E` is its element type.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | Reads one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V.store` | `store(self, values: mut list[E], at: int64)` | Writes one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V` operators | `+`, `-`, `*`, `/`, unary `-` | The operation in each lane. Division by a zero lane traps with `AU4004`. |
+| `V.min`, `V.max` | `min(self, other: V) -> V` | The lesser or greater lane, `other` when the comparison is false. |
+| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. |
+| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. |
+| `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
+| `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
 
 ## Gzip
 
@@ -2927,6 +2952,7 @@ aura check app.au
 | `aura build -o path file.au` | Build a native binary. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
 | `aura mir file.au` | Print lowered MIR. |
@@ -3061,6 +3087,42 @@ A debug build runs slower than a normal one. A union, a callable, and a
 class with a field that is itself more than one word are not shown yet. A
 value whose last use has passed has already been released, so it reads
 `<unset>` or null.
+
+### Target CPU
+
+`aura build` and `aura run` compile for a generic CPU of the host
+architecture, so a built binary runs on every machine of that architecture.
+`--target-cpu <name>` picks another instruction set for the program's
+compiled code:
+
+| Name | Instruction set |
+| --- | --- |
+| `generic` | The baseline of the architecture. This is the default. |
+| `native` | Everything the CPU of the build machine has. |
+| `x86-64-v2` | x86-64 only: SSE4.2 and POPCNT. |
+| `x86-64-v3` | x86-64 only: AVX2, FMA, and BMI2. |
+| `x86-64-v4` | x86-64 only: AVX-512. |
+
+```bash
+aura build --target-cpu native -o app app.au
+```
+
+- `AURA_TARGET_CPU` names the CPU when the option is absent. The option
+  wins.
+- A name the host does not accept ends the command with exit status 2 and
+  lists the accepted names.
+- A binary built for a CPU runs only on a CPU with those instructions. On
+  an older CPU it stops with an illegal-instruction signal. A `native`
+  build is for the machine that builds it.
+- The choice does not change a result. Aura never fuses a multiply and an
+  add, so a `native` build prints the same floats as a `generic` one.
+- The name is part of the native cache key. For `native` the key holds the
+  CPU and feature list that LLVM detects.
+- The MIR backend ignores the option.
+
+The Array kernels in the runtime do not need the option. They pick the widest
+copy the CPU has when the program starts. See
+[Kernel Width](/manual/numeric-arrays#kernel-width).
 
 ### Keeping Native Symbols For Profiling
 
@@ -4980,7 +5042,7 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice assignment
+- slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
@@ -5949,8 +6011,8 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Expression closures: contextual bare/`mut`/`own` parameters, expression-only bodies, implicit Copy snapshots, non-Copy move-at-creation, repeatable reads, consuming single-use calls, structural Transfer, cleanup, and MIR/direct parity | lambda parser/check/run/failure fixture families; focused semantic, MIR, runtime, native-codegen, analysis, completion, language-server, and extension tests; `examples/basics/closures.au`; and the forced MIR/direct parity matrix |
 | Place-based loans and views: root/field/fixed-tuple identity, shared/mutable local views, inferred final-use regions, returned receiver/parameter views, reborrowing, exhaustive loan capture lists, mutable-repeatable closures, non-Transfer escape rejection, exit cleanup, `AU3010`, analysis/editor exposure, and MIR/direct write-through parity | focused view parser, semantic, analysis, MIR, MIR-runtime, native-codegen, and native-runtime tests; `place_views.au`; `examples/basics/views.au`; language-server/compiler-bridge and extension protocol tests; and the forced MIR/direct parity matrix |
 | Eager owned comprehensions: list/set/dictionary forms, exact-Boolean filters, progressive non-leaking target scope, nested outer-major order, left-to-right filters, dictionary key-before-value replacement, every bare iterable including Queue receive ownership, explicit clone/move behavior, closure capture interaction, generator/modifier teaching diagnostics, cleanup, and MIR/direct parity | comprehension parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/comprehensions.au`; and the forced MIR/direct parity matrix |
-| Owned list/str slices under the unified `int64` index domain: all omitted endpoint forms, `int64` endpoints with scoped lossless widening, once-only negative normalization, no clamping, invalid/reversed `AU4003`, Unicode-scalar str O(n) behavior, list clone-safety and task-repeatability, retained evaluate-once order, source/result independence, stepped slices (ADR-0066), reserved slice assignment `AU2005`, str integer-index rejection, and MIR/direct parity | slice parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/slices.au`; and the forced MIR/direct parity matrix |
-| Contiguous numeric Arrays and explicit integer modes: four exact dtypes, rank-at-least-one row-major owned storage, zero dimensions, constructor/count checks, multidimensional indexing, first-axis copy slices, exact-shape/scalar kernels, float-only division, deterministic row-major map/reductions, `float64` mean, checked/wrapping/saturating integer behavior, `AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures, `AU4003` coordinate/slice bounds, `AU4005` allocation/element-count failures, `AU4007` shape/rank/count/empty-reduction failures, and no array-shape broadcasting/views/promotion/accelerator | numeric-array semantic/MIR/runtime/native/parity fixture families, including synchronized checked-overflow and floating-zero-divisor diagnostics; compiler analysis, language-server, and extension protocol tests; `examples/numbers/numeric_arrays.au`; the tested `bench-numeric-arrays.py` raw/summary evidence protocol; and the forced MIR/direct parity matrix |
+| Owned list/str slices under the unified `int64` index domain: all omitted endpoint forms, `int64` endpoints with scoped lossless widening, once-only negative normalization, no clamping, invalid/reversed `AU4003`, Unicode-scalar str O(n) behavior, list clone-safety and task-repeatability, retained evaluate-once order, source/result independence, stepped slices (ADR-0066), list/str slice assignment `AU2005`, str integer-index rejection, and MIR/direct parity | slice parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/slices.au`; and the forced MIR/direct parity matrix |
+| Contiguous numeric Arrays and explicit integer modes: four exact dtypes, rank-at-least-one row-major owned storage, zero dimensions, constructor/count checks, multidimensional indexing, per-axis and stepped selections that share storage, `reshape`/`flatten`/`transpose`/`permute`, slice assignment with copy on write, exact-shape/scalar kernels, float-only division, deterministic row-major map/reductions, `float64` mean, checked/wrapping/saturating integer behavior, `AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures, `AU4003` coordinate/slice bounds, `AU4005` allocation/element-count failures, `AU4007` shape/rank/count/empty-reduction failures, and no array-shape broadcasting/promotion/accelerator | numeric-array semantic/MIR/runtime/native/parity fixture families, including synchronized checked-overflow and floating-zero-divisor diagnostics; compiler analysis, language-server, and extension protocol tests; `examples/numbers/numeric_arrays.au`; the tested `bench-numeric-arrays.py` raw/summary evidence protocol; and the forced MIR/direct parity matrix |
 | recursive JSON parse/dump semantics, exact numeric classification, typed parse errors, deterministic formatting, accessors, ownership, and resource limits | JSON codec/runtime-value unit tests, including exact materialized-node boundaries and deterministic allocation-failure injection; `json_dynamic_values`, JSON ownership and run-fail fixtures; `examples/json/dynamic_values.au`; language-server tests; and the MIR/direct parity matrix |
 | dict duplicate-key replacement, key-before-value effects, indexed-read/simple-write ownership, and missing-key traps | `dict_literal_duplicate_keys`, `dict_index_non_copy_requires_explicit_clone`, `dict_index_assignment_consumes_noncopy_key`, and `dict_index_missing_key` fixtures plus the MIR/native parity matrix |
 | Supplied/default order and named enum-argument source order with declaration-slot binding | `explicit_and_default_argument_order` plus the MIR/native parity matrix |
@@ -7148,7 +7210,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
-- Slice steps and slice assignment are reserved `AU2005` forms.
+- Slice assignment to a list or `str` is a reserved `AU2005` form.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
@@ -7163,12 +7225,20 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numeric Arrays
 
-- Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
+- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, matrix multiplication, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
-- First-axis slices are fresh owned copies.
+- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting between two Arrays, mixed promotion, equality, a matrix product over more than two dimensions, `for` iteration, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
+
+### SIMD Lane Values
+
+- The `simd` module has float lanes only: `F64x2`, `F64x4`, `F32x4`, and `F32x8`. There are no integer lanes, lane comparisons, masks, shuffles, or fused multiply-add.
+- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
+- A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
+- The interpreter backend computes each lane as a separate float.
 
 ### Foreign Functions
 
@@ -7440,7 +7510,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -7842,10 +7912,13 @@ Each runtime code's precise causes are listed under
 - a `from_list` count mismatch
 - an exact-shape operator mismatch
 - a direct coordinate-count or runtime-rank mismatch
+- an index with more components than the runtime rank
+- a `reshape` or `permute` the Array's shape does not allow
+- a slice assignment whose value does not broadcast to the selection
 - empty `min`, `max`, or `mean`
 
 Shape-product or element-count overflow and allocation failure stay `AU4005`.
-Out-of-range coordinates and invalid first-axis slice bounds stay `AU4003`.
+Out-of-range coordinates and invalid slice bounds or steps stay `AU4003`.
 Absence from the optional `get` is ordinary `None`. Method `set` traps on an
 invalid coordinate or rank.
 
@@ -8123,13 +8196,15 @@ items for Queue.
 ### Slices
 
 Owned list and str slicing, with or without a step, is implemented. Slice
-assignment is reserved. It reports `AU2005` with this exact message:
+assignment to a list or `str` reports `AU2005` with this exact message:
 
     slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
 
-A stepped slice of an `Array` reports `AU2003`. A zero step, or a
-negative-step slice whose start is outside the value or whose end exceeds
-its start, stops the program with `AU4003`.
+An `Array` accepts slice assignment. A slice among several index
+components, as in `values[0, 1:]`, is an Array form, and reports `AU2003`
+on any other type. A zero step, or a negative-step slice whose start is
+outside the value or whose end exceeds its start, stops the program with
+`AU4003`.
 
 Other slice rules:
 
@@ -9495,7 +9570,7 @@ Array failures use these codes:
 | --- | --- |
 | `AU4007` | Rank-zero or negative-dimension construction, `from_list` count mismatch, exact-shape or rank mismatch, and empty reductions. |
 | `AU4005` | Shape-product or element-count overflow, and allocation failure. |
-| `AU4003` | Direct coordinate and first-axis-slice bounds failures. |
+| `AU4003` | Direct coordinate and slice bounds failures. |
 
 ### Trait-Backed Operators
 
@@ -10718,16 +10793,19 @@ UTF-8 str. Integer `string[index]` is unavailable.
 
 ### Array Slices
 
-An Array slice applies the range only to axis zero. It copies complete rows
-and keeps all later dimensions. Its first result dimension is `end - start`.
-It follows the same rules as other slices: the `int64` domain, one-time
-negative normalization, no clamping, `AU4003`, an owned copy, no step, and no
-assignment. It is not a multidimensional slice or a view.
+An Array index takes one component per axis, and each component is a
+coordinate or a slice: `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`. A slice
+keeps its axis and a coordinate removes it. Each slice follows the same
+rules as other slices: the `int64` domain, one-time negative normalization,
+no clamping, and `AU4003`. The result shares the source's elements instead
+of copying them, and an Array index with a slice can be assigned to.
+[Numeric Arrays](/manual/numeric-arrays#selections) has the details.
 
 ### Steps And Assignment
 
 `value[start:end:step]` selects every `step`-th element of a `list`, `Span`,
-or `str` into a fresh owned value (ADR-0066). The step is in the `int64`
+or `str` into a fresh owned value (ADR-0066). An `Array` takes the same
+form on each axis. The step is in the `int64`
 index domain and may be negative. An empty step, as in `value[::]`, is a
 one-colon slice.
 
@@ -10741,11 +10819,10 @@ one-colon slice.
   otherwise the slice stops the program with `AU4003`.
 - A zero step stops the program with `AU4003`.
 - A `str` step counts Unicode scalar values.
-- `Array` values have no stepped slice; the checker reports `AU2003`.
 
-Slice assignment and compound assignment report `AU2005` with `slice
-assignment is unavailable because slices are owned copies; mutate the source
-by index or build a new value`.
+Slice assignment and compound assignment to a list or `str` report `AU2005`
+with `slice assignment is unavailable because slices are owned copies;
+mutate the source by index or build a new value`. An `Array` accepts both.
 
 ## Collection Literals
 
@@ -11156,7 +11233,7 @@ Compile-time codes:
 | `AU2002` | A type, constructor-payload, match-result, or index-type mismatch. |
 | `AU2003` | An unsupported unary, binary, compound, membership, or cast operator. |
 | `AU2004` | Call or constructor argument binding failed. |
-| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment. |
+| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment to a list or `str`. |
 | `AU2008` | Equality on a union that has a member without equality. |
 | `AU2010` | A value is not a direct member of its expected union. |
 | `AU2011` | A literal that more than one union member could accept. |
@@ -14895,7 +14972,7 @@ view-statement
 
 assignment-target
     = identifier,
-      { ".", identifier | "[", expression, "]" } ;
+      { ".", identifier | index-suffix } ;
 
 unpack-target
     = binding-target, ",", binding-target,
@@ -15202,8 +15279,10 @@ postfix-expression
       | trait-object-cast-suffix } ;
 
 index-suffix
-    = "[", expression, { ",", expression }, "]"
-    | "[", [ expression ], ":", [ expression ], "]" ;
+    = "[", index-component, { ",", index-component }, "]" ;
+index-component
+    = expression
+    | [ expression ], ":", [ expression ], [ ":", [ expression ] ] ;
 member-suffix = ".", identifier ;
 call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
@@ -15248,18 +15327,18 @@ not chains.
 
 ### Indexing And Slicing
 
-Comma-separated index expressions are accepted only for `Array[T]`, which
-requires one `int64` coordinate per runtime axis. Other indexable types take
-one index expression.
+Comma-separated index components are accepted only for `Array[T]`, which
+takes one component per runtime axis. A component is an expression or a
+slice, so `grid[1, :]` and `grid[::2, 1:3]` are Array indexes. Other
+indexable types take one index expression or one slice.
 
-The one-colon bracket forms are owned slices. Each endpoint is optional, so
-`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` all use the
-second `index-suffix` alternative. On `Array[T]`, the range copies the first
-axis.
+The bracket forms with a colon are slices. Each endpoint is optional, so
+`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` are all
+slices. A second colon adds a step: `value[start:end:step]`.
 
-A second colon is reserved step syntax. It is rejected with `AU2005` and is
-not part of the accepted grammar. A slice suffix is an expression only and
-cannot be an assignment target.
+An index with a slice among its components is an assignment target only on
+an `Array[T]`. [Numeric Arrays](/manual/numeric-arrays) defines selections
+and slice assignment.
 
 ## Primary Expressions And Literals
 
@@ -18052,13 +18131,15 @@ Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnol
 
 # Numeric Arrays
 
-`Array[T]` is Aura's owned, contiguous numeric container for the CPU. Use it
-for local preprocessing, postprocessing, evaluation, and batch-shaped numeric
-work. It is smaller than a general tensor framework:
+`Array[T]` is Aura's owned numeric container for the CPU. Use it for local
+preprocessing, postprocessing, evaluation, and batch-shaped numeric work. It
+is smaller than a general tensor framework:
 
 - Shape is runtime metadata.
 - Storage is row-major and lives on the host.
-- Every result owns its buffer.
+- An Array is a value. Slices, transposes, and reshapes read the same
+  elements without copying them, and no Array sees a write made through
+  another.
 
 The only dtypes, or element types, are `int32`, `int64`, `float32`, and
 `float64`.
@@ -18068,10 +18149,11 @@ def main() -> int32:
     left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
     right = Array[float64].full([2, 2], 0.5)
     combined = left + right
-    first_row = combined[0:1]
+    first_row = combined[0, :]
     print(combined.shape())
     print(combined[1, 0])
     print(first_row.sum())
+    print(combined.transpose()[0, :])
     print(combined.mean())
     return 0
 ```
@@ -18079,23 +18161,23 @@ def main() -> int32:
 ## Grammar
 
 `Array` is a global builtin generic type, not a module. It uses the ordinary
-grammar for specialization, calls, member calls, indexing, indexed assignment,
-and one-colon slices:
+grammar for specialization, calls, member calls, indexing, and indexed
+assignment. An Array index takes one component per axis, and a component is
+a coordinate or a slice:
 
 ```text
 Array [ dtype ]
 Array [ dtype ] . constructor ( arguments )
-array [ expression { , expression } ]
-array [ [ expression ] : [ expression ] ]
+array [ component { , component } ]
+component = expression | [ expression ] : [ expression ] [ : [ expression ] ]
 ```
 
 The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is different from list indexing. A
-one-colon slice selects a range along the first axis. [Grammar](/manual/grammar)
-defines the complete syntax.
+`float64`. Comma-separated Array indexing is different from list indexing.
+[Grammar](/manual/grammar) defines the complete syntax.
 
-Aura has no Array literal, dtype value, rank annotation, array-shape
-broadcast syntax, view syntax, step slice, or multidimensional slice tuple.
+Aura has no Array literal, dtype value, rank annotation, or array-shape
+broadcast syntax.
 
 ## Typing Rules
 
@@ -18122,7 +18204,11 @@ from a mixed numeric source.
 | --- | --- |
 | `shape()` | `list[int64]`; owned shape snapshot |
 | `len()` | `int64`; total element count |
-| `clone()` | fresh `Array[T]` |
+| `clone()` | `Array[T]`; an independent copy |
+| `reshape(shape: list[int64])` | `Array[T]`; the same elements under another shape |
+| `flatten()` | `Array[T]`; the elements as one axis |
+| `transpose()` | `Array[T]`; the axes in reverse order |
+| `permute(axes: list[int64])` | `Array[T]`; the axes in the order given |
 | `get(index: list[int64])` | `T \| None`; `None` for an out-of-bounds coordinate or rank mismatch |
 | `set(index: list[int64], value: T)` | mutable receiver; `T \| None` holding the replaced value, or a coordinate/rank trap rather than `None` |
 | `fill(value: T)` | mutable receiver; returns `None` |
@@ -18131,17 +18217,29 @@ from a mixed numeric source.
 | `min()` | `T` |
 | `max()` | `T` |
 | `mean()` | `float64` for every input dtype |
+| `fast_sum()` | `T`; the sum in the fixed reordered order |
+| `fast_mean()` | `float64`; the mean in the fixed reordered order |
+| `dot(other: Array[T])` | `T`; inner product of two Arrays of the same shape |
+| `matmul(other: Array[T])` | fresh `Array[T]`; matrix product |
 
 `map` requires a repeatable callable whose bare parameter type and return
 type match exactly. The checker rejects a consuming closure, a `mut` or `own`
 parameter, and an unsupported result dtype. `set` and `fill` require a mutable
 Array place.
 
+`dot` and `matmul` take an Array of exactly the receiver's type. They borrow
+both operands and consume neither.
+
 ### Indexing And Slicing
 
-Direct indexing takes exactly one `int64` coordinate per runtime axis.
-`array[i, j]` has type `T`. Indexed assignment requires a mutable Array place
-and a value of exactly `T`. `array[start:end]` returns `Array[T]`.
+An index of coordinates only, such as `array[i, j]`, has type `T`. It takes
+exactly one `int64` coordinate per runtime axis. Assignment through it
+requires a mutable Array place and a value of exactly `T`.
+
+An index with a slice among its components, such as `array[i, :]` or
+`array[::2]`, has type `Array[T]`. Assignment through it requires a mutable
+Array place and a value of type `T` or `Array[T]`. Slice bounds and steps are
+`int64` or a losslessly narrower integer type.
 
 ### Operators
 
@@ -18170,7 +18268,7 @@ checked.
 
 ### Shape And Layout
 
-An Array has rank one or more and owns one contiguous row-major buffer.
+An Array has rank one or more and reads its elements in row-major order.
 Dimensions are `int64`. They can be zero but not negative. `len()` is the
 checked product of all dimensions, so a zero dimension makes the Array empty
 while keeping its full shape.
@@ -18188,19 +18286,126 @@ coordinate:
 
 A valid `set` returns the previous scalar as its `T | None` result.
 
-### First-Axis Slices
+### Selections
 
-`array[start:end]` selects complete rows along axis zero. Written endpoints
-have exact type `int32`. Omitted bounds and one-time negative normalization
-follow the owned-slice rules for lists. Endpoints never clamp. The result has
-shape `[end - start]` followed by the source's remaining dimensions. It is
-fresh storage that never aliases the source.
+Each component of an index applies to one axis, in order. A coordinate picks
+one position and removes the axis. A slice keeps the axis. Axes after the
+last component are taken whole.
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [3, 4])
+    print(grid[1, :])
+    print(grid[:, 2])
+    print(grid[::2, 1:3])
+    print(grid[::-1])
+    print(grid[1:2, :].shape())
+    return 0
+```
+
+It prints the second row, the third column, a two by two block, the rows in
+reverse order, and `[1, 4]`.
+
+A slice follows the rules of a list slice. Omitted bounds take the whole
+axis, a negative bound counts from the end once, and a step may be negative.
+Bounds never clamp. A bound outside the axis, a reversed range, or a zero
+step is `AU4003`. More components than the Array has axes is `AU4007`.
+
+A selection does not copy elements. See [Shared Storage](#shared-storage).
+
+### Shape Members
+
+| Member | Result |
+| --- | --- |
+| `reshape(shape)` | The same elements in row-major order under `shape`. One dimension may be `-1`, which takes the length the others leave. |
+| `flatten()` | `reshape([-1])`. |
+| `transpose()` | The axes in reverse order. A rank-1 Array is unchanged. |
+| `permute(axes)` | The axes in the order `axes` names them. Each axis appears once, and a negative axis counts from the last. |
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5], [2, 3])
+    print(grid.transpose())
+    print(grid.reshape([3, -1]))
+    print(grid.transpose().flatten())
+    return 0
+```
+
+A `reshape` whose shape holds a different number of elements, and a
+`permute` that repeats or omits an axis, are `AU4007`.
+
+### Slice Assignment
+
+`array[selection] = value` writes every selected element. The value is one
+element, which fills the selection, or an Array whose shape broadcasts to
+the selected shape: each dimension is equal or one, aligned at the last
+axis.
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    grid[0, :] = 1
+    grid[:, 3] = Array[float64].from_list([7.0, 8.0, 9.0], [3])
+    grid[1:, :2] += 0.5
+    grid[2, :] = grid[0, :]
+    print(grid)
+    return 0
+```
+
+- A numeric literal takes the Array's dtype.
+- `array[selection] op= value` reads the selection once, applies the
+  operator, and writes the result back.
+- The value is complete before the write starts, so it may read the Array it
+  is assigned into. `values[1:] = values[:-1]` shifts the elements as they
+  were.
+- The selection and the value's shape are checked before anything is
+  written. A value of another shape is `AU4007`.
+
+### Shared Storage
+
+`clone()`, a selection, `reshape`, `flatten`, `transpose`, and `permute`
+return an Array that reads the same element buffer as the source. They cost
+the same for any element count. Two exceptions copy elements:
+
+- `reshape` and `flatten` of a view that is not one row-major block, such as
+  a transposed matrix or a stepped slice.
+- `clone()` of an Array that reads part of a larger buffer. The copy holds
+  only its own elements.
+
+A write never shows through another Array. `set`, `fill`, and assignment
+write in place when the Array is the only one reading its buffer. Otherwise
+the Array first copies its own elements, and the other Arrays keep the old
+buffer:
+
+```aura
+def main() -> int32:
+    mut grid = Array[int64].zeros([2, 2])
+    row = grid[0, :]
+    grid[0, 0] = 5
+    print(row)
+    print(grid[0, :])
+    return 0
+```
+
+It prints `[0, 0]` for `row` and `[5, 0]` for the row read after the write.
+
+That copy is the one cost to plan for. A loop that keeps a view of an Array
+alive while it writes the Array copies the Array on the first write after
+each view is taken. Call `clone()` on the view to keep its elements without
+the buffer:
+
+```aura
+def swap_rows(grid: mut Array[float64], first: int64, second: int64) -> None:
+    saved = grid[first, :].clone()
+    grid[first, :] = grid[second, :]
+    grid[second, :] = saved
+```
 
 ### Arithmetic
 
 - Array/Array operations require exactly equal shapes.
 - Scalar forms apply the scalar to every element in row-major order.
-- Results own fresh contiguous storage.
+- Results own fresh storage.
 - Floating `/` follows the ordinary floating operator rules.
 - Integer `+`, `-`, `*`, and `sum` keep checked overflow.
 - Wrapping operations use fixed-width two's-complement modular arithmetic.
@@ -18218,12 +18423,78 @@ order.
 - `mean()` accumulates and returns a `float64` result for every source
   dtype.
 
-The contract promises no reassociation and no vectorized reduction order.
+`sum` and `mean` promise no reassociation and no vectorized reduction
+order. A float `min` treats `-0.0` as below `0.0`, and `max` treats `0.0` as
+above `-0.0`.
+
+### Reordered Reductions
+
+A left-to-right float sum is a chain in which each addition waits for the one
+before it, so it adds one element at a time on any CPU. `fast_sum()` and
+`fast_mean()` add in another order that a CPU can run many elements wide:
+
+```aura
+def main() -> int32:
+    values = Array[float64].full([1000000], 0.1)
+    print(values.sum())
+    print(values.fast_sum())
+    return 0
+```
+
+The order is fixed, so the result is the same on every CPU and in both
+backends. For `n` elements, let `w` be the largest multiple of 32 that is at
+most `n`:
+
+1. Element `i < w` is added to partial sum `i % 32`, in index order. Each
+   partial sum starts at zero.
+2. The 32 partial sums are added in halves. Sum `s` takes sum `s + 16`, then
+   `s + 8`, `s + 4`, `s + 2`, and `s + 1`.
+3. Elements `w` to `n - 1` are added to that total in index order.
+
+- `fast_sum()` adds in the element type. `fast_mean()` widens each element
+  to `float64`, adds in that order, and divides by the count.
+- The result can differ from `sum()` and `mean()` in the last digits. Both
+  propagate NaN.
+- On an integer Array `fast_sum()` is `sum()`: exact and checked.
+- `fast_sum()` of an empty Array is zero, and `fast_mean()` requires at
+  least one element.
+
+### Dot And Matrix Products
+
+`left.dot(right)` requires two Arrays of the same shape, of any rank, and
+returns the sum of the products of matching elements. A float `dot` rounds
+each product in the element type and adds the products in the reordered
+order above. An integer `dot` is checked: the first product or running sum,
+in index order, that leaves the element type's range is `AU4002`.
+
+`left.matmul(right)` accepts three pairs of shapes:
+
+| Left | Right | Result |
+| --- | --- | --- |
+| `[n, k]` | `[k, m]` | `[n, m]` |
+| `[n, k]` | `[k]` | `[n]` |
+| `[k]` | `[k, m]` | `[m]` |
+
+```aura
+def main() -> int32:
+    left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    right = Array[float64].from_list([5.0, 6.0, 7.0, 8.0], [2, 2])
+    product = left.matmul(right)
+    print(product[0, 0])
+    print(product[1, 1])
+    print(left.dot(right))
+    return 0
+```
+
+Each result element starts at zero and adds its `k` products in ascending
+order of the inner index, rounding each product before it is added. That is
+the order of the plain three-loop program, so `matmul` gives that program's
+bits. An integer `matmul` is checked and reports `AU4002`.
 
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
-move the buffer. `.clone()` is the explicit way to duplicate the whole buffer.
+move the Array. `.clone()` is the explicit way to duplicate it.
 
 An Array is always structurally `Transfer`, because every dtype is a
 `Transfer` scalar. A Task result that holds an Array still has the ordinary
@@ -18237,13 +18508,13 @@ Evaluation order:
   Arrays for the kernel and consumes neither shared operand.
 - Coordinates evaluate from left to right.
 - A direct indexed assignment captures its coordinate before it evaluates the
-  new value.
+  new value. A slice assignment evaluates its bounds and steps from left to
+  right, then its value.
 
-Elementwise operations, `map`, and first-axis slices allocate a fresh result.
-`map` calls its repeatable callback once per element in row-major order, and
-moves or copies each scalar result into the output. If a trap occurs, any
-partial output is cleaned up. Shape snapshots and first-axis slices are owned
-copies, not views.
+Elementwise operations and `map` allocate a fresh result. `map` calls its
+repeatable callback once per element in row-major order, and moves or copies
+each scalar result into the output. If a trap occurs, any partial output is
+cleaned up. A shape snapshot is an owned copy.
 
 ## Diagnostics
 
@@ -18252,21 +18523,20 @@ Compile-time codes:
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown Array member or constructor. |
-| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. |
+| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. A slice assignment whose value is neither `T` nor `Array[T]`. A slice bound or step that is not an integer. |
 | `AU2003` | Unsupported operator, including integer Array `/`. The message keeps the ordinary checked-integer guidance. |
 | `AU2004` | Invalid argument binding. |
-| `AU2005` | Slice steps and slice assignment, which are reserved. The message gives the same owned-copy guidance as for list and str slices. |
-| `AU3002` | Mutation while shared access is active. |
-| `AU3003` | `set`, `fill`, or indexed assignment through an immutable place. |
+| `AU3002` | Mutation while shared access is active, or a slice assignment that moves its own target, as in `values[:] = values`. |
+| `AU3003` | `set`, `fill`, or assignment through an immutable place. |
 
 Runtime codes:
 
 | Code | Cause |
 | --- | --- |
-| `AU4002` | Checked integer Array arithmetic overflows. |
-| `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
+| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
+| `AU4003` | A coordinate is out of range, a slice bound is outside its axis, a slice range is reversed, or a slice step is zero. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
-| `AU4005` | Shape product or element count overflows, or allocation fails. |
+| `AU4005` | Shape product or element count overflows, or allocation fails. A write to an Array that shares its buffer allocates the copy. |
 | `AU4007` | Numeric array shape or reduction violation. See below. |
 
 `AU4007` (`numeric array shape or reduction violation`) covers:
@@ -18275,7 +18545,14 @@ Runtime codes:
 - a `from_list` element count that does not match the shape
 - an Array/Array operation whose shapes differ
 - a direct coordinate count that does not match the runtime rank
-- `min`, `max`, or `mean` on an empty Array
+- an index with more components than the runtime rank
+- a `reshape` to a shape with a different element count, or with two `-1`
+  dimensions
+- a `permute` that repeats or omits an axis
+- a slice assignment whose value does not broadcast to the selected shape
+- `min`, `max`, `mean`, or `fast_mean` on an empty Array
+- a `dot` whose shapes differ
+- a `matmul` whose shapes are not one of the three accepted pairs
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -18285,12 +18562,15 @@ place.
 MIR and direct execution both implement:
 
 - constructors, indexing, and mutation
-- first-axis copies
+- selections, shape members, and slice assignment
 - `map` and reductions
+- `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
 - scalar forms and exact-shape elementwise operations
 
-Direct native execution uses contiguous kernels specialized per dtype. Both
+Direct native execution uses kernels specialized per dtype. A view that is
+not one row-major block is copied into row-major order before a kernel reads
+it. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
 
@@ -18300,14 +18580,14 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 Arrays are CPU-only, contiguous, row-major, and have rank one or
-more. They do not have:
+Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
+not have:
 
-- array-shape broadcasting or mixed promotion
-- views, reshape, or transpose
-- matrix multiplication
+- array-shape broadcasting between two Array operands, or mixed promotion
+- a matrix product over more than two dimensions
 - equality or ordering
-- multidimensional slicing, step slices, or slice assignment
+- iteration with `for`
+- a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage
 - aliasing of foreign buffers
 
@@ -18392,8 +18672,25 @@ builds. The cases cover:
 - NaN payloads, infinities, and signed zero
 - arithmetic modes and first-trap indices
 
-The kernels do not reassociate, do not approximate division, and add no new
-numeric policy.
+The elementwise kernels do not reassociate, do not approximate division, and
+add no new numeric policy.
+
+### Kernel Width
+
+On x86-64 the runtime holds two copies of each kernel: one for the baseline
+instruction set, with 128-bit registers, and one for AVX2, with 256-bit
+registers. The first Array operation of a process asks the CPU which it has,
+so a program built for any x86-64 machine runs the wide copies where they
+exist. On arm64 there is one copy, which uses NEON.
+
+The copies give the same bits. No kernel uses fused multiply-add, and no
+kernel lets the register width decide the order of its floating-point
+operations.
+
+Set `AURA_ARRAY_KERNELS=baseline` to make a process use the baseline copies,
+to compare the two or to rule the wide ones out. `--target-cpu` in
+[CLI and Tooling](/manual/cli-and-tooling) is the matching choice for the
+program's own compiled code.
 
 ## Status
 
@@ -18403,7 +18700,10 @@ It does not include tensor placement, views, shape transformations, or
 distributed execution.
 
 Design records:
-[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
+[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md),
+[ADR-0085: Target CPU and kernel dispatch](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0085-target-cpu-and-kernel-dispatch.md),
+[ADR-0086: Array products and reordered reductions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0086-array-products-and-reordered-reductions.md),
+[ADR-0088: Array views share storage and copy on write](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0088-array-views-share-storage.md),
 and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).
 
 ## Source: docs/manual/ownership-and-borrowing.md
@@ -21218,6 +21518,57 @@ now counts as having its type from the start, and appending an `int64` to a
 passes it on, as `regex_match` does for every byte, no longer pays a
 runtime type check for each pass.
 
+### Counted Loops Over Number Lists
+
+A loop that walks a list of numbers by index runs without a bounds check
+on each element, and LLVM turns it into vector instructions when the
+arithmetic allows it:
+
+```aura
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = a * xs[i] + y
+```
+
+Native code checks once, where the loop starts, that every index the loop
+will use is inside its list. When the check holds, the loop runs a copy
+with no per-element check. When it does not, the loop runs as written and
+stops with `AU4003` at the access that leaves the list, so the result is
+the same either way.
+
+The loop qualifies when:
+
+- **The list** is a `list` of one fixed-width number type or `bool`, and
+  the loop does not resize it.
+- **The counter** is an `int64` that only moves up by a constant: a
+  `for i in range(...)`, with or without a positive literal step such as
+  `range(0, n, 4)`, or a `while i < n:` loop with `i += 2`.
+- **The bound** is `len(xs)`, a constant, or a variable the loop does not
+  assign.
+- **Each index** is the counter plus or minus a constant, such as
+  `xs[i - 1]` and `xs[i + 1]`.
+
+These loops stay scalar:
+
+- **A float sum** such as `total += xs[i]`. Aura adds in source order.
+  Use `Array.fast_sum()` or `Array.dot()` for a reordered sum, or keep the
+  sum in a lane value from the [SIMD module](/manual/simd).
+- **Checked integer arithmetic** on the elements. Each operation can
+  report overflow.
+- **A loop in a program that starts tasks.** Each iteration checks
+  whether to yield.
+
+On `benchmarks/simd`, five such loops over `float64` lists run at the
+speed of the same loops in Rust, and 40 to 400 times faster than in
+Python. `aura build --target-cpu native` lets the loops use the host's
+widest registers.
+
+A `for` over `range(start, stop, step)` whose step is a positive integer
+literal counts on plain integers, as a range without a step does. Any
+other step, such as a variable or a negative number, makes a `Range` value
+and asks it for each element, which is far slower.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
@@ -22088,6 +22439,186 @@ The constructor, deterministic methods, secure functions, move-only ownership, b
 Aura 0.14 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
 
 Design records: [ADR-0020: Randomness algorithm and security boundary](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md) and [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).
+
+## Source: docs/manual/simd.md
+
+# SIMD Module
+
+The `simd` module has values that hold two, four, or eight floats and do
+arithmetic on all of them at once. Native code keeps such a value in vector
+registers, so one `+` adds every lane with one or two instructions.
+
+```aura
+import simd
+```
+
+Use it when a loop over a list of floats does not turn into vector
+instructions on its own. The usual case is a float sum, which Aura adds in
+source order: with lane values you choose the order yourself, and it is the
+same on every machine.
+
+## Lane Classes
+
+| Class | Lanes | Element type |
+| --- | --- | --- |
+| `simd.F64x2` | 2 | `float64` |
+| `simd.F64x4` | 4 | `float64` |
+| `simd.F32x4` | 4 | `float32` |
+| `simd.F32x8` | 8 | `float32` |
+
+Each class is an ordinary Copy class whose public fields `l0`, `l1`, and so
+on are the lanes. You can construct one by naming its fields, read a lane
+with `value.l2`, pass it to a function, return it, and store it in a class
+field. Assigning one copies it.
+
+There are no integer lane classes. Integer arithmetic in Aura reports
+overflow, and a check in each lane would cost more than the lanes save.
+
+## Public API
+
+`V` stands for the lane class and `E` for its element type.
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
+| `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
+| `+`, `-`, `*`, `/` | `V` with `V` | The operation in each lane. |
+| unary `-` | `V` | Each lane negated. |
+| `min` | `min(self, other: V) -> V` | In each lane, `self` where it is less than `other`, else `other`. |
+| `max` | `max(self, other: V) -> V` | In each lane, `self` where it is greater than `other`, else `other`. |
+| `abs` | `abs(self) -> V` | The absolute value of each lane. |
+| `sqrt` | `sqrt(self) -> V` | The square root of each lane. |
+| `mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane. |
+| `sum` | `sum(self) -> E` | The sum of the lanes, added in pairs. |
+| `to_list` | `to_list(self) -> list[E]` | The lanes as a new list, `l0` first. |
+
+Both operands of an operator must be the same lane class. To scale by one
+number, make it a lane value first with `splat`.
+
+## Example
+
+```aura
+from simd import F64x4
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+```
+
+```text
+29.0
+```
+
+The first loop takes four elements at a time and stops while four are still
+left. The second loop finishes the last one to three elements.
+`examples/numbers/simd_lanes.au` also clamps a `float32` list with
+`F32x8`.
+
+## Exact Results
+
+Every operation is defined lane by lane in terms of the scalar operation, so
+a result never depends on the CPU, on `--target-cpu`, or on whether the
+program runs under `aura run` or as a native binary.
+
+- **`sum`** adds neighbors first: `(l0 + l1) + (l2 + l3)` for four lanes,
+  and `((l0 + l1) + (l2 + l3)) + ((l4 + l5) + (l6 + l7))` for eight.
+- **`mul_add`** rounds after the product and again after the sum. It is not
+  a fused multiply-add.
+- **`min` and `max`** return `other` when the comparison is false. So a NaN
+  in `self` gives `other`, and a NaN in `other` gives the NaN.
+- **`sqrt`** of a negative lane is NaN.
+- **`/`** by a lane that holds zero traps with `AU4004`, as scalar float
+  division does.
+- **`float32` lanes** round each result to `float32`, as scalar `float32`
+  arithmetic does.
+
+A loop that keeps a lane value as its running sum adds in a different order
+than a loop that keeps one float. The two can differ in their last bits.
+
+## Loads And Stores
+
+`load` and `store` read and write one element for each lane, at `at`,
+`at + 1`, and so on. Each index follows the list index rules: it must be
+inside the list, or the program traps with `AU4003`, and a negative index
+counts from the end.
+
+```aura
+from simd import F32x4
+
+def main():
+    mut out: list[float32] = [0.0, 0.0, 0.0, 0.0, 0.0]
+    F32x4.splat(2.5).store(out, 1)
+    print(out)
+```
+
+```text
+[0.0, 2.5, 2.5, 2.5, 2.5]
+```
+
+A `store` at index 2 of that list would trap, because the fourth lane has no
+element to go to.
+
+When the list is a local variable or a parameter and the arguments are
+positional, the compiler treats the call as the element reads or writes it
+stands for. A [counted loop](/manual/performance#counted-loops-over-number-lists)
+then checks the range of every load and store once, before the loop starts,
+and a trap reports the line of the call. Any other call, such as
+`F64x4.load(self.samples, i)`, runs the method and checks each element.
+Bind the list to a local first to get the fast form.
+
+A value read from a list and written back to the same list needs no
+temporary:
+
+```aura
+from simd import F64x4
+
+def clamp(xs: mut list[float64], low: float64, high: float64):
+    lo = F64x4.splat(low)
+    hi = F64x4.splat(high)
+    for i in range(0, len(xs) - 3, 4):
+        F64x4.load(xs, i).max(lo).min(hi).store(xs, i)
+
+def main():
+    mut xs = [-5.0, 0.5, 12.0, 3.0, 99.0]
+    clamp(xs, 0.0, 10.0)
+    print(xs)
+```
+
+```text
+[0.0, 0.5, 10.0, 3.0, 99.0]
+```
+
+## Performance
+
+A native build copies each lane method into its caller and keeps the lanes
+in registers. On a baseline x86-64 build an `F64x4` is two 128-bit
+registers. With `--target-cpu x86-64-v3` or `native` on a machine with AVX2
+it is one 256-bit register. On Apple Silicon it is two 128-bit registers.
+The results are the same in every case.
+
+On `benchmarks/simd`, a dot product over 1,024 `float64` elements with
+`F64x4` runs about three times as fast as the scalar loop, which has to add
+in source order.
+
+These limits apply:
+
+- **A program that starts tasks** checks whether to yield once in each loop
+  iteration. The lane arithmetic inside an iteration is still vector code.
+- **`Array` elements** are not loaded directly. Use the `Array` kernels, or
+  copy into a list.
+- **`aura run` on the interpreter backend** computes each lane as a
+  separate float. The results are the same and there is no speedup.
 
 ## Source: docs/manual/statements.md
 
@@ -23223,15 +23754,15 @@ A shared read of an element whose type cannot be cloned, such as `random.Rng`, a
 - An omitted endpoint contributes no expression.
 - Each negative written endpoint is normalized once as `len + i`. Then both effective endpoints must lie in `0..=len`, and start must not exceed end. Invalid or reversed bounds are runtime `AU4003`.
 - String slicing counts Unicode scalar values and returns `str`.
-- A slice is not a place. It cannot be the target of assignment or mutable access.
-- Step syntax and slice assignment are reported as unsupported forms with `AU2005`.
+- A list or `str` slice is not a place. It cannot be the target of assignment or mutable access, and slice assignment to one reports `AU2005`.
 
 List slicing creates a clone-producing obligation for `T`. Copy elements are copied, and non-Copy elements must be clone-safe. A concrete or transitive `random.Rng` element is rejected with `AU3007`. A non-repeatable Task observation right is rejected with `AU3009`. An unresolved generic `T` carries the inferred obligation to specialization.
 
 **Arrays.** `Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
 
 - Its constructors require exact `list[int64]` shape metadata.
-- Array slicing uses the same one-colon grammar and endpoint rules. It copies only a first-axis range and keeps the remaining runtime dimensions.
+- An Array index takes one component per axis. With a slice among its components it has type `Array[T]`; with coordinates only it has type `T`. Slices use the list endpoint and step rules.
+- Assignment through an Array index with a slice takes a value of type `T` or `Array[T]`. The value may read the target Array, and may not move it.
 - Array/Array arithmetic requires identical `T`. Runtime shape equality is checked with `AU4007`.
 - Scalar arithmetic requires exactly `T`, with no mixed promotion or broadcasting. Integer Array `/` is `AU2003`.
 - Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the four Array dtypes.
@@ -23555,7 +24086,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, steps, slice assignment, and indexed slice views are not available.
+- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
@@ -35691,9 +36222,9 @@ error[AU3003]: cannot assign through immutable place `a[..]`
   |     ^
 ```
 
-An array can't grow or shrink. Its shape is fixed when it's made, and there's
-no `append`, `reshape`, or `transpose`. To get a different shape, build a new
-array.
+An array can't grow or shrink, so there's no `append`. You can look at the
+same elements under another shape, though, and write to whole rows and
+columns at once. Both come up later in this section.
 
 ## Arithmetic on whole arrays
 
@@ -35734,7 +36265,8 @@ Array[float64](shape=[2, 2], values=[0.72, 0.88, 0.95, 0.64])
 
 `scores + 5.0` adds five to every element and returns a new array.
 `scores * weights` multiplies the two arrays element by element, which is
-*not* matrix multiplication; Aura arrays don't have that. `+`, `-`, `*`, and,
+*not* matrix multiplication; that's the `matmul` method you'll meet later in
+this section. `+`, `-`, `*`, and,
 for floating-point arrays, `/` all work this way, with either two arrays or
 an array and a single number. `map` applies a function to every element and
 returns a new array of the results. `sum`, `min`, and `max` reduce the whole
@@ -35881,25 +36413,61 @@ error[AU4007]: cannot compute array mean over an empty array
 `min` and `max` behave the same way. A dimension of zero is allowed, so a
 2-by-0 array exists; it has no elements.
 
-## Slicing rows
+## Rows, columns, and blocks
 
-A slice of an array selects whole rows: `scores[1:3]` is a new array with
-rows 1 and 2 and every column. It works only on the first axis, and it's a
-copy, not a view, so changing the slice doesn't change the original. There's
-no step, either; `a[::2]` is refused with `AU2003` and a suggestion to
-convert to a list first. That's enough for our gradebook, which needs one
-student's row at a time:
+An array index takes one piece per dimension, and each piece can be a
+coordinate or a slice. A coordinate picks one position. A slice, written
+with a colon as for lists, keeps a range, and a bare `:` keeps everything
+along that dimension:
 
 *Filename: src/main.au*
 
 ```aura
-def column_mean(table: Array[float64], column: int64) -> float64:
-    rows = table.shape()[0]
-    mut total = 0.0
-    for row in range(rows):
-        total += table[row, column]
-    return total / rows.to_float()
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0,
+         64.0, 58.0, 77.0],
+        [3, 3],
+    )
+    print(scores[1, :])
+    print(scores[:, 0])
+    print(scores[::2, 1:])
+    print(scores[::-1, 0])
+    print(scores[0:2].shape())
+    print(scores[0:1, :].shape())
+```
 
+```console
+$ aura run src/main.au
+Array[float64](shape=[3], values=[95.0, 91.0, 84.0])
+Array[float64](shape=[3], values=[72.0, 95.0, 64.0])
+Array[float64](shape=[2, 2], values=[88.0, 95.0, 58.0, 77.0])
+Array[float64](shape=[3], values=[64.0, 95.0, 72.0])
+[2, 3]
+[1, 3]
+```
+
+`scores[1, :]` is row 1 and `scores[:, 0]` is column 0. `scores[::2, 1:]`
+takes every second row and drops the first column, and a negative step
+walks backwards, so `scores[::-1, 0]` is the first column from the bottom
+up. Dimensions you don't mention are kept whole, which is why `scores[0:2]`
+is two full rows.
+
+Notice the last two lines. A coordinate removes its dimension and a slice
+keeps it, even a slice one element long. `scores[0, :]` has shape `[3]`,
+and `scores[0:1, :]` has shape `[1, 3]`.
+
+Slices follow the list rules you already know: negative bounds count from
+the end, and a bound past the end is an `AU4003` trap, never a quietly
+shorter result.
+
+That's what our gradebook needs. One student is a row, and one assignment is
+a column:
+
+*Filename: src/main.au*
+
+```aura
 def main():
     names = ["ada", "grace", "alan", "kathy"]
     scores = Array[float64].from_list(
@@ -35910,12 +36478,12 @@ def main():
         [4, 3],
     )
     for i, name in enumerate(names):
-        row = scores[i:i + 1]
+        row = scores[i, :]
         print(f"{name:<6} mean {row.mean():.1f}, best {row.max():.0f}")
 
     assignments = scores.shape()[1]
     for column in range(assignments):
-        print(f"assignment {column + 1}: {column_mean(scores, column):.1f}")
+        print(f"assignment {column + 1}: {scores[:, column].mean():.1f}")
 
     overall = scores.mean()
     spread = scores - overall
@@ -35936,19 +36504,200 @@ assignment 3: 86.5
 class mean 81.17, from -23.17 to +13.83
 ```
 
-The per-student numbers come from row slices, so they need no loop of our
-own. The per-assignment averages are columns, and since slices only cut
-rows, `column_mean` walks down a column with a loop. That's the honest cost
-of a deliberately small array type: you get exact, predictable arithmetic,
-and for column operations you sometimes write the loop. The last two lines
-subtract the class mean from every score in one step and report how far the
-lowest and highest scores sit from it.
+Neither loop touches an element by hand. The last two lines subtract the
+class mean from every score in one step and report how far the lowest and
+highest scores sit from it.
+
+### A slice doesn't copy, and a write doesn't leak
+
+Taking `scores[i, :]` doesn't copy the row. The new array reads the same
+block of memory as `scores`, so a slice of a huge table costs the same as a
+slice of a small one.
+
+If you've used NumPy, that might worry you. There, a slice is a second name
+for the same memory, and writing through one name changes what you see
+through the other. Aura doesn't allow that. An array is a value, like a
+list, and nothing you do to one array changes another:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    mut scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0,
+         64.0, 58.0, 77.0],
+        [3, 3],
+    )
+    before = scores[2, :]
+    scores[:, 1] += 5.0
+    scores[2, :] = 70
+    scores[0, 1:] = scores[1, 1:]
+    print(scores)
+    print(before)
+```
+
+<span class="caption">Listing 8-22: Writing to rows and columns</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[3, 3], values=[72.0, 96.0, 84.0, 95.0, 96.0, 84.0, 70.0, 70.0, 70.0])
+Array[float64](shape=[3], values=[64.0, 58.0, 77.0])
+```
+
+A slice on the left of `=` writes to every element it selects. The value
+can be one number, which fills the selection, or an array of the right
+shape. `scores[:, 1] += 5.0` gives everyone five points on the second
+assignment, `scores[2, :] = 70` overwrites a whole row, and the last
+assignment copies part of one row over another.
+
+`before` still holds the old third row. Aura got there by sharing memory
+until the first write: when `scores[:, 1] += 5.0` ran, `before` was still
+reading the same block, so `scores` copied its elements once and wrote to
+its own copy. After that, `scores` is alone in its block and the later
+writes happen in place.
+
+So the rule to remember is small. Slices are free, and a write to an array
+that something else is still reading costs one copy. If you keep a slice
+around while you update the table in a loop, call `.clone()` on the slice.
+That gives it a small block of its own and leaves the table free to change
+in place.
+
+### Another shape for the same numbers
+
+`transpose` swaps rows and columns, and `reshape` lays the same elements
+out under a new shape. Like slices, they share memory with the original:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0],
+        [2, 3],
+    )
+    by_assignment = scores.transpose()
+    print(by_assignment.shape())
+    print(by_assignment[0, :])
+    print(scores.reshape([3, 2]))
+    print(scores.reshape([-1, 2]).shape())
+    print(by_assignment.flatten())
+```
+
+```console
+$ aura run src/main.au
+[3, 2]
+Array[float64](shape=[2], values=[72.0, 95.0])
+Array[float64](shape=[3, 2], values=[72.0, 88.0, 95.0, 95.0, 91.0, 84.0])
+[3, 2]
+Array[float64](shape=[6], values=[72.0, 95.0, 88.0, 91.0, 95.0, 84.0])
+```
+
+`reshape` reads the elements row by row and deals them out again, so the
+new shape has to hold the same number of elements. Write `-1` for one
+dimension and Aura works it out from the others. `flatten` is the reshape
+to a single dimension. For arrays with more than two dimensions,
+`permute([2, 0, 1])` puts the axes in any order you name.
+
+### Products and Faster Sums
+
+Two arrays of the same shape have a *dot product*, the sum of their
+matching elements multiplied together, and two tables whose inner sizes
+agree have a *matrix product*. Both are methods:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0],
+        [2, 3],
+    )
+    weights = Array[float64].from_list([0.2, 0.3, 0.5], [3])
+    final = scores.matmul(weights)
+    print(final)
+    print(weights.dot(weights))
+```
+
+<span class="caption">Listing 8-23: A weighted grade with `matmul`</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[2], values=[88.3, 88.3])
+0.38
+```
+
+`scores` has shape `[2, 3]` and `weights` has shape `[3]`, so the product
+has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
+into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
+
+`sum` adds from left to right, which is the order you'd add by hand and the
+slowest order for a CPU. When an array is large and the last digit doesn't
+matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
+times faster. The order is the same on every machine, so the answer is
+still reproducible. It just isn't always the same last digit as `sum`.
 
 Arrays have a few more limits worth knowing before you plan a program around
-them. They live in ordinary memory on the CPU. They have no equality, so `a
-== b` is an `AU2003` error, no views, and no reshaping. The
+them. They live in ordinary memory on the CPU, they have no equality, so `a
+== b` is an `AU2003` error, and you can't loop over one with `for`. The
 [Manual](/manual/numeric-arrays) lists exactly what's there, along with
 measured performance against NumPy and Rust.
+
+### Several Floats at Once
+
+Sometimes the kernel you need isn't one of the Array methods, and you write
+a loop over a list of floats. Most such loops are fast already. A running
+float sum is the exception: Aura adds in the order you wrote, one element
+at a time, because any other order can change the last digit.
+
+The `simd` module lets you pick a faster order yourself. Its *lane values*
+hold a few floats side by side, and one `+` or `*` works on all of them.
+`F64x4` holds four `float64` lanes:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+```
+
+<span class="caption">Listing 8-24: A dot product four elements at a time</span>
+
+```console
+$ aura run src/main.au
+29.0
+```
+
+`splat` fills every lane with one number, and `load(xs, i)` reads the four
+elements starting at `i`. The first loop steps by four and stops while
+four elements are still left, so `acc` ends up holding four separate
+running sums. `acc.sum()` adds them together, and the second loop picks up
+the one to three elements at the end.
+
+In a native build each lane value lives in the CPU's vector registers, and
+this loop runs about three times as fast as the one-at-a-time version. The
+answer is the same on every machine and in `aura run`, because every
+operation is defined lane by lane. It can differ in the last digit from a
+plain left-to-right sum, since the additions happen in a different order.
+
+There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
+[Manual](/manual/simd) has the full list.
 
 ## Summary
 

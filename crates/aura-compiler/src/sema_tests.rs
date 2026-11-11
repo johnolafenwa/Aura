@@ -31925,11 +31925,11 @@ def main() -> None:
         ),
         (
             r#"def main() -> None:
-    values = Array[int32].zeros([4])
+    values = {1: 2}
     print(values[::2])
 "#,
             "AU2003",
-            r#"stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `Array[int32]`"#,
+            r#"stepped slicing is available only for `Array[T]`, `list[T]`, `Span[T]`, and `str`, found `dict[int64, int64]`"#,
         ),
         (
             r#"def sorted(value: int64) -> int64:
@@ -33425,5 +33425,165 @@ def count(path: str) -> Result[int64, io.Error]:
             "{statement}: {}",
             error.message
         );
+    }
+}
+
+#[test]
+fn array_selections_type_check_reads_views_and_slice_assignment() {
+    crate::check_source(
+        r#"
+def main():
+    mut values = Array[float64].zeros([3, 4])
+    narrow: int32 = 1
+    row: Array[float64] = values[narrow, :]
+    column: Array[float64] = values[:, -1]
+    block: Array[float64] = values[::2, 1:3]
+    reversed: Array[float64] = values[::-1]
+    stepped: Array[float64] = values[0:3:narrow]
+    item: float64 = values[1, 2]
+    turned: Array[float64] = values.transpose()
+    reshaped: Array[float64] = values.reshape([2, -1])
+    flat: Array[float64] = values.flatten()
+    swapped: Array[float64] = values.permute(axes=[1, 0])
+    values[0, :] = 1
+    values[1, :] = 2.5
+    values[:, 0] = column
+    values[1:, :] = values[:-1, :]
+    values[::2] += 1
+    values[2, 1:3] *= block[0, :]
+    print(row.len() + reversed.len() + stepped.len() + turned.len())
+    print(item + reshaped[0, 0] + flat[0] + swapped[0, 0])
+"#,
+    )
+    .expect("Array selections, layout members, and slice assignment should type-check");
+}
+
+#[test]
+fn array_selections_reject_misuse_in_the_library_checker() {
+    for (source, code, message) in [
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([2, 3])
+    values[0, :] = 1.5
+"#,
+            "AU2002",
+            "cannot assign value of type `float64` through a slice of `Array[int32]`; assign `Array[int32]` or `int32`",
+        ),
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([2, 3])
+    values[0, :] = Array[int64].zeros([3])
+"#,
+            "AU2002",
+            "cannot assign value of type `Array[int64]` through a slice of `Array[int32]`; assign `Array[int32]` or `int32`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    values[0, :] = 1
+"#,
+            "AU3003",
+            "cannot assign through immutable place `values[..]`",
+        ),
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([4])
+    values[::-1] = values
+"#,
+            "AU3002",
+            "cannot consume `values` while `values` remains mutably borrowed by the indexed assignment target",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values[0, 1.0:])
+"#,
+            "AU2002",
+            "slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values[0, ::1.5])
+"#,
+            "AU2002",
+            "slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values["a", :])
+"#,
+            "AU2002",
+            "Array indices must have type `int64` or a losslessly narrower integer type, found `str`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.reshape(6))
+"#,
+            "AU2002",
+            "`Array.reshape` expects `list[int64]`, found `int64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.permute([0.5, 1.0]))
+"#,
+            "AU2002",
+            "list literal elements must all have type `int64`, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.transpose(1))
+"#,
+            "AU2004",
+            "`transpose` expects 0 arguments, found 1",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.flatten(1))
+"#,
+            "AU2004",
+            "`flatten` expects 0 arguments, found 1",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    row: int32 = values[0, :]
+    print(row)
+"#,
+            "AU2002",
+            "binding `row` has annotated type `int32`, but value has type `Array[int32]`",
+        ),
+        (
+            r#"def main():
+    values = [1, 2, 3]
+    print(values[0, 1:])
+"#,
+            "AU2003",
+            "a slice among the components of an index is available only for `Array[T]`, found `list[int64]`",
+        ),
+        (
+            r#"def main():
+    mut values = {1: 2}
+    values[0:1] = 3
+"#,
+            "AU2005",
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+        ),
+        (
+            r#"def replace(values: mut list[int32]):
+    values[:] += values
+"#,
+            "AU2005",
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(message);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{source}");
     }
 }

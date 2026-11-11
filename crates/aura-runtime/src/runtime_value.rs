@@ -1833,6 +1833,73 @@ impl ArrayValue {
         })))
     }
 
+    /// Whether `self` and `other` read one element buffer.
+    pub fn shares_buffer_with(&self, other: &Self) -> bool {
+        match (&self.base, &other.base) {
+            (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => {
+                left.shares_buffer_with(right)
+            }
+            (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => {
+                left.shares_buffer_with(right)
+            }
+            (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => {
+                left.shares_buffer_with(right)
+            }
+            (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => {
+                left.shares_buffer_with(right)
+            }
+            _ => false,
+        }
+    }
+
+    /// Whether the Array reads only part of a larger buffer, as a slice of
+    /// some rows or a stepped view does.
+    pub fn is_partial_view(&self) -> bool {
+        self.strided.is_some()
+            || match &self.base {
+                ArrayStorage::Int32(values) => values.is_partial(),
+                ArrayStorage::Int64(values) => values.is_partial(),
+                ArrayStorage::Float32(values) => values.is_partial(),
+                ArrayStorage::Float64(values) => values.is_partial(),
+            }
+    }
+
+    /// A copy of the Array in a buffer of its own, holding exactly its
+    /// elements in row-major order.
+    pub fn detached(&self) -> Result<Self> {
+        let len = self.len();
+        let base = match &self.strided {
+            // A row-major window is one run of the buffer.
+            None => array_storage_map!(&self.base, |values| {
+                let mut packed = try_array_buffer(len, "array view copy")?;
+                packed.extend_from_slice(values);
+                packed.into()
+            }),
+            Some(layout) => array_storage_map!(&self.base, |values| {
+                let mut packed = try_array_buffer(len, "array view copy")?;
+                array_layout::gather(values, &self.shape, layout, &mut packed);
+                packed.into()
+            }),
+        };
+        Ok(Self {
+            shape: self.try_shape()?,
+            base,
+            strided: None,
+        })
+    }
+
+    /// `array.clone()`: a whole Array shares its buffer with the copy. A
+    /// view of part of a buffer is copied out instead, so the copy does
+    /// not keep the larger buffer alive, and a later write to the source
+    /// finds no view of it left.
+    pub fn clone_member(&self) -> Result<Self> {
+        if self.is_partial_view() {
+            self.detached()
+        } else {
+            self.try_clone()
+        }
+    }
+
     /// The Array's storage for writing: row-major, and shared with no
     /// other Array. A strided view is packed first, and each buffer's
     /// `try_make_mut` copies a window that another Array still shares.
@@ -1873,6 +1940,33 @@ impl ArrayValue {
             shape,
             base: base.clone(),
             strided: Some(Box::new(layout)),
+        }
+    }
+
+    /// `view` from borrowed parts, which allocates a [`Strides`] record
+    /// only for a layout that needs one.
+    pub(crate) fn view_of(
+        base: &ArrayStorage,
+        shape: &[usize],
+        offset: usize,
+        strides: &[isize],
+    ) -> Self {
+        if array_layout::is_row_major(shape, strides) {
+            let len = shape.iter().product::<usize>();
+            let offset = if len == 0 { 0 } else { offset };
+            return Self {
+                shape: shape.into(),
+                base: array_storage_map!(base, |values| values.window(offset, len)),
+                strided: None,
+            };
+        }
+        Self {
+            shape: shape.into(),
+            base: base.clone(),
+            strided: Some(Box::new(Strides {
+                offset,
+                strides: strides.into(),
+            })),
         }
     }
 

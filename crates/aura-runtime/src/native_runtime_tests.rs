@@ -29092,3 +29092,416 @@ fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
     };
     unsafe { release_value(map) };
 }
+
+#[test]
+fn direct_array_views_cross_the_native_abi() {
+    use crate::array_views::{
+        ARRAY_SELECTION_HAS_END, ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_INDEX,
+        ARRAY_SELECTION_SLICE,
+    };
+    let int64_array = |values: &[i64], shape: &[i64]| {
+        Value::Array(
+            ArrayValue::new(
+                shape.iter().map(|dimension| *dimension as usize).collect(),
+                ArrayStorage::Int64(values.to_vec().into()),
+            )
+            .unwrap(),
+        )
+    };
+    let words = |values: &[i64]| integer_vector(IntegerKind::Int64, values);
+    let matrix =
+        super::aura_direct_array_from_vec(1, words(&[0, 1, 2, 3, 4, 5]), words(&[2, 3]), 1, 1);
+
+    // `matrix[1, ::2]`
+    let selection = words(&[
+        ARRAY_SELECTION_INDEX,
+        1,
+        0,
+        0,
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        2,
+    ]);
+    let row = super::aura_direct_array_select(matrix, selection, 3, 5);
+    assert_eq!(unsafe { take_value(row) }, int64_array(&[3, 5], &[2]));
+
+    let reshaped = super::aura_direct_array_reshape(matrix, words(&[3, -1]), 0, 3, 5);
+    assert_eq!(
+        unsafe { take_value(reshaped) },
+        int64_array(&[0, 1, 2, 3, 4, 5], &[3, 2])
+    );
+    let permuted = super::aura_direct_array_reshape(matrix, words(&[1, 0]), 1, 3, 5);
+    assert_eq!(
+        unsafe { take_value(permuted) },
+        int64_array(&[0, 3, 1, 4, 2, 5], &[3, 2])
+    );
+    let transposed = super::aura_direct_array_relayout(matrix, 1, 3, 5);
+    let flattened = super::aura_direct_array_relayout(transposed, 0, 3, 5);
+    assert_eq!(
+        unsafe { take_value(flattened) },
+        int64_array(&[0, 3, 1, 4, 2, 5], &[6])
+    );
+    unsafe { release_value(transposed) };
+
+    // `matrix[:, 1:3] = matrix[:, 0:2]`, read through the same box, then
+    // `matrix[0, :] = 9`.
+    let columns = |start: i64, end: i64| {
+        words(&[
+            ARRAY_SELECTION_SLICE,
+            0,
+            0,
+            1,
+            ARRAY_SELECTION_SLICE | ARRAY_SELECTION_HAS_START | ARRAY_SELECTION_HAS_END,
+            start,
+            end,
+            1,
+        ])
+    };
+    // The helper owns the value it is given, and releases it.
+    let kept = super::aura_direct_array_select(matrix, columns(0, 2), 3, 5);
+    let source = super::aura_direct_array_select(matrix, columns(0, 2), 3, 5);
+    let unit = super::aura_direct_array_assign_in_place(matrix, columns(1, 3), source, 3, 5);
+    assert_eq!(unsafe { take_value(unit) }, Value::Unit);
+    assert_eq!(
+        unsafe { super::value_ref(matrix) }.clone(),
+        int64_array(&[0, 0, 1, 3, 3, 4], &[2, 3])
+    );
+    let nine = boxed_value(Value::Int(IntegerValue::from_i64(9)));
+    let first_row = words(&[ARRAY_SELECTION_INDEX, 0, 0, 0]);
+    let unit = super::aura_direct_array_assign_in_place(matrix, first_row, nine, 3, 5);
+    unsafe { release_value(unit) };
+    assert_eq!(
+        unsafe { super::value_ref(matrix) }.clone(),
+        int64_array(&[9, 9, 9, 3, 3, 4], &[2, 3])
+    );
+    assert_eq!(
+        unsafe { super::value_ref(kept) }.clone(),
+        int64_array(&[0, 1, 3, 4], &[2, 2]),
+        "a view keeps the elements it was taken from"
+    );
+
+    let capture = |invoke: Box<dyn FnOnce() + Send>| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("an invalid Array view should trap")
+    };
+    let matrix_address = matrix as usize;
+    let outside = words(&[ARRAY_SELECTION_INDEX, 2, 0, 0]) as usize;
+    let malformed = words(&[ARRAY_SELECTION_INDEX, 2, 0]) as usize;
+    let wide = words(&[4]) as usize;
+    let repeated = words(&[0, 0]) as usize;
+    let nine_address = boxed_value(Value::Int(IntegerValue::from_i64(9))) as usize;
+    let pointer = |address: usize| address as *mut OpaqueValue;
+    for (code, line, invoke) in [
+        (
+            "AU4003",
+            11,
+            Box::new(move || {
+                let _ = super::aura_direct_array_select(
+                    pointer(matrix_address),
+                    pointer(outside),
+                    11,
+                    13,
+                );
+            }) as Box<dyn FnOnce() + Send>,
+        ),
+        (
+            "AU4001",
+            12,
+            Box::new(move || {
+                let _ = super::aura_direct_array_select(
+                    pointer(matrix_address),
+                    pointer(malformed),
+                    12,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4003",
+            15,
+            Box::new(move || {
+                let _ = super::aura_direct_array_assign_in_place(
+                    pointer(matrix_address),
+                    pointer(outside),
+                    pointer(nine_address),
+                    15,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4007",
+            17,
+            Box::new(move || {
+                let _ = super::aura_direct_array_reshape(
+                    pointer(matrix_address),
+                    pointer(wide),
+                    0,
+                    17,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4007",
+            19,
+            Box::new(move || {
+                let _ = super::aura_direct_array_reshape(
+                    pointer(matrix_address),
+                    pointer(repeated),
+                    1,
+                    19,
+                    13,
+                );
+            }),
+        ),
+    ] {
+        let diagnostic = capture(invoke);
+        assert_eq!(diagnostic.code, code, "{}", diagnostic.message);
+        assert_eq!(diagnostic.span, Some(Span::new(line, 13)));
+    }
+    assert_eq!(
+        unsafe { super::value_ref(matrix) }.clone(),
+        int64_array(&[9, 9, 9, 3, 3, 4], &[2, 3]),
+        "a refused assignment writes nothing"
+    );
+
+    for value in [matrix, kept] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
+fn direct_array_views_take_one_or_two_components_as_plain_words() {
+    use crate::array_views::{
+        ARRAY_SELECTION_ABSENT, ARRAY_SELECTION_HAS_END, ARRAY_SELECTION_HAS_START,
+        ARRAY_SELECTION_INDEX, ARRAY_SELECTION_SLICE,
+    };
+    let int64_array = |values: &[i64], shape: &[i64]| {
+        Value::Array(
+            ArrayValue::new(
+                shape.iter().map(|dimension| *dimension as usize).collect(),
+                ArrayStorage::Int64(values.to_vec().into()),
+            )
+            .unwrap(),
+        )
+    };
+    let words = |values: &[i64]| integer_vector(IntegerKind::Int64, values);
+    let matrix =
+        super::aura_direct_array_from_vec(1, words(&[0, 1, 2, 3, 4, 5]), words(&[2, 3]), 1, 1);
+    let bounded = ARRAY_SELECTION_SLICE | ARRAY_SELECTION_HAS_START | ARRAY_SELECTION_HAS_END;
+
+    // `matrix[1, ::2]`
+    let row = super::aura_direct_array_select_words(
+        matrix,
+        ARRAY_SELECTION_INDEX,
+        1,
+        0,
+        0,
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        2,
+        3,
+        5,
+    );
+    assert_eq!(unsafe { take_value(row) }, int64_array(&[3, 5], &[2]));
+    // `matrix[1:2]`: one component, the second absent.
+    let rows = super::aura_direct_array_select_words(
+        matrix,
+        bounded,
+        1,
+        2,
+        1,
+        ARRAY_SELECTION_ABSENT,
+        0,
+        0,
+        0,
+        3,
+        5,
+    );
+    assert_eq!(
+        unsafe { take_value(rows) },
+        int64_array(&[3, 4, 5], &[1, 3])
+    );
+
+    // `matrix[:, 1:3] = matrix[:, 0:2]`. The entry owns the value.
+    let source = super::aura_direct_array_select_words(
+        matrix,
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        1,
+        bounded,
+        0,
+        2,
+        1,
+        3,
+        5,
+    );
+    let unit = super::aura_direct_array_assign_words_in_place(
+        matrix,
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        1,
+        bounded,
+        1,
+        3,
+        1,
+        source,
+        3,
+        5,
+    );
+    assert_eq!(unsafe { take_value(unit) }, Value::Unit);
+    // `matrix[0] = 9` on a matrix writes the first row.
+    let nine = boxed_value(Value::Int(IntegerValue::from_i64(9)));
+    let unit = super::aura_direct_array_assign_words_in_place(
+        matrix,
+        ARRAY_SELECTION_INDEX,
+        0,
+        0,
+        0,
+        ARRAY_SELECTION_ABSENT,
+        0,
+        0,
+        0,
+        nine,
+        3,
+        5,
+    );
+    unsafe { release_value(unit) };
+    assert_eq!(
+        unsafe { super::value_ref(matrix) }.clone(),
+        int64_array(&[9, 9, 9, 3, 3, 4], &[2, 3])
+    );
+
+    let capture = |invoke: Box<dyn FnOnce() + Send>| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("an invalid Array view should trap")
+    };
+    let matrix_address = matrix as usize;
+    let nine_address = boxed_value(Value::Int(IntegerValue::from_i64(9))) as usize;
+    let seven_address = boxed_value(Value::Int(IntegerValue::from_i64(7))) as usize;
+    let pointer = |address: usize| address as *mut OpaqueValue;
+    for (code, line, invoke) in [
+        (
+            "AU4003",
+            11,
+            Box::new(move || {
+                let _ = super::aura_direct_array_select_words(
+                    pointer(matrix_address),
+                    ARRAY_SELECTION_INDEX,
+                    2,
+                    0,
+                    0,
+                    ARRAY_SELECTION_ABSENT,
+                    0,
+                    0,
+                    0,
+                    11,
+                    13,
+                );
+            }) as Box<dyn FnOnce() + Send>,
+        ),
+        (
+            "AU4001",
+            12,
+            Box::new(move || {
+                let _ = super::aura_direct_array_select_words(
+                    pointer(matrix_address),
+                    64,
+                    0,
+                    0,
+                    1,
+                    ARRAY_SELECTION_ABSENT,
+                    0,
+                    0,
+                    0,
+                    12,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4001",
+            13,
+            Box::new(move || {
+                let _ = super::aura_direct_array_select_words(
+                    pointer(matrix_address),
+                    ARRAY_SELECTION_INDEX,
+                    0,
+                    0,
+                    0,
+                    64,
+                    0,
+                    0,
+                    1,
+                    13,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4003",
+            15,
+            Box::new(move || {
+                let _ = super::aura_direct_array_assign_words_in_place(
+                    pointer(matrix_address),
+                    ARRAY_SELECTION_INDEX,
+                    0,
+                    0,
+                    0,
+                    ARRAY_SELECTION_INDEX,
+                    3,
+                    0,
+                    0,
+                    pointer(nine_address),
+                    15,
+                    13,
+                );
+            }),
+        ),
+        (
+            "AU4001",
+            16,
+            Box::new(move || {
+                let _ = super::aura_direct_array_assign_words_in_place(
+                    pointer(matrix_address),
+                    64,
+                    0,
+                    0,
+                    1,
+                    ARRAY_SELECTION_ABSENT,
+                    0,
+                    0,
+                    0,
+                    pointer(seven_address),
+                    16,
+                    13,
+                );
+            }),
+        ),
+    ] {
+        let diagnostic = capture(invoke);
+        assert_eq!(diagnostic.code, code, "{}", diagnostic.message);
+        assert_eq!(diagnostic.span, Some(Span::new(line, 13)));
+    }
+    assert_eq!(
+        unsafe { super::value_ref(matrix) }.clone(),
+        int64_array(&[9, 9, 9, 3, 3, 4], &[2, 3]),
+        "a refused assignment writes nothing"
+    );
+    unsafe { release_value(matrix) };
+}

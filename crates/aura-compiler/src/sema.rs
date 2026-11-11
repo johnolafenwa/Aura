@@ -1564,12 +1564,7 @@ impl<'a> FunctionChecker<'a> {
         let mut selects = false;
         for coordinate in coordinates {
             let Some(slice) = crate::parser::array_axis_slice_parts(coordinate) else {
-                self.check_index_domain_type(
-                    coordinate,
-                    coordinate.span,
-                    "Array indices",
-                    locals,
-                )?;
+                self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
                 continue;
             };
             selects = true;
@@ -5860,6 +5855,10 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 self.invalidate_narrowing(&place, assign.span, "indexed assignment", locals);
             }
+            // A slice assignment to a list or `str` is refused for what it
+            // is, whether or not the place is mutable.
+            let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
+            self.reject_slice_index_outside_array(index, &object_ty, true)?;
             if !self.is_mutable_place(object, locals)? {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
@@ -5873,9 +5872,7 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
             let locals_before_index = locals.clone();
-            self.reject_slice_index_outside_array(index, &object_ty, true)?;
             self.reject_mutable_returned_view_value(index, locals, false)?;
             // `values[1:3] = ...` assigns an Array of the target's type, or
             // one element that fills the selection.
@@ -5992,15 +5989,21 @@ impl<'a> FunctionChecker<'a> {
             } else {
                 ReceiverKind::Value
             };
-            self.reject_retained_expr_overlap(
-                &retained_target,
-                &assign.value,
-                &value_ty,
-                Some(rhs_passing),
-                &locals_before_value,
-                locals,
-                "indexed assignment value",
-            )?;
+            // The value of a selection assignment is complete before the
+            // write starts, so it may read the Array it is assigned into:
+            // `values[1:] = values[:-1]`. Only moving that Array is refused,
+            // once the value is consumed below.
+            if selection_element.is_none() {
+                self.reject_retained_expr_overlap(
+                    &retained_target,
+                    &assign.value,
+                    &value_ty,
+                    Some(rhs_passing),
+                    &locals_before_value,
+                    locals,
+                    "indexed assignment value",
+                )?;
+            }
             let final_value_ty = if let Some(op) = assign.op {
                 self.type_of_binary(assign.span, op, target_ty.clone(), value_ty.clone())?
             } else {
@@ -6036,6 +6039,15 @@ impl<'a> FunctionChecker<'a> {
                     "operator right operand",
                     locals,
                 )?;
+            }
+            if selection_element.is_some() {
+                let value_moved_accesses = self.newly_moved_place_accesses(
+                    &locals_before_value,
+                    locals,
+                    "indexed assignment value",
+                    assign.value.span,
+                );
+                self.reject_retained_access_overlap(&retained_target, &value_moved_accesses)?;
             }
             return Ok(());
         }
@@ -13135,8 +13147,11 @@ impl<'a> FunctionChecker<'a> {
                                     );
                                     let expected =
                                         Type::Named("list".to_string(), vec![Type::named("int64")]);
-                                    let actual =
-                                        self.type_of_expr_hint(&axes.value, locals, Some(&expected))?;
+                                    let actual = self.type_of_expr_hint(
+                                        &axes.value,
+                                        locals,
+                                        Some(&expected),
+                                    )?;
                                     if actual != expected {
                                         return Err(Diagnostic::coded_at(
                                             "AU2002",

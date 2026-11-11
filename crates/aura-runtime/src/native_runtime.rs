@@ -2807,6 +2807,8 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
             .tagged_enum_name
             .as_ref()
             .is_some_and(|tagged| std::ptr::eq(tagged.as_str(), variant.enum_name.as_str())),
+        // An Array records its dtype and shape itself.
+        (Value::Array(_), _) => false,
         _ => true,
     }
 }
@@ -9814,7 +9816,7 @@ pub extern "C-unwind" fn aura_direct_array_clone(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let cloned = with_array(array, ArrayValue::try_clone);
+        let cloned = with_array(array, ArrayValue::clone_member);
         boxed_value(Value::Array(direct_array_result(cloned, line, column)))
     })
 }
@@ -9968,10 +9970,70 @@ pub extern "C-unwind" fn aura_direct_array_assign_in_place(
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         let selection = direct_array_result(direct_array_selection(selection), line, column);
-        // A copy of the value shares an Array's buffer, and it lets
-        // `values[:] = values` read and write through one box.
-        let value = unsafe { value_ref(value) };
-        let result = with_array_mut(array, |array| array.assign(&selection, &value));
+        // The assignment owns the value, so a view of the target dies
+        // before the write and leaves the target's buffer unshared.
+        let value = unsafe { consume_owned_value(value) };
+        let result = with_array_mut(array, |array| array.assign_owned(&selection, value));
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+/// `array[selection]` for one or two components, whose selection words
+/// arrive as plain arguments.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_select_words(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        let view = crate::array_views::ArrayAxisSelection::decode_inline(words).and_then(
+            |(selection, count)| with_array(array, |array| array.select(&selection[..count])),
+        );
+        boxed_value(Value::Array(direct_array_result(view, line, column)))
+    })
+}
+
+/// `array[selection] = value` for one or two components.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_assign_words_in_place(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        // The assignment owns the value, as in
+        // `aura_direct_array_assign_in_place`.
+        let value = unsafe { consume_owned_value(value) };
+        let result = crate::array_views::ArrayAxisSelection::decode_inline(words).and_then(
+            |(selection, count)| {
+                with_array_mut(array, |array| {
+                    array.assign_owned(&selection[..count], value)
+                })
+            },
+        );
         direct_array_result(result, line, column);
         boxed_value(Value::Unit)
     })

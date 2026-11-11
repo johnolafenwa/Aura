@@ -5261,6 +5261,9 @@ impl<'a> AnalysisBuilder<'a> {
                             _ => None,
                         },
                         _ => match base_type_name(&ty) {
+                            // A slice among the components selects part of
+                            // the Array, not one element.
+                            "Array" if crate::parser::index_has_slice(index) => Some(ty.clone()),
                             "Array" => ty.type_arguments().first().cloned(),
                             "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),

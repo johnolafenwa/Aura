@@ -6,7 +6,7 @@
 //! values: a later write to either Array copies first, so neither sees the
 //! other change.
 
-use crate::array_layout::{self, Strides};
+use crate::array_layout::{self, AxisVec, Strides};
 use crate::diag::{Diagnostic, Result};
 use crate::runtime_value::{
     array_float32_scalar, array_float64_scalar, array_int32_scalar, array_int64_scalar,
@@ -38,32 +38,57 @@ pub const ARRAY_SELECTION_HAS_START: i64 = 2;
 /// The kind bit of a slice whose end is written.
 pub const ARRAY_SELECTION_HAS_END: i64 = 4;
 
+/// The kind word of a component that is not there. A selection of one
+/// component that travels as [`ARRAY_SELECTION_INLINE_WORDS`] plain words
+/// fills its second component with this.
+pub const ARRAY_SELECTION_ABSENT: i64 = 8;
+/// The words of a selection that travels without a tuple: two components.
+pub const ARRAY_SELECTION_INLINE_WORDS: usize = 2 * ARRAY_SELECTION_WORDS;
+
 impl ArrayAxisSelection {
+    /// The selection that eight plain words encode: one or two components,
+    /// the second possibly [`ARRAY_SELECTION_ABSENT`]. Returns the
+    /// components and how many of them are present.
+    #[inline]
+    pub fn decode_inline(words: [i64; ARRAY_SELECTION_INLINE_WORDS]) -> Result<([Self; 2], usize)> {
+        let first = Self::decode_axis(&words[..ARRAY_SELECTION_WORDS])?;
+        if words[ARRAY_SELECTION_WORDS] == ARRAY_SELECTION_ABSENT {
+            return Ok(([first, Self::Index(0)], 1));
+        }
+        let second = Self::decode_axis(&words[ARRAY_SELECTION_WORDS..])?;
+        Ok(([first, second], 2))
+    }
+
+    #[inline]
+    fn decode_axis(axis: &[i64]) -> Result<Self> {
+        let (kind, start, end, step) = (axis[0], axis[1], axis[2], axis[3]);
+        if kind == ARRAY_SELECTION_INDEX {
+            return Ok(Self::Index(start));
+        }
+        let known = ARRAY_SELECTION_SLICE | ARRAY_SELECTION_HAS_START | ARRAY_SELECTION_HAS_END;
+        if kind & ARRAY_SELECTION_SLICE == 0 || kind & !known != 0 {
+            return Err(Diagnostic::coded(
+                "AU4001",
+                "malformed Array selection words",
+            ));
+        }
+        Ok(Self::Slice {
+            start: (kind & ARRAY_SELECTION_HAS_START != 0).then_some(start),
+            end: (kind & ARRAY_SELECTION_HAS_END != 0).then_some(end),
+            step,
+        })
+    }
+
     /// The selection that `words` encodes, [`ARRAY_SELECTION_WORDS`] per
     /// axis.
     pub fn decode(words: &[i64]) -> Result<Vec<Self>> {
         let malformed = || Diagnostic::coded("AU4001", "malformed Array selection words");
-        if words.is_empty() || words.len() % ARRAY_SELECTION_WORDS != 0 {
+        if words.is_empty() || !words.len().is_multiple_of(ARRAY_SELECTION_WORDS) {
             return Err(malformed());
         }
         words
             .chunks_exact(ARRAY_SELECTION_WORDS)
-            .map(|axis| {
-                let (kind, start, end, step) = (axis[0], axis[1], axis[2], axis[3]);
-                if kind == ARRAY_SELECTION_INDEX {
-                    return Ok(Self::Index(start));
-                }
-                let known =
-                    ARRAY_SELECTION_SLICE | ARRAY_SELECTION_HAS_START | ARRAY_SELECTION_HAS_END;
-                if kind & ARRAY_SELECTION_SLICE == 0 || kind & !known != 0 {
-                    return Err(malformed());
-                }
-                Ok(Self::Slice {
-                    start: (kind & ARRAY_SELECTION_HAS_START != 0).then_some(start),
-                    end: (kind & ARRAY_SELECTION_HAS_END != 0).then_some(end),
-                    step,
-                })
-            })
+            .map(Self::decode_axis)
             .collect()
     }
 }
@@ -72,24 +97,50 @@ fn shape_error(message: String) -> Diagnostic {
     Diagnostic::coded("AU4007", message)
 }
 
+/// The layout of a selection, held without allocating for a short shape.
+struct SelectedLayout {
+    shape: AxisVec<usize>,
+    offset: usize,
+    strides: AxisVec<isize>,
+}
+
+impl SelectedLayout {
+    /// Whether the selection is one row-major block.
+    fn is_row_major(&self) -> bool {
+        array_layout::is_row_major(&self.shape, &self.strides)
+    }
+
+    fn strides(&self) -> Strides {
+        Strides {
+            offset: self.offset,
+            strides: self.strides.as_slice().into(),
+        }
+    }
+}
+
 impl ArrayValue {
-    /// The shape and layout that `selection` picks out of this Array, one
-    /// selector per leading axis. Axes without a selector are kept whole.
-    fn select_layout(&self, selection: &[ArrayAxisSelection]) -> Result<(Vec<usize>, Strides)> {
+    /// The shape, first position, and strides of the elements `selection`
+    /// picks: one selector per leading axis. Axes without a selector are
+    /// kept whole.
+    fn select_parts(&self, selection: &[ArrayAxisSelection]) -> Result<SelectedLayout> {
         let rank = self.rank();
         if selection.len() > rank {
             return Err(shape_error(format!(
-                "array rank {rank} accepts at most {rank} selectors, found {}",
+                "array rank {rank} accepts at most {rank} index components, found {}",
                 selection.len()
             )));
         }
-        let layout = self.layout();
-        let mut offset = layout.offset as isize;
-        let mut shape = Vec::with_capacity(rank);
-        let mut strides = Vec::with_capacity(rank);
-        for (axis, (&dimension, &stride)) in
-            self.shape.iter().zip(layout.strides.iter()).enumerate()
-        {
+        let own_strides;
+        let (mut offset, source_strides): (isize, &[isize]) = match &self.strided {
+            Some(layout) => (layout.offset as isize, &layout.strides),
+            None => {
+                own_strides = array_layout::row_major_axis_strides(&self.shape);
+                (0, &own_strides)
+            }
+        };
+        let mut shape = AxisVec::new();
+        let mut strides = AxisVec::new();
+        for (axis, (&dimension, &stride)) in self.shape.iter().zip(source_strides).enumerate() {
             match selection.get(axis) {
                 None => {
                     shape.push(dimension);
@@ -100,12 +151,16 @@ impl ArrayValue {
                     offset += position as isize * stride;
                 }
                 Some(ArrayAxisSelection::Slice { start, end, step }) => {
-                    let (first, count) = stepped_slice_positions(
-                        start.map(i128::from),
-                        end.map(i128::from),
-                        i128::from(*step),
-                        dimension,
-                    )?;
+                    let (first, count) = match (start, end, step) {
+                        // `:` keeps the axis as it is.
+                        (None, None, 1) => (0, dimension),
+                        _ => stepped_slice_positions(
+                            start.map(i128::from),
+                            end.map(i128::from),
+                            i128::from(*step),
+                            dimension,
+                        )?,
+                    };
                     offset += first as isize * stride;
                     shape.push(count);
                     // Two selected positions are `step` apart and both
@@ -127,20 +182,23 @@ impl ArrayValue {
         if shape.contains(&0) {
             offset = 0;
         }
-        Ok((
+        Ok(SelectedLayout {
             shape,
-            Strides {
-                offset: offset as usize,
-                strides: strides.into(),
-            },
-        ))
+            offset: offset as usize,
+            strides,
+        })
     }
 
     /// `array[a, b:c, ::k]`: the elements `selection` picks, as a view that
     /// shares this Array's buffer.
     pub fn select(&self, selection: &[ArrayAxisSelection]) -> Result<Self> {
-        let (shape, layout) = self.select_layout(selection)?;
-        Ok(Self::view(&self.base, shape.into(), layout))
+        let selected = self.select_parts(selection)?;
+        Ok(Self::view_of(
+            &self.base,
+            &selected.shape,
+            selected.offset,
+            &selected.strides,
+        ))
     }
 
     /// The Array's elements under a new shape of the same element count.
@@ -181,7 +239,7 @@ impl ArrayValue {
             .collect();
         match inferred {
             Some(axis) => {
-                if known == 0 || len % known != 0 {
+                if known == 0 || !len.is_multiple_of(known) {
                     return Err(mismatch());
                 }
                 dimensions[axis] = len / known;
@@ -245,90 +303,171 @@ impl ArrayValue {
         Ok(normalized as usize)
     }
 
+    /// `array[selection] = value` for a value the assignment owns. A value
+    /// that is a view of this Array, as in `m[0, :] = m[1, :]`, gives up
+    /// its view before the write, so the Array is written in place unless
+    /// some other view of it is still alive.
+    pub fn assign_owned(&mut self, selection: &[ArrayAxisSelection], value: Value) -> Result<()> {
+        let value = match value {
+            Value::Array(source) if source.shares_buffer_with(self) => {
+                let selected = self.select_parts(selection)?;
+                let source = match self.move_within(&selected, source) {
+                    Ok(()) => return Ok(()),
+                    Err(source) => source,
+                };
+                Value::Array(source.detached()?)
+            }
+            value => value,
+        };
+        self.assign(selection, &value)
+    }
+
+    /// Writes `source`, a block of this Array's own buffer, over the block
+    /// `selected` names, inside the buffer. Hands `source` back when the
+    /// write needs a copy of it: a strided side, a shape to broadcast, or
+    /// a third reader of the buffer.
+    fn move_within(
+        &mut self,
+        selected: &SelectedLayout,
+        source: ArrayValue,
+    ) -> std::result::Result<(), ArrayValue> {
+        let blocks = self.strided.is_none()
+            && source.strided.is_none()
+            && *source.shape == *selected.shape
+            && selected.is_row_major();
+        if !blocks {
+            return Err(source);
+        }
+        let ArrayValue { shape, base, .. } = source;
+        macro_rules! move_block {
+            ($($variant:ident),*) => {
+                match (&mut self.base, base) {
+                    $((ArrayStorage::$variant(values), ArrayStorage::$variant(block)) => {
+                        if values.is_shared_only_with(&block) {
+                            values.copy_within_from(block, selected.offset);
+                            return Ok(());
+                        }
+                        ArrayStorage::$variant(block)
+                    })*
+                    (_, base) => base,
+                }
+            };
+        }
+        let base = move_block!(Int32, Int64, Float32, Float64);
+        Err(ArrayValue {
+            shape,
+            base,
+            strided: None,
+        })
+    }
+
     /// `array[selection] = value`: writes a scalar, or an Array that
     /// broadcasts to the selected shape, over the selected elements.
     pub fn assign(&mut self, selection: &[ArrayAxisSelection], value: &Value) -> Result<()> {
         // Check the selection and the value's shape before anything is
         // copied.
-        let (shape, _) = self.select_layout(selection)?;
+        let mut selected = self.select_parts(selection)?;
         let source = match value {
             Value::Array(source) => {
+                let shape = selected.shape.as_slice();
                 let fits = self.dtype() == source.dtype()
-                    && array_layout::broadcast_shape(&shape, &source.shape).as_deref()
-                        == Some(&shape[..]);
+                    && (*source.shape == *shape
+                        || array_layout::broadcast_shape(shape, &source.shape).as_deref()
+                            == Some(shape));
                 if !fits {
                     return Err(shape_error(format!(
-                        "array slice assignment requires a {} value that broadcasts to the selected shape {shape:?}, found {} {:?}",
+                        "array slice assignment requires a value that broadcasts to the selected shape {shape:?} of {}, found {:?} {}",
                         self.dtype().runtime_type_name(),
-                        source.dtype().runtime_type_name(),
-                        source.shape
+                        source.shape,
+                        source.dtype().runtime_type_name()
                     )));
                 }
-                Some((
-                    source,
-                    array_layout::broadcast_layout(&source.shape, &source.layout(), &shape),
-                ))
+                Some(source)
             }
             _ => None,
         };
         // Writing gives this Array a row-major buffer of its own. A source
         // that is a view of this Array keeps the old buffer, so it reads
         // the elements as they were before the assignment.
+        let repacked = self.strided.is_some();
         self.elements_mut()?;
-        let (shape, target) = self.select_layout(selection)?;
+        if repacked {
+            selected = self.select_parts(selection)?;
+        }
         let label = "Array slice assignment";
         match (&mut self.base, source) {
-            (ArrayStorage::Int32(values), Some((source, layout))) => {
-                let ArrayStorage::Int32(source) = &source.base else {
+            (ArrayStorage::Int32(values), Some(source)) => {
+                let ArrayStorage::Int32(elements) = &source.base else {
                     unreachable!("matching array dtypes imply matching storage variants")
                 };
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter(values, &target, source, &layout, &shape);
+                write_array(values.try_make_mut(label)?, &selected, elements, source);
             }
-            (ArrayStorage::Int64(values), Some((source, layout))) => {
-                let ArrayStorage::Int64(source) = &source.base else {
+            (ArrayStorage::Int64(values), Some(source)) => {
+                let ArrayStorage::Int64(elements) = &source.base else {
                     unreachable!("matching array dtypes imply matching storage variants")
                 };
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter(values, &target, source, &layout, &shape);
+                write_array(values.try_make_mut(label)?, &selected, elements, source);
             }
-            (ArrayStorage::Float32(values), Some((source, layout))) => {
-                let ArrayStorage::Float32(source) = &source.base else {
+            (ArrayStorage::Float32(values), Some(source)) => {
+                let ArrayStorage::Float32(elements) = &source.base else {
                     unreachable!("matching array dtypes imply matching storage variants")
                 };
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter(values, &target, source, &layout, &shape);
+                write_array(values.try_make_mut(label)?, &selected, elements, source);
             }
-            (ArrayStorage::Float64(values), Some((source, layout))) => {
-                let ArrayStorage::Float64(source) = &source.base else {
+            (ArrayStorage::Float64(values), Some(source)) => {
+                let ArrayStorage::Float64(elements) = &source.base else {
                     unreachable!("matching array dtypes imply matching storage variants")
                 };
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter(values, &target, source, &layout, &shape);
+                write_array(values.try_make_mut(label)?, &selected, elements, source);
             }
             (ArrayStorage::Int32(values), None) => {
                 let scalar = array_int32_scalar(value, 0)?;
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter_fill(values, &target, &shape, scalar);
+                write_scalar(values.try_make_mut(label)?, &selected, scalar);
             }
             (ArrayStorage::Int64(values), None) => {
                 let scalar = array_int64_scalar(value, 0)?;
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter_fill(values, &target, &shape, scalar);
+                write_scalar(values.try_make_mut(label)?, &selected, scalar);
             }
             (ArrayStorage::Float32(values), None) => {
                 let scalar = array_float32_scalar(value, 0)?;
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter_fill(values, &target, &shape, scalar);
+                write_scalar(values.try_make_mut(label)?, &selected, scalar);
             }
             (ArrayStorage::Float64(values), None) => {
                 let scalar = array_float64_scalar(value, 0)?;
-                let values = values.try_make_mut(label)?;
-                array_layout::scatter_fill(values, &target, &shape, scalar);
+                write_scalar(values.try_make_mut(label)?, &selected, scalar);
             }
         }
         Ok(())
     }
+}
+
+/// Writes `source`'s elements over the elements of `values` that `target`
+/// selects. `source` broadcasts to the selected shape.
+fn write_array<T: Copy>(
+    values: &mut [T],
+    target: &SelectedLayout,
+    elements: &[T],
+    source: &ArrayValue,
+) {
+    let shape = target.shape.as_slice();
+    if source.strided.is_none() && *source.shape == *shape && target.is_row_major() {
+        // One block over another of the same shape.
+        values[target.offset..target.offset + elements.len()].copy_from_slice(elements);
+        return;
+    }
+    let layout = array_layout::broadcast_layout(&source.shape, &source.layout(), shape);
+    array_layout::scatter(values, &target.strides(), elements, &layout, shape);
+}
+
+/// Writes `scalar` over the elements of `values` that `target` selects.
+fn write_scalar<T: Copy>(values: &mut [T], target: &SelectedLayout, scalar: T) {
+    let shape = target.shape.as_slice();
+    if target.is_row_major() {
+        let len = shape.iter().product::<usize>();
+        values[target.offset..target.offset + len].fill(scalar);
+        return;
+    }
+    array_layout::scatter_fill(values, &target.strides(), shape, scalar);
 }
 
 #[cfg(test)]

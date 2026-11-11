@@ -337,6 +337,10 @@ enum DirectType {
     Opaque(Type),
 }
 
+/// The selection words an `Array` index of one or two components passes
+/// as plain arguments.
+const SELECTION_WORDS: usize = aura_runtime::array_views::ARRAY_SELECTION_INLINE_WORDS;
+
 /// The words after a callable's descriptor.
 const CALLABLE_ENVIRONMENT_WORDS: usize = 3;
 
@@ -15672,6 +15676,36 @@ impl<'a> FunctionCompiler<'a> {
                 let results = self.runtime_call_results(function, &words);
                 Ok(self.owned_opaque_result(results, array_ty))
             }
+            ArrayOp::SelectWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                words.push(self.load_word(args[SELECTION_WORDS], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 1], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::AssignWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let value = self.load_operand(&args[SELECTION_WORDS].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                // The helper owns the value: a view of the receiver must
+                // die before the write.
+                words.push(self.transfer_owned_opaque_value(&value));
+                words.push(self.load_word(args[SELECTION_WORDS + 1], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 2], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
             ArrayOp::Select => {
                 let selection = self.load_operand(&args[0].value)?;
                 let selection = self.ensure_opaque(selection)?;
@@ -15693,11 +15727,14 @@ impl<'a> FunctionCompiler<'a> {
                     self.coerce_value(value, &element_direct_ty)?
                 };
                 let value = self.ensure_opaque(value)?;
+                // The helper owns the value: a view of the receiver must
+                // die before the write.
+                let value = self.transfer_owned_opaque_value(&value);
                 let line = self.load_word(args[2], int32, true)?;
                 let column = self.load_word(args[3], int32, true)?;
                 let results = self.runtime_call_results(
                     function,
-                    &[array, selection.values[0], value.values[0], line, column],
+                    &[array, selection.values[0], value, line, column],
                 );
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;

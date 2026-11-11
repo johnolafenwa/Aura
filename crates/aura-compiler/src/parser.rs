@@ -4384,7 +4384,12 @@ impl Parser {
                     kind: ExprKind::Name(STEPPED_SLICE_BUILTIN.to_string()),
                     span: colon_span,
                 }),
-                args: vec![argument(None), argument(start), argument(end), argument(step)],
+                args: vec![
+                    argument(None),
+                    argument(start),
+                    argument(end),
+                    argument(step),
+                ],
             },
             span,
         })

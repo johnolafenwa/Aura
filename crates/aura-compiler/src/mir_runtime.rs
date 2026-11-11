@@ -29,10 +29,9 @@ use crate::mir::{
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
-    StrOp, ASSIGN_MEMBER, INDEX_MEMBER, PERMUTE_MEMBER, SELECT_MEMBER, SLICE_STEP_MEMBER,
-    SORT_BY_KEYS_MEMBER, SORT_MEMBER,
+    StrOp, ASSIGN_MEMBER, ASSIGN_WORDS_MEMBER, INDEX_MEMBER, PERMUTE_MEMBER, SELECT_MEMBER,
+    SELECT_WORDS_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
 };
-use aura_runtime::array_views::ArrayAxisSelection;
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
     claim_task_result_observations, clone_json_codec_source, concat_text_checked,
@@ -78,6 +77,7 @@ use crate::runtime_value::{
 };
 use crate::sema::{substitute_type, Type};
 use crate::text_methods;
+use aura_runtime::array_views::{ArrayAxisSelection, ARRAY_SELECTION_INLINE_WORDS};
 
 const MIR_FLOOR_DIVISION_OPERANDS_ERROR: &str =
     "MIR floor division requires matching numeric operands";
@@ -7284,7 +7284,7 @@ impl MirRuntime {
             "clone" => {
                 debug_assert!(args.is_empty());
                 array_place_ref(env, object_place)?
-                    .try_clone()
+                    .clone_member()
                     .map(Value::Array)
             }
             "get" => {
@@ -7354,15 +7354,60 @@ impl MirRuntime {
                         error
                     })
             }
-            ASSIGN_MEMBER => {
+            SELECT_WORDS_MEMBER => {
                 let values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 2);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let line =
+                    self.mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 1].value.clone())?;
+                ArrayAxisSelection::decode_inline(words)
+                    .and_then(|(selection, count)| {
+                        array_place_ref(env, object_place)?.select(&selection[..count])
+                    })
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })
+            }
+            ASSIGN_WORDS_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 3);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let line = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 1].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 2].value.clone())?;
+                let value =
+                    std::mem::replace(&mut values[ARRAY_SELECTION_INLINE_WORDS].value, Value::Unit);
+                ArrayAxisSelection::decode_inline(words)
+                    .and_then(|(selection, count)| {
+                        array_place_mut(env, object_place)?.assign_owned(&selection[..count], value)
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            ASSIGN_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
                 debug_assert_eq!(values.len(), 4);
                 let words = array_coordinates_from_runtime(&values[0].value)?;
                 let line = self.mir_index_from_value(values[2].value.clone())?;
                 let column = self.mir_index_from_value(values[3].value.clone())?;
+                let value = std::mem::replace(&mut values[1].value, Value::Unit);
                 ArrayAxisSelection::decode(&words)
                     .and_then(|selection| {
-                        array_place_mut(env, object_place)?.assign(&selection, &values[1].value)
+                        array_place_mut(env, object_place)?.assign_owned(&selection, value)
                     })
                     .map_err(|mut error| {
                         error.span = Some(Span::new(line, column));
@@ -11708,6 +11753,20 @@ fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
         })
         .collect::<Result<Vec<_>>>()
         .map(Vec::into_boxed_slice)
+}
+
+/// One word of an `Array` selection that travels as plain arguments.
+fn array_selection_word(value: &Value) -> Result<i64> {
+    match value {
+        Value::Int(word) => word
+            .as_i128()
+            .and_then(|word| i64::try_from(word).ok())
+            .ok_or_else(|| Diagnostic::coded("AU4001", "malformed Array selection words")),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            "malformed Array selection words",
+        )),
+    }
 }
 
 fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {

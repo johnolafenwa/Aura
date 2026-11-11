@@ -198,3 +198,54 @@ fn shapes_broadcast_from_their_last_axes() {
         "array addition requires shapes that broadcast together, found [2, 3] and [2]"
     );
 }
+
+#[test]
+fn per_axis_values_stay_inline_until_they_outgrow_it() {
+    let mut values = AxisVec::<usize>::default();
+    assert!(values.is_empty());
+    for value in 0..INLINE_AXES {
+        values.push(value);
+    }
+    assert_eq!(values.as_slice(), &[0, 1, 2, 3, 4, 5]);
+    values.push(6);
+    values.push(7);
+    assert_eq!(&*values, &[0, 1, 2, 3, 4, 5, 6, 7]);
+
+    for shape in [
+        &[][..],
+        &[4],
+        &[2, 3],
+        &[2, 0, 3],
+        &[2, 1, 2, 1, 2, 1, 2, 3],
+    ] {
+        assert_eq!(
+            row_major_axis_strides(shape).as_slice(),
+            &row_major_strides(shape)[..],
+            "{shape:?}"
+        );
+    }
+}
+
+#[test]
+fn a_window_copies_inside_a_buffer_it_shares_with_one_other_window() {
+    let mut whole: ArrayBuf<i64> = (0..6).collect();
+    let tail = whole.window(2, 4);
+    let third = whole.window(0, 1);
+    assert!(!whole.is_shared_only_with(&tail));
+    assert!(
+        !whole.copy_within_from(tail, 0),
+        "a third window still reads"
+    );
+    assert_eq!(&*whole, &[0, 1, 2, 3, 4, 5]);
+    drop(third);
+
+    let address = whole.as_ptr();
+    let tail = whole.window(2, 4);
+    assert!(whole.is_shared_only_with(&tail));
+    assert!(whole.copy_within_from(tail, 1));
+    assert_eq!(&*whole, &[0, 2, 3, 4, 5, 5]);
+    assert_eq!(whole.as_ptr(), address);
+
+    let other: ArrayBuf<i64> = (0..2).collect();
+    assert!(!whole.copy_within_from(other, 0));
+}

@@ -2,6 +2,19 @@
 
 Last updated: 2026-11-11
 
+## Array v2 (in progress)
+
+- Target: the four items John approved on 2026-11-11: views and shape
+  operations, broadcasting with axis reductions and elementwise math,
+  matrix products beyond two dimensions, and zero-copy transport. Tensor
+  and device interop is deferred. Details are in
+  `2026-11-11-array-v2.md`.
+- Done: item 1. Arrays share reference-counted storage and copy on write
+  (ADR-0088). An index takes a coordinate or a slice per axis, with
+  steps. `reshape`, `flatten`, `transpose`, `permute`, and slice
+  assignment work on both backends.
+- Remaining: items 2, 3, and 4.
+
 ## SIMD (complete)
 
 - Target: the four pieces John asked for on 2026-11-11: wider Array

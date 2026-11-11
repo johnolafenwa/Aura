@@ -2543,8 +2543,23 @@ fn array_coordinate_assignment_preserves_a_tuple_index_target() {
 
     assert!(parse("def main():\n    values[0,] = 7\n").is_err());
     let mixed = parse("def main():\n    values[0, 1:] = 7\n")
-        .expect_err("mixed coordinate/slice assignment must stay rejected");
-    assert!(mixed.message.contains("slice assignment is unavailable"));
+        .expect("a coordinate and a slice select part of an Array");
+    let Item::Function(mixed_function) = &mixed.items[0] else {
+        panic!("expected main function");
+    };
+    let Stmt::Assign(mixed_assign) = &mixed_function.body[0] else {
+        panic!("expected a selection assignment");
+    };
+    let AssignTarget::Index { index, .. } = &mixed_assign.target else {
+        panic!("expected a selection target");
+    };
+    assert!(index_has_slice(index));
+    let ExprKind::Tuple(components) = &index.kind else {
+        panic!("a selection keeps one component for each axis");
+    };
+    assert!(array_axis_slice_parts(&components[0]).is_none());
+    let slice = array_axis_slice_parts(&components[1]).expect("the second axis is a slice");
+    assert!(slice.start.is_some() && slice.end.is_none() && slice.step.is_none());
 }
 
 #[test]
@@ -2681,33 +2696,60 @@ fn phase72_parser_reads_slice_steps_and_rejects_slice_assignment() {
         );
     }
 
-    for (source, column) in [
-        ("values[1:3] = replacement\n", 9),
-        ("values[:] += replacement\n", 8),
+    for (source, column, has_start, has_end) in [
+        ("values[1:3] = replacement\n", 9, true, true),
+        ("values[:] += replacement\n", 8, false, false),
     ] {
-        let error = parse_stmt_from(source).expect_err("slice assignment is unavailable");
-        assert_eq!(error.code, "AU2005", "{source}");
-        assert_eq!(error.span, Some(Span::new(1, column)), "{source}");
-        assert!(
-            error.message.contains("slice assignment is unavailable")
-                && error.message.contains("owned copies"),
-            "{source}: {}",
-            error.message
-        );
+        let Stmt::Assign(assign) = parse_stmt_from(source).expect("a slice target parses") else {
+            panic!("{source} should parse as an assignment");
+        };
+        let AssignTarget::Index { index, .. } = &assign.target else {
+            panic!("{source} should assign through an index target");
+        };
+        let slice = array_axis_slice_parts(index).expect("the target is one slice");
+        assert_eq!(slice.colon_span, Span::new(1, column), "{source}");
+        assert_eq!(slice.start.is_some(), has_start, "{source}");
+        assert_eq!(slice.end.is_some(), has_end, "{source}");
+        assert!(slice.step.is_none(), "{source}");
     }
 }
 
 #[test]
-fn phase72_parser_rejects_mixed_tuple_and_slice_delimiters() {
-    for (source, message) in [
-        ("values[0:1,2]", "expected RBracket, found Comma"),
-        ("values[0,1:2]", "expected RBracket, found Colon"),
+fn index_components_mix_coordinates_and_slices() {
+    for (source, slices) in [
+        ("values[0:1,2]", [true, false]),
+        ("values[0,1:2]", [false, true]),
+        ("values[::2,:]", [true, true]),
     ] {
-        let error =
-            parse_expression(source).expect_err("tuple and slice delimiters must not be mixed");
-        assert_eq!(error.code, "AU1101", "{source}");
-        assert_eq!(error.span, Some(Span::new(1, 11)), "{source}");
-        assert_eq!(error.message, message, "{source}");
+        let expr = parse_expression(source).expect("a slice may be one component of an index");
+        let ExprKind::Index { index, .. } = &expr.kind else {
+            panic!("{source} should stay an index expression: {:?}", expr.kind);
+        };
+        assert!(index_has_slice(index), "{source}");
+        let ExprKind::Tuple(components) = &index.kind else {
+            panic!("{source} should keep one component for each axis");
+        };
+        let found: Vec<bool> = components
+            .iter()
+            .map(|component| array_axis_slice_parts(component).is_some())
+            .collect();
+        assert_eq!(found, slices, "{source}");
+    }
+    let stepped = parse_expression("values[::-1, 1:3:2]").expect("stepped components parse");
+    let ExprKind::Index { index, .. } = &stepped.kind else {
+        panic!("expected an index expression");
+    };
+    let ExprKind::Tuple(components) = &index.kind else {
+        panic!("expected two components");
+    };
+    let first = array_axis_slice_parts(&components[0]).expect("the first axis is a slice");
+    assert!(first.start.is_none() && first.end.is_none() && first.step.is_some());
+    let second = array_axis_slice_parts(&components[1]).expect("the second axis is a slice");
+    assert!(second.start.is_some() && second.end.is_some() && second.step.is_some());
+    assert!(!index_has_slice(&parse_expression("0").unwrap()));
+
+    for source in ["values[0,]", "values[1:2:3:4]", "values[,1]"] {
+        assert!(parse_expression(source).is_err(), "{source}");
     }
 }
 

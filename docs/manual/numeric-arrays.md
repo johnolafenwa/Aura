@@ -1,12 +1,14 @@
 # Numeric Arrays
 
-`Array[T]` is Aura's owned, contiguous numeric container for the CPU. Use it
-for local preprocessing, postprocessing, evaluation, and batch-shaped numeric
-work. It is smaller than a general tensor framework:
+`Array[T]` is Aura's owned numeric container for the CPU. Use it for local
+preprocessing, postprocessing, evaluation, and batch-shaped numeric work. It
+is smaller than a general tensor framework:
 
 - Shape is runtime metadata.
 - Storage is row-major and lives on the host.
-- Every result owns its buffer.
+- An Array is a value. Slices, transposes, and reshapes read the same
+  elements without copying them, and no Array sees a write made through
+  another.
 
 The only dtypes, or element types, are `int32`, `int64`, `float32`, and
 `float64`.
@@ -16,10 +18,11 @@ def main() -> int32:
     left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
     right = Array[float64].full([2, 2], 0.5)
     combined = left + right
-    first_row = combined[0:1]
+    first_row = combined[0, :]
     print(combined.shape())
     print(combined[1, 0])
     print(first_row.sum())
+    print(combined.transpose()[0, :])
     print(combined.mean())
     return 0
 ```
@@ -27,23 +30,23 @@ def main() -> int32:
 ## Grammar
 
 `Array` is a global builtin generic type, not a module. It uses the ordinary
-grammar for specialization, calls, member calls, indexing, indexed assignment,
-and one-colon slices:
+grammar for specialization, calls, member calls, indexing, and indexed
+assignment. An Array index takes one component per axis, and a component is
+a coordinate or a slice:
 
 ```text
 Array [ dtype ]
 Array [ dtype ] . constructor ( arguments )
-array [ expression { , expression } ]
-array [ [ expression ] : [ expression ] ]
+array [ component { , component } ]
+component = expression | [ expression ] : [ expression ] [ : [ expression ] ]
 ```
 
 The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is different from list indexing. A
-one-colon slice selects a range along the first axis. [Grammar](/manual/grammar)
-defines the complete syntax.
+`float64`. Comma-separated Array indexing is different from list indexing.
+[Grammar](/manual/grammar) defines the complete syntax.
 
-Aura has no Array literal, dtype value, rank annotation, array-shape
-broadcast syntax, view syntax, step slice, or multidimensional slice tuple.
+Aura has no Array literal, dtype value, rank annotation, or array-shape
+broadcast syntax.
 
 ## Typing Rules
 
@@ -70,7 +73,11 @@ from a mixed numeric source.
 | --- | --- |
 | `shape()` | `list[int64]`; owned shape snapshot |
 | `len()` | `int64`; total element count |
-| `clone()` | fresh `Array[T]` |
+| `clone()` | `Array[T]`; an independent copy |
+| `reshape(shape: list[int64])` | `Array[T]`; the same elements under another shape |
+| `flatten()` | `Array[T]`; the elements as one axis |
+| `transpose()` | `Array[T]`; the axes in reverse order |
+| `permute(axes: list[int64])` | `Array[T]`; the axes in the order given |
 | `get(index: list[int64])` | `T \| None`; `None` for an out-of-bounds coordinate or rank mismatch |
 | `set(index: list[int64], value: T)` | mutable receiver; `T \| None` holding the replaced value, or a coordinate/rank trap rather than `None` |
 | `fill(value: T)` | mutable receiver; returns `None` |
@@ -94,9 +101,14 @@ both operands and consume neither.
 
 ### Indexing And Slicing
 
-Direct indexing takes exactly one `int64` coordinate per runtime axis.
-`array[i, j]` has type `T`. Indexed assignment requires a mutable Array place
-and a value of exactly `T`. `array[start:end]` returns `Array[T]`.
+An index of coordinates only, such as `array[i, j]`, has type `T`. It takes
+exactly one `int64` coordinate per runtime axis. Assignment through it
+requires a mutable Array place and a value of exactly `T`.
+
+An index with a slice among its components, such as `array[i, :]` or
+`array[::2]`, has type `Array[T]`. Assignment through it requires a mutable
+Array place and a value of type `T` or `Array[T]`. Slice bounds and steps are
+`int64` or a losslessly narrower integer type.
 
 ### Operators
 
@@ -125,7 +137,7 @@ checked.
 
 ### Shape And Layout
 
-An Array has rank one or more and owns one contiguous row-major buffer.
+An Array has rank one or more and reads its elements in row-major order.
 Dimensions are `int64`. They can be zero but not negative. `len()` is the
 checked product of all dimensions, so a zero dimension makes the Array empty
 while keeping its full shape.
@@ -143,19 +155,126 @@ coordinate:
 
 A valid `set` returns the previous scalar as its `T | None` result.
 
-### First-Axis Slices
+### Selections
 
-`array[start:end]` selects complete rows along axis zero. Written endpoints
-have exact type `int32`. Omitted bounds and one-time negative normalization
-follow the owned-slice rules for lists. Endpoints never clamp. The result has
-shape `[end - start]` followed by the source's remaining dimensions. It is
-fresh storage that never aliases the source.
+Each component of an index applies to one axis, in order. A coordinate picks
+one position and removes the axis. A slice keeps the axis. Axes after the
+last component are taken whole.
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [3, 4])
+    print(grid[1, :])
+    print(grid[:, 2])
+    print(grid[::2, 1:3])
+    print(grid[::-1])
+    print(grid[1:2, :].shape())
+    return 0
+```
+
+It prints the second row, the third column, a two by two block, the rows in
+reverse order, and `[1, 4]`.
+
+A slice follows the rules of a list slice. Omitted bounds take the whole
+axis, a negative bound counts from the end once, and a step may be negative.
+Bounds never clamp. A bound outside the axis, a reversed range, or a zero
+step is `AU4003`. More components than the Array has axes is `AU4007`.
+
+A selection does not copy elements. See [Shared Storage](#shared-storage).
+
+### Shape Members
+
+| Member | Result |
+| --- | --- |
+| `reshape(shape)` | The same elements in row-major order under `shape`. One dimension may be `-1`, which takes the length the others leave. |
+| `flatten()` | `reshape([-1])`. |
+| `transpose()` | The axes in reverse order. A rank-1 Array is unchanged. |
+| `permute(axes)` | The axes in the order `axes` names them. Each axis appears once, and a negative axis counts from the last. |
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5], [2, 3])
+    print(grid.transpose())
+    print(grid.reshape([3, -1]))
+    print(grid.transpose().flatten())
+    return 0
+```
+
+A `reshape` whose shape holds a different number of elements, and a
+`permute` that repeats or omits an axis, are `AU4007`.
+
+### Slice Assignment
+
+`array[selection] = value` writes every selected element. The value is one
+element, which fills the selection, or an Array whose shape broadcasts to
+the selected shape: each dimension is equal or one, aligned at the last
+axis.
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    grid[0, :] = 1
+    grid[:, 3] = Array[float64].from_list([7.0, 8.0, 9.0], [3])
+    grid[1:, :2] += 0.5
+    grid[2, :] = grid[0, :]
+    print(grid)
+    return 0
+```
+
+- A numeric literal takes the Array's dtype.
+- `array[selection] op= value` reads the selection once, applies the
+  operator, and writes the result back.
+- The value is complete before the write starts, so it may read the Array it
+  is assigned into. `values[1:] = values[:-1]` shifts the elements as they
+  were.
+- The selection and the value's shape are checked before anything is
+  written. A value of another shape is `AU4007`.
+
+### Shared Storage
+
+`clone()`, a selection, `reshape`, `flatten`, `transpose`, and `permute`
+return an Array that reads the same element buffer as the source. They cost
+the same for any element count. Two exceptions copy elements:
+
+- `reshape` and `flatten` of a view that is not one row-major block, such as
+  a transposed matrix or a stepped slice.
+- `clone()` of an Array that reads part of a larger buffer. The copy holds
+  only its own elements.
+
+A write never shows through another Array. `set`, `fill`, and assignment
+write in place when the Array is the only one reading its buffer. Otherwise
+the Array first copies its own elements, and the other Arrays keep the old
+buffer:
+
+```aura
+def main() -> int32:
+    mut grid = Array[int64].zeros([2, 2])
+    row = grid[0, :]
+    grid[0, 0] = 5
+    print(row)
+    print(grid[0, :])
+    return 0
+```
+
+It prints `[0, 0]` for `row` and `[5, 0]` for the row read after the write.
+
+That copy is the one cost to plan for. A loop that keeps a view of an Array
+alive while it writes the Array copies the Array on the first write after
+each view is taken. Call `clone()` on the view to keep its elements without
+the buffer:
+
+```aura
+def swap_rows(grid: mut Array[float64], first: int64, second: int64) -> None:
+    saved = grid[first, :].clone()
+    grid[first, :] = grid[second, :]
+    grid[second, :] = saved
+```
 
 ### Arithmetic
 
 - Array/Array operations require exactly equal shapes.
 - Scalar forms apply the scalar to every element in row-major order.
-- Results own fresh contiguous storage.
+- Results own fresh storage.
 - Floating `/` follows the ordinary floating operator rules.
 - Integer `+`, `-`, `*`, and `sum` keep checked overflow.
 - Wrapping operations use fixed-width two's-complement modular arithmetic.
@@ -244,7 +363,7 @@ bits. An integer `matmul` is checked and reports `AU4002`.
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
-move the buffer. `.clone()` is the explicit way to duplicate the whole buffer.
+move the Array. `.clone()` is the explicit way to duplicate it.
 
 An Array is always structurally `Transfer`, because every dtype is a
 `Transfer` scalar. A Task result that holds an Array still has the ordinary
@@ -258,13 +377,13 @@ Evaluation order:
   Arrays for the kernel and consumes neither shared operand.
 - Coordinates evaluate from left to right.
 - A direct indexed assignment captures its coordinate before it evaluates the
-  new value.
+  new value. A slice assignment evaluates its bounds and steps from left to
+  right, then its value.
 
-Elementwise operations, `map`, and first-axis slices allocate a fresh result.
-`map` calls its repeatable callback once per element in row-major order, and
-moves or copies each scalar result into the output. If a trap occurs, any
-partial output is cleaned up. Shape snapshots and first-axis slices are owned
-copies, not views.
+Elementwise operations and `map` allocate a fresh result. `map` calls its
+repeatable callback once per element in row-major order, and moves or copies
+each scalar result into the output. If a trap occurs, any partial output is
+cleaned up. A shape snapshot is an owned copy.
 
 ## Diagnostics
 
@@ -273,21 +392,20 @@ Compile-time codes:
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown Array member or constructor. |
-| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. |
+| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. A slice assignment whose value is neither `T` nor `Array[T]`. A slice bound or step that is not an integer. |
 | `AU2003` | Unsupported operator, including integer Array `/`. The message keeps the ordinary checked-integer guidance. |
 | `AU2004` | Invalid argument binding. |
-| `AU2005` | Slice steps and slice assignment, which are reserved. The message gives the same owned-copy guidance as for list and str slices. |
-| `AU3002` | Mutation while shared access is active. |
-| `AU3003` | `set`, `fill`, or indexed assignment through an immutable place. |
+| `AU3002` | Mutation while shared access is active, or a slice assignment that moves its own target, as in `values[:] = values`. |
+| `AU3003` | `set`, `fill`, or assignment through an immutable place. |
 
 Runtime codes:
 
 | Code | Cause |
 | --- | --- |
 | `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
-| `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
+| `AU4003` | A coordinate is out of range, a slice bound is outside its axis, a slice range is reversed, or a slice step is zero. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
-| `AU4005` | Shape product or element count overflows, or allocation fails. |
+| `AU4005` | Shape product or element count overflows, or allocation fails. A write to an Array that shares its buffer allocates the copy. |
 | `AU4007` | Numeric array shape or reduction violation. See below. |
 
 `AU4007` (`numeric array shape or reduction violation`) covers:
@@ -296,6 +414,11 @@ Runtime codes:
 - a `from_list` element count that does not match the shape
 - an Array/Array operation whose shapes differ
 - a direct coordinate count that does not match the runtime rank
+- an index with more components than the runtime rank
+- a `reshape` to a shape with a different element count, or with two `-1`
+  dimensions
+- a `permute` that repeats or omits an axis
+- a slice assignment whose value does not broadcast to the selected shape
 - `min`, `max`, `mean`, or `fast_mean` on an empty Array
 - a `dot` whose shapes differ
 - a `matmul` whose shapes are not one of the three accepted pairs
@@ -308,13 +431,15 @@ place.
 MIR and direct execution both implement:
 
 - constructors, indexing, and mutation
-- first-axis copies
+- selections, shape members, and slice assignment
 - `map` and reductions
 - `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
 - scalar forms and exact-shape elementwise operations
 
-Direct native execution uses contiguous kernels specialized per dtype. Both
+Direct native execution uses kernels specialized per dtype. A view that is
+not one row-major block is copied into row-major order before a kernel reads
+it. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
 
@@ -324,14 +449,14 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 Arrays are CPU-only, contiguous, row-major, and have rank one or
-more. They do not have:
+Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
+not have:
 
-- array-shape broadcasting or mixed promotion
-- views, reshape, or transpose
+- array-shape broadcasting between two Array operands, or mixed promotion
 - a matrix product over more than two dimensions
 - equality or ordering
-- multidimensional slicing, step slices, or slice assignment
+- iteration with `for`
+- a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage
 - aliasing of foreign buffers
 
@@ -447,4 +572,5 @@ Design records:
 [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md),
 [ADR-0085: Target CPU and kernel dispatch](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0085-target-cpu-and-kernel-dispatch.md),
 [ADR-0086: Array products and reordered reductions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0086-array-products-and-reordered-reductions.md),
+[ADR-0088: Array views share storage and copy on write](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0088-array-views-share-storage.md),
 and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).

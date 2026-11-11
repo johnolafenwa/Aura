@@ -8860,6 +8860,53 @@ fn counted_loops_over_scalar_lists_build_to_vector_instructions() {
 }
 
 #[test]
+fn array_views_example_matches_on_both_backends() {
+    let temp = TempDir::new("aura-array-views");
+    let source_path = repo_root().join("examples/numbers/array_views.au");
+    let expected = concat!(
+        "Array[float64](shape=[4], values=[4.0, 5.0, 6.0, 7.0])\n",
+        "Array[float64](shape=[3], values=[2.0, 6.0, 10.0])\n",
+        "Array[float64](shape=[2, 2], values=[1.0, 2.0, 9.0, 10.0])\n",
+        "Array[float64](shape=[3], values=[8.0, 4.0, 0.0])\n",
+        "[4, 3]\n",
+        "Array[float64](shape=[2, 6], values=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0])\n",
+        "Array[float64](shape=[12], values=[0.0, 4.0, 8.0, 1.0, 5.0, 9.0, 2.0, 6.0, 10.0, 3.0, 7.0, 11.0])\n",
+        "Array[float64](shape=[3], values=[1.0, 3.0, 5.0])\n",
+        "Array[float64](shape=[3, 4], values=[1.0, 1.0, 1.0, 70.0, 4.5, 5.5, 6.0, 80.0, 8.5, 9.5, 10.0, 90.0])\n",
+        "Array[float64](shape=[4], values=[0.0, 1.0, 2.0, 3.0])\n",
+        "Array[int64](shape=[5], values=[1, 1, 2, 3, 4])\n",
+        "Array[float64](shape=[4], values=[8.5, 9.5, 10.0, 90.0])\n",
+    );
+    let interpreted = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura run");
+    assert!(
+        interpreted.status.success(),
+        "the example should run, stderr was:\n{}",
+        String::from_utf8_lossy(&interpreted.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&interpreted.stdout), expected);
+
+    let output_path = temp.path().join("app");
+    let build = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&output_path)
+        .arg(&source_path)
+        .output()
+        .expect("failed to run aura build");
+    assert!(
+        build.status.success(),
+        "the build should succeed, stderr was:\n{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    let run = generated_binary(&output_path).output().unwrap();
+    assert!(run.status.success());
+    assert_eq!(String::from_utf8_lossy(&run.stdout), expected);
+}
+
+#[test]
 fn simd_lane_values_build_to_vector_instructions() {
     let temp = TempDir::new("aura-simd-lanes");
     let source_path = repo_root().join("examples/numbers/simd_lanes.au");

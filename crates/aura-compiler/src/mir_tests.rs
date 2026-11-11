@@ -16121,3 +16121,60 @@ def main() -> int32:
     let decoded: MirModule = serde_json::from_value(encoded).expect("MIR reads back");
     assert_eq!(decoded.foreign_link, linked.foreign_link);
 }
+
+#[test]
+fn array_selections_lower_to_the_private_view_members() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    mut values = Array[int32].zeros([2, 3])
+    row = values[1, :]
+    stepped = values[::2]
+    first = values[0:1]
+    item = values[1, 2]
+    turned = values.transpose()
+    shaped = values.reshape([3, 2])
+    values[0, 1:] = 4
+    values[:, 0] += row[0:2]
+    mut cube = Array[int32].zeros([2, 2, 2])
+    line = cube[0, :, 1]
+    cube[1, :, 0] = 5
+    print(line)
+    print(row)
+    print(stepped)
+    print(first)
+    print(item)
+    print(turned)
+    print(shaped)
+"#,
+    )
+    .expect("Array selections should lower");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    let locals = main
+        .local_types
+        .iter()
+        .map(|local| (local.name.as_str(), local.ty.clone()))
+        .collect::<BTreeMap<_, _>>();
+    let int_array = Type::Named("Array".to_string(), vec![Type::named("int32")]);
+    for name in ["row", "stepped", "first", "turned", "shaped"] {
+        assert_eq!(locals[name], int_array, "{name}");
+    }
+    assert_eq!(locals["item"], Type::named("int32"));
+
+    let rendered = format!("{main:?}");
+    let count = |op: &str| rendered.matches(&format!("Array({op})")).count();
+    assert_eq!(
+        count("SelectWords"),
+        3,
+        "a mixed index, a stepped slice, and a compound assignment's read: {rendered}"
+    );
+    assert_eq!(count("Slice"), 2, "one-colon slices keep the row slice");
+    assert_eq!(count("AssignWords"), 2, "{rendered}");
+    // Three components pass their words as a tuple.
+    assert_eq!(count("Select"), 1, "{rendered}");
+    assert_eq!(count("Assign"), 1, "{rendered}");
+}

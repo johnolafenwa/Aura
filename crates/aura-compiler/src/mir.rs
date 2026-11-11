@@ -15271,6 +15271,20 @@ impl<'a> Lowerer<'a> {
             };
             let lowered_object = lent_object.unwrap_or_else(|| self.lower_expr(object));
             let object_ty = self.infer_expr_type(object);
+            // `values[a:b, i] = value` writes a scalar or an Array through
+            // the selection.
+            if let Some(Type::Named(name, args)) = object_ty.as_ref() {
+                if name == "Array" && args.len() == 1 && crate::parser::index_has_slice(index) {
+                    self.lower_array_selection_assign(
+                        assign,
+                        index,
+                        lowered_object,
+                        receiver_place,
+                        &args[0],
+                    );
+                    return;
+                }
+            }
             let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
                 Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
                     INTERNAL_MAP_INDEX_FIELD.to_string(),
@@ -15284,28 +15298,6 @@ impl<'a> Lowerer<'a> {
                     Some(Type::named("int64")),
                     Some(args[0].clone()),
                 ),
-                // `values[a:b, i] = value` writes a scalar or an Array
-                // through the selection.
-                Some(Type::Named(name, args))
-                    if name == "Array"
-                        && args.len() == 1
-                        && crate::parser::index_has_slice(index) =>
-                {
-                    let value_is_array = matches!(
-                        self.infer_expr_type(&assign.value),
-                        Some(Type::Named(name, _)) if name == "Array"
-                    );
-                    (
-                        crate::runtime_ops::SELECT_MEMBER.to_string(),
-                        crate::runtime_ops::ASSIGN_MEMBER.to_string(),
-                        Some(array_selection_type(index)),
-                        Some(if value_is_array {
-                            Type::Named(name.clone(), args.clone())
-                        } else {
-                            args[0].clone()
-                        }),
-                    )
-                }
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => (
                     INTERNAL_VEC_INDEX_FIELD.to_string(),
                     INTERNAL_VEC_SET_INDEX_FIELD.to_string(),
@@ -15325,7 +15317,7 @@ impl<'a> Lowerer<'a> {
                     self.span_absolute_index(object, relative, index.span)
                 }
                 Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
-                    self.lower_array_index_expr(index)
+                    self.lower_array_coordinate_expr(index)
                 }
                 // The checker lets a compound assignment borrow a `str` or
                 // `bytes` key, so the write back stores a clone of it.
@@ -21346,13 +21338,30 @@ impl<'a> Lowerer<'a> {
                 let temp = self.new_temp_for_expr(expr);
                 let object_type = self.infer_expr_type(object);
                 let lowered_object = self.lower_expr_at_sequence_point(object, None);
+                if matches!(&object_type, Some(Type::Named(name, _)) if name == "Array")
+                    && crate::parser::index_has_slice(index)
+                {
+                    let receiver_place = match &lowered_object {
+                        Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+                        _ => self.render_place_expr_option(object),
+                    };
+                    let words = self.lower_array_selection_words(index);
+                    self.emit_array_select(
+                        &temp,
+                        lowered_object,
+                        receiver_place,
+                        words,
+                        index.span,
+                    );
+                    return Operand::Place(temp);
+                }
                 let lowered_index = match object_type.as_ref() {
                     Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                         let relative = self.lower_index_domain_expr(index);
                         self.span_absolute_index(object, relative, index.span)
                     }
                     Some(Type::Named(name, args)) if name == "Array" && args.len() == 1 => {
-                        self.lower_array_index_expr(index)
+                        self.lower_array_coordinate_expr(index)
                     }
                     _ => self.lower_expr_at_sequence_point(index, None),
                 };
@@ -21363,11 +21372,6 @@ impl<'a> Lowerer<'a> {
                 let field = match object_type {
                     Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => {
                         INTERNAL_MAP_INDEX_FIELD.to_string()
-                    }
-                    Some(Type::Named(name, _))
-                        if name == "Array" && crate::parser::index_has_slice(index) =>
-                    {
-                        crate::runtime_ops::SELECT_MEMBER.to_string()
                     }
                     _ => INTERNAL_VEC_INDEX_FIELD.to_string(),
                 };
@@ -21575,9 +21579,10 @@ impl<'a> Lowerer<'a> {
         };
         let mut kind = ARRAY_SELECTION_SLICE;
         let mut words = vec![Operand::Int(0)];
-        for (bound, flag) in bounds
-            .iter()
-            .zip([ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_HAS_END, 0])
+        for (bound, flag) in
+            bounds
+                .iter()
+                .zip([ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_HAS_END, 0])
         {
             let bound = bound.expect("a stepped slice binds every position");
             if matches!(bound.value.kind, ExprKind::BuiltinOmitted) {
@@ -21588,37 +21593,7 @@ impl<'a> Lowerer<'a> {
             }
         }
         words[0] = Operand::Int(kind as u128);
-        let element_types = vec![Type::named("int64"); words.len()];
-        let selection = self.new_typed_temp(Type::Tuple(element_types.clone()));
-        self.emit(Instruction::Assign {
-            target: selection.clone(),
-            value: Rvalue::TupleLiteral {
-                elements: words,
-                element_types,
-            },
-        });
-        let arg = |value| MirArg {
-            name: None,
-            value,
-            writeback_place: None,
-        };
-        self.emit(Instruction::Assign {
-            target: result.to_string(),
-            value: Rvalue::Call {
-                callee: CallTarget::Member {
-                    object: lowered_object,
-                    field: crate::runtime_ops::SELECT_MEMBER.to_string(),
-                    receiver_place,
-                    dispatch: None,
-                },
-                args: vec![
-                    arg(Operand::Place(selection)),
-                    arg(Operand::Int(colon_span.line as u128)),
-                    arg(Operand::Int(colon_span.column as u128)),
-                ],
-                type_args: Default::default(),
-            },
-        });
+        self.emit_array_select(result, lowered_object, receiver_place, words, colon_span);
     }
 
     /// Calls the list method `field` on the list in `place` for its effect.
@@ -23220,22 +23195,12 @@ impl<'a> Lowerer<'a> {
         Operand::Place(temp)
     }
 
-    /// The index of an `Array` read or write: its coordinates, or the
-    /// selection words when a component is a slice.
-    fn lower_array_index_expr(&mut self, index: &Expr) -> Operand {
-        if crate::parser::index_has_slice(index) {
-            self.lower_array_selection_expr(index)
-        } else {
-            self.lower_array_coordinate_expr(index)
-        }
-    }
-
     /// The selection words of an `Array` index with a slice among its
-    /// components, as a tuple of `int64`: a kind word, start, end, and
-    /// step per component, which the runtime decodes
-    /// (`aura_runtime::array_views`). Components are evaluated left to
-    /// right, and a slice's start, end, and step in that order.
-    fn lower_array_selection_expr(&mut self, index: &Expr) -> Operand {
+    /// components: a kind word, start, end, and step per component, which
+    /// the runtime decodes (`aura_runtime::array_views`). Components are
+    /// evaluated left to right, and a slice's start, end, and step in that
+    /// order.
+    fn lower_array_selection_words(&mut self, index: &Expr) -> Vec<Operand> {
         use aura_runtime::array_views::{
             ARRAY_SELECTION_HAS_END, ARRAY_SELECTION_HAS_START, ARRAY_SELECTION_INDEX,
             ARRAY_SELECTION_SLICE,
@@ -23267,6 +23232,33 @@ impl<'a> Lowerer<'a> {
                 });
             }
         }
+        words
+    }
+
+    /// The private members and leading arguments that carry `words` to the
+    /// runtime. One or two components travel as eight plain words, so a
+    /// row or column selection boxes nothing. More components travel as
+    /// one tuple.
+    fn array_selection_call(
+        &mut self,
+        mut words: Vec<Operand>,
+    ) -> (&'static str, &'static str, Vec<Operand>) {
+        use aura_runtime::array_views::{ARRAY_SELECTION_ABSENT, ARRAY_SELECTION_INLINE_WORDS};
+        if words.len() <= ARRAY_SELECTION_INLINE_WORDS {
+            while words.len() < ARRAY_SELECTION_INLINE_WORDS {
+                words.extend([
+                    Operand::Int(ARRAY_SELECTION_ABSENT as u128),
+                    Operand::Int(0),
+                    Operand::Int(0),
+                    Operand::Int(0),
+                ]);
+            }
+            return (
+                crate::runtime_ops::SELECT_WORDS_MEMBER,
+                crate::runtime_ops::ASSIGN_WORDS_MEMBER,
+                words,
+            );
+        }
         let element_types = vec![Type::named("int64"); words.len()];
         let temp = self.new_typed_temp(Type::Tuple(element_types.clone()));
         self.emit(Instruction::Assign {
@@ -23276,7 +23268,137 @@ impl<'a> Lowerer<'a> {
                 element_types,
             },
         });
-        Operand::Place(temp)
+        (
+            crate::runtime_ops::SELECT_MEMBER,
+            crate::runtime_ops::ASSIGN_MEMBER,
+            vec![Operand::Place(temp)],
+        )
+    }
+
+    /// `result = object[words]`: a view of the selected elements.
+    fn emit_array_select(
+        &mut self,
+        result: &str,
+        object: Operand,
+        receiver_place: Option<String>,
+        words: Vec<Operand>,
+        span: Span,
+    ) {
+        let (select, _, mut args) = self.array_selection_call(words);
+        args.extend([
+            Operand::Int(span.line as u128),
+            Operand::Int(span.column as u128),
+        ]);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object,
+                    field: select.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: args
+                    .into_iter()
+                    .map(|value| MirArg {
+                        name: None,
+                        value,
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
+    }
+
+    /// `object[index] = value` and `object[index] op= value` for an index
+    /// with a slice among its components. The bounds and steps are
+    /// evaluated once, before the value.
+    fn lower_array_selection_assign(
+        &mut self,
+        assign: &AssignStmt,
+        index: &Expr,
+        lowered_object: Operand,
+        receiver_place: Option<String>,
+        element_ty: &Type,
+    ) {
+        let array_ty = Type::Named("Array".to_string(), vec![element_ty.clone()]);
+        let mut words = self.lower_array_selection_words(index);
+        if assign.op.is_some() {
+            // The words are read twice, so each keeps the value it had
+            // before the right-hand side ran.
+            for word in &mut words {
+                if matches!(word, Operand::Int(_)) {
+                    continue;
+                }
+                let captured = self.new_typed_temp(Type::named("int64"));
+                self.emit(Instruction::Assign {
+                    target: captured.clone(),
+                    value: Rvalue::Use(word.clone()),
+                });
+                *word = Operand::Place(captured);
+            }
+        }
+        let value = if let Some(op) = assign.op {
+            let current = self.new_typed_temp(array_ty.clone());
+            self.emit_array_select(
+                &current,
+                lowered_object.clone(),
+                receiver_place.clone(),
+                words.clone(),
+                assign.span,
+            );
+            let compound = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(Expr {
+                        kind: ExprKind::Name(current),
+                        span: assign.span,
+                    }),
+                    right: Box::new(assign.value.clone()),
+                },
+                span: assign.span,
+            };
+            self.lower_expr_with_expected(&compound, Some(&array_ty))
+        } else {
+            let value_is_array = matches!(
+                self.infer_expr_type(&assign.value),
+                Some(Type::Named(name, _)) if name == "Array"
+            );
+            let value_ty = if value_is_array {
+                &array_ty
+            } else {
+                element_ty
+            };
+            self.lower_expr_for_owned_value(&assign.value, Some(value_ty))
+        };
+        let (_, assign_member, mut args) = self.array_selection_call(words);
+        args.extend([
+            value,
+            Operand::Int(assign.span.line as u128),
+            Operand::Int(assign.span.column as u128),
+        ]);
+        let temp = self.new_typed_temp(Type::Unit);
+        self.emit(Instruction::Assign {
+            target: temp,
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: lowered_object,
+                    field: assign_member.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: args
+                    .into_iter()
+                    .map(|value| MirArg {
+                        name: None,
+                        value,
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
     }
 
     fn lower_array_coordinate_expr(&mut self, expr: &Expr) -> Operand {
@@ -30077,15 +30199,6 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
         ExprKind::Group(inner) => tuple_constant_index(inner),
         _ => None,
     }
-}
-
-/// The type of an `Array` selection's words: four `int64` per component.
-fn array_selection_type(index: &Expr) -> Type {
-    let components = match &index.kind {
-        ExprKind::Tuple(elements) => elements.len(),
-        _ => 1,
-    };
-    Type::Tuple(vec![Type::named("int64"); components * 4])
 }
 
 fn array_coordinate_type(expr: &Expr) -> Type {

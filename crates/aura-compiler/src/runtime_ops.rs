@@ -840,6 +840,11 @@ pub const SLICE_STEP_MEMBER: &str = "__slice_step";
 pub const SELECT_MEMBER: &str = "__select";
 /// The private member an assignment through such an index lowers to.
 pub const ASSIGN_MEMBER: &str = "__assign";
+/// `__select` for an index of one or two components, whose selection
+/// words travel as eight plain arguments instead of one tuple.
+pub const SELECT_WORDS_MEMBER: &str = "__select_words";
+/// `__assign` for an index of one or two components.
+pub const ASSIGN_WORDS_MEMBER: &str = "__assign_words";
 /// The private optional read a `for` loop over a borrowed collection lowers
 /// to.
 pub const INDEX_OPTION_MEMBER: &str = "__index_option";
@@ -965,6 +970,33 @@ const SET_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("line"),
     CallableParam::required("column"),
 ];
+const SELECT_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ASSIGN_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+/// The position of `value` among [`ASSIGN_WORDS_PARAMS`].
+pub const ASSIGN_WORDS_VALUE: usize = 8;
 const KEY_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("key"),
     CallableParam::required("line"),
@@ -1760,6 +1792,12 @@ pub enum ArrayOp {
     /// `__assign(selection, value, line, column)`: an assignment through
     /// such an index.
     Assign,
+    /// `__select_words(kind0, start0, end0, step0, kind1, start1, end1,
+    /// step1, line, column)`: `Select` for one or two components.
+    SelectWords,
+    /// `__assign_words(kind0, ..., step1, value, line, column)`: `Assign`
+    /// for one or two components.
+    AssignWords,
 }
 
 impl ArrayOp {
@@ -1794,6 +1832,8 @@ impl ArrayOp {
         ArrayOp::Slice,
         ArrayOp::Select,
         ArrayOp::Assign,
+        ArrayOp::SelectWords,
+        ArrayOp::AssignWords,
     ];
 
     const fn builtin_member(self) -> Option<BuiltinMember> {
@@ -1828,7 +1868,9 @@ impl ArrayOp {
             | ArrayOp::SetIndex
             | ArrayOp::Slice
             | ArrayOp::Select
-            | ArrayOp::Assign => return None,
+            | ArrayOp::Assign
+            | ArrayOp::SelectWords
+            | ArrayOp::AssignWords => return None,
         })
     }
 
@@ -1871,6 +1913,8 @@ impl ArrayOp {
             ArrayOp::Slice => SLICE_MEMBER,
             ArrayOp::Select => SELECT_MEMBER,
             ArrayOp::Assign => ASSIGN_MEMBER,
+            ArrayOp::SelectWords => SELECT_WORDS_MEMBER,
+            ArrayOp::AssignWords => ASSIGN_WORDS_MEMBER,
             _ => return None,
         })
     }
@@ -1882,6 +1926,8 @@ impl ArrayOp {
             SLICE_MEMBER => ArrayOp::Slice,
             SELECT_MEMBER => ArrayOp::Select,
             ASSIGN_MEMBER => ArrayOp::Assign,
+            SELECT_WORDS_MEMBER => ArrayOp::SelectWords,
+            ASSIGN_WORDS_MEMBER => ArrayOp::AssignWords,
             _ => return None,
         })
     }
@@ -1890,6 +1936,8 @@ impl ArrayOp {
         Some(match self {
             ArrayOp::Index | ArrayOp::Select => INDEX_PARAMS,
             ArrayOp::SetIndex | ArrayOp::Assign => SET_INDEX_PARAMS,
+            ArrayOp::SelectWords => SELECT_WORDS_PARAMS,
+            ArrayOp::AssignWords => ASSIGN_WORDS_PARAMS,
             ArrayOp::Slice => SLICE_PARAMS,
             _ => return None,
         })
@@ -1940,6 +1988,8 @@ impl ArrayOp {
             ArrayOp::Slice => helper(RuntimeFn::ArraySlice),
             ArrayOp::Select => helper(RuntimeFn::ArraySelect),
             ArrayOp::Assign => helper(RuntimeFn::ArrayAssignInPlace),
+            ArrayOp::SelectWords => helper(RuntimeFn::ArraySelectWords),
+            ArrayOp::AssignWords => helper(RuntimeFn::ArrayAssignWordsInPlace),
         }
     }
 
@@ -1958,6 +2008,7 @@ impl ArrayOp {
             | ArrayOp::Transpose
             | ArrayOp::Permute
             | ArrayOp::Select
+            | ArrayOp::SelectWords
             | ArrayOp::WrappingAdd
             | ArrayOp::WrappingSub
             | ArrayOp::WrappingMul
@@ -1968,7 +2019,9 @@ impl ArrayOp {
             ArrayOp::Get | ArrayOp::Set => {
                 optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
             }
-            ArrayOp::Fill | ArrayOp::SetIndex | ArrayOp::Assign => Type::Unit,
+            ArrayOp::Fill | ArrayOp::SetIndex | ArrayOp::Assign | ArrayOp::AssignWords => {
+                Type::Unit
+            }
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max
@@ -3052,7 +3105,11 @@ impl RuntimeOp {
             RuntimeOp::Set(SetOp::IndexOption | SetOp::TakeIndexOption) => private(&[]),
             RuntimeOp::Set(_) => member(),
             RuntimeOp::Array(ArrayOp::SetIndex) => private(&[1]),
-            RuntimeOp::Array(ArrayOp::Index | ArrayOp::Slice) => private(&[]),
+            RuntimeOp::Array(ArrayOp::Assign) => private(&[1]),
+            RuntimeOp::Array(ArrayOp::AssignWords) => private(&[ASSIGN_WORDS_VALUE]),
+            RuntimeOp::Array(
+                ArrayOp::Index | ArrayOp::Slice | ArrayOp::Select | ArrayOp::SelectWords,
+            ) => private(&[]),
             RuntimeOp::Array(_) => member(),
             // A restore puts the extracted values back into the list.
             RuntimeOp::Span(SpanOp::Restore) => private(&[1]),

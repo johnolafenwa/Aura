@@ -46,6 +46,11 @@ impl<T> ArrayBuf<T> {
         Arc::strong_count(&self.owner) != 1
     }
 
+    /// Whether the window leaves out part of its buffer.
+    pub fn is_partial(&self) -> bool {
+        self.len != self.owner.len()
+    }
+
     /// Whether `self` and `other` are windows of one buffer.
     pub fn shares_buffer_with(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.owner, &other.owner)
@@ -53,6 +58,33 @@ impl<T> ArrayBuf<T> {
 }
 
 impl<T: Copy> ArrayBuf<T> {
+    /// Whether this window and `other` are the only two holders of one
+    /// buffer.
+    pub fn is_shared_only_with(&self, other: &Self) -> bool {
+        self.shares_buffer_with(other) && Arc::strong_count(&self.owner) == 2
+    }
+
+    /// Copies `source`, the one other window of this buffer, over the
+    /// elements of this window from `at`, inside the buffer. The elements
+    /// move as they were before the copy, even where the two ranges
+    /// overlap. Returns `false`, having written nothing, when some third
+    /// holder still reads the buffer.
+    pub fn copy_within_from(&mut self, source: Self, at: usize) -> bool {
+        if !self.is_shared_only_with(&source) {
+            return false;
+        }
+        let (from, len) = (source.start, source.len);
+        assert!(
+            at <= self.len && len <= self.len - at,
+            "an Array write stays inside its window"
+        );
+        drop(source);
+        let to = self.start + at;
+        let owner = Arc::get_mut(&mut self.owner).expect("the other holder was just dropped");
+        owner.copy_within(from..from + len, to);
+        true
+    }
+
     /// The window's elements for writing. A window whose buffer another
     /// Array shares is copied first, so the write stays private.
     pub fn try_make_mut(&mut self, label: &str) -> Result<&mut [T]> {
@@ -131,6 +163,82 @@ impl<T: fmt::Debug> fmt::Debug for ArrayBuf<T> {
 pub struct Strides {
     pub offset: usize,
     pub strides: Box<[isize]>,
+}
+
+/// How many axes an [`AxisVec`] holds without allocating.
+const INLINE_AXES: usize = 6;
+
+/// One value per axis of an Array. Up to [`INLINE_AXES`] values live in
+/// the value itself, so working out the layout of a view of a matrix
+/// allocates nothing.
+#[derive(Clone, Debug)]
+pub struct AxisVec<T> {
+    inline: [T; INLINE_AXES],
+    len: usize,
+    spilled: Vec<T>,
+}
+
+impl<T: Copy + Default> AxisVec<T> {
+    pub fn new() -> Self {
+        Self {
+            inline: [T::default(); INLINE_AXES],
+            len: 0,
+            spilled: Vec::new(),
+        }
+    }
+
+    pub fn push(&mut self, value: T) {
+        if self.len < INLINE_AXES {
+            self.inline[self.len] = value;
+        } else {
+            if self.len == INLINE_AXES {
+                self.spilled.extend_from_slice(&self.inline);
+            }
+            self.spilled.push(value);
+        }
+        self.len += 1;
+    }
+
+    pub fn as_slice(&self) -> &[T] {
+        if self.len <= INLINE_AXES {
+            &self.inline[..self.len]
+        } else {
+            &self.spilled
+        }
+    }
+}
+
+impl<T: Copy + Default> Default for AxisVec<T> {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl<T: Copy + Default> Deref for AxisVec<T> {
+    type Target = [T];
+
+    fn deref(&self) -> &[T] {
+        self.as_slice()
+    }
+}
+
+/// The strides of a row-major block of `shape`, without allocating for a
+/// short shape.
+pub fn row_major_axis_strides(shape: &[usize]) -> AxisVec<isize> {
+    let mut strides = AxisVec::new();
+    if shape.len() > INLINE_AXES {
+        for stride in row_major_strides(shape) {
+            strides.push(stride);
+        }
+        return strides;
+    }
+    let mut block = 1_isize;
+    for (stride, dimension) in strides.inline.iter_mut().zip(shape).rev() {
+        *stride = block;
+        block = block.wrapping_mul(*dimension as isize);
+    }
+    strides.len = shape.len();
+    strides
 }
 
 /// The strides of a row-major block of `shape`.
@@ -236,11 +344,10 @@ pub fn gather<T: Copy>(base: &[T], shape: &[usize], layout: &Strides, output: &m
         if step == 1 {
             output.extend_from_slice(&base[start..start + count]);
         } else {
-            let mut position = start as isize;
-            for _ in 0..count {
-                output.push(base[position as usize]);
-                position += step;
-            }
+            // A counted iterator reserves once, where a push per element
+            // checks the capacity each time.
+            let start = start as isize;
+            output.extend((0..count as isize).map(|index| base[(start + index * step) as usize]));
         }
         true
     });

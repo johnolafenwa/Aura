@@ -256,15 +256,15 @@ A shared read of an element whose type cannot be cloned, such as `random.Rng`, a
 - An omitted endpoint contributes no expression.
 - Each negative written endpoint is normalized once as `len + i`. Then both effective endpoints must lie in `0..=len`, and start must not exceed end. Invalid or reversed bounds are runtime `AU4003`.
 - String slicing counts Unicode scalar values and returns `str`.
-- A slice is not a place. It cannot be the target of assignment or mutable access.
-- Step syntax and slice assignment are reported as unsupported forms with `AU2005`.
+- A list or `str` slice is not a place. It cannot be the target of assignment or mutable access, and slice assignment to one reports `AU2005`.
 
 List slicing creates a clone-producing obligation for `T`. Copy elements are copied, and non-Copy elements must be clone-safe. A concrete or transitive `random.Rng` element is rejected with `AU3007`. A non-repeatable Task observation right is rejected with `AU3009`. An unresolved generic `T` carries the inferred obligation to specialization.
 
 **Arrays.** `Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
 
 - Its constructors require exact `list[int64]` shape metadata.
-- Array slicing uses the same one-colon grammar and endpoint rules. It copies only a first-axis range and keeps the remaining runtime dimensions.
+- An Array index takes one component per axis. With a slice among its components it has type `Array[T]`; with coordinates only it has type `T`. Slices use the list endpoint and step rules.
+- Assignment through an Array index with a slice takes a value of type `T` or `Array[T]`. The value may read the target Array, and may not move it.
 - Array/Array arithmetic requires identical `T`. Runtime shape equality is checked with `AU4007`.
 - Scalar arithmetic requires exactly `T`, with no mixed promotion or broadcasting. Integer Array `/` is `AU2003`.
 - Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the four Array dtypes.

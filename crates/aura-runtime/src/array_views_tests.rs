@@ -168,7 +168,7 @@ fn selections_report_rank_range_and_step_errors() {
     assert_eq!(error.code, "AU4007");
     assert_eq!(
         error.message,
-        "array rank 2 accepts at most 2 selectors, found 3"
+        "array rank 2 accepts at most 2 index components, found 3"
     );
     let error = matrix.select(&[all(), Index(3)]).unwrap_err();
     assert_eq!(error.code, "AU4003");
@@ -444,7 +444,7 @@ fn assignment_rejects_values_that_do_not_fit_before_copying() {
     assert_eq!(error.code, "AU4007");
     assert_eq!(
         error.message,
-        "array slice assignment requires a int64 value that broadcasts to the selected shape [2, 3], found int64 [4]"
+        "array slice assignment requires a value that broadcasts to the selected shape [2, 3] of int64, found [4] int64"
     );
     // A value with more axes than the selection does not broadcast to it.
     let tall = int_array(&[2, 2, 3]);
@@ -453,7 +453,7 @@ fn assignment_rejects_values_that_do_not_fit_before_copying() {
     let error = matrix.assign(&[all()], &Value::Array(floats)).unwrap_err();
     assert_eq!(
         error.message,
-        "array slice assignment requires a int64 value that broadcasts to the selected shape [2, 3], found float64 [3]"
+        "array slice assignment requires a value that broadcasts to the selected shape [2, 3] of int64, found [3] float64"
     );
     assert!(matrix.assign(&[Index(2)], &int(1)).is_err());
     assert_eq!(
@@ -568,4 +568,238 @@ fn generated_views_match_an_index_by_index_model() {
             assert_eq!(*value, if selected { flat as i64 } else { 0 });
         }
     }
+}
+
+#[test]
+fn an_owned_assignment_from_a_view_of_the_target_writes_in_place() {
+    let mut grid = int_array(&[3, 4]);
+    let address = base_address(&grid);
+
+    // `grid[0, :] = grid[2, :]`: the value is the only other reader of
+    // the buffer, and it is released before the write.
+    let row = grid.select(&[Index(2), all()]).unwrap();
+    assert!(row.shares_buffer_with(&grid));
+    grid.assign_owned(&[Index(0), all()], Value::Array(row))
+        .unwrap();
+    assert_eq!(ints(&grid), [8, 9, 10, 11, 4, 5, 6, 7, 8, 9, 10, 11]);
+    assert_eq!(
+        base_address(&grid),
+        address,
+        "no other Array reads the buffer"
+    );
+
+    // An overlapping value is read as it was before the write.
+    let mut ramp = int_array(&[5]);
+    let address = base_address(&ramp);
+    let head = ramp.select(&[span(0, 4, 1)]).unwrap();
+    ramp.assign_owned(&[span(1, 5, 1)], Value::Array(head))
+        .unwrap();
+    assert_eq!(ints(&ramp), [0, 0, 1, 2, 3]);
+    assert_eq!(base_address(&ramp), address);
+
+    // A view someone else still holds keeps the old buffer.
+    let kept = ramp.select(&[span(0, 2, 1)]).unwrap();
+    let value = ramp.select(&[span(3, 5, 1)]).unwrap();
+    ramp.assign_owned(&[span(0, 2, 1)], Value::Array(value))
+        .unwrap();
+    assert_eq!(ints(&ramp), [2, 3, 1, 2, 3]);
+    assert_eq!(ints(&kept), [0, 0]);
+    assert_ne!(base_address(&ramp), address);
+
+    // A scalar and an unrelated Array pass straight through.
+    ramp.assign_owned(&[span(0, 1, 1)], int(9)).unwrap();
+    ramp.assign_owned(&[span(1, 3, 1)], Value::Array(int_array(&[2])))
+        .unwrap();
+    assert_eq!(ints(&ramp), [9, 0, 1, 2, 3]);
+
+    // A refused selection is reported before the value is copied out.
+    let value = ramp.select(&[span(0, 2, 1)]).unwrap();
+    let error =
+        with_array_allocation_budget(0, || ramp.assign_owned(&[Index(7)], Value::Array(value)))
+            .unwrap_err();
+    assert_eq!(error.code, "AU4003");
+}
+
+#[test]
+fn clone_shares_a_whole_array_and_copies_a_partial_view() {
+    let grid = int_array(&[3, 4]);
+    assert!(!grid.is_partial_view());
+    let whole = grid.clone_member().unwrap();
+    assert_eq!(base_address(&whole), base_address(&grid));
+    let reshaped = grid.reshape(&[4, 3]).unwrap();
+    assert!(!reshaped.is_partial_view());
+
+    for view in [
+        grid.select(&[Index(1), all()]).unwrap(),
+        grid.select(&[all(), Index(1)]).unwrap(),
+        grid.transpose().unwrap(),
+    ] {
+        assert!(view.is_partial_view());
+        let copy = view.clone_member().unwrap();
+        assert_eq!(copy, view);
+        assert!(copy.is_contiguous());
+        assert!(!copy.is_partial_view());
+        assert!(!copy.shares_buffer_with(&grid));
+    }
+
+    let other = ArrayValue::new([2].into(), ArrayStorage::Float64([1.0, 2.0].into())).unwrap();
+    assert!(!other.shares_buffer_with(&grid));
+    for (storage, partial) in [
+        (ArrayStorage::Int32([1, 2, 3].into()), false),
+        (ArrayStorage::Float32([1.0, 2.0, 3.0].into()), false),
+        (ArrayStorage::Float64([1.0, 2.0, 3.0].into()), false),
+    ] {
+        let array = ArrayValue::new([3].into(), storage).unwrap();
+        assert_eq!(array.is_partial_view(), partial);
+        let tail = array.select(&[span(1, 3, 1)]).unwrap();
+        assert!(tail.is_partial_view());
+        assert!(tail.shares_buffer_with(&array));
+        let detached = tail.detached().unwrap();
+        assert_eq!(detached, tail);
+        assert!(!detached.shares_buffer_with(&array));
+    }
+
+    let error = with_array_allocation_budget(0, || {
+        grid.select(&[Index(1), all()]).unwrap().clone_member()
+    })
+    .unwrap_err();
+    assert_eq!(error.code, "AU4005");
+}
+
+#[test]
+fn inline_selection_words_decode_one_or_two_components() {
+    let bounded = ARRAY_SELECTION_SLICE | ARRAY_SELECTION_HAS_START | ARRAY_SELECTION_HAS_END;
+    let (selection, count) =
+        ArrayAxisSelection::decode_inline([ARRAY_SELECTION_INDEX, -1, 0, 0, bounded, 1, 3, 2])
+            .unwrap();
+    assert_eq!(&selection[..count], &[Index(-1), span(1, 3, 2)]);
+
+    let (selection, count) = ArrayAxisSelection::decode_inline([
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        -1,
+        ARRAY_SELECTION_ABSENT,
+        0,
+        0,
+        0,
+    ])
+    .unwrap();
+    assert_eq!(
+        &selection[..count],
+        &[Slice {
+            start: None,
+            end: None,
+            step: -1
+        }]
+    );
+
+    for words in [
+        [64, 0, 0, 1, ARRAY_SELECTION_ABSENT, 0, 0, 0],
+        [
+            ARRAY_SELECTION_ABSENT,
+            0,
+            0,
+            0,
+            ARRAY_SELECTION_INDEX,
+            0,
+            0,
+            0,
+        ],
+        [ARRAY_SELECTION_INDEX, 0, 0, 0, 64, 0, 0, 1],
+    ] {
+        let error = ArrayAxisSelection::decode_inline(words).unwrap_err();
+        assert_eq!(error.code, "AU4001");
+    }
+}
+
+#[test]
+fn a_selection_of_a_high_rank_array_matches_the_model() {
+    // Seven axes spill the inline per-axis storage.
+    let array = int_array(&[2, 1, 2, 1, 2, 1, 2]);
+    let view = array
+        .select(&[
+            all(),
+            Index(0),
+            span(1, 2, 1),
+            all(),
+            Slice {
+                start: None,
+                end: None,
+                step: -1,
+            },
+        ])
+        .unwrap();
+    assert_eq!(&*view.shape, &[2, 1, 1, 2, 1, 2]);
+    assert_eq!(ints(&view), vec![6, 7, 4, 5, 14, 15, 12, 13]);
+
+    let mut target = int_array(&[2, 1, 2, 1, 2, 1, 2]);
+    target
+        .assign(&[Index(1), all(), Index(0)], &int(-1))
+        .unwrap();
+    assert_eq!(
+        ints(&target),
+        vec![0, 1, 2, 3, 4, 5, 6, 7, -1, -1, -1, -1, 12, 13, 14, 15]
+    );
+}
+
+#[test]
+fn an_assignment_into_a_strided_view_repacks_it_first() {
+    let source = int_array(&[2, 3]);
+    let mut columns = source.transpose().unwrap();
+    assert!(columns.strided.is_some());
+    columns.assign(&[Index(1), all()], &int(9)).unwrap();
+    assert!(columns.strided.is_none());
+    assert_eq!(ints(&columns), vec![0, 3, 9, 9, 2, 5]);
+    assert_eq!(ints(&source), vec![0, 1, 2, 3, 4, 5]);
+}
+
+#[test]
+fn detaching_a_contiguous_window_copies_one_run() {
+    let source = int_array(&[3, 2]);
+    let row = source.select(&[Index(1)]).unwrap();
+    let copy = row.detached().unwrap();
+    assert_eq!(ints(&copy), vec![2, 3]);
+    assert!(!copy.shares_buffer_with(&source));
+    let column = source.select(&[all(), Index(1)]).unwrap();
+    let copy = column.detached().unwrap();
+    assert_eq!(ints(&copy), vec![1, 3, 5]);
+    assert!(copy.strided.is_none());
+}
+
+#[test]
+fn a_block_of_the_target_moves_inside_its_buffer_for_every_dtype() {
+    let storages = [
+        ArrayStorage::Int32((0..6).collect()),
+        ArrayStorage::Int64((0..6).collect()),
+        ArrayStorage::Float32((0..6).map(|value| value as f32).collect()),
+        ArrayStorage::Float64((0..6).map(f64::from).collect()),
+    ];
+    for storage in storages {
+        let mut grid = ArrayValue::new([3, 2].into(), storage).unwrap();
+        let row = grid.select(&[Index(2)]).unwrap();
+        grid.assign_owned(&[Index(0)], Value::Array(row)).unwrap();
+        assert!(!grid.is_partial_view());
+        assert_eq!(grid.render(), grid.detached().unwrap().render());
+        assert_eq!(grid.get(&[0, 1]).unwrap(), grid.get(&[2, 1]).unwrap());
+        assert_ne!(grid.get(&[0, 1]).unwrap(), grid.get(&[1, 1]).unwrap());
+    }
+
+    // A strided value and a value to broadcast are copied out first.
+    let mut grid = int_array(&[3, 3]);
+    let address = base_address(&grid);
+    let column = grid.select(&[all(), Index(1)]).unwrap();
+    grid.assign_owned(&[Index(0)], Value::Array(column))
+        .unwrap();
+    assert_eq!(ints(&grid), [1, 4, 7, 3, 4, 5, 6, 7, 8]);
+    let corner = grid.select(&[Index(2), span(2, 3, 1)]).unwrap();
+    grid.assign_owned(&[Index(1)], Value::Array(corner))
+        .unwrap();
+    assert_eq!(ints(&grid), [1, 4, 7, 8, 8, 8, 6, 7, 8]);
+    assert_eq!(base_address(&grid), address);
+
+    // A scalar fills a block and a strided selection alike.
+    grid.assign(&[Index(2)], &int(0)).unwrap();
+    grid.assign(&[all(), Index(0)], &int(-1)).unwrap();
+    assert_eq!(ints(&grid), [-1, 4, 7, -1, 8, 8, -1, 0, 0]);
 }
