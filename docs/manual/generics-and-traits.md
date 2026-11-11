@@ -346,7 +346,7 @@ The qualified name and a `from shapes import Make` name the same trait. A module
 
 An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
 
-Aura 0.13 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+Aura 0.14 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions
 
@@ -387,7 +387,7 @@ The checker rejects the following before any body runs:
 - signature mismatches
 - default ordinary arguments added by an implementation method
 
-An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.13 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.14 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
 
 An `impl` targeting any builtin type MUST NOT explicitly define or inherit a trait method whose name is a builtin member of that target. This covers:
 
@@ -1270,7 +1270,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.13 has none of the following:
+Aura 0.14 has none of the following:
 
 - associated constants
 - higher-kinded parameters
@@ -1291,6 +1291,7 @@ Implemented:
 - invariant generics, local and contextual inference, and explicit specialization
 - nominal traits and bounds, supertraits, and default methods
 - associated methods called through a bounded type parameter, such as `T.parse(text)`
+- associated types in traits, as bounds on function, class, enum, and `impl` type parameters, and inherited through supertraits
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch

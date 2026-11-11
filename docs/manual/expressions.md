@@ -1167,7 +1167,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.13 expressions do not include:
+Aura 0.14 expressions do not include:
 
 - generator expressions
 - assignment expressions

@@ -7,24 +7,15 @@ in this file.
 
 ## Unreleased
 
-- Trait objects. `dyn Trait` is the type of a value of any type that
-  implements `Trait`, so `list[dyn Tool]` holds values of many types and a
-  function can return `dyn Tool` without naming one. A value converts where
-  the trait object type is expected: a typed binding, an argument, a
-  `return`, a field, an element of a typed collection. A method call runs
-  the implementation of the type the value holds, on both backends, and
-  supertrait methods are callable too. A `dyn Tool` converts to `dyn Named`
-  when `Named` is a supertrait, and satisfies a `T: Tool` bound. A trait
-  object is owned and never copied: it has no `clone()` and no `==`, and
-  `tools[i].run()` borrows the element in place. A method that takes no
-  `self`, has type parameters, or names `Self` in its signature is not
-  callable on a trait object (`AU2051`). A bare trait name used as a type
-  reports `AU2050`. `value as dyn Trait` names the conversion where no
+- Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
-  so one function can return any of several iterator types. `match` on a
-  trait object selects on the type it holds with `case Type as name:` arms
-  and a final `case _:`, under a bare `match`, `match mut`, and `match own`.
+  so one function can return any of several iterator types. A union value
+  converts when every member implements the trait.
+- `match` on a trait object selects on the type it holds with
+  `case Type as name:` arms and a final `case _:`, under a bare `match`,
+  `match mut`, and `match own`. A match without the catch-all, or with an
+  arm whose type does not implement the trait, reports `AU2013`.
 - Trait objects in tasks. `Transfer` is now a prelude trait that names the
   property the compiler derives. `trait Job: Transfer:` admits only Transfer
   types, so `dyn Job` may be a task argument, a task result, and a `Queue`
@@ -39,9 +30,93 @@ in this file.
   and a `float64` that both implement the trait no longer run each other's
   method, `Cell[float32]` no longer runs the method of `Cell[float64]` on
   `aura run`, and a method call on a trait object that holds a value of a
-  generic enum no longer fails on `aura run`.
+  generic enum no longer fails on `aura run`. These were the three known
+  issues of 0.14.0.
 - Fixed: an element of a list of trait objects can be passed to a `mut`
   parameter, as in `widen(shapes[0])`.
+
+## VS Code extension 0.14.0 — 2026-11-10
+
+- Bundles language server 0.14.0. The semantic interface version stays 20.
+
+## 0.14.0 — 2026-11-10 (technical preview)
+
+Aura 0.14.0 adds trait objects, makes JSON documents compact, and finishes
+the iterator and verification work that 0.13.0 began. `dyn Trait` is the
+type of a value of any type that implements a trait, so a `list[dyn Tool]`
+holds an open set of types, and a method call runs the implementation of
+the type the value holds. This is the first step of trait objects: `match`
+on the held type, `value as dyn Trait`, trait objects in tasks, and the
+work on dispatch speed are not in this release, and three known issues
+are listed below. A parsed JSON document, and
+a `json.Value` literal spelled whole, is now one flat block of memory that
+`match`, key lookups, and `json.dumps` read in place, so the two JSON
+programs of the
+[cross-language suite](benchmarks/cross_language/README.md) are faster than
+Python for the first time: `docdb` takes 309 ms instead of 977, against
+Python's 554, and `json_roundtrip` 287 ms instead of 673, against Python's
+415. Measured against 0.13.0 on the Linux measurement host, the 30
+programs take 11.3 seconds instead of 13.1 and run the same number of
+instructions, and the median program takes 3.2 times Rust's time, down
+from 3.5. Every `list[T]` implements `iter.IntoIterator[T]`, and classes,
+enums, implementations, and supertraits can name traits with associated
+types. `aura verify` models `dict.get` and `dict.remove`, follows
+contracts on callable fields and results, proves float division and `sqrt`
+bounds in milliseconds, and rejects false float claims in about 0.1 s. It
+also fixes a soundness bug: a false `float32` claim could be reported as
+proved. The first step of FFI v1 is in: a package links native libraries
+from its manifest, and a built program calls a C function directly, in
+under a nanosecond for scalars instead of about 380. Struct arguments,
+callbacks, and C strings are not in this release, and neither is the
+streaming I/O work now under way. Breaking: a program
+that wrote its own `impl IntoIterator[...] for list[...]` now gets a
+duplicate-impl error and can delete that implementation, and a foreign
+symbol that no library defines is a link error from `aura build` instead
+of `AU4005` at the call. Linux hello world grows from 1,080,264 to about
+1,163,000 bytes. The semantic interface stays 20, and the native cache
+format stays `v10`.
+
+- Trait objects. `dyn Trait` is the type of a value of any type that
+  implements `Trait`, so `list[dyn Tool]` holds values of many types and a
+  function can return `dyn Tool` without naming one. A value converts where
+  the trait object type is expected: a typed binding, an argument, a
+  `return`, a field, an element of a typed collection. A method call runs
+  the implementation of the type the value holds, on both backends, and
+  supertrait methods are callable too. A `dyn Tool` converts to `dyn Named`
+  when `Named` is a supertrait, and satisfies a `T: Tool` bound. A trait
+  object is owned and never copied: it has no `clone()` and no `==`, and
+  `tools[i].run()` borrows the element in place. A method that takes no
+  `self`, has type parameters, or names `Self` in its signature is not
+  callable on a trait object (`AU2051`). A bare trait name used as a type
+  reports `AU2050`. `match` on the held type, `value as dyn Trait`, and
+  trait objects in tasks come next.
+- Known issues in trait objects, to be fixed in the next release. Under
+  `aura run`, a method call on a trait object that holds a generic enum
+  value, such as `Maybe[int64]`, fails with "type `Maybe` has no MIR
+  implementation"; a built program is not affected. When both `float32`
+  and `float64` implement the trait, a held float can run the other
+  width's implementation, and under `aura run` a held `Box[float32]` can
+  run the implementation for `Box[float64]`.
+- A parsed JSON document is kept as one flat tape instead of a box for
+  every value, a dict for every object, and a list for every array. A
+  `match` on a `json.Value` tests the node's tag, `Int`, `Float`, and
+  `Bool` payloads are read from the node, key lookups and `len` read the
+  tape, and `json.dumps` writes from it. A dict or list is built from the
+  tape only when the program first changes it or reads it as a value.
+- A `json.Value.Array` or `json.Value.Object` literal whose parts are all
+  spelled where it is built is made as one tape too. A document database
+  of 50,000 such documents peaks at 66 MB instead of 163 MB.
+- A field of a JSON object that is only looked up, matched, or passed to
+  `json.as_int`, `json.as_float`, `json.as_bool`, `json.is_null`, or
+  `json.dumps` is read where it lies, with no copy.
+- Runtime values are 64 bytes instead of 96, and a box header is smaller,
+  so lists and dictionaries of boxed values use less memory.
+- A loop over a list of class instances reads the list's length and
+  storage once instead of on every element read. On the operation probes,
+  reading a field of a class held in a list takes 1.4 times Rust's
+  instructions and writing one 2.6 times, down from about 15 and 4 times.
+- A loop that appends scalars to a list held in a dictionary entry, as in
+  `index[key].append(n)`, finds the entry once instead of on every append.
 - An enum type parameter can be bounded by a trait with associated types,
   as in `enum Source[T, S: IntoIterator[T]]`. Constructing a variant infers
   `S.Iter`, and a `T` named only by the bound, from the implementation for
