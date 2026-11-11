@@ -118,5 +118,10 @@
     "count": 100000,
     "plan_step": "9g",
     "measures": "`text += f\"{i},\"` on a growing `str`"
+  },
+  "trait_object_call": {
+    "count": 100000,
+    "plan_step": "trait objects 6",
+    "measures": "one method call on each element of a `list[dyn Solid]` that holds three classes"
   }
 }

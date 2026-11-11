@@ -22961,6 +22961,115 @@ fn direct_union_active_payload_copies_or_moves_the_active_member() {
     );
 }
 
+/// The type and float a trait object box holds.
+fn coverage_held_float(ptr: *mut OpaqueValue) -> (String, f64) {
+    unsafe {
+        super::with_value(ptr, |value| match value {
+            Value::TraitObject(object) => match object.value {
+                Value::Float(float) => (object.held.to_string(), float),
+                ref other => panic!("expected a held float, found {other:?}"),
+            },
+            other => panic!("expected a trait object value, found {other:?}"),
+        })
+    }
+}
+
+#[test]
+fn direct_trait_object_from_holds_the_active_member_of_a_union() {
+    let target = coverage_union(vec![Type::named("int64"), Type::named("float32")]);
+    let int_index = coverage_union_member_index(&target, &Type::named("int64"));
+    let float_index = coverage_union_member_index(&target, &Type::named("float32"));
+
+    let union = boxed_value(coverage_union_value(&target, int_index, coverage_int(4)));
+    assert_eq!(expect_int(super::aura_direct_trait_object_from(union)), 4);
+
+    // A float does not say its width, so the member's type is kept with it.
+    let union = boxed_value(coverage_union_value(
+        &target,
+        float_index,
+        Value::Float(1.5),
+    ));
+    let held = super::aura_direct_trait_object_from(union);
+    assert_eq!(coverage_held_float(held), ("float32".to_string(), 1.5));
+    for (name, expected) in [("float32", 1), ("float64", 0), ("int64", 0)] {
+        assert_eq!(
+            super::aura_direct_value_type_matches(held, name.as_ptr(), name.len()),
+            expected,
+            "{name}"
+        );
+    }
+    assert_eq!(super::aura_direct_unbox_f64(held), 1.5);
+    assert_eq!(
+        unsafe { super::with_value(held, |value| super::value_type_name(value)) },
+        "float32"
+    );
+    assert_eq!(
+        unsafe { super::with_value(held, super::inferred_collection_type) },
+        Type::named("float32")
+    );
+    unsafe {
+        release_value(held);
+    }
+
+    // A union inside a union gives its innermost active member.
+    let nested = boxed_value(coverage_union_value(
+        &target,
+        int_index,
+        coverage_union_value(&target, int_index, coverage_int(9)),
+    ));
+    assert_eq!(expect_int(super::aura_direct_trait_object_from(nested)), 9);
+
+    // Any other value is the trait object's value as it is.
+    let plain = boxed_value(coverage_int(7));
+    assert_eq!(super::aura_direct_trait_object_from(plain), plain);
+    assert_eq!(expect_int(plain), 7);
+}
+
+#[test]
+fn direct_trait_object_float_keeps_the_width_beside_the_float() {
+    for (single, held) in [(1, "float32"), (0, "float64")] {
+        let float = super::aura_direct_box_f64(2.5);
+        super::aura_direct_trait_object_float(float, single);
+        assert_eq!(coverage_held_float(float), (held.to_string(), 2.5));
+        for name in ["float32", "float64"] {
+            assert_eq!(
+                super::aura_direct_value_type_matches(float, name.as_ptr(), name.len()),
+                i64::from(name == held),
+                "{held} against {name}"
+            );
+        }
+        assert_eq!(super::aura_direct_unbox_f64(float), 2.5);
+        unsafe {
+            release_value(float);
+        }
+    }
+
+    // A box that holds no float is left as it is.
+    let other = boxed_value(coverage_int(3));
+    super::aura_direct_trait_object_float(other, 1);
+    assert_eq!(expect_int(other), 3);
+
+    let not_a_float = boxed_value(coverage_int(1)) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_unbox_f64(not_a_float as *mut OpaqueValue);
+        }),
+        "direct backend expected `float64`, found `integer`"
+    );
+    let holds_text = boxed_value(Value::TraitObject(Box::new(
+        crate::runtime_value::TraitObjectValue {
+            held: Type::named("str").into(),
+            value: Value::String("text".into()),
+        },
+    ))) as usize;
+    assert_eq!(
+        capture_direct_boundary_error_message(move || {
+            super::aura_direct_unbox_f64(holds_text as *mut OpaqueValue);
+        }),
+        "direct backend expected `float64`, found `str`"
+    );
+}
+
 #[test]
 fn direct_none_test_recognizes_unit_and_unions_holding_none() {
     let target = coverage_union(vec![Type::named("int64"), Type::Unit]);

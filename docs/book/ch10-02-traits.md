@@ -244,7 +244,14 @@ whatever else implements the trait. A value converts where it is stored, and
 each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
-trait declares.
+trait declares. Where nothing names the type, say it yourself with `as`:
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`. When you do need the
+type back, `match` asks for it by name: `case Book as book:` runs when the
+item is a book, and a final `case _:` takes everything else. To hand a trait
+object to a task, declare the trait with `Transfer` as a supertrait, as
+[Chapter 15](/book/ch15-01-tasks-and-task-groups) explains. We'll come
+back to trait objects in [their own section](/book/ch10-05-trait-objects) at
+the end of this chapter.
 
 ### Traits are nominal
 

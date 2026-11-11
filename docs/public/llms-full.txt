@@ -5158,6 +5158,8 @@ with group = TaskGroup():
 
 `Transfer` is the compiler-derived property of a value that may cross a task
 or Queue boundary. [Typing Rules](#typing-rules) lists which types have it.
+The prelude names the property as a trait, so it can be written as a bound,
+`T: Transfer`, and as a supertrait, `trait Job: Transfer:`.
 
 ### Task Targets
 
@@ -5566,8 +5568,11 @@ on every captured argument and on the target's result. This obligation is
 provisional.
 
 - The check runs after generic specialization and before scheduling.
-- A fully concrete generic call is checked after inference. An unresolved type
-  parameter is rejected rather than becoming a deferred `Transfer` contract.
+- A fully concrete generic call is checked after inference. A type parameter
+  passes only when it is bounded by `Transfer`, as in
+  `def send[T: Transfer](value: own T)`, or by a trait that has `Transfer` as
+  a supertrait. Each call then proves the bound for its own type argument. An
+  unbounded type parameter is rejected.
 - The obligation applies to the owned capture even when the target declares a
   bare shared parameter and borrows that child-owned storage during its call.
 - Queue construction, `put`, and `try_put` require `T: Transfer`. Handle
@@ -5577,7 +5582,13 @@ provisional.
   tuples, classes, and enums, and `Queue` and `Task` handles.
 - Types that fail: capability views, `random.Rng`, `TaskGroup`, and live host
   resources.
-- `Transfer` is derived by the compiler. It is not a user trait.
+- A trait object passes only when its trait has `Transfer` as a supertrait.
+  `trait Job: Transfer:` admits only Transfer types, so `dyn Job` may cross
+  the boundary. See
+  [Trait Objects In Tasks](/manual/generics-and-traits#trait-objects-in-tasks).
+- `Transfer` is derived by the compiler. The prelude trait `Transfer` names
+  the property for bounds and supertraits. It has no implementations, and
+  `impl Transfer for T:` reports `AU3008`.
 
 Reading a Copy value through shared or mutable access for a task argument
 captures an owned snapshot, not the access capability. That snapshot is
@@ -5728,8 +5739,9 @@ before user code runs. A non-Unicode value is displayed lossily.
 field, element, or payload path that leads to the non-transferable leaf. To
 fix it, pass owned transferable data instead of a capability view. Keep a host
 resource or `random.Rng` on its owning task and send transferable input and
-output data instead. The guidance never suggests implementing `Transfer`,
-because there is no user implementation surface. This diagnostic belongs to
+output data instead. For a trait object, declare its trait with `Transfer` as
+a supertrait. The guidance never suggests implementing `Transfer`, because
+there is no user implementation surface. This diagnostic belongs to
 the provisional `Transfer` contract.
 
 **AU3009 versus AU3001.** `AU3009` means the value has already passed the
@@ -7117,7 +7129,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - A function may instead declare one `-> view [mut] T from origin` result tied to a receiver or parameter place.
 - A union value passed through a generic bound dispatches its trait methods on the active member on both backends, `mut self` methods included, because native code compiles a copy of the generic function for the union type. A call keeps the generic function instead when the module already has 4,096 copies, when a type argument nests deeper than a layout can, or when the copy would merge union members, as `T | int64` does with `T = int64`. Such a call still runs a `mut self` method on the interpreter only. There the direct backend reports `AU4001` because it has no write-back path to the active payload behind an erased place. Narrow the union to its member before such a call.
 - A trait object, `dyn Trait`, has no `clone()`, no `==`, and no copy, so it cannot be a dictionary key or a set element, and `value = items[index]` is rejected for a collection of trait objects. Borrow the element with `view`, call a method on it in place, or take it out with `pop` or `remove`.
-- `match` cannot yet select on the type a trait object holds, the explicit conversion `value as dyn Trait` is not yet available, and a trait object cannot cross a task boundary. A trait with associated types cannot be a trait object.
+- A trait object crosses a task boundary only when its trait has `Transfer` as a supertrait, `trait Job: Transfer:`. A trait with associated types cannot be a trait object.
+- A `match` on a trait object needs a final `case _:`, because the set of types that implement a trait is open.
 - The MIR interpreter allocates a box for each union payload and closure environment. MIR is Aura's mid-level intermediate representation. The direct backend stores unions and callables inline, as [Performance](/manual/performance#representation) describes. Aura makes no foreign-function or application binary interface (ABI) stability claim for these layouts.
 
 ### Strings And Bytes
@@ -7474,7 +7487,7 @@ String and format-specification diagnostics are described under
 | `AU2010` | union member or context | A value that is not a direct member of the expected union, or a union without enough context. | Supply a direct member or the missing type context. |
 | `AU2011` | ambiguous union injection | A literal that more than one union member accepts. | Make the intended member explicit. |
 | `AU2012` | cyclic type alias | A transparent alias that refers back to itself. | Break the cycle. |
-| `AU2013` | union pattern coverage | Missing, duplicate, unreachable, or nonmember union type arms. | Add the missing arms and remove the others. |
+| `AU2013` | type arm coverage | Missing, duplicate, unreachable, or nonmember union type arms. A trait object match with no final `case _:`, or with an arm for a type that does not implement the trait. | Add the missing arms and remove the others. |
 | `AU2014` | invalidated narrowing | A member use after the `None` test that narrowed the place stopped applying. | Test the current value again. |
 | `AU2015` | callable contract mismatch | A callable whose complete contract differs from the one its destination requires. | Match the contract, or restrict it with an explicit adapter or constructor. |
 | `AU2016` | initializer declaration | An `__init__` without a bare `self` receiver, with its own type parameters, with a result other than `None`, with `return value`, or declared in a trait. | Write `def __init__(self, ...)` with no result, and move fallible construction into a named factory. |
@@ -7491,7 +7504,7 @@ String and format-specification diagnostics are described under
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
-| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, and a `mut` argument whose type is not already the parameter's trait object type. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
+| `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -7564,8 +7577,10 @@ could accept reports `AU2011`.
 
 **`AU2012` cyclic type alias.** A cyclic transparent alias reports `AU2012`.
 
-**`AU2013` union pattern coverage.** Missing, duplicate, unreachable, or
-nonmember union type arms report `AU2013`.
+**`AU2013` type arm coverage.** Missing, duplicate, unreachable, or
+nonmember union type arms report `AU2013`. So does a `match` on a trait
+object with no final `case _:`, or with an arm whose type can never be the
+one the trait object holds.
 
 **`AU2014` invalidated narrowing.** A member use through a place whose
 `None`-test narrowing was invalidated reports exactly this message:
@@ -7794,6 +7809,11 @@ The `AU3008` guidance follows these rules:
   not claim that all borrowed Copy captures fail.
 - It never proposes an `impl Transfer`. An ordinary user trait also named
   `Transfer`, and its implementations, do not alter the structural property.
+- For a trait object it recommends declaring the trait with the prelude
+  `Transfer` as a supertrait. An `impl` of such a trait for a type that is not
+  Transfer reports `AU3008` at the `impl`, and so does `impl Transfer for T:`.
+- A type argument that does not meet a `T: Transfer` bound reports `AU3008`
+  at the call, with the same path to the leaf.
 
 A task callable contract that returns a view also reports `AU3008`.
 
@@ -8617,6 +8637,7 @@ This prints `42` twice.
 - A type parameter cannot stand for a type arm either. `case V as inner` is rejected with `AU2013`, because `V` is not proved disjoint from the other arms. Use `case None` and a catch-all.
 - A matching type arm is irrefutable when the scrutinee type has collapsed to one member.
 - Type patterns may also appear inside nominal enum payload patterns.
+- A trait object matches the same way on the type of the value it holds. Its match always needs a catch-all. See [Matching On The Held Type](/manual/generics-and-traits#matching-on-the-held-type).
 
 ### Coverage
 
@@ -9216,7 +9237,7 @@ A match evaluates its scrutinee exactly once, tests arms in source order, and ru
 | `AU2001` | Unknown enum type, variant, or payload type. |
 | `AU2002` | Generic inference or bound failure. Constructor or payload type mismatch. Literal-pattern type mismatch. A non-Boolean guard. Alternative binding type mismatch. Incompatible match-expression results. |
 | `AU2004` | Invalid variant-constructor argument binding. |
-| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. |
+| `AU2013` | Union type-arm coverage: missing members, duplicate coverage, unreachable type arms, nonmembers, and type arms that are not one member. A trait object match with no final `case _:`, or with an arm that can never match. |
 | `AU2014` | A member use through a place whose narrowing fact was invalidated. |
 | `AU2040` | A class pattern with a positional, unknown, private, repeated, or method field. A class that is not the scrutinee class or a union member. A tested field whose type differs between the union specializations the pattern matches. A class pattern under `match mut`. Enum variant or type patterns over a class scrutinee. |
 | `AU2041` | A rest element outside a tuple or sequence, a second rest element, too few positions for the fixed elements, a `*name` that covers no positions, or a sequence pattern under `match mut` or `match own`. |
@@ -9937,6 +9958,7 @@ Three pages hold the normative detail:
 | `is None`, `is not None` | [None Tests](#none-tests) |
 | `in`, `not in`, `a < b < c` | [Membership And Comparison Chains](#membership-and-comparison-chains) |
 | `value as int64` | [Numeric Casts](#numeric-casts) |
+| `value as dyn Trait` | [Trait Objects](/manual/generics-and-traits#conversion) |
 | `f(x)`, `f(name=x)` | [Calls And Argument Binding](#calls-and-argument-binding) |
 | `Box[int32](...)` | [Explicit Generic Specialization](#explicit-generic-specialization) |
 | `object.member` | [Member Access](#member-access) |
@@ -13319,6 +13341,72 @@ def show(tool: Tool):
 
 A value converts to a trait object where a trait object type is expected and the value's type implements the trait. Those places are the ones that already know the type they need: an annotated binding, an assignment to a typed place, an argument, a `return`, a field in a constructor, a payload, and an element of a typed collection literal. The conversion moves the value. Nothing is copied.
 
+`value as dyn Trait` names the conversion where nothing else supplies the type. It gives a binding, a list literal, or a generic call its trait object type without an annotation:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def last[T](items: own list[T]) -> T:
+    mut rest = items
+    return rest.pop()
+
+def main():
+    tools = [Echo(prefix="> ") as dyn Tool, Counter(calls=0)]
+    print(len(tools))
+    tool = last([Counter(calls=0) as dyn Tool, Echo(prefix="")])
+    print(tool.name())
+    echo = Echo(prefix="> ")
+    print((echo as dyn Tool).name())
+    print(echo.prefix)
+```
+
+The explicit form converts exactly as the implicit one does. Bound to a name, stored, or passed to an `own` parameter, it moves the value. As the receiver of a `self` method or as a shared argument, it borrows the value for the call, so `echo` above is still usable. The converted value is a new value, so it cannot be a `mut` receiver or a `mut` argument (`AU2051`), and it cannot be the source of a `view`. A type that does not implement the trait reports `AU2002`.
+
+A value of a union type converts when every member implements the trait. The trait object then holds the union's active member. A value of a type parameter converts when a bound of the parameter promises the trait:
+
+```aura
+trait Tool:
+    def name(self) -> str
+
+class Echo:
+    prefix: str
+
+class Counter:
+    calls: int64
+
+impl Tool for Echo:
+    def name(self) -> str:
+        return "echo"
+
+impl Tool for Counter:
+    def name(self) -> str:
+        return "counter"
+
+def boxed[T: Tool](tool: own T) -> dyn Tool:
+    return tool
+
+def main():
+    either: Echo | Counter = Counter(calls=0)
+    tool: dyn Tool = either
+    print(tool.name())
+    print(boxed(Echo(prefix="")).name())
+```
+
 The conversion applies to one value. A `list[Echo]` does not convert to a `list[dyn Tool]`. Build the list with the trait object annotation instead.
 
 A trait object converts to a trait object of a supertrait of its trait: a `dyn Tool` converts to `dyn Named` when the trait is declared `trait Tool: Named:`. It does not convert back to the type it holds, and it does not convert to a trait object of any other trait.
@@ -13367,6 +13455,108 @@ A trait object exposes the methods of its trait and its supertraits only. It has
 
 A trait object satisfies a bound on its own trait or a supertrait when every method the bound promises can be called on a trait object. So `dyn Tool` can be the `T` of `def run_once[T: Tool](tool: mut T)`.
 
+### Iteration
+
+`dyn Iterator[T]` is a `for` source, and so is a trait object of a trait that extends `Iterator[T]`. A function can return any of several iterator types behind it, and a list can hold iterators of different types:
+
+```aura
+from iter import Iterator, Step
+
+class Count:
+    next_value: int64
+    stop: int64
+
+class Repeat:
+    value: int64
+    left: int64
+
+impl Iterator[int64] for Count:
+    def next(mut self) -> Step[int64]:
+        if self.next_value >= self.stop:
+            return Step.End
+        self.next_value += 1
+        return Step.Item(self.next_value - 1)
+
+impl Iterator[int64] for Repeat:
+    def next(mut self) -> Step[int64]:
+        if self.left == 0:
+            return Step.End
+        self.left -= 1
+        return Step.Item(self.value)
+
+def numbers(repeat: bool) -> dyn Iterator[int64]:
+    if repeat:
+        return Repeat(value=7, left=2)
+    return Count(next_value=0, stop=3)
+
+def main():
+    for value in numbers(false):
+        print(value)
+    sources: list[dyn Iterator[int64]] = [numbers(true), numbers(false)]
+    for source in own sources:
+        print(source.collect())
+```
+
+This prints `0`, `1`, `2`, `[7, 7]`, and `[0, 1, 2]`. The loop calls `next` through the trait object once for each value. The methods of `Iterator[T]`, such as `collect`, are callable on the trait object. A function with an `Iterator[T]` bound accepts one too, because `dyn Iterator[T]` satisfies the bound. See [Iterator Iteration](/manual/statements#iterator-iteration).
+
+### Matching On The Held Type
+
+`match` on a trait object selects on the type of the value it holds. A type arm is spelled `case Type as name:`, the same as a type arm on a [union](/manual/enums-and-match#union-type-patterns):
+
+```aura
+trait Shape:
+    def area(self) -> int64
+
+class Square:
+    side: int64
+
+class Rect:
+    w: int64
+    h: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+
+def describe(shape: dyn Shape) -> str:
+    match shape:
+        case Square as square:
+            return f"square of side {square.side}"
+        case Rect as rect:
+            return f"{rect.w} by {rect.h}"
+        case _:
+            return f"a shape of area {shape.area()}"
+
+def widen(shape: mut dyn Shape):
+    match mut shape:
+        case Rect as rect:
+            rect.w += 1
+        case _:
+            pass
+
+def main():
+    mut shapes: list[dyn Shape] = [Square(side=2), Rect(w=2, h=3)]
+    for shape in mut shapes:
+        widen(shape)
+    for shape in shapes:
+        print(describe(shape))
+```
+
+This prints `square of side 2` and `3 by 3`.
+
+- An arm names one type that implements the trait, with its type arguments. It matches that exact type: `float32` is not `float64`, and `case Cell[int64] as cell:` does not match a `Cell[str]`.
+- The match ends with `case _:` or a name, because a trait object can hold any type that implements its trait, including a type another module adds later. A match without one reports `AU2013`.
+- An arm whose type does not implement the trait can never match, and it reports `AU2013`. So does an arm that names a trait object, such as `case dyn Other as other:`, because a trait object holds a value of a concrete type. A second arm for one type and an arm after the catch-all report `AU2013` too.
+- Guards, match expressions, and the three capabilities work as they do on a union. A bare `match` gives a shared binding. `match mut` gives a mutable binding and writes the value back into the trait object when the arm ends, on `return`, `break`, and `continue` too. `match own` moves the value out of the trait object.
+- `match tools[i]:` and `match mut tools[i]:` inspect the element where it is. `match own tools[i]:` would copy the element out, so it reports `AU3005`.
+- Literal, class, and enum variant patterns do not apply to a trait object. Select the type first, then match the bound value.
+
+A type arm is the way back from a trait object to the type it holds. Nothing else converts one back: `square: Square = shape` reports `AU2002`.
+
 ### Ownership
 
 A trait object is an owned value. It moves on assignment and it is never copied:
@@ -13375,11 +13565,48 @@ A trait object is an owned value. It moves on assignment and it is never copied:
 - It does not define `==`.
 - Reading an element out of a collection would copy it, so `tool = tools[0]` reports `AU3005`. Use `view tool = tools[0]`, or take the element out with `pop` or `remove`.
 - A method call on an element, `tools[0].run(input)`, borrows the element where it is. So does passing an element to a shared or `mut` parameter.
-- A trait object is not Transfer, so it cannot cross a task boundary.
+- A trait object is Transfer only when its trait says so. See [Trait Objects In Tasks](#trait-objects-in-tasks).
+
+### Trait Objects In Tasks
+
+A trait object crosses a task boundary when its trait has `Transfer` as a supertrait. `Transfer` is the prelude trait for the property the compiler derives from a type's structure, described in [Concurrency](/manual/concurrency#typing-rules).
+
+```aura
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+
+def work(job: own dyn Job) -> int64:
+    return job.run()
+
+def main() -> None:
+    with TaskGroup() as group:
+        task = group.start(work, Sum(values=[1, 2, 3]) as dyn Job)
+        print(task.result())
+```
+
+- `trait Job: Transfer:` admits only Transfer types. An `impl Job for T:` where `T` is not Transfer reports `AU3008` and names the field that is not Transfer.
+- So every value a `dyn Job` can hold is Transfer, and `dyn Job` is Transfer. It can be a task argument, a task result, and a `Queue` payload. So can a list, a dictionary, a tuple, a union, or a class that holds one.
+- A trait that extends `Job` inherits the property: with `trait Fast: Job:`, `dyn Fast` is Transfer too.
+- A trait object of any other trait is not Transfer, and sending one reports `AU3008`.
+- No `impl Transfer for T:` is written, and one reports `AU3008`. A type is Transfer when every part of it is.
+- `Transfer` is a bound as well. `def send[T: Transfer](value: own T)` accepts every Transfer type and may put `value` in a `Queue[T]` or hand it to a task. A generic implementation states it the same way: `impl[T: Transfer] Job for Box[T]:`.
+- `dyn Transfer` holds a value of any Transfer type. It has no methods, so a [type arm](#matching-on-the-held-type) is the way to use the value.
 
 ### Representation
 
 A trait object is one handle to a box that holds the value together with its type. A call reads the type from the box and runs that type's implementation. A conversion from a value that is already boxed, such as another erased value, reuses its box.
+
+A `for` loop over a `list[dyn Trait]` lends each element to the body and copies none. A call on a lent element of a class type compares a type number in the box, so it costs a few instructions more than a call the compiler resolves. A `mut self` call on a list element takes the element out and stores it back, as it does for a list of one class.
 
 ## Operator Traits
 
@@ -13403,7 +13630,7 @@ Builtin rules come first:
 - `/` on equal integer operands is rejected with the integer-division teaching diagnostic. It is not dispatched to `Div.div`. `/` still requests `Div.div` for an applicable non-numeric user type.
 - The divisor-sign rule for `%` describes builtin numeric remainder. `Mod.mod` on a user type has the semantics of that implementation.
 
-`Ord`, `Add`, and `From` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
+`Ord`, `Add`, `From`, and the marker trait `Transfer` are declared in the builtin prelude, which every module sees without an import (ADR-0069). The prelude implements `Ord[t]` and `Add[t, t]` for every integer type, `float32`, `float64`, and `str`, and `From` for the lossless widenings: a narrower integer into a wider one of the same signedness, an unsigned integer into a wider signed one, and any integer of 32 bits or fewer or `float32` into `float64`. A module that declares or imports its own trait with one of these names uses its own declaration, and the prelude's is not visible in that module. The other operator traits are not predeclared; a module declares them with these shapes:
 
 ```aura
 trait Add[Rhs, Out]:
@@ -13520,7 +13747,7 @@ The checker enforces the selected `From.from` method's clone-safety obligations 
 - Trait and implementation methods cannot give ordinary parameters defaults.
 - Generic task targets are permitted when their callable type arguments can be resolved. Bare shared and `own` targets use task-owned captures. `mut` targets are rejected.
 - Equal-specificity overlapping implementations are an error at the use site.
-- A trait object names one trait. `match` on the type a trait object holds, the explicit conversion `value as dyn Trait`, and trait objects in tasks are not available yet.
+- A trait object names one trait. It crosses a task boundary only when that trait has `Transfer` as a supertrait.
 - A type alias cannot bound a type parameter by a trait with associated types.
 - Clone-safety obligations are inferred, not written. An explicit implementation cannot strengthen the contract inferred by its trait method.
 
@@ -13575,9 +13802,9 @@ No generic or trait boundary inserts a hidden clone, coercion, or ownership-mode
 | `AU2005` | An unsupported `T.method(...)` call: the method takes `self`, declares type parameters, or is called outside a module-level function, or the function is used as a task target or with a type parameter where no concrete type reaches it. |
 | `AU2006` | A trait method name that collides with a builtin member. Rename the trait method. |
 | `AU2010` | A type parameter that a union-member argument cannot determine. Specialize explicitly. |
-| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. |
+| `AU2013` | A type arm over a type parameter. Use `case None` and a catch-all. A `match` on a trait object with no final `case _:`, with an arm whose type does not implement the trait, or with an arm that names a trait object. |
 | `AU2050` | An invalid trait object type: a bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types, a wrong number of trait arguments, or an `impl` whose target is a trait object type. |
-| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, or a `mut` argument that is not already a trait object. |
+| `AU2051` | An invalid trait object use: a method that cannot be called on a trait object, a trait object standing for a type parameter whose bound promises such a method, a `mut` argument that is not already a trait object, or `value as dyn Trait` as a `mut` receiver or `mut` argument. |
 | `AU2043` | An invalid `Display` implementation: a foreign, builtin, tuple, union, or type-parameter target, a target that does not cover every specialization, a bounded parameter, an overlapping implementation, or a `display` method that does not match the trait. |
 | `AU2999` | Duplicate or invalid implementations, method-conformance or supertrait failure, unsupported implementation targets, and other generic or trait rejections. |
 | `AU3001` | Use after an owned generic value or receiver has moved. |
@@ -13632,7 +13859,7 @@ Implemented:
 - generic and specialized implementations with unique-most-specific dispatch
 - operator traits, `Self`, and `From`-based `try` conversion
 - the prelude `Display` trait and its rendering dispatch
-- trait objects, `dyn Trait`, with conversion at typed places and calls dispatched on the held value
+- trait objects, `dyn Trait`, with conversion at typed places, `value as dyn Trait`, calls dispatched on the held value, and `match` type arms on the held type
 - inferred clone-safety contracts
 - type parameters as union members, renormalizing specialization, remainder inference, and universal generic body checks
 
@@ -14642,7 +14869,8 @@ postfix-expression
       | index-suffix
       | member-suffix
       | call-suffix
-      | numeric-cast-suffix } ;
+      | numeric-cast-suffix
+      | trait-object-cast-suffix } ;
 
 index-suffix
     = "[", expression, { ",", expression }, "]"
@@ -14652,6 +14880,8 @@ call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
 
 numeric-cast-suffix = "as", numeric-type ;
+
+trait-object-cast-suffix = "as", trait-object-type ;
 
 numeric-type
     = "int" | "int8" | "int16" | "int32" | "int64" | "int128" | "intsize"
@@ -22555,7 +22785,7 @@ Compile-time diagnostics:
 | `AU2003` | Unsupported compound-assignment operator. |
 | `AU2004` | Call or target argument binding failed. |
 | `AU2005` | Unsupported syntax or feature for a Python-shaped statement. |
-| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. |
+| `AU2013` | A union match is missing a type arm, duplicates one, or cannot reach one. A trait object match has no final `case _:`, or has an arm that can never match. |
 | `AU2014` | A member use through a place whose `None`-test narrowing was ended by an assignment, a mutable match, or a call with mutable access. |
 | `AU2017` | A `with` item is not a context manager, or its exit `Result` does not fit the enclosing function. |
 | `AU2999` | An exhaustiveness, contextual-legality, or unsupported-statement rejection with no narrower code. |
@@ -24404,8 +24634,12 @@ checks these places, so while one of them is unproved
 A function is proved on its own. A call relies only on what its callee
 declares: the verifier proves the callee's `requires` at the call, and then
 assumes its `ensures`. A call through a trait, on a value whose type is a
-type parameter, relies on the trait method's contract, which every
-implementation is proved to keep. A call of a `lemma def` relies on the
+type parameter or a trait object, relies on the trait method's contract,
+which every implementation is proved to keep. A trait object the function
+itself made from a value of a known type is followed more closely: a call on
+it relies on that type's own contract, and a `match` type arm on it is
+decided. A trait object the function receives, reads from a collection, or
+gets from two paths that hold different types may hold any type. A call of a `lemma def` relies on the
 lemma's `ensures` the same way; see
 [Lemmas](/manual/contracts#lemmas). Nothing else about the callee's body is used, so
 what a caller needs to know must be in the contract.
@@ -37065,8 +37299,9 @@ We'll build a generic stack and a `largest` function that first refuses to
 compile, then use traits to describe priced items in a small shop and fix
 `largest` along the way. By the end you'll be able to write generic code,
 define and implement traits, give your own types operators and custom printing,
-convert between types deliberately, and make `for` loops work over your own
-types with iterators and generators.
+convert between types deliberately, make `for` loops work over your own
+types with iterators and generators, and keep values of different types in one
+list with trait objects.
 
 ## Source: docs/book/ch10-01-generics.md
 
@@ -37708,7 +37943,14 @@ whatever else implements the trait. A value converts where it is stored, and
 each `item.label()` call still runs the implementation for the type that
 element actually is. A trait object gives up what the compiler can no longer
 know: it has no `==` and no `clone()`, and you reach only the methods the
-trait declares.
+trait declares. Where nothing names the type, say it yourself with `as`:
+`[book as dyn Priced, coffee]` is a `list[dyn Priced]`. When you do need the
+type back, `match` asks for it by name: `case Book as book:` runs when the
+item is a book, and a final `case _:` takes everything else. To hand a trait
+object to a task, declare the trait with `Transfer` as a supertrait, as
+[Chapter 15](/book/ch15-01-tasks-and-task-groups) explains. We'll come
+back to trait objects in [their own section](/book/ch10-05-trait-objects) at
+the end of this chapter.
 
 ### Traits are nominal
 
@@ -38709,6 +38951,424 @@ because `into_iter` consumes its receiver. Your own traits can declare associate
 types the same way; the [Manual](/manual/generics-and-traits#associated-types)
 has the details.
 
+We've now written traits that the compiler resolves ahead of time. The last
+piece of this chapter is what to do when it can't: a list whose elements have
+different types, where the set of types isn't known in advance.
+
+## Source: docs/book/ch10-05-trait-objects.md
+
+# Trait objects
+
+Listing 10-6 put books and coffees in one list by naming both types:
+`list[Book | Coffee]`. That works while we know every type that will ever go
+in the list. A shop's discounts are not like that. Today there is a percentage
+off and a coupon, next month marketing invents a loyalty reward, and a
+partner's module adds its own. Every new kind would mean editing the union,
+and every function that takes the list.
+
+What we want to say is "a list of anything that is a discount". Aura spells
+that `list[dyn Discount]`. The type `dyn Discount` is a *trait object*: a
+value of some type that implements `Discount`, where which type is decided
+while the program runs. `dyn` is short for dynamic.
+
+## A list of anything that implements a trait
+
+Let's write the discounts. A discount has a name for the receipt and decides
+how many cents to take off a subtotal:
+
+```aura
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def checkout(subtotal: int64, discounts: list[dyn Discount]) -> int64:
+    mut total = subtotal
+    for discount in discounts:
+        cut = discount.cut_cents(total)
+        print(f"{discount.name()}: -{cut} cents")
+        total -= cut
+    return total
+
+def main():
+    discounts: list[dyn Discount] = [
+        PercentOff(percent=10),
+        Coupon(code="WELCOME", cents=250, used=false),
+    ]
+    print(f"to pay: {checkout(2000, discounts)} cents")
+```
+
+<span class="caption">Listing 10-10: One list holding two types of discount</span>
+
+```console
+$ aura run src/main.au
+10% off: -200 cents
+coupon WELCOME: -250 cents
+to pay: 1550 cents
+```
+
+Nothing about the trait or the two `impl` blocks is new. The new part is the
+type `list[dyn Discount]`, in `main` and in `checkout`. Inside the loop,
+`discount.cut_cents(total)` runs `PercentOff`'s method for the first element
+and `Coupon`'s for the second. The compiler can't pick the method ahead of
+time as it does for a generic function, so the program looks at the type the
+value holds and picks then.
+
+Notice what `checkout` does not mention: `PercentOff` and `Coupon`. A module
+written next year can define a `LoyaltyReward`, implement `Discount` for it,
+and append one to the list. `checkout` runs it without being touched.
+
+## Where a value becomes a trait object
+
+In `main`, each element was written as an ordinary constructor call and ended
+up as a `dyn Discount`. Aura converts a value to a trait object wherever the
+code already says a trait object is expected: an annotated binding like the
+one above, an argument for a `dyn Discount` parameter, a `return` from a
+function that returns one, or a field of that type. The conversion moves the
+value into the trait object. Nothing is copied.
+
+Take the annotation away and there's nothing to say what the list should
+hold, so the compiler falls back to its usual rule that list elements share
+one type:
+
+```aura check-fail:AU2002
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def main():
+    discounts = [PercentOff(percent=10), Coupon(code="WELCOME", cents=250, used=false)]
+    print(len(discounts))
+```
+
+```console
+$ aura check src/main.au
+error[AU2002]: list literal elements must all have type `PercentOff`, found `Coupon`
+ --> src/main.au:30:42
+   |
+30 |     discounts = [PercentOff(percent=10), Coupon(code="WELCOME", cents=250, used=false)]
+   |                                          ^
+```
+
+Aura could have guessed that we meant a list of trait objects, but a guess
+like that would hide a real mistake just as often. Instead you say it. Either
+annotate the binding, or convert one element with `as` and let the rest
+follow:
+
+```aura
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def main():
+    discounts = [PercentOff(percent=10) as dyn Discount, Coupon(code="WELCOME", cents=250, used=false)]
+    print(len(discounts))
+```
+
+This is the same `as` that converts numbers in
+[the section on conversions](/book/ch10-03-conversions), and it follows the
+same idea: nothing becomes a trait object behind your back.
+
+## What a trait object gives up
+
+A `dyn Discount` could hold any type, so the compiler lets you do only what
+every discount can do, which is exactly what the trait declares. Reaching for
+a field of the type you happen to know is inside is an error:
+
+```aura check-fail:AU2002
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def main():
+    discount: dyn Discount = PercentOff(percent=10)
+    print(discount.percent)
+```
+
+```console
+$ aura check src/main.au
+error[AU2002]: `dyn Discount` has no field `percent`
+ --> src/main.au:31:20
+   |
+31 |     print(discount.percent)
+   |                    ^
+  = note: a trait object exposes the methods of its trait, not the fields of the type it holds
+  = help: add a method to the trait that returns the value
+```
+
+The help line is the usual fix: if every discount should be able to answer the
+question, the question belongs in the trait.
+
+For the same reason a trait object has no `==` and no `clone()`. Two
+`dyn Discount` values might hold different types, and `Discount` says nothing
+about comparing or copying. If you need either, add a method to the trait that
+does it. A trait object is still an ordinary owned value in every other way:
+you can move it, lend it to a function, store it in a class, and return it.
+
+A few trait methods can't be called on a trait object at all. One call has to
+make sense for whatever type is inside, so a method that has type parameters
+of its own, or that mentions `Self` anywhere besides the receiver, is left
+out. The trait can still declare such methods. They work on values whose type
+is known and through a type parameter, and the compiler tells you when you
+call one on a `dyn` value.
+
+## Getting the type back
+
+Sometimes one kind of value does need special treatment. A coupon has a code
+the customer must type in, and no other discount does. `match` can ask a trait
+object which type it holds, with the same `case Type as name:` arm that works
+on a union:
+
+```aura check-fail:AU2013
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def describe(discount: dyn Discount) -> str:
+    match discount:
+        case Coupon as coupon:
+            return f"enter {coupon.code} at checkout"
+```
+
+```console
+$ aura check src/main.au
+error[AU2013]: match on `dyn Discount` needs a final `case _:`, because a trait object can hold any type that implements its trait
+ --> src/main.au:30:5
+   |
+30 |     match discount:
+   |     ^
+  = help: add `case _:` after the type arms
+```
+
+A `match` on a union is complete when it has an arm for every member. A trait
+object has no list of members, which was the point of using one, so the
+compiler asks for a catch-all. With it, the function compiles, and inside the
+`Coupon` arm `coupon` really is a `Coupon` with its fields:
+
+```aura
+trait Discount:
+    def name(self) -> str
+    def cut_cents(self, subtotal: int64) -> int64
+
+class PercentOff:
+    percent: int64
+
+class Coupon:
+    code: str
+    cents: int64
+    used: bool
+
+impl Discount for PercentOff:
+    def name(self) -> str:
+        return f"{self.percent}% off"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        return subtotal * self.percent // 100
+
+impl Discount for Coupon:
+    def name(self) -> str:
+        return f"coupon {self.code}"
+
+    def cut_cents(self, subtotal: int64) -> int64:
+        if self.used:
+            return 0
+        return min(self.cents, subtotal)
+def describe(discount: dyn Discount) -> str:
+    match discount:
+        case Coupon as coupon:
+            return f"enter {coupon.code} at checkout"
+        case _:
+            return discount.name()
+
+def redeem(discounts: mut list[dyn Discount]):
+    for discount in mut discounts:
+        match mut discount:
+            case Coupon as coupon:
+                coupon.used = true
+            case _:
+                pass
+
+def main():
+    mut discounts: list[dyn Discount] = [
+        PercentOff(percent=10),
+        Coupon(code="WELCOME", cents=250, used=false),
+    ]
+    for discount in discounts:
+        print(describe(discount))
+    print(discounts[1].cut_cents(2000))
+    redeem(discounts)
+    print(discounts[1].cut_cents(2000))
+```
+
+<span class="caption">Listing 10-11: Matching on the type a trait object holds</span>
+
+```console
+$ aura run src/main.au
+10% off
+enter WELCOME at checkout
+250
+0
+```
+
+`match` follows the rules you know from [Chapter 6](/book/ch06-00-enums-and-match).
+A plain `match` lends the value, so `describe` only reads the coupon.
+`match mut` gives the arm a binding it can change, and the change lands in the
+list, which is how `redeem` marks every coupon as used. `match own` moves the
+value out of the trait object for good.
+
+Reach for a type arm sparingly. Each one is a place that knows about a
+specific type, and the more of them you write, the less open your list is.
+When most of your code wants to match, a union or an enum is the better fit.
+
+## Generic, union, or trait object
+
+We now have three ways to write code over several types, and they answer
+different questions.
+
+A type parameter, `def total[T: Priced](items: list[T])`, is one type chosen
+at each call. Every element of the list has that same type, the compiler
+builds a copy of the function for it, and calls are direct. Use it when the
+caller knows the type.
+
+A union, `list[Book | Coffee]`, mixes types from a fixed set. The compiler
+knows every member, so it can check that a `match` handles all of them, and
+values still compare and clone when their members do. Use it when you can
+list the types.
+
+A trait object, `list[dyn Priced]`, mixes types from an open set. New types
+join without any change to the code that uses the list, and in exchange you
+get only the trait's methods. Use it for plugins, handlers, strategies, and
+anything else where the code that holds the values shouldn't know what they
+are.
+
+The cost of a trait object is a small amount of work per call to find the
+right method. In our measurements a call through a `dyn` value in a loop is
+within three times the cost of the same call through Rust's `Box<dyn Trait>`
+and several times faster than a method call in Python, so it is rarely the
+thing to optimize.
+
+Trait objects cross task boundaries only when the trait promises that every
+implementing type is safe to hand to another task. You write that promise as
+`trait Job: Transfer:`, and
+[Chapter 15](/book/ch15-01-tasks-and-task-groups) shows it at work. A
+`dyn Iterator[T]` is a `for` source, so a function can return one of several
+iterator types behind a single return type. The
+[Manual](/manual/generics-and-traits#trait-objects) has the complete rules.
+
 ## Summary
 
 Generics let you write a function, class, or enum once and use it with many
@@ -38731,6 +39391,11 @@ Generators let you write a lazy sequence as an ordinary loop with `yield`.
 Nothing runs until a loop asks for the next item, which makes endless sequences
 safe to zip with finite ones, and a generator that stops early still runs its
 cleanup.
+
+Trait objects cover the case generics and unions can't: values of types the
+code has never heard of. `dyn Trait` holds any implementing type, converts
+where the type is written or with `as`, offers the trait's methods, and gives
+the type back through `match` with a catch-all.
 
 With error handling and generics in hand, you're ready to make sure your code
 does what you think it does. [Chapter 11](/book/ch11-00-testing) introduces
@@ -45137,6 +45802,12 @@ the path, or to read the data first and send the text. Other things that can't
 cross include `random.Rng`, a `TaskGroup`, and views. You can't declare a type
 `Transfer` yourself; it is always derived, so there's no way to claim a type is
 safe when it isn't.
+
+A trait object needs one more word, because the compiler can't see the type it
+holds. Write `Transfer` as a supertrait, `trait Job: Transfer:`, and only
+transferable types may implement `Job`. A `dyn Job` can then go to a task or
+through a queue like any other owned value. A generic function asks for the
+same thing with a bound, `def send[T: Transfer](value: own T)`.
 
 Two kinds of handle are the exception that makes communication possible. A
 `Queue` handle and a `Task` handle can be passed to any task, because their
@@ -51794,6 +52465,8 @@ although doing so tends to confuse readers.
 - `self` names the receiver in a method.
 - `Self` refers to the current type inside a trait or an `impl`.
 - `copy` makes a class a copy class when it appears directly before `class`.
+- `dyn` begins a trait object type when a trait name follows it: `dyn Tool`
+  is a value of any type that implements `Tool`.
 - `None` is the unit value, and the "nothing here" member of a `T | None`
   union.
 - `is` appears only in `value is None` and `value is not None`. Aura has no

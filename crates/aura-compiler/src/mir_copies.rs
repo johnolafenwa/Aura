@@ -113,7 +113,9 @@ fn expr_only_borrows(expr: &Expr, name: &str, element: &Type) -> bool {
             .all(|child| expr_only_borrows(child, name, element))
     };
     match &expr.kind {
-        ExprKind::Name(found) => found != name,
+        // A trait object is never copied, so the checker already holds
+        // every use of the binding to a borrow of the element.
+        ExprKind::Name(found) => found != name || element.is_trait_object(),
         ExprKind::Binary {
             op: BinaryOp::Eq | BinaryOp::NotEq,
             left,

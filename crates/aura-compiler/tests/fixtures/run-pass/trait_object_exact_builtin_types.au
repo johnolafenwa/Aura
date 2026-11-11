@@ -1,0 +1,88 @@
+trait Named:
+    def name(self) -> str
+
+
+class Box[T]:
+    value: T
+
+
+impl Named for int32:
+    def name(self) -> str:
+        return "int32"
+
+
+impl Named for int64:
+    def name(self) -> str:
+        return "int64"
+
+
+impl Named for uint8:
+    def name(self) -> str:
+        return "uint8"
+
+
+impl Named for float32:
+    def name(self) -> str:
+        return "float32"
+
+
+impl Named for float64:
+    def name(self) -> str:
+        return "float64"
+
+
+impl Named for list[int64]:
+    def name(self) -> str:
+        return "list[int64]"
+
+
+impl Named for list[str]:
+    def name(self) -> str:
+        return "list[str]"
+
+
+impl Named for Box[int64]:
+    def name(self) -> str:
+        return "Box[int64]"
+
+
+impl Named for Box[str]:
+    def name(self) -> str:
+        return "Box[str]"
+
+
+impl Named for Box[list[int32]]:
+    def name(self) -> str:
+        return "Box[list[int32]]"
+
+
+impl Named for Box[list[int64]]:
+    def name(self) -> str:
+        return "Box[list[int64]]"
+
+
+def main() -> None:
+    a: int32 = 1
+    b: uint8 = 2
+    c: float32 = 1.5
+    empty_ints: list[int64] = []
+    empty_strs: list[str] = []
+    empty32: list[int32] = []
+    empty64: list[int64] = []
+    items: list[dyn Named] = [
+        a,
+        2,
+        b,
+        c,
+        2.5,
+        empty_ints,
+        empty_strs,
+        [1],
+        ["x"],
+        Box(value=1),
+        Box(value="s"),
+        Box(value=empty32),
+        Box(value=empty64),
+    ]
+    for item in items:
+        print(item.name())

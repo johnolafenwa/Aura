@@ -314,30 +314,6 @@ because `into_iter` consumes its receiver. Your own traits can declare associate
 types the same way; the [Manual](/manual/generics-and-traits#associated-types)
 has the details.
 
-## Summary
-
-Generics let you write a function, class, or enum once and use it with many
-types. Type parameters are checked once, for every possible type, so the
-ownership modes and operations in a generic body have to make sense for all of
-them: `own T` for values the body keeps, and a trait bound for any method or
-operator it calls. Traits name behavior, implementations promise it explicitly,
-and bounds put the requirement in the signature where callers can read it. A
-few traits connect to the language itself: `Display` controls printing, `Add`,
-`Ord`, and friends give your types operators, `From` lets `try` convert
-errors, and `Iterator` and `IntoIterator` decide what a `for` loop does with
-your types.
-
-Conversions follow the same philosophy of saying what you mean. `as` converts
-numbers exactly or traps, `.to_float()` rounds on purpose, parsing text returns
-a `Result`, and `str()` and f-strings render anything. Nothing converts behind
-your back.
-
-Generators let you write a lazy sequence as an ordinary loop with `yield`.
-Nothing runs until a loop asks for the next item, which makes endless sequences
-safe to zip with finite ones, and a generator that stops early still runs its
-cleanup.
-
-With error handling and generics in hand, you're ready to make sure your code
-does what you think it does. [Chapter 11](/book/ch11-00-testing) introduces
-`aura test`, and we'll use it to find a real bug in some code that looks
-correct.
+We've now written traits that the compiler resolves ahead of time. The last
+piece of this chapter is what to do when it can't: a list whose elements have
+different types, where the set of types isn't known in advance.

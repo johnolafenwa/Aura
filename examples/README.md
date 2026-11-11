@@ -192,7 +192,7 @@ seven real loopback requests.
 | `specialized_trait_dispatch.au` | Bounded generic dispatch over specialized generic trait impls | `7`, `hi` |
 | `generic_trait_impl.au` | Generic trait declarations and generic impl headers with `own T` inputs | `11` |
 | `default_trait_methods.au` | Default trait method bodies with per-impl overrides | `name=aura`, `team=infra` |
-| `trait_objects.au` | Trait objects: a `list[dyn Tool]` and a `dict[str, dyn Tool]` that hold values of three types, conversion where a value is stored or returned, calls that run the held value's method, and a call on an element that borrows it in place | `echo: you said hello`, `counter: call 1 with 5 characters`, `shout: HELLO`, `echo: you said again`, `counter: call 2 with 5 characters`, `shout: AGAIN`, `tool counter, called 2 times`, `> typed`, `tool shout` |
+| `trait_objects.au` | Trait objects: a `list[dyn Tool]` and a `dict[str, dyn Tool]` that hold values of three types, conversion where a value is stored or returned, calls that run the held value's method, a call on an element that borrows it in place, a `match` type arm that reads the held `Counter`, and `as dyn Tool` where no annotation names the type | `echo: you said hello`, `counter: call 1 with 5 characters`, `shout: HELLO`, `echo: you said again`, `counter: call 2 with 5 characters`, `shout: AGAIN`, `tool counter, called 2 times`, `2 counted calls`, `> typed`, `tool shout`, `2`, `tool counter, called 10 times` |
 | `operator_traits.au` | Operator traits for `+` and unary `-` through `Add[...]` and `Neg[...]` | `6`, `8`, `-6`, `-8` |
 | `ordering_traits.au` | Ordering traits with shared right-hand operands and an explicitly consuming generic selector | `true`, `true`, `true`, `true`, `2` |
 | `trait_associated_factory.au` | Associated trait methods called through the implementing type name | `7` |
@@ -312,6 +312,7 @@ printed-output order unless they coordinate that order explicitly.
 | `task_group_associated_method.au` | Starting associated methods without `self` through `TaskGroup.start(...)` | `5`, `7` |
 | `queue_put_timeout.au` | `Queue.put(timeout=...)` with explicit send-failure handling | `sent`, `4` |
 | `task_group_queue_sum.au` | Queue-driven coordination inside a `TaskGroup()` scope | `3` |
+| `trait_object_jobs.au` | Trait objects in tasks: `trait Job: Transfer:` admits only Transfer types, so a `dyn Job` moves into a task and through a `Queue[dyn Job]` to a worker that never names its type | `sum = 6`, `count a = 3`, `sum = 30`, `count s = 4` |
 | `task_group_cancel.au` | Cooperative cancellation with `group.cancel()` and `cancelled()` | `0`, `1` |
 | `yield_now.au` | Explicit cooperative scheduling between bounded chunks of CPU work. Ordinary loop backedges also get amortized scheduling checks that the compiler inserts. | Three numbered steps each for `alpha` and `beta`. The exact interleaving is unspecified on purpose. |
 | `typed_select.au` | Typed heterogeneous selection over Queue, Task, and relative-Duration sources, including deterministic lowest-index priority | `SelectOutcome.Queue(0, QueueReceive.Item(queued))`, `TaskResult.Ready(42)`, `SelectOutcome.Task(0, TaskResult.Ready(42))`, `SelectOutcome.Deadline(0)` |

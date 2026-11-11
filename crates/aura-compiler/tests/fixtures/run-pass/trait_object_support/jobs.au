@@ -1,0 +1,15 @@
+public trait Job: Transfer:
+    def run(self) -> int64
+
+public class Sum:
+    public values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        mut total = 0
+        for value in self.values:
+            total += value
+        return total
+
+public def run_job(job: own dyn Job) -> int64:
+    return job.run()

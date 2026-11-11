@@ -1,0 +1,6 @@
+error[AU2051]: a conversion to a trait object makes a new value, so it cannot be changed in place
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_mut_argument.au:52:10
+   |
+52 |     bump(square as dyn Shape)
+   |          ^
+  = help: bind the converted value to a `mut` name first, and use that

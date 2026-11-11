@@ -27,6 +27,7 @@ Three pages hold the normative detail:
 | `is None`, `is not None` | [None Tests](#none-tests) |
 | `in`, `not in`, `a < b < c` | [Membership And Comparison Chains](#membership-and-comparison-chains) |
 | `value as int64` | [Numeric Casts](#numeric-casts) |
+| `value as dyn Trait` | [Trait Objects](/manual/generics-and-traits#conversion) |
 | `f(x)`, `f(name=x)` | [Calls And Argument Binding](#calls-and-argument-binding) |
 | `Box[int32](...)` | [Explicit Generic Specialization](#explicit-generic-specialization) |
 | `object.member` | [Member Access](#member-access) |

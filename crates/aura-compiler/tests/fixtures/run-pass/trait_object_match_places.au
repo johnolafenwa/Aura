@@ -1,0 +1,139 @@
+trait Shape:
+    def area(self) -> int64
+    def name(self) -> str
+    def grow(mut self, by: int64) -> None
+    def describe(self) -> str:
+        return f"{self.name()} of area {self.area()}"
+
+
+class Square:
+    side: int64
+
+
+class Rect:
+    w: int64
+    h: int64
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side * self.side
+    def name(self) -> str:
+        return "square"
+    def grow(mut self, by: int64) -> None:
+        self.side += by
+
+
+impl Shape for Rect:
+    def area(self) -> int64:
+        return self.w * self.h
+    def name(self) -> str:
+        return "rect"
+    def grow(mut self, by: int64) -> None:
+        self.w += by
+        self.h += by
+
+
+impl Shape for Label:
+    def area(self) -> int64:
+        return len(self.text) + len(self.hits)
+    def name(self) -> str:
+        return self.text.clone()
+    def grow(mut self, by: int64) -> None:
+        self.hits.append(by)
+    def describe(self) -> str:
+        return f"label {self.text}"
+
+
+class Holder:
+    shape: dyn Shape
+    count: int64
+
+
+class Wrapper:
+    inner: dyn Shape
+
+
+enum Slot:
+    Full(dyn Shape)
+    Empty
+
+
+impl Shape for Wrapper:
+    def area(self) -> int64:
+        return self.inner.area()
+    def name(self) -> str:
+        return "wrapper"
+    def grow(mut self, by: int64) -> None:
+        self.inner.grow(by)
+
+
+def poke(holder: mut Holder) -> None:
+    match mut holder.shape:
+        case Square as square:
+            square.side += 5
+            holder.count += 1
+        case Wrapper as wrapper:
+            wrapper.grow(1)
+        case _:
+            pass
+
+
+def peek(slot: Slot) -> int64:
+    match slot:
+        case Slot.Full(inner):
+            match inner:
+                case Square as square:
+                    return square.side
+                case _:
+                    return inner.area()
+        case Slot.Empty:
+            return -1
+
+
+def first(slot: Slot) -> int64:
+    match slot:
+        case Slot.Full(Square as square):
+            return square.side
+        case Slot.Full(other):
+            return other.area()
+        case Slot.Empty:
+            return -1
+
+
+def depth(shape: dyn Shape) -> int64:
+    match shape:
+        case Wrapper as wrapper:
+            alias = wrapper
+            return 1 + depth(alias.inner)
+        case _:
+            return 0
+
+
+def main() -> None:
+    mut holder = Holder(shape=Square(side=1), count=0)
+    poke(holder)
+    poke(holder)
+    print(holder.shape.area())
+    print(holder.count)
+    mut wrapped = Holder(shape=Wrapper(inner=Wrapper(inner=Square(side=2))), count=0)
+    poke(wrapped)
+    print(wrapped.shape.area())
+    print(depth(wrapped.shape))
+    print(peek(Slot.Full(Square(side=3))))
+    print(peek(Slot.Full(Rect(w=2, h=5))))
+    print(peek(Slot.Empty))
+    print(first(Slot.Full(Square(side=4))))
+    print(first(Slot.Full(Label(text="abc", hits=[]))))
+    mut table: dict[str, dyn Shape] = {"a": Square(side=2)}
+    match mut table["a"]:
+        case Square as square:
+            square.side = 9
+        case _:
+            pass
+    print(table["a"].area())

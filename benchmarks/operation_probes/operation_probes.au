@@ -343,6 +343,55 @@ def str_format(n: int64, run: bool) -> int64:
     return text.len()
 
 
+trait Solid:
+    def volume(self) -> int64
+
+
+class Cube:
+    side: int64
+
+
+class Slab:
+    width: int64
+    depth: int64
+
+
+class Rod:
+    length: int64
+    step: int64
+
+
+impl Solid for Cube:
+    def volume(self) -> int64:
+        return self.side * self.side
+
+
+impl Solid for Slab:
+    def volume(self) -> int64:
+        return self.width * self.depth
+
+
+impl Solid for Rod:
+    def volume(self) -> int64:
+        return self.length + self.step
+
+
+def trait_object_call(n: int64, run: bool) -> int64:
+    mut solids = list[dyn Solid]()
+    for i in range(n):
+        if i % 3 == 0:
+            solids.append(Cube(side=i % 7))
+        elif i % 3 == 1:
+            solids.append(Slab(width=i % 5, depth=i % 11))
+        else:
+            solids.append(Rod(length=i % 13, step=1))
+    mut total = 0
+    if run:
+        for solid in solids:
+            total += solid.volume()
+    return total + solids.len()
+
+
 def probe(operation: str, n: int64, run: bool) -> int64:
     if operation == "while_step":
         return while_step(n, run)
@@ -392,6 +441,8 @@ def probe(operation: str, n: int64, run: bool) -> int64:
         return str_append(n, run)
     elif operation == "str_format":
         return str_format(n, run)
+    elif operation == "trait_object_call":
+        return trait_object_call(n, run)
     return -1
 
 

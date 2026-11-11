@@ -319,6 +319,19 @@ pub enum Value {
     TlsStream(TlsStreamValue),
     /// A generator frame (Batch 9). Not Transfer and not cloneable.
     Generator(GeneratorValue),
+    /// A trait object of the interpreter: a value together with the type it
+    /// had where it was converted. Generated code keeps the value in its own
+    /// box instead and never builds this.
+    TraitObject(Box<TraitObjectValue>),
+}
+
+/// The value a trait object holds and its exact type. The value alone does
+/// not say it: a `float32` and a `float64` are the same `Value`, and so are
+/// a `Maybe[int32].Nothing` and a `Maybe[int64].Nothing`.
+#[derive(Clone, Debug)]
+pub struct TraitObjectValue {
+    pub held: Arc<Type>,
+    pub value: Value,
 }
 
 impl Value {
@@ -5793,6 +5806,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
     fn render_source_type(value: &Value) -> String {
         match value {
             Value::Union(union) => union.union_type.to_string(),
+            Value::TraitObject(object) => object.held.to_string(),
             Value::Int(_) | Value::Float(_) => {
                 unreachable!("numeric source types are handled before render_source_type")
             }
@@ -9815,6 +9829,10 @@ impl Clone for Value {
             Self::Channel(value) => Self::Channel(value.clone()),
             Self::Task(value) => Self::Task(value.clone()),
             Self::TaskGroup(value) => Self::TaskGroup(value.clone()),
+            Self::TraitObject(object) => Self::TraitObject(Box::new(TraitObjectValue {
+                held: Arc::clone(&object.held),
+                value: object.value.clone(),
+            })),
             Self::File(value) => Self::File(value.clone()),
             Self::TcpListener(value) => Self::TcpListener(value.clone()),
             Self::TcpStream(value) => Self::TcpStream(value.clone()),
@@ -10146,6 +10164,9 @@ impl Value {
                                     actions.push(RenderAction::Static(", "));
                                 }
                             }
+                        }
+                        Value::TraitObject(object) => {
+                            actions.push(typed(&object.value, &object.held));
                         }
                         Value::Union(union) => actions.push(match &*union.union_type {
                             Type::Union(members) => match members.members.get(union.member_index) {

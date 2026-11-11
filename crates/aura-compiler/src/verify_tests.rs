@@ -3449,3 +3449,160 @@ fn only_declared_float_inputs_are_fixed() {
     // No float input, no samples.
     assert!(preludes("plain").0.is_empty());
 }
+
+const TRAIT_OBJECT_SHAPES: &str = r#"
+trait Shape:
+    def area(self) -> int64:
+        ensures result >= 0
+
+    def grow(mut self, by: int64) -> None:
+        requires by >= 0 and by < 100
+
+class Square:
+    side: int64
+
+class Slab:
+    width: int64
+
+impl Shape for Square:
+    def area(self) -> int64:
+        ensures result == 9
+        return 9
+
+    def grow(mut self, by: int64) -> None:
+        if self.side < 1000:
+            self.side = by
+
+impl Shape for Slab:
+    def area(self) -> int64:
+        ensures result == 2
+        return 2
+
+    def grow(mut self, by: int64) -> None:
+        self.width = 0
+"#;
+
+#[test]
+fn a_trait_object_made_from_a_known_type_keeps_that_type_and_its_value() {
+    let source = format!(
+        r#"{TRAIT_OBJECT_SHAPES}
+def received(shape: dyn Shape) -> int64:
+    ensures result >= 0
+    return shape.area()
+
+def first(shapes: list[dyn Shape]) -> int64:
+    requires len(shapes) > 0
+    ensures result >= 0
+    return shapes[0].area()
+
+def exact() -> int64:
+    ensures result == 9
+    shape: dyn Shape = Square(side=3)
+    return shape.area()
+
+def grown() -> int64:
+    ensures result == 9
+    mut shape: dyn Shape = Square(side=3)
+    shape.grow(5)
+    return shape.area()
+
+def merged(flag: bool) -> int64:
+    ensures result == 2
+    mut shape: dyn Shape = Square(side=1)
+    if flag:
+        shape = Square(side=2)
+    match shape:
+        case Square as square:
+            return 2
+        case _:
+            return 0
+
+def arm(shape: dyn Shape) -> int64:
+    ensures result >= 0
+    match shape:
+        case Square as square:
+            return square.area()
+        case _:
+            return shape.area()
+
+def known() -> int64:
+    ensures result == 4
+    shape = Square(side=4) as dyn Shape
+    match shape:
+        case Square as square:
+            return square.side
+        case _:
+            return 0
+
+def changed() -> int64:
+    ensures result == 7
+    mut shape: dyn Shape = Square(side=3)
+    match mut shape:
+        case Square as square:
+            square.side = 7
+        case _:
+            pass
+    match shape:
+        case Slab as slab:
+            return slab.width
+        case Square as square:
+            return square.side
+        case _:
+            return 0
+
+def main():
+    print(received(Slab(width=1)))
+    print(first([Square(side=1)]))
+    print(exact())
+    print(grown())
+    print(arm(Slab(width=1)))
+    print(known())
+    print(changed())
+    print(merged(true))
+"#
+    );
+    assert_proved(&source);
+}
+
+#[test]
+fn a_trait_object_of_an_unknown_type_gives_only_the_trait_contract() {
+    // The held type decides the call, so a wrong claim about it stays
+    // open. Two paths that hold different types merge to an unknown one,
+    // and a trait object the function receives may hold any type.
+    let source = format!(
+        r#"{TRAIT_OBJECT_SHAPES}
+def wrong() -> int64:
+    ensures result == 2
+    shape: dyn Shape = Square(side=3)
+    return shape.area()
+
+def either(flag: bool) -> int64:
+    ensures result == 9
+    mut shape: dyn Shape = Square(side=1)
+    if flag:
+        shape = Slab(width=1)
+    return shape.area()
+
+def received(shape: dyn Shape) -> int64:
+    ensures result == 9
+    match shape:
+        case Slab as slab:
+            return 9
+        case _:
+            return shape.area()
+
+def main():
+    print(wrong())
+    print(either(false))
+    print(received(Square(side=1)))
+"#
+    );
+    assert_open(
+        &source,
+        &[
+            "33 ensures failed",
+            "38 ensures failed",
+            "45 ensures failed",
+        ],
+    );
+}

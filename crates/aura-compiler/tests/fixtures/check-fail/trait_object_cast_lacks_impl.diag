@@ -1,0 +1,6 @@
+error[AU2002]: cannot convert `Other` to `dyn Shape`
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_lacks_impl.au:51:9
+   |
+51 |     a = Other(x=1) as dyn Shape
+   |         ^
+  = help: `Other` does not implement trait `Shape`; add `impl Shape for Other:`

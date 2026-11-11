@@ -1,0 +1,5 @@
+error[AU2013]: type arm `Plain` can never match: a `dyn Shape` holds only types that implement its trait, and `Plain` does not
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_arm_lacks_impl.au:30:14
+   |
+30 |         case Plain as plain:
+   |              ^

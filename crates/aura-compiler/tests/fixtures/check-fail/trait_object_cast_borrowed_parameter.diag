@@ -1,0 +1,7 @@
+error[AU3002]: parameter `square` is borrowed; declare it as `own Square` to take ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_borrowed_parameter.au:48:12
+   |
+48 |     return square as dyn Shape
+   |            ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/trait_object_cast_borrowed_parameter.au:47:10: parameter `square` is borrowed here
+  = help: declare the parameter as `own Square` when the function should consume this non-cloneable value

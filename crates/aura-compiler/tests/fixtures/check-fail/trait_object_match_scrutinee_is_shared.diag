@@ -1,0 +1,7 @@
+error[AU3002]: cannot mutate `shape` while `shape` remains shared by a bare match
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_scrutinee_is_shared.au:48:19
+   |
+48 |             shape.grow(1)
+   |                   ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_scrutinee_is_shared.au:46:5: bare `match shape` starts here
+  = help: finish the selected match arm before mutating `shape`, or use `match mut shape` when the arm must update it

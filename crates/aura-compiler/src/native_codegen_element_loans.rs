@@ -180,7 +180,8 @@ pub(super) fn native_element_loans<'f>(
                 // the receiver's place.
                 if allowed_seen
                     && mention == loan
-                    && added_receiver_loan(instruction, &sources) == Some(loan)
+                    && (added_receiver_loan(instruction, &sources) == Some(loan)
+                        || (passed == Some(loan) && dispatches_on_loan(instruction, loan)))
                 {
                     continue;
                 }
@@ -292,10 +293,16 @@ fn passed_loan<'f>(
 ) -> Option<&'f str> {
     let Instruction::Assign {
         target,
-        value: Rvalue::Call {
-            callee: CallTarget::Name(_),
-            ..
-        },
+        value:
+            Rvalue::Call {
+                callee:
+                    CallTarget::Name(_)
+                    | CallTarget::TraitMember {
+                        dispatch: Some(MethodDispatch::Candidates { .. }),
+                        ..
+                    },
+                ..
+            },
     } = instruction
     else {
         return None;
@@ -318,6 +325,27 @@ fn passed_loan<'f>(
         .iter()
         .all(|mention| root(mention) != source)
         .then_some(loan.as_str())
+}
+
+/// Whether `instruction` calls a trait method on the loan `loan` through a
+/// runtime dispatch that lends the element's box to the implementation it
+/// picks. Such a call names the loan as the receiver and as the receiver's
+/// place.
+fn dispatches_on_loan(instruction: &Instruction, loan: &str) -> bool {
+    matches!(
+        instruction,
+        Instruction::Assign {
+            value: Rvalue::Call {
+                callee: CallTarget::TraitMember {
+                    object: Operand::Place(object),
+                    dispatch: Some(MethodDispatch::Candidates { .. }),
+                    ..
+                },
+                ..
+            },
+            ..
+        } if object == loan
+    )
 }
 
 /// The loan `instruction` adds to as the receiver of a runtime operation,

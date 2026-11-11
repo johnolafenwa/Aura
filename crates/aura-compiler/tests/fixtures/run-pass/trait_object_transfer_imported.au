@@ -1,0 +1,18 @@
+import trait_object_support.jobs as jobs
+from trait_object_support.jobs import Job
+
+class Twice:
+    n: int64
+
+impl Job for Twice:
+    def run(self) -> int64:
+        return self.n * 2
+
+def main() -> None:
+    work: list[dyn Job] = [jobs.Sum(values=[1, 2, 3]), Twice(n=4)]
+    with TaskGroup() as group:
+        mut tasks: list[Task[int64]] = []
+        for job in own work:
+            tasks.append(group.start(jobs.run_job, job))
+        for task in tasks:
+            print(task.result())

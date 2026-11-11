@@ -1,0 +1,21 @@
+import random
+
+trait Job: Transfer:
+    def run(self) -> int64
+
+class Sum:
+    values: list[int64]
+
+impl Job for Sum:
+    def run(self) -> int64:
+        return len(self.values)
+
+class Dice:
+    rng: random.Rng
+
+impl Job for Dice:
+    def run(self) -> int64:
+        return 1
+
+def main() -> None:
+    print(Sum(values=[1]).run())

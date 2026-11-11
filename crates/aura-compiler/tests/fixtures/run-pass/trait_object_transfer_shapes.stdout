@@ -1,0 +1,19 @@
+TaskResult.Ready(7)
+TaskResult.Ready(5)
+TaskResult.Ready(42)
+TaskResult.Ready(10)
+TaskResult.Ready(7)
+TaskResult.Ready(12)
+3
+2
+1
+1
+1
+int 1
+sum of 2
+something else
+sum of 1
+TaskResult.Ready(2)
+TaskResult.Ready(-1)
+1
+1

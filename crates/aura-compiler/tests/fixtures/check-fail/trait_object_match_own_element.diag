@@ -1,0 +1,5 @@
+error[AU3005]: cannot implicitly copy `dyn Shape` out of a list index; trait object `dyn Shape` cannot be cloned, so use `view value = items[index]` for shared access or `pop(index)` to transfer ownership
+ --> crates/aura-compiler/tests/fixtures/check-fail/trait_object_match_own_element.au:30:15
+   |
+30 |     match own shapes[0]:
+   |               ^

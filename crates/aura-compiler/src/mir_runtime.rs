@@ -69,9 +69,10 @@ use crate::runtime_value::{
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
     RunOutput, RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
     TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
-    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
-    UnixListenerValue, UnixStreamValue, Value, VecValue, WebSocketListenerValue, WebSocketValue,
-    INTERPRETED_GENERATOR_STACK_BYTES, NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TraitObjectValue, TupleValue,
+    UdpDatagramValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value, VecValue,
+    WebSocketListenerValue, WebSocketValue, INTERPRETED_GENERATOR_STACK_BYTES,
+    NANOS_PER_MILLISECOND, NANOS_PER_MINUTE, NANOS_PER_SECOND,
 };
 use crate::sema::{substitute_type, Type};
 use crate::text_methods;
@@ -400,11 +401,14 @@ fn args_materialize_process_run(args: &[MirArg]) -> bool {
 
 fn rvalue_materializes_process_run(value: &Rvalue) -> bool {
     match value {
-        Rvalue::UnionTagTest { .. } | Rvalue::UnionTakePayload { .. } | Rvalue::NoneTest { .. } => {
-            false
-        }
+        Rvalue::UnionTagTest { .. }
+        | Rvalue::UnionTakePayload { .. }
+        | Rvalue::NoneTest { .. }
+        | Rvalue::TraitObjectHolds { .. } => false,
         Rvalue::Use(value)
         | Rvalue::CallableAdapt { value, .. }
+        | Rvalue::TraitObject { value, .. }
+        | Rvalue::TraitObjectTake { value, .. }
         | Rvalue::UnionInject { value, .. }
         | Rvalue::Unary { value, .. }
         | Rvalue::Cast { value, .. }
@@ -2865,6 +2869,7 @@ impl MirRuntime {
         &mut self,
         receiver: Value,
         receiver_ty: &Type,
+        trait_object: Option<Arc<Type>>,
         field: &str,
         method: MirMethod,
         receiver_place: Option<&str>,
@@ -2903,6 +2908,13 @@ impl MirRuntime {
                 ))
             })?;
             if let Some(place) = receiver_place {
+                let updated = match trait_object {
+                    Some(held) => Value::TraitObject(Box::new(TraitObjectValue {
+                        held,
+                        value: updated,
+                    })),
+                    None => updated,
+                };
                 env.write_place(place, updated)?;
             }
         }
@@ -3107,6 +3119,7 @@ impl MirRuntime {
             Value::Duration(_) => Some(Type::named("Duration")),
             Value::Rng(_) => Some(Type::named("random.Rng")),
             Value::Generator(_) => Some(Type::named("iter.GeneratorHandle")),
+            Value::TraitObject(object) => Some(Type::clone(&object.held)),
             Value::Range(_) => Some(Type::named("Range")),
             Value::ModuleNamespace(_) => None,
             Value::Function(function) => Some(function.signature.clone()),
@@ -3196,6 +3209,41 @@ impl MirRuntime {
             })
             .collect();
         Some(Type::Named(instance.class_name.to_string(), resolved_args))
+    }
+
+    /// Whether the trait object `value` holds a value of exactly `ty`.
+    fn trait_object_holds(value: &Value, ty: &Type) -> bool {
+        let Value::TraitObject(object) = value else {
+            return false;
+        };
+        let no_params = std::collections::BTreeSet::new();
+        crate::sema::type_pattern_matches(ty, &object.held, &no_params, &mut HashMap::new())
+    }
+
+    /// The trait object that holds `value`. `static_type` is the type the
+    /// value has where it converts, when the frame knows it; a value the
+    /// frame knows only by a type parameter is typed by what it holds.
+    fn trait_object_value(&self, value: Value, static_type: Option<Type>) -> Value {
+        match value {
+            Value::TraitObject(_) => value,
+            // A trait object holds the active member, never the union.
+            Value::Union(union) => {
+                let member = crate::union_runtime::active_member_type(&union).cloned();
+                self.trait_object_value(union.payload, member)
+            }
+            value => {
+                // A value with no type to name cannot be dispatched on, and
+                // a call on it says so.
+                let held = static_type
+                    .filter(|ty| !matches!(ty, Type::TypeParam(_) | Type::Union(_)))
+                    .or_else(|| self.infer_runtime_value_type(&value))
+                    .unwrap_or_else(|| Type::named("Unknown"));
+                Value::TraitObject(Box::new(TraitObjectValue {
+                    held: Arc::new(held),
+                    value,
+                }))
+            }
+        }
     }
 
     fn infer_runtime_value_type(&self, value: &Value) -> Option<Type> {
@@ -4468,6 +4516,39 @@ impl MirRuntime {
             Rvalue::Use(operand) | Rvalue::CallableAdapt { value: operand, .. } => Ok(
                 RvalueOutcome::Value(self.evaluate_owned_operand(operand, env)?),
             ),
+            Rvalue::TraitObject {
+                value: operand,
+                held,
+            } => {
+                // A type the conversion could not name, a type parameter of
+                // an unspecialized body, is the one the operand has in this
+                // frame.
+                let held = if crate::sema::has_unresolved_type_params(held) {
+                    self.resolve_operand_type(operand, env)
+                } else {
+                    Some(held.clone())
+                };
+                let value = self.evaluate_owned_operand(operand, env)?;
+                Ok(RvalueOutcome::Value(self.trait_object_value(value, held)))
+            }
+            Rvalue::TraitObjectHolds { value, ty } => {
+                let holds = match value {
+                    Operand::Place(place) | Operand::MovePlace(place) => {
+                        Self::trait_object_holds(&*env.place_ref(place)?, ty)
+                    }
+                    other => {
+                        Self::trait_object_holds(&self.evaluate_owned_operand(other, env)?, ty)
+                    }
+                };
+                Ok(RvalueOutcome::Value(Value::Bool(holds)))
+            }
+            Rvalue::TraitObjectTake { value, .. } => {
+                let held = match self.evaluate_owned_operand(value, env)? {
+                    Value::TraitObject(object) => object.value,
+                    value => value,
+                };
+                Ok(RvalueOutcome::Value(held))
+            }
             Rvalue::NoneTest { value } => {
                 let is_none = match value {
                     Operand::Place(place) | Operand::MovePlace(place) => {
@@ -5734,7 +5815,18 @@ impl MirRuntime {
                             .map(|place| format!("{place}.__union_payload_{}", union.member_index));
                         receiver = union.payload;
                     }
-                    let resolved_receiver_ty = receiver_static_ty
+                    // A trait object says which type it holds. The method
+                    // runs on the value, and a changed value goes back into
+                    // the same object.
+                    let mut held = None;
+                    if let Value::TraitObject(object) = receiver {
+                        held = Some(Arc::clone(&object.held));
+                        receiver = object.value;
+                    }
+                    let resolved_receiver_ty = held
+                        .as_deref()
+                        .cloned()
+                        .or(receiver_static_ty)
                         .or_else(|| self.infer_runtime_value_type(&receiver))
                         .ok_or_else(|| {
                             Diagnostic::new(format!(
@@ -5759,6 +5851,7 @@ impl MirRuntime {
                     return self.evaluate_resolved_trait_method_call(
                         receiver,
                         &resolved_receiver_ty,
+                        held,
                         field,
                         method,
                         effective_receiver_place,
@@ -5941,6 +6034,7 @@ impl MirRuntime {
                         return self.evaluate_resolved_trait_method_call(
                             receiver,
                             &resolved_receiver_ty,
+                            None,
                             field,
                             method,
                             receiver_place,
@@ -11127,6 +11221,7 @@ fn owns_generator(value: &Value) -> bool {
     match value {
         Value::Generator(_) => true,
         Value::Instance(instance) => instance.class_name == "iter.Generator",
+        Value::TraitObject(object) => owns_generator(&object.value),
         _ => false,
     }
 }

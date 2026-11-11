@@ -157,3 +157,20 @@ itself with the view's checks already settled:
 | --- | --- | ---: | ---: | ---: | ---: |
 | `class_field_read` | 2d, 2e | 100,000 | 1.5 | 2.1 | 1.4x |
 | `field_write` | 2e | 100,000 | 7.0 | 18.0 | 2.6x |
+
+## Trait object call
+
+`trait_object_call` (trait objects step 6, added on 11 November 2026)
+measures one method call on each element of a `list[dyn Solid]` that holds
+three classes, next to `Vec<Box<dyn Solid>>` in Rust. Before step 5 a loop
+copied each element and the call tested the element's type by name against
+each implementation in turn. Now the loop lends the element and the call
+compares a type number in the element's box:
+
+| operation | step | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | --- | ---: | ---: | ---: | ---: |
+| `trait_object_call`, before | trait objects 6 | 100,000 | 12.0 | about 4,600 | about 380x |
+| `trait_object_call` | trait objects 6 | 100,000 | 12.0 | 34.0 | 2.8x |
+
+The earlier figure was read on the same loop over 30,000 elements before
+the probe existed.
