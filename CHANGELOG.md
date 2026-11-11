@@ -27,6 +27,12 @@ in this file.
   with a constant step, and `mut` list parameters qualify. Five such loops
   in `benchmarks/simd` now run at the speed of the same loops in Rust. An
   index out of range still stops at the access that reaches it.
+- A float `matmul` of two matrices is faster and gives the same bits as
+  before. On a CPU with AVX2 it keeps its running sums in registers, and a
+  large product runs on several threads. 2,000 products of 64 by 64
+  matrices take 41 ms where they took 108, and a 512 by 512 product takes
+  a seventh of the time on four cores. `AURA_ARRAY_THREADS` sets the most
+  threads a product may use.
 - Arrays: `left.dot(right)` is the inner product of two Arrays of the same
   shape, and `left.matmul(right)` is the matrix product of `[n, k]` with
   `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Integer products are

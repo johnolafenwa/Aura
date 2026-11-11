@@ -241,6 +241,14 @@ order of the inner index, rounding each product before it is added. That is
 the order of the plain three-loop program, so `matmul` gives that program's
 bits. An integer `matmul` is checked and reports `AU4002`.
 
+A large float product of two matrices runs on several threads. Each thread
+computes whole rows of the result, and no element is shared, so the bits
+are the same on any number of threads. A product whose `n * k * m` is under
+about two million runs on the calling thread. `AURA_ARRAY_THREADS` sets the
+most threads one product may use. The default is the number of CPUs the
+process may run on, a product never uses more than 16, and
+`AURA_ARRAY_THREADS=1` keeps every product on the calling thread.
+
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
@@ -430,6 +438,11 @@ exist. On arm64 there is one copy, which uses NEON.
 The copies give the same bits. No kernel uses fused multiply-add, and no
 kernel lets the register width decide the order of its floating-point
 operations.
+
+With AVX2 a float `matmul` of two matrices copies a block of the right
+operand into a packed buffer and computes two rows by sixteen `float64`
+columns of the result at a time, which keeps the running sums in
+registers. The additions for each element stay in the same order.
 
 Set `AURA_ARRAY_KERNELS=baseline` to make a process use the baseline copies,
 to compare the two or to rule the wide ones out. `--target-cpu` in

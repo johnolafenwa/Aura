@@ -131,6 +131,8 @@ pub(crate) trait KernelFloat:
     Copy
     + Default
     + PartialOrd
+    + Send
+    + Sync
     + std::ops::Add<Output = Self>
     + std::ops::Mul<Output = Self>
     + std::ops::AddAssign
@@ -454,11 +456,115 @@ const MATMUL_COLUMN_BLOCK: usize = 512;
 /// Rows of the right operand per block of a matrix product.
 const MATMUL_ROW_BLOCK: usize = 64;
 
+/// Inner indexes per block of a tiled matrix product. One block of a
+/// tile's columns of the right operand, copied side by side, is 16 KiB
+/// and stays in the first-level cache while every row passes over it.
+const MATMUL_INNER_BLOCK: usize = 128;
+/// Output rows one tile of a matrix product holds in registers.
+const MATMUL_TILE_ROWS: usize = 2;
+/// The multiply-adds a thread of a matrix product should have to itself.
+/// Below it the product costs less than starting the thread.
+const MATMUL_THREAD_WORK: usize = 1 << 21;
+/// The most threads a matrix product runs on.
+const MATMUL_MAX_THREADS: usize = 16;
+
+/// The threads the Array kernels may use: `AURA_ARRAY_THREADS` when it is
+/// a positive number, and otherwise the CPUs the process may run on, up
+/// to [`MATMUL_MAX_THREADS`].
+fn array_thread_limit() -> usize {
+    static LIMIT: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *LIMIT.get_or_init(|| {
+        thread_limit_for(
+            std::env::var("AURA_ARRAY_THREADS").ok().as_deref(),
+            std::thread::available_parallelism().map_or(1, std::num::NonZero::get),
+        )
+    })
+}
+
+/// The thread limit for the `AURA_ARRAY_THREADS` setting `requested` on a
+/// machine with `available` CPUs.
+fn thread_limit_for(requested: Option<&str>, available: usize) -> usize {
+    requested
+        .and_then(|text| text.trim().parse::<usize>().ok())
+        .filter(|threads| *threads > 0)
+        .unwrap_or(available)
+        .min(MATMUL_MAX_THREADS)
+}
+
+/// How many threads a `rows` by `inner` by `columns` product runs on when
+/// at most `limit` are allowed: one for each [`MATMUL_THREAD_WORK`]
+/// multiply-adds, and never more than one for each tile of rows.
+fn matmul_threads(rows: usize, inner: usize, columns: usize, limit: usize) -> usize {
+    let work = rows.saturating_mul(inner).saturating_mul(columns);
+    (work / MATMUL_THREAD_WORK)
+        .min(rows / MATMUL_TILE_ROWS)
+        .min(limit)
+        .max(1)
+}
+
 /// `output += left * right` for a `rows` by `inner` left operand and an
 /// `inner` by `columns` right operand, all row-major, where `output`
 /// starts at zero. Each output element adds its `inner` products in
 /// ascending order of the inner index, each rounded before it is added.
+///
+/// A large product splits its rows over threads. Every output element is
+/// computed by one thread in that same order, so the result does not
+/// depend on how many threads ran.
 pub(crate) fn float_matmul<T: KernelFloat>(
+    left: &[T],
+    right: &[T],
+    output: &mut [T],
+    rows: usize,
+    inner: usize,
+    columns: usize,
+) {
+    let threads = matmul_threads(rows, inner, columns, array_thread_limit());
+    float_matmul_on(threads, left, right, output, rows, inner, columns);
+}
+
+/// [`float_matmul`] on `threads` threads, the calling one among them.
+pub(crate) fn float_matmul_on<T: KernelFloat>(
+    threads: usize,
+    left: &[T],
+    right: &[T],
+    output: &mut [T],
+    rows: usize,
+    inner: usize,
+    columns: usize,
+) {
+    // The tiles pay with 256-bit registers. At the baseline the row
+    // kernel is as fast, and other targets are not measured.
+    let level = kernel_level();
+    let tiled = level == KernelLevel::Avx2;
+    if threads <= 1 || rows < 2 || inner == 0 || columns == 0 {
+        return float_matmul_rows(tiled, left, right, output, rows, inner, columns);
+    }
+    // Each thread takes a run of whole tiles of rows.
+    let share = rows.div_ceil(threads).next_multiple_of(MATMUL_TILE_ROWS);
+    std::thread::scope(|scope| {
+        let mut parts = left
+            .chunks(share * inner)
+            .zip(output.chunks_mut(share * columns));
+        let first = parts.next();
+        for (left, output) in parts {
+            scope.spawn(move || {
+                with_kernel_level(level, || {
+                    let rows = output.len() / columns;
+                    float_matmul_rows(tiled, left, right, output, rows, inner, columns);
+                });
+            });
+        }
+        if let Some((left, output)) = first {
+            let rows = output.len() / columns;
+            float_matmul_rows(tiled, left, right, output, rows, inner, columns);
+        }
+    });
+}
+
+/// [`float_matmul`] on the calling thread, in tiles where `tiled` says
+/// so and a row at a time otherwise.
+fn float_matmul_rows<T: KernelFloat>(
+    tiled: bool,
     left: &[T],
     right: &[T],
     output: &mut [T],
@@ -469,40 +575,143 @@ pub(crate) fn float_matmul<T: KernelFloat>(
     widest(
         #[inline(always)]
         || {
-            for column_start in (0..columns).step_by(MATMUL_COLUMN_BLOCK) {
-                let width = MATMUL_COLUMN_BLOCK.min(columns - column_start);
-                for inner_start in (0..inner).step_by(MATMUL_ROW_BLOCK) {
-                    let inner_end = (inner_start + MATMUL_ROW_BLOCK).min(inner);
-                    for row in 0..rows {
-                        let target = &mut output[row * columns + column_start..][..width];
-                        let scales = &left[row * inner..][..inner];
-                        let mut k = inner_start;
-                        while k + 4 <= inner_end {
-                            let (a0, a1, a2, a3) =
-                                (scales[k], scales[k + 1], scales[k + 2], scales[k + 3]);
-                            let b0 = &right[k * columns + column_start..][..width];
-                            let b1 = &right[(k + 1) * columns + column_start..][..width];
-                            let b2 = &right[(k + 2) * columns + column_start..][..width];
-                            let b3 = &right[(k + 3) * columns + column_start..][..width];
-                            for j in 0..width {
-                                target[j] = (((target[j] + a0 * b0[j]) + a1 * b1[j]) + a2 * b2[j])
-                                    + a3 * b3[j];
-                            }
-                            k += 4;
-                        }
-                        while k < inner_end {
-                            let scale = scales[k];
-                            let source = &right[k * columns + column_start..][..width];
-                            for j in 0..width {
-                                target[j] += scale * source[j];
-                            }
-                            k += 1;
-                        }
-                    }
-                }
-            }
+            let covered = match (tiled, std::mem::size_of::<T>()) {
+                (false, _) => 0,
+                (true, 4) => float_matmul_tiles::<T, 32>(left, right, output, rows, inner, columns),
+                (true, _) => float_matmul_tiles::<T, 16>(left, right, output, rows, inner, columns),
+            };
+            float_matmul_by_row(left, right, output, rows, inner, columns, covered);
         },
     )
+}
+
+/// The columns of a matrix product from `first_column` on, one output row
+/// at a time: each pass adds four rows of the right operand, scaled, to
+/// the row.
+#[inline(always)]
+fn float_matmul_by_row<T: KernelFloat>(
+    left: &[T],
+    right: &[T],
+    output: &mut [T],
+    rows: usize,
+    inner: usize,
+    columns: usize,
+    first_column: usize,
+) {
+    for column_start in (first_column..columns).step_by(MATMUL_COLUMN_BLOCK) {
+        let width = MATMUL_COLUMN_BLOCK.min(columns - column_start);
+        for inner_start in (0..inner).step_by(MATMUL_ROW_BLOCK) {
+            let inner_end = (inner_start + MATMUL_ROW_BLOCK).min(inner);
+            for row in 0..rows {
+                let target = &mut output[row * columns + column_start..][..width];
+                let scales = &left[row * inner..][..inner];
+                let mut k = inner_start;
+                while k + 4 <= inner_end {
+                    let (a0, a1, a2, a3) = (scales[k], scales[k + 1], scales[k + 2], scales[k + 3]);
+                    let b0 = &right[k * columns + column_start..][..width];
+                    let b1 = &right[(k + 1) * columns + column_start..][..width];
+                    let b2 = &right[(k + 2) * columns + column_start..][..width];
+                    let b3 = &right[(k + 3) * columns + column_start..][..width];
+                    for j in 0..width {
+                        target[j] =
+                            (((target[j] + a0 * b0[j]) + a1 * b1[j]) + a2 * b2[j]) + a3 * b3[j];
+                    }
+                    k += 4;
+                }
+                while k < inner_end {
+                    let scale = scales[k];
+                    let source = &right[k * columns + column_start..][..width];
+                    for j in 0..width {
+                        target[j] += scale * source[j];
+                    }
+                    k += 1;
+                }
+            }
+        }
+    }
+}
+
+/// The whole tiles of `W` columns of a matrix product. Returns how many
+/// columns they cover.
+///
+/// A tile is `R` output rows by `W` columns that stay in registers while
+/// the inner index runs over a block. For each block the tile's columns of
+/// the right operand are copied side by side into `panel`, so every row
+/// group reads them in one pass. An element still adds its products in
+/// ascending order of the inner index: the blocks are taken in order, and
+/// a tile starts each block from the sums the last one stored.
+#[inline(always)]
+fn float_matmul_tiles<T: KernelFloat, const W: usize>(
+    left: &[T],
+    right: &[T],
+    output: &mut [T],
+    rows: usize,
+    inner: usize,
+    columns: usize,
+) -> usize {
+    let covered = columns - columns % W;
+    if covered == 0 || rows == 0 || inner == 0 {
+        return 0;
+    }
+    let mut panel = Vec::with_capacity(MATMUL_INNER_BLOCK.min(inner) * W);
+    for column in (0..covered).step_by(W) {
+        for first in (0..inner).step_by(MATMUL_INNER_BLOCK) {
+            let last = (first + MATMUL_INNER_BLOCK).min(inner);
+            panel.clear();
+            for k in first..last {
+                panel.extend_from_slice(&right[k * columns + column..][..W]);
+            }
+            let mut row = 0;
+            while row + MATMUL_TILE_ROWS <= rows {
+                float_matmul_tile::<T, MATMUL_TILE_ROWS, W>(
+                    left, &panel, output, row, inner, columns, column, first,
+                );
+                row += MATMUL_TILE_ROWS;
+            }
+            while row < rows {
+                float_matmul_tile::<T, 1, W>(
+                    left, &panel, output, row, inner, columns, column, first,
+                );
+                row += 1;
+            }
+        }
+    }
+    covered
+}
+
+/// Adds one block of products to the `R` rows from `row` and the `W`
+/// columns from `column` of the output. `panel` holds those columns of
+/// the right operand for the inner indexes from `first`, one row after
+/// another.
+#[inline(always)]
+#[allow(clippy::too_many_arguments)]
+fn float_matmul_tile<T: KernelFloat, const R: usize, const W: usize>(
+    left: &[T],
+    panel: &[T],
+    output: &mut [T],
+    row: usize,
+    inner: usize,
+    columns: usize,
+    column: usize,
+    first: usize,
+) {
+    let mut sums = [[T::default(); W]; R];
+    let mut scales = [&left[..0]; R];
+    for r in 0..R {
+        sums[r].copy_from_slice(&output[(row + r) * columns + column..][..W]);
+        scales[r] = &left[(row + r) * inner + first..][..panel.len() / W];
+    }
+    for (k, source) in panel.chunks_exact(W).enumerate() {
+        for r in 0..R {
+            let scale = scales[r][k];
+            for j in 0..W {
+                sums[r][j] += scale * source[j];
+            }
+        }
+    }
+    for r in 0..R {
+        output[(row + r) * columns + column..][..W].copy_from_slice(&sums[r]);
+    }
 }
 
 /// `output[row] = left[row, ..] . right` for a `rows` by `inner` matrix and

@@ -45,8 +45,8 @@ row. The Python column is its measured time multiplied by 100.
 | `dot` | 1,000,000 | 300 | 175 | 185 | 230 | 256 | 58 | 21,000 |
 | `min` and `max` | 1,000,000 | 300 | 219 | 242 | 494 | 246 | 157 | 10,000 |
 | `+` | 1,000,000 | 300 | 267 | 334 | 297 | 297 | 374 | 24,500 |
-| `matmul` | 64 by 64 | 2,000 | 108 | 111 | 150 | 145 | 26 | 42,400 |
-| `matmul` | 512 by 512 | 4 | 100 | 116 | 232 | 177 | 10 | |
+| `matmul` | 64 by 64 | 2,000 | 41 | 82 | 150 | 145 | 16 | 42,400 |
+| `matmul` | 512 by 512 | 4 | 13 | 27 | 232 | 177 | 7 | |
 
 Every side prints the same checksum for every row but one: NumPy's
 512 by 512 product differs in the last digit, because its library adds in
@@ -62,9 +62,15 @@ What the numbers say:
   right, and ahead of NumPy on a small Array.
 - NumPy calls a tuned linear algebra library for `dot` and `@`. It uses
   fused multiply-add, 512-bit registers, and several threads, so it is
-  ahead on a large `dot` and on `matmul`. Aura's `matmul` keeps the
-  plain three-loop order and its bits, and is ahead of the same loop in
-  Rust.
+  ahead on a large `dot` and on `matmul`.
+- Aura's `matmul` keeps the plain three-loop order and its bits. With
+  AVX2 it runs in register tiles, and a large product uses every core
+  (ADR-0093). It is 3.5 times faster than the same loop in Rust at 64 by
+  64 and 13 times faster at 512 by 512. NumPy is still 2.6 times faster
+  at 64 by 64 and about twice as fast at 512 by 512. With one thread on
+  each side (`AURA_ARRAY_THREADS=1`, `OPENBLAS_NUM_THREADS=1`) the 512 by
+  512 row is 42 against 18. That factor is the fused multiply-add, which
+  is one instruction where the exact product and sum are two.
 - The host is shared, so a row moves by a fifth between runs. The
   baseline column is within that of the 256-bit column on most rows: at
   1,024 elements the call costs as much as the kernel, and at one million

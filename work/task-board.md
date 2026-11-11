@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-11
 
-## SIMD (gap work in progress)
+## SIMD (complete)
 
 - Target: the four pieces John asked for on 2026-11-11: wider Array
   kernels, more vectorized Array kernels, vectorizable user loops, and
@@ -16,10 +16,15 @@ Last updated: 2026-11-11
   literal step count on plain integers.
 - Gap work after the first table (2026-11-11): stepped loops have one
   test in each iteration and lane loads two entry guards, and `I64x2`
-  and `I64x4` add checked `int64` lanes (ADR-0092).
-- Remaining: `matmul` against NumPy. Possible follow-ups are `int32`
-  lanes, the joined integer check on AArch64, lane loads from an
-  `Array`, and counted loops over `Array` elements.
+  and `I64x4` add checked `int64` lanes (ADR-0092). A float `matmul`
+  runs in register tiles and on several threads with the same bits
+  (ADR-0093).
+- Gaps that stay: NumPy is about twice as fast at `matmul` on one
+  thread because it fuses each multiply with its add. Rust is up to 1.5
+  times faster on two lane kernels in a host-CPU build.
+- Possible follow-ups: `int32` lanes, the joined integer check and
+  `matmul` tiles on AArch64, lane loads from an `Array`, and counted
+  loops over `Array` elements.
 
 ## Six older compiler bugs (complete)
 
