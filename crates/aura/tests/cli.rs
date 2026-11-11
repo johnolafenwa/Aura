@@ -16853,18 +16853,22 @@ def make_named[T: shapes.Make + sh.Named](seed: int64) -> str:
 def tell[T: Described](value: T) -> str:
     return value.describe()
 
+def by_alias[T: sh.Named](value: T) -> str:
+    return value.name()
+
 def main():
     gadget: Gadget = shapes.build[Gadget](4)
     print(gadget.size)
     print(shapes.label(gadget))
     print(make_named[Gadget](9))
     print(tell(gadget))
+    print(by_alias(gadget))
 "#;
     assert_run_and_direct_program_stdout(
         "aura-module-qualified-traits",
         main,
         &[("shapes.au", shapes)],
-        "5\n<gadget 5>\ngadget 10\ngadget 5!\n",
+        "5\n<gadget 5>\ngadget 10\ngadget 5!\ngadget 5\n",
     );
 }
 

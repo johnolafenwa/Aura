@@ -80,6 +80,18 @@ All of 1 to 5 reproduced on `main` @ `0694dba` before the fix.
 - Library tests run the same files, and `verify_tests.rs` proves the
   `ensures` after list, dictionary, `enumerate`, and set loops.
 
+## Found by CI
+
+- The fix for 4 lowers an annotation that names the enclosing type
+  parameter, `value: T`, as that parameter. A method call on such a value
+  looks the method up through the parameter's bounds, and a bound written
+  through an import alias (`T: sh.Named` after `import shapes as sh`) did
+  not resolve: `module_namespace` found a module by its path only. The
+  same call on a parameter of type `T` failed on `main` too. It now reads
+  the name the import binds first.
+  `module_qualified_traits_work_in_bounds_impls_and_supertraits_on_both_backends`
+  covers both.
+
 ## Open
 
 - 6, the cost of a `mut self` call on a list element, is next. Measured

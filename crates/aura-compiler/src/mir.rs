@@ -12652,6 +12652,14 @@ impl<'a> Lowerer<'a> {
         if let Some(namespace) = self.program.module_registry.get(path) {
             return Some(namespace);
         }
+        // The name an import binds, such as `sh` for `import shapes as sh`.
+        let imported = match self.current_module_namespace() {
+            Some(current) => &current.imported_modules,
+            None => &self.program.imported_modules,
+        };
+        if let Some(namespace) = imported.get(path) {
+            return Some(namespace);
+        }
         self.current_module_namespace()
             .and_then(|current| Self::find_namespace_in_modules(&current.imported_modules, path))
             .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))

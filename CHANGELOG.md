@@ -35,6 +35,10 @@ in this file.
   parameter, as in `apply(run_one[T], job)` inside `def outer[T: Job]`.
   Under `aura run` the call failed with "type `T` has no MIR implementation";
   the built program was already right.
+- Fixed a generic bound written through an import alias, as in
+  `def show[T: sh.Named](value: T)` after `import shapes as sh`. A method
+  call on such a value failed with "requires an authoritative trait
+  identity"; the module's own name, `shapes.Named`, already worked.
 - Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
