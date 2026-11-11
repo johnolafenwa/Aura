@@ -113,16 +113,11 @@ fn searches_report_matches_and_scalar_offsets() {
     assert_eq!(found.elements[2], Value::Int(IntegerValue::from_i64(4)));
     assert!(payload(call("regex::__aura_find", &[pattern, "none"]).unwrap()).is_none());
 
-    let Value::Tuple(all) = call("regex::__aura_matches", &[pattern, subject]).unwrap() else {
-        panic!("expected a tuple");
-    };
-    assert_eq!(texts(&all.elements[0]), ["333", "22", "1"]);
-    assert_eq!(items(&all.elements[1]), int_values(&[1, 2, 5, 7, 8, 11]));
+    let all = call("regex::__aura_matches", &[pattern, subject]).unwrap();
+    assert_eq!(items(&all), int_values(&[1, 2, 5, 7, 8, 11]));
     // An all-ASCII text takes the byte offsets as they are.
-    let Value::Tuple(ascii) = call("regex::__aura_matches", &[pattern, "a12b3"]).unwrap() else {
-        panic!("expected a tuple");
-    };
-    assert_eq!(items(&ascii.elements[1]), int_values(&[1, 3, 4, 5]));
+    let ascii = call("regex::__aura_matches", &[pattern, "a12b3"]).unwrap();
+    assert_eq!(items(&ascii), int_values(&[1, 3, 4, 5]));
 }
 
 #[test]

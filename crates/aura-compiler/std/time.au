@@ -116,9 +116,8 @@ public copy class DateTime:
     public def add(self, amount: Duration) -> DateTime:
         """The instant `amount` later, at the same offset. Traps when the
         result leaves the years 1 to 9999."""
-        (seconds, nanos) = time.__aura_duration_parts(amount)
-        mut total_seconds = self.unix_seconds + seconds
-        mut total_nanos = self.subsecond_nanos + nanos
+        mut total_seconds = self.unix_seconds + time.__aura_duration_seconds(amount)
+        mut total_nanos = self.subsecond_nanos + time.__aura_duration_nanos(amount)
         if total_nanos >= 1000000000:
             total_nanos -= 1000000000
             total_seconds += 1
@@ -174,12 +173,12 @@ public copy class DateTime:
         """The date and time written as `pattern` directs, where `%Y`,
         `%m`, `%d`, `%H`, `%M`, `%S` and the other directives stand for
         fields."""
-        (ok, text) = time.__aura_format(
+        text = time.__aura_format(
             self.unix_seconds, self.subsecond_nanos, self.utc_offset_minutes, pattern
         )
-        if ok:
-            return Result.Ok(text)
-        return Result.Err(Error.Invalid(message=text))
+        if time.__aura_failed():
+            return Result.Err(Error.Invalid(message=time.__aura_error()))
+        return Result.Ok(text)
 
 
 impl Display for DateTime:
@@ -329,23 +328,24 @@ public def utc(
     )
 
 
-def parsed(
-    ok: bool, seconds: int64, nanos: int64, offset: int64, message: str
-) -> Result[DateTime, Error]:
+def parsed(ok: bool) -> Result[DateTime, Error]:
+    # The host keeps the instant or the failure of the parse just made.
     if not ok:
-        return Result.Err(Error.Invalid(message=message.clone()))
-    return checked(seconds, nanos, offset)
+        return Result.Err(Error.Invalid(message=time.__aura_error()))
+    return checked(
+        time.__aura_parsed_seconds(),
+        time.__aura_parsed_nanos(),
+        time.__aura_parsed_offset(),
+    )
 
 
 public def parse_rfc3339(text: str) -> Result[DateTime, Error]:
     """Parses RFC 3339 text such as `2026-11-10T20:14:38Z` or
     `2026-11-10T21:14:38.25+01:00`. The result keeps the text's offset."""
-    (ok, seconds, nanos, offset, message) = time.__aura_parse_rfc3339(text)
-    return parsed(ok, seconds, nanos, offset, message)
+    return parsed(time.__aura_parse_rfc3339(text))
 
 
 public def parse(text: str, pattern: str) -> Result[DateTime, Error]:
     """Parses `text` written as `pattern` directs, with the directives of
     `DateTime.format`. A pattern without `%z` reads the fields at UTC."""
-    (ok, seconds, nanos, offset, message) = time.__aura_parse(text, pattern)
-    return parsed(ok, seconds, nanos, offset, message)
+    return parsed(time.__aura_parse(text, pattern))

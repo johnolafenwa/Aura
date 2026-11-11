@@ -16640,3 +16640,85 @@ def main():
 
     emit_host_object(&mir).expect("the trait object loop should compile directly");
 }
+
+#[test]
+fn direct_time_and_regex_module_calls_use_their_scalar_helpers() {
+    let source = r#"
+import regex
+import time
+
+def main() -> int32:
+    match time.parse_rfc3339("2026-11-10T20:14:38Z"):
+        case Result.Ok(at):
+            later = at.add(Duration.seconds(90)).to_local()
+            print(later.to_rfc3339())
+            print(later.since(at))
+            match later.format("%Y-%m-%d"):
+                case Result.Ok(text):
+                    print(text)
+                case Result.Err(time.Error.Invalid(message)):
+                    print(message)
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+    match time.parse("2026", "%Y"):
+        case Result.Ok(at):
+            print(at.year())
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+    match regex.compile("(?<word>[a-z]+)"):
+        case Result.Ok(pattern):
+            print(pattern.is_match("abc"))
+            print(pattern.count("abc def"))
+            print(pattern.find_all("abc def").len())
+            print(pattern.matches("abc def").len())
+            print(pattern.split("1abc2").len())
+            print(pattern.replace("abc def", "x"))
+            print(pattern.replace_all("abc def", "x"))
+            match pattern.find("abc"):
+                case regex.Match as found:
+                    print(found.text)
+                case None:
+                    pass
+            match pattern.captures("abc"):
+                case regex.Captures as groups:
+                    match groups.name("word"):
+                        case str as word:
+                            print(word)
+                        case None:
+                            pass
+                case None:
+                    pass
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the module calls should lower");
+    let object = emit_host_object(&mir).expect("the module calls should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for helper in [
+        "aura_direct_time_rfc3339",
+        "aura_direct_time_format",
+        "aura_direct_time_failed",
+        "aura_direct_time_parse_rfc3339",
+        "aura_direct_time_parse",
+        "aura_direct_time_parsed_part",
+        "aura_direct_time_duration_seconds",
+        "aura_direct_time_duration_nanos",
+        "aura_direct_time_duration",
+        "aura_direct_time_local_offset_minutes",
+        "aura_direct_regex_scalar",
+        "aura_direct_regex_search",
+        "aura_direct_regex_replace",
+    ] {
+        assert!(
+            referenced.contains(helper),
+            "expected a call to `{helper}`: {referenced:?}"
+        );
+    }
+    for generic in ["aura_host_time_rfc3339", "aura_host_regex_is_match"] {
+        assert!(
+            !referenced.contains(generic),
+            "`{generic}` goes through the argument buffer: {referenced:?}"
+        );
+    }
+}

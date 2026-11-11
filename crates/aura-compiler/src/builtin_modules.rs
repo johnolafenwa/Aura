@@ -1706,7 +1706,7 @@ fn regex_namespace() -> ModuleNamespace {
                     builtin_span(),
                 )),
             ),
-            search("__aura_matches", pair(list_of(text()), list_of(int64()))),
+            search("__aura_matches", list_of(int64())),
             search("__aura_find_all", list_of(text())),
             search(
                 "__aura_captures",
@@ -1825,7 +1825,6 @@ fn time_namespace() -> ModuleNamespace {
             value_param("offset", int64()),
         ]
     };
-    let parsed = || tuple(vec![boolean(), int64(), int64(), int64(), text()]);
     function_only_namespace(
         "time",
         vec![
@@ -1844,9 +1843,15 @@ fn time_namespace() -> ModuleNamespace {
             ),
             function_info(
                 "time",
-                "__aura_duration_parts",
+                "__aura_duration_seconds",
                 vec![value_param("amount", duration())],
-                tuple(vec![int64(), int64()]),
+                int64(),
+            ),
+            function_info(
+                "time",
+                "__aura_duration_nanos",
+                vec![value_param("amount", duration())],
+                int64(),
             ),
             function_info(
                 "time",
@@ -1866,20 +1871,25 @@ fn time_namespace() -> ModuleNamespace {
                     params.push(value_param("pattern", text()));
                     params
                 },
-                tuple(vec![boolean(), text()]),
+                text(),
             ),
             function_info(
                 "time",
                 "__aura_parse_rfc3339",
                 vec![value_param("text", text())],
-                parsed(),
+                boolean(),
             ),
             function_info(
                 "time",
                 "__aura_parse",
                 vec![value_param("text", text()), value_param("pattern", text())],
-                parsed(),
+                boolean(),
             ),
+            function_info("time", "__aura_failed", Vec::new(), boolean()),
+            function_info("time", "__aura_error", Vec::new(), text()),
+            function_info("time", "__aura_parsed_seconds", Vec::new(), int64()),
+            function_info("time", "__aura_parsed_nanos", Vec::new(), int64()),
+            function_info("time", "__aura_parsed_offset", Vec::new(), int64()),
         ],
     )
 }

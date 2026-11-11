@@ -99,17 +99,23 @@ subject.
 ## Consequences
 
 - `regex_scan`, the 32nd cross-language program, runs five patterns over
-  200,000 generated log lines: Aura 1.19 s, Python 1.63 s, Rust 0.30 s on
+  200,000 generated log lines: Aura 0.83 s, Python 1.55 s, Rust 0.27 s on
   the 4-core cloud host. Aura and Rust run the same engine. The remaining
-  difference is the cost of a host call (about 1,900 instructions around a
-  search of about 650) and of building `Match` values and lists.
+  difference is the cost of building `Match` values and lists.
+- A compiled program calls each search through a helper that takes the
+  pattern number as an integer and the texts as handles, and returns a
+  `bool` or an `int64` as one word. The general host call, which boxes each
+  integer and passes an argument buffer, cost about 1,900 instructions
+  around a search of about 650 and made the program take 1.19 s.
+  `matches` gets the start and end of each match from the host and slices
+  the text itself.
 - The engine adds `regex`, `regex-automata`, and `regex-syntax` to the
   runtime's dependencies. `aho-corasick` and `memchr` were already there.
 
 ## Not decided here
 
-- A faster call path for small host functions, which would bring
-  `is_match` and `count` close to Rust. It belongs with the general work on
-  runtime-boundary costs noted in `work/2026-11-10-streaming-io-and-stdlib.md`.
+- A cheaper class instance and list, which is where the rest of the
+  distance to Rust is. It belongs with the general work on runtime-boundary
+  costs noted in `work/2026-11-10-streaming-io-and-stdlib.md`.
 - An iterator of matches, search over `list[uint8]`, a replacement computed
   by a function, and a split limit.

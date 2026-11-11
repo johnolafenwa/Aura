@@ -80,14 +80,14 @@ public copy class Regex:
     public def matches(self, text: str) -> list[Match]:
         """Every non-overlapping match in `text`, in order, with its
         position."""
-        # The texts arrive last match first, so each `pop` moves the next
-        # one out without copying it.
-        (texts, spans) = regex.__aura_matches(self.number, text)
+        # The host returns each match's start and end.
+        spans = regex.__aura_matches(self.number, text)
         mut found: list[Match] = []
-        mut rest = texts
         mut index = 0
         while index < spans.len():
-            found.append(Match(text=rest.pop(), start=spans[index], end=spans[index + 1]))
+            start = spans[index]
+            end = spans[index + 1]
+            found.append(Match(text=text[start:end], start=start, end=end))
             index += 2
         return found
 

@@ -156,18 +156,16 @@ Python's time and 1.8 times Rust's. It is not in the table or the totals
 above.
 
 `regex_scan` was added the same day with the `regex` module. At 200,000
-lines it takes 1.19 s in Aura, 1.63 s in Python, and 0.30 s in Rust: 0.73
-times Python's time and 3.9 times Rust's. Rust's `regex` crate is the engine
+lines it takes 0.83 s in Aura, 1.55 s in Python, and 0.27 s in Rust: 0.54
+times Python's time and 3.0 times Rust's. Rust's `regex` crate is the engine
 under both the Aura and the Rust program, so the difference is the cost of
 handing each result to the program as Aura values. It is not in the table or
 the totals above either.
 
 `date_time` was added the same day with the `time` module. At 200,000
-instants it takes 0.77 s in Aura, 4.1 s in Python (`datetime`), and 0.16 s
-in Rust (`chrono`): 0.19 times Python's time and 4.8 times Rust's. Most of
-Aura's time is in the calls that write and read text, each of which crosses
-into the runtime with boxed integer arguments. It is not in the table or the
-totals above either.
+instants it takes 0.34 s in Aura, 4.0 s in Python (`datetime`), and 0.18 s
+in Rust (`chrono`): 0.08 times Python's time and 1.9 times Rust's. It is not
+in the table or the totals above either.
 
 `http_stream` was added on 11 November 2026 with the `http` module. At
 400,000 lines, 100,000 events, and 4,000 small requests it takes 1.19 s in

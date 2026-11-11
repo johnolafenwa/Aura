@@ -268,3 +268,46 @@ Tests: `direct_try_of_a_file_line_read_builds_no_result`,
   and on `read_chunk`. Each needs its own helper.
 - A `Result` a runtime helper returns still costs about 1,000 instructions
   when the program keeps it as a value.
+
+## Step 6: direct calls for `time` and `regex`
+
+The final benchmark pass had `regex_scan` and `date_time` at 4.4 times
+Rust. A profile of `date_time` showed 46,000 instructions per instant, most
+of them in the general host call: an argument buffer, a box per integer
+argument, a tuple result, and a box per tuple element read back.
+
+- Twelve `time` functions and ten `regex` functions are now `FunctionOp`s
+  with a helper each family shares (`aura_direct_time_*`,
+  `aura_direct_regex_scalar`, `aura_direct_regex_search`,
+  `aura_direct_regex_replace`). `function_op_arg_layout` takes the argument
+  index, so one op can pass integers as words and texts as handles.
+- A parse returns a `bool`. The host keeps the instant or the failure per
+  thread and `std/time.au` reads it back with `__aura_parsed_seconds`,
+  `__aura_parsed_nanos`, `__aura_parsed_offset`, and `__aura_error`.
+  `__aura_format` returns the text and `__aura_failed` says whether the
+  pattern could be followed. `__aura_duration_parts` became
+  `__aura_duration_seconds` and `__aura_duration_nanos`.
+- The host writes date digits itself, not through `core::fmt`.
+- `regex.__aura_matches` returns the spans only and `Regex.matches` slices
+  the text. The host builds scalar lists in their scalar form.
+
+| Program | Before | After | Python | Rust |
+| --- | --- | --- | --- | --- |
+| `date_time` at 200,000 instants | 757 ms | 339 ms | 4028 ms | 180 ms |
+| `regex_scan` at 200,000 lines | 1139 ms | 831 ms | 1549 ms | 273 ms |
+
+`date_time` runs 431 million instructions for 20,000 instants where it ran
+925 million. `regex_scan` runs 978 million for 20,000 lines where it ran
+1,295 million, and about 280 million of those are the regex engine.
+
+Tests: `direct_time_helpers_write_parse_and_keep_the_outcome`,
+`direct_regex_helpers_search_with_a_pattern_number`,
+`direct_time_and_regex_module_calls_use_their_scalar_helpers`, and the
+existing `time` and `regex` host and CLI tests.
+
+## Gaps found in step 6, left for later
+
+- What is left in `regex_scan` is the cost of a class instance: creating a
+  `Match` and dropping it cost about 1,700 instructions.
+- `Result[DateTime, Error]` boxes the `DateTime`, about 900 instructions for
+  each `time.parse` and `time.from_unix`.

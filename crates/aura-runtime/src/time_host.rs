@@ -6,6 +6,7 @@
 //! read date and time text.
 
 use super::*;
+use std::cell::{Cell, RefCell};
 
 const NANOS_PER_SECOND: i128 = 1_000_000_000;
 const SECONDS_PER_DAY: i64 = 86_400;
@@ -36,6 +37,31 @@ const MONTHS: [&str; 12] = [
     "November",
     "December",
 ];
+
+/// Appends `value` in at least `width` characters, filled on the left with
+/// `fill`.
+fn push_number(out: &mut String, value: i64, width: usize, fill: u8) {
+    if value < 0 {
+        // No field of a `DateTime` in range is negative.
+        use std::fmt::Write;
+        let _ = write!(out, "{value:0width$}");
+        return;
+    }
+    let mut digits = [fill; 20];
+    let mut at = digits.len();
+    let mut rest = value as u64;
+    loop {
+        at -= 1;
+        digits[at] = b'0' + (rest % 10) as u8;
+        rest /= 10;
+        if rest == 0 {
+            break;
+        }
+    }
+    let start = at.min(digits.len() - width.min(digits.len()));
+    // SAFETY: every byte is an ASCII digit or the ASCII `fill`.
+    out.push_str(unsafe { std::str::from_utf8_unchecked(&digits[start..]) });
+}
 
 fn int(value: i64) -> Value {
     Value::Int(IntegerValue::from_i64(value))
@@ -135,37 +161,41 @@ impl Fields {
     }
 
     fn push_offset(&self, out: &mut String, colon: bool, zulu: bool) {
-        use std::fmt::Write;
         if zulu && self.offset_minutes == 0 {
             out.push('Z');
             return;
         }
         let sign = if self.offset_minutes < 0 { '-' } else { '+' };
         let minutes = self.offset_minutes.abs();
-        let separator = if colon { ":" } else { "" };
-        let _ = write!(
-            out,
-            "{sign}{:02}{separator}{:02}",
-            minutes / 60,
-            minutes % 60
-        );
+        out.push(sign);
+        push_number(out, minutes / 60, 2, b'0');
+        if colon {
+            out.push(':');
+        }
+        push_number(out, minutes % 60, 2, b'0');
     }
 
     fn rfc3339(&self) -> String {
-        use std::fmt::Write;
         let mut out = String::with_capacity(35);
-        let _ = write!(
-            out,
-            "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}",
-            self.year, self.month, self.day, self.hour, self.minute, self.second
-        );
+        push_number(&mut out, self.year, 4, b'0');
+        for (separator, value) in [
+            ('-', self.month),
+            ('-', self.day),
+            ('T', self.hour),
+            (':', self.minute),
+            (':', self.second),
+        ] {
+            out.push(separator);
+            push_number(&mut out, value, 2, b'0');
+        }
         if self.nanos != 0 {
+            out.push('.');
             if self.nanos % 1_000_000 == 0 {
-                let _ = write!(out, ".{:03}", self.nanos / 1_000_000);
+                push_number(&mut out, self.nanos / 1_000_000, 3, b'0');
             } else if self.nanos % 1_000 == 0 {
-                let _ = write!(out, ".{:06}", self.nanos / 1_000);
+                push_number(&mut out, self.nanos / 1_000, 6, b'0');
             } else {
-                let _ = write!(out, ".{:09}", self.nanos);
+                push_number(&mut out, self.nanos, 9, b'0');
             }
         }
         self.push_offset(&mut out, true, true);
@@ -173,7 +203,6 @@ impl Fields {
     }
 
     fn format(&self, pattern: &str) -> std::result::Result<String, String> {
-        use std::fmt::Write;
         let mut out = String::with_capacity(pattern.len() + 16);
         let mut chars = pattern.chars();
         while let Some(ch) = chars.next() {
@@ -184,40 +213,33 @@ impl Fields {
             let Some(directive) = chars.next() else {
                 return Err("the pattern ends with a lone `%`".to_string());
             };
-            let _ = match directive {
-                'Y' => write!(out, "{:04}", self.year),
-                'y' => write!(out, "{:02}", self.year % 100),
-                'm' => write!(out, "{:02}", self.month),
-                'd' => write!(out, "{:02}", self.day),
-                'e' => write!(out, "{:2}", self.day),
-                'H' => write!(out, "{:02}", self.hour),
-                'I' => write!(out, "{:02}", (self.hour + 11) % 12 + 1),
-                'p' => write!(out, "{}", if self.hour < 12 { "AM" } else { "PM" }),
-                'M' => write!(out, "{:02}", self.minute),
-                'S' => write!(out, "{:02}", self.second),
-                'f' => write!(out, "{:06}", self.nanos / 1_000),
-                'j' => write!(out, "{:03}", self.day_of_year),
-                'a' => write!(out, "{}", &WEEKDAYS[self.weekday][..3]),
-                'A' => write!(out, "{}", WEEKDAYS[self.weekday]),
-                'b' => write!(out, "{}", &MONTHS[self.month as usize - 1][..3]),
-                'B' => write!(out, "{}", MONTHS[self.month as usize - 1]),
-                'z' => {
-                    self.push_offset(&mut out, false, false);
-                    Ok(())
-                }
+            match directive {
+                'Y' => push_number(&mut out, self.year, 4, b'0'),
+                'y' => push_number(&mut out, self.year % 100, 2, b'0'),
+                'm' => push_number(&mut out, self.month, 2, b'0'),
+                'd' => push_number(&mut out, self.day, 2, b'0'),
+                'e' => push_number(&mut out, self.day, 2, b' '),
+                'H' => push_number(&mut out, self.hour, 2, b'0'),
+                'I' => push_number(&mut out, (self.hour + 11) % 12 + 1, 2, b'0'),
+                'p' => out.push_str(if self.hour < 12 { "AM" } else { "PM" }),
+                'M' => push_number(&mut out, self.minute, 2, b'0'),
+                'S' => push_number(&mut out, self.second, 2, b'0'),
+                'f' => push_number(&mut out, self.nanos / 1_000, 6, b'0'),
+                'j' => push_number(&mut out, self.day_of_year, 3, b'0'),
+                'a' => out.push_str(&WEEKDAYS[self.weekday][..3]),
+                'A' => out.push_str(WEEKDAYS[self.weekday]),
+                'b' => out.push_str(&MONTHS[self.month as usize - 1][..3]),
+                'B' => out.push_str(MONTHS[self.month as usize - 1]),
+                'z' => self.push_offset(&mut out, false, false),
                 ':' => {
                     if chars.next() != Some('z') {
                         return Err("`%:` must be followed by `z`".to_string());
                     }
                     self.push_offset(&mut out, true, false);
-                    Ok(())
                 }
-                '%' => {
-                    out.push('%');
-                    Ok(())
-                }
+                '%' => out.push('%'),
                 other => return Err(format!("unknown directive `%{other}`")),
-            };
+            }
         }
         Ok(out)
     }
@@ -484,33 +506,116 @@ fn parse_with_pattern(text: &str, pattern: &str) -> std::result::Result<(i64, i6
     parsed.finish()
 }
 
-/// The `(bool, int64, int64, int64, str)` a parse returns to `std/time.au`.
-fn parse_result(outcome: std::result::Result<(i64, i64, i64), String>) -> Value {
-    let (ok, (seconds, nanos, offset), message) = match outcome {
-        Ok(instant) => (true, instant, String::new()),
-        Err(message) => (false, (0, 0, 0), message),
+/// What the last format or parse on this thread came to. `std/time.au`
+/// reads it in the statements that follow the call. No task can be
+/// suspended between them, so a task never reads another task's outcome.
+struct Outcome {
+    failed: Cell<bool>,
+    seconds: Cell<i64>,
+    nanos: Cell<i64>,
+    offset: Cell<i64>,
+    message: RefCell<String>,
+}
+
+thread_local! {
+    static OUTCOME: Outcome = const {
+        Outcome {
+            failed: Cell::new(false),
+            seconds: Cell::new(0),
+            nanos: Cell::new(0),
+            offset: Cell::new(0),
+            message: RefCell::new(String::new()),
+        }
     };
-    let int64 = || Type::named("int64");
-    tuple(
-        vec![
-            Type::named("bool"),
-            int64(),
-            int64(),
-            int64(),
-            Type::named("str"),
-        ],
-        vec![
-            Value::Bool(ok),
-            int(seconds),
-            int(nanos),
-            int(offset),
-            Value::string(message),
-        ],
-    )
+}
+
+fn keep_failure(outcome: &Outcome, message: String) {
+    outcome.failed.set(true);
+    *outcome.message.borrow_mut() = message;
+}
+
+/// The text of an instant written as `pattern` directs. A pattern that
+/// cannot be followed gives an empty text and a kept failure.
+pub(crate) fn format_text(
+    unix_seconds: i64,
+    nanos: i64,
+    offset_minutes: i64,
+    pattern: &str,
+) -> String {
+    let formatted = Fields::new(unix_seconds, nanos, offset_minutes).format(pattern);
+    OUTCOME.with(|outcome| match formatted {
+        Ok(text) => {
+            outcome.failed.set(false);
+            text
+        }
+        Err(message) => {
+            keep_failure(outcome, message);
+            String::new()
+        }
+    })
+}
+
+/// Parses `text` as RFC 3339, or as `pattern` directs, and keeps the
+/// instant or the failure. Whether it parsed.
+pub(crate) fn parse_text(text: &str, pattern: Option<&str>) -> bool {
+    let parsed = match pattern {
+        Some(pattern) => parse_with_pattern(text, pattern),
+        None => parse_rfc3339(text),
+    };
+    OUTCOME.with(|outcome| match parsed {
+        Ok((seconds, nanos, offset)) => {
+            outcome.failed.set(false);
+            outcome.seconds.set(seconds);
+            outcome.nanos.set(nanos);
+            outcome.offset.set(offset);
+            true
+        }
+        Err(message) => {
+            keep_failure(outcome, message);
+            false
+        }
+    })
+}
+
+/// Whether the last format or parse on this thread failed.
+pub(crate) fn outcome_failed() -> bool {
+    OUTCOME.with(|outcome| outcome.failed.get())
+}
+
+/// Why the last format or parse on this thread failed.
+pub(crate) fn outcome_message() -> String {
+    OUTCOME.with(|outcome| outcome.message.borrow().clone())
+}
+
+/// Part `index` of the last instant parsed on this thread: 0 for its Unix
+/// seconds, 1 for its nanoseconds, 2 for its offset in minutes.
+pub(crate) fn parsed_part(index: usize) -> i64 {
+    OUTCOME.with(|outcome| match index {
+        0 => outcome.seconds.get(),
+        1 => outcome.nanos.get(),
+        _ => outcome.offset.get(),
+    })
+}
+
+/// The whole seconds of a Duration, rounded down.
+pub(crate) fn duration_seconds(nanos: i128) -> i64 {
+    nanos
+        .div_euclid(NANOS_PER_SECOND)
+        .clamp(i128::from(i64::MIN / 4), i128::from(i64::MAX / 4)) as i64
+}
+
+/// The nanoseconds of a Duration past its whole seconds.
+pub(crate) fn duration_nanos(nanos: i128) -> i64 {
+    nanos.rem_euclid(NANOS_PER_SECOND) as i64
+}
+
+/// The Duration of `seconds` and `nanos`.
+pub(crate) fn duration_of(seconds: i64, nanos: i64) -> i128 {
+    i128::from(seconds) * NANOS_PER_SECOND + i128::from(nanos)
 }
 
 /// Minutes east of UTC that the system time zone has at `unix_seconds`.
-fn local_offset_minutes(unix_seconds: i64) -> i64 {
+pub(crate) fn local_offset_minutes(unix_seconds: i64) -> i64 {
     #[cfg(unix)]
     {
         // Every instant a `DateTime` holds fits a 64-bit `time_t`.
@@ -571,91 +676,133 @@ pub fn host_time_local_offset_minutes(
     Ok(int(local_offset_minutes(int_arg(&args, 0, name)?)))
 }
 
-/// `time::__aura_duration_parts`: a Duration as whole seconds, rounded
-/// down, and the nanoseconds past them.
-pub fn host_time_duration_parts(
+fn duration_arg(args: &[Value], name: &str) -> Result<i128> {
+    host_expect_arity(name, args, 1)?;
+    match &args[0] {
+        Value::Duration(nanos) => Ok(*nanos),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{name}` expects a `Duration`"),
+        )),
+    }
+}
+
+/// `time::__aura_duration_seconds`: the whole seconds of a Duration, rounded
+/// down.
+pub fn host_time_duration_seconds(
     args: Vec<Value>,
     _program_args: Option<&[String]>,
 ) -> Result<Value> {
-    let name = "time::__aura_duration_parts";
-    host_expect_arity(name, &args, 1)?;
-    let Value::Duration(nanos) = &args[0] else {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            format!("`{name}` expects a `Duration`"),
-        ));
-    };
-    let seconds = nanos
-        .div_euclid(NANOS_PER_SECOND)
-        .clamp(i128::from(i64::MIN / 4), i128::from(i64::MAX / 4)) as i64;
-    let int64 = || Type::named("int64");
-    Ok(tuple(
-        vec![int64(), int64()],
-        vec![int(seconds), int(nanos.rem_euclid(NANOS_PER_SECOND) as i64)],
-    ))
+    duration_arg(&args, "time::__aura_duration_seconds").map(|nanos| int(duration_seconds(nanos)))
+}
+
+/// `time::__aura_duration_nanos`: the nanoseconds of a Duration past its
+/// whole seconds.
+pub fn host_time_duration_nanos(
+    args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> Result<Value> {
+    duration_arg(&args, "time::__aura_duration_nanos").map(|nanos| int(duration_nanos(nanos)))
 }
 
 /// `time::__aura_duration`: the Duration of `seconds` and `nanos`.
 pub fn host_time_duration(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "time::__aura_duration";
     host_expect_arity(name, &args, 2)?;
-    let seconds = i128::from(int_arg(&args, 0, name)?);
-    let nanos = i128::from(int_arg(&args, 1, name)?);
-    Ok(Value::Duration(seconds * NANOS_PER_SECOND + nanos))
+    Ok(Value::Duration(duration_of(
+        int_arg(&args, 0, name)?,
+        int_arg(&args, 1, name)?,
+    )))
+}
+
+/// The RFC 3339 text of an instant read at `offset_minutes`.
+pub(crate) fn rfc3339_text(unix_seconds: i64, nanos: i64, offset_minutes: i64) -> String {
+    Fields::new(unix_seconds, nanos, offset_minutes).rfc3339()
 }
 
 /// `time::__aura_rfc3339`.
 pub fn host_time_rfc3339(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "time::__aura_rfc3339";
     host_expect_arity(name, &args, 3)?;
-    let fields = Fields::new(
+    Ok(Value::string(rfc3339_text(
         int_arg(&args, 0, name)?,
         int_arg(&args, 1, name)?,
         int_arg(&args, 2, name)?,
-    );
-    Ok(Value::string(fields.rfc3339()))
+    )))
 }
 
-/// `time::__aura_format`: `(true, text)`, or `(false, reason)` for a
-/// pattern that cannot be followed.
+/// `time::__aura_format`: the text, or an empty text and a kept failure
+/// for a pattern that cannot be followed.
 pub fn host_time_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "time::__aura_format";
     host_expect_arity(name, &args, 4)?;
-    let fields = Fields::new(
+    Ok(Value::string(format_text(
         int_arg(&args, 0, name)?,
         int_arg(&args, 1, name)?,
         int_arg(&args, 2, name)?,
-    );
-    let (ok, text) = match fields.format(host_string_ref_arg(&args, 3, name)?) {
-        Ok(text) => (true, text),
-        Err(message) => (false, message),
-    };
-    Ok(tuple(
-        vec![Type::named("bool"), Type::named("str")],
-        vec![Value::Bool(ok), Value::string(text)],
-    ))
+        host_string_ref_arg(&args, 3, name)?,
+    )))
 }
 
-/// `time::__aura_parse_rfc3339`.
+/// `time::__aura_parse_rfc3339`: whether the text parsed. The instant or
+/// the failure is kept.
 pub fn host_time_parse_rfc3339(
     args: Vec<Value>,
     _program_args: Option<&[String]>,
 ) -> Result<Value> {
     let name = "time::__aura_parse_rfc3339";
     host_expect_arity(name, &args, 1)?;
-    Ok(parse_result(parse_rfc3339(host_string_ref_arg(
-        &args, 0, name,
-    )?)))
+    Ok(Value::Bool(parse_text(
+        host_string_ref_arg(&args, 0, name)?,
+        None,
+    )))
 }
 
-/// `time::__aura_parse`.
+/// `time::__aura_parse`: whether the text parsed. The instant or the
+/// failure is kept.
 pub fn host_time_parse(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "time::__aura_parse";
     host_expect_arity(name, &args, 2)?;
-    Ok(parse_result(parse_with_pattern(
+    Ok(Value::Bool(parse_text(
         host_string_ref_arg(&args, 0, name)?,
-        host_string_ref_arg(&args, 1, name)?,
+        Some(host_string_ref_arg(&args, 1, name)?),
     )))
+}
+
+/// `time::__aura_failed`: whether the last format or parse failed.
+pub fn host_time_failed(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    host_expect_arity("time::__aura_failed", &args, 0)?;
+    Ok(Value::Bool(outcome_failed()))
+}
+
+/// `time::__aura_error`: why the last format or parse failed.
+pub fn host_time_error(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    host_expect_arity("time::__aura_error", &args, 0)?;
+    Ok(Value::string(outcome_message()))
+}
+
+/// `time::__aura_parsed_seconds`: the Unix seconds of the last parse.
+pub fn host_time_parsed_seconds(
+    args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> Result<Value> {
+    host_expect_arity("time::__aura_parsed_seconds", &args, 0)?;
+    Ok(int(parsed_part(0)))
+}
+
+/// `time::__aura_parsed_nanos`: the nanoseconds of the last parse.
+pub fn host_time_parsed_nanos(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    host_expect_arity("time::__aura_parsed_nanos", &args, 0)?;
+    Ok(int(parsed_part(1)))
+}
+
+/// `time::__aura_parsed_offset`: the offset in minutes of the last parse.
+pub fn host_time_parsed_offset(
+    args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> Result<Value> {
+    host_expect_arity("time::__aura_parsed_offset", &args, 0)?;
+    Ok(int(parsed_part(2)))
 }
 
 /// The interpreter's entry for a `time` host builtin.
@@ -664,12 +811,18 @@ pub fn time_host_function(name: &str) -> Option<host_builtins::HostBuiltinFn> {
         "time::__aura_now" => host_time_now,
         "time::__aura_monotonic" => host_time_monotonic,
         "time::__aura_local_offset_minutes" => host_time_local_offset_minutes,
-        "time::__aura_duration_parts" => host_time_duration_parts,
+        "time::__aura_duration_seconds" => host_time_duration_seconds,
+        "time::__aura_duration_nanos" => host_time_duration_nanos,
         "time::__aura_duration" => host_time_duration,
         "time::__aura_rfc3339" => host_time_rfc3339,
         "time::__aura_format" => host_time_format,
         "time::__aura_parse_rfc3339" => host_time_parse_rfc3339,
         "time::__aura_parse" => host_time_parse,
+        "time::__aura_failed" => host_time_failed,
+        "time::__aura_error" => host_time_error,
+        "time::__aura_parsed_seconds" => host_time_parsed_seconds,
+        "time::__aura_parsed_nanos" => host_time_parsed_nanos,
+        "time::__aura_parsed_offset" => host_time_parsed_offset,
         _ => return None,
     })
 }

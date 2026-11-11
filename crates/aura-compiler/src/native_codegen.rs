@@ -2816,14 +2816,34 @@ enum FunctionOpArgLayout {
     Int64,
 }
 
-fn function_op_arg_layout(op: FunctionOp) -> FunctionOpArgLayout {
+fn function_op_arg_layout(op: FunctionOp, index: usize) -> FunctionOpArgLayout {
     match op {
+        // The instant's three integers, then the pattern.
+        FunctionOp::TimeFormat if index < 3 => FunctionOpArgLayout::Int64,
+        // The pattern number, then the texts.
+        FunctionOp::RegexIsMatch
+        | FunctionOp::RegexCount
+        | FunctionOp::RegexGroupIndex
+        | FunctionOp::RegexFind
+        | FunctionOp::RegexMatches
+        | FunctionOp::RegexFindAll
+        | FunctionOp::RegexCaptures
+        | FunctionOp::RegexSplit
+        | FunctionOp::RegexReplace
+        | FunctionOp::RegexReplaceAll
+            if index == 0 =>
+        {
+            FunctionOpArgLayout::Int64
+        }
         FunctionOp::RngNew
         | FunctionOp::RandomSecureInt
         | FunctionOp::RandomSecureBytes
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
         | FunctionOp::DurationMinutes
+        | FunctionOp::TimeRfc3339
+        | FunctionOp::TimeDuration
+        | FunctionOp::TimeLocalOffsetMinutes
         | FunctionOp::Chr => FunctionOpArgLayout::Int64,
         _ => FunctionOpArgLayout::Boxed,
     }
@@ -2849,10 +2869,22 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
         FunctionOp::YieldNow | FunctionOp::Sleep | FunctionOp::Eprint => {
             FunctionOpResultLayout::Unit
         }
-        FunctionOp::Cancelled => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
-        FunctionOp::RandomSecureInt | FunctionOp::MonotonicTimeMs | FunctionOp::Ord => {
-            FunctionOpResultLayout::Scalar(ScalarKind::Int64)
-        }
+        FunctionOp::Cancelled
+        | FunctionOp::TimeParseRfc3339
+        | FunctionOp::TimeParse
+        | FunctionOp::TimeFailed
+        | FunctionOp::RegexIsMatch => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
+        FunctionOp::RandomSecureInt
+        | FunctionOp::MonotonicTimeMs
+        | FunctionOp::TimeParsedSeconds
+        | FunctionOp::TimeParsedNanos
+        | FunctionOp::TimeParsedOffset
+        | FunctionOp::TimeDurationSeconds
+        | FunctionOp::TimeDurationNanos
+        | FunctionOp::TimeLocalOffsetMinutes
+        | FunctionOp::RegexCount
+        | FunctionOp::RegexGroupIndex
+        | FunctionOp::Ord => FunctionOpResultLayout::Scalar(ScalarKind::Int64),
         FunctionOp::FsExists => FunctionOpResultLayout::BoxedBool,
         FunctionOp::Chr => FunctionOpResultLayout::Boxed(Some(Type::named("str"))),
         FunctionOp::Abs
@@ -8596,12 +8628,12 @@ impl<'a> FunctionCompiler<'a> {
         let mut first_layout = None;
         // MIR binds one argument to each parameter, in order. An omitted
         // timeout or queue capacity passes no value.
-        for argument in args {
+        for (index, argument) in args.iter().enumerate() {
             if argument.value == Operand::Default(ArgDefault::Omitted) {
                 words.push(self.builder.iconst(types::I64, 0));
                 continue;
             }
-            let word = match function_op_arg_layout(op) {
+            let word = match function_op_arg_layout(op, index) {
                 FunctionOpArgLayout::Int64 => {
                     let value = self
                         .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;

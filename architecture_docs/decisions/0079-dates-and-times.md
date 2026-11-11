@@ -74,13 +74,18 @@ cheapest way to get a number, and removing them buys nothing.
 
 - `date_time`, the 33rd cross-language program, runs 200,000 instants
   through RFC 3339 text, arithmetic, field reads, and a log layout: Aura
-  0.77 s, Python's `datetime` 4.1 s, Rust's `chrono` 0.16 s on the 4-core
+  0.34 s, Python's `datetime` 4.0 s, Rust's `chrono` 0.18 s on the 4-core
   cloud host. A first version returned the date from one helper as a tuple
   and took 1.15 s: a tuple of integers is a boxed runtime value, so each
   field method now computes its own integer.
-- The remaining distance to Rust is the cost of the host calls that write
-  and read text, which take boxed integers and return tuples. It belongs
-  with the call-path work ADR-0078 leaves open.
+- The host functions that write and read text take the instant as three
+  integer words and return one word. A parse returns whether it worked, and
+  the host keeps the instant or the failure for the calls that follow:
+  `__aura_parsed_seconds`, `__aura_parsed_nanos`, `__aura_parsed_offset`,
+  and `__aura_error`. `std/time.au` reads them in the statements right
+  after the parse, with no point between where a task can be suspended, so
+  the kept outcome is per thread and never seen by another task. With
+  boxed integer arguments and tuple results the program took 0.77 s.
 - No new dependency. The module adds about 600 lines of Rust and 300 of
   Aura.
 - `public copy class` was misread as a module constant named `copy`. The

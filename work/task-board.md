@@ -18,7 +18,9 @@ Last updated: 2026-11-11
   the package's loopback stand-in.
 - Done: `try file.read_line()` in a loop is faster than Python (155 ms
   against 250 ms for 2 million lines; Rust takes 90 ms).
-- Remaining: a final benchmark pass.
+- Done: the final benchmark pass, and direct runtime calls for `time` and
+  `regex`. All four programs beat Python; against Rust `stream_io` is 2.0
+  times, `http_stream` 1.5, `date_time` 1.9, and `regex_scan` 3.0.
 
 ## Release 0.14.0-preview (in progress)
 

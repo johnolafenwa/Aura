@@ -148,12 +148,22 @@ fn compiled(number: i64) -> Result<Rc<Regex>> {
 }
 
 fn int64_list(values: Vec<i64>) -> Value {
+    scalar_list("int64", values, ListElements::Int64)
+}
+
+/// A list of scalars in its scalar form. An empty list has no form yet.
+fn scalar_list<T>(
+    element_type: &str,
+    values: Vec<T>,
+    form: fn(SharedVec<T>) -> ListElements,
+) -> Value {
     Value::Vec(VecValue {
-        element_type: SharedType::named("int64"),
-        elements: values
-            .into_iter()
-            .map(|value| Value::Int(IntegerValue::from_i64(value)))
-            .collect(),
+        element_type: SharedType::named(element_type),
+        elements: if values.is_empty() {
+            ListElements::Values(Vec::new().into())
+        } else {
+            form(values.into())
+        },
         str_view: Default::default(),
     })
 }
@@ -161,7 +171,7 @@ fn int64_list(values: Vec<i64>) -> Value {
 fn str_list(values: impl IntoIterator<Item = Value>) -> Value {
     Value::Vec(VecValue {
         element_type: SharedType::named("str"),
-        elements: values.into_iter().collect(),
+        elements: ListElements::Values(values.into_iter().collect::<Vec<_>>().into()),
         str_view: Default::default(),
     })
 }
@@ -201,6 +211,21 @@ pub enum RegexArgument<'a> {
     Text(&'a str),
 }
 
+/// The scalar searches of compiled code: 0 for whether the pattern matches
+/// `text`, 1 for how many matches it has, and 2 for the index of the group
+/// named `text`, or -1.
+pub(crate) fn regex_scalar(operation: i64, number: i64, text: &str) -> Result<i64> {
+    let regex = compiled(number)?;
+    Ok(match operation {
+        0 => i64::from(regex.is_match(text)),
+        1 => regex.find_iter(text).count() as i64,
+        _ => regex
+            .capture_names()
+            .position(|group| group == Some(text))
+            .map_or(-1, |index| index as i64),
+    })
+}
+
 /// Evaluates the `regex` host builtin `name` for pattern `number` over
 /// `text`.
 pub fn evaluate_regex_builtin(
@@ -236,23 +261,15 @@ pub fn evaluate_regex_builtin(
                 }),
             )
         }
+        // The start and end of each match. `std/regex.au` slices the text.
         "regex::__aura_matches" => {
             let mut offsets = ScalarOffsets::new(text);
-            let mut texts = Vec::new();
             let mut spans = Vec::new();
             for found in regex.find_iter(text) {
-                texts.push(Value::string(found.as_str()));
                 spans.push(offsets.at(found.start()));
                 spans.push(offsets.at(found.end()));
             }
-            // `std/regex.au` builds the matches by popping texts, so they
-            // go out last match first. The spans stay in order.
-            texts.reverse();
-            let list_of = |item: &str| Type::Named("list".to_string(), vec![Type::named(item)]);
-            Value::Tuple(TupleValue {
-                element_types: vec![list_of("str"), list_of("int64")],
-                elements: vec![str_list(texts), int64_list(spans)],
-            })
+            int64_list(spans)
         }
         "regex::__aura_find_all" => str_list(
             regex
@@ -265,8 +282,10 @@ pub fn evaluate_regex_builtin(
             let mut groups = Vec::new();
             let mut matched = Vec::new();
             if let Some(captures) = regex.captures(text) {
+                groups.reserve(captures.len());
+                matched.reserve(captures.len());
                 for group in captures.iter() {
-                    matched.push(Value::Bool(group.is_some()));
+                    matched.push(group.is_some());
                     groups.push(Value::string(group.map_or("", |group| group.as_str())));
                 }
             }
@@ -275,11 +294,7 @@ pub fn evaluate_regex_builtin(
                 element_types: vec![list_of("str"), list_of("bool")],
                 elements: vec![
                     str_list(groups),
-                    Value::Vec(VecValue {
-                        element_type: SharedType::named("bool"),
-                        elements: matched.into_iter().collect(),
-                        str_view: Default::default(),
-                    }),
+                    scalar_list("bool", matched, ListElements::Bool),
                 ],
             })
         }

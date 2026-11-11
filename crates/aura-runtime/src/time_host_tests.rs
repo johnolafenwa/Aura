@@ -24,8 +24,16 @@ fn instant(seconds: i64, nanos: i64, offset: i64) -> Vec<Value> {
 fn format(seconds: i64, nanos: i64, offset: i64, pattern: &str) -> (bool, String) {
     let mut args = instant(seconds, nanos, offset);
     args.push(Value::string(pattern));
-    let result = elements(host("time::__aura_format", args).expect("format returns"));
-    (result[0] == Value::Bool(true), text(&result[1]))
+    let written = text(&host("time::__aura_format", args).expect("format returns"));
+    if host("time::__aura_failed", Vec::new()).expect("failed") == Value::Bool(true) {
+        assert_eq!(written, "");
+        (
+            false,
+            text(&host("time::__aura_error", Vec::new()).expect("error")),
+        )
+    } else {
+        (true, written)
+    }
 }
 
 fn rfc3339(seconds: i64, nanos: i64, offset: i64) -> String {
@@ -34,11 +42,17 @@ fn rfc3339(seconds: i64, nanos: i64, offset: i64) -> String {
 
 /// What a parse returned: the instant, or the message.
 fn parsed(result: Value) -> std::result::Result<(Value, Value, Value), String> {
-    let result = elements(result);
-    if result[0] == Value::Bool(true) {
-        Ok((result[1].clone(), result[2].clone(), result[3].clone()))
+    let part = |name: &str| host(name, Vec::new()).expect("a kept part");
+    if result == Value::Bool(true) {
+        assert_eq!(part("time::__aura_failed"), Value::Bool(false));
+        Ok((
+            part("time::__aura_parsed_seconds"),
+            part("time::__aura_parsed_nanos"),
+            part("time::__aura_parsed_offset"),
+        ))
     } else {
-        Err(text(&result[4]))
+        assert_eq!(part("time::__aura_failed"), Value::Bool(true));
+        Err(text(&part("time::__aura_error")))
     }
 }
 
@@ -252,7 +266,14 @@ fn clocks_and_durations_cross_the_boundary_exactly() {
     assert!(first >= 3_600 * NANOS_PER_SECOND && second >= first);
 
     let parts = |nanos: i128| {
-        elements(host("time::__aura_duration_parts", vec![Value::Duration(nanos)]).expect("parts"))
+        vec![
+            host(
+                "time::__aura_duration_seconds",
+                vec![Value::Duration(nanos)],
+            )
+            .expect("seconds"),
+            host("time::__aura_duration_nanos", vec![Value::Duration(nanos)]).expect("nanos"),
+        ]
     };
     assert_eq!(parts(1_500_000_000), vec![int(1), int(500_000_000)]);
     assert_eq!(parts(-1), vec![int(-1), int(999_999_999)]);
@@ -274,8 +295,15 @@ fn host_calls_reject_wrong_arguments() {
         ("time::__aura_monotonic", vec![int(1)]),
         ("time::__aura_local_offset_minutes", Vec::new()),
         ("time::__aura_local_offset_minutes", vec![Value::Bool(true)]),
-        ("time::__aura_duration_parts", vec![int(1)]),
-        ("time::__aura_duration_parts", Vec::new()),
+        ("time::__aura_duration_seconds", vec![int(1)]),
+        ("time::__aura_duration_seconds", Vec::new()),
+        ("time::__aura_duration_nanos", vec![int(1)]),
+        ("time::__aura_duration_nanos", Vec::new()),
+        ("time::__aura_failed", vec![int(1)]),
+        ("time::__aura_error", vec![int(1)]),
+        ("time::__aura_parsed_seconds", vec![int(1)]),
+        ("time::__aura_parsed_nanos", vec![int(1)]),
+        ("time::__aura_parsed_offset", vec![int(1)]),
         ("time::__aura_duration", vec![int(1)]),
         ("time::__aura_duration", vec![Value::Bool(true), int(1)]),
         ("time::__aura_rfc3339", vec![int(1)]),

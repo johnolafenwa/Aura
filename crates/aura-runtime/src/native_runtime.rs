@@ -15000,12 +15000,18 @@ host_builtin_entries! {
     owned "time::__aura_now" => aura_host_time_now(crate::runtime_value::time_host::host_time_now);
     owned "time::__aura_monotonic" => aura_host_time_monotonic(crate::runtime_value::time_host::host_time_monotonic);
     owned "time::__aura_local_offset_minutes" => aura_host_time_local_offset_minutes(crate::runtime_value::time_host::host_time_local_offset_minutes);
-    owned "time::__aura_duration_parts" => aura_host_time_duration_parts(crate::runtime_value::time_host::host_time_duration_parts);
+    owned "time::__aura_duration_seconds" => aura_host_time_duration_seconds(crate::runtime_value::time_host::host_time_duration_seconds);
+    owned "time::__aura_duration_nanos" => aura_host_time_duration_nanos(crate::runtime_value::time_host::host_time_duration_nanos);
     owned "time::__aura_duration" => aura_host_time_duration(crate::runtime_value::time_host::host_time_duration);
     owned "time::__aura_rfc3339" => aura_host_time_rfc3339(crate::runtime_value::time_host::host_time_rfc3339);
     owned "time::__aura_format" => aura_host_time_format(crate::runtime_value::time_host::host_time_format);
     owned "time::__aura_parse_rfc3339" => aura_host_time_parse_rfc3339(crate::runtime_value::time_host::host_time_parse_rfc3339);
     owned "time::__aura_parse" => aura_host_time_parse(crate::runtime_value::time_host::host_time_parse);
+    owned "time::__aura_failed" => aura_host_time_failed(crate::runtime_value::time_host::host_time_failed);
+    owned "time::__aura_error" => aura_host_time_error(crate::runtime_value::time_host::host_time_error);
+    owned "time::__aura_parsed_seconds" => aura_host_time_parsed_seconds(crate::runtime_value::time_host::host_time_parsed_seconds);
+    owned "time::__aura_parsed_nanos" => aura_host_time_parsed_nanos(crate::runtime_value::time_host::host_time_parsed_nanos);
+    owned "time::__aura_parsed_offset" => aura_host_time_parsed_offset(crate::runtime_value::time_host::host_time_parsed_offset);
     borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));
     borrowed "http::__aura_read_chunk" => aura_host_http_read_chunk(|args| direct_http("http::__aura_read_chunk", crate::runtime_value::http_client::host_http_read_chunk, args));
     borrowed "http::__aura_read_line" => aura_host_http_read_line(|args| direct_http("http::__aura_read_line", crate::runtime_value::http_client::host_http_read_line, args));
@@ -19562,6 +19568,215 @@ pub extern "C-unwind" fn aura_direct_sleep_value_void(duration: *mut OpaqueValue
 }
 
 static DIRECT_MONOTONIC_EPOCH: OnceLock<Instant> = OnceLock::new();
+
+/// The text of a `str` handle the caller keeps.
+fn direct_text<T>(name: &str, handle: *mut OpaqueValue, read: impl FnOnce(&str) -> T) -> T {
+    unsafe {
+        with_value(handle, |value| match value {
+            Value::String(text) => read(text.as_str()),
+            other => runtime_error(format!(
+                "`{name}` expects `str`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// `regex.Regex.is_match`, `count`, and the group index of a name: the
+/// search `operation` of pattern `number` over the `str` handle `text`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_regex_scalar(
+    number: i64,
+    text: *mut OpaqueValue,
+    operation: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        direct_text("regex", text, |text| {
+            crate::runtime_value::regex_host::regex_scalar(operation, number, text)
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// The searches of `regex.Regex` that return a value, in the order
+/// `DIRECT_REGEX_SEARCHES` names them.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_regex_search(
+    number: i64,
+    text: *mut OpaqueValue,
+    operation: i64,
+) -> *mut OpaqueValue {
+    use crate::runtime_value::regex_host::{evaluate_regex_builtin, RegexArgument};
+    task_runtime_boundary(|| {
+        let name = direct_regex_search_name(operation);
+        match direct_text(name, text, |text| {
+            evaluate_regex_builtin(name, number, text, RegexArgument::None)
+        }) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+/// `regex.Regex.replace` for `operation` 0 and `replace_all` for 1.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_regex_replace(
+    number: i64,
+    text: *mut OpaqueValue,
+    replacement: *mut OpaqueValue,
+    operation: i64,
+) -> *mut OpaqueValue {
+    use crate::runtime_value::regex_host::{evaluate_regex_builtin, RegexArgument};
+    task_runtime_boundary(|| {
+        let name = if operation == 0 {
+            "regex::__aura_replace"
+        } else {
+            "regex::__aura_replace_all"
+        };
+        match direct_text(name, text, |text| {
+            direct_text(name, replacement, |replacement| {
+                evaluate_regex_builtin(name, number, text, RegexArgument::Text(replacement))
+            })
+        }) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+/// The builtin each `aura_direct_regex_search` operation runs.
+const DIRECT_REGEX_SEARCHES: [&str; 5] = [
+    "regex::__aura_find",
+    "regex::__aura_matches",
+    "regex::__aura_find_all",
+    "regex::__aura_captures",
+    "regex::__aura_split",
+];
+
+fn direct_regex_search_name(operation: i64) -> &'static str {
+    usize::try_from(operation)
+        .ok()
+        .and_then(|operation| DIRECT_REGEX_SEARCHES.get(operation).copied())
+        .unwrap_or_else(|| runtime_error("unknown regex search operation"))
+}
+
+/// The nanoseconds of a `Duration` handle the caller keeps.
+fn direct_duration(name: &str, handle: *mut OpaqueValue) -> i128 {
+    unsafe {
+        with_value(handle, |value| match value {
+            Value::Duration(nanos) => *nanos,
+            other => runtime_error(format!(
+                "`{name}` expects `Duration`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_rfc3339(
+    unix_seconds: i64,
+    nanos: i64,
+    offset_minutes: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::string(
+            crate::runtime_value::time_host::rfc3339_text(unix_seconds, nanos, offset_minutes),
+        ))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_format(
+    unix_seconds: i64,
+    nanos: i64,
+    offset_minutes: i64,
+    pattern: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let text = direct_text("time::__aura_format", pattern, |pattern| {
+            crate::runtime_value::time_host::format_text(
+                unix_seconds,
+                nanos,
+                offset_minutes,
+                pattern,
+            )
+        });
+        boxed_value(Value::string(text))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_parse_rfc3339(text: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        direct_text("time::__aura_parse_rfc3339", text, |text| {
+            i64::from(crate::runtime_value::time_host::parse_text(text, None))
+        })
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_parse(
+    text: *mut OpaqueValue,
+    pattern: *mut OpaqueValue,
+) -> i64 {
+    task_runtime_boundary(|| {
+        direct_text("time::__aura_parse", text, |text| {
+            direct_text("time::__aura_parse", pattern, |pattern| {
+                i64::from(crate::runtime_value::time_host::parse_text(
+                    text,
+                    Some(pattern),
+                ))
+            })
+        })
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_local_offset_minutes(unix_seconds: i64) -> i64 {
+    crate::runtime_value::time_host::local_offset_minutes(unix_seconds)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_failed() -> i64 {
+    i64::from(crate::runtime_value::time_host::outcome_failed())
+}
+
+/// Part `index` of the last instant parsed: its Unix seconds, its
+/// nanoseconds, or its offset in minutes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_parsed_part(index: i64) -> i64 {
+    crate::runtime_value::time_host::parsed_part(index as usize)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_duration_seconds(amount: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        crate::runtime_value::time_host::duration_seconds(direct_duration(
+            "time::__aura_duration_seconds",
+            amount,
+        ))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_duration_nanos(amount: *mut OpaqueValue) -> i64 {
+    task_runtime_boundary(|| {
+        crate::runtime_value::time_host::duration_nanos(direct_duration(
+            "time::__aura_duration_nanos",
+            amount,
+        ))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_time_duration(seconds: i64, nanos: i64) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Duration(
+            crate::runtime_value::time_host::duration_of(seconds, nanos),
+        ))
+    })
+}
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_monotonic_time_ms() -> i64 {

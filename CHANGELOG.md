@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- The `time` and `regex` modules call the runtime with integer arguments
+  as plain words and get a `bool` or an integer back as one word, instead
+  of boxing each integer into an argument buffer. `date_time` goes from
+  0.77 s to 0.34 s, 1.9 times Rust's `chrono`, and `regex_scan` from 1.19 s
+  to 0.83 s, 3.0 times Rust's `regex`.
 - A loop that reads a file one line at a time with
   `try file.read_line()` is more than twice as fast in a compiled
   program. Reading 2 million lines (96 MB) takes 155 ms, where Python's
@@ -57,8 +62,8 @@ in this file.
   text, and `format` and `parse` with `%` directives. `time.monotonic()`
   measures intervals. The 33rd
   [cross-language program](benchmarks/cross_language/README.md),
-  `date_time`, takes 0.77 s for 200,000 instants where Python's `datetime`
-  takes 4.1 s and Rust's `chrono` 0.16 s. See the
+  `date_time`, takes 0.34 s for 200,000 instants where Python's `datetime`
+  takes 4.0 s and Rust's `chrono` 0.18 s. See the
   [Time Module](docs/manual/time.md).
 - Fixed: `public copy class Name:` was read as a module constant named
   `copy` and reported `AU1101`.
@@ -68,8 +73,8 @@ in this file.
   indexes do, and a pattern that does not compile is a
   `regex.Error.Invalid` value. The 32nd
   [cross-language program](benchmarks/cross_language/README.md),
-  `regex_scan`, runs five patterns over 200,000 log lines: Aura 1.19 s,
-  Python 1.63 s, Rust 0.30 s. See the [Regex Module](docs/manual/regex.md).
+  `regex_scan`, runs five patterns over 200,000 log lines: Aura 0.83 s,
+  Python 1.55 s, Rust 0.27 s. See the [Regex Module](docs/manual/regex.md).
 - Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,

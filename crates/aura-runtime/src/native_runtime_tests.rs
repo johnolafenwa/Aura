@@ -2112,6 +2112,11 @@ fn every_host_builtin_entry_checks_its_argument_count() {
                 | "control::__retry_cancel_if_requested"
                 | "time::__aura_now"
                 | "time::__aura_monotonic"
+                | "time::__aura_failed"
+                | "time::__aura_error"
+                | "time::__aura_parsed_seconds"
+                | "time::__aura_parsed_nanos"
+                | "time::__aura_parsed_offset"
                 | "http::__aura_idle_connections"
                 | "http::__aura_close_idle"
         );
@@ -28891,6 +28896,193 @@ fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
         })
     };
     unsafe { release_value(map) };
+}
+
+/// What a direct helper that traps reports.
+fn direct_trap_message(run: impl FnOnce() + Send + 'static) -> String {
+    run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            run();
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the helper traps")
+    .message
+}
+
+#[test]
+fn direct_time_helpers_write_parse_and_keep_the_outcome() {
+    let text = |value: *mut OpaqueValue| match unsafe { take_value(value) } {
+        Value::String(text) => text.to_string(),
+        other => panic!("expected str, found {other:?}"),
+    };
+    let handle = |text: &str| boxed_value(Value::string(text));
+    assert_eq!(
+        text(super::aura_direct_time_rfc3339(
+            1_700_000_000,
+            250_000_000,
+            60
+        )),
+        "2023-11-14T23:13:20.250+01:00"
+    );
+
+    let pattern = handle("%Y-%m-%d %e %H:%M:%S %z");
+    assert_eq!(
+        text(super::aura_direct_time_format(
+            1_700_000_000,
+            0,
+            -90,
+            pattern
+        )),
+        "2023-11-14 14 20:43:20 -0130"
+    );
+    assert_eq!(super::aura_direct_time_failed(), 0);
+    let bad_pattern = handle("%Q");
+    assert_eq!(
+        text(super::aura_direct_time_format(0, 0, 0, bad_pattern)),
+        ""
+    );
+    assert_eq!(super::aura_direct_time_failed(), 1);
+    assert_eq!(
+        text(direct_host_builtin_call("time::__aura_error", &[])),
+        "unknown directive `%Q`"
+    );
+
+    let stamp = handle("2023-11-14T23:13:20.25+01:00");
+    assert_eq!(super::aura_direct_time_parse_rfc3339(stamp), 1);
+    assert_eq!(super::aura_direct_time_failed(), 0);
+    assert_eq!(super::aura_direct_time_parsed_part(0), 1_700_000_000);
+    assert_eq!(super::aura_direct_time_parsed_part(1), 250_000_000);
+    assert_eq!(super::aura_direct_time_parsed_part(2), 60);
+    let written = handle("2023-11-14 22:13");
+    let layout = handle("%Y-%m-%d %H:%M");
+    assert_eq!(super::aura_direct_time_parse(written, layout), 1);
+    assert_eq!(super::aura_direct_time_parsed_part(0), 1_699_999_980);
+    assert_eq!(super::aura_direct_time_parsed_part(2), 0);
+    assert_eq!(super::aura_direct_time_parse(written, pattern), 0);
+    assert_eq!(super::aura_direct_time_failed(), 1);
+    assert_eq!(super::aura_direct_time_parse_rfc3339(written), 0);
+
+    let amount = boxed_value(Value::Duration(-1));
+    assert_eq!(super::aura_direct_time_duration_seconds(amount), -1);
+    assert_eq!(super::aura_direct_time_duration_nanos(amount), 999_999_999);
+    assert_eq!(
+        unsafe { take_value(super::aura_direct_time_duration(-2, 500_000_000)) },
+        Value::Duration(-1_500_000_000)
+    );
+    assert!((-1_439..=1_439).contains(&super::aura_direct_time_local_offset_minutes(0)));
+
+    unsafe {
+        for value in [pattern, bad_pattern, stamp, written, layout, amount] {
+            release_value(value);
+        }
+    }
+
+    let message = direct_trap_message(|| {
+        let number = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_time_parse_rfc3339(number);
+    });
+    assert_eq!(
+        message,
+        "`time::__aura_parse_rfc3339` expects `str`, found `bool`"
+    );
+    let message = direct_trap_message(|| {
+        let number = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_time_duration_seconds(number);
+    });
+    assert_eq!(
+        message,
+        "`time::__aura_duration_seconds` expects `Duration`, found `bool`"
+    );
+}
+
+#[test]
+fn direct_regex_helpers_search_with_a_pattern_number() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"(?<digits>\d+)")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let Value::Int(number) = &compiled.elements[0] else {
+        panic!("expected a pattern number");
+    };
+    let number = number.as_i128().expect("a small number") as i64;
+    let text = boxed_value(Value::string("a12b3"));
+    let name = boxed_value(Value::string("digits"));
+    let replacement = boxed_value(Value::string("#"));
+
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 0), 1);
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 1), 2);
+    assert_eq!(super::aura_direct_regex_scalar(number, name, 2), 1);
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 2), -1);
+    for operation in 0..5 {
+        let found = super::aura_direct_regex_search(number, text, operation);
+        let direct = unsafe { take_value(found) };
+        let builtin = super::DIRECT_REGEX_SEARCHES[operation as usize];
+        let expected = crate::runtime_value::regex_host::evaluate_regex_builtin(
+            builtin,
+            number,
+            "a12b3",
+            crate::runtime_value::regex_host::RegexArgument::None,
+        )
+        .expect("the builtin searches");
+        assert_eq!(direct, expected, "{builtin}");
+    }
+    assert_eq!(
+        unsafe {
+            take_value(super::aura_direct_regex_replace(
+                number,
+                text,
+                replacement,
+                0,
+            ))
+        },
+        Value::string("a#b3")
+    );
+    assert_eq!(
+        unsafe {
+            take_value(super::aura_direct_regex_replace(
+                number,
+                text,
+                replacement,
+                1,
+            ))
+        },
+        Value::string("a#b#")
+    );
+    unsafe {
+        for value in [text, name, replacement] {
+            release_value(value);
+        }
+    }
+
+    let message = direct_trap_message(|| {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_scalar(i64::MAX, text, 0);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(|| {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_search(i64::MAX, text, 0);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(move || {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_search(number, text, 9);
+    });
+    assert_eq!(message, "unknown regex search operation");
+    let message = direct_trap_message(move || {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_replace(i64::MAX, text, text, 1);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(move || {
+        let number_value = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_regex_scalar(number, number_value, 0);
+    });
+    assert_eq!(message, "`regex` expects `str`, found `bool`");
 }
 
 #[test]
