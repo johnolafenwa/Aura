@@ -1,0 +1,39 @@
+class Square:
+    side: int64
+    name: str
+
+    def reset(mut self) -> None:
+        self = Square(side=0, name="z")
+
+    def swap(mut self, other: mut Square) -> None:
+        kept = self.side
+        self.side = other.side
+        other.side = kept
+
+    def keep(mut self, into: mut list[Square]) -> None:
+        self.side += 1
+        into.append(Square(side=self.side, name=self.name.clone()))
+
+
+def main() -> None:
+    mut squares: list[Square] = []
+    for i in range(20):
+        squares.append(Square(side=i, name="sq"))
+    mut kept: list[Square] = []
+    mut spare = Square(side=99, name="spare")
+    for i in range(len(squares)):
+        squares[i].keep(kept)
+        squares[i].swap(spare)
+        if i % 3 == 0:
+            squares[i].reset()
+    for square in mut squares:
+        square.keep(kept)
+        square.swap(spare)
+    mut total: int64 = 0
+    for square in squares:
+        total += square.side
+    for square in kept:
+        total += square.side
+    print(total)
+    print(squares[0].name)
+    print(spare.side)

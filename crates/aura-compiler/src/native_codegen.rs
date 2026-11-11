@@ -672,6 +672,9 @@ struct NativeCodegen<'a> {
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     /// How each method function takes its receiver, by function name.
     method_receivers: HashMap<String, Option<MirReceiverKind>>,
+    /// The `mut self` methods that hand back the receiver box they were
+    /// given (see `element_loans::receiver_keepers`).
+    receiver_keepers: HashSet<String>,
     /// The functions whose callers keep their shared arguments (see
     /// `mir::ownership::borrowing_functions`).
     borrowing: BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
@@ -1075,6 +1078,7 @@ impl<'a> NativeCodegen<'a> {
                     )
                 })
                 .collect(),
+            receiver_keepers: element_loans::receiver_keepers(module, &method_receivers),
             method_receivers,
             borrowing: crate::mir::ownership::kept_arguments(module),
             function_return_types,
@@ -1218,10 +1222,37 @@ impl<'a> NativeCodegen<'a> {
         )
     }
 
+    /// The receiver of a call of a method of the receiver's own type that
+    /// only reads its receiver: the call may lend a list element's box as
+    /// the receiver.
+    fn shared_method_receiver<'i>(&self, instruction: &'i Instruction) -> Option<&'i Operand> {
+        let Instruction::Assign {
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            object,
+                            dispatch: Some(MethodDispatch::Static { function }),
+                            ..
+                        },
+                    ..
+                },
+            ..
+        } = instruction
+        else {
+            return None;
+        };
+        let borrows = self.method_receivers.get(function) == Some(&Some(MirReceiverKind::Borrow));
+        borrows.then_some(object)
+    }
+
     /// The receiver of a trait method call that picks its implementation
     /// at run time, when every implementation it may pick only reads its
     /// receiver: the call may lend a list element's box as the receiver.
     fn dispatched_shared_receiver<'i>(&self, instruction: &'i Instruction) -> Option<&'i Operand> {
+        if let Some(receiver) = self.shared_method_receiver(instruction) {
+            return Some(receiver);
+        }
         let Instruction::Assign {
             value:
                 Rvalue::Call {
@@ -1656,20 +1687,30 @@ impl<'a> NativeCodegen<'a> {
                     )
             },
             |instruction| {
+                if let Some(receiver) = self.shared_method_receiver(instruction) {
+                    return vec![receiver];
+                }
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
                     self.borrowing.get(name)
                 })
             },
         );
-        let (native_loan_uses, element_lend_temps) =
-            element_loans::native_element_loans(function, |instruction| {
+        let (native_loan_uses, element_lend_temps) = element_loans::native_element_loans(
+            function,
+            |instruction| {
                 if let Some(receiver) = self.dispatched_shared_receiver(instruction) {
                     return vec![receiver];
                 }
                 crate::mir::ownership::callee_borrowed_operands(instruction, |name| {
                     self.borrowing.get(name)
                 })
-            });
+            },
+            |method| match self.method_receivers.get(method).copied().flatten() {
+                Some(MirReceiverKind::Borrow) => true,
+                Some(MirReceiverKind::BorrowMut) => self.receiver_keepers.contains(method),
+                _ => false,
+            },
+        );
         let field_lend_temps = classes::field_lend_temps(function);
         // A local of a Copy type the MIR never releases holds a box all the
         // same, which `release_boxed_copy_roots` releases by its flag.
@@ -2022,6 +2063,7 @@ impl<'a> NativeCodegen<'a> {
             enums: self.enums.clone(),
             union_layouts: self.union_layouts.clone(),
             method_receivers: &self.method_receivers,
+            receiver_keepers: &self.receiver_keepers,
             borrowing: &self.borrowing,
             return_type: function.return_type.clone(),
             layout_scratch: LayoutScratch::default(),
@@ -2052,6 +2094,9 @@ impl<'a> NativeCodegen<'a> {
             lent_temps: HashMap::new(),
             field_lend_temps,
             field_lends: HashMap::new(),
+            record_lends: HashMap::new(),
+            element_calls: HashMap::new(),
+            deferred_element_retain: None,
             field_box_receiver: false,
             native_loan_uses,
             element_lend_temps,
@@ -3362,6 +3407,7 @@ struct FunctionCompiler<'a> {
     enums: HashMap<String, MirEnum>,
     union_layouts: HashMap<String, crate::union_layout::MirUnionLayout>,
     method_receivers: &'a HashMap<String, Option<MirReceiverKind>>,
+    receiver_keepers: &'a HashSet<String>,
     /// The functions whose callers keep their shared arguments.
     borrowing: &'a BTreeMap<String, crate::mir::ownership::BorrowingCallee>,
     return_type: Type,
@@ -3471,6 +3517,15 @@ struct FunctionCompiler<'a> {
     field_lend_temps: HashSet<String>,
     /// The field lends in progress that lent a box as it is, by temporary.
     field_lends: HashMap<String, classes::FieldLend>,
+    /// The lends of a plain record to a method call in progress that read
+    /// the record where its list keeps it, by temporary.
+    record_lends: HashMap<String, element_loans::RecordLend>,
+    /// The `mut self` method calls in progress on a followed loan of a box
+    /// slot, by loan.
+    element_calls: HashMap<String, element_loans::ElementCall>,
+    /// The followed loan of a box slot whose `Retain` waits for the `mut
+    /// self` call the next instruction makes on it.
+    deferred_element_retain: Option<String>,
     /// Whether the runtime operation being compiled has such a lent box as
     /// its receiver.
     field_box_receiver: bool,
@@ -4479,6 +4534,10 @@ impl<'a> FunctionCompiler<'a> {
             }
         }
         if let Instruction::Retain { place } = instruction {
+            if self.defers_native_element_retain(place) {
+                self.deferred_element_retain = Some(place.clone());
+                return Ok(());
+            }
             if self.lent_places.contains(place.as_str()) {
                 let word = self.load_place(place)?.values[0];
                 self.retain_lent_word(word);
@@ -4501,6 +4560,14 @@ impl<'a> FunctionCompiler<'a> {
             crate::mir::ownership::operand_roles_with(instruction, &borrowed),
         );
         let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
+        if compiled.is_ok()
+            && self.deferred_element_retain.is_some()
+            && !matches!(instruction, Instruction::Retain { .. })
+        {
+            return Err(format!(
+                "direct backend left the retain before {instruction:?} without its call"
+            ));
+        }
         self.emptied_store_root = None;
         self.layout_scratch.consumers.clear();
         compiled?;
@@ -4841,7 +4908,9 @@ impl<'a> FunctionCompiler<'a> {
                 temp,
                 mutable,
             } => {
-                if !self.end_class_field_lend(place, temp, *mutable)? {
+                if !self.end_native_record_lend(place, temp, *mutable)?
+                    && !self.end_class_field_lend(place, temp, *mutable)?
+                {
                     self.end_lend_on_runtime_path(place, temp, *mutable)?;
                 }
             }
@@ -7868,14 +7937,16 @@ impl<'a> FunctionCompiler<'a> {
                 let dispatch = required_dispatch(dispatch, field)?;
                 // A followed loan of a list element lends the element's
                 // box to the implementation the dispatch picks.
-                let lent = match object {
-                    Operand::Place(place) => self.pass_native_element(place)?,
-                    _ => None,
-                };
-                let object = match lent {
-                    Some(lent) => lent,
-                    None => self.load_operand(object)?,
-                };
+                if let Some(result) = self.compile_native_element_call(
+                    object,
+                    field,
+                    dispatch,
+                    receiver_place.as_deref(),
+                    args,
+                )? {
+                    return Ok(result);
+                }
+                let object = self.load_operand(object)?;
                 self.compile_dispatch(object, field, dispatch, receiver_place.as_deref(), args)
             }
         }
@@ -9202,6 +9273,13 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
         }
+        if let MemberCallee::Method { field, dispatch } = callee {
+            if let Some(result) =
+                self.compile_native_element_call(object, field, dispatch, receiver_place, args)?
+            {
+                return Ok(result);
+            }
+        }
         if let (Operand::Place(place), MemberCallee::Runtime(op)) = (object, callee) {
             if receiver_place == Some(place.as_str()) {
                 if let Some(result) = self.add_to_native_element(place, op, args)? {
@@ -9239,6 +9317,78 @@ impl<'a> FunctionCompiler<'a> {
         let result = self.compile_member_callee_on_receiver(object, callee, receiver_place, args);
         self.field_box_receiver = outer;
         result
+    }
+
+    /// Compiles a method call whose receiver is a followed loan of a box
+    /// slot on the box where its list keeps it. A method that only reads
+    /// its receiver borrows the box. A `mut self` method called on a
+    /// mutable loan takes the list's reference and hands it back (see
+    /// `begin_native_element_call`). Returns `None` for any other call.
+    fn compile_native_element_call(
+        &mut self,
+        object: &Operand,
+        field: &str,
+        dispatch: &MethodDispatch,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        // The retain before a `mut self` call on a followed loan waits for
+        // the call: the method takes the list's own reference, and only a
+        // call that falls back to the general path needs the retain.
+        let deferred = self.deferred_element_retain.take();
+        let result = self.try_native_element_call(object, field, dispatch, receiver_place, args)?;
+        if let (None, Some(place)) = (&result, deferred) {
+            self.retain_place(&place)?;
+        }
+        Ok(result)
+    }
+
+    fn try_native_element_call(
+        &mut self,
+        object: &Operand,
+        field: &str,
+        dispatch: &MethodDispatch,
+        receiver_place: Option<&str>,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Operand::Place(place) = object else {
+            return Ok(None);
+        };
+        match self.dispatch_receiver(dispatch) {
+            Some(MirReceiverKind::Borrow) => {
+                let Some(lent) = self.pass_native_element(place)? else {
+                    return Ok(None);
+                };
+                self.compile_dispatch(lent, field, dispatch, receiver_place, args)
+                    .map(Some)
+            }
+            Some(MirReceiverKind::BorrowMut) if receiver_place == Some(place.as_str()) => {
+                let Some(receiver) = self.begin_native_element_call(place, dispatch)? else {
+                    return Ok(None);
+                };
+                let result = self.compile_dispatch(receiver, field, dispatch, receiver_place, args);
+                self.end_native_element_call(place);
+                result.map(Some)
+            }
+            _ => Ok(None),
+        }
+    }
+
+    /// How every method `dispatch` may run takes its receiver, when they
+    /// all take it the same way.
+    fn dispatch_receiver(&self, dispatch: &MethodDispatch) -> Option<MirReceiverKind> {
+        let receiver = |function: &String| self.method_receivers.get(function).copied().flatten();
+        match dispatch {
+            MethodDispatch::Static { function } => receiver(function),
+            MethodDispatch::Candidates { candidates, .. } => {
+                let mut kinds = candidates
+                    .iter()
+                    .map(|candidate| receiver(&candidate.function));
+                let first = kinds.next()??;
+                kinds.all(|kind| kind == Some(first)).then_some(first)
+            }
+            _ => None,
+        }
     }
 
     /// Whether `place` is a view of one element of a collection, with no
@@ -12153,6 +12303,21 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn store_place(&mut self, place: &str, value: ValueRef) -> std::result::Result<(), String> {
+        if self.names_native_record(place) && self.store_native_loan_place(place, value.clone())? {
+            return Ok(());
+        }
+        if self.store_native_element_call(place, &value)? {
+            return Ok(());
+        }
+        self.store_view_place(place, value)
+    }
+
+    /// Stores `value` in `place` through the view places it may name.
+    fn store_view_place(
+        &mut self,
+        place: &str,
+        value: ValueRef,
+    ) -> std::result::Result<(), String> {
         let resolved = self.resolve_view_place(place)?;
         self.store_resolved_view_place(resolved, value)
     }
@@ -14248,6 +14413,10 @@ impl<'a> FunctionCompiler<'a> {
             .as_ref()
             .is_some_and(|callee| callee.receiver == Some(MirReceiverKind::Borrow))
         {
+            lowered_args.extend(receiver.values.iter().copied());
+        } else if mutable_receiver && self.hands_over_native_element(&object, &receiver) {
+            // The method takes the reference the element's list holds and
+            // hands it back as the updated receiver.
             lowered_args.extend(receiver.values.iter().copied());
         } else {
             let transferred = self.transfer_values(&receiver);

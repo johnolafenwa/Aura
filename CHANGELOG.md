@@ -45,6 +45,18 @@ in this file.
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
   when the option is absent.
+- A method call on a list element no longer takes the element out of the
+  list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
+  shared call by index (`items[i].get()`), any call in
+  `for item in mut items:`, and `item.count += 1` in such a loop cost 2,300
+  to 2,800 instructions each. They now cost 36 for a class of numbers and 92
+  for a class with a `str` field, with the method inlined, and a field
+  update in the loop costs 16 and 37. This covers a class's own methods,
+  trait methods, and `list[dyn Trait]` elements. `for item in items:
+  item.get()` on a class with a `str` field no longer clones each element
+  (1,615 instructions down to 46). The first pass over a list still pays
+  the old cost for about one element in eight while the list settles how
+  it stores its elements.
 - A `for` invariant that does not read the loop target is now checked
   before the loop asks for each element, as a `while` invariant is: on
   entry, after every iteration, and when the loop runs out. It holds after

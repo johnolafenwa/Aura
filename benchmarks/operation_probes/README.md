@@ -174,3 +174,30 @@ compares a type number in the element's box:
 
 The earlier figure was read on the same loop over 30,000 elements before
 the probe existed.
+
+## Method calls on list elements
+
+`element_mut_call` and `element_plain_mut_call` (added on 11 November 2026)
+measure a `mut self` method call on a list element by index,
+`counters[i].bump(2)`, on a class with a `str` field and on a class of two
+integers. Before, each such call took the element out of the list and put
+it back through the runtime, and so did a shared call by index and every
+call in `for item in mut items:`. Now the call works on the element where
+the list keeps it:
+
+| operation | count | Rust instr/op | Aura instr/op | Aura/Rust |
+| --- | ---: | ---: | ---: | ---: |
+| `element_mut_call`, before | 100,000 | 12.0 | about 2,800 | about 230x |
+| `element_mut_call` | 100,000 | 12.0 | 94.1 | 7.8x |
+| `element_plain_mut_call`, before | 100,000 | 16.0 | about 2,800 | about 175x |
+| `element_plain_mut_call` | 100,000 | 16.0 | 64.1 | 4.0x |
+
+The earlier figures were read on the same loops over 1,000 elements before
+the probes existed. Both phases of each probe make one pass first, because
+the first calls on a list's elements settle how the list stores them (about
+one call in eight of that first pass still goes through the runtime), and
+the probes measure the calls after. What is left is the cost of a call that
+is not inlined, not of reaching the element: `Tally.bump` itself runs 49 of
+the 64 instructions, most of them the entry and exit of its frame for
+stack traces, and Rust inlines its `bump`. The same loop with the method
+inlined costs 36 instructions, and `counters[i].count += 1` costs 18.

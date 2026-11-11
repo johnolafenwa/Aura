@@ -1,0 +1,63 @@
+class Point:
+    x: int32
+    y: float64
+
+    def shift(mut self, by: int32) -> None:
+        self.x += by
+        self.y = self.y + 0.5
+
+    def sum(self) -> float64:
+        return self.x.to_float() + self.y
+
+
+class Cell:
+    alive: bool
+    at: Point
+    hits: int64
+
+    def touch(mut self) -> int64:
+        self.hits += 1
+        self.alive = not self.alive
+        self.at.shift(2)
+        return self.hits
+
+    def score(self) -> int64:
+        return self.hits * 10 + (self.at.x as int64)
+
+
+def total(cells: list[Cell]) -> int64:
+    mut sum: int64 = 0
+    for cell in cells:
+        sum += cell.score()
+    return sum
+
+
+def main() -> None:
+    mut cells: list[Cell] = []
+    for i in range(5):
+        cells.append(Cell(alive=i % 2 == 0, at=Point(x=(i as int32), y=1.0), hits=i))
+    for i in range(len(cells)):
+        print(cells[i].touch())
+    print(total(cells))
+    for cell in mut cells:
+        cell.hits += 100
+        cell.touch()
+        cell.at.x += 1
+        cell.at.shift(1)
+    print(total(cells))
+    mut shared = cells.copy()
+    for i in range(len(shared)):
+        shared[i].touch()
+        shared[i].hits += 1000
+    print(total(cells))
+    print(total(shared))
+    cells[-1].touch()
+    cells[-1].at.y = 9.5
+    print(cells[-1].at.sum())
+    print(cells[0].alive)
+    print(cells[1].score())
+    mut i: int64 = 0
+    while i < len(cells):
+        cells[i].at.shift((i as int32))
+        i += 1
+    print(total(cells))
