@@ -1,0 +1,99 @@
+# Streaming I/O: a log read in line batches and in chunks, with gzip and HMAC.
+#
+# Writes N log lines, reads them back 1,024 lines at a time and parses each,
+# then reads the file again in 64 KiB chunks. Each chunk is compressed with
+# gzip, decompressed again, and folded into a running HMAC-SHA256, so the
+# program never holds the whole file. Takes the line count and a scratch
+# directory.
+import bytes
+import fs
+import gzip
+import io
+import path
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def main() -> int32:
+    args = sys.args()
+    match parse_int64(args[0]):
+        case Result.Ok(n):
+            match run(n, args[1].clone()):
+                case Result.Ok(summary):
+                    print(summary)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            print("usage: stream_io <lines> <workdir>")
+            return 2
+
+
+def run(n: int64, workdir: str) -> Result[str, io.Error]:
+    mut rng = Rng(state=41)
+    words = ["connect", "read", "write", "close", "retry", "timeout", "accept", "flush"]
+
+    log_path = path.join(workdir.clone(), "stream.log")
+    with log = try fs.create(log_path.clone()):
+        for i in range(n):
+            view word = words[rng.next() % 8]
+            try log.write_all(
+                f"{i} {word} worker-{rng.next() % 64} {rng.next() % 100000}\n"
+            )
+
+    mut lines = 0
+    mut value_sum = 0
+    mut retries = 0
+    with file = try fs.open(log_path.clone()):
+        while true:
+            batch = try file.read_lines(1024)
+            if batch.is_empty():
+                break
+            for line in batch:
+                fields = line.split(" ")
+                lines += 1
+                value_sum += try_int(fields[3])
+                if fields[1] == "retry":
+                    retries += 1
+
+    mut chunks = 0
+    mut restored = 0
+    mut smaller = 0
+    mut mac = "stream_io".to_bytes()
+    with file = try fs.open(log_path.clone()):
+        while true:
+            match try file.read_chunk(65536):
+                case list[uint8] as chunk:
+                    chunks += 1
+                    packed = gzip.compress(chunk)
+                    if packed.len() < chunk.len():
+                        smaller += 1
+                    match gzip.decompress(packed):
+                        case Result.Ok(plain):
+                            restored += plain.len()
+                            mac = bytes.hmac_sha256(mac, plain)
+                        case Result.Err(_):
+                            return Result.Ok("stream_io could not restore a chunk")
+                case None:
+                    break
+
+    try fs.remove_file(log_path)
+    return Result.Ok(
+        f"stream_io lines={lines} value_sum={value_sum} retries={retries} chunks={chunks} smaller={smaller} restored={restored} mac={bytes.hex_encode(mac)}"
+    )
+
+
+def try_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0

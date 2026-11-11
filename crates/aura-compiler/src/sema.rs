@@ -14329,6 +14329,48 @@ impl<'a> FunctionChecker<'a> {
                                     "Result".to_string(),
                                     vec![bytes_ty.clone(), crate::builtin_modules::io_error_type()],
                                 )),
+                                BuiltinMember::FileReadLine => Ok(Type::Named(
+                                    "Result".to_string(),
+                                    vec![
+                                        optional_type(Type::named("str")),
+                                        crate::builtin_modules::io_error_type(),
+                                    ],
+                                )),
+                                BuiltinMember::FileReadLines | BuiltinMember::FileReadChunk => {
+                                    let (name, parameter, ok) = match builtin_member {
+                                        BuiltinMember::FileReadLines => (
+                                            "read_lines",
+                                            "`read_lines` requires a `max_lines` argument",
+                                            Type::Named(
+                                                "list".to_string(),
+                                                vec![Type::named("str")],
+                                            ),
+                                        ),
+                                        _ => (
+                                            "read_chunk",
+                                            "`read_chunk` requires a `max_bytes` argument",
+                                            optional_type(bytes_ty.clone()),
+                                        ),
+                                    };
+                                    let count_arg =
+                                        self.bound_argument(&ordered_args, 0, span, parameter)?;
+                                    self.check_builtin_argument_type(
+                                        count_arg,
+                                        &Type::named("int64"),
+                                        locals,
+                                        name,
+                                    )?;
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        count_arg,
+                                        locals,
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Result".to_string(),
+                                        vec![ok, crate::builtin_modules::io_error_type()],
+                                    ))
+                                }
                                 BuiltinMember::FileWriteAll => {
                                     let text_arg = self.bound_argument(
                                         &ordered_args,

@@ -264,6 +264,8 @@ compiler, CLI, and language-server regression tests cover them instead.
 | `read_text_file.au` | Builtin `fs.exists(...)` and `fs.read_to_string(...)` | `true`, `true` |
 | `bytes_file_io.au` | Binary file helpers and `fs.File.read_bytes()` / `write_bytes(...)` | `4`, `65`, `67`, `5`, `68` |
 | `atomic_save.au` | `fs.File.sync()` and `fs.rename(...)` replace a file atomically; renaming a missing file returns `io.Error.NotFound` | `second`, `false`, `io.Error.NotFound` |
+| `read_lines.au` | `fs.File.read_lines(...)`, `read_line()`, and `read_chunk(...)` read a file in pieces from one position | `4 lines, 9 words`, `the quick brown fox`, `24`, `3`, `true` |
+| `sign_and_compress.au` | `gzip.compress(...)`, bounded `gzip.decompress(...)`, `bytes.hmac_sha256(...)`, and `bytes.constant_time_eq(...)` | `true`, `64`, `true`, `bad signature`, `more than 4096 bytes`, `not gzip` |
 | `process_run.au` | Shell-free `process.run(..., group=true)`, UTF-8 and raw captured stdout and stderr, and `process.Completed.check()` | `aura process`, `13`, `0`, `ExitStatus.Exited(0)` |
 | `process_pipes.au` | Interactive `process.start(..., group=true)`, `process.Pipe`, and child waiting with a timeout | `ping`, `ExitStatus.Exited(0)` |
 | `process_supervisor.au` | `process.supervisor()`, restart policies, restart backoff, and group-aware supervisor shutdown | `SupervisorEvent.Restarted(flaky, ExitStatus.Exited(1), 1)`, `SupervisorEvent.Exited(flaky, ExitStatus.Exited(1), 1)`, `true`, `false`, `true` |
@@ -425,6 +427,8 @@ cargo run -p aura -- run examples/resources/context_managers.au
 cargo run -p aura -- run examples/io/read_text_file.au
 cargo run -p aura -- run examples/io/bytes_file_io.au
 cargo run -p aura -- run examples/io/atomic_save.au
+cargo run -p aura -- run examples/io/read_lines.au
+cargo run -p aura -- run examples/io/sign_and_compress.au
 cargo run -p aura -- run examples/io/process_run.au
 cargo run -p aura -- run examples/io/process_pipes.au
 cargo run -p aura -- run examples/io/process_supervisor.au

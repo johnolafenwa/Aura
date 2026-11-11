@@ -1,0 +1,7 @@
+import fs
+import io
+
+def copy() -> Result[None, io.Error]:
+    file = try fs.open("data.bin")
+    chunk = try file.read_chunk("4096")
+    return Result.Ok(None)

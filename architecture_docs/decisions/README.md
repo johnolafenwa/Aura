@@ -98,4 +98,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 70. [ADR-0070: An unused `Result` is an error](0070-unused-results-are-errors.md) — Accepted; `AU2018`, and `_ = expr` discards on purpose
 71. [ADR-0071: Task groups live in `with`, and a child failure cancels the group](0071-task-groups-in-with-and-failure-cancellation.md) — Accepted; `AU2019`, and asyncio-style sibling cancellation
 72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
+73. [ADR-0073: Streaming file reads, gzip, and HMAC](0073-streaming-reads-gzip-and-hmac.md) — Accepted; `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip` module, and `bytes.hmac_sha256`
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause

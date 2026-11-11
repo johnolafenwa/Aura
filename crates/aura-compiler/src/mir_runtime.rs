@@ -9127,6 +9127,29 @@ impl MirRuntime {
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
+            "read_line" => {
+                bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
+                match file.read_line() {
+                    Ok(line) => Ok(result_ok(optional_str_value(line))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_lines" => {
+                let bound = bind_builtin_args(&["max_lines"], evaluate_named_args(args, env)?)?;
+                let max_lines = expect_i64_value(&bound[0].value, "read_lines(...)")?;
+                match file.read_lines(max_lines) {
+                    Ok(lines) => Ok(result_ok(lines)),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
+            "read_chunk" => {
+                let bound = bind_builtin_args(&["max_bytes"], evaluate_named_args(args, env)?)?;
+                let max_bytes = expect_i64_value(&bound[0].value, "read_chunk(...)")?;
+                match file.read_chunk(max_bytes) {
+                    Ok(chunk) => Ok(result_ok(optional_bytes_value(chunk.map(bytes_vec_value)))),
+                    Err(error) => Ok(result_err(io_error(error))),
+                }
+            }
             "write_all" => {
                 let bound = bind_builtin_args(&["text"], evaluate_named_args(args, env)?)?;
                 match &bound[0].value {

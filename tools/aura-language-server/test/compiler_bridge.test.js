@@ -4432,6 +4432,9 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     const fileNames = await completionsForLine("    file.");
     assert.ok(fileNames.has("read_all"));
     assert.ok(fileNames.has("read_bytes"));
+    assert.ok(fileNames.has("read_line"));
+    assert.ok(fileNames.has("read_lines"));
+    assert.ok(fileNames.has("read_chunk"));
     assert.ok(fileNames.has("write_all"));
     assert.ok(fileNames.has("write_bytes"));
     assert.ok(fileNames.has("flush"));
@@ -4594,7 +4597,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control"];
+    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control", "gzip"];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
       const line = `    ${moduleName}.`;
@@ -4620,6 +4623,10 @@ test("compiler bridge exposes control-plane module completions", async () => {
     assert.ok((await completionNames("log")).has("info"));
     assert.ok((await completionNames("metrics")).has("increment"));
     assert.ok((await completionNames("trace")).has("event"));
+    const gzipNames = await completionNames("gzip");
+    for (const expected of ["compress", "decompress", "Error"]) {
+      assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
+    }
 
     const retryCompletion = (await completions("control")).find(
       (completion) => completion.name === "retry"
@@ -5087,7 +5094,9 @@ test("compiler bridge exposes the canonical bytes module, errors, and str conver
       "base64_encode",
       "base64_decode",
       "sha256",
-      "sha256_string"
+      "sha256_string",
+      "hmac_sha256",
+      "constant_time_eq"
     ]) {
       assert.ok(moduleNames.has(expected), `bytes completion should include ${expected}`);
     }

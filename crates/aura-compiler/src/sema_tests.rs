@@ -32891,3 +32891,61 @@ fn ghost_locals_are_pure_and_read_only_by_ghost_code() {
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn file_line_and_chunk_reads_type_check_on_a_shared_handle() {
+    crate::check_source(
+        r#"import fs
+import io
+
+def count(path: str) -> Result[int64, io.Error]:
+    file = try fs.open(path)
+    mut total = 0
+    match try file.read_line():
+        case str as line:
+            total += line.byte_len()
+        case None:
+            pass
+    batch: list[str] = try file.read_lines(max_lines=64)
+    total += batch.len()
+    match try file.read_chunk(4096):
+        case list[uint8] as chunk:
+            total += chunk.len()
+        case None:
+            pass
+    return Result.Ok(total)
+"#,
+    )
+    .expect("line, batch, and chunk reads need no mutable receiver");
+
+    let cases = [
+        (
+            "    chunk = try file.read_chunk(\"4096\")\n",
+            "AU2999",
+            "`read_chunk` expects `int64`, found `str`",
+        ),
+        (
+            "    lines = try file.read_lines(1.5)\n",
+            "AU2999",
+            "`read_lines` expects `int64`, found `float64`",
+        ),
+        (
+            "    line = try file.read_line(80)\n",
+            "AU2004",
+            "`read_line` expects 0 arguments, found 1",
+        ),
+        ("    lines = try file.read_lines()\n", "AU2004", ""),
+    ];
+    for (statement, code, message) in cases {
+        let source = format!(
+            "import fs\nimport io\n\ndef copy() -> Result[None, io.Error]:\n    file = try fs.open(\"data\")\n{statement}    return Result.Ok(None)\n"
+        );
+        let error = crate::check_source(&source).expect_err("the call should be rejected");
+        assert_eq!(error.code, code, "{statement}: {}", error.message);
+        assert!(
+            error.message.contains(message),
+            "{statement}: {}",
+            error.message
+        );
+    }
+}

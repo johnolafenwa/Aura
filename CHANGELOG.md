@@ -7,6 +7,24 @@ in this file.
 
 ## Unreleased
 
+- `fs.File` reads a file in pieces: `read_lines(max_lines)` returns the
+  next batch of lines, `read_line()` the next line, and
+  `read_chunk(max_bytes)` the next bytes. A file larger than the 256 MiB
+  whole-read cap can now be read, and any file can be read in constant
+  memory. Reading 2 million lines in batches of 1,024 takes about 300 ms,
+  where Python's `for line in file` takes 340 to 400 ms. See the
+  [Filesystem Module](docs/manual/filesystem.md#reading-a-file-in-pieces).
+- New `gzip` module: `gzip.compress(data, level=6)` and
+  `gzip.decompress(data, max_bytes=...)`, which stops at the limit and
+  returns `gzip.Error.OutputTooLarge` instead of expanding a small input
+  without bound. See the [Gzip Module](docs/manual/gzip.md).
+- `bytes.hmac_sha256(key, message)` computes HMAC-SHA256, and
+  `bytes.constant_time_eq(left, right)` compares two signatures without
+  leaking where they differ.
+- A 31st [cross-language program](benchmarks/cross_language/README.md),
+  `stream_io`, reads a log in line batches and 64 KiB chunks with gzip and
+  HMAC on each chunk: Aura 766 ms, Python 938 ms, Rust 430 ms.
+
 ## VS Code extension 0.14.0 — 2026-11-10
 
 - Bundles language server 0.14.0. The semantic interface version stays 20.

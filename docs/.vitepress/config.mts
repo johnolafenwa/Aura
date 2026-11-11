@@ -97,6 +97,7 @@ export default defineConfig({
             { text: 'Numeric Arrays', link: '/manual/numeric-arrays' },
             { text: 'Math Module', link: '/manual/math' },
             { text: 'Bytes, Codecs, And SHA-256', link: '/manual/bytes' },
+            { text: 'Gzip Module', link: '/manual/gzip' },
             { text: 'JSON Module', link: '/manual/json' },
             { text: 'Randomness Module', link: '/manual/randomness' },
             { text: 'Concurrency', link: '/manual/concurrency' },

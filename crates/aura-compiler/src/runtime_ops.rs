@@ -185,6 +185,9 @@ macro_rules! resource_ops {
 resource_ops! {
     FileReadAll => ("fs.File", FileReadAll),
     FileReadBytes => ("fs.File", FileReadBytes),
+    FileReadLine => ("fs.File", FileReadLine),
+    FileReadLines => ("fs.File", FileReadLines),
+    FileReadChunk => ("fs.File", FileReadChunk),
     FileWriteAll => ("fs.File", FileWriteAll),
     FileWriteBytes => ("fs.File", FileWriteBytes),
     FileFlush => ("fs.File", FileFlush),
@@ -326,6 +329,7 @@ impl ResourceOp {
             FileReadBytes | TcpStreamReadExact | UnixStreamReadExact | TlsStreamReadExact => {
                 io(bytes())
             }
+            FileReadLines => io(Type::Named("list".to_string(), vec![str()])),
             FileWriteAll
             | FileWriteBytes
             | FileFlush
@@ -344,10 +348,11 @@ impl ResourceOp {
             | WebSocketSendBytes
             | UnixStreamWriteAll
             | TlsStreamWriteAll => io(Type::Unit),
-            TcpStreamReadLine | WebSocketRecvText | UnixStreamReadLine | TlsStreamReadLine => {
-                io(optional_type(str()))
+            FileReadLine | TcpStreamReadLine | WebSocketRecvText | UnixStreamReadLine
+            | TlsStreamReadLine => io(optional_type(str())),
+            FileReadChunk | TcpStreamReadBytes | UdpSocketRecv | WebSocketRecvBytes => {
+                io(optional_type(bytes()))
             }
-            TcpStreamReadBytes | UdpSocketRecv | WebSocketRecvBytes => io(optional_type(bytes())),
             TcpListenerAccept => io(Type::named("net.TcpStream")),
             UdpSocketRecvFrom => io(optional_type(Type::named("net.UdpDatagram"))),
             UdpDatagramAddress
