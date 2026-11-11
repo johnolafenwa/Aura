@@ -33,7 +33,7 @@ public trait Neg[Out]:
     def neg(self) -> Out
 
 
-public class F64x2:
+public copy class F64x2:
     """Two `float64` lanes, `l0` first."""
     public l0: float64
     public l1: float64
@@ -111,7 +111,7 @@ impl Neg[F64x2] for F64x2:
         return F64x2(l0=-self.l0, l1=-self.l1)
 
 
-public class F64x4:
+public copy class F64x4:
     """Four `float64` lanes, `l0` first."""
     public l0: float64
     public l1: float64
@@ -193,7 +193,7 @@ impl Neg[F64x4] for F64x4:
         return F64x4(l0=-self.l0, l1=-self.l1, l2=-self.l2, l3=-self.l3)
 
 
-public class F32x4:
+public copy class F32x4:
     """Four `float32` lanes, `l0` first."""
     public l0: float32
     public l1: float32
@@ -275,7 +275,7 @@ impl Neg[F32x4] for F32x4:
         return F32x4(l0=-self.l0, l1=-self.l1, l2=-self.l2, l3=-self.l3)
 
 
-public class F32x8:
+public copy class F32x8:
     """Eight `float32` lanes, `l0` first."""
     public l0: float32
     public l1: float32

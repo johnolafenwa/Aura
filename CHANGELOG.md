@@ -18,6 +18,8 @@ in this file.
   step now counts on plain integers in both backends and qualifies for
   the counted loop check below. It was about a thousand times slower.
 - A float `sqrt` is one instruction in native code instead of a call.
+- Fixed: `public copy class Name:` at the top of a module was a syntax
+  error, because `public copy` was read as the start of a constant.
 - Native code runs a counted loop over a list of numbers, such as
   `for i in range(len(xs)): ys[i] = a * xs[i] + ys[i]`, with one range
   check where the loop starts instead of one per element, and LLVM

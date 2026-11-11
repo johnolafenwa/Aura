@@ -19412,8 +19412,7 @@ impl<'a> Lowerer<'a> {
                     stop,
                     step,
                     for_stmt.span,
-                    body_block,
-                    after_block,
+                    (body_block, after_block),
                 );
             }
             Some(Type::Named(name, _)) if name == "Range" => {
@@ -20101,7 +20100,8 @@ impl<'a> Lowerer<'a> {
     /// it first, as `ForRange` does. That step cannot overflow: the cursor
     /// stays below `stop`, which is at most `int64` max. A larger step
     /// advances where the iteration ends (see
-    /// `lower_stepped_range_advance`).
+    /// `lower_stepped_range_advance`). The blocks are the loop's body and
+    /// the block after the loop.
     fn lower_counted_range_test(
         &mut self,
         binding: Option<String>,
@@ -20109,8 +20109,7 @@ impl<'a> Lowerer<'a> {
         stop: String,
         step: u128,
         span: crate::diag::Span,
-        body_block: usize,
-        after_block: usize,
+        (body_block, after_block): (usize, usize),
     ) {
         let next_block = self.new_block("for_range_next");
         let more = self.new_typed_temp(Type::named("bool"));

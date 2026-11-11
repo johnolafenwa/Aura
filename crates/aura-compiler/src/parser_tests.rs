@@ -1674,6 +1674,28 @@ fn parse_module_constants_preserves_visibility_annotation_and_source_order() {
 }
 
 #[test]
+fn parse_module_accepts_a_public_copy_class_beside_a_public_constant() {
+    let module = parse(
+        "public copy class Pair:\n    public left: float64\n    public right: float64\n\npublic copy = 1\n",
+    )
+    .expect("a public copy class should parse");
+    let class_decl = module
+        .items
+        .iter()
+        .find_map(|item| match item {
+            Item::Class(class_decl) => Some(class_decl),
+            _ => None,
+        })
+        .expect("the module should hold the class");
+    assert!(class_decl.public);
+    assert!(class_decl.copy);
+    assert_eq!(class_decl.name, "Pair");
+    // `copy` is still an ordinary name for a constant.
+    assert_eq!(module.constants.len(), 1);
+    assert_eq!(module.constants[0].name, "copy");
+}
+
+#[test]
 fn parse_preserves_top_level_mutable_bindings_for_contextual_entry_checking() {
     let module = parse("mut counter = 0\ndef main():\n    pass\n")
         .expect("parsing must preserve the script statement until the entry style is known");

@@ -569,6 +569,9 @@ impl Parser {
                 matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
                     && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "spec" || name == "lemma")
                         && matches!(self.peek_kind(2), Some(TokenKind::KwDef)))
+                    // `public copy class Name:` declares a class.
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "copy")
+                        && matches!(self.peek_kind(2), Some(TokenKind::KwClass)))
             }
             _ => false,
         }

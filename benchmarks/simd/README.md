@@ -1,4 +1,4 @@
-# Array kernels and list loops
+# Array kernels, list loops, and lane values
 
 The Array kernels of ADR-0085 and ADR-0086 beside the same work in Rust,
 in NumPy, and in plain Python: the left-to-right `sum`, the reordered
@@ -105,3 +105,40 @@ the measured time multiplied by 100.
   lacks, so it is four times faster in a build for the host CPU.
 - `blur` and `dot` are scalar in both languages. `blur` divides, and
   `dot` adds in source order, which no compiler may reorder.
+
+## Lane values
+
+`lanes.au`, `lanes.rs`, and `lanes.py` run six kernels written with the
+lane values of the `simd` module (ADR-0087): a dot product, `saxpy`, the
+length of each pair of coordinates (`norms`), a clamp, the absolute
+difference of two `float32` lists, and a `float32` sum. The Rust side
+uses lane structs with one field for each lane and the same order of
+operations, which is how stable Rust writes them without vendor
+intrinsics. Python has no lane values, so it runs the plain loops.
+
+Milliseconds for 1,024 elements, 400,000 times:
+
+| Kernel | Lane class | Aura | Aura, native | Rust | Rust, native | Python |
+| --- | --- | ---: | ---: | ---: | ---: | ---: |
+| `dot` | `F64x4` | 99 | 83 | 189 | 121 | 13,100 |
+| `saxpy` | `F64x4` | 133 | 124 | 217 | 59 | 15,000 |
+| `norms` | `F64x4` | 449 | 436 | 441 | 442 | 45,500 |
+| `clamp` | `F64x4` | 169 | 87 | 149 | 61 | 29,600 |
+| `absdiff` | `F32x8` | 105 | 56 | 280 | 23 | 17,000 |
+| `sum8` | `F32x8` | 114 | 78 | 98 | 72 | 6,400 |
+
+Aura and Rust print the same checksum on every row. Python runs one
+hundredth of the repetitions and adds in source order, so its checksums
+differ and its column is the measured time multiplied by 100.
+
+- On a generic build Aura is at or ahead of Rust on every row. Rust keeps
+  a bounds check on each load and store. Aura checks the range of every
+  lane once, where the loop starts.
+- On a build for the host CPU Rust is about twice as fast on `saxpy`,
+  `clamp`, and `absdiff`, where it unrolls further with 256-bit
+  registers. Aura stays within three times of Rust on every row.
+- `dot` with `F64x4` takes a third of the time of the scalar `dot` in
+  the list loop table above, which has to add in source order.
+- `norms` is bound by the square root, which costs the same in every
+  column.
+- Python is 60 to 300 times slower than Aura.
