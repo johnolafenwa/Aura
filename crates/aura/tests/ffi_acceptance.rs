@@ -1492,6 +1492,20 @@ def stored() -> None:
     print(fx_crate_make(-1, slot))
     report("stored over, before return")
 
+def ordered() -> int32:
+    # The order among handles that go out of scope together is not
+    # specified, so the three carry one id.
+    first = fx_crate_open(22)
+    second = fx_crate_open(22)
+    third = fx_crate_open(22)
+    total = fx_crate_id(third) + fx_crate_id(first)
+    return total + fx_crate_id(second)
+
+def failing(index: int64) -> int32:
+    held = fx_crate_open(31)
+    values: list[int32] = [fx_crate_id(held)]
+    return values[index]
+
 def main() -> int32:
     print(scoped())
     report("scoped")
@@ -1509,6 +1523,10 @@ def main() -> int32:
     report("found")
     stored()
     report("stored")
+    print(ordered())
+    report("ordered")
+    print(failing(0))
+    report("not failing")
     return 0
 "#,
     );
@@ -1539,6 +1557,10 @@ swapped, before return: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
 1\n\
 stored over, before return: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
 stored: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211]\n\
+66\n\
+ordered: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211, 22, 22, 22]\n\
+31\n\
+not failing: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211, 22, 22, 22, 31]\n\
 ";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);

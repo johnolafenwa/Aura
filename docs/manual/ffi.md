@@ -451,6 +451,54 @@ Aura.
   a task or Queue boundary.
 - A null `-> Handle` result is an Aura runtime failure, `AU4005`.
 
+### Drop Functions
+
+A `drop` clause names the C function that releases the object behind a
+handle. Aura calls it when the program lets go of a handle it still owns.
+
+```aura fragment
+extern "C" opaque class Database drop sqlite3_close
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close(db: own Database) -> int32
+
+def opens() -> bool:
+    mut found: Database | None = None
+    sqlite3_open(":memory:", found)
+    return found is not None
+```
+
+`opens` returns without a call of `sqlite3_close`, and the database is
+closed when `found` goes out of scope.
+
+- **The function.** It is an extern function of the same module. It takes
+  the handle as its one parameter, declared `own`, and returns a scalar or
+  nothing. Any other shape, or a name that is not such a function, is
+  `AU2005`. Aura discards the result.
+- **When it runs.** The function runs once, when the last owner of the
+  handle goes away: a variable goes out of scope or is assigned another
+  value, or a list, tuple, class instance, or enum payload that holds the
+  handle is dropped. That covers a normal return and `try` propagation. A
+  handle the program still holds when the process ends, after `main`
+  returns or a runtime failure stops it, may not be released.
+- **Giving a handle up.** A handle passed to an `own` parameter of any
+  extern function belongs to that function. The `drop` function does not
+  run for it. So an explicit close is still allowed, and it is the way to
+  read the status the function returns.
+- **Out-parameters.** After a call with a `mut Handle | None` argument, a
+  pointer the function did not change keeps the handle the place held. A
+  pointer it changed is a new handle, and the object the place held is no
+  longer the program's: the `drop` function does not run for it.
+- **Order.** The order in which handles that go out of scope together are
+  released is not specified, and the two backends may differ. When one C
+  object must outlive another, release the dependent one first with an
+  explicit call, keep it in a narrower scope, or name a `drop` function
+  that tolerates either order, such as `sqlite3_close_v2`.
+- **Borrowed pointers.** Every handle of the type is released, however it
+  was made. A C function that returns a pointer its library keeps must
+  return a different opaque class, one with no `drop` clause.
+- **The interpreter** looks the function up when a call first makes a
+  handle of the type. A missing symbol is `AU4005` at that call.
+
 ### Nullable Handles
 
 A type that is exactly a declared opaque handle plus `None` crosses C as one
@@ -559,10 +607,10 @@ conversion, or pointer-lifetime extension. A foreign call may have
 irreversible external effects. Evaluating a later argument or validating the
 result does not undo earlier evaluation, the foreign call, or foreign writes.
 
-Opaque handles have no automatic foreign destructor. A binding package must
-declare and call the right consuming C function. Dropping an unconsumed handle
-discards only Aura's wrapper. It may leak the foreign resource if the native
-API needs explicit destruction.
+An opaque class with no `drop` clause has no foreign destructor. A binding
+package must declare and call the right consuming C function. Dropping an
+unconsumed handle of such a class discards only Aura's wrapper. It may leak
+the foreign resource if the native API needs explicit destruction.
 
 Printing, f-string interpolation, and `str(...)` render a handle as
 `<opaque TypeName>`, using its canonical Aura type name. The pointer address
@@ -575,7 +623,7 @@ never appears in source-visible output or diagnostics.
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
 | `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
-| `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, or a function as an extern result. |
+| `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, a function as an extern result, or a `drop` clause that does not name an extern function taking the handle as its one `own` parameter. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
@@ -598,7 +646,9 @@ are outside Aura's memory-safety guarantees.
 The native backend and the interpreter share one validated ABI description.
 The native backend emits the C call itself. The interpreter builds each call
 at run time. They agree on argument layout, ownership, mutable views,
-results, and Aura diagnostics. The maintained `examples/packages/ffi_getpid`
+results, and Aura diagnostics. The maintained `examples/packages/sqlite_notes` package binds the system
+SQLite library with handles, `drop` functions, C text, out-parameters, and
+a callback. The maintained `examples/packages/ffi_getpid`
 package and the FFI acceptance tests run the same declarations on both.
 
 A foreign call from a built program costs about what the same call costs
@@ -656,6 +706,7 @@ Implemented:
 - named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
+- `drop` functions that release an opaque handle the program lets go of
 
 Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
 other nullable shapes, unions, and arrays of structs. Aura does not infer them

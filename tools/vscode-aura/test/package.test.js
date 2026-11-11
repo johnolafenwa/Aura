@@ -421,6 +421,28 @@ test("extension highlights and snippets the maintained extern C surface", () => 
   assert.equal(opaqueRule.captures["3"].name, "keyword.declaration.ffi.aura");
   assert.equal(opaqueRule.captures["4"].name, "keyword.declaration.aura");
   assert.equal(opaqueRule.captures["5"].name, "entity.name.type.aura");
+  assert.deepEqual(
+    new RegExp(opaqueRule.match)
+      .exec('extern "C" opaque class Database drop sqlite3_close')
+      ?.slice(1),
+    ["extern", '"C"', "opaque", "class", "Database"]
+  );
+
+  const classRule = declarationRules.find(
+    (pattern) => pattern.name === "meta.definition.ffi.class.aura"
+  );
+  assert.ok(classRule);
+  assert.deepEqual(
+    new RegExp(classRule.match).exec('extern "C" class Point:')?.slice(1),
+    ["extern", '"C"', "class", "Point"]
+  );
+  assert.equal(classRule.captures["4"].name, "entity.name.type.aura");
+  const typeRule = grammar.repository.types.patterns.find(
+    (pattern) => pattern.name === "support.type.primitive.aura"
+  );
+  for (const ffiType of ["cstr", "ptr"]) {
+    assert.equal(new RegExp(typeRule.match).test(ffiType), true);
+  }
   assert.deepEqual(snippets["Extern C function"].body, [
     'public extern "C" def ${1:name}(${2}) -> ${3:int32}'
   ]);

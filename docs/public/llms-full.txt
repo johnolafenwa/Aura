@@ -4180,7 +4180,7 @@ A `from self` result has no value type. A bound method that returns a view of it
 ### Language Limits
 
 - Closures are expression-only and contextually typed.
-- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, FFI callbacks, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
+- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
 - Owned callable storage holds owned captures only. Loan captures stay in local loan closures.
 - A stored callable may return a view of one explicit parameter, but never of a captured receiver.
 - Explicit capture lists accept local identifiers. Project a field into a named view before capturing it.
@@ -5843,7 +5843,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Delimiter continuation, ignored continuation indentation, expression-match layout islands, trailing-comma/backslash/single-line-string boundaries, and pairing diagnostics | focused lexer/parser tests; `newline_continuation*` and delimiter parse/run fixtures; `examples/basics/multiline_expressions.au`; compiler-bridge and extension indentation tests; and the MIR/direct parity matrix |
 | Parenthesized tuple values/types, recursive assignment/loop targets and patterns, function returns, left-to-right capture, recursive Copy, whole-source non-Copy moves, shared leaf provenance, copy-only constant indexing, canonical rendering, same-type recursive structural `==`/`!=` with non-consuming reads, retained ordering rejection, and mutable-writeback rejections | focused lexer/parser/sema/MIR/native/runtime tests; the `tuple_structural_equality`, `tuple_equality_contextual_literals`, and retained `tuple_ordering_rejected` fixtures; other `tuple_*` parse/check/run fixtures; `examples/basics/tuples.au`; the compiler-bridge tuple equality/ordering regression; and the MIR/direct parity matrix |
 | grammar and parser limits | `crates/aura-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
-| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; and reserved callbacks/raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
+| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; named-function callbacks over scalars; and reserved raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
 | `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` and `iteration_element_loan_write_through` for write-through on fallthrough, `continue`, `break`, and explicit return; the maintained example; and the MIR/direct parity matrix |
@@ -7103,7 +7103,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
 - Calls run synchronously on the current worker.
 - The accepted ABI is limited to fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list, C structs of scalars by value and by pointer, temporary str and byte pointer-length views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
-- There is no callback, variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, automatic handle destructor, or async offload.
+- A callback is a named top-level function over scalars. Closures, text, lists, structs, and handles do not cross in a callback.
+- There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
 - The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
 - The interpreter loads libraries and looks up symbols on Unix-family hosts only.
@@ -7582,9 +7583,9 @@ Foreign function interface (FFI) failures use these codes:
 
 | Code | FFI failure |
 | --- | --- |
-| `AU1101` | Malformed extern bodies, defaults, type parameters, callbacks, variadics, and raw-pointer syntax, each with dedicated parser guidance. |
+| `AU1101` | Malformed extern bodies, defaults, type parameters, variadics, and raw-pointer syntax, each with dedicated parser guidance. |
 | `AU2002` | A type outside the FFI v0 scalar/view/opaque table. |
-| `AU2005` | A reserved raw-pointer or callback contract, or opaque construction. |
+| `AU2005` | A reserved raw-pointer contract, a callback argument that is not a named top-level function, or opaque construction. |
 | `AU2999` | Package authorization, root dependency reports, and the direct-call-only policy. |
 | `AU3004` | An invalid FFI capability. |
 | `AU3001`, `AU3008` | Opaque handle moves and task/Queue boundaries keep their usual codes. |
@@ -11156,7 +11157,7 @@ Design record:
 Aura FFI calls C functions through a fixed subset of the platform C ABI. A
 package declares each function it calls and names the native libraries they
 come from. It is an unsafe package capability for binding trusted native
-code. It is not a general system for pointers or callbacks.
+code. It is not a general system for pointers.
 
 ## Package Opt-In
 
@@ -11271,6 +11272,10 @@ extern "C" class Div:
     rem: int32
 
 extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
 
 def main() -> int32:
     print(getpid() > 0)
@@ -11304,7 +11309,7 @@ The rules for these declarations:
   with a block of fields. It has no methods, invariants, field defaults, or
   type parameters. See [Structs](#structs).
 
-Raw pointer syntax, callback types, and `...` variadics are reserved. The
+Raw pointer syntax and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
 opaque handle. An extern declaration is direct-call-only, so it cannot be used
 as a first-class function value.
@@ -11526,6 +11531,65 @@ AArch64, a struct argument that the convention would split between the last
 free registers and the stack is a build error. Move the parameter earlier or
 pass it as `mut Name`.
 
+### Callbacks
+
+A parameter of function type is a C function pointer. The argument is a
+named Aura function, and the C function calls it.
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+| Callback parameter | C type | Meaning |
+| --- | --- | --- |
+| `value: T` | `T` | a scalar by value |
+| `value: mut T` | `T *` | a pointer to one scalar, read on entry and written back on return |
+| `-> T` | `T` | a scalar result |
+| `-> None` | `void` | no result |
+
+`T` is any scalar type of the [Scalars](#scalars) table.
+
+- **Named functions only.** The argument names a top-level function with
+  exactly the declared parameter and result types. A lambda, a closure, a
+  method, a generic function, and a function held in a variable are
+  `AU2005`. C receives a plain code address, so the function has no
+  captured values. A `void *` user-data parameter that C passes through is
+  declared `uint64`.
+- **Pointer parameters.** `mut T` is also the spelling for `const T *`. A
+  null pointer reads as zero and is not written.
+- **Booleans.** A `bool` argument from C is `true` for any nonzero byte.
+- **Lifetime.** The code address stays valid for the life of the program.
+  The C library may keep it and call it during a later foreign call.
+- **Threads.** C must call the function on the thread that made the foreign
+  call, while a foreign call is running. A call from a thread the C library
+  started has undefined behavior.
+- **Suspension.** A callback should not wait on a task, a `Queue`, or a
+  timer. Other tasks would run while the C function is still on the stack.
+- **Failures.** A failure in the callback, such as an index out of range,
+  does not unwind through the C function. The callback returns zero to C,
+  later callbacks return zero without running, and the foreign call fails
+  with the callback's diagnostic when the C function returns.
+
+A callback parameter or result of any other type is `AU2002`: text, lists,
+structs, and handles do not cross in a callback. An extern function cannot
+return a function, and a callback parameter cannot be `own` or `mut`.
+
 ### Opaque Handles
 
 An opaque handle is one non-null foreign pointer with no layout visible to
@@ -11540,6 +11604,54 @@ Aura.
 - Handles are not Copy, not cloneable, and never `Transfer`. They cannot cross
   a task or Queue boundary.
 - A null `-> Handle` result is an Aura runtime failure, `AU4005`.
+
+### Drop Functions
+
+A `drop` clause names the C function that releases the object behind a
+handle. Aura calls it when the program lets go of a handle it still owns.
+
+```aura fragment
+extern "C" opaque class Database drop sqlite3_close
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close(db: own Database) -> int32
+
+def opens() -> bool:
+    mut found: Database | None = None
+    sqlite3_open(":memory:", found)
+    return found is not None
+```
+
+`opens` returns without a call of `sqlite3_close`, and the database is
+closed when `found` goes out of scope.
+
+- **The function.** It is an extern function of the same module. It takes
+  the handle as its one parameter, declared `own`, and returns a scalar or
+  nothing. Any other shape, or a name that is not such a function, is
+  `AU2005`. Aura discards the result.
+- **When it runs.** The function runs once, when the last owner of the
+  handle goes away: a variable goes out of scope or is assigned another
+  value, or a list, tuple, class instance, or enum payload that holds the
+  handle is dropped. That covers a normal return and `try` propagation. A
+  handle the program still holds when the process ends, after `main`
+  returns or a runtime failure stops it, may not be released.
+- **Giving a handle up.** A handle passed to an `own` parameter of any
+  extern function belongs to that function. The `drop` function does not
+  run for it. So an explicit close is still allowed, and it is the way to
+  read the status the function returns.
+- **Out-parameters.** After a call with a `mut Handle | None` argument, a
+  pointer the function did not change keeps the handle the place held. A
+  pointer it changed is a new handle, and the object the place held is no
+  longer the program's: the `drop` function does not run for it.
+- **Order.** The order in which handles that go out of scope together are
+  released is not specified, and the two backends may differ. When one C
+  object must outlive another, release the dependent one first with an
+  explicit call, keep it in a narrower scope, or name a `drop` function
+  that tolerates either order, such as `sqlite3_close_v2`.
+- **Borrowed pointers.** Every handle of the type is released, however it
+  was made. A C function that returns a pointer its library keeps must
+  return a different opaque class, one with no `drop` clause.
+- **The interpreter** looks the function up when a call first makes a
+  handle of the type. A missing symbol is `AU4005` at that call.
 
 ### Nullable Handles
 
@@ -11649,10 +11761,10 @@ conversion, or pointer-lifetime extension. A foreign call may have
 irreversible external effects. Evaluating a later argument or validating the
 result does not undo earlier evaluation, the foreign call, or foreign writes.
 
-Opaque handles have no automatic foreign destructor. A binding package must
-declare and call the right consuming C function. Dropping an unconsumed handle
-discards only Aura's wrapper. It may leak the foreign resource if the native
-API needs explicit destruction.
+An opaque class with no `drop` clause has no foreign destructor. A binding
+package must declare and call the right consuming C function. Dropping an
+unconsumed handle of such a class discards only Aura's wrapper. It may leak
+the foreign resource if the native API needs explicit destruction.
 
 Printing, f-string interpolation, and `str(...)` render a handle as
 `<opaque TypeName>`, using its canonical Aura type name. The pointer address
@@ -11662,10 +11774,10 @@ never appears in source-visible output or diagnostics.
 
 | Code | Cause |
 | --- | --- |
-| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
+| `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
 | `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
-| `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
+| `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, a function as an extern result, or a `drop` clause that does not name an extern function taking the handle as its one `own` parameter. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
@@ -11688,7 +11800,9 @@ are outside Aura's memory-safety guarantees.
 The native backend and the interpreter share one validated ABI description.
 The native backend emits the C call itself. The interpreter builds each call
 at run time. They agree on argument layout, ownership, mutable views,
-results, and Aura diagnostics. The maintained `examples/packages/ffi_getpid`
+results, and Aura diagnostics. The maintained `examples/packages/sqlite_notes` package binds the system
+SQLite library with handles, `drop` functions, C text, out-parameters, and
+a callback. The maintained `examples/packages/ffi_getpid`
 package and the FFI acceptance tests run the same declarations on both.
 
 A foreign call from a built program costs about what the same call costs
@@ -11698,7 +11812,9 @@ find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
 loads to find the list's elements. A struct argument or result costs a
-store and a load for each field.
+store and a load for each field. A callback costs about 4 ns more
+than a C function pointer, for the frame that guards the C caller against
+a failure.
 
 Library loading and symbol lookup in the interpreter are implemented on
 Unix-family hosts. On other hosts, a call there fails with the runtime
@@ -11716,7 +11832,9 @@ FFI does not:
 - pass typed pointers to anything but one scalar, one handle, or the
   elements of a list of scalars
 - pass an `Array[T]` as a pointer
-- accept callbacks or variadics
+- accept variadics
+- pass a closure as a callback, or pass text, lists, structs, or handles to
+  one
 - offer asynchronous foreign calls
 
 Aura does not infer C ABI layout outside the tables above.
@@ -11739,10 +11857,12 @@ Implemented:
 - `mut` scalar out-parameters
 - `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
 - `extern "C"` classes passed and returned by value, and passed by pointer
+- named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
+- `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
+Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
 other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 
@@ -14021,7 +14141,8 @@ extern-function-declaration
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
-    = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+    = "extern", STRING, "opaque", "class", identifier,
+      [ "drop", identifier ], NEWLINE ;
 
 contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
@@ -14040,7 +14161,7 @@ checking rejects alias expansion cycles with `AU2012`.
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
 declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
-contract.
+contract. `symbol` and `drop` are words only in these clauses.
 [FFI](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters
@@ -18282,7 +18403,7 @@ FFI is the foreign function interface. FFI v0 views are temporary call-boundary 
 
 An opaque FFI handle is a non-Copy, non-cloneable, non-Transfer owned wrapper for one non-null foreign pointer. A bare handle parameter retains it. `own Handle` consumes it. `mut Handle` is unavailable.
 
-Aura does not call a foreign destructor automatically, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
+A handle whose class declares a `drop` function is released with it when the program lets go of the handle. Without the clause, Aura does not call a foreign destructor, so a binding must invoke its explicit consuming close or free declaration. Opaque handles cannot be task captures, task results, or Queue payloads.
 
 See [FFI](/manual/ffi) for the complete ABI and failure boundary.
 
@@ -49194,12 +49315,48 @@ the object it creates through it, which is how `sqlite3_open` and many other
 constructors that return a status code hand back their result. The
 [Manual's FFI page](/manual/ffi#nullable-handles) shows that form.
 
-What Aura does *not* do is close a handle for you. A dropped `CFile` only
-discards Aura's wrapper, and the `FILE *` leaks. When you write a binding,
-declare the C function that releases the object with an `own` parameter,
-and give your callers a way to call it, typically through a class with a
-`close()` method that they can put in a `with` block, as
-[Chapter 14](/book/ch14-00-resources-and-cleanup) showed.
+So far a `CFile` we forget to close leaks: Aura drops its own wrapper and
+the `FILE *` stays open. A `drop` clause on the opaque class fixes that. It
+names the C function that releases the object, and Aura calls it when the
+program lets go of a handle it still owns:
+
+*Filename: src/note.au*
+
+```aura fragment
+extern "C" opaque class CFile drop fclose
+extern "C" def tmpfile() -> CFile
+extern "C" def fwrite(text: str, count: uint64, file: CFile) -> uint64
+extern "C" def ftell(file: CFile) -> int64
+extern "C" def fclose(file: own CFile) -> int32
+
+def write_note(text: str) -> int64:
+    file = tmpfile()
+    fwrite(text, 1, file)
+    return ftell(file)
+
+def main() -> int32:
+    print(write_note("twelve bytes"))
+    return 0
+```
+
+```console
+$ aura run src/note.au
+12
+```
+
+`write_note` never calls `fclose`, and the file is closed all the same,
+when `file` goes out of scope at the end of the function. The same happens
+when a handle is replaced by assignment, and when a list or a class
+instance that holds one is dropped. The `drop` function must be an extern
+function of the same module that takes the handle as its one `own`
+parameter.
+
+A handle is released exactly once. Calling `fclose(file)` ourselves still
+works, and it is the way to see the status the function returns. The handle
+moves into the call, so there is nothing left for Aura to release. Declare
+`drop` on a type only when every handle of that type is ours to release. A
+C function that returns a pointer its library keeps, such as the `stdout`
+stream, needs a second opaque class without the clause.
 
 ## Arrays of numbers
 
@@ -49313,6 +49470,64 @@ Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
 struct costs a few nanoseconds more than one with plain numbers. C unions,
 bit-fields, and array fields have no Aura spelling.
+
+## Callbacks
+
+Sometimes the C function wants to call us. `qsort` sorts an array of
+anything, so it asks for a function that compares two elements. In an
+extern declaration a parameter with a function type is a C function
+pointer, and the argument is the name of an Aura function:
+
+*Filename: src/sorting.au*
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+<span class="caption">Listing 18-7: Handing an Aura function to C's `qsort`</span>
+
+```console
+$ aura run src/sorting.au
+[12, 9, 3, 0, -4]
+```
+
+`qsort` hands its comparison function two `const void *` pointers. We know
+they point at `int32` elements, so the callback type says `mut int32`: a
+pointer to one number, which Aura reads on the way in. A plain `int32`
+parameter would be a number passed by value. A callback takes and returns
+scalars only.
+
+The argument must be a function we name, defined at the top level of a
+module. C receives a bare code address with nowhere to keep captured
+variables, so a lambda or a closure is a compile error. C libraries usually
+make up for that with a `void *user_data` parameter that they pass back to
+the callback untouched. Declare it `uint64`, and use it to carry an index
+or a key.
+
+A callback can fail like any other Aura code, with an index out of range
+or an overflow. Aura does not unwind through the C function, which would
+not expect it. The callback returns zero to C, any later callbacks return
+zero without running, and the `qsort` call itself fails with the
+callback's error as soon as the C function returns. Two rules keep
+callbacks safe: the C library must call the function on the thread that
+made the foreign call, and the callback should not wait on a task or a
+queue.
 
 ## When things go wrong at run time
 
@@ -49446,7 +49661,7 @@ without a change to your own manifest that a reviewer will see.
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
-the compiler cannot check. There are no callbacks from C into Aura, no
+the compiler cannot check. There are no closures as callbacks, no
 variadic functions such as `printf`, no unions or arrays of structs, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
@@ -49461,10 +49676,11 @@ You can now call a C function from Aura: declare it with `extern "C" def`
 inside a package that opts in with `allow_ffi = true`, name its library
 under `[ffi]`, pass scalars by value,
 text and bytes as temporary views, C strings as `cstr`, lists of numbers as
-`ptr[T]` arrays, C structs as `extern "C"` classes, and results through
+`ptr[T]` arrays, C structs as `extern "C"` classes, Aura functions as
+callbacks, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
-a compile error. You have also seen where the compiler's help ends, at the
+a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
 boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In

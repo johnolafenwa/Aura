@@ -304,7 +304,8 @@ extern-function-declaration
       ( NEWLINE | ":", NEWLINE, INDENT, contract-clause, { contract-clause }, DEDENT ) ;
 
 extern-opaque-declaration
-    = "extern", STRING, "opaque", "class", identifier, NEWLINE ;
+    = "extern", STRING, "opaque", "class", identifier,
+      [ "drop", identifier ], NEWLINE ;
 
 contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
@@ -323,7 +324,7 @@ checking rejects alias expansion cycles with `AU2012`.
 Parsing requires the extern ABI string to be exactly `"C"`. Extern
 declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
-contract.
+contract. `symbol` and `drop` are words only in these clauses.
 [FFI](/manual/ffi) restricts their parameter modes and types.
 
 ## Type References And Type Parameters

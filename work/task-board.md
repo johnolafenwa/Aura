@@ -57,9 +57,11 @@ Last updated: 2026-11-10
   out-parameters, and `Handle | None` and `mut Handle | None` parameters
   (ADR-0075). `ptr[T]` and `mut ptr[T]` array pointers over scalar lists
   (ADR-0076). `extern "C" class` structs by value and by pointer (ADR-0077).
-  Named functions as C callbacks over scalars (ADR-0080).
-- Remaining: handle destructors, a
-  SQLite example, and the final benchmarks against Rust and Python.
+  Named functions as C callbacks over scalars (ADR-0080). `drop`
+  functions that release opaque handles (ADR-0083), and the
+  `examples/packages/sqlite_notes` binding of SQLite.
+- Remaining: `Array[T]` as a pointer, closures as callbacks, and structs
+  or text in callbacks.
 
 ## Evaluation of the work since 0.13.0-preview (complete)
 

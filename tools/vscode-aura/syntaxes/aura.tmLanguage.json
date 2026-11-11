@@ -319,6 +319,24 @@
           }
         },
         {
+          "name": "meta.definition.ffi.class.aura",
+          "match": "\\b(extern)\\s+(\"C\")\\s+(class)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.ffi.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            },
+            "3": {
+              "name": "keyword.declaration.aura"
+            },
+            "4": {
+              "name": "entity.name.type.aura"
+            }
+          }
+        },
+        {
           "name": "meta.definition.ffi.function.aura",
           "match": "\\b(extern)\\s+(\"C\")\\s+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
           "captures": {
@@ -525,7 +543,7 @@
       "patterns": [
         {
           "name": "support.type.primitive.aura",
-          "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|str|list|dict|set|Duration|Lookup|Poll|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
+          "match": "\\b(bool|int|int8|int16|int32|int64|int128|intsize|uint8|uint16|uint32|uint64|uint128|uintsize|float32|float64|str|cstr|ptr|list|dict|set|Duration|Lookup|Poll|Result|SendError|Queue|QueueReceive|Task|TaskResult|TaskGroup|SelectOutcome|WaitAny|WaitAll|Array|process\\.Child|fs\\.File|net\\.TcpStream)\\b"
         },
         {
           "name": "support.type.primitive.aura",

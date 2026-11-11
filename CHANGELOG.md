@@ -32,6 +32,16 @@ in this file.
   parameters and results are scalars, and `mut T` is a pointer to one. A
   failure in a callback fails the foreign call once the C function
   returns. Closures cannot be callbacks.
+- FFI releases opaque handles. `extern "C" opaque class Database drop
+  sqlite3_close` names the C function that releases a handle, and Aura
+  calls it once when the program lets go of a handle it still owns: at
+  the end of a scope, on reassignment, or when a list or class instance
+  that holds it is dropped. Passing the handle to an `own` parameter
+  still closes it by hand.
+- `examples/packages/sqlite_notes` binds the system SQLite library.
+- `aura verify` finds the trusted contract of an extern function that has
+  a `symbol` clause. It looked the contract up by the C symbol, so the
+  contract was ignored.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

@@ -384,12 +384,48 @@ the object it creates through it, which is how `sqlite3_open` and many other
 constructors that return a status code hand back their result. The
 [Manual's FFI page](/manual/ffi#nullable-handles) shows that form.
 
-What Aura does *not* do is close a handle for you. A dropped `CFile` only
-discards Aura's wrapper, and the `FILE *` leaks. When you write a binding,
-declare the C function that releases the object with an `own` parameter,
-and give your callers a way to call it, typically through a class with a
-`close()` method that they can put in a `with` block, as
-[Chapter 14](/book/ch14-00-resources-and-cleanup) showed.
+So far a `CFile` we forget to close leaks: Aura drops its own wrapper and
+the `FILE *` stays open. A `drop` clause on the opaque class fixes that. It
+names the C function that releases the object, and Aura calls it when the
+program lets go of a handle it still owns:
+
+*Filename: src/note.au*
+
+```aura fragment
+extern "C" opaque class CFile drop fclose
+extern "C" def tmpfile() -> CFile
+extern "C" def fwrite(text: str, count: uint64, file: CFile) -> uint64
+extern "C" def ftell(file: CFile) -> int64
+extern "C" def fclose(file: own CFile) -> int32
+
+def write_note(text: str) -> int64:
+    file = tmpfile()
+    fwrite(text, 1, file)
+    return ftell(file)
+
+def main() -> int32:
+    print(write_note("twelve bytes"))
+    return 0
+```
+
+```console
+$ aura run src/note.au
+12
+```
+
+`write_note` never calls `fclose`, and the file is closed all the same,
+when `file` goes out of scope at the end of the function. The same happens
+when a handle is replaced by assignment, and when a list or a class
+instance that holds one is dropped. The `drop` function must be an extern
+function of the same module that takes the handle as its one `own`
+parameter.
+
+A handle is released exactly once. Calling `fclose(file)` ourselves still
+works, and it is the way to see the status the function returns. The handle
+moves into the call, so there is nothing left for Aura to release. Declare
+`drop` on a type only when every handle of that type is ours to release. A
+C function that returns a pointer its library keeps, such as the `stdout`
+stream, needs a second opaque class without the clause.
 
 ## Arrays of numbers
 
@@ -713,7 +749,7 @@ text and bytes as temporary views, C strings as `cstr`, lists of numbers as
 callbacks, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
-a compile error. You have also seen where the compiler's help ends, at the
+a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
 boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In
