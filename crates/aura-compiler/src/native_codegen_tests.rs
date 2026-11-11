@@ -16555,7 +16555,7 @@ def main() -> int32:
         "aura_direct_ffi_release_c_string",
         "aura_direct_ffi_c_string_result",
         "aura_direct_ffi_nullable_handle_address",
-        "aura_direct_ffi_handle",
+        "aura_direct_ffi_stored_handle",
         "aura_direct_ffi_none",
         "aura_direct_ffi_bad_bool",
     ] {

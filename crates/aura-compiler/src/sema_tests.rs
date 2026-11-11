@@ -31148,7 +31148,7 @@ fn closure_types_have_canonical_keys_and_empty_unions_are_rejected() {
 }
 
 #[test]
-fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
+fn ffi_signature_validation_admits_function_typed_parameters_and_reserves_returns() {
     let span = Span::new(1, 1);
     let callback_type = || TypeRef::function(vec![type_ref("int32")], type_ref("int32"), span);
     let decl =
@@ -31171,7 +31171,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
     let type_arities = BTreeMap::new();
     let canonical_type_names = BTreeMap::new();
 
-    let parameter = validate_ffi_signature(
+    validate_ffi_signature(
         &decl(
             vec![crate::ast::Param {
                 name: "callback".to_string(),
@@ -31189,13 +31189,7 @@ fn ffi_signature_validation_reserves_function_typed_parameters_and_returns() {
         &type_arities,
         &canonical_type_names,
     )
-    .expect_err("callback parameters are reserved in FFI v0");
-    assert_eq!(parameter.code, "AU2005");
-    assert_eq!(
-        parameter.message,
-        "FFI callbacks are reserved; parameter `callback` cannot use a function type"
-    );
-    assert!(!parameter.help.is_empty());
+    .expect("a function-typed parameter is a callback");
 
     let returned = validate_ffi_signature(
         &decl(Vec::new(), callback_type()),

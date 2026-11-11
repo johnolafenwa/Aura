@@ -454,6 +454,9 @@ impl Specializer<'_, '_> {
     }
 }
 
+// One replacement is built for a call and consumed at once, so the size
+// of the rvalue variant costs nothing a box would save.
+#[allow(clippy::large_enum_variant)]
 enum Replacement {
     Callee(String),
     Rvalue(Rvalue),
