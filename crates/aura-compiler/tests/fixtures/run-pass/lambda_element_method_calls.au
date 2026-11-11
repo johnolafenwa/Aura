@@ -1,0 +1,44 @@
+# A lambda body that calls a method on an element of a captured list lends
+# the element for the call, and the loan ends before the lambda returns.
+class Square:
+    side: int64
+
+    def area(self) -> int64:
+        return self.side * self.side
+
+    def grow(mut self, by: int64) -> int64:
+        self.side += by
+        return self.side
+
+
+class Label:
+    text: str
+    hits: list[int64]
+
+    def describe(self) -> str:
+        return f"{self.text}:{len(self.hits)}"
+
+
+def main() -> None:
+    items: list[Square] = [Square(side=3), Square(side=4)]
+    first = lambda: items[0].area()
+    print(first())
+    print(first())
+
+    squares: list[Square] = [Square(side=5), Square(side=6)]
+    both = lambda: squares[1].area() + squares[0].area()
+    print(both())
+
+    labels: list[Label] = [Label(text="a", hits=[1, 2]), Label(text="b", hits=[])]
+    describe: def(int64) -> str = lambda index: labels[index].describe()
+    print(describe(0))
+    print(describe(1))
+
+    rows: list[list[int64]] = [[1, 2, 3], [4]]
+    width: def(int64) -> int64 = lambda index: len(rows[index])
+    print(width(0) + width(1))
+
+    mut growing: list[Square] = [Square(side=1)]
+    mut grow: def(int64) -> int64 = lambda [mut growing] by: growing[0].grow(by)
+    print(grow(2))
+    print(grow(3))

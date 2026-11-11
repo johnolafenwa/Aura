@@ -396,6 +396,8 @@ match result:
 print("result is still owned")
 ```
 
+A local bound to a shared binding, as in `kept = message`, shares the value with the scrutinee. Nothing moves out of the scrutinee. The same holds for the binding of a union type arm, `case Square as square:`.
+
 `match mut` requires a mutable place as the scrutinee. It gives mutably borrowed payload bindings. It rebuilds the enum value and writes it back on normal arm exit, `return`, `break`, `continue`, and `try` propagation.
 
 - Overlapping nested mutable matches are rejected.

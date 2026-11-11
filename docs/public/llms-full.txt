@@ -6285,12 +6285,18 @@ def main():
 - A `while` invariant is checked before every test of the condition: on
   entry, after every iteration (including one that ends in `continue`),
   and when the condition ends the loop. A `break` leaves without a check.
-- A `for` invariant is checked at the start of every iteration, after the
-  loop target is bound, so it can read the target. A loop over a
-  `range(...)` call checks it once more when the range runs out, with the
-  target at the range's end (or at its start when the range is empty), so
-  after `for i in range(n)` the invariant holds with `i == n`. A `break`
-  leaves without a check.
+- A `for` invariant that reads the loop target is checked at the start of
+  every iteration, after the target is bound. A loop over a `range(...)`
+  call checks it once more when the range runs out, with the target at the
+  range's end (or at its start when the range is empty), so after
+  `for i in range(n)` the invariant holds with `i == n`.
+- A `for` invariant that does not read the loop target is checked like a
+  `while` invariant: before the loop asks for each element, so on entry,
+  after every iteration, and when the loop runs out. It holds after the
+  loop, also when the loop ran no iteration. In
+  `for value in values: invariant total >= 0`, the code after the loop may
+  rely on `total >= 0`.
+- A `break` leaves a `for` loop without a check.
 - `decreases measure` takes an `int64` measure. It is checked each time
   the body starts: the measure must be at least 0, and smaller than it was
   the previous time. A loop that keeps both rules must end. A `for` loop
@@ -8956,6 +8962,8 @@ match result:
 
 print("result is still owned")
 ```
+
+A local bound to a shared binding, as in `kept = message`, shares the value with the scrutinee. Nothing moves out of the scrutinee. The same holds for the binding of a union type arm, `case Square as square:`.
 
 `match mut` requires a mutable place as the scrutinee. It gives mutably borrowed payload bindings. It rebuilds the enum value and writes it back on normal arm exit, `return`, `break`, `continue`, and `try` propagation.
 
@@ -13240,7 +13248,30 @@ A union value dispatches a trait method when every member implements the same tr
 - A `mut self` method mutates the payload in place, and the tag stays fixed.
 - An `own self` method consumes the union.
 
-A result written as `Self` that would differ per member is not one contract. Match the member and declare the result union explicitly. There is no duck typing over common method names, no `impl` for an anonymous union, and no inferred trait intersection.
+A result written as `Self` that would differ per member is not one contract. Match the member and declare the result union explicitly. There is no duck typing over common method names and no inferred trait intersection.
+
+An `impl` can also name a union type. Its methods then run for a direct call on a value of exactly that union type, whichever member the value holds, and the method reads the member with `match self`:
+
+```aura
+trait Named:
+    def name(self) -> str
+
+impl Named for int64 | None:
+    def name(self) -> str:
+        match self:
+            case None:
+                return "nothing"
+            case value:
+                return f"int {value}"
+
+def main():
+    count: int64 | None = 3
+    print(count.name())  # int 3
+    missing: int64 | None = None
+    print(missing.name())  # nothing
+```
+
+Such an `impl` serves direct calls only. It does not make the union satisfy a trait bound or convert to a trait object: both still ask every member to implement the trait.
 
 The same all-member rule decides whether a union satisfies a trait bound. A union type argument satisfies `T: Named` when every member implements that specialization, and every method the bound exposes, supertraits included, has one coherent contract across the members.
 
@@ -24560,7 +24591,10 @@ A loop is proved one iteration at a time. On entering the loop, the verifier
 forgets the value of every local the loop body assigns, and keeps only what
 the loop's `invariant` clauses say about them. It proves each invariant on
 entry and after every iteration, and the code after the loop learns only
-the invariants and the condition that ended the loop.
+the invariants and the condition that ended the loop. After a `for` loop
+over a collection or an iterator, that is every invariant that does not
+read the loop target: one that reads it is checked only inside the body
+(see [Contracts](/manual/contracts)).
 
 ```aura
 def sum_to(n: int64) -> int64:

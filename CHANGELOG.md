@@ -43,6 +43,38 @@ in this file.
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
   when the option is absent.
+- A `for` invariant that does not read the loop target is now checked
+  before the loop asks for each element, as a `while` invariant is: on
+  entry, after every iteration, and when the loop runs out. It holds after
+  the loop, so `aura verify` proves an `ensures` that relies on it, as in
+  `for value in values: invariant total >= 0`. Before, such an invariant was
+  checked only at the start of each iteration, the verifier learned nothing
+  from it after the loop, and it reported a counterexample for the
+  `ensures`. A program whose invariant fails only after the last iteration,
+  or on entry to a loop that runs no iteration, now stops with `AU4009`.
+  An invariant that reads the loop target is checked as before.
+- An `impl` for a union type, such as `impl Named for int64 | None:`, now
+  works for direct calls on a value of that type on both backends. Before,
+  the checker accepted it and the program failed with `AU4001` or did not
+  build. Such an `impl` does not make the union satisfy a trait bound or
+  convert to a trait object.
+- Fixed programs the checker accepted that then failed with `AU4001` under
+  `aura run` and did not build:
+  - a lambda that calls a method on an element of a captured list, as in
+    `lambda: items[0].area()`;
+  - a local bound to a name a shared `match` binds, as in
+    `case Square as square:` then `other = square`, or
+    `case Shape.Named(name):` then `label = name`;
+  - a local bound to another local that shares a borrowed value, as in
+    `first = param` then `second = first`.
+- Fixed an explicit type argument that names the enclosing function's type
+  parameter, as in `apply(run_one[T], job)` inside `def outer[T: Job]`.
+  Under `aura run` the call failed with "type `T` has no MIR implementation";
+  the built program was already right.
+- Fixed a generic bound written through an import alias, as in
+  `def show[T: sh.Named](value: T)` after `import shapes as sh`. A method
+  call on such a value failed with "requires an authoritative trait
+  identity"; the module's own name, `shapes.Named`, already worked.
 - Trait objects: `value as dyn Trait` names the conversion where no
   annotation supplies the type, as in `[Echo() as dyn Tool, Counter()]`.
   `dyn Iterator[T]` is a `for` source and satisfies an `Iterator[T]` bound,
