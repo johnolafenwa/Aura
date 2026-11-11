@@ -237,6 +237,20 @@ fn pool_put(connection: Connection) {
     drop(dropped);
 }
 
+/// Closes the idle connections to `port` and returns how many there were.
+#[cfg(test)]
+fn pool_discard(port: u16) -> usize {
+    let dropped = {
+        let mut pool = lock_mutex(&POOL);
+        let (matching, rest) = std::mem::take(&mut *pool)
+            .into_iter()
+            .partition::<Vec<_>, _>(|idle| idle.connection.key.port == port);
+        *pool = rest;
+        matching
+    };
+    dropped.len()
+}
+
 /// The idle connections the pool holds.
 pub fn http_pool_idle_connections() -> usize {
     lock_mutex(&POOL).len()
@@ -1308,6 +1322,7 @@ pub fn http_send(
             return Ok(response);
         };
         if redirects >= options.max_redirects {
+            response.drain_for_reuse(deadline, cancellation);
             return Err(io::Error::other(format!(
                 "stopped after {} redirects",
                 options.max_redirects
