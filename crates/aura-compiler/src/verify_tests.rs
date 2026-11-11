@@ -3931,6 +3931,10 @@ def defaulted() -> int64:
 
 def main():
     print(good())
+
+def first(xs: list[int64]) -> int64:
+    requires xs.contains(1)
+    return 1
 "#,
     )
     .expect("main.au");

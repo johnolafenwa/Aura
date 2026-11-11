@@ -544,10 +544,10 @@ impl FunctionChecker<'_> {
                     return Ok(());
                 };
                 if let ExprKind::Name(root) = &object.kind {
-                    if locals
-                        .get(root)
-                        .is_some_and(|binding| !matches!(binding.ty, Type::Module(_)))
-                    {
+                    if matches!(
+                        locals.get(root),
+                        Some(binding) if !matches!(binding.ty, Type::Module(_))
+                    ) {
                         return Ok(());
                     }
                 }

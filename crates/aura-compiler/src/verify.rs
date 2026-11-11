@@ -565,15 +565,18 @@ impl<'a> VerifyContext<'a> {
                         .rsplit('.')
                         .next()
                         .unwrap_or(&trait_impl.trait_name);
-                    let trait_method = ns
-                        .all_traits
-                        .get(&trait_impl.trait_name)
-                        .or_else(|| ns.traits.get(&trait_impl.trait_name))
-                        .or_else(|| ns.all_traits.get(short_trait))
-                        .or_else(|| ns.traits.get(short_trait))
-                        .or_else(|| program.traits.get(&trait_impl.trait_name))
-                        .and_then(|info| info.methods.get(method_name))
-                        .map(|info| &info.decl);
+                    let trait_method = [
+                        ns.all_traits.get(&trait_impl.trait_name),
+                        ns.traits.get(&trait_impl.trait_name),
+                        ns.all_traits.get(short_trait),
+                        ns.traits.get(short_trait),
+                        program.traits.get(&trait_impl.trait_name),
+                    ]
+                    .into_iter()
+                    .flatten()
+                    .next()
+                    .and_then(|info| info.methods.get(method_name))
+                    .map(|info| &info.decl);
                     impl_methods
                         .entry((
                             trait_impl.module_name.as_str(),
@@ -765,9 +768,11 @@ impl<'a> VerifyContext<'a> {
                 }
             }
         }
-        self.module_paths
-            .contains(dotted)
-            .then(|| dotted.to_string())
+        if self.module_paths.contains(dotted) {
+            Some(dotted.to_string())
+        } else {
+            None
+        }
     }
 
     /// The alias and its contract, when `ty` names a callable alias that

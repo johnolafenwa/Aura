@@ -1264,7 +1264,7 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
             .and_then(|n| n.strip_prefix(&prefix))
             .and_then(parse_soname_version);
         match (left_ver, right_ver) {
-            (Some(l), Some(r)) => r.cmp(&l).then_with(|| left.cmp(right)),
+            (Some(l), Some(r)) => r.cmp(&l).then(left.cmp(right)),
             (Some(_), None) => std::cmp::Ordering::Less,
             (None, Some(_)) => std::cmp::Ordering::Greater,
             (None, None) => left.cmp(right),
