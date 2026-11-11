@@ -111,7 +111,9 @@ pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 
 use ast::{ImportKind, Item};
 use package::PackageGraph;
-pub use package::{is_valid_link_name, DependencyUpdateResult, ForeignLinkPlan};
+pub use package::{
+    is_offline_mode, is_valid_link_name, set_offline_mode, DependencyUpdateResult, ForeignLinkPlan,
+};
 
 #[cfg(coverage)]
 #[doc(hidden)]

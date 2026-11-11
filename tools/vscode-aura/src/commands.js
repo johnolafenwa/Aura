@@ -4,10 +4,11 @@ const path = require("node:path");
 
 const MAIN_DEFINITION = /^def\s+main\s*\(/;
 
-// POSIX single-quote quoting; PowerShell and cmd accept double quotes.
+// Literal single-quote quoting on both POSIX (`'\''`) and PowerShell (`''`),
+// preventing `$()`, backtick, and `$env:` expansion in fallback terminal lines.
 function quoteArgument(value, platform = process.platform) {
   if (platform === "win32") {
-    return `"${value.replace(/"/g, '""')}"`;
+    return `'${value.replace(/'/g, "''")}'`;
   }
   return `'${value.replace(/'/g, "'\\''")}'`;
 }
@@ -17,22 +18,36 @@ function buildOutputPath(filePath, platform = process.platform) {
   return path.join(parsed.dir, platform === "win32" ? `${parsed.name}.exe` : parsed.name);
 }
 
-function compilerCommand(vscode) {
+function configuredCompilerExecutable(vscode) {
+  return vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim() || "aura";
+}
+
+function compilerCommand(vscode, platform = process.platform) {
   const configured = vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim();
-  return configured ? quoteArgument(configured) : "aura";
+  if (!configured) {
+    return "aura";
+  }
+  const quoted = quoteArgument(configured, platform);
+  return platform === "win32" ? `& ${quoted}` : quoted;
+}
+
+function commandArgs(kind, filePath, platform = process.platform) {
+  switch (kind) {
+    case "run":
+      return ["run", filePath];
+    case "build":
+      return ["build", "-o", buildOutputPath(filePath, platform), filePath];
+    default:
+      return ["test", filePath];
+  }
 }
 
 // The shell command each editor command runs for a saved file.
-function commandLine(kind, compiler, filePath) {
-  const file = quoteArgument(filePath);
-  switch (kind) {
-    case "run":
-      return `${compiler} run ${file}`;
-    case "build":
-      return `${compiler} build -o ${quoteArgument(buildOutputPath(filePath))} ${file}`;
-    default:
-      return `${compiler} test ${file}`;
-  }
+function commandLine(kind, compiler, filePath, platform = process.platform) {
+  const args = commandArgs(kind, filePath, platform).map((arg, index) =>
+    index === 0 || arg === "-o" ? arg : quoteArgument(arg, platform)
+  );
+  return `${compiler} ${args.join(" ")}`;
 }
 
 // CodeLens ranges for each module-level `def main(`.
@@ -51,6 +66,35 @@ function registerRunCommands(vscode, context) {
       terminal = vscode.window.createTerminal({ name: "Aura" });
     }
     return terminal;
+  }
+
+  function canExecuteStructuredTask() {
+    return Boolean(
+      vscode.tasks &&
+        typeof vscode.tasks.executeTask === "function" &&
+        typeof vscode.Task === "function" &&
+        typeof vscode.ShellExecution === "function"
+    );
+  }
+
+  async function executeAuraCommand(name, args, fallbackLine) {
+    if (canExecuteStructuredTask()) {
+      const executable = configuredCompilerExecutable(vscode);
+      const scope = (vscode.TaskScope && vscode.TaskScope.Workspace) || 2;
+      const task = new vscode.Task(
+        { type: "aura", command: name },
+        scope,
+        name,
+        "Aura",
+        new vscode.ShellExecution(executable, args)
+      );
+      await vscode.tasks.executeTask(task);
+      return fallbackLine;
+    }
+    const target = auraTerminal();
+    target.show(true);
+    target.sendText(fallbackLine);
+    return fallbackLine;
   }
 
   async function documentFor(uri) {
@@ -75,21 +119,20 @@ function registerRunCommands(vscode, context) {
       await document.save();
     }
     const line = commandLine(kind, compilerCommand(vscode), document.uri.fsPath);
-    const target = auraTerminal();
-    target.show(true);
-    target.sendText(line);
-    return line;
+    return executeAuraCommand(
+      `aura ${kind}`,
+      commandArgs(kind, document.uri.fsPath),
+      line
+    );
   }
 
   async function runWorkspaceTests() {
     const folder = (vscode.workspace.workspaceFolders || [])[0];
-    const target = auraTerminal();
-    target.show(true);
+    const args = folder ? ["test", folder.uri.fsPath] : ["test"];
     const line = folder
       ? `${compilerCommand(vscode)} test ${quoteArgument(folder.uri.fsPath)}`
       : `${compilerCommand(vscode)} test`;
-    target.sendText(line);
-    return line;
+    return executeAuraCommand("aura test", args, line);
   }
 
   const codeLensProvider = {
@@ -129,7 +172,9 @@ function registerRunCommands(vscode, context) {
 
 module.exports = {
   buildOutputPath,
+  commandArgs,
   commandLine,
+  compilerCommand,
   mainDefinitionLines,
   quoteArgument,
   registerRunCommands

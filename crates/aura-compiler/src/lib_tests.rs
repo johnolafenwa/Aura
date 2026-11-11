@@ -2500,7 +2500,7 @@ fn imported_function_return_types_keep_members_visible_across_modules() {
     let checked = check_path(&main_path)
         .expect("return type members from imported functions should stay visible");
     assert!(
-        checked.functions.get("main").is_some(),
+        checked.functions.contains_key("main"),
         "main should still type-check"
     );
 
@@ -2671,9 +2671,8 @@ fn broad_scratch_corpus_checks_analysis_and_mir_lowering_do_not_panic() {
                             emit_host_native_object(&mir)
                         })
                         .unwrap_or_else(|error| panic!("{error}"));
-                    match emission {
-                        Ok(_) => emitted_ok += 1,
-                        Err(_) => {}
+                    if emission.is_ok() {
+                        emitted_ok += 1;
                     }
                 }
             }
@@ -2711,7 +2710,7 @@ fn broad_scratch_corpus_runtime_paths_do_not_panic() {
                     continue;
                 }
                 runnable += 1;
-                if runnable % 50 == 0 {
+                if runnable.is_multiple_of(50) {
                     eprintln!(
                         "runtime corpus progress: processed {} runnable files (current: {})",
                         runnable,
@@ -2794,9 +2793,8 @@ fn maintained_example_tree_public_paths_do_not_panic() {
                 move || emit_host_native_object(&mir),
             )
             .unwrap_or_else(|error| panic!("{error}"));
-            match emission {
-                Ok(_) => emitted_ok += 1,
-                Err(_) => {}
+            if emission.is_ok() {
+                emitted_ok += 1;
             }
         }
 

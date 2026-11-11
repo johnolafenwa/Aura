@@ -7,6 +7,7 @@
 
 const childProcess = require("node:child_process");
 const fs = require("node:fs");
+const os = require("node:os");
 const path = require("node:path");
 
 const DEBUG_TYPE = "aura";
@@ -83,6 +84,10 @@ function environmentList(env) {
   return Object.entries(env || {}).map(([name, value]) => `${name}=${value}`);
 }
 
+function escapeLldbPath(value) {
+  return String(value).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
 // The launch request lldb-dap receives for an Aura configuration whose
 // program was built at `binary`.
 function adapterConfiguration(configuration, binary, formatterPath) {
@@ -92,7 +97,7 @@ function adapterConfiguration(configuration, binary, formatterPath) {
     args: (configuration.args || []).map(String),
     env: environmentList(configuration.env),
     initCommands: [
-      `command script import "${formatterPath}"`,
+      `command script import "${escapeLldbPath(formatterPath)}"`,
       ...(configuration.initCommands || [])
     ],
     auraProgram: configuration.program
@@ -118,22 +123,76 @@ function defaultConfiguration(document) {
   };
 }
 
-function compilerPath(vscode) {
-  return vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim() || "aura";
+function expandHome(value, home = os.homedir()) {
+  if (value === "~") {
+    return home;
+  }
+  if (value.startsWith("~/") || value.startsWith("~\\")) {
+    return path.join(home, value.slice(2));
+  }
+  return value;
 }
 
-function registerDebugger(vscode, context, { runFile = childProcess.execFile } = {}) {
+function findDebugCompiler({
+  configured = "",
+  platform = process.platform,
+  pathValue = process.env.PATH || "",
+  home = os.homedir(),
+  systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"],
+  executable = isExecutable
+} = {}) {
+  if (configured) {
+    return expandHome(configured, home);
+  }
+  const name = platform === "win32" ? "aura.exe" : "aura";
+  const pathDirs = pathValue.split(path.delimiter).filter((entry) => entry && path.isAbsolute(entry));
+  const installDirs = [path.join(home, ".local", "bin"), path.join(home, ".cargo", "bin"), ...systemDirs];
+  for (const directory of [...pathDirs, ...installDirs]) {
+    const candidate = path.join(directory, name);
+    if (executable(candidate)) {
+      return candidate;
+    }
+  }
+  return null;
+}
+
+function registerDebugger(
+  vscode,
+  context,
+  {
+    runFile = childProcess.execFile,
+    platform = process.platform,
+    pathValue = process.env.PATH || "",
+    home = os.homedir(),
+    systemDirs = ["/opt/homebrew/bin", "/usr/local/bin"]
+  } = {}
+) {
   const formatterPath = context.asAbsolutePath(path.join("debug", "aura_lldb.py"));
   const storage = context.globalStorageUri.fsPath;
   const output = vscode.window.createOutputChannel("Aura Debug");
 
   function build(program, binary) {
     fs.mkdirSync(path.dirname(binary), { recursive: true });
+    const configured = vscode.workspace.getConfiguration("aura").get("compilerPath", "").trim();
+    const resolvedCompiler = findDebugCompiler({
+      configured,
+      platform,
+      pathValue,
+      home,
+      systemDirs
+    });
+    if (!resolvedCompiler && platform === "win32") {
+      return Promise.resolve(
+        'Could not find `aura.exe` on PATH. Install Aura or set "aura.compilerPath" to the full path of aura.exe.'
+      );
+    }
+    const command = resolvedCompiler || "aura";
+    const options = resolvedCompiler ? { cwd: path.dirname(program) } : {};
     return new Promise((resolve) => {
       runFile(
-        compilerPath(vscode),
+        command,
         debugBuildArguments(program, binary),
-        { cwd: path.dirname(program) },
+        options,
         (error, _stdout, stderr) => {
           output.append(String(stderr || ""));
           resolve(error ? String(stderr || error.message) : null);

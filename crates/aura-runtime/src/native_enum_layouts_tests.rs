@@ -82,7 +82,7 @@ fn descriptor(prefix: &str) -> &'static str {
     let env = shape_env(prefix);
     let mut builder = LayoutBuilder::new(&env);
     let root = builder
-        .boxed_enum_layout(&Type::named(&format!("{prefix}Shape")), scalar)
+        .boxed_enum_layout(&Type::named(format!("{prefix}Shape")), scalar)
         .expect("a layout")
         .expect("an enum");
     Box::leak(encode_layouts(builder.table(), root).into_boxed_str())
@@ -1139,10 +1139,10 @@ fn dict_lookups_read_a_parsed_objects_entries_in_its_tape() {
             // Every lookup so far read the tape; a key that is not a `str`
             // looks the entries up as values.
             assert!(unrealized());
-            assert!(unsafe { aura_direct_map_get_lent(map, key_int) }.is_null());
+            assert!(aura_direct_map_get_lent(map, key_int).is_null());
             assert!(!unrealized());
             // A realized confined dict lends the entry itself.
-            assert!(!unsafe { aura_direct_map_get_lent(map, key_a) }.is_null());
+            assert!(!aura_direct_map_get_lent(map, key_a).is_null());
             for boxed in [key_a, key_z, key_int, map] {
                 unsafe { aura_direct_release_value(boxed) };
             }

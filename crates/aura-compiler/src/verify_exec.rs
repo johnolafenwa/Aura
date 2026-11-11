@@ -476,6 +476,18 @@ pub(super) struct Exec<'a> {
     pub(super) entry_facts: usize,
     /// The constant each defined term is named by.
     defined: BTreeMap<String, String>,
+    /// Whether specification evaluation is proving a goal rather than
+    /// assuming an hypothesis.
+    pub(super) proving: bool,
+    /// The module whose scope resolves unqualified names in the clause
+    /// currently being evaluated.
+    pub(super) spec_module: String,
+    /// Active `(spec_decl_ptr, rendered_args)` calls to stop direct or
+    /// mutual cycles immediately.
+    pub(super) active_specs: Vec<(usize, Vec<String>)>,
+    /// The unfolding limit a `spec def` call reached while a goal was
+    /// being proved, so the obligation can say so.
+    pub(super) spec_limit_hit: Option<usize>,
 }
 
 const MAX_DEPTH: usize = 3;
@@ -519,6 +531,10 @@ impl<'a> Exec<'a> {
             defined: BTreeMap::new(),
             prove_sites: false,
             position: (0, 0),
+            proving: true,
+            spec_module: function.module_name.clone(),
+            active_specs: Vec::new(),
+            spec_limit_hit: None,
         }
     }
 
@@ -3119,12 +3135,20 @@ impl<'a> Exec<'a> {
                 self.havoc_writebacks(state, args);
                 result.unwrap_or_else(|| fresh_target(self))
             }
-            CallTarget::Name(name) if self.cx.spec_def(name).is_some() => {
+            CallTarget::Name(name)
+                if self
+                    .cx
+                    .spec_def_in(&self.function.module_name, name)
+                    .is_some() =>
+            {
                 let mut values = Vec::new();
                 for arg in args {
                     values.push(self.operand(state, &arg.value, None));
                 }
-                let spec = self.cx.spec_def(name).expect("checked above");
+                let spec = self
+                    .cx
+                    .spec_def_in(&self.function.module_name, name)
+                    .expect("checked above");
                 self.spec_call_value(state, spec, values, name)
                     .unwrap_or_else(|| fresh_target(self))
             }
@@ -3141,8 +3165,14 @@ impl<'a> Exec<'a> {
                 self.spec_call_value(state, spec, values, function)
                     .unwrap_or_else(|| fresh_target(self))
             }
-            CallTarget::Name(name) if args.is_empty() && self.default_value(name).is_some() => {
-                self.default_value(name).expect("checked above")
+            CallTarget::Name(name) if args.is_empty() && name.contains("::__default_") => {
+                if let Some(value) = self.default_value(state, name) {
+                    value
+                } else if self.cx.function(name).is_some() {
+                    self.user_call(state, name, None, Vec::new(), target_type.as_ref(), target)
+                } else {
+                    fresh_target(self)
+                }
             }
             CallTarget::Name(name) => {
                 if self.cx.function(name).is_some() {
@@ -3312,9 +3342,10 @@ impl<'a> Exec<'a> {
                     fresh_target(self)
                 }
             },
-            CallTarget::Extern(call) if self.cx.decl(&call.name).is_some() => {
-                // A trusted contract: the call proves the `requires` and
-                // the result and `mut` arguments have the `ensures`.
+            CallTarget::Extern(call) if self.cx.extern_decl(&call.symbol).is_some() => {
+                let decl = self.cx.extern_decl(&call.symbol).expect("checked above");
+                // The call proves the `requires` and the result and `mut`
+                // arguments have the `ensures`.
                 let mut pre = Vec::new();
                 let mut post = Vec::new();
                 for (param, arg) in call.params.iter().zip(args) {
@@ -3338,12 +3369,14 @@ impl<'a> Exec<'a> {
                     post.push((param.name.clone(), after));
                 }
                 let span = self.span;
-                self.call_requires(state, &call.name, &pre, span);
+                self.contract_override = Some(decl);
+                self.call_requires(state, &decl.name, &pre, span);
                 let result = match target_type.as_ref().unwrap_or(&call.return_type) {
                     Type::Unit => Val::Unit,
                     ty => self.fresh(ty, target.unwrap_or("result")),
                 };
-                self.call_ensures(state, &call.name, &pre, &post, &result);
+                self.call_ensures(state, &decl.name, &pre, &post, &result);
+                self.contract_override = None;
                 result
             }
             CallTarget::Extern(_) => {
@@ -3415,7 +3448,7 @@ impl<'a> Exec<'a> {
     /// The value of the hidden function that computes a parameter's
     /// default, `f::__default_<index>_<param>`, read from the default as
     /// written when the contract model reads it.
-    fn default_value(&mut self, name: &str) -> Option<Val> {
+    fn default_value(&mut self, state: &State, name: &str) -> Option<Val> {
         let (function, rest) = name.split_once("::__default_")?;
         let (_, param) = rest.split_once('_')?;
         let decl = self.cx.decl(function)?;
@@ -3425,9 +3458,38 @@ impl<'a> Exec<'a> {
             .find(|p| p.name == param)?
             .default
             .as_ref()?;
+        let prev_module = self.spec_module.clone();
+        if let Some(module_name) = self.cx.decl_module(decl) {
+            self.spec_module = module_name.to_string();
+        }
         let mut wd = Vec::new();
-        let value = self.spec(default, &Default::default(), &mut wd, 0).ok()?;
-        wd.is_empty().then_some(value)
+        let result = self.spec(default, &Default::default(), &mut wd, 0).ok();
+        self.spec_module = prev_module;
+        let value = result?;
+        let wd_term = conjoin(&wd);
+        if wd_term != "true" {
+            let is_imported = self
+                .cx
+                .function(name)
+                .is_some_and(|thunk| thunk.module_name != self.function.module_name);
+            if is_imported {
+                let pc = state.pc.clone();
+                let span = self.span;
+                self.oblige(
+                    ObligationKind::Assert,
+                    span,
+                    format!(
+                        "default argument `{param}` of `{}` is well-defined",
+                        crate::mir::public_function_name(function)
+                    ),
+                    &pc,
+                    Goal::Holds(wd_term.clone()),
+                );
+            }
+            let pc = state.pc.clone();
+            self.assume(&pc, wd_term);
+        }
+        Some(value)
     }
 
     /// The value a call of a `spec def` returns, unfolded from its body,
@@ -3440,18 +3502,26 @@ impl<'a> Exec<'a> {
         name: &str,
     ) -> Option<Val> {
         let mut wd = Vec::new();
+        self.spec_limit_hit = None;
         let value = self.spec_call(spec, values, &mut wd, 0).ok()?;
+        let limit_hit = self.spec_limit_hit.take();
         let pc = state.pc.clone();
         let span = self.span;
         let wd = conjoin(&wd);
         if wd != "true" {
+            let public = crate::mir::public_function_name(name);
             self.oblige(
                 ObligationKind::Assert,
                 span,
-                format!(
-                    "`spec def {}` is well-defined",
-                    crate::mir::public_function_name(name)
-                ),
+                match limit_hit {
+                    // A recursive `spec def` is unfolded, not proved by
+                    // induction, so a call that may recurse deeper than
+                    // the limit has no known value.
+                    Some(limit) => format!(
+                        "`spec def {public}` needs at most {limit} levels of recursion here"
+                    ),
+                    None => format!("`spec def {public}` is well-defined"),
+                },
                 &pc,
                 Goal::Holds(wd),
             );

@@ -245,8 +245,9 @@ A path package is rejected as an update target.
 
 ## Git Resolution, Cache, And Safety
 
-A git source is either an explicit URL or SSH form, or an existing local path
-relative to the declaring manifest. Aura rejects these before invoking git:
+A git source is either an explicit `https://`, `ssh://`, or `git@host:path`
+SSH remote, or an existing local path relative to the declaring manifest. Aura
+rejects these before invoking git:
 
 - empty sources
 - option-like sources that begin with `-`
@@ -257,6 +258,10 @@ Aura disables interactive git credential prompts, so package commands fail
 instead of waiting for terminal input. Each git command has a 60-second
 default timeout. Set `AURA_GIT_TIMEOUT_MS` to a positive millisecond value to
 override it.
+
+Pass `--offline` or set `AURA_OFFLINE=1` to forbid network git traffic. Offline
+mode resolves local path dependencies, local git repositories, and cached
+remote revisions, and rejects uncached remote git queries.
 
 Resolved revisions live in a content-addressed cache under
 `$XDG_CACHE_HOME/aura/git`, otherwise `$HOME/.cache/aura/git`. When neither

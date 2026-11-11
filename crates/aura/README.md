@@ -139,7 +139,7 @@ aura deps update util
 | `aura --version` | Prints the build channel and 12-hex-digit source commit, then exits successfully. A release archive prints `aura 0.14.0-preview (0123456789ab)`. A source build prints `aura 0.14.0-dev (0123456789ab)`. |
 | `aura check <file.au>` | Parses and type-checks a program. |
 | `aura run [--backend mir\|direct\|auto] <file.au> [-- <program-args>...]` | Runs a program. The MIR runtime is the default. MIR is the compiler's mid-level intermediate representation. |
-| `aura build -o <output> <file.au>` | Compiles a standalone native binary. |
+| `aura build [--no-rpath] -o <output> <file.au>` | Compiles a standalone native binary. `--no-rpath` omits embedded `library_paths` run-time search paths. |
 | `aura deps update [package]` | Refreshes git dependencies for the current package or workspace and rewrites `Aura.lock`. |
 | `aura new <project-path>` | Creates `Aura.toml` and `src/main.au`. It never overwrites an existing path. |
 | `aura fmt [--check] [path ...]` | Formats source files: indentation, spacing, blank lines, and 88-column reflow. `--check` lists files that would change without writing. |
@@ -167,6 +167,9 @@ aura deps update util
 - With no package name, `aura deps update` refreshes every branch, tag, and
   default-main git dependency.
 - With a package name such as `util`, it refreshes only that dependency.
+- Pass `--offline` or set `AURA_OFFLINE=1` on any package-aware command to
+  forbid network git traffic while keeping cached remote revisions and local
+  repositories available.
 
 ### Running
 

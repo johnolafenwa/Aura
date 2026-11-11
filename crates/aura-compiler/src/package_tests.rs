@@ -2550,3 +2550,252 @@ library_paths = ["lib"]
         error.message
     );
 }
+
+#[cfg(unix)]
+#[test]
+fn git_dependency_rejects_symlinks_introduced_on_checked_out_revision() {
+    let _env_lock = lock_package_env();
+    let temp = TempDir::new("aura-package-git-rev-symlink");
+    let repo = init_git_package_repo(&temp, "util-repo", "util");
+    let source = fs::canonicalize(&repo)
+        .expect("repo should canonicalize")
+        .to_string_lossy()
+        .to_string();
+
+    run_git(&repo, &["checkout", "-b", "evil"]);
+    std::os::unix::fs::symlink("/etc/hosts", repo.join("escape.txt"))
+        .expect("failed to create symlink in git repo");
+    run_git(&repo, &["add", "escape.txt"]);
+    run_git(
+        &repo,
+        &["commit", "-m", "introduce symlink on non-HEAD branch"],
+    );
+    let evil_rev = run_git(&repo, &["rev-parse", "HEAD"]);
+    run_git(&repo, &["checkout", "main"]);
+
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+    let error = resolve_git_dependency(
+        &temp.path,
+        "util",
+        source,
+        &GitSelector::Rev(evil_rev),
+        None,
+    )
+    .expect_err("symlinks introduced only on checked-out <rev> must be rejected");
+    assert!(
+        error.message.contains("symlinked content"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn package_resolution_rejects_symlinked_src_escaping_manifest_dir() {
+    let temp = TempDir::new("aura-package-escaped-src");
+    let outside_src = temp.path.join("outside-src");
+    fs::create_dir_all(&outside_src).expect("create outside-src");
+    fs::write(outside_src.join("main.au"), "def main():\n    pass\n").expect("write main.au");
+
+    let pkg_dir = temp.path.join("pkg");
+    fs::create_dir_all(&pkg_dir).expect("create pkg_dir");
+    fs::write(
+        pkg_dir.join(MANIFEST_NAME),
+        "[package]\nname = \"pkg\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    )
+    .expect("write Aura.toml");
+    std::os::unix::fs::symlink(&outside_src, pkg_dir.join("src"))
+        .expect("symlink src outside manifest_dir");
+
+    let mut resolver = PackageResolver::new(BTreeMap::new(), DependencyRefreshPolicy::None);
+    let error = resolver
+        .resolve_package(&pkg_dir, None, PackageOrigin::Path)
+        .expect_err("symlinked src outside manifest_dir must be rejected");
+    assert!(
+        error.message.contains("outside package directory"),
+        "unexpected error: {}",
+        error.message
+    );
+}
+
+#[test]
+fn git_source_validation_enforces_allowed_protocols_and_offline_mode() {
+    let _env_lock = lock_package_env();
+    for disallowed in [
+        "http://example.com/org/repo.git",
+        "git://example.com/org/repo.git",
+        "ftp://example.com/org/repo.git",
+        "file:///tmp/repo",
+        "ext::sh -c echo% pwned",
+    ] {
+        let error = validate_git_source_literal("util", disallowed)
+            .expect_err(&format!("disallowed git source `{disallowed}` must fail"));
+        assert!(
+            error.message.contains("git protocol") || error.message.contains("remote helper"),
+            "unexpected error for `{disallowed}`: {}",
+            error.message
+        );
+    }
+
+    for allowed in [
+        "https://example.com/org/repo.git",
+        "ssh://git@example.com/org/repo.git",
+        "git@example.com:org/repo.git",
+    ] {
+        validate_git_source_literal("util", allowed)
+            .unwrap_or_else(|e| panic!("allowed git source `{allowed}` failed: {}", e.message));
+    }
+
+    let temp = TempDir::new("aura-package-offline-git");
+    let repo = init_git_package_repo(&temp, "util-repo", "util");
+    let local_source = fs::canonicalize(&repo)
+        .expect("repo should canonicalize")
+        .to_string_lossy()
+        .to_string();
+    let remote_source = "https://example.invalid/org/util.git".to_string();
+    let main_rev = run_git(&repo, &["rev-parse", "HEAD"]);
+    let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache"));
+
+    {
+        let _offline = EnvVarGuard::set("AURA_OFFLINE", "1");
+        let branch_err = resolve_git_dependency(
+            &temp.path,
+            "util",
+            remote_source.clone(),
+            &GitSelector::Branch("main".to_string()),
+            None,
+        )
+        .expect_err("uncached remote branch resolution must fail in offline mode");
+        assert!(
+            branch_err.message.contains("offline mode"),
+            "unexpected error: {}",
+            branch_err.message
+        );
+
+        let rev_err = resolve_git_dependency(
+            &temp.path,
+            "util",
+            remote_source.clone(),
+            &GitSelector::Rev(main_rev.clone()),
+            None,
+        )
+        .expect_err("uncached remote rev materialization must fail in offline mode");
+        assert!(
+            rev_err.message.contains("offline mode"),
+            "unexpected error: {}",
+            rev_err.message
+        );
+
+        // Local filesystem git repositories do not use the network and succeed offline.
+        let local_resolved = resolve_git_dependency(
+            &temp.path,
+            "util",
+            local_source,
+            &GitSelector::Branch("main".to_string()),
+            None,
+        )
+        .expect("local filesystem git dependency should succeed in offline mode");
+        let remote_cache_dir = git_cache_root()
+            .expect("git cache root")
+            .join(hash_source_key(&remote_source))
+            .join(&main_rev);
+        fs::create_dir_all(remote_cache_dir.parent().expect("cache parent"))
+            .expect("create remote cache parent");
+        fs::rename(&local_resolved.checkout_dir, &remote_cache_dir)
+            .expect("seed remote cache checkout");
+
+        let cached = resolve_git_dependency(
+            &temp.path,
+            "util",
+            remote_source,
+            &GitSelector::Rev(main_rev),
+            None,
+        )
+        .expect("cached remote git checkout should succeed in offline mode");
+        assert!(cached.checkout_dir.join(MANIFEST_NAME).is_file());
+    }
+}
+
+#[cfg(unix)]
+#[test]
+fn ffi_link_settings_reject_parent_traversal_and_unconfined_dependency_library_paths() {
+    let parent_err = expect_diag(
+        host_link_plan("library_paths = [\"../outside\"]\n", true, "linux"),
+        "parent directory traversal in library_paths must be rejected",
+    );
+    assert_eq!(parent_err.code, "AU2999");
+
+    let temp = TempDir::new("aura-packages-ffi-dep-confinement");
+    let main_path = temp.write(
+        "app/src/main.au",
+        "import native.sys\n\ndef main():\n    pass\n",
+    );
+    temp.write(
+        "app/Aura.toml",
+        r#"[package]
+name = "app"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[dependencies]
+native = { path = "../native" }
+
+[ffi]
+dependencies = ["native"]
+"#,
+    );
+    temp.write(
+        "native/src/sys.au",
+        "public extern \"C\" def getpid() -> int32\n",
+    );
+    temp.write(
+        "native/Aura.toml",
+        r#"[package]
+name = "native"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+library_paths = ["/opt/vendor/lib"]
+"#,
+    );
+    let abs_err = expect_diag(
+        PackageGraph::discover_for_entry(&main_path),
+        "dependency with absolute library_paths must be rejected",
+    );
+    assert_eq!(abs_err.code, "AU2999");
+    assert!(
+        abs_err.message.contains("outside its package directory"),
+        "unexpected error: {}",
+        abs_err.message
+    );
+
+    let outside_lib = temp.path.join("outside-lib");
+    fs::create_dir_all(&outside_lib).expect("create outside-lib");
+    std::os::unix::fs::symlink(&outside_lib, temp.path.join("native/escaped-lib"))
+        .expect("symlink escaped-lib");
+    temp.write(
+        "native/Aura.toml",
+        r#"[package]
+name = "native"
+version = "0.1.0"
+edition = "2026"
+allow_ffi = true
+
+[ffi]
+library_paths = ["escaped-lib"]
+"#,
+    );
+    let sym_err = expect_diag(
+        PackageGraph::discover_for_entry(&main_path),
+        "dependency with symlinked escaping library_paths must be rejected",
+    );
+    assert_eq!(sym_err.code, "AU2999");
+    assert!(
+        sym_err.message.contains("outside its package directory"),
+        "unexpected error: {}",
+        sym_err.message
+    );
+}

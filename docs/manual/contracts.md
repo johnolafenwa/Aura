@@ -132,7 +132,9 @@ def main():
 - It takes no `mut` parameters. It may state `requires` clauses, which say
   where it is defined: they are checked when it runs, and `aura verify`
   proves them wherever a contract uses it. It takes no other clauses.
-- It may call other `spec def` functions, itself included.
+- It may call other `spec def` functions, itself included. `aura verify`
+  evaluates recursive calls on concrete arguments and unfolds symbolic calls up
+  to eight levels.
 - Only contract clauses and other `spec def` bodies may call or name a
   module-level one. Using one anywhere else is `AU2048`.
 - `public spec def` exports it for other modules' contracts.

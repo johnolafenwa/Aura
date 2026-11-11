@@ -194,9 +194,7 @@ fn integers_equal_to(value: i128) -> Vec<Value> {
         IntegerKind::Uint64,
         IntegerKind::Uint128,
     ] {
-        let typed = if value < 0 {
-            IntegerValue::from_typed_signed(value, kind)
-        } else if kind.is_signed() {
+        let typed = if value < 0 || kind.is_signed() {
             IntegerValue::from_typed_signed(value, kind)
         } else {
             IntegerValue::from_typed_unsigned(value as u128, kind)
@@ -604,6 +602,7 @@ fn clearing_keeps_room_unless_shared() {
 }
 
 #[test]
+#[allow(clippy::manual_next_back)]
 fn small_and_large_entries_answer_the_same_reads() {
     for size in [4_i64, 40] {
         let entries: DictEntries = (0..size).map(|index| (int(index), int(-index))).collect();
