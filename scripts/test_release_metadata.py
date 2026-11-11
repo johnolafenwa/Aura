@@ -10,8 +10,8 @@ import unittest
 
 
 ROOT = pathlib.Path(__file__).resolve().parents[1]
-VERSION = "0.13.0"
-EXTENSION_VERSION = "0.13.0"
+VERSION = "0.14.0"
+EXTENSION_VERSION = "0.14.0"
 
 
 class ReleaseMetadataTests(unittest.TestCase):
@@ -174,7 +174,7 @@ class ReleaseMetadataTests(unittest.TestCase):
         self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime)
         self.assertIn("DIRECT_VALUE_LIVE_COUNT", native_runtime_exports)
         self.assertNotIn("aura_direct_coverage_live_value_count", native_runtime_exports)
-        self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 8)
+        self.assertEqual(ffi_tests.count("direct_runtime_ffi_test_guard()"), 7)
 
     def test_scheduler_stress_filters_resolve_and_fit_the_hosted_budget(self) -> None:
         workflow = (ROOT / ".github/workflows/safety.yml").read_text()
