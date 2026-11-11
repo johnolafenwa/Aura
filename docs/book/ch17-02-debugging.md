@@ -237,9 +237,9 @@ that setting it looks for Xcode's copy through `xcrun` on macOS, and then on
 
 ## What the debugger cannot show yet
 
-Debug support is new in Aura 0.13, and some values are not described yet.
-Unions (such as `str | None`), callables, and instances of a class with a
-field that is itself more than one machine word do not show their contents.
+Debug support is still young in Aura 0.14, and some values are not described
+yet. Unions (such as `str | None`), callables, and instances of a class with
+a field that is itself more than one machine word do not show their contents.
 lldb's expression evaluator speaks C, not Aura. Arithmetic on simple numbers
 works, so at the first stop `print total * 2` printed `(int64) 490`, but you
 cannot call Aura methods or write Aura expressions at the prompt.
