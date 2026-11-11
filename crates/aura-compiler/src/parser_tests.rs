@@ -215,12 +215,16 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
         "FFI v0 does not support variadic declarations; declare fixed parameters explicitly"
     );
 
+    // A callback parameter is a function type, which the checker judges.
     let callback = parse("extern \"C\" def visit(callback: def(int32) -> None) -> int32\n")
-        .expect_err("FFI v0 reserves callbacks");
-    assert_eq!(
-        callback.message,
-        "FFI v0 does not support callback parameters or returns"
-    );
+        .expect("a callback parameter parses");
+    let Item::ExternFunction(visit) = &callback.items[0] else {
+        panic!("expected an extern function");
+    };
+    assert!(matches!(
+        visit.params[0].ty.kind,
+        TypeRefKind::Function { .. }
+    ));
 
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
         .expect_err("FFI v0 reserves raw pointer syntax");

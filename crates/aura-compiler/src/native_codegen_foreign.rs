@@ -40,8 +40,8 @@ use super::*;
 
 use crate::c_layout::{CAbi, CArgument, CPassing, CPiece, CStruct};
 use crate::ffi::CCallback;
-use crate::mir_runtime::callback_signature;
 use crate::mir::MirExternParam;
+use crate::mir_runtime::callback_signature;
 use crate::native_backend::{Extension, Indirect};
 
 /// How one scalar crosses the C boundary.
@@ -242,8 +242,7 @@ impl NativeCodegen<'_> {
 
         let mut pointees = Vec::new();
         for (index, (param, argument)) in callback.params.iter().zip(arguments).enumerate() {
-            let scalar =
-                foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
+            let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
             let raw = if param.pointer {
                 let present = builder.icmp_imm(IntCC::NotEqual, argument, 0);
                 let address = builder.select(present, argument, spare);
@@ -264,12 +263,7 @@ impl NativeCodegen<'_> {
         for (index, address) in pointees {
             let scalar = foreign_scalar(callback.params[index].scalar.ffi_type())
                 .expect("a callback takes scalars");
-            let word = builder.load(
-                scalar.kind.signature_type(),
-                flags,
-                frame,
-                index as i32 * 8,
-            );
+            let word = builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8);
             let narrow = callback_narrow(builder, scalar.ty, word);
             builder.store(flags, narrow, address, 0);
         }
@@ -278,12 +272,7 @@ impl NativeCodegen<'_> {
             return;
         };
         let scalar = foreign_scalar(result.ffi_type()).expect("a callback returns a scalar");
-        let word = builder.load(
-            scalar.kind.signature_type(),
-            flags,
-            frame,
-            count as i32 * 8,
-        );
+        let word = builder.load(scalar.kind.signature_type(), flags, frame, count as i32 * 8);
         let narrow = callback_narrow(builder, callback_result_type(result), word);
         builder.return_(&[narrow]);
     }
@@ -305,14 +294,8 @@ fn emit_callback_body(builder: &mut dyn FunctionBackend, callback: &CCallback, t
         .iter()
         .enumerate()
         .map(|(index, param)| {
-            let scalar =
-                foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
-            builder.load(
-                scalar.kind.signature_type(),
-                flags,
-                frame,
-                index as i32 * 8,
-            )
+            let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
+            builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8)
         })
         .collect::<Vec<_>>();
     let target = builder.import_function(target);
@@ -542,10 +525,9 @@ impl FunctionCompiler<'_> {
             match (ffi.ffi_type, &argument.value) {
                 (FfiType::Callback, operand) => {
                     let entry = match (callback_signature(&param.ty), operand) {
-                        (Some(signature), Operand::Function { name, .. }) => self
-                            .callback_refs
-                            .get(&(name.clone(), signature))
-                            .copied(),
+                        (Some(signature), Operand::Function { name, .. }) => {
+                            self.callback_refs.get(&(name.clone(), signature)).copied()
+                        }
                         _ => None,
                     };
                     let entry = entry.ok_or_else(|| {

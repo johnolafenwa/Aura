@@ -11013,7 +11013,11 @@ pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     use crate::ffi::{CCallback, CCallbackParam, FfiScalar};
     let scalar = |ty: &Type| match ty {
         Type::Named(name, args) if args.is_empty() => {
-            let name = if name == "int" { "int64" } else { name.as_str() };
+            let name = if name == "int" {
+                "int64"
+            } else {
+                name.as_str()
+            };
             [
                 FfiScalar::Bool,
                 FfiScalar::I8,

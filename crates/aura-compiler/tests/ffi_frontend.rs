@@ -227,10 +227,6 @@ fn ffi_keywords_and_reserved_syntax_have_stable_frontend_diagnostics() {
             "FFI v0 does not support variadic declarations; declare fixed parameters explicitly",
         ),
         (
-            "extern \"C\" def visit(callback: def(int32) -> None) -> int32\n",
-            "FFI v0 does not support callback parameters or returns",
-        ),
-        (
             "extern \"C\" def read(output: *uint8) -> int64\n",
             "FFI v0 does not expose raw pointer syntax; use a supported byte/string view or opaque handle",
         ),

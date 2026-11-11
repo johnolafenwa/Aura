@@ -24455,3 +24455,172 @@ def main() -> int32:
         assert_eq!(error.code, "AU4005", "{}", error.message);
     }
 }
+
+#[test]
+fn ffi_callbacks_reenter_the_interpreter_and_park_a_failure() {
+    use crate::ffi::{CCallback, CCallbackParam, FfiScalar, FfiType};
+
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    if values[0] != 12 or values[4] != -4:
+        return -1
+    return values[1] * 10 + values[2]
+"#,
+    );
+    let output = super::run_trusted(&module).expect("qsort should call back into Aura");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(93));
+
+    // A callback that fails leaves C a zero result, and the failure is
+    // the result of the foreign call.
+    let failing = lower_ffi_runtime_source(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def broken(a: mut int32, b: mut int32) -> int32:
+    return a // (b - b)
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4]
+    qsort(values, 3, 4, broken)
+    return 0
+"#,
+    );
+    let error = super::run_trusted(&failing).expect_err("the callback divides by zero");
+    assert!(
+        error.message.contains("division by zero"),
+        "{}",
+        error.message
+    );
+
+    let function_type =
+        |params: Vec<(&str, aura_core::ops::ReceiverKind)>, result: Type| Type::Function {
+            params: params
+                .into_iter()
+                .map(|(ty, passing)| aura_core::types::FunctionParamContract {
+                    keyword_only: false,
+                    name: String::new(),
+                    ty: Type::named(ty),
+                    passing,
+                    has_default: false,
+                })
+                .collect(),
+            return_type: Box::new(result),
+        };
+    let compare = function_type(
+        vec![
+            ("int", aura_core::ops::ReceiverKind::Borrow),
+            ("float32", aura_core::ops::ReceiverKind::BorrowMut),
+            ("bool", aura_core::ops::ReceiverKind::Value),
+        ],
+        Type::named("uint16"),
+    );
+    assert_eq!(
+        super::callback_signature(&compare),
+        Some(CCallback {
+            params: vec![
+                CCallbackParam {
+                    scalar: FfiScalar::I64,
+                    pointer: false
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::F32,
+                    pointer: true
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::Bool,
+                    pointer: false
+                },
+            ],
+            result: Some(FfiScalar::U16),
+        })
+    );
+    let nothing = function_type(Vec::new(), Type::Unit);
+    assert_eq!(
+        super::callback_signature(&nothing),
+        Some(CCallback {
+            params: Vec::new(),
+            result: None
+        })
+    );
+    for ty in [
+        Type::named("int32"),
+        function_type(
+            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            Type::Unit,
+        ),
+        function_type(Vec::new(), Type::named("str")),
+        function_type(
+            Vec::new(),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
+        ),
+    ] {
+        assert_eq!(super::callback_signature(&ty), None, "{ty}");
+    }
+
+    let param = MirExternParam {
+        name: "visit".to_string(),
+        passing: MirReceiverKind::Borrow,
+        ty: nothing.clone(),
+        c_string: false,
+        pointer: false,
+        c_struct: None,
+    };
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param).expect("a callback parameter"),
+        FfiType::Callback
+    );
+    for (value, ty) in [
+        (Value::Bool(true), nothing.clone()),
+        (
+            super::mir_function_value("visit", &nothing),
+            Type::named("int32"),
+        ),
+    ] {
+        let error = super::ffi_callback_from_runtime(&value, &ty)
+            .expect_err("a callback is a named function of a callback type");
+        assert_eq!(error.code, "AU4005");
+        assert!(
+            error.message.contains("needs a named function"),
+            "{}",
+            error.message
+        );
+    }
+    let first =
+        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
+            .expect("a named function");
+    let again =
+        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
+            .expect("a named function");
+    assert_eq!(first, again, "one function and signature share their code");
+
+    // Outside a foreign call there is no interpreter to re-enter, and the
+    // frame comes back as it was.
+    let mut frame = [7_u64];
+    super::run_callback(
+        "visit",
+        &super::callback_signature(&nothing).unwrap(),
+        &mut frame,
+    );
+    assert_eq!(frame, [7]);
+}

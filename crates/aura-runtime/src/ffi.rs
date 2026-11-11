@@ -1594,7 +1594,11 @@ mod tests {
         let result = call(
             apply_callback as *const (),
             FfiSignature::new(
-                vec![FfiType::Callback, FfiType::I32, FfiType::Out(FfiScalar::I16)],
+                vec![
+                    FfiType::Callback,
+                    FfiType::I32,
+                    FfiType::Out(FfiScalar::I16),
+                ],
                 FfiType::I64,
             ),
             &mut [

@@ -16911,3 +16911,104 @@ def main() -> int32:
     );
     assert!(extern_call("st_len").c_struct_result.is_none());
 }
+
+#[test]
+fn direct_ffi_codegen_passes_named_functions_as_c_callbacks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def cb_sort(
+    base: mut ptr[int32], count: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+extern "C" def cb_each(
+    visit: def(a: bool, b: int8, c: uint16, d: float32, e: float64, f: mut float32) -> None
+) -> None
+extern "C" def cb_map(f: def(v: int8) -> int8, g: def(v: float32) -> float32) -> bool
+extern "C" def cb_plain(value: int32) -> int32
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def visit(a: bool, b: int8, c: uint16, d: float32, e: float64, f: mut float32) -> None:
+    f = d
+
+def same(v: int8) -> int8:
+    return v
+
+def half(v: float32) -> float32:
+    return v / 2.0
+
+def main() -> int32:
+    mut values: list[int32] = [2, 1]
+    cb_sort(values, 2, ascending)
+    cb_sort(values, 2, ascending)
+    cb_each(visit)
+    print(cb_map(same, half))
+    return cb_plain(values[0])
+"#,
+    );
+    let callbacks = super::foreign::module_callbacks(&module);
+    assert_eq!(
+        callbacks
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["ascending", "half", "same", "visit"],
+        "each callback is listed once, in name order"
+    );
+    let (entry, body) = super::foreign::callback_signatures(&callbacks[0].1);
+    assert_eq!(entry.params, [types::I64, types::I64]);
+    assert_eq!(entry.returns, [types::I32]);
+    assert_eq!(
+        (body.params.as_slice(), body.returns.len()),
+        (&[types::I64][..], 0)
+    );
+    // A result narrower than 32 bits is returned extended.
+    let (same, _) = super::foreign::callback_signatures(&callbacks[2].1);
+    assert_eq!(
+        (same.params.as_slice(), same.returns.as_slice()),
+        (&[types::I8][..], &[types::I32][..])
+    );
+    let (half, _) = super::foreign::callback_signatures(&callbacks[1].1);
+    assert_eq!(half.returns, [types::F32]);
+    let (visit, _) = super::foreign::callback_signatures(&callbacks[3].1);
+    assert_eq!(
+        visit.params,
+        [
+            types::I8,
+            types::I8,
+            types::I16,
+            types::F32,
+            types::F64,
+            types::I64
+        ]
+    );
+    assert!(visit.returns.is_empty());
+
+    let object = emit_host_object(&module).expect("callback arguments should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "cb_sort",
+        "cb_each",
+        "cb_map",
+        "aura_direct_ffi_callback_guard",
+        "aura_direct_ffi_callback_check",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // A module that passes no callback does not check for a parked failure.
+    let plain = lower_ffi_source_to_mir(
+        "extern \"C\" def cb_plain(value: int32) -> int32\n\ndef main() -> int32:\n    return cb_plain(1)\n",
+    );
+    assert!(super::foreign::module_callbacks(&plain).is_empty());
+    let object = emit_host_object(&plain).expect("a plain call should emit");
+    assert!(!object_referenced_symbols(&object)
+        .iter()
+        .any(|name| name.contains("ffi_callback")));
+}

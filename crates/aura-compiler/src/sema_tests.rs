@@ -2263,10 +2263,10 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: def(int32) -> int32) -> None
+            r#"extern "C" def bad(value: def(str) -> int32) -> None
 "#,
-            "FFI v0 does not support callback parameters or returns",
-            "AU1101",
+            "parameter 1 of callback `value` cannot cross the C boundary as `str`",
+            "AU2002",
         ),
         (
             r#"extern "C" def bad(value: Ptr[uint8]) -> None
@@ -33166,6 +33166,129 @@ def run() -> None:
     for (source, message, code) in rejected {
         let diagnostic =
             check_ffi_source_for_test(source).expect_err("the unsupported struct use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_admits_named_functions_as_c_callbacks() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+extern "C" def each(visit: def(value: float64, flag: bool) -> None, scale: float32) -> None
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def show(value: float64, flag: bool) -> None:
+    print(value)
+
+def run() -> None:
+    mut values: list[int32] = [3, 1, 2]
+    qsort(values, 3, 4, ascending)
+    each(scale=2.0, visit=show)
+"#,
+    )
+    .expect("named functions should check as callbacks");
+    let compare = &program.extern_functions["qsort"].signature.params[3];
+    let Type::Function {
+        params,
+        return_type,
+    } = compare
+    else {
+        panic!("a callback parameter keeps its function type, found {compare}");
+    };
+    assert_eq!(params.len(), 2);
+    assert_eq!(params[0].passing, ReceiverKind::BorrowMut);
+    assert_eq!(**return_type, Type::named("int32"));
+
+    let declarations = r#"extern "C" def each(visit: def(value: int32) -> int32) -> None
+def twice(value: int32) -> int32:
+    return value * 2
+def same[T](value: T) -> T:
+    return value
+class Counter:
+    step: int32
+    def add(self, value: int32) -> int32:
+        return value + self.step
+"#;
+    let rejected = [
+        (
+            "def run() -> None:\n    each(lambda value: value * 2)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    held = twice\n    each(held)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    each(visit=same)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+        (
+            "def run() -> None:\n    counter = Counter(step=1)\n    each(counter.add)\n",
+            "callback argument `visit` of extern function `each` must name a top-level function",
+            "AU2005",
+        ),
+    ];
+    for (body, message, code) in rejected {
+        let diagnostic = check_ffi_source_for_test(&format!("{declarations}{body}"))
+            .expect_err("only a named function is a callback");
+        assert_eq!(diagnostic.code, code, "{body}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+
+    // A function of another signature is a type mismatch, as for any call.
+    check_ffi_source_for_test(&format!(
+        "{declarations}def wide(value: int64) -> int32:\n    return 0\ndef run() -> None:\n    each(wide)\n"
+    ))
+    .expect_err("the callback type is the declared one");
+
+    let bad_declarations = [
+        (
+            "extern \"C\" def bad(f: def(text: str) -> None) -> None\n",
+            "parameter 1 of callback `f` cannot cross the C boundary as `str`",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: def(values: list[int32]) -> None) -> None\n",
+            "parameter 1 of callback `f` cannot cross the C boundary as `list[int32]`",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: def(value: int32) -> str) -> None\n",
+            "callback `f` cannot return `str` across the C boundary",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" def bad(f: mut def(value: int32) -> None) -> None\n",
+            "callback parameter `f` cannot be `own` or `mut`",
+            "AU3004",
+        ),
+        (
+            "extern \"C\" def bad() -> def(value: int32) -> None\n",
+            "an extern declaration cannot return a function value",
+            "AU2005",
+        ),
+    ];
+    for (source, message, code) in bad_declarations {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the callback type must be rejected");
         assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
         assert!(
             diagnostic.message.contains(message),

@@ -587,9 +587,7 @@ fn validate_ffi_callback(
         return Err(Diagnostic::coded_at(
             "AU2002",
             span,
-            format!(
-                "callback `{param_name}` cannot return `{return_type}` across the C boundary"
-            ),
+            format!("callback `{param_name}` cannot return `{return_type}` across the C boundary"),
         )
         .with_help(help));
     }
