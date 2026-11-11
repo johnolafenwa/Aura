@@ -132,6 +132,20 @@ test("recovery preserves extern C declarations while the compiler is unavailable
     }
   });
 
+  const structSymbols = documentSymbols(
+    ['extern "C" class Point:', "    x: float64", "    y: float64", ""].join("\n")
+  );
+  assert.deepEqual(
+    structSymbols.map((symbol) => [symbol.name, symbol.kind, symbol.detail]),
+    [["Point", "class", 'extern "C" class']]
+  );
+  assert.deepEqual(
+    documentSymbols('extern "C" opaque class Database drop sqlite3_close\n').map(
+      (symbol) => symbol.name
+    ),
+    ["Database"]
+  );
+
   const unsupported = documentSymbols(
     [
       'public extern "C" enum WrongEnum',

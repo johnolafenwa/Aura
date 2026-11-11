@@ -16,6 +16,7 @@ fn signature(call_conv: CallConv, params: &[ScalarType], returns: &[ScalarType])
         params: params.to_vec(),
         returns: returns.to_vec(),
         extensions: Vec::new(),
+        indirects: Vec::new(),
     }
 }
 

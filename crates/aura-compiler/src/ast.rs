@@ -186,6 +186,17 @@ impl Item {
             Item::Impl(impl_decl) => &impl_decl.trait_name,
         }
     }
+
+    /// Whether the item is an FFI declaration, which only a package that
+    /// opts in may hold: an extern function, an opaque handle, or an
+    /// `extern "C" class`.
+    pub fn declares_ffi(&self) -> bool {
+        match self {
+            Item::ExternFunction(_) | Item::ExternOpaqueClass(_) => true,
+            Item::Class(class_decl) => class_decl.c_layout,
+            _ => false,
+        }
+    }
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -240,6 +251,11 @@ pub struct ClassDecl {
     pub span: Span,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub doc: Option<DocString>,
+    /// Whether the class was declared `extern "C" class`: a `copy` class of
+    /// fields only, which crosses the C boundary laid out as a C struct of
+    /// those fields in order.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub c_layout: bool,
 }
 
 #[derive(Clone, Debug, Serialize)]
@@ -541,6 +557,20 @@ pub struct ExternFunctionDecl {
     pub symbol: Option<String>,
     pub params: Vec<Param>,
     pub return_type: TypeRef,
+    /// One entry for each parameter: whether it was written `cstr` or
+    /// `cstr | None`. Such a parameter has the type `str` or `str | None`
+    /// in `params` and crosses the boundary as NUL-terminated text.
+    #[serde(skip_serializing_if = "no_c_strings")]
+    pub c_string_params: Vec<bool>,
+    /// One entry for each parameter: whether it was written `ptr[T]`. Such
+    /// a parameter has the type `list[T]` in `params` and crosses the
+    /// boundary as a pointer to the first element, with no length.
+    #[serde(skip_serializing_if = "no_c_strings")]
+    pub pointer_params: Vec<bool>,
+    /// Whether the result was written `cstr` or `cstr | None`.
+    /// `return_type` then holds `str` or `str | None`.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub c_string_result: bool,
     pub span: Span,
     /// The trusted `requires` and `ensures` clauses of an indented block
     /// after the signature: `aura verify` proves the `requires` at each
@@ -554,6 +584,22 @@ impl ExternFunctionDecl {
     pub fn link_name(&self) -> &str {
         self.symbol.as_deref().unwrap_or(&self.name)
     }
+
+    /// Whether parameter `index` crosses the boundary as NUL-terminated
+    /// text.
+    pub fn c_string_param(&self, index: usize) -> bool {
+        self.c_string_params.get(index).copied().unwrap_or(false)
+    }
+
+    /// Whether parameter `index` crosses the boundary as a pointer to the
+    /// first element of a list.
+    pub fn pointer_param(&self, index: usize) -> bool {
+        self.pointer_params.get(index).copied().unwrap_or(false)
+    }
+}
+
+fn no_c_strings(marks: &[bool]) -> bool {
+    !marks.contains(&true)
 }
 
 /// A bodyless, layout-opaque foreign handle type declaration.
@@ -564,6 +610,10 @@ pub struct ExternOpaqueClassDecl {
     pub name: String,
     pub name_span: Span,
     pub span: Span,
+    /// The extern function of the `drop` clause, which releases a handle
+    /// the program still owns when its last use ends.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub drop: Option<(String, Span)>,
 }
 
 #[derive(Clone, Debug, Serialize)]

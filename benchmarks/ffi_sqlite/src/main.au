@@ -1,0 +1,98 @@
+import sys
+
+extern "C" opaque class Database drop sqlite3_close_v2
+extern "C" opaque class Statement drop sqlite3_finalize
+
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close_v2(db: own Database) -> int32
+extern "C" def sqlite3_exec(
+    db: Database, sql: cstr,
+    row: def(data: uint64, columns: int32, values: uint64, names: uint64) -> int32,
+    data: uint64, error: uint64
+) -> int32
+extern "C" def sqlite3_prepare_v2(
+    db: Database, sql: cstr, length: int32, out: mut Statement | None, tail: uint64
+) -> int32
+extern "C" def sqlite3_bind_int64(statement: Statement, index: int32, value: int64) -> int32
+extern "C" def sqlite3_bind_text(
+    statement: Statement, index: int32, text: cstr, length: int32, lifetime: int64
+) -> int32
+extern "C" def sqlite3_step(statement: Statement) -> int32
+extern "C" def sqlite3_reset(statement: Statement) -> int32
+extern "C" def sqlite3_column_int64(statement: Statement, column: int32) -> int64
+extern "C" def sqlite3_column_text(statement: Statement, column: int32) -> cstr
+extern "C" def sqlite3_finalize(statement: own Statement) -> int32
+
+def no_rows(data: uint64, columns: int32, values: uint64, names: uint64) -> int32:
+    return 0
+
+def prepare(db: Database, sql: str) -> Statement | None:
+    mut slot: Statement | None = None
+    sqlite3_prepare_v2(db, sql, -1, slot, 0)
+    return slot
+
+def insert_rows(db: Database, rows: int64) -> int32:
+    match prepare(db, "insert into notes (id, body) values (?, ?)"):
+        case None:
+            return 1
+        case Statement as insert:
+            sqlite3_exec(db, "begin", no_rows, 0, 0)
+            mut i: int64 = 0
+            while i < rows:
+                sqlite3_bind_int64(insert, 1, i)
+                sqlite3_bind_text(insert, 2, f"note number {i}", -1, -1)
+                sqlite3_step(insert)
+                sqlite3_reset(insert)
+                i = i + 1
+            sqlite3_exec(db, "commit", no_rows, 0, 0)
+            return 0
+
+def read_rows(db: Database) -> int64:
+    match prepare(db, "select id, body from notes"):
+        case None:
+            return -1
+        case Statement as query:
+            mut total: int64 = 0
+            while sqlite3_step(query) == 100:
+                total = total + sqlite3_column_int64(query, 0)
+                total = total + len(sqlite3_column_text(query, 1))
+            return total
+
+def lookups(db: Database, rows: int64) -> int64:
+    match prepare(db, "select body from notes where id = ?"):
+        case None:
+            return -1
+        case Statement as query:
+            mut total: int64 = 0
+            mut i: int64 = 0
+            while i < rows:
+                sqlite3_bind_int64(query, 1, (i * 7919) % rows)
+                if sqlite3_step(query) == 100:
+                    total = total + len(sqlite3_column_text(query, 0))
+                sqlite3_reset(query)
+                i = i + 1
+            return total
+
+def run(db: Database, rows: int64) -> int32:
+    sqlite3_exec(db, "create table notes (id integer primary key, body text not null)", no_rows, 0, 0)
+    mut started = sys.monotonic_time_ms()
+    if insert_rows(db, rows) != 0:
+        return 1
+    print(f"insert {sys.monotonic_time_ms() - started}")
+    started = sys.monotonic_time_ms()
+    read = read_rows(db)
+    print(f"read {sys.monotonic_time_ms() - started}")
+    started = sys.monotonic_time_ms()
+    found = lookups(db, rows)
+    print(f"lookup {sys.monotonic_time_ms() - started}")
+    print(f"checksum {read} {found}")
+    return 0
+
+def main() -> int32:
+    mut slot: Database | None = None
+    sqlite3_open(":memory:", slot)
+    match slot:
+        case None:
+            return 1
+        case Database as db:
+            return run(db, 500000)

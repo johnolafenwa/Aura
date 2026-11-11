@@ -3285,10 +3285,14 @@ fn module_with_main_call_result_type(call: Rvalue, result_ty: Type) -> crate::mi
 fn direct_ffi_codegen_calls_the_foreign_symbol_itself() {
     let call = Rvalue::Call {
         callee: CallTarget::Extern(MirExternCall {
+            name: String::new(),
             symbol: "getpid".to_string(),
             abi: "C".to_string(),
             params: Vec::new(),
             return_type: Type::named("int32"),
+            c_string_result: false,
+            c_struct_result: None,
+            handle_drops: std::collections::BTreeMap::new(),
         }),
         args: Vec::new(),
         type_args: Default::default(),
@@ -3364,6 +3368,7 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "read_count".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
                                 params: vec![
@@ -3371,14 +3376,23 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                                         name: "fd".to_string(),
                                         passing: MirReceiverKind::Borrow,
                                         ty: Type::named("int32"),
+                                        c_string: false,
+                                        pointer: false,
+                                        c_struct: None,
                                     },
                                     MirExternParam {
                                         name: "bytes".to_string(),
                                         passing: MirReceiverKind::BorrowMut,
                                         ty: bytes_ty.clone(),
+                                        c_string: false,
+                                        pointer: false,
+                                        c_struct: None,
                                     },
                                 ],
                                 return_type: Type::named("int64"),
+                                c_string_result: false,
+                                c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![
                                 MirArg {
@@ -3399,14 +3413,21 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "handle".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                name: String::new(),
                                 symbol: "malloc".to_string(),
                                 abi: "C".to_string(),
                                 params: vec![MirExternParam {
                                     name: "size".to_string(),
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint64"),
+                                    c_string: false,
+                                    pointer: false,
+                                    c_struct: None,
                                 }],
                                 return_type: handle_ty.clone(),
+                                c_string_result: false,
+                                c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3420,14 +3441,21 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "released".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                name: String::new(),
                                 symbol: "free".to_string(),
                                 abi: "C".to_string(),
                                 params: vec![MirExternParam {
                                     name: "handle".to_string(),
                                     passing: MirReceiverKind::Value,
                                     ty: handle_ty,
+                                    c_string: false,
+                                    pointer: false,
+                                    c_struct: None,
                                 }],
                                 return_type: Type::Unit,
+                                c_string_result: false,
+                                c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3441,14 +3469,21 @@ fn direct_ffi_codegen_handles_narrow_scalars_mutable_bytes_and_opaque_ownership(
                         target: "narrow".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                name: String::new(),
                                 symbol: "htons".to_string(),
                                 abi: "C".to_string(),
                                 params: vec![MirExternParam {
                                     name: "value".to_string(),
                                     passing: MirReceiverKind::Borrow,
                                     ty: Type::named("uint16"),
+                                    c_string: false,
+                                    pointer: false,
+                                    c_struct: None,
                                 }],
                                 return_type: Type::named("uint16"),
+                                c_string_result: false,
+                                c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3497,10 +3532,14 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let invalid_abi = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "Rust".to_string(),
                 params: Vec::new(),
                 return_type: Type::named("int32"),
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3513,14 +3552,21 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let wrong_arity = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
                 params: vec![MirExternParam {
                     name: "value".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
+                    pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::named("int32"),
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: Vec::new(),
             type_args: Default::default(),
@@ -3535,14 +3581,21 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
     let unexpected_writeback = module_with_main_call_result_type(
         Rvalue::Call {
             callee: CallTarget::Extern(MirExternCall {
+                name: String::new(),
                 symbol: "foreign".to_string(),
                 abi: "C".to_string(),
                 params: vec![MirExternParam {
                     name: "value".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
+                    pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::named("int32"),
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: std::collections::BTreeMap::new(),
             }),
             args: vec![MirArg {
                 name: None,
@@ -3598,14 +3651,21 @@ fn direct_ffi_validation_rejects_unvalidated_metadata() {
                         target: "%t0".to_string(),
                         value: Rvalue::Call {
                             callee: CallTarget::Extern(MirExternCall {
+                                name: String::new(),
                                 symbol: "read".to_string(),
                                 abi: "C".to_string(),
                                 params: vec![MirExternParam {
                                     name: "bytes".to_string(),
                                     passing: MirReceiverKind::BorrowMut,
                                     ty: bytes_ty,
+                                    c_string: false,
+                                    pointer: false,
+                                    c_struct: None,
                                 }],
                                 return_type: Type::named("int64"),
+                                c_string_result: false,
+                                c_struct_result: None,
+                                handle_drops: std::collections::BTreeMap::new(),
                             }),
                             args: vec![MirArg {
                                 name: None,
@@ -3684,14 +3744,42 @@ fn direct_ffi_source_types_pin_the_v0_abi_and_capability_contract() {
     assert_eq!(handle.ffi_type, FfiType::OpaqueHandle);
     assert_eq!(handle.opaque_name.as_deref(), Some("ProcessHandle"));
 
-    for passing in [MirReceiverKind::BorrowMut, MirReceiverKind::Value] {
-        assert_eq!(
-            direct_ffi_type_for_source(&Type::named("int32"), Some(passing)),
-            Err(format!(
-                "direct backend cannot pass `int32` with ownership mode `{passing:?}` through FFI v0"
-            ))
-        );
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::named("int32"), Some(MirReceiverKind::Value)),
+        Err(
+            "direct backend cannot pass `int32` with ownership mode `Value` through FFI v0"
+                .to_string()
+        )
+    );
+    assert_eq!(
+        direct_ffi_type_for_source(&Type::named("int32"), Some(MirReceiverKind::BorrowMut))
+            .expect("a mut scalar is an out-parameter")
+            .ffi_type,
+        FfiType::Out(crate::ffi::FfiScalar::I32)
+    );
+    let nullable = Type::normalize_union(
+        vec![Type::named("ProcessHandle"), Type::Unit],
+        "main",
+        &Default::default(),
+    )
+    .expect("a nullable handle");
+    for (passing, expected) in [
+        (None, FfiType::NullableOpaqueHandle),
+        (Some(MirReceiverKind::Borrow), FfiType::NullableOpaqueHandle),
+        (Some(MirReceiverKind::BorrowMut), FfiType::OpaqueHandleOut),
+    ] {
+        let direct = direct_ffi_type_for_source(&nullable, passing)
+            .expect("a nullable handle is one pointer or a pointer to one");
+        assert_eq!(direct.ffi_type, expected);
+        assert_eq!(direct.opaque_name.as_deref(), Some("ProcessHandle"));
+        assert_eq!(direct.union_type.as_ref(), Some(&nullable));
     }
+    assert_eq!(
+        direct_ffi_type_for_source(&nullable, Some(MirReceiverKind::Value)),
+        Err(format!(
+            "direct backend cannot lower `{nullable}` through FFI v0"
+        ))
+    );
     assert_eq!(
         direct_ffi_type_for_source(&Type::named("str"), Some(MirReceiverKind::BorrowMut)),
         Err("direct backend can pass `str` through FFI v0 only as a shared view".to_string())
@@ -16415,6 +16503,217 @@ fn lower_ffi_source_to_mir(source: &str) -> crate::mir::MirModule {
 }
 
 #[test]
+fn direct_ffi_codegen_lowers_c_text_out_parameters_and_nullable_handles() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Handle
+
+extern "C" def length(text: cstr) -> uint64
+extern "C" def length_or(text: cstr | None) -> uint64
+extern "C" def name() -> cstr
+extern "C" def maybe_name() -> cstr | None
+extern "C" def divide(a: int32, quotient: mut int32, exact: mut bool, ratio: mut float32) -> None
+extern "C" def create(out: mut Handle | None) -> int32
+extern "C" def peek(handle: Handle | None) -> int32
+
+def main() -> int32:
+    held = "held"
+    total = length(held) + length("literal") + length_or(None) + length_or(held)
+    with_nul = length("a\0b")
+    print(name())
+    found = maybe_name()
+    if found is None:
+        print("none")
+    mut quotient: int32 = 0
+    mut exact = false
+    mut ratio: float32 = 0.0
+    divide(7, quotient, exact, ratio)
+    mut slot: Handle | None = None
+    made = create(slot)
+    print(total + with_nul)
+    print(exact)
+    print(ratio)
+    return quotient + made + peek(slot) + peek(None)
+"#,
+    );
+    let object = emit_host_object(&module).expect("the FFI v1 pointer types should emit");
+    let referenced = object_referenced_symbols(&object);
+    let calls = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "length",
+        "length_or",
+        "name",
+        "maybe_name",
+        "divide",
+        "create",
+        "peek",
+        "aura_direct_ffi_c_string",
+        "aura_direct_ffi_release_c_string",
+        "aura_direct_ffi_c_string_result",
+        "aura_direct_ffi_nullable_handle_address",
+        "aura_direct_ffi_stored_handle",
+        "aura_direct_ffi_none",
+        "aura_direct_ffi_bad_bool",
+    ] {
+        assert!(
+            calls(symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    let length = extern_call("length");
+    assert!(length.params[0].c_string);
+    assert_eq!(length.params[0].ty, Type::named("str"));
+    assert!(!length.c_string_result);
+    assert_eq!(
+        super::foreign::foreign_param_type(&length.params[0])
+            .expect("cstr is a boundary type")
+            .ffi_type,
+        crate::ffi::FfiType::CString
+    );
+    assert_eq!(
+        super::foreign::foreign_param_type(&extern_call("length_or").params[0])
+            .expect("cstr | None is a boundary type")
+            .ffi_type,
+        crate::ffi::FfiType::NullableCString
+    );
+    assert_eq!(
+        super::foreign::foreign_result_type(&extern_call("name"))
+            .expect("cstr is a result type")
+            .ffi_type,
+        crate::ffi::FfiType::CString
+    );
+    assert_eq!(
+        super::foreign::foreign_result_type(&extern_call("maybe_name"))
+            .expect("cstr | None is a result type")
+            .ffi_type,
+        crate::ffi::FfiType::NullableCString
+    );
+    assert!(!extern_call("divide").params[0].c_string);
+}
+
+#[test]
+fn direct_ffi_codegen_lowers_pointer_parameters_over_every_scalar_list() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def reads(
+    a: ptr[bool], b: ptr[int8], c: ptr[int16], d: ptr[int32], e: ptr[int64],
+    f: ptr[uint8], g: ptr[uint16], h: ptr[uint32], i: ptr[uint64],
+    j: ptr[float32], k: ptr[float64]
+) -> None
+extern "C" def writes(flags: mut ptr[bool], values: mut ptr[float64], n: int64) -> None
+
+def main() -> int32:
+    a: list[bool] = [true]
+    b: list[int8] = [1]
+    c: list[int16] = [1]
+    d: list[int32] = [1]
+    e: list[int64] = [1]
+    f: list[uint8] = [1]
+    g: list[uint16] = [1]
+    h: list[uint32] = [1]
+    i: list[uint64] = [1]
+    j: list[float32] = [1.0]
+    k: list[float64] = [1.0]
+    reads(a, b, c, d, e, f, g, h, i, j, k)
+    mut flags: list[bool] = [false]
+    mut values: list[float64] = [1.0, 2.0]
+    writes(flags, values, 2)
+    print(flags)
+    print(values)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("pointer parameters should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "reads",
+        "writes",
+        "aura_direct_ffi_elements",
+        "aura_direct_ffi_elements_mut",
+        "aura_direct_ffi_check_flags",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::{FfiScalar, FfiType};
+    let reads = extern_call("reads");
+    assert!(reads.params.iter().all(|param| param.pointer));
+    assert_eq!(
+        super::foreign::foreign_param_type(&reads.params[3])
+            .expect("ptr[int32] is a boundary type")
+            .ffi_type,
+        FfiType::Pointer(FfiScalar::I32)
+    );
+    let writes = extern_call("writes");
+    assert!(writes.params[1].pointer && !writes.params[2].pointer);
+    assert_eq!(
+        super::foreign::foreign_param_type(&writes.params[1])
+            .expect("mut ptr[float64] is a boundary type")
+            .ffi_type,
+        FfiType::PointerMut(FfiScalar::F64)
+    );
+    for ty in [
+        Type::named("str"),
+        Type::Named("list".to_string(), vec![Type::named("str")]),
+    ] {
+        let mut param = writes.params[1].clone();
+        param.ty = ty;
+        let error = super::foreign::foreign_param_type(&param)
+            .err()
+            .expect("a pointer needs a list of scalars");
+        assert!(error.contains("as an FFI pointer"), "{error}");
+    }
+}
+
+#[test]
 fn direct_ffi_codegen_lowers_every_boundary_type_to_c_arguments() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -16516,6 +16815,266 @@ def main() -> int32:
         1,
         "only the held string needs a view; literals lend constant bytes"
     );
+}
+
+#[test]
+fn direct_ffi_codegen_passes_c_structs_in_registers_and_in_memory() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Vec2:
+    x: float64
+    y: float64
+
+extern "C" class Mixed:
+    count: int32
+    on: bool
+    weight: float32
+
+extern "C" class Triple:
+    a: int64
+    b: int64
+    c: int64
+
+extern "C" class Rect:
+    lo: Vec2
+    hi: Vec2
+
+extern "C" def st_len(v: Vec2) -> float64
+extern "C" def st_add(a: Vec2, b: Vec2) -> Vec2
+extern "C" def st_mixed(m: Mixed) -> Mixed
+extern "C" def st_rotate(t: Triple) -> Triple
+extern "C" def st_grow(r: mut Rect, by: Vec2) -> None
+extern "C" def st_flag(m: mut Mixed) -> bool
+extern "C" def st_spill(
+    a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, m: Mixed, v: Vec2
+) -> int64
+
+def main() -> int32:
+    a = Vec2(x=1.0, y=2.0)
+    sum = st_add(a, a)
+    print(st_len(sum))
+    mut mixed = st_mixed(Mixed(count=1, on=true, weight=0.5))
+    print(st_flag(mixed))
+    print(mixed.count)
+    triple = st_rotate(Triple(a=1, b=2, c=3))
+    print(triple.c)
+    mut rect = Rect(lo=a, hi=sum)
+    st_grow(rect, a)
+    print(rect.hi.y)
+    print(st_spill(1, 2, 3, 4, 5, 6, mixed, a))
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("struct parameters should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "st_len",
+        "st_add",
+        "st_mixed",
+        "st_rotate",
+        "st_grow",
+        "st_flag",
+        "st_spill",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::FfiType;
+    let grow = extern_call("st_grow");
+    let rect = grow.params[0].c_struct.clone().expect("a struct pointer");
+    assert_eq!((rect.size(), rect.leaves().len()), (32, 4));
+    assert_eq!(
+        super::foreign::foreign_param_type(&grow.params[0])
+            .expect("mut Rect is a boundary type")
+            .ffi_type,
+        FfiType::StructPointer(rect.interned())
+    );
+    let vec2 = grow.params[1].c_struct.clone().expect("a struct");
+    assert_eq!(
+        super::foreign::foreign_param_type(&grow.params[1])
+            .expect("Vec2 is a boundary type")
+            .ffi_type,
+        FfiType::Struct(vec2.interned())
+    );
+    let add = extern_call("st_add");
+    assert_eq!(
+        super::foreign::foreign_result_type(&add)
+            .expect("Vec2 is a result type")
+            .ffi_type,
+        FfiType::Struct(vec2.interned())
+    );
+    assert!(extern_call("st_len").c_struct_result.is_none());
+}
+
+#[test]
+fn direct_ffi_codegen_passes_named_functions_as_c_callbacks() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" def cb_sort(
+    base: mut ptr[int32], count: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+extern "C" def cb_each(
+    visit: def(a: bool, b: int8, c: uint16, d: float32, e: float64, f: mut float32) -> None
+) -> None
+extern "C" def cb_map(f: def(v: int8) -> int8, g: def(v: float32) -> float32) -> bool
+extern "C" def cb_plain(value: int32) -> int32
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def visit(a: bool, b: int8, c: uint16, d: float32, e: float64, f: mut float32) -> None:
+    f = d
+
+def same(v: int8) -> int8:
+    return v
+
+def half(v: float32) -> float32:
+    return v / 2.0
+
+def main() -> int32:
+    mut values: list[int32] = [2, 1]
+    cb_sort(values, 2, ascending)
+    cb_sort(values, 2, ascending)
+    cb_each(visit)
+    print(cb_map(same, half))
+    return cb_plain(values[0])
+"#,
+    );
+    let callbacks = super::foreign::module_callbacks(&module);
+    assert_eq!(
+        callbacks
+            .iter()
+            .map(|(name, _)| name.as_str())
+            .collect::<Vec<_>>(),
+        ["ascending", "half", "same", "visit"],
+        "each callback is listed once, in name order"
+    );
+    let (entry, body) = super::foreign::callback_signatures(&callbacks[0].1);
+    assert_eq!(entry.params, [types::I64, types::I64]);
+    assert_eq!(entry.returns, [types::I32]);
+    assert_eq!(
+        (body.params.as_slice(), body.returns.len()),
+        (&[types::I64][..], 0)
+    );
+    // A result narrower than 32 bits is returned extended.
+    let (same, _) = super::foreign::callback_signatures(&callbacks[2].1);
+    assert_eq!(
+        (same.params.as_slice(), same.returns.as_slice()),
+        (&[types::I8][..], &[types::I32][..])
+    );
+    let (half, _) = super::foreign::callback_signatures(&callbacks[1].1);
+    assert_eq!(half.returns, [types::F32]);
+    let (visit, _) = super::foreign::callback_signatures(&callbacks[3].1);
+    assert_eq!(
+        visit.params,
+        [
+            types::I8,
+            types::I8,
+            types::I16,
+            types::F32,
+            types::F64,
+            types::I64
+        ]
+    );
+    assert!(visit.returns.is_empty());
+
+    let object = emit_host_object(&module).expect("callback arguments should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "cb_sort",
+        "cb_each",
+        "cb_map",
+        "aura_direct_ffi_callback_guard",
+        "aura_direct_ffi_callback_check",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // A module that passes no callback does not check for a parked failure.
+    let plain = lower_ffi_source_to_mir(
+        "extern \"C\" def cb_plain(value: int32) -> int32\n\ndef main() -> int32:\n    return cb_plain(1)\n",
+    );
+    assert!(super::foreign::module_callbacks(&plain).is_empty());
+    let object = emit_host_object(&plain).expect("a plain call should emit");
+    assert!(!object_referenced_symbols(&object)
+        .iter()
+        .any(|name| name.contains("ffi_callback")));
+}
+
+#[test]
+fn direct_ffi_codegen_names_the_drop_function_of_a_handle() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" opaque class Store drop st_close
+extern "C" opaque class Plain
+extern "C" def st_open(id: int32) -> Store
+extern "C" def st_find(id: int32) -> Store | None
+extern "C" def st_make(id: int32, out: mut Store | None) -> int32
+extern "C" def st_close(store: own Store) -> int32
+extern "C" def st_plain() -> Plain
+
+def main() -> int32:
+    store = st_open(1)
+    mut slot: Store | None = st_find(2)
+    status = st_make(3, slot)
+    plain = st_plain()
+    return status + st_close(store)
+"#,
+    );
+    let object = emit_host_object(&module).expect("handles with a drop function should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "st_close",
+        "aura_direct_ffi_handle",
+        "aura_direct_ffi_stored_handle",
+        "aura_direct_ffi_give_up_handle",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // A handle type with no drop clause references no release function.
+    let plain = lower_ffi_source_to_mir(
+        "extern \"C\" opaque class Plain\nextern \"C\" def st_plain() -> Plain\nextern \"C\" def st_done(plain: own Plain) -> None\n\ndef main() -> int32:\n    plain = st_plain()\n    return 0\n",
+    );
+    let object = emit_host_object(&plain).expect("a plain handle should emit");
+    assert!(!object_referenced_symbols(&object)
+        .iter()
+        .any(|name| name.contains("st_done")));
 }
 
 #[test]

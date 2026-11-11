@@ -2772,10 +2772,14 @@ fn public_mir_execution_rejects_caller_supplied_ffi_metadata() {
                     target: "process_id".to_string(),
                     value: Rvalue::Call {
                         callee: CallTarget::Extern(MirExternCall {
+                            name: String::new(),
                             symbol: "getpid".to_string(),
                             abi: "C".to_string(),
                             params: Vec::new(),
                             return_type: Type::named("int32"),
+                            c_string_result: false,
+                            c_struct_result: None,
+                            handle_drops: BTreeMap::new(),
                         }),
                         args: Vec::new(),
                         type_args: Default::default(),
@@ -2891,6 +2895,7 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
     );
 
     let call = MirExternCall {
+        name: String::new(),
         symbol: "aura_test_exchange".to_string(),
         abi: "C".to_string(),
         params: vec![
@@ -2898,24 +2903,39 @@ fn mir_runtime_ffi_marshalling_preserves_boundaries_mutable_writeback_and_opaque
                 name: "minimum".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("int8"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "maximum".to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: Type::named("uint64"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             },
             MirExternParam {
                 name: "handle".to_string(),
                 passing: MirReceiverKind::Value,
                 ty: Type::named("Token"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             },
         ],
         return_type: Type::named("Token"),
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = vec![
         MirArg {
@@ -2996,10 +3016,14 @@ fn mir_runtime_ffi_maps_noncanonical_bool_returns_to_au4001() {
     let mut runtime = test_runtime();
     let mut env = Env::default();
     let call = MirExternCall {
+        name: String::new(),
         symbol: "bad_bool".to_string(),
         abi: "C".to_string(),
         params: Vec::new(),
         return_type: Type::named("bool"),
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let error = runtime
         .evaluate_extern_call_with(&call, &[], &mut env, |_, _, _| {
@@ -3116,6 +3140,7 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
         ),
     ];
     let call = MirExternCall {
+        name: String::new(),
         symbol: "aura_test_observe_all".to_string(),
         abi: "C".to_string(),
         params: parameter_specs
@@ -3124,9 +3149,15 @@ fn mir_runtime_ffi_marshals_every_scalar_and_shared_view_source_shape() {
                 name: (*name).to_string(),
                 passing: MirReceiverKind::Borrow,
                 ty: ty.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             })
             .collect(),
         return_type: Type::Unit,
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
     };
     let args = parameter_specs
         .iter()
@@ -3196,10 +3227,14 @@ fn mir_runtime_ffi_unmarshals_every_fixed_width_scalar_result() {
         returned: crate::ffi::FfiValue,
     ) -> Value {
         let call = MirExternCall {
+            name: String::new(),
             symbol: "aura_test_scalar_result".to_string(),
             abi: "C".to_string(),
             params: Vec::new(),
             return_type: ty,
+            c_string_result: false,
+            c_struct_result: None,
+            handle_drops: BTreeMap::new(),
         };
         runtime
             .evaluate_extern_call_with(
@@ -3356,14 +3391,21 @@ fn mir_runtime_ffi_writes_mutable_views_back_before_foreign_and_result_errors() 
 
     fn call() -> MirExternCall {
         MirExternCall {
+            name: String::new(),
             symbol: "aura_test_writeback_order".to_string(),
             abi: "C".to_string(),
             params: vec![MirExternParam {
                 name: "bytes".to_string(),
                 passing: MirReceiverKind::BorrowMut,
                 ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
             }],
             return_type: Type::named("int32"),
+            c_string_result: false,
+            c_struct_result: None,
+            handle_drops: BTreeMap::new(),
         }
     }
 
@@ -3485,15 +3527,22 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
         name: "value".to_string(),
         passing: MirReceiverKind::Borrow,
         ty: Type::named("int32"),
+        c_string: false,
+        pointer: false,
+        c_struct: None,
     }];
 
     let unsupported_abi = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_bad_abi".to_string(),
                 abi: "stdcall".to_string(),
                 params: params.clone(),
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3513,10 +3562,14 @@ fn mir_runtime_ffi_reports_runtime_abi_and_argument_binding_errors_before_dispat
     let unknown_argument = runtime
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_bad_binding".to_string(),
                 abi: "C".to_string(),
                 params,
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3561,14 +3614,21 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
         runtime
             .evaluate_extern_call_with(
                 &MirExternCall {
+                    name: String::new(),
                     symbol: "aura_test_shape_guard".to_string(),
                     abi: "C".to_string(),
                     params: vec![MirExternParam {
                         name: "value".to_string(),
                         passing: MirReceiverKind::Borrow,
                         ty: param_ty,
+                        c_string: false,
+                        pointer: false,
+                        c_struct: None,
                     }],
                     return_type: Type::Unit,
+                    c_string_result: false,
+                    c_struct_result: None,
+                    handle_drops: BTreeMap::new(),
                 },
                 &[MirArg {
                     name: None,
@@ -3642,14 +3702,21 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let mutated_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_mutable_shape_guard".to_string(),
                 abi: "C".to_string(),
                 params: vec![MirExternParam {
                     name: "bytes".to_string(),
                     passing: MirReceiverKind::BorrowMut,
                     ty: bytes_type,
+                    c_string: false,
+                    pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3663,7 +3730,7 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     assert_eq!(mutated_shape.code, "AU4005");
     assert_eq!(
         mutated_shape.message,
-        "FFI call to `aura_test_mutable_shape_guard` failed: mutable parameter `bytes` did not marshal as bytes"
+        "FFI call to `aura_test_mutable_shape_guard` failed: FFI result `bool` does not match source return type `list[uint8]`"
     );
     assert_eq!(
         env.read_place("bytes")
@@ -3675,14 +3742,21 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let binding_error = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_binding_guard".to_string(),
                 abi: "C".to_string(),
                 params: vec![MirExternParam {
                     name: "expected".to_string(),
                     passing: MirReceiverKind::Borrow,
                     ty: Type::named("int32"),
+                    c_string: false,
+                    pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: Some("other".to_string()),
@@ -3709,14 +3783,21 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let missing_writeback = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_missing_writeback".to_string(),
                 abi: "C".to_string(),
                 params: vec![MirExternParam {
                     name: "bytes".to_string(),
                     passing: MirReceiverKind::BorrowMut,
                     ty: Type::Named("list".to_string(), vec![Type::named("uint8")]),
+                    c_string: false,
+                    pointer: false,
+                    c_struct: None,
                 }],
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[MirArg {
                 name: None,
@@ -3743,10 +3824,14 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let foreign_failure = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_foreign_failure".to_string(),
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -3761,10 +3846,14 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let result_shape = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_result_shape_guard".to_string(),
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::named("int32"),
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -3779,10 +3868,14 @@ fn mir_runtime_ffi_rejects_forged_runtime_shapes_at_the_boundary() {
     let unit = test_runtime()
         .evaluate_extern_call_with(
             &MirExternCall {
+                name: String::new(),
                 symbol: "aura_test_success".to_string(),
                 abi: "C".to_string(),
                 params: Vec::new(),
                 return_type: Type::Unit,
+                c_string_result: false,
+                c_struct_result: None,
+                handle_drops: BTreeMap::new(),
             },
             &[],
             &mut Env::default(),
@@ -21769,14 +21862,13 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         name: "value".to_string(),
         passing: MirReceiverKind::Value,
         ty: Type::Union(Box::new(nullable.clone())),
+        c_string: false,
+        pointer: false,
+        c_struct: None,
     };
-    let error = super::ffi_type_for_extern_param(&union_param)
-        .expect_err("union parameters never reach FFI marshalling");
-    assert_eq!(error.code, "AU4005");
-    assert!(
-        error.message.contains("union FFI parameter type"),
-        "{}",
-        error.message
+    assert_eq!(
+        super::ffi_type_for_extern_param(&union_param).expect("a nullable handle is a pointer"),
+        crate::ffi::FfiType::NullableOpaqueHandle
     );
 
     let unsupported = super::ffi_value_from_runtime(&Value::Unit, &Type::Tuple(Vec::new()))
@@ -21820,6 +21912,392 @@ fn ffi_conversions_reject_union_params_and_decode_nullable_results() {
         error.message.contains("does not match source return type"),
         "{}",
         error.message
+    );
+}
+
+#[test]
+fn ffi_conversions_cover_c_text_out_parameters_and_nullable_arguments() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue, OpaqueHandle};
+    let param = |ty: Type, passing, c_string| MirExternParam {
+        name: "value".to_string(),
+        passing,
+        ty,
+        c_string,
+        pointer: false,
+        c_struct: None,
+    };
+    let text = Type::named("str");
+    let nullable_text = Type::Union(Box::new(coverage_union(vec![text.clone(), Type::Unit])));
+    let nullable_handle = Type::Union(Box::new(coverage_union(vec![
+        Type::named("Handle"),
+        Type::Unit,
+    ])));
+    let bytes = Type::Named("list".to_string(), vec![Type::named("uint8")]);
+    let shared = MirReceiverKind::Borrow;
+    let mutable = MirReceiverKind::BorrowMut;
+    for (param, expected) in [
+        (param(text.clone(), shared, true), FfiType::CString),
+        (param(text.clone(), shared, false), FfiType::StringView),
+        (
+            param(nullable_text.clone(), shared, true),
+            FfiType::NullableCString,
+        ),
+        (
+            param(nullable_handle.clone(), shared, false),
+            FfiType::NullableOpaqueHandle,
+        ),
+        (
+            param(nullable_handle.clone(), mutable, false),
+            FfiType::OpaqueHandleOut,
+        ),
+        (
+            param(Type::named("uint16"), mutable, false),
+            FfiType::Out(FfiScalar::U16),
+        ),
+        (param(bytes, mutable, false), FfiType::BytesViewMut),
+    ] {
+        assert_eq!(
+            super::ffi_type_for_extern_param(&param).expect("an admitted parameter"),
+            expected
+        );
+    }
+    let error = super::ffi_type_for_extern_param(&param(text.clone(), mutable, false))
+        .expect_err("a str view is never mutable");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "mutable FFI parameter type `str` reached MIR execution"
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_result(&text, true).expect("a cstr result"),
+        FfiType::CString
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_result(&nullable_text, true).expect("a nullable cstr result"),
+        FfiType::NullableCString
+    );
+
+    // A nullable argument crosses as its active member, bare or in a union.
+    let Type::Union(text_union) = &nullable_text else {
+        unreachable!("built as a union above")
+    };
+    let held = Value::String("held".to_string().into());
+    let lifted = crate::union_runtime::coerce_union_boundary(held.clone(), &nullable_text);
+    assert!(matches!(lifted, Value::Union(_)));
+    for value in [&held, &lifted] {
+        assert_eq!(
+            super::ffi_value_from_runtime(value, &nullable_text).expect("text crosses"),
+            FfiValue::String("held".to_string())
+        );
+    }
+    let none = crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_text);
+    for value in [&Value::Unit, &none] {
+        assert_eq!(
+            super::ffi_value_from_runtime(value, &nullable_text).expect("None crosses"),
+            FfiValue::Unit
+        );
+    }
+    let mut marker = 0u8;
+    let address = &mut marker as *mut u8 as *mut c_void;
+    let handle = Value::FfiHandle(
+        FfiHandleValue::new("Handle".to_string(), address).expect("a non-null handle"),
+    );
+    assert_eq!(
+        super::ffi_value_from_runtime(&handle, &nullable_handle).expect("a handle crosses"),
+        FfiValue::OpaqueHandle(OpaqueHandle::new(address).expect("non-null"))
+    );
+    let error = super::ffi_value_from_runtime(&Value::Bool(true), &nullable_handle)
+        .expect_err("a bool is no member of a nullable handle");
+    assert_eq!(error.code, "AU4005");
+
+    // C text results become `str` or the `str` member.
+    let copied = super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &text)
+        .expect("a cstr result is a str");
+    assert_eq!(copied, Value::String("name".to_string().into()));
+    let member =
+        super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &nullable_text)
+            .expect("a nullable cstr result is the str member");
+    assert!(matches!(
+        member,
+        Value::Union(union) if union.payload == Value::String("name".to_string().into())
+    ));
+    assert_eq!(text_union.members.len(), 2);
+    let error =
+        super::runtime_value_from_ffi(FfiValue::String("name".to_string()), &nullable_handle)
+            .expect_err("a union without str takes no text");
+    assert!(
+        error.message.contains("does not match source return type"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn ffi_pointer_parameters_cross_as_elements_and_write_a_mut_list_back() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue};
+    let list_of = |element: &str| Type::Named("list".to_string(), vec![Type::named(element)]);
+    let list = |element: &str, elements: Vec<Value>| {
+        Value::Vec(VecValue {
+            element_type: Type::named(element).into(),
+            elements: elements.into_iter().collect(),
+            str_view: Default::default(),
+        })
+    };
+    let param = |name: &str, ty: Type, passing| MirExternParam {
+        name: name.to_string(),
+        passing,
+        ty,
+        c_string: false,
+        pointer: true,
+        c_struct: None,
+    };
+    let shared = MirReceiverKind::Borrow;
+    let mutable = MirReceiverKind::BorrowMut;
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param("a", list_of("float64"), shared))
+            .expect("a pointer parameter"),
+        FfiType::Pointer(FfiScalar::F64)
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param("a", list_of("int16"), mutable))
+            .expect("a mut pointer parameter"),
+        FfiType::PointerMut(FfiScalar::I16)
+    );
+    for ty in [Type::named("str"), list_of("str")] {
+        let error = super::ffi_type_for_extern_param(&param("a", ty.clone(), shared))
+            .expect_err("a pointer needs a list of scalars");
+        assert_eq!(error.code, "AU4005");
+        assert_eq!(
+            error.message,
+            format!("pointer FFI parameter type `{ty}` reached MIR execution")
+        );
+    }
+
+    let floats = list("float64", vec![Value::Float(1.5), Value::Float(-2.0)]);
+    assert_eq!(
+        super::ffi_elements_from_runtime(&floats, &list_of("float64")).expect("a float list"),
+        FfiValue::Elements(
+            FfiScalar::F64,
+            vec![1.5_f64.to_bits(), (-2.0_f64).to_bits()]
+        )
+    );
+    for (value, ty) in [
+        (Value::Bool(true), list_of("float64")),
+        (list("float64", vec![Value::Bool(true)]), list_of("float64")),
+        (floats.clone(), Type::named("str")),
+    ] {
+        let error = super::ffi_elements_from_runtime(&value, &ty)
+            .expect_err("only a list of the scalar crosses as a pointer");
+        assert_eq!(error.code, "AU4005", "{}", error.message);
+    }
+    assert_eq!(
+        super::elements_runtime_value(FfiScalar::Bool, &[1, 0], &list_of("bool"), "fill")
+            .expect("flags"),
+        list("bool", vec![Value::Bool(true), Value::Bool(false)])
+    );
+    let error = super::elements_runtime_value(FfiScalar::Bool, &[7], &list_of("bool"), "fill")
+        .expect_err("7 is not a bool");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("FFI call to `fill` failed"));
+    let error = super::elements_runtime_value(FfiScalar::Bool, &[1], &Type::Unit, "fill")
+        .expect_err("a pointer needs a list type");
+    assert_eq!(error.code, "AU4005");
+
+    let mut env = Env::default();
+    env.define_typed("xs", list_of("float64"), floats.clone());
+    env.define_typed(
+        "out",
+        list_of("int32"),
+        list(
+            "int32",
+            vec![
+                Value::Int(IntegerValue::from_i32(1)),
+                Value::Int(IntegerValue::from_i32(2)),
+            ],
+        ),
+    );
+    let call = MirExternCall {
+        name: String::new(),
+        symbol: "aura_test_pointers".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            param("xs", list_of("float64"), shared),
+            param("out", list_of("int32"), mutable),
+        ],
+        return_type: Type::Unit,
+        c_string_result: false,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = [
+        MirArg {
+            name: None,
+            value: Operand::Place("xs".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("out".to_string()),
+            writeback_place: Some("out".to_string()),
+        },
+    ];
+    let result = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, signature, arguments| {
+            assert_eq!(
+                signature.parameters(),
+                [
+                    FfiType::Pointer(FfiScalar::F64),
+                    FfiType::PointerMut(FfiScalar::I32)
+                ]
+            );
+            assert_eq!(arguments[1], FfiValue::Elements(FfiScalar::I32, vec![1, 2]));
+            arguments[1] = FfiValue::Elements(FfiScalar::I32, vec![u64::from(u32::MAX), 40]);
+            Ok(FfiValue::Unit)
+        })
+        .expect("the call returns");
+    assert_eq!(result, Value::Unit);
+    assert_eq!(env.read_place("xs").expect("xs is defined"), floats);
+    assert_eq!(
+        env.read_place("out").expect("out is defined"),
+        list(
+            "int32",
+            vec![
+                Value::Int(IntegerValue::from_i32(-1)),
+                Value::Int(IntegerValue::from_i32(40)),
+            ],
+        )
+    );
+}
+
+#[test]
+fn ffi_out_parameters_write_the_scalar_and_handle_back_to_their_places() {
+    use crate::ffi::{FfiScalar, FfiType, FfiValue, OpaqueHandle};
+    let nullable_handle = Type::Union(Box::new(coverage_union(vec![
+        Type::named("Handle"),
+        Type::Unit,
+    ])));
+    let mut marker = 0u8;
+    let address = &mut marker as *mut u8 as *mut c_void as usize;
+    let mut env = Env::default();
+    env.define_typed(
+        "count",
+        Type::named("int32"),
+        Value::Int(IntegerValue::from_i32(1)),
+    );
+    env.define_typed(
+        "slot",
+        nullable_handle.clone(),
+        crate::union_runtime::coerce_union_boundary(Value::Unit, &nullable_handle),
+    );
+    let call = MirExternCall {
+        name: String::new(),
+        symbol: "aura_test_out".to_string(),
+        abi: "C".to_string(),
+        params: vec![
+            MirExternParam {
+                name: "path".to_string(),
+                passing: MirReceiverKind::Borrow,
+                ty: Type::named("str"),
+                c_string: true,
+                pointer: false,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "count".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: Type::named("int32"),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+            MirExternParam {
+                name: "slot".to_string(),
+                passing: MirReceiverKind::BorrowMut,
+                ty: nullable_handle.clone(),
+                c_string: false,
+                pointer: false,
+                c_struct: None,
+            },
+        ],
+        return_type: Type::named("str"),
+        c_string_result: true,
+        c_struct_result: None,
+        handle_drops: BTreeMap::new(),
+    };
+    let args = [
+        MirArg {
+            name: None,
+            value: Operand::String("db".to_string()),
+            writeback_place: None,
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("count".to_string()),
+            writeback_place: Some("count".to_string()),
+        },
+        MirArg {
+            name: None,
+            value: Operand::Place("slot".to_string()),
+            writeback_place: Some("slot".to_string()),
+        },
+    ];
+    let result = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, signature, arguments| {
+            assert_eq!(
+                signature.parameters(),
+                [
+                    FfiType::CString,
+                    FfiType::Out(FfiScalar::I32),
+                    FfiType::OpaqueHandleOut
+                ]
+            );
+            assert_eq!(signature.result(), FfiType::CString);
+            assert_eq!(arguments[0], FfiValue::String("db".to_string()));
+            assert_eq!(arguments[1], FfiValue::I32(1));
+            assert_eq!(arguments[2], FfiValue::Unit);
+            arguments[1] = FfiValue::I32(42);
+            arguments[2] = FfiValue::OpaqueHandle(
+                OpaqueHandle::new(address as *mut c_void).expect("non-null"),
+            );
+            Ok(FfiValue::String("opened".to_string()))
+        })
+        .expect("the call returns text");
+    assert_eq!(result, Value::String("opened".to_string().into()));
+    assert_eq!(
+        env.read_place("count").expect("count is defined"),
+        Value::Int(IntegerValue::from_i32(42))
+    );
+    assert!(matches!(
+        env.read_place("slot").expect("slot is defined"),
+        Value::Union(union)
+            if matches!(&union.payload, Value::FfiHandle(handle) if handle.type_name() == "Handle")
+    ));
+
+    // The handle the place now holds crosses back, and the function clears it.
+    let cleared = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, _, arguments| {
+            assert!(matches!(arguments[2], FfiValue::OpaqueHandle(_)));
+            arguments[2] = FfiValue::Unit;
+            Ok(FfiValue::String(String::new()))
+        })
+        .expect("the call returns text");
+    assert_eq!(cleared, Value::String(String::new().into()));
+    assert!(matches!(
+        env.read_place("slot").expect("slot is defined"),
+        Value::Union(union) if union.payload == Value::Unit
+    ));
+
+    // A slot the dispatch fills with another type is refused at writeback.
+    let forged = test_runtime()
+        .evaluate_extern_call_with(&call, &args, &mut env, |_, _, arguments| {
+            arguments[1] = FfiValue::Bool(true);
+            Ok(FfiValue::String(String::new()))
+        })
+        .expect_err("an int32 place takes no bool");
+    assert_eq!(forged.code, "AU4005");
+    assert_eq!(
+        forged.message,
+        "FFI call to `aura_test_out` failed: FFI result `bool` does not match source return type `int32`"
     );
 }
 
@@ -24023,4 +24501,400 @@ fn public_mir_execution_rejects_a_caller_supplied_link_plan() {
         error.message,
         "MIR that names native libraries can run only through a package-checked path API"
     );
+}
+
+#[test]
+fn ffi_structs_cross_as_c_bytes_and_come_back_as_instances() {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::ffi::{FfiScalar, FfiType, FfiValue};
+
+    // libc returns a struct in registers and fills one through a pointer.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class LongDiv:
+    quot: int64
+    rem: int64
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(n: int32, d: int32) -> Div
+extern "C" def ldiv(n: int64, d: int64) -> LongDiv
+extern "C" def clock_gettime(clock: int32, out: mut Timespec) -> int32
+
+def main() -> int32:
+    small = div(-17, 5)
+    wide = ldiv(9000000000007, 1000)
+    mut now = Timespec(seconds=0, nanoseconds=-1)
+    failed = clock_gettime(0, now)
+    if failed != 0 or now.seconds < 1700000000 or now.nanoseconds < 0:
+        return -1
+    if wide.quot != 9000000000 or wide.rem != 7:
+        return -2
+    return small.quot * 10 + small.rem
+"#,
+    );
+    let output = super::run_trusted(&module).expect("libc structs should cross");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(-32));
+
+    let field = |name: &str, kind| CField {
+        name: name.to_string(),
+        kind,
+    };
+    let inner = CStruct {
+        name: "Flagged".to_string(),
+        fields: vec![
+            field("on", CFieldKind::Scalar(FfiScalar::Bool)),
+            field("level", CFieldKind::Scalar(FfiScalar::F32)),
+        ],
+    };
+    let outer = CStruct {
+        name: "Outer".to_string(),
+        fields: vec![
+            field("id", CFieldKind::Scalar(FfiScalar::I16)),
+            field("flagged", CFieldKind::Struct(inner.clone())),
+        ],
+    };
+    let param = |passing| MirExternParam {
+        name: "value".to_string(),
+        passing,
+        ty: Type::named("Outer"),
+        c_string: false,
+        pointer: false,
+        c_struct: Some(outer.clone()),
+    };
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param(MirReceiverKind::Borrow)).expect("by value"),
+        FfiType::Struct(outer.interned())
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param(MirReceiverKind::BorrowMut)).expect("by pointer"),
+        FfiType::StructPointer(outer.interned())
+    );
+
+    let instance = |name: &str, fields: Vec<(&str, Value)>| {
+        Value::Instance(InstanceValue {
+            class_name: aura_runtime::runtime_value::RuntimeName::from(name.to_string()),
+            fields: fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
+        })
+    };
+    let int16 = |value: i64| {
+        Value::Int(
+            IntegerValue::from_typed_signed(i128::from(value), IntegerKind::Int16)
+                .expect("an int16"),
+        )
+    };
+    let flagged = instance(
+        "Flagged",
+        vec![("on", Value::Bool(true)), ("level", Value::Float(0.5))],
+    );
+    let value = instance(
+        "Outer",
+        vec![("id", int16(-2)), ("flagged", flagged.clone())],
+    );
+    let FfiValue::Struct(layout, bytes) =
+        super::ffi_struct_from_runtime(&value, &outer).expect("an instance of the struct")
+    else {
+        panic!("a struct crosses as struct bytes");
+    };
+    assert_eq!(layout, outer.interned());
+    assert_eq!(bytes[..2], (-2_i16).to_le_bytes());
+    assert_eq!(bytes[4], 1);
+    assert_eq!(bytes[8..12], 0.5_f32.to_le_bytes());
+    assert_eq!(bytes.len(), 12);
+    let back = super::struct_runtime_value(layout, &bytes, "probe").expect("the same instance");
+    assert_eq!(back.render(), value.render());
+
+    // A C function can leave any byte in a `bool` field.
+    let mut bad = bytes.clone();
+    bad[4] = 7;
+    let error =
+        super::struct_runtime_value(layout, &bad, "probe").expect_err("a bool field holds 0 or 1");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("probe"), "{}", error.message);
+
+    for wrong in [
+        Value::Bool(true),
+        instance("Outer", vec![("id", int16(1))]),
+        instance("Outer", vec![("id", int16(1)), ("flagged", Value::Unit)]),
+        instance(
+            "Outer",
+            vec![("id", Value::Float(1.0)), ("flagged", flagged.clone())],
+        ),
+    ] {
+        let error = super::ffi_struct_from_runtime(&wrong, &outer)
+            .expect_err("the value is not an instance of the struct");
+        assert_eq!(error.code, "AU4005", "{}", error.message);
+    }
+}
+
+#[test]
+fn ffi_callbacks_reenter_the_interpreter_and_park_a_failure() {
+    use crate::ffi::{CCallback, CCallbackParam, FfiScalar, FfiType};
+
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    if values[0] != 12 or values[4] != -4:
+        return -1
+    return values[1] * 10 + values[2]
+"#,
+    );
+    let output = super::run_trusted(&module).expect("qsort should call back into Aura");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(93));
+
+    // A callback that fails leaves C a zero result, and the failure is
+    // the result of the foreign call.
+    let failing = lower_ffi_runtime_source(
+        r#"
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def broken(a: mut int32, b: mut int32) -> int32:
+    return a // (b - b)
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4]
+    qsort(values, 3, 4, broken)
+    return 0
+"#,
+    );
+    let error = super::run_trusted(&failing).expect_err("the callback divides by zero");
+    assert!(
+        error.message.contains("division by zero"),
+        "{}",
+        error.message
+    );
+
+    let function_type =
+        |params: Vec<(&str, aura_core::ops::ReceiverKind)>, result: Type| Type::Function {
+            params: params
+                .into_iter()
+                .map(|(ty, passing)| aura_core::types::FunctionParamContract {
+                    keyword_only: false,
+                    name: String::new(),
+                    ty: Type::named(ty),
+                    passing,
+                    has_default: false,
+                })
+                .collect(),
+            return_type: Box::new(result),
+        };
+    let compare = function_type(
+        vec![
+            ("int", aura_core::ops::ReceiverKind::Borrow),
+            ("float32", aura_core::ops::ReceiverKind::BorrowMut),
+            ("bool", aura_core::ops::ReceiverKind::Value),
+        ],
+        Type::named("uint16"),
+    );
+    assert_eq!(
+        super::callback_signature(&compare),
+        Some(CCallback {
+            params: vec![
+                CCallbackParam {
+                    scalar: FfiScalar::I64,
+                    pointer: false
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::F32,
+                    pointer: true
+                },
+                CCallbackParam {
+                    scalar: FfiScalar::Bool,
+                    pointer: false
+                },
+            ],
+            result: Some(FfiScalar::U16),
+        })
+    );
+    let nothing = function_type(Vec::new(), Type::Unit);
+    assert_eq!(
+        super::callback_signature(&nothing),
+        Some(CCallback {
+            params: Vec::new(),
+            result: None
+        })
+    );
+    for ty in [
+        Type::named("int32"),
+        function_type(
+            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            Type::Unit,
+        ),
+        function_type(Vec::new(), Type::named("str")),
+        function_type(
+            Vec::new(),
+            Type::Named("list".to_string(), vec![Type::named("int32")]),
+        ),
+    ] {
+        assert_eq!(super::callback_signature(&ty), None, "{ty}");
+    }
+
+    let param = MirExternParam {
+        name: "visit".to_string(),
+        passing: MirReceiverKind::Borrow,
+        ty: nothing.clone(),
+        c_string: false,
+        pointer: false,
+        c_struct: None,
+    };
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param).expect("a callback parameter"),
+        FfiType::Callback
+    );
+    for (value, ty) in [
+        (Value::Bool(true), nothing.clone()),
+        (
+            super::mir_function_value("visit", &nothing),
+            Type::named("int32"),
+        ),
+    ] {
+        let error = super::ffi_callback_from_runtime(&value, &ty)
+            .expect_err("a callback is a named function of a callback type");
+        assert_eq!(error.code, "AU4005");
+        assert!(
+            error.message.contains("needs a named function"),
+            "{}",
+            error.message
+        );
+    }
+    let first =
+        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
+            .expect("a named function");
+    let again =
+        super::ffi_callback_from_runtime(&super::mir_function_value("visit", &nothing), &nothing)
+            .expect("a named function");
+    assert_eq!(first, again, "one function and signature share their code");
+
+    // Outside a foreign call there is no interpreter to re-enter, and the
+    // frame comes back as it was.
+    let mut frame = [7_u64];
+    super::run_callback(
+        "visit",
+        &super::callback_signature(&nothing).unwrap(),
+        &mut frame,
+    );
+    assert_eq!(frame, [7]);
+}
+
+#[test]
+fn ffi_handles_with_a_drop_function_release_their_object() {
+    // The C allocator stands in for a library: `free` is the drop function
+    // of a block, and `posix_memalign` stores one through a pointer.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" opaque class Block drop free
+extern "C" def malloc(size: uint64) -> Block
+extern "C" def calloc(count: uint64, size: uint64) -> Block | None
+extern "C" def posix_memalign(out: mut Block | None, alignment: uint64, size: uint64) -> int32
+extern "C" def free(block: own Block) -> None
+
+def dropped() -> None:
+    block = malloc(64)
+
+def main() -> int32:
+    dropped()
+    free(malloc(32))
+    mut slot: Block | None = calloc(4, 8)
+    status = posix_memalign(slot, 64, 256)
+    if slot is None:
+        return -1
+    return status
+"#,
+    );
+    let output = super::run_trusted(&module).expect("blocks should be released");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(0));
+
+    // A drop function no loaded library defines fails the call that would
+    // make the handle.
+    let missing = lower_ffi_runtime_source(
+        r#"
+extern "C" opaque class Block drop aura_no_such_release
+extern "C" def malloc(size: uint64) -> Block
+extern "C" def aura_no_such_release(block: own Block) -> None
+
+def main() -> int32:
+    block = malloc(8)
+    return 0
+"#,
+    );
+    let error = super::run_trusted(&missing).expect_err("the drop function is missing");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error.message.contains("aura_no_such_release"),
+        "{}",
+        error.message
+    );
+
+    // What a `mut Handle | None` place holds after a call.
+    static RELEASED: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
+    unsafe extern "C" fn note(_: *mut std::ffi::c_void) {
+        RELEASED.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    }
+    let released = || RELEASED.load(std::sync::atomic::Ordering::SeqCst);
+    let mut targets = [0_u8; 2];
+    let first: *mut std::ffi::c_void = targets.as_mut_ptr().cast();
+    let second = first.wrapping_add(1);
+    let handle = |address| {
+        Value::FfiHandle(
+            FfiHandleValue::owned("Block".to_string(), address, Some(note))
+                .expect("a non-null address"),
+        )
+    };
+    let written = |address| {
+        crate::ffi::FfiValue::OpaqueHandle(
+            crate::ffi::OpaqueHandle::new(address).expect("non-null"),
+        )
+    };
+    // The same address keeps the handle, with its owner.
+    let held = handle(first);
+    let kept = super::stored_handle(&held, &written(first)).expect("the handle is kept");
+    drop(held);
+    assert_eq!(released(), 0);
+    drop(kept);
+    assert_eq!(released(), 1);
+    // Another address, or null, gives the object up.
+    let held = handle(first);
+    assert!(super::stored_handle(&held, &written(second)).is_none());
+    drop(held);
+    let held = handle(first);
+    assert!(super::stored_handle(&held, &crate::ffi::FfiValue::Unit).is_none());
+    drop(held);
+    assert_eq!(released(), 1);
+    // A place that held `None` decides nothing.
+    assert!(super::stored_handle(&Value::Unit, &written(first)).is_none());
 }

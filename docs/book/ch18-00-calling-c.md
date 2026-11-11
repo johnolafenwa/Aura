@@ -144,14 +144,13 @@ false
 
 `write` put thirteen bytes on file descriptor 1, standard output, and
 returned the count. The string view is *not* terminated with a NUL byte, which
-is why it comes with its length. So you cannot pass a `str` to a C function
-that expects a NUL-terminated `char *`, such as `strlen` or `fopen`; those
-need a small C adapter that takes a pointer and a length.
+is why it comes with its length. A C function that expects a NUL-terminated
+`char *`, such as `strlen` or `fopen`, takes a different parameter type,
+`cstr`, which we come to in a moment.
 
 `getentropy(void *buf, size_t len)` fills a buffer with random bytes, which
-is what a `mut list[uint8]` parameter is for. Aura copies the list into a
-scratch buffer of the same length, passes the pointer and length, and copies
-the bytes back after the call returns. The C function can change the bytes
+is what a `mut list[uint8]` parameter is for. Aura passes a pointer to the
+list's own bytes and their length. The C function can change the bytes
 but never the length; `noise` still has eight elements, and they are no
 longer all zero. A bare `list[uint8]` passes a read-only view the same way,
 and an empty `str` or list passes a null pointer with length zero.
@@ -167,19 +166,19 @@ extern "C" def getenv(name: str) -> str
 
 ```console
 $ aura check src/ret.au
-error[AU2002]: FFI v0 cannot return a str view because no foreign lifetime or allocator contract exists
+error[AU2002]: an extern function cannot return a str view because no foreign lifetime or allocator contract exists
  --> src/ret.au:1:37
   |
 1 | extern "C" def getenv(name: str) -> str
   |                                     ^
+  = help: return `cstr` to copy NUL-terminated text that the C side keeps
 ```
 
-The message says exactly what is missing. A returned pointer could point at
-static memory, at a buffer the caller must free, or at something that will
-change on the next call, and the declaration has no way to say which. Rather
-than guess, FFI v0 does not offer the form. (For environment variables,
-`sys.env` already exists.) Raw pointers are refused for the same reason, with
-a parser error that suggests the alternatives:
+The message says exactly what is missing. A returned pointer and length
+could describe static memory, a buffer the caller must free, or something
+that will change on the next call, and the declaration has no way to say
+which. Raw pointers are refused for the same reason, with a parser error
+that suggests the alternatives:
 
 ```aura fragment
 extern "C" def strlen(text: *uint8) -> uint64
@@ -193,6 +192,74 @@ error[AU1101]: FFI v0 does not expose raw pointer syntax; use a supported byte/s
 1 | extern "C" def strlen(text: *uint8) -> uint64
   |                             ^
 ```
+
+## C strings and out-parameters
+
+Most C functions that take text want a `char *` that ends at a NUL byte, with
+no length. The type `cstr` is that contract. It exists only in extern
+declarations: on the Aura side the value is an ordinary `str`. Two more forms
+cover the other everyday C habits. A `cstr | None` is a pointer that may be
+null, and a `mut` scalar is a pointer the function writes its answer through:
+
+*Filename: src/main.au*
+
+```aura fragment
+extern "C" def strlen(text: cstr) -> uint64
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64
+
+def main() -> int32:
+    print(strlen("hello from C"))
+
+    home = getenv("HOME")
+    if home is None:
+        print("HOME is not set")
+    else:
+        print(strlen(home) > 0)
+    print(getenv("AURA_NO_SUCH_VARIABLE") is None)
+
+    mut exponent: int32 = 0
+    fraction = frexp(48.0, exponent)
+    print(fraction)
+    print(exponent)
+    return 0
+```
+
+<span class="caption">Listing 18-2: NUL-terminated text and a scalar out-parameter</span>
+
+```console
+$ aura run src/main.au
+12
+true
+true
+0.75
+6
+```
+
+For a `cstr` argument Aura makes a copy of the text with a NUL on the end,
+passes its address, and frees the copy when the call returns. A string
+literal skips the copy, because the compiler stores it with its NUL already
+in place. An Aura string can hold a NUL byte and a C string cannot, so
+passing one traps with `AU4005` before the C function runs.
+
+A `cstr` result goes the other way: Aura reads bytes up to the NUL, checks
+that they are UTF-8, and copies them into a new `str`. It never frees the C
+pointer. That is the right contract for `getenv`, which returns a pointer
+into memory the C library owns, and for most "get the error message" calls.
+It is the wrong one for a function such as `strdup`, whose result the caller
+must free: declared `-> cstr`, that memory leaks. Declare such a function to
+return an opaque handle, the subject of the next section, and free it with
+the library's own function.
+
+`getenv` returns a null pointer for a variable that is not set, so its result
+is `cstr | None`, and the checker makes us test for `None` before we use the
+text. Had we declared it `-> cstr`, a null result would trap with `AU4005`.
+
+`frexp(double, int *)` splits a number into a fraction and a power of two.
+It returns the fraction and stores the exponent through its second
+parameter. The `mut int32` parameter passes the address of a temporary that
+holds `exponent`, and after the call `exponent` holds what C left there:
+`48.0` is `0.75 * 2^6`. Any scalar type can be an out-parameter.
 
 ## Opaque handles
 
@@ -225,7 +292,7 @@ def main() -> int32:
     return 0
 ```
 
-<span class="caption">Listing 18-2: Wrapping a C `FILE *` in an opaque handle</span>
+<span class="caption">Listing 18-3: Wrapping a C `FILE *` in an opaque handle</span>
 
 ```console
 $ aura run src/cfile.au
@@ -278,12 +345,258 @@ And they cannot cross into another task: passing a `CFile` to `group.start`
 fails with `AU3008`, because C libraries differ wildly in what they allow
 across threads, and Aura cannot know.
 
-What Aura does *not* do is close a handle for you. A dropped `CFile` only
-discards Aura's wrapper, and the `FILE *` leaks. When you write a binding,
-declare the C function that releases the object with an `own` parameter,
-and give your callers a way to call it, typically through a class with a
-`close()` method that they can put in a `with` block, as
-[Chapter 14](/book/ch14-00-resources-and-cleanup) showed.
+A handle is never null. `tmpfile` can fail, though, and then it returns a
+null pointer, which would trap with `AU4005`. A C function that reports
+failure that way should say so in its declaration, with `| None`:
+
+*Filename: src/open.au*
+
+```aura fragment
+extern "C" opaque class CFile
+extern "C" def fopen(path: cstr, mode: cstr) -> CFile | None
+extern "C" def fclose(file: own CFile) -> int32
+
+def main() -> int32:
+    missing = fopen("/no/such/file", "r")
+    print(missing is None)
+
+    found = fopen("/dev/null", "r")
+    if found is None:
+        print("could not open /dev/null")
+        return 1
+    print(fclose(found))
+    return 0
+```
+
+<span class="caption">Listing 18-4: A handle result that may be null</span>
+
+```console
+$ aura run src/open.au
+true
+0
+```
+
+A null pointer becomes `None`, and anything else becomes the handle, so the
+checker makes us deal with the failure before we can use the file. The same
+type works as a parameter, where `None` passes a null pointer. And a
+`mut CFile | None` parameter is C's pointer to a pointer: the function stores
+the object it creates through it, which is how `sqlite3_open` and many other
+constructors that return a status code hand back their result. The
+[Manual's FFI page](/manual/ffi#nullable-handles) shows that form.
+
+So far a `CFile` we forget to close leaks: Aura drops its own wrapper and
+the `FILE *` stays open. A `drop` clause on the opaque class fixes that. It
+names the C function that releases the object, and Aura calls it when the
+program lets go of a handle it still owns:
+
+*Filename: src/note.au*
+
+```aura fragment
+extern "C" opaque class CFile drop fclose
+extern "C" def tmpfile() -> CFile
+extern "C" def fwrite(text: str, count: uint64, file: CFile) -> uint64
+extern "C" def ftell(file: CFile) -> int64
+extern "C" def fclose(file: own CFile) -> int32
+
+def write_note(text: str) -> int64:
+    file = tmpfile()
+    fwrite(text, 1, file)
+    return ftell(file)
+
+def main() -> int32:
+    print(write_note("twelve bytes"))
+    return 0
+```
+
+```console
+$ aura run src/note.au
+12
+```
+
+`write_note` never calls `fclose`, and the file is closed all the same,
+when `file` goes out of scope at the end of the function. The same happens
+when a handle is replaced by assignment, and when a list or a class
+instance that holds one is dropped. The `drop` function must be an extern
+function of the same module that takes the handle as its one `own`
+parameter.
+
+A handle is released exactly once. Calling `fclose(file)` ourselves still
+works, and it is the way to see the status the function returns. The handle
+moves into the call, so there is nothing left for Aura to release. Declare
+`drop` on a type only when every handle of that type is ours to release. A
+C function that returns a pointer its library keeps, such as the `stdout`
+stream, needs a second opaque class without the clause.
+
+## Arrays of numbers
+
+Numeric libraries take their data as a pointer to the first element of an
+array, with the count in a separate argument. The type `ptr[T]` is that
+pointer. Like `cstr`, it exists only in extern declarations: on the Aura
+side the argument is a `list[T]`, where `T` is one of the scalar types.
+`ptr[T]` is a `const T *` the function reads through, and `mut ptr[T]` is a
+`T *` it may also write through:
+
+*Filename: src/arrays.au*
+
+```aura fragment
+extern "C" def wcslen(text: ptr[int32]) -> uint64
+extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
+
+def main() -> int32:
+    wide: list[int32] = [72, 105, 0]
+    print(wcslen(wide))
+
+    mut averages: list[float64] = [-1.0, -1.0, -1.0]
+    print(getloadavg(averages, 3))
+    print(averages[0] >= 0.0)
+    return 0
+```
+
+<span class="caption">Listing 18-5: Passing lists of numbers to C as arrays</span>
+
+```console
+$ aura run src/arrays.au
+2
+3
+true
+```
+
+`wcslen` counts wide characters up to a zero, and on Linux and macOS a wide
+character is 32 bits, so a `list[int32]` that ends in `0` is a wide string.
+`getloadavg(double[], int)` fills an array with the system's load averages
+and returns how many it wrote. After the call, `averages` holds what C
+stored.
+
+No length crosses with the pointer, so nothing stops a C function from
+reading or writing past the end of the list. That is why `getloadavg` gets
+`3` as its own argument, and it is on us to pass a count that is no larger
+than the list. A list of scalars keeps its elements side by side in memory,
+exactly as a C array does, so a built program passes the address of the
+list's own storage and copies nothing. A million-element list costs the same
+to pass as a three-element one. That is the form to reach for when you wrap
+BLAS, an image codec, or a model runtime.
+
+## Structs
+
+Many C functions take or return a small struct: a point, a color, a pair of
+results. An `extern "C" class` declares one. It lists the fields in the
+order the C header does, and Aura lays them out exactly as the C compiler
+does, padding included. The C library has two functions we can try it on.
+`div` returns a quotient and a remainder together, and `clock_gettime`
+fills in a struct we hand it by pointer:
+
+*Filename: src/structs.au*
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def clock_gettime(clock: int32, time: mut Timespec) -> int32
+
+def main() -> int32:
+    parts = div(17, 5)
+    print(parts.quot)
+    print(parts.rem)
+
+    mut now = Timespec(seconds=0, nanoseconds=0)
+    if clock_gettime(0, now) != 0:
+        return 1
+    print(now.seconds > 1700000000)
+    return 0
+```
+
+<span class="caption">Listing 18-6: A struct result and a struct passed by pointer</span>
+
+```console
+$ aura run src/structs.au
+3
+2
+true
+```
+
+A parameter or result of the class type crosses by value, so `-> Div` is a
+C function that returns `div_t` itself, not a pointer to one. A `mut`
+parameter is the pointer form: `time: mut Timespec` is `struct timespec *`.
+Aura passes the address of a C copy of `now`, and when the call returns,
+`now` holds whatever the function stored. C headers also write
+`const struct timespec *` for a struct the function only reads. Declare that
+as `mut` too, and pass a `mut` variable.
+
+On the Aura side there is nothing foreign about these values. An
+`extern "C"` class is a `copy class`: we build one with keyword arguments,
+read its fields, copy it by assignment, and keep it in a list. What it gives
+up is everything a C struct does not have. It has no methods, no field
+defaults, and no type parameters, and each field is a scalar or another
+`extern "C"` class, which C would hold inline as a nested struct.
+
+Small structs travel in registers and larger ones in memory, by the same
+rules the C compiler follows on the machine we build for, so a call with a
+struct costs a few nanoseconds more than one with plain numbers. C unions,
+bit-fields, and array fields have no Aura spelling.
+
+## Callbacks
+
+Sometimes the C function wants to call us. `qsort` sorts an array of
+anything, so it asks for a function that compares two elements. In an
+extern declaration a parameter with a function type is a C function
+pointer, and the argument is the name of an Aura function:
+
+*Filename: src/sorting.au*
+
+```aura fragment
+extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    if a < b:
+        return 1
+    if a > b:
+        return -1
+    return 0
+
+def main() -> int32:
+    mut values: list[int32] = [3, 9, -4, 12, 0]
+    qsort(values, 5, 4, descending)
+    print(values)
+    return 0
+```
+
+<span class="caption">Listing 18-7: Handing an Aura function to C's `qsort`</span>
+
+```console
+$ aura run src/sorting.au
+[12, 9, 3, 0, -4]
+```
+
+`qsort` hands its comparison function two `const void *` pointers. We know
+they point at `int32` elements, so the callback type says `mut int32`: a
+pointer to one number, which Aura reads on the way in. A plain `int32`
+parameter would be a number passed by value. A callback takes and returns
+scalars only.
+
+The argument must be a function we name, defined at the top level of a
+module. C receives a bare code address with nowhere to keep captured
+variables, so a lambda or a closure is a compile error. C libraries usually
+make up for that with a `void *user_data` parameter that they pass back to
+the callback untouched. Declare it `uint64`, and use it to carry an index
+or a key.
+
+A callback can fail like any other Aura code, with an index out of range
+or an overflow. Aura does not unwind through the C function, which would
+not expect it. The callback returns zero to C, any later callbacks return
+zero without running, and the `qsort` call itself fails with the
+callback's error as soon as the C function returns. Two rules keep
+callbacks safe: the C library must call the function on the thread that
+made the foreign call, and the callback should not wait on a task or a
+queue.
 
 ## When things go wrong at run time
 
@@ -312,7 +625,8 @@ error[AU4005]: FFI call to `no_such_function_anywhere` failed: FFI symbol `no_su
 The interpreter got as far as the call, because its lookup happens there. (The path in the
 message is the program the symbol was looked up in, here the `aura` command
 itself, so yours will differ.) A handle-returning
-function that returns a null pointer traps with `AU4005` too, and a `bool`
+function that returns a null pointer traps with `AU4005` too, as does a
+`cstr` result that is null or not UTF-8, and a `bool`
 result that is anything other than `0` or `1` traps with `AU4001`.
 
 Everything else is outside Aura's reach. A segmentation fault, an abort, an
@@ -416,10 +730,10 @@ without a change to your own manifest that a reviewer will see.
 
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
-the compiler cannot check. There are no callbacks from C into Aura, no
-variadic functions such as `printf`, no structs or unions passed by value, no
-raw pointers or pointer arithmetic, no returned views, and no asynchronous
-foreign calls. When you need one of
+the compiler cannot check. There are no closures as callbacks, no
+variadic functions such as `printf`, no unions or arrays of structs, no
+raw pointers or pointer arithmetic, no returned views, no freeing of
+returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
 signature, built as a library the package links, or a separate helper program driven
 through `process`. The [Manual's FFI page](/manual/ffi) has the full ABI
@@ -429,10 +743,13 @@ table, the diagnostics, and the backend contract.
 
 You can now call a C function from Aura: declare it with `extern "C" def`
 inside a package that opts in with `allow_ffi = true`, name its library
-under `[ffi]`, pass scalars by value
-and text and bytes as temporary views, and wrap C objects in opaque handles
+under `[ffi]`, pass scalars by value,
+text and bytes as temporary views, C strings as `cstr`, lists of numbers as
+`ptr[T]` arrays, C structs as `extern "C"` classes, Aura functions as
+callbacks, and results through
+`mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
-a compile error. You have also seen where the compiler's help ends, at the
+a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
 boundary of the C code itself, and why FFI keeps that boundary small.
 
 That completes the tour of the language and its tools. In

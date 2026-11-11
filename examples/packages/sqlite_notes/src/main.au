@@ -1,0 +1,111 @@
+"""A table of notes kept in SQLite, bound through FFI.
+
+The package links the system SQLite library, which its manifest names
+under `[ffi]`. The two opaque classes name the C functions that release
+them, so a database or a statement the program lets go of is closed.
+"""
+
+extern "C" opaque class Database drop sqlite3_close_v2
+extern "C" opaque class Statement drop sqlite3_finalize
+
+extern "C" def sqlite3_open(path: cstr, out: mut Database | None) -> int32
+extern "C" def sqlite3_close_v2(db: own Database) -> int32
+extern "C" def sqlite3_errmsg(db: Database) -> cstr
+extern "C" def sqlite3_exec(
+    db: Database, sql: cstr,
+    row: def(data: uint64, columns: int32, values: uint64, names: uint64) -> int32,
+    data: uint64, error: uint64
+) -> int32
+extern "C" def sqlite3_prepare_v2(
+    db: Database, sql: cstr, length: int32, out: mut Statement | None, tail: uint64
+) -> int32
+extern "C" def sqlite3_bind_int64(statement: Statement, index: int32, value: int64) -> int32
+extern "C" def sqlite3_bind_text(
+    statement: Statement, index: int32, text: cstr, length: int32, lifetime: int64
+) -> int32
+extern "C" def sqlite3_step(statement: Statement) -> int32
+extern "C" def sqlite3_column_int64(statement: Statement, column: int32) -> int64
+extern "C" def sqlite3_column_text(statement: Statement, column: int32) -> cstr
+extern "C" def sqlite3_finalize(statement: own Statement) -> int32
+extern "C" def sqlite3_last_insert_rowid(db: Database) -> int64
+extern "C" def sqlite3_memory_used() -> int64
+
+# `sqlite3_step` returns one of these while a statement runs.
+SQLITE_ROW: int32 = 100
+SQLITE_DONE: int32 = 101
+# The `lifetime` that asks SQLite to copy bound text before the call returns.
+SQLITE_TRANSIENT: int64 = -1
+
+def each_row(data: uint64, columns: int32, values: uint64, names: uint64) -> int32:
+    """Called by `sqlite3_exec` for each row a statement produces."""
+    print(f"a row of {columns} columns")
+    return 0
+
+class Notes:
+    db: Database
+
+    def run(self, sql: str) -> Result[None, str]:
+        if sqlite3_exec(self.db, sql, each_row, 0, 0) != 0:
+            return Result.Err(sqlite3_errmsg(self.db))
+        return Result.Ok(None)
+
+    def prepare(self, sql: str) -> Result[Statement, str]:
+        mut slot: Statement | None = None
+        sqlite3_prepare_v2(self.db, sql, -1, slot, 0)
+        match own slot:
+            case None:
+                return Result.Err(sqlite3_errmsg(self.db))
+            case Statement as statement:
+                return Result.Ok(statement)
+
+    def add(self, body: str) -> Result[int64, str]:
+        insert = try self.prepare("insert into notes (body) values (?)")
+        sqlite3_bind_text(insert, 1, body, -1, SQLITE_TRANSIENT)
+        if sqlite3_step(insert) != SQLITE_DONE:
+            return Result.Err(sqlite3_errmsg(self.db))
+        return Result.Ok(sqlite3_last_insert_rowid(self.db))
+
+    def longer_than(self, length: int64) -> Result[list[str], str]:
+        query = try self.prepare("select id, body from notes where length(body) > ? order by id")
+        sqlite3_bind_int64(query, 1, length)
+        mut found: list[str] = []
+        while sqlite3_step(query) == SQLITE_ROW:
+            found.append(f"{sqlite3_column_int64(query, 0)}: {sqlite3_column_text(query, 1)}")
+        return Result.Ok(found)
+
+def open_notes(path: str) -> Result[Notes, str]:
+    mut slot: Database | None = None
+    status = sqlite3_open(path, slot)
+    match own slot:
+        case None:
+            return Result.Err(f"sqlite3_open failed with {status}")
+        case Database as db:
+            notes = Notes(db=db)
+            try notes.run("create table notes (id integer primary key, body text not null)")
+            return Result.Ok(notes)
+
+def session() -> Result[None, str]:
+    notes = try open_notes(":memory:")
+    print(try notes.add("water the plants"))
+    print(try notes.add("call the bank"))
+    print(try notes.add("renew the library books"))
+    for line in try notes.longer_than(13):
+        print(line)
+    try notes.run("select count(*), max(id) from notes")
+    match notes.run("select * from missing"):
+        case Result.Err(message):
+            print(message)
+        case Result.Ok(_):
+            print("unexpected")
+    return Result.Ok(None)
+
+def main() -> int32:
+    match session():
+        case Result.Err(message):
+            print(message)
+            return 1
+        case Result.Ok(_):
+            pass
+    # The database and every statement are closed by now.
+    print(sqlite3_memory_used())
+    return 0

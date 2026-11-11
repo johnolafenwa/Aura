@@ -100,4 +100,9 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 72. [ADR-0072: Task placement, stealing, and stack reuse](0072-task-placement-and-stack-reuse.md) — Accepted; local-first spawn, stealing of tasks that have not run, per-worker stack pools
 73. [ADR-0073: Streaming file reads, gzip, and HMAC](0073-streaming-reads-gzip-and-hmac.md) — Accepted; `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip` module, and `bytes.hmac_sha256`
 74. [ADR-0074: FFI links libraries and calls C directly](0074-ffi-library-linking-and-direct-calls.md) — Accepted; `[ffi] libraries`, direct native calls, and the `symbol` clause
+75. [ADR-0075: FFI passes C text, out-parameters, and nullable handles](0075-ffi-c-text-and-out-parameters.md) — Accepted; `cstr`, `mut` scalar out-parameters, `Handle | None` parameters, and `mut Handle | None`
+76. [ADR-0076: FFI passes a list of scalars as an array pointer](0076-ffi-array-pointers.md) — Accepted; `ptr[T]` and `mut ptr[T]` parameters over the elements of a scalar list
+77. [ADR-0077: FFI passes C structs by value and by pointer](0077-ffi-c-structs.md) — Accepted; `extern "C" class` structs in registers or memory by the C calling convention
+80. [ADR-0080: FFI passes a named function as a C callback](0080-ffi-callbacks.md) — Accepted; function-typed extern parameters over scalars, with a failure parked until the C function returns
 81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
+83. [ADR-0083: An opaque handle names the C function that releases it](0083-ffi-handle-drop-functions.md) — Accepted; `drop` clause on `extern "C" opaque class`, run once when the last owner goes away

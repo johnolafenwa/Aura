@@ -18,3 +18,18 @@ uint64_t fc_bytes(const uint8_t *bytes, uint64_t length) {
 void fc_fill(uint8_t *bytes, uint64_t length) {
     if (length != 0) bytes[0]++;
 }
+uint64_t fc_cstr(const char *text) { return (uint64_t)text[0]; }
+const char *fc_name(void) { return "hello, world"; }
+int32_t fc_out(int64_t value, int64_t *out) {
+    *out += value;
+    return 0;
+}
+double fc_floats(const double *values, int64_t count) { return values[count - 1]; }
+void fc_bump(double *values, int64_t count) { values[count - 1] += 1.0; }
+
+typedef struct { double x, y; } Vec2;
+typedef struct { int64_t a, b, c; } Triple;
+Vec2 fc_vec2_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }
+Triple fc_triple_next(Triple t) { Triple r = {t.b, t.c, t.a + 1}; return r; }
+void fc_vec2_move(Vec2 *v, double by) { v->x += by; v->y -= by; }
+int64_t fc_apply(int64_t (*f)(int64_t, int32_t), int64_t value) { return f(value, 3); }

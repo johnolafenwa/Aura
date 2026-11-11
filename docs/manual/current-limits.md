@@ -123,9 +123,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
 - Calls run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, temporary str and byte pointer-length views, same-length mutable byte views, and non-null opaque handles. Empty views use `(NULL, 0)`.
-- There is no callback, variadic, raw-pointer arithmetic, returned view, foreign aggregate layout, automatic handle destructor, or async offload.
-- The only nullable handle is an extern result of exactly `Handle | None`. See [FFI](/manual/ffi).
+- The accepted ABI is limited to fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list, C structs of scalars by value and by pointer, temporary str and byte pointer-length views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
+- A callback is a named top-level function over scalars. Closures, text, lists, structs, and handles do not cross in a callback.
+- There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
+- A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
+- The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
 - The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 

@@ -64,6 +64,41 @@ in this file.
 - A 31st [cross-language program](benchmarks/cross_language/README.md),
   `stream_io`, reads a log in line batches and 64 KiB chunks with gzip and
   HMAC on each chunk: Aura 766 ms, Python 938 ms, Rust 430 ms.
+- FFI passes C strings. A `cstr` parameter takes a `str` and passes
+  NUL-terminated text, and a `cstr` result is copied into a `str`.
+  `cstr | None` is a pointer that may be null, in both directions.
+- FFI passes out-parameters. A `mut` scalar parameter such as
+  `exponent: mut int32` passes a pointer, and the variable holds what the
+  C function stored when the call returns.
+- `Handle | None` is a parameter type as well as a result type, and
+  `out: mut Handle | None` passes a pointer to a pointer, as
+  `sqlite3_open` takes. A `mut` scalar in an extern declaration was
+  `AU3004` before, and a `Handle | None` parameter was `AU2010`.
+- FFI passes lists of numbers as C arrays. A `ptr[float64]` parameter takes
+  a `list[float64]` and passes a pointer to its first element, with no
+  length and no copy. `mut ptr[T]` lets the C function write the elements.
+  `T` is any fixed-width scalar.
+- FFI passes C structs. `extern "C" class Name:` declares a struct of
+  scalars and other such classes, laid out as C lays it out. A `Name`
+  parameter or result crosses by value, in registers or in memory as the
+  C calling convention says, and `mut Name` passes a pointer the function
+  can write through. In Aura code the class is an ordinary `copy class`.
+- FFI passes callbacks. An extern parameter with a function type, such as
+  `compare: def(a: mut int32, b: mut int32) -> int32`, takes the name of a
+  top-level Aura function, and the C function calls it. Callback
+  parameters and results are scalars, and `mut T` is a pointer to one. A
+  failure in a callback fails the foreign call once the C function
+  returns. Closures cannot be callbacks.
+- FFI releases opaque handles. `extern "C" opaque class Database drop
+  sqlite3_close` names the C function that releases a handle, and Aura
+  calls it once when the program lets go of a handle it still owns: at
+  the end of a scope, on reassignment, or when a list or class instance
+  that holds it is dropped. Passing the handle to an `own` parameter
+  still closes it by hand.
+- `examples/packages/sqlite_notes` binds the system SQLite library.
+- `aura verify` finds the trusted contract of an extern function that has
+  a `symbol` clause. It looked the contract up by the C symbol, so the
+  contract was ignored.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 
