@@ -4417,6 +4417,8 @@ struct FileReadBuffer {
     /// `FILE_READ_BUFFER_MAX_BYTES`, because each fill of a file read from
     /// start to end is one trip to the blocking pool.
     fill_bytes: usize,
+    /// Where a fill on the calling thread gets the file's bytes.
+    fill_source: FillSource,
 }
 
 /// The buffer size above which an emptied read buffer gives its memory
@@ -4547,18 +4549,9 @@ impl FileReadBuffer {
     /// Reads once from `file` into the buffer and returns how many bytes
     /// came. Zero means the end of the file.
     fn fill(&mut self, file: &mut StdFile) -> io::Result<usize> {
-        if self.start > 0 {
-            self.bytes.copy_within(self.start..self.end, 0);
-            self.end -= self.start;
-            self.valid_until = self.valid_until.saturating_sub(self.start);
-            self.start = 0;
-        }
         let fill = self.fill_bytes.max(FILE_READ_BUFFER_BYTES);
         self.fill_bytes = (fill * 2).min(FILE_READ_BUFFER_MAX_BYTES);
-        let room = self.end + fill;
-        if self.bytes.len() < room {
-            self.bytes.resize(room, 0);
-        }
+        let room = self.room_for(fill);
         let read = loop {
             match file.read(&mut self.bytes[self.end..room]) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -4568,6 +4561,145 @@ impl FileReadBuffer {
         self.end += *read.as_ref().unwrap_or(&0);
         read
     }
+
+    /// Moves the unread bytes to the front and makes room for `fill` more
+    /// after them. Returns where that room ends.
+    fn room_for(&mut self, fill: usize) -> usize {
+        if self.start > 0 {
+            self.bytes.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.valid_until = self.valid_until.saturating_sub(self.start);
+            self.start = 0;
+        }
+        let room = self.end + fill;
+        if self.bytes.len() < room {
+            self.bytes.resize(room, 0);
+        }
+        room
+    }
+
+    /// Reads into the buffer the bytes the host has in memory, on the
+    /// calling thread, and returns how many came. Zero means the end of the
+    /// file. `None` means the host would have to wait for them, or cannot
+    /// say, so the read belongs on the blocking pool.
+    ///
+    /// A file that is read from start to end is in the host's page cache
+    /// after its first read, so most fills take this path. The bytes then
+    /// stay in the cache of the processor that uses them, and the task
+    /// never parks.
+    fn fill_cached(&mut self, file: &StdFile) -> Option<io::Result<usize>> {
+        if self.fill_source == FillSource::Pool {
+            return None;
+        }
+        let room = self.room_for(FILE_READ_BUFFER_BYTES);
+        let buffer = &mut self.bytes[self.end..room];
+        let read = match self.fill_source {
+            FillSource::Memory => read_retrying(file, buffer),
+            _ => match read_cached(file, buffer) {
+                CachedRead::Read(read) => Ok(read),
+                CachedRead::Waits => return None,
+                // A file system that keeps its files in memory has nothing
+                // to wait for, so a plain read does the same.
+                CachedRead::Unsupported if file_is_in_memory(file) => {
+                    self.fill_source = FillSource::Memory;
+                    read_retrying(file, buffer)
+                }
+                CachedRead::Unsupported | CachedRead::Refused => {
+                    self.fill_source = FillSource::Pool;
+                    return None;
+                }
+            },
+        };
+        self.end += *read.as_ref().unwrap_or(&0);
+        Some(read)
+    }
+}
+
+/// Where a fill on the calling thread gets a file's bytes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum FillSource {
+    /// The host's page cache, by a read that does not wait.
+    #[default]
+    Cache,
+    /// A file system that keeps its files in memory, by a plain read.
+    Memory,
+    /// Nowhere: every fill goes to the blocking pool.
+    Pool,
+}
+
+/// What a read that must not wait found.
+enum CachedRead {
+    /// This many bytes came. Zero is the end of the file.
+    Read(usize),
+    /// The host has to wait for the bytes.
+    Waits,
+    /// The file's file system has no read that does not wait.
+    Unsupported,
+    /// The read failed. The blocking read reports why.
+    Refused,
+}
+
+/// A plain read of `file` into `buffer`, again after an interruption.
+fn read_retrying(mut file: &StdFile, buffer: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match file.read(buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
+/// Reads from `file`'s position into `buffer` only what the host holds in
+/// memory.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn read_cached(file: &StdFile, buffer: &mut [u8]) -> CachedRead {
+    use std::os::fd::AsRawFd;
+    let vector = libc::iovec {
+        iov_base: buffer.as_mut_ptr().cast(),
+        iov_len: buffer.len(),
+    };
+    loop {
+        // SAFETY: the vector names `buffer`, which is writable for its
+        // whole length, and an offset of -1 reads at the file's position.
+        let read = unsafe { libc::preadv2(file.as_raw_fd(), &vector, 1, -1, libc::RWF_NOWAIT) };
+        if let Ok(read) = usize::try_from(read) {
+            return CachedRead::Read(read);
+        }
+        match io::Error::last_os_error().raw_os_error() {
+            Some(libc::EINTR) => {}
+            Some(libc::EAGAIN) => return CachedRead::Waits,
+            Some(libc::EOPNOTSUPP) => return CachedRead::Unsupported,
+            _ => return CachedRead::Refused,
+        }
+    }
+}
+
+/// Whether `file` lies on a file system that keeps its files in memory.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn file_is_in_memory(file: &StdFile) -> bool {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `statfs` is plain data, and the call fills it for an open
+    // descriptor.
+    let kind = unsafe {
+        let mut stat: libc::statfs = std::mem::zeroed();
+        if libc::fstatfs(file.as_raw_fd(), &mut stat) != 0 {
+            return false;
+        }
+        stat.f_type
+    };
+    // `ramfs` has no constant in `libc`.
+    const RAMFS_MAGIC: libc::c_long = 0x8584_58f6;
+    kind == libc::TMPFS_MAGIC || kind == RAMFS_MAGIC
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn read_cached(_file: &StdFile, _buffer: &mut [u8]) -> CachedRead {
+    CachedRead::Refused
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn file_is_in_memory(_file: &StdFile) -> bool {
+    false
 }
 
 /// A `list[str]` of `lines`, each a `str` value.
@@ -4600,6 +4732,16 @@ impl OpenFile {
         let mut bytes = self.read.take_all();
         bytes.extend_from_slice(&rest);
         Ok(bytes)
+    }
+
+    /// Fills the read buffer with bytes the host has in memory (see
+    /// [`FileReadBuffer::fill_cached`]). A handle with unflushed writes
+    /// flushes first, which may wait, so it reads on the blocking pool.
+    fn fill_cached(&mut self, limit: usize) -> Option<io::Result<usize>> {
+        if !self.pending.is_empty() || self.read.unread().len() >= limit {
+            return None;
+        }
+        self.read.fill_cached(&self.file)
     }
 
     /// The next line of the file, read on the calling thread.
@@ -13547,19 +13689,38 @@ impl FileValue {
         )
     }
 
+    /// The next line when the read buffer holds all of it, and `None` when
+    /// the buffer needs more of the file. It never waits, so a caller may
+    /// hold the handle's box across it.
+    pub fn buffered_line(&self) -> Option<io::Result<Option<String>>> {
+        let mut file = try_lock_mutex(&self.inner.file)?;
+        let Some(open) = file.as_mut() else {
+            return Some(Err(closed_resource_error()));
+        };
+        open.read.take_line().map(|line| line.map(Some))
+    }
+
     /// The next line of the file without its LF or CRLF, or `None` at the
     /// end of the file. A line the read buffer already holds costs no trip
     /// to the blocking pool.
     pub fn read_line(&self) -> io::Result<Option<String>> {
+        if let Some(line) = self.buffered_line() {
+            return line;
+        }
+        flush_other_buffered_files(Some(&self.inner));
         if let Some(mut file) = try_lock_mutex(&self.inner.file) {
             let Some(open) = file.as_mut() else {
                 return Err(closed_resource_error());
             };
-            if let Some(line) = open.read.take_line() {
-                return line.map(Some);
+            while let Some(read) = open.fill_cached(MAX_STREAM_READ_BYTES) {
+                if read? == 0 {
+                    return open.read.take_last_line();
+                }
+                if let Some(line) = open.read.take_line() {
+                    return line.map(Some);
+                }
             }
         }
-        flush_other_buffered_files(Some(&self.inner));
         let state = self.inner.clone();
         run_blocking_io(
             move || {
@@ -13610,6 +13771,15 @@ impl FileValue {
             }
             drop(file);
             flush_other_buffered_files(Some(&self.inner));
+            if let Some(mut file) = try_lock_mutex(&self.inner.file) {
+                let cached = file
+                    .as_mut()
+                    .and_then(|open| open.fill_cached(MAX_STREAM_READ_BYTES));
+                if let Some(read) = cached {
+                    at_end = read? == 0;
+                    continue;
+                }
+            }
             let state = self.inner.clone();
             at_end = run_blocking_io(
                 move || {
@@ -17376,7 +17546,9 @@ pub fn optional_kept(
     let found = KEPT_OPTIONALS.with_borrow(|unions| {
         unions
             .iter()
-            .find(|(known, ..)| *known == key)
+            // A key is a literal, so the same key is most often the same
+            // address.
+            .find(|(known, ..)| std::ptr::eq(*known, key) || *known == key)
             .map(|(_, union_type, present, absent)| (Arc::clone(union_type), *present, *absent))
     });
     let (union_type, present, absent) = found.unwrap_or_else(|| {

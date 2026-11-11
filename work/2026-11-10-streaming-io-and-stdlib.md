@@ -53,9 +53,9 @@ How the batch read got there, from a first version at 480 ms:
 
 - Every `Result[str | None, io.Error]` or `Result[str, E]` value crosses
   the runtime boundary as a boxed enum (about 2,500 instructions each), so
-  `read_line()` in a loop is 2.4 times slower than Python, and a user
-  `Iterator[Result[str, io.Error]]` is as slow. This is a compiler gap, not
-  a file one. A `for line in file` form waits on it.
+  `read_line()` in a loop was 2.4 times slower than Python, and a user
+  `Iterator[Result[str, io.Error]]` is as slow. Step 5 below closes the
+  `try file.read_line()` case.
 - `for line in batch` over a `list[str]` copies each string (about 85 ns
   per line here). It is the larger half of the 300 ms above.
 - A match on a builtin enum whose runtime name is not in
@@ -207,3 +207,64 @@ was built, so only the stand-in path has run.
 - A conversation is a `list[str]` of JSON messages for the same reason.
 - There is no JSON object literal shorter than
   `json.Value.Object({...})` with each value wrapped by hand.
+
+## Step 5: `read_line()` faster than Python (work completed, 2026-11-11)
+
+Goal: a loop over `try file.read_line()` beats Python's `for line in f`.
+It was the one measured place where item 1 lost to Python.
+
+Where the time went, by stack sampling a 2 million line read (callgrind's
+instruction counts hid most of it, because the cost was in atomic
+operations and in bytes that crossed processors):
+
+- The `Result[str | None, io.Error]` box, its type tag, and the match that
+  took it apart: about 40% of the instructions.
+- The boxed `str | None` inside it, built by the runtime and unboxed at
+  once into the inline union the native code keeps: about 25% of the time
+  that remained.
+- A clone of the file handle out of its box on every call.
+- Each buffer fill was a trip to the blocking pool, and the buffer it
+  filled was then read by another processor.
+
+What changed:
+
+- The native backend lowers `try file.read_line()` as one call to
+  `aura_direct_file_read_line_try`. It returns the `str` itself, null at
+  the end of the file, or null with a `Result.Err` in a stack word. The
+  line goes straight into the words of the inline `str | None`. A read
+  whose `Result` is kept still uses the plain helper. The interpreter is
+  unchanged.
+- A line the read buffer already holds is taken while the handle stays in
+  its box (`FileValue::buffered_line`).
+- On Linux, a fill first asks for the bytes the page cache holds with
+  `preadv2(RWF_NOWAIT)`, on the calling thread, 64 KiB at a time. A file
+  on `tmpfs` or `ramfs`, which has no such read, is read with a plain
+  `read`, because its bytes are in memory. Anything else, and every other
+  host, fills on the blocking pool as before.
+
+Measured, 2 million lines (96 MB), medians of 15 interleaved runs:
+
+| File on | Aura before | Aura | Python | Rust |
+| --- | --- | --- | --- | --- |
+| `tmpfs` | 400 ms | 159 ms | 251 ms | 95 ms |
+| `ext4` | | 154 ms | 257 ms | 87 ms |
+
+Not measured: macOS. It has no read that does not wait, so its fills stay
+on the blocking pool. The fused call and the buffered line apply there.
+
+Tests: `direct_try_of_a_file_line_read_builds_no_result`,
+`direct_file_line_read_kept_as_a_result_uses_the_plain_helper`,
+`file_read_line_try_hands_back_the_line_and_leaves_a_failure_in_its_word`,
+`file_read_buffer_fills_from_memory_without_waiting`,
+`a_cached_read_of_an_empty_pipe_waits`,
+`a_file_kept_in_memory_fills_on_the_calling_thread`,
+`file_buffered_line_takes_only_what_the_buffer_holds`, and the CLI test
+`try_of_a_file_line_read_matches_on_both_backends`.
+
+## Gaps found in step 5, left for later
+
+- The same fusion would help `try` on the other line reads
+  (`net.TcpStream.read_line`, `process.Pipe.read_line`, `io.read_line`)
+  and on `read_chunk`. Each needs its own helper.
+- A `Result` a runtime helper returns still costs about 1,000 instructions
+  when the program keeps it as a value.

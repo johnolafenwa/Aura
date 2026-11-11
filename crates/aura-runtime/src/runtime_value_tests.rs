@@ -12329,6 +12329,171 @@ fn file_read_line_spans_read_buffers_and_rejects_invalid_text() {
     );
 }
 
+#[test]
+fn file_read_buffer_fills_from_memory_without_waiting() {
+    let temp = TempDir::new("aura-file-fill-cached");
+    let path = temp.path().join("lines.txt");
+    fs::write(&path, "one\ntwo\n").expect("fixture should be written");
+    let file = fs::File::open(&path).expect("fixture should open");
+    let mut read = super::FileReadBuffer::default();
+    if cfg!(all(target_os = "linux", target_env = "gnu")) {
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("a file just written is in memory")
+                .expect("the read succeeds"),
+            8
+        );
+        assert_eq!(read.unread(), b"one\ntwo\n");
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("the end of the file needs no wait")
+                .expect("the read succeeds"),
+            0
+        );
+        assert_ne!(read.fill_source, super::FillSource::Pool);
+    } else {
+        assert!(read.fill_cached(&file).is_none());
+        assert_eq!(
+            read.fill_source,
+            super::FillSource::Pool,
+            "a host without the read is not asked again"
+        );
+    }
+
+    // A handle that cannot be read is left to the blocking read, which
+    // reports the failure, and is not asked again.
+    let write_only = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("fixture should reopen");
+    let mut refused = super::FileReadBuffer::default();
+    assert!(refused.fill_cached(&write_only).is_none());
+    assert_eq!(refused.fill_source, super::FillSource::Pool);
+    assert!(refused.fill_cached(&write_only).is_none());
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_file_kept_in_memory_fills_on_the_calling_thread() {
+    let shared = std::path::Path::new("/dev/shm");
+    if !shared.is_dir() {
+        return;
+    }
+    let path = shared.join(format!("aura-file-fill-memory-{}", std::process::id()));
+    fs::write(&path, "kept in memory\n").expect("fixture should be written");
+    let file = fs::File::open(&path).expect("fixture should open");
+    assert!(super::file_is_in_memory(&file));
+    let mut read = super::FileReadBuffer::default();
+    for expected in [15, 0] {
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("a file in memory needs no wait")
+                .expect("the read succeeds"),
+            expected
+        );
+    }
+    assert_ne!(read.fill_source, super::FillSource::Pool);
+    // A plain read takes over where the host has no read that does not
+    // wait, and reports its own failures.
+    let mut plain = super::FileReadBuffer {
+        fill_source: super::FillSource::Memory,
+        ..Default::default()
+    };
+    let again = fs::File::open(&path).expect("fixture should reopen");
+    assert_eq!(
+        plain
+            .fill_cached(&again)
+            .expect("a plain read never defers")
+            .expect("the read succeeds"),
+        15
+    );
+    let write_only = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("fixture should reopen");
+    let mut refused = super::FileReadBuffer {
+        fill_source: super::FillSource::Memory,
+        ..Default::default()
+    };
+    refused
+        .fill_cached(&write_only)
+        .expect("a plain read never defers")
+        .expect_err("a handle opened for writing cannot read");
+    fs::remove_file(&path).expect("fixture should be removed");
+    let on_disk = fs::File::open("/proc/self/exe");
+    if let Ok(on_disk) = on_disk {
+        let _ = super::file_is_in_memory(&on_disk);
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_cached_read_of_an_empty_pipe_waits() {
+    use std::os::fd::FromRawFd;
+    let mut ends = [0; 2];
+    // SAFETY: `ends` has room for the two descriptors.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    // SAFETY: the pipe's descriptors are open and owned by nothing else.
+    let (reader, mut writer) = unsafe {
+        (
+            fs::File::from_raw_fd(ends[0]),
+            fs::File::from_raw_fd(ends[1]),
+        )
+    };
+    let mut read = super::FileReadBuffer::default();
+    assert!(read.fill_cached(&reader).is_none());
+    assert_eq!(
+        read.fill_source,
+        super::FillSource::Cache,
+        "an empty pipe is asked again"
+    );
+    writer.write_all(b"ready\n").expect("pipe write succeeds");
+    assert_eq!(
+        read.fill_cached(&reader)
+            .expect("the pipe holds bytes")
+            .expect("the read succeeds"),
+        6
+    );
+    assert_eq!(
+        read.take_line()
+            .expect("a whole line")
+            .expect("the line is UTF-8"),
+        "ready"
+    );
+}
+
+#[test]
+fn file_buffered_line_takes_only_what_the_buffer_holds() {
+    let temp = TempDir::new("aura-file-buffered-line");
+    let path = temp.path().join("lines.txt");
+    fs::write(&path, "one\ntwo").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert!(
+        file.buffered_line().is_none(),
+        "nothing is buffered before the first read"
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("one".to_string())
+    );
+    assert!(
+        file.buffered_line().is_none(),
+        "a last line without a line feed needs the end of the file"
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("two".to_string())
+    );
+    file.close();
+    assert_eq!(
+        file.buffered_line()
+            .expect("a closed handle answers at once")
+            .expect_err("a closed handle cannot read")
+            .to_string(),
+        "resource is closed"
+    );
+}
+
 fn batch_of_lines(file: &FileValue, max_lines: i64) -> Vec<String> {
     match file
         .read_lines(max_lines)

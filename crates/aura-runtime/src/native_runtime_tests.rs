@@ -7242,6 +7242,9 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
     expect_io_result_error(super::aura_direct_file_read_all(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_bytes(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_line(file_ptr));
+    let mut failure = std::ptr::null_mut();
+    assert!(super::aura_direct_file_read_line_try(file_ptr, &mut failure).is_null());
+    expect_io_result_error(failure);
     expect_io_result_error(super::aura_direct_file_read_lines(file_ptr, int_value(4)));
     expect_io_result_error(super::aura_direct_file_read_chunk(file_ptr, int_value(4)));
     expect_io_result_error(super::aura_direct_file_write_all(
@@ -12644,6 +12647,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "file-read-line-type" => {
                 super::aura_direct_file_read_line(bool_value(true));
             }
+            "file-read-line-try-type" => {
+                let mut failure = std::ptr::null_mut();
+                super::aura_direct_file_read_line_try(bool_value(true), &mut failure);
+            }
             "file-read-lines-type" => {
                 super::aura_direct_file_read_lines(bool_value(true), int_value(1));
             }
@@ -13996,6 +14003,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("file-read-all-type", "expected `fs.File`, found `bool`"),
         ("file-read-bytes-type", "expected `fs.File`, found `bool`"),
         ("file-read-line-type", "expected `fs.File`, found `bool`"),
+        (
+            "file-read-line-try-type",
+            "expected `fs.File`, found `bool`",
+        ),
         ("file-read-lines-type", "expected `fs.File`, found `bool`"),
         (
             "file-read-lines-count-type",
@@ -28907,4 +28918,56 @@ fn http_host_entries_borrow_the_stream_and_read_a_response_through_the_native_ab
         "the pool reports a count"
     );
     expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+}
+
+#[test]
+fn file_read_line_try_hands_back_the_line_and_leaves_a_failure_in_its_word() {
+    let path = std::env::temp_dir().join(format!(
+        "aura-native-read-line-try-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    ));
+    std::fs::write(&path, b"one\r\ntwo\nbad \xff\nlast").expect("fixture should be written");
+    let opened = expect_variant_ptr(
+        super::aura_direct_fs_open(string_value(path.to_str().expect("temp path is UTF-8"))),
+        "Result",
+        "Ok",
+    );
+    let file = match opened.as_slice() {
+        [Value::File(file)] => boxed_value(Value::File(file.clone())),
+        other => panic!("expected opened fs.File, found {:?}", other),
+    };
+    let mut failure = std::ptr::null_mut();
+    let line = |failure: &mut *mut OpaqueValue| {
+        let text = super::aura_direct_file_read_line_try(file, failure);
+        assert!(!text.is_null(), "the file has another line");
+        string_payload(unsafe { take_value(text) }, "`str`")
+    };
+    for expected in ["one", "two"] {
+        assert_eq!(line(&mut failure), expected);
+        assert!(failure.is_null(), "a line that is read leaves no failure");
+    }
+    assert!(
+        super::aura_direct_file_read_line_try(file, &mut failure).is_null(),
+        "a line that is not UTF-8 is a failure"
+    );
+    assert!(expect_variant_value(
+        expect_result_err_payload(failure),
+        "io.Error",
+        "InvalidData"
+    )
+    .is_empty());
+    let mut failure = std::ptr::null_mut();
+    assert_eq!(line(&mut failure), "last");
+    assert!(
+        super::aura_direct_file_read_line_try(file, &mut failure).is_null(),
+        "the end of the file is a null line"
+    );
+    assert!(failure.is_null(), "the end of the file is not a failure");
+    expect_unit(super::aura_direct_file_close(file));
+    unsafe { release_value(file) };
+    std::fs::remove_file(&path).expect("fixture should be removed");
 }

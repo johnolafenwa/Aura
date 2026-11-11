@@ -7,6 +7,15 @@ in this file.
 
 ## Unreleased
 
+- A loop that reads a file one line at a time with
+  `try file.read_line()` is more than twice as fast in a compiled
+  program. Reading 2 million lines (96 MB) takes 155 ms, where Python's
+  `for line in file` takes 250 ms and Rust's `BufRead::lines` 90 ms. It
+  took 400 ms before. The line reaches the program with no `Result` or
+  boxed `str | None` built around it. On Linux, `read_line` and
+  `read_lines` take bytes the operating system already holds in memory
+  on the calling thread, so the task does not park for them. A read that
+  would wait for a disk still goes to the blocking pool.
 - New example package `examples/agents/streaming_agent`, the reference
   streaming agent. It sends a conversation to the Claude Messages API with
   the `http` module, prints the reply as it arrives, runs the tool the

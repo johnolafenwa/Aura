@@ -12024,6 +12024,109 @@ fn run_and_direct_backends_run_atomic_save_example() {
 }
 
 #[test]
+fn try_of_a_file_line_read_matches_on_both_backends() {
+    // The direct backend reads the line of `try file.read_line()` through
+    // one helper that builds no `Result`. The loop forms, the end of the
+    // file, a failed read, and a converted error must match the interpreter.
+    let fixtures = TempDir::new("aura-try-read-line-fixtures");
+    let directory = fixtures
+        .path()
+        .to_str()
+        .expect("temp path should be valid UTF-8")
+        .replace('\\', "/");
+    let source = r#"import fs
+import io
+
+enum AppError:
+    Io(error: io.Error)
+    Empty
+
+impl From[io.Error] for AppError:
+    def from(value: own io.Error) -> AppError:
+        return AppError.Io(error=value)
+
+def count(path: str) -> Result[(int64, int64), io.Error]:
+    mut lines = 0
+    mut bytes = 0
+    with file = try fs.open(path):
+        while true:
+            match try file.read_line():
+                case str as line:
+                    lines += 1
+                    bytes += line.byte_len()
+                case None:
+                    break
+    return Result.Ok((lines, bytes))
+
+def longest(path: str) -> Result[str, AppError]:
+    mut best = ""
+    with file = try fs.open(path):
+        while true:
+            line = try file.read_line()
+            if line is None:
+                break
+            if line.byte_len() > best.byte_len():
+                best = line
+    if best == "":
+        return Result.Err(AppError.Empty)
+    return Result.Ok(best)
+
+def report(path: str) -> None:
+    match count(path):
+        case Result.Ok((lines, bytes)):
+            print(f"{lines} lines, {bytes} bytes")
+        case Result.Err(error):
+            print(f"count failed: {error}")
+    match longest(path):
+        case Result.Ok(line):
+            print(f"longest has {line.byte_len()} bytes")
+        case Result.Err(AppError.Io(error)):
+            print(f"longest failed: {error}")
+        case Result.Err(AppError.Empty):
+            print("longest: no lines")
+
+def write_fixtures(directory: str) -> Result[None, io.Error]:
+    mut text = ""
+    for index in range(0, 30000):
+        text += f"line {index}\r\n"
+    text += "the last line has no line feed"
+    try fs.write_string(directory + "/many.txt", text)
+    try fs.write_string(directory + "/empty.txt", "")
+    try fs.write_bytes(directory + "/bad.txt", [111, 107, 10, 255, 254, 10, 122, 10])
+    return Result.Ok(None)
+
+def main() -> int32:
+    directory = "__DIRECTORY__"
+    match write_fixtures(directory):
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+            return 1
+    report(directory + "/many.txt")
+    report(directory + "/empty.txt")
+    report(directory + "/bad.txt")
+    report(directory + "/missing.txt")
+    return 0
+"#
+    .replace("__DIRECTORY__", &directory);
+    assert_run_and_direct_source_stdout(
+        "aura-try-read-line",
+        &source,
+        concat!(
+            "30001 lines, 288920 bytes\n",
+            "longest has 30 bytes\n",
+            "0 lines, 0 bytes\n",
+            "longest: no lines\n",
+            "count failed: io.Error.InvalidData\n",
+            "longest failed: io.Error.InvalidData\n",
+            "count failed: io.Error.NotFound\n",
+            "longest failed: io.Error.NotFound\n",
+        ),
+    );
+}
+
+#[test]
 fn run_and_direct_backends_run_read_lines_example() {
     let expected = "4 lines, 9 words\nthe quick brown fox\n24\n3\ntrue\n";
     let output = Command::new(aura_bin())

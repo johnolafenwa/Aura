@@ -17140,19 +17140,52 @@ pub extern "C-unwind" fn aura_direct_file_read_bytes(file: *mut OpaqueValue) -> 
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_file_read_line(file: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        // The handle is cloned out of its box: a read that goes to the
-        // blocking pool parks the task, and no box access may span that.
-        let line = match unsafe { value_ref(file) } {
-            Value::File(file) => file.read_line(),
-            other => runtime_error(format!(
-                "expected `fs.File`, found `{}`",
-                value_type_name(other)
-            )),
-        };
-        match line {
-            Ok(line) => boxed_value(result_ok(optional_str_value(line))),
-            Err(error) => boxed_value(result_err(io_error(error))),
+    task_runtime_boundary(|| match direct_file_read_line(file) {
+        Ok(line) => boxed_value(result_ok(optional_str_value(line))),
+        Err(error) => boxed_value(result_err(io_error(error))),
+    })
+}
+
+/// The next line of the `fs.File` in `file`.
+fn direct_file_read_line(file: *mut OpaqueValue) -> io::Result<Option<String>> {
+    // A line the read buffer holds is taken where the handle lies.
+    let buffered = unsafe {
+        with_value(file, |value| match value {
+            Value::File(file) => file.buffered_line(),
+            _ => None,
+        })
+    };
+    if let Some(line) = buffered {
+        return line;
+    }
+    // The handle is cloned out of its box: a read that goes to the
+    // blocking pool parks the task, and no box access may span that.
+    match unsafe { value_ref(file) } {
+        Value::File(file) => file.read_line(),
+        other => runtime_error(format!(
+            "expected `fs.File`, found `{}`",
+            value_type_name(other)
+        )),
+    }
+}
+
+/// `try file.read_line()` in one call. A line comes back as the `str`
+/// itself, with no `Result` or `str | None` built around it. Null is the
+/// end of the file when `failure`, which points at one writable word the
+/// caller cleared, is still null. A failed read returns null and leaves the
+/// `Result.Err` the `try` returns in that word.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_file_read_line_try(
+    file: *mut OpaqueValue,
+    failure: *mut *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| match direct_file_read_line(file) {
+        Ok(Some(line)) => boxed_value(Value::string(line)),
+        Ok(None) => std::ptr::null_mut(),
+        Err(error) => {
+            // SAFETY: the caller passes one writable word.
+            unsafe { failure.write(boxed_value(result_err(io_error(error)))) };
+            std::ptr::null_mut()
         }
     })
 }

@@ -14792,6 +14792,74 @@ fn direct_lookup_matches_keep_the_found_value_without_a_lookup() {
     }
 }
 
+const TRY_READ_LINE_SOURCE: &str = r#"
+import fs
+import io
+
+def count(path: str) -> Result[int64, io.Error]:
+    mut lines = 0
+    with file = try fs.open(path):
+        while true:
+            match try file.read_line():
+                case str as line:
+                    lines += 1
+                case None:
+                    break
+    return Result.Ok(lines)
+
+def main() -> int32:
+    match count("missing.txt"):
+        case Result.Ok(lines):
+            print(lines)
+        case Result.Err(error):
+            print(error)
+    return 0
+"#;
+
+#[test]
+fn direct_try_of_a_file_line_read_builds_no_result() {
+    let mir = lower_source_to_mir(TRY_READ_LINE_SOURCE).expect("the line loop should lower");
+    let object = emit_host_object(&mir).expect("the line loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_file_read_line_try"),
+        "`try file.read_line()` reads through the fused helper: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_file_read_line"),
+        "`try file.read_line()` builds no `Result`: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_file_line_read_kept_as_a_result_uses_the_plain_helper() {
+    let source = r#"
+import fs
+import io
+
+def first(path: str) -> Result[str | None, io.Error]:
+    with file = try fs.open(path):
+        line = file.read_line()
+        return line
+
+def main() -> int32:
+    match first("missing.txt"):
+        case Result.Ok(_):
+            print("ok")
+        case Result.Err(error):
+            print(error)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the line read should lower");
+    let object = emit_host_object(&mir).expect("the line read should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_file_read_line")
+            && !referenced.contains("aura_direct_file_read_line_try"),
+        "a read whose `Result` is kept is not fused: {referenced:?}"
+    );
+}
+
 #[test]
 fn direct_scalar_variant_payloads_read_without_a_box() {
     let source = r#"

@@ -49,18 +49,23 @@ read_chunk(max_bytes: int64) -> Result[list[uint8] | None, io.Error]
 - The end of the file is not remembered. A later call sees appended data,
   which is what following a growing log needs.
 
-`read_lines` exists beside `read_line` for speed. Every `Result[str | None,
-io.Error]` crosses the runtime boundary as a boxed value today, which costs
-about 400 ns per line. A batch crosses once. On a 2 million line, 90 MB
-file, `read_lines(1024)` in a loop takes about 300 ms where Python's
-`for line in file` takes 340 to 400 ms and Rust's `BufRead::lines` 150 ms;
-`read_line` takes about 830 ms. A `for line in file` form waits until
-`Result[str, E]` values in an iterator are cheap, since it would otherwise
-be the slow path under a nicer spelling.
+`read_lines` exists beside `read_line` because a batch crosses the runtime
+boundary once. On a 2 million line, 96 MB file, `read_lines(1024)` in a
+loop takes about 130 ms and `read_line` about 155 ms, where Python's
+`for line in file` takes about 250 ms and Rust's `BufRead::lines` 90 ms.
 
-A fill is the only part of a read that can wait on the host, so it is the
-only part that runs on the blocking pool. Lines are built on the calling
-thread, which also frees them.
+`line = try file.read_line()` compiles to one call that hands back the line
+or null and writes a failure to a word on the caller's stack, so the usual
+call builds no `Result` and no `str | None` box. A `read_line` result kept
+as a value uses the plain entry.
+
+A line that the buffer already holds is taken on the calling thread. A fill
+is the only part of a read that can wait on the host. On Linux a fill first
+asks for data the page cache already holds (`preadv2` with `RWF_NOWAIT`)
+and reads it on the calling thread; a file on `tmpfs` or `ramfs` is always
+in memory and is read directly. A fill that would wait for the disk, and
+every fill on other hosts, runs on the blocking pool. Lines are built on
+the calling thread, which also frees them.
 
 ### gzip
 
