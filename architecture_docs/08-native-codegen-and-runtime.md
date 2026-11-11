@@ -406,6 +406,21 @@ A trap inside a lane method that was called, such as a division by a
 zero lane, carries `<std>/simd.au` as its file, so the report does not
 point at an unrelated line of the program.
 
+`I64x2` and `I64x4` (ADR-0092) are the same kind of class over `int64`
+fields, and every lane operation is checked.
+
+- **A lane method defers its overflow checks** when it is one block of
+  sums, differences, products, and a constructor (`defers_lane_traps`)
+  and the target CPU has AVX2 (`joins_lane_checks`). A signed sum or
+  difference then emits the wrapped result and a word whose sign says
+  whether it overflowed, with no branch.
+- **The return tests the joined words once** (`flush_deferred_traps`).
+  Its rare side tests each word in order and calls the same failure the
+  scalar check calls, so the report is the first lane's.
+- **Every other target, and every product, keeps the branch after each
+  lane.** The joined form is slower on the x86-64 baseline, where the
+  rare side's use of each lane keeps SLP from vectorizing at all.
+
 ### Integer Widths, Casts, And Constants
 
 Every fixed-width scalar runs in machine words, so code over bytes, hashes,

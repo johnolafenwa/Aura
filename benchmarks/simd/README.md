@@ -145,3 +145,26 @@ differ and its column is the measured time multiplied by 100.
 - `norms` is bound by the square root, which costs the same in every
   column.
 - Python is 60 to 300 times slower than Aura.
+
+## Integer lane values
+
+`int_lanes.au`, `int_lanes.rs`, and `int_lanes.py` run two kernels over
+`int64` lists with `I64x4` (ADR-0092), and the same kernels as plain
+loops: `add` writes the sum of two lists to a third, and `total` sums
+one list. Every addition is checked in the Aura and Rust forms. The Rust lane struct calls `checked_add` on each lane.
+
+Milliseconds for 1,024 elements, 400,000 times, best of five:
+
+| Kernel | Aura lanes | Aura lanes, native | Aura plain loop | Rust lanes | Rust lanes, native | Rust plain loop | Python |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `add` | 174 | 100 | 209 | 155 | 155 | 304 | 17,900 |
+| `total` | 129 | 79 | 155 | 114 | 103 | 166 | 10,500 |
+
+- On a build for the host CPU, which has AVX2, Aura tests the four lanes
+  of a sum with one branch and keeps them in one register. The lanes
+  take half the time of the plain loop and two thirds of Rust's.
+- On a generic build each lane keeps its own branch. The lanes are 1.2
+  times as fast as the plain loop, and Rust's lane struct is about a
+  tenth ahead.
+- Python runs one hundredth of the repetitions, and its column is the
+  measured time multiplied by 100.

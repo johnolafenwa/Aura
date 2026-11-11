@@ -1435,6 +1435,33 @@ fn foreign_symbols_declare_once_and_calls_extend_narrow_arguments() {
 }
 
 #[test]
+fn lane_checks_join_from_avx2_on() {
+    use crate::native_backend::{joins_lane_checks, lane_checks_join_on, with_joined_lane_checks};
+
+    let host = |features: &'static str| move || format!("native:cpu:{features}");
+    assert!(lane_checks_join_on("x86_64", "x86-64-v3", host("")));
+    assert!(lane_checks_join_on("x86_64", "x86-64-v4", host("")));
+    assert!(lane_checks_join_on(
+        "x86_64",
+        "native",
+        host("+sse2,+avx2,-avx512f")
+    ));
+    assert!(!lane_checks_join_on(
+        "x86_64",
+        "native",
+        host("+sse2,-avx2")
+    ));
+    assert!(!lane_checks_join_on("x86_64", "generic", host("+avx2")));
+    assert!(!lane_checks_join_on("x86_64", "x86-64-v2", host("+avx2")));
+    // Other architectures are not measured.
+    assert!(!lane_checks_join_on("aarch64", "native", host("+avx2")));
+    // The default target CPU of a test is the generic one.
+    assert!(!joins_lane_checks());
+    assert!(with_joined_lane_checks(joins_lane_checks));
+    assert!(!joins_lane_checks());
+}
+
+#[test]
 fn target_cpu_names_follow_the_architecture() {
     use crate::native_backend::{target_cpu_names, target_cpu_names_for};
 

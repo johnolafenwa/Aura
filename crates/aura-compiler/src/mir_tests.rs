@@ -5368,7 +5368,9 @@ fn simd_lane_counts_come_from_the_class_name() {
     assert_eq!(simd_lane_count("F64x2"), Some(2));
     assert_eq!(simd_lane_count("F64x4"), Some(4));
     assert_eq!(simd_lane_count("F32x8"), Some(8));
-    for name in ["F64", "I64x4", "F64x3", "F64xx", "Lanes", "F16x4"] {
+    assert_eq!(simd_lane_count("I64x2"), Some(2));
+    assert_eq!(simd_lane_count("I64x4"), Some(4));
+    for name in ["F64", "I32x4", "F64x3", "F64xx", "Lanes", "F16x4"] {
         assert_eq!(simd_lane_count(name), None, "{name}");
     }
 }

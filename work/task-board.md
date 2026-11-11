@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-11
 
-## SIMD (complete)
+## SIMD (gap work in progress)
 
 - Target: the four pieces John asked for on 2026-11-11: wider Array
   kernels, more vectorized Array kernels, vectorizable user loops, and
@@ -14,8 +14,12 @@ Last updated: 2026-11-11
   in Rust. The `simd` module has float lane values `F64x2`,
   `F64x4`, `F32x4`, and `F32x8` (ADR-0087), and `range` loops with a
   literal step count on plain integers.
-- Remaining: nothing. Possible follow-ups are integer lanes, lane loads
-  from an `Array`, and counted loops over `Array` elements.
+- Gap work after the first table (2026-11-11): stepped loops have one
+  test in each iteration and lane loads two entry guards, and `I64x2`
+  and `I64x4` add checked `int64` lanes (ADR-0092).
+- Remaining: `matmul` against NumPy. Possible follow-ups are `int32`
+  lanes, the joined integer check on AArch64, lane loads from an
+  `Array`, and counted loops over `Array` elements.
 
 ## Six older compiler bugs (complete)
 

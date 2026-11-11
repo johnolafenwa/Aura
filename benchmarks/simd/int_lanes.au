@@ -1,0 +1,62 @@
+# The integer lane benchmark: two kernels written with `I64x4` and the
+# same kernels as plain loops. Each lane operation checks for overflow as
+# the scalar operation does.
+from simd import I64x4
+import sys
+
+
+def add(xs: list[int64], ys: list[int64], out: mut list[int64]):
+    for i in range(0, len(xs) - 3, 4):
+        (I64x4.load(xs, i) + I64x4.load(ys, i)).store(out, i)
+
+
+def add_scalar(xs: list[int64], ys: list[int64], out: mut list[int64]):
+    for i in range(len(xs)):
+        out[i] = xs[i] + ys[i]
+
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    return acc.sum()
+
+
+def total_scalar(xs: list[int64]) -> int64:
+    mut sum: int64 = 0
+    for i in range(len(xs)):
+        sum += xs[i]
+    return sum
+
+
+def main() -> int32:
+    n: int64 = 1024
+    reps: int64 = 400000
+    mut xs: list[int64] = []
+    mut ys: list[int64] = []
+    mut out: list[int64] = []
+    for i in range(n):
+        xs.append((i % 1000) * 3 + 1)
+        ys.append((i % 700) * 5 - 3)
+        out.append(0)
+
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        add(xs, ys, out)
+    print(f"add {n} {sys.monotonic_time_ms() - start} {out[7]}")
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        add_scalar(xs, ys, out)
+    print(f"add_scalar {n} {sys.monotonic_time_ms() - start} {out[7]}")
+
+    mut acc: int64 = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += total(xs)
+    print(f"total {n} {sys.monotonic_time_ms() - start} {acc}")
+    acc = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += total_scalar(xs)
+    print(f"total_scalar {n} {sys.monotonic_time_ms() - start} {acc}")
+    return 0

@@ -119,9 +119,8 @@ things in Aura shape the answer:
   verifier, and the two definitions could drift. Lanes as fields reach
   the same instructions through inlining and SLP.
 - **Integer lanes.** Checked lanes need a compare in each lane and a
-  branch for each operation, which costs what the lanes save. Wrapping
-  integer operations exist as methods that currently box their operands.
-  Integer lanes can follow when wrapping arithmetic is unboxed.
+  branch for each operation, which costs what the lanes save. ADR-0092
+  later added `int64` lanes with one joined check on AVX2 targets.
 - **A fused `mul_add`.** Faster where the instruction exists, and a
   different answer where it does not.
 - **Lane-wise comparisons and masks.** `min`, `max`, and `abs` cover the

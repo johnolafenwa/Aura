@@ -30,6 +30,25 @@ pub(crate) fn without_optimization<R>(emit: impl FnOnce() -> R) -> R {
     emit()
 }
 
+#[cfg(test)]
+thread_local! {
+    static JOINED_LANE_CHECKS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Runs `emit` with the joined overflow check of integer lane methods on
+/// this thread, whatever the target CPU (see `joins_lane_checks`).
+#[cfg(test)]
+pub(crate) fn with_joined_lane_checks<R>(emit: impl FnOnce() -> R) -> R {
+    struct Restore(bool);
+    impl Drop for Restore {
+        fn drop(&mut self) {
+            JOINED_LANE_CHECKS.with(|joined| joined.set(self.0));
+        }
+    }
+    let _restore = Restore(JOINED_LANE_CHECKS.with(|joined| joined.replace(true)));
+    emit()
+}
+
 /// Whether LLVM runs its pass pipeline on this thread's objects.
 fn optimizes() -> bool {
     #[cfg(test)]
@@ -96,6 +115,36 @@ pub fn target_cpu_identity() -> String {
         "native" => llvm::host_cpu_identity(),
         name => name.to_string(),
     }
+}
+
+/// Whether host objects are compiled for a CPU on which one joined
+/// overflow check for the lanes of a `simd` integer value beats a check
+/// after each lane.
+///
+/// The joined check lets LLVM compute the lanes in vector registers. It
+/// pays on x86-64 from AVX2 on, where four `int64` lanes fit a register:
+/// an `I64x4` sum then takes under half the time of the scalar loop. On
+/// the x86-64 baseline two lanes fit, the check costs more than the lanes
+/// save, and the code is slower than a branch for each lane. Other
+/// architectures are not measured and keep the branches. The results are
+/// the same either way.
+pub(crate) fn joins_lane_checks() -> bool {
+    #[cfg(test)]
+    if JOINED_LANE_CHECKS.with(std::cell::Cell::get) {
+        return true;
+    }
+    lane_checks_join_on(std::env::consts::ARCH, target_cpu(), || {
+        llvm::host_cpu_identity()
+    })
+}
+
+pub(crate) fn lane_checks_join_on(arch: &str, cpu: &str, host: impl FnOnce() -> String) -> bool {
+    arch == "x86_64"
+        && match cpu {
+            "x86-64-v3" | "x86-64-v4" => true,
+            "native" => host().split(',').any(|feature| feature == "+avx2"),
+            _ => false,
+        }
 }
 
 /// The module backend for the host, which the emitter writes one object

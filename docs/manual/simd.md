@@ -1,6 +1,6 @@
 # SIMD Module
 
-The `simd` module has values that hold two, four, or eight floats and do
+The `simd` module has values that hold two, four, or eight numbers and do
 arithmetic on all of them at once. Native code keeps such a value in vector
 registers, so one `+` adds every lane with one or two instructions.
 
@@ -8,10 +8,11 @@ registers, so one `+` adds every lane with one or two instructions.
 import simd
 ```
 
-Use it when a loop over a list of floats does not turn into vector
+Use it when a loop over a list of numbers does not turn into vector
 instructions on its own. The usual case is a float sum, which Aura adds in
 source order: with lane values you choose the order yourself, and it is the
-same on every machine.
+same on every machine. The other case is checked `int64` arithmetic, which
+a plain loop does one element at a time.
 
 ## Lane Classes
 
@@ -21,14 +22,16 @@ same on every machine.
 | `simd.F64x4` | 4 | `float64` |
 | `simd.F32x4` | 4 | `float32` |
 | `simd.F32x8` | 8 | `float32` |
+| `simd.I64x2` | 2 | `int64` |
+| `simd.I64x4` | 4 | `int64` |
 
 Each class is an ordinary Copy class whose public fields `l0`, `l1`, and so
 on are the lanes. You can construct one by naming its fields, read a lane
 with `value.l2`, pass it to a function, return it, and store it in a class
 field. Assigning one copies it.
 
-There are no integer lane classes. Integer arithmetic in Aura reports
-overflow, and a check in each lane would cost more than the lanes save.
+There are no lane classes for `int32` or the other narrow integers. See
+[Integer Lanes](#integer-lanes) for why.
 
 ## Public API
 
@@ -39,13 +42,14 @@ overflow, and a check in each lane would cost more than the lanes save.
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
 | `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
-| `+`, `-`, `*`, `/` | `V` with `V` | The operation in each lane. |
+| `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
+| `/` | `V` with `V`, float classes only | The division in each lane. |
 | unary `-` | `V` | Each lane negated. |
 | `min` | `min(self, other: V) -> V` | In each lane, `self` where it is less than `other`, else `other`. |
 | `max` | `max(self, other: V) -> V` | In each lane, `self` where it is greater than `other`, else `other`. |
 | `abs` | `abs(self) -> V` | The absolute value of each lane. |
-| `sqrt` | `sqrt(self) -> V` | The square root of each lane. |
-| `mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane. |
+| `sqrt` | `sqrt(self) -> V`, float classes only | The square root of each lane. |
+| `mul_add` | `mul_add(self, factor: V, addend: V) -> V`, float classes only | `self * factor + addend` in each lane. |
 | `sum` | `sum(self) -> E` | The sum of the lanes, added in pairs. |
 | `to_list` | `to_list(self) -> list[E]` | The lanes as a new list, `l0` first. |
 
@@ -101,6 +105,63 @@ program runs under `aura run` or as a native binary.
 
 A loop that keeps a lane value as its running sum adds in a different order
 than a loop that keeps one float. The two can differ in their last bits.
+
+## Integer Lanes
+
+`I64x2` and `I64x4` hold `int64` lanes. Each operation is the checked
+scalar operation in each lane: a sum, difference, product, or negation
+that does not fit `int64`, and `abs` of the least `int64`, stops the
+program with `AU4002`. `sum` checks each of its additions.
+
+```aura
+from simd import I64x4
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    mut sum = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        sum += xs[i]
+    return sum
+
+def main():
+    print(total([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+```
+
+```text
+45
+```
+
+A lane that overflows is reported as the scalar operation would be, with
+the value that does not fit. The position is the lane's line in the
+module's source, and the call chain names your function:
+
+```text
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> <std>/simd.au:486:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+```
+
+How much faster the lanes are depends on the target CPU:
+
+- **With `--target-cpu x86-64-v3`, `x86-64-v4`, or `native` on a machine
+  with AVX2**, `+`, `-`, and unary `-` test all lanes of an operation
+  with one branch, and the lanes share a 256-bit register. On
+  `benchmarks/simd` an `I64x4` sum takes under half the time of the plain
+  loop.
+- **On the default build and on Apple Silicon**, each lane keeps its own
+  overflow branch. The lanes are about 1.2 times as fast as the plain
+  loop.
+- **`*`** checks one lane at a time on every CPU.
+- **`min` and `max`** are no faster than the scalar comparison before
+  AVX-512.
+
+The results and the reports are the same on every target.
+
+There are no `int32` lanes. Aura computes an `int32` in a 64-bit word and
+checks its range after each operation, so eight `int32` lanes ran no
+faster than the plain loop when measured.
 
 ## Loads And Stores
 

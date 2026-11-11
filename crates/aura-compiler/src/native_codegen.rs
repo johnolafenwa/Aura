@@ -2056,6 +2056,10 @@ impl<'a> NativeCodegen<'a> {
             current_function_name,
             current_function_path,
             frameless_descriptor: frameless.then_some(descriptor),
+            deferred_traps: (frameless
+                && defers_lane_traps(function)
+                && crate::native_backend::joins_lane_checks())
+            .then(Vec::new),
             writeback_locals,
             mutable_param_indices,
             mutable_sink_vars,
@@ -3398,6 +3402,9 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The overflow checks of a lane method that wait for its return (see
+    /// `defers_lane_traps`), or `None` in any other function.
+    deferred_traps: Option<Vec<DeferredTrap>>,
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
     /// The variable that holds each mutable parameter's write-through sink,
@@ -5378,6 +5385,7 @@ impl<'a> FunctionCompiler<'a> {
         self.fresh_str_copies.clear();
         match terminator {
             Terminator::Return(operand) => {
+                self.flush_deferred_traps();
                 let value = self.load_operand_for_target(operand, return_ty)?;
                 self.release_unconsumed_retains();
                 let coerced = self.coerce_value(value, return_ty)?;
@@ -6648,6 +6656,14 @@ impl<'a> FunctionCompiler<'a> {
                 WideOverflowOp::Mul | WideOverflowOp::Div => self.builder.imul(left, right),
             });
         }
+        if self.deferred_traps.is_some() {
+            if kind.is_signed() && matches!(op, WideOverflowOp::Add | WideOverflowOp::Sub) {
+                return Ok(self.compile_deferred_wide_overflow(op, left, right, span));
+            }
+            // A product's check is a flag LLVM keeps for each lane, so it
+            // branches here, after the checks that wait.
+            self.flush_deferred_traps();
+        }
         let (result, overflow) = match (op, kind.is_signed()) {
             (WideOverflowOp::Add, true) => self.builder.sadd_overflow(left, right),
             (WideOverflowOp::Add, false) => self.builder.uadd_overflow(left, right),
@@ -6671,6 +6687,91 @@ impl<'a> FunctionCompiler<'a> {
         }
         self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
         Ok(result)
+    }
+
+    /// The signed sum or difference `left op right` in a lane method (see
+    /// `defers_lane_traps`): the wrapped result now, and the overflow check
+    /// where the method returns.
+    fn compile_deferred_wide_overflow(
+        &mut self,
+        op: WideOverflowOp,
+        left: Val,
+        right: Val,
+        span: Option<Span>,
+    ) -> Val {
+        // A signed sum overflows when both operands differ in sign from
+        // it, and a difference when the operands differ in sign and the
+        // result differs from the left one. Each is the sign of a word
+        // LLVM computes on every lane at once, which it does not do for
+        // the overflow flag of an add.
+        let (result, word) = if op == WideOverflowOp::Add {
+            let sum = self.builder.iadd(left, right);
+            let from_left = self.builder.bxor(left, sum);
+            let from_right = self.builder.bxor(right, sum);
+            (sum, self.builder.band(from_left, from_right))
+        } else {
+            let difference = self.builder.isub(left, right);
+            let apart = self.builder.bxor(left, right);
+            let moved = self.builder.bxor(left, difference);
+            (difference, self.builder.band(apart, moved))
+        };
+        self.deferred_traps
+            .as_mut()
+            .expect("only a lane method defers its overflow checks")
+            .push(DeferredTrap {
+                word,
+                op,
+                left,
+                right,
+                span,
+            });
+        result
+    }
+
+    /// Tests the overflow checks a lane method deferred, where it returns.
+    /// One branch covers them all. Its rare side tests each in the order
+    /// the method computed them and reports the first that failed.
+    fn flush_deferred_traps(&mut self) {
+        let Some(traps) = self.deferred_traps.as_mut().map(std::mem::take) else {
+            return;
+        };
+        if traps.is_empty() {
+            return;
+        }
+        let joined = traps
+            .iter()
+            .map(|trap| trap.word)
+            .reduce(|left, right| self.builder.bor(left, right))
+            .expect("at least one check waits");
+        let failed = self.builder.icmp_imm(IntCC::SignedLessThan, joined, 0);
+        let rare_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .brif(failed, rare_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(rare_block);
+        self.builder.set_cold_block(rare_block);
+        self.builder.seal_block(rare_block);
+        for trap in traps {
+            let this = self.builder.icmp_imm(IntCC::SignedLessThan, trap.word, 0);
+            let fail_block = self.builder.create_block();
+            let next_block = self.builder.create_block();
+            self.builder.brif(this, fail_block, &[], next_block, &[]);
+            self.builder.switch_to_block(fail_block);
+            self.builder.seal_block(fail_block);
+            self.emit_integer_overflow_failure(
+                WideIntegerKind::Int64,
+                trap.op,
+                trap.left,
+                trap.right,
+                trap.span,
+            );
+            self.builder.switch_to_block(next_block);
+            self.builder.seal_block(next_block);
+        }
+        // One of the checks failed, so the last test does not fall through.
+        self.builder.trap(TrapCode::IntegerOverflow);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
     }
 
     fn compile_cast(
@@ -7840,6 +7941,22 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        self.emit_integer_overflow_failure(kind, op, left, right, span);
+        self.builder.seal_block(fail_block);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+        Ok(())
+    }
+
+    /// Reports that `left op right` overflowed, and ends the block.
+    fn emit_integer_overflow_failure(
+        &mut self,
+        kind: WideIntegerKind,
+        op: WideOverflowOp,
+        left: Val,
+        right: Val,
+        span: Option<Span>,
+    ) {
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         self.push_frameless_frame();
@@ -7851,10 +7968,6 @@ impl<'a> FunctionCompiler<'a> {
             &[kind_code, op_code, left, right, line, column],
         );
         self.builder.trap(TrapCode::IntegerOverflow);
-        self.builder.seal_block(fail_block);
-        self.builder.switch_to_block(continue_block);
-        self.builder.seal_block(continue_block);
-        Ok(())
     }
 
     fn emit_float_division_guard(
@@ -16625,6 +16738,51 @@ const FAST_ADVANCE_SUFFIX: &str = ".__aura_advance";
 const SIMD_MODULE: &str = "simd";
 /// The largest advance method inlined into each loop that calls it.
 const FAST_ADVANCE_INLINE_BLOCKS: usize = 64;
+
+/// The overflow check of a signed 64-bit sum or difference that waits for
+/// the end of a lane method.
+struct DeferredTrap {
+    /// The word that is negative when the operation overflowed.
+    word: Val,
+    op: WideOverflowOp,
+    left: Val,
+    right: Val,
+    span: Option<Span>,
+}
+
+/// Whether `function` is a method of the `simd` module whose integer
+/// overflow checks wait for its return.
+///
+/// A lane method such as `I64x4 + I64x4` adds each lane with its own check.
+/// A branch after each lane keeps LLVM from joining the lanes into vector
+/// instructions. Such a method is one block that only computes sums,
+/// differences, and products, builds its result, and returns, so nothing it
+/// does can be seen before it returns. Its checks are computed without a
+/// branch and tested together where it returns. When one failed, the
+/// checks are tested again in source order, so the report is the one the
+/// method would give lane by lane.
+fn defers_lane_traps(function: &MirFunction) -> bool {
+    let [block] = function.blocks.as_slice() else {
+        return false;
+    };
+    function.module_name == SIMD_MODULE
+        && matches!(block.terminator, Terminator::Return(_))
+        && block.instructions.iter().all(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Use(_)
+                        | Rvalue::Construct { .. }
+                        | Rvalue::Unary { .. }
+                        | Rvalue::Binary {
+                            op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
+                            ..
+                        },
+                    ..
+                }
+            )
+        })
+}
 
 fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     fn words_only(ty: &DirectType) -> bool {

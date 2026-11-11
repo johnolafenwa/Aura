@@ -8915,6 +8915,85 @@ fn simd_lane_values_build_to_vector_instructions() {
     );
 }
 
+/// On an AVX2 target a lane method tests the overflow of all its lanes
+/// with one branch. The values and the reports are those of the generic
+/// build and of the interpreter.
+#[cfg(target_arch = "x86_64")]
+#[test]
+fn integer_lane_checks_join_on_an_avx2_target() {
+    let temp = TempDir::new("aura-integer-lanes");
+    let fixtures = repo_root().join("crates/aura-compiler/tests/fixtures");
+    let prefix = temp.path().join("ir");
+    for (index, (name, fails)) in [
+        ("run-pass/simd_integer_lanes", false),
+        ("run-fail/simd_integer_lane_sum_overflows", true),
+        ("run-fail/simd_integer_lane_difference_overflows", true),
+        ("run-fail/simd_integer_lane_negation_overflows", true),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let source_path = fixtures.join(format!("{name}.au"));
+        let interpreted = Command::new(aura_bin())
+            .args(["run", "--backend", "mir"])
+            .arg(&source_path)
+            .output()
+            .expect("failed to run aura run");
+        assert_eq!(interpreted.status.success(), !fails, "{name}");
+        let output_path = temp.path().join(format!("app{index}"));
+        let mut build = Command::new(aura_bin());
+        build
+            .args(["build", "--target-cpu", "x86-64-v3", "-o"])
+            .arg(&output_path)
+            .arg(&source_path);
+        if !fails {
+            build.env("AURA_DUMP_LLVM_IR", &prefix);
+        }
+        let build = build.output().expect("failed to run aura build");
+        assert!(
+            build.status.success(),
+            "the build of {name} should succeed, stderr was:\n{}",
+            String::from_utf8_lossy(&build.stderr)
+        );
+        // The IR is checked on every x86-64 machine. The program runs
+        // only where the CPU has the instructions it was built for.
+        if !std::arch::is_x86_feature_detected!("avx2") {
+            continue;
+        }
+        let run = generated_binary(&output_path).output().unwrap();
+        assert_eq!(run.status.success(), !fails, "{name}");
+        assert_eq!(
+            String::from_utf8_lossy(&run.stdout),
+            String::from_utf8_lossy(&interpreted.stdout),
+            "{name}"
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&run.stderr),
+            String::from_utf8_lossy(&interpreted.stderr),
+            "{name}"
+        );
+    }
+    let lines = fs::read_dir(temp.path())
+        .unwrap()
+        .map(|entry| entry.unwrap().path())
+        .filter(|path| path.extension().is_some_and(|extension| extension == "ll"))
+        .map(|path| fs::read_to_string(path).unwrap())
+        .collect::<Vec<_>>();
+    let lines = lines.iter().flat_map(|ir| ir.lines()).collect::<Vec<_>>();
+    // The loop adds four lanes as one vector and joins their overflow
+    // words before its one test.
+    assert!(
+        lines.iter().any(|line| line.contains("add <4 x i64>")),
+        "no unit adds int64 lanes as one vector"
+    );
+    assert!(
+        lines
+            .iter()
+            .any(|line| line.contains("llvm.vector.reduce.or.v4i64")),
+        "no unit joins the overflow words of four lanes"
+    );
+}
+
 #[test]
 fn build_and_run_accept_a_target_cpu() {
     let temp = TempDir::new("aura-target-cpu");

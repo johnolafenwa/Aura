@@ -41,6 +41,13 @@ in this file.
   the same at every width. `AURA_ARRAY_KERNELS=baseline` turns the wide
   copies off. A float `min` and `max` now compare many elements at once,
   and order `-0.0` below `0.0`.
+- The `simd` module has `int64` lane values `I64x2` and `I64x4`, with
+  `splat`, `load`, `store`, `+`, `-`, `*`, unary `-`, `min`, `max`, `abs`,
+  `sum`, and `to_list`. Every lane is checked: an overflow stops the
+  program with `AU4002` and names the value, as the scalar operation
+  does. On a build for AVX2 (`--target-cpu x86-64-v3` or `native`) one
+  test covers all lanes of a sum or difference, and an `I64x4` sum takes
+  under half the time of the plain loop.
 - A `for` loop over `range(start, stop, step)` with a literal step tests
   its bound once in each iteration, and a lane load or store adds two
   conditions to the loop's entry whatever its lane count. The lane
