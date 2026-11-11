@@ -14,7 +14,7 @@ def report(name, started):
     print(f'{name} {(time.perf_counter_ns() - started) / CALLS}')
 
 
-def run(prefix, lib, text, data, buffer, out, as_text, floats):
+def run(prefix, lib, text, data, buffer, out, as_text, floats, structs):
     total = 0
     started = time.perf_counter_ns()
     for i in range(CALLS):
@@ -85,6 +85,30 @@ def run(prefix, lib, text, data, buffer, out, as_text, floats):
         lib.fc_bump(floats, 8)
     report(f'{prefix}bump', started)
 
+    point, step, triple, point_address = structs
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        point = lib.fc_vec2_add(point, step)
+    report(f'{prefix}vec2', started)
+
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        triple = lib.fc_triple_next(triple)
+    report(f'{prefix}triple', started)
+
+    started = time.perf_counter_ns()
+    for _ in range(CALLS):
+        lib.fc_vec2_move(point_address, 0.5)
+    report(f'{prefix}move', started)
+
+
+class Vec2(ctypes.Structure):
+    _fields_ = [('x', ctypes.c_double), ('y', ctypes.c_double)]
+
+
+class Triple(ctypes.Structure):
+    _fields_ = [('a', ctypes.c_int64), ('b', ctypes.c_int64), ('c', ctypes.c_int64)]
+
 
 def ctypes_library(path):
     lib = ctypes.CDLL(path)
@@ -101,6 +125,9 @@ def ctypes_library(path):
     lib.fc_out.argtypes, lib.fc_out.restype = [i64, ctypes.POINTER(i64)], ctypes.c_int32
     lib.fc_floats.argtypes, lib.fc_floats.restype = [ctypes.POINTER(f64), i64], f64
     lib.fc_bump.argtypes, lib.fc_bump.restype = [ctypes.POINTER(f64), i64], None
+    lib.fc_vec2_add.argtypes, lib.fc_vec2_add.restype = [Vec2, Vec2], Vec2
+    lib.fc_triple_next.argtypes, lib.fc_triple_next.restype = [Triple], Triple
+    lib.fc_vec2_move.argtypes, lib.fc_vec2_move.restype = [ctypes.POINTER(Vec2), f64], None
     return lib
 
 
@@ -117,6 +144,11 @@ const char *fc_name(void);
 int32_t fc_out(int64_t value, int64_t *out);
 double fc_floats(const double *values, int64_t count);
 void fc_bump(double *values, int64_t count);
+typedef struct { double x, y; } Vec2;
+typedef struct { int64_t a, b, c; } Triple;
+Vec2 fc_vec2_add(Vec2 a, Vec2 b);
+Triple fc_triple_next(Triple t);
+void fc_vec2_move(Vec2 *v, double by);
 '''
 
 
@@ -128,6 +160,7 @@ def main():
         'ctypes_', ctypes_library(path), text, data, ctypes.create_string_buffer(8),
         ctypes.byref(ctypes.c_int64(0)), lambda name: name.decode(),
         (ctypes.c_double * 8)(1, 2, 3, 4, 5, 6, 7, 8),
+        (Vec2(0.0, 0.0), Vec2(0.5, -0.25), Triple(1, 2, 3), ctypes.byref(Vec2(0.0, 0.0))),
     )
     try:
         import cffi
@@ -139,6 +172,10 @@ def main():
         'cffi_', ffi.dlopen(path), text, data, ffi.new('uint8_t[8]'),
         ffi.new('int64_t *'), lambda name: ffi.string(name).decode(),
         ffi.new('double[8]', [1, 2, 3, 4, 5, 6, 7, 8]),
+        (
+            ffi.new('Vec2 *', [0.0, 0.0])[0], ffi.new('Vec2 *', [0.5, -0.25])[0],
+            ffi.new('Triple *', [1, 2, 3])[0], ffi.new('Vec2 *', [0.0, 0.0]),
+        ),
     )
 
 

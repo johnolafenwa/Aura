@@ -113,6 +113,12 @@ extern "C" def frexp(value: float64, exponent: mut int32) -> float64
 extern "C" def getloadavg(averages: mut ptr[float64], count: int32) -> int32
 extern "C" def close(handle: own ProcessHandle) -> None
 
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+
 def main() -> int32:
     print(getpid() > 0)
     return 0
@@ -141,6 +147,9 @@ The rules for these declarations:
 - **Opaque handles.** An opaque declaration is written
   `extern "C" opaque class Name`. It has no fields, methods, body, or type
   parameters.
+- **C structs.** A struct declaration is written `extern "C" class Name:`
+  with a block of fields. It has no methods, invariants, field defaults, or
+  type parameters. See [Structs](#structs).
 
 Raw pointer syntax, callback types, and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
@@ -301,6 +310,69 @@ rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
 with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
 form for bytes with a length.
 
+### Structs
+
+`extern "C" class` declares a C struct. Its fields are laid out as a C
+compiler lays out a struct with the same fields in the same order, with the
+same padding.
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def clock_gettime(clock: int32, time: mut Timespec) -> int32
+
+def main() -> int32:
+    parts = div(17, 5)
+    print(parts.quot)
+    print(parts.rem)
+    mut now = Timespec(seconds=0, nanoseconds=0)
+    if clock_gettime(0, now) != 0:
+        return 1
+    print(now.seconds > 0)
+    return 0
+```
+
+| Declaration | C type | Argument | Contract |
+| --- | --- | --- | --- |
+| `value: Name` | `struct name` | a `Name` value | the struct crosses by value |
+| `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
+| `-> Name` | `struct name` | | the struct comes back by value |
+
+- **Fields.** A field is a scalar of the [Scalars](#scalars) table or
+  another `extern "C"` class, which is held inline as a nested struct. Any
+  other field type is `AU2002`. The class needs at least one field.
+- **An ordinary value.** In Aura code the class is a `copy class`. Construct
+  it with keyword arguments, read and assign its fields, and keep it in a
+  list or another class. It has no C identity until it crosses.
+- **By value.** A `Name` parameter or result is passed the way the C calling
+  convention passes that struct: in registers when it is small, and in
+  memory otherwise.
+- **By pointer.** A `mut Name` parameter passes the address of a C copy of
+  the argument. When the call returns, the argument holds the fields the
+  function left there. Use it for `const struct name *` as well, since Aura
+  has no read-only struct pointer. The argument must be a mutable place.
+  The pointer is valid only during the call.
+- **Booleans.** A `bool` field that comes back with a byte other than `0` or
+  `1` fails with `AU4001`.
+
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. A `ptr[Name]` array of
+structs is not available. C unions, bit-fields, fixed-size array fields,
+pointer fields, and packed or over-aligned structs have no spelling. Declare
+a pointer field as `uint64` only when the code never dereferences it.
+
+Struct layout and passing follow the System V convention on x86-64 and the
+standard procedure call convention on AArch64, for Linux and macOS. On
+AArch64, a struct argument that the convention would split between the last
+free registers and the stack is a build error. Move the parameter earlier or
+pass it as `mut Name`.
+
 ### Opaque Handles
 
 An opaque handle is one non-null foreign pointer with no layout visible to
@@ -438,15 +510,15 @@ never appears in source-visible output or diagnostics.
 | Code | Cause |
 | --- | --- |
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, callbacks, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, C text, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, and a `ptr` to anything but a scalar. |
+| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, or a callback or raw-pointer contract that reaches static checking. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
 | `AU2999` | Missing package opt-in, an inaccurate root dependency report, an invalid `[ffi]` library, framework, or path entry, standalone FFI source, an extern used as a value, or another FFI policy violation without a narrower code. |
 | `AU3001` | Use of an opaque handle after an `own` extern call. |
-| `AU3004` | An invalid scalar, view, C text, pointer, or handle capability. |
+| `AU3004` | An invalid scalar, view, C text, pointer, struct, or handle capability. |
 | `AU3008` | An opaque handle at a task or Queue `Transfer` boundary. |
-| `AU4001` | A non-canonical C boolean: the byte a function returned, or stored through a `mut bool` or a `mut ptr[bool]`, was neither `0` nor `1`. |
+| `AU4001` | A non-canonical C boolean: the byte a function returned, stored through a `mut bool` or a `mut ptr[bool]`, or left in a `bool` field of a struct, was neither `0` nor `1`. |
 | `AU4005` | A recoverable runtime boundary failure: a null opaque-handle or `cstr` result, a `cstr` result that is not UTF-8, a `cstr` argument that holds a NUL byte, and in the interpreter a library that does not load, a missing symbol, or a marshalling failure. |
 
 Aura panics and traps never unwind through a foreign frame. Pre-call failures
@@ -472,7 +544,8 @@ function itself. A `str` or `list[uint8]` argument adds a few nanoseconds to
 find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
-loads to find the list's elements.
+loads to find the list's elements. A struct argument or result costs a
+store and a load for each field.
 
 Library loading and symbol lookup in the interpreter are implemented on
 Unix-family hosts. On other hosts, a call there fails with the runtime
@@ -483,7 +556,8 @@ declaration must still name the host's actual C symbol.
 
 FFI does not:
 
-- define C structs or unions, or pass enums
+- define C unions, bit-fields, or array fields, or pass enums
+- pass an array of structs, or a struct that holds a pointer Aura can follow
 - allocate foreign memory or expose pointer arithmetic
 - return views, or free a `cstr` result
 - pass typed pointers to anything but one scalar, one handle, or the
@@ -511,11 +585,12 @@ Implemented:
 - `cstr` arguments and results, and `cstr | None`
 - `mut` scalar out-parameters
 - `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
+- `extern "C"` classes passed and returned by value, and passed by pointer
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 
 Reserved or unavailable: callbacks, raw pointers, variadics, returned views,
-other nullable shapes, and foreign aggregate layout. Aura does not infer them
+other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 
 Design record:

@@ -33058,3 +33058,119 @@ fn ghost_locals_are_pure_and_read_only_by_ghost_code() {
         assert!(error.message.contains(message), "{source}: {}", error.message);
     }
 }
+
+#[test]
+fn ffi_admits_c_structs_by_value_and_by_pointer() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Point:
+    x: float64
+    y: float64
+
+extern "C" class Rect:
+    lo: Point
+    hi: Point
+    tag: int8
+
+extern "C" def length(p: Point) -> float64
+extern "C" def grow(s: mut Rect, by: float64) -> None
+extern "C" def middle(s: Rect) -> Point
+
+def run() -> float64:
+    mut rect = Rect(lo=Point(x=0.0, y=0.0), hi=Point(x=2.0, y=2.0), tag=1)
+    grow(rect, 1.0)
+    kept = rect
+    return length(middle(rect)) + kept.hi.x
+"#,
+    )
+    .expect("C structs should check");
+    use crate::c_layout::CFieldKind;
+    use crate::ffi::FfiScalar;
+    let length = &program.extern_functions["length"];
+    let point = length.c_struct_params[0]
+        .as_ref()
+        .expect("a struct parameter");
+    assert_eq!(point.name, "Point");
+    assert_eq!(point.fields[1].name, "y");
+    assert_eq!(point.fields[1].kind, CFieldKind::Scalar(FfiScalar::F64));
+    assert!(length.c_struct_result.is_none());
+    let grow = &program.extern_functions["grow"];
+    let rect = grow.c_struct_params[0].as_ref().expect("a struct pointer");
+    assert_eq!(rect.fields[0].kind, CFieldKind::Struct(point.clone()));
+    assert_eq!((rect.size(), rect.align()), (40, 8));
+    assert!(grow.c_struct_params[1].is_none());
+    assert_eq!(
+        program.extern_functions["middle"].c_struct_result.as_ref(),
+        Some(point)
+    );
+
+    let rejected = [
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: own P) -> None
+"#,
+            "C struct parameter `p` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"copy class Q:
+    x: int32
+extern "C" class P:
+    q: Q
+"#,
+            "field `q` of `extern \"C\"` class `P`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    name: str
+"#,
+            "field `name` of `extern \"C\"` class `P` has type `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: (int32, int32)
+"#,
+            "field `x` of `extern \"C\"` class `P`",
+            "AU2002",
+        ),
+        (
+            r#"class Q:
+    x: int32
+extern "C" def bad(q: Q) -> None
+"#,
+            "does not support parameter type `Q`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: P | None) -> None
+"#,
+            "union parameter `p` cannot cross the C boundary",
+            "AU2010",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def poke(p: mut P) -> None
+def run() -> None:
+    poke(P(x=1))
+"#,
+            "must be a mutable place",
+            "AU2004",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported struct use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}

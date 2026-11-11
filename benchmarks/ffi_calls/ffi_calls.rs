@@ -18,6 +18,24 @@ extern "C" {
     fn fc_out(value: i64, out: *mut i64) -> i32;
     fn fc_floats(values: *const f64, count: i64) -> f64;
     fn fc_bump(values: *mut f64, count: i64);
+    fn fc_vec2_add(a: Vec2, b: Vec2) -> Vec2;
+    fn fc_triple_next(t: Triple) -> Triple;
+    fn fc_vec2_move(v: *mut Vec2, by: f64);
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vec2 {
+    x: f64,
+    y: f64,
+}
+
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Triple {
+    a: i64,
+    b: i64,
+    c: i64,
 }
 
 fn report(name: &str, started: Instant, calls: i64) {
@@ -119,6 +137,27 @@ fn main() {
     }
     report("bump", started, calls);
 
+    let step = Vec2 { x: 0.5, y: -0.25 };
+    let mut point = Vec2 { x: 0.0, y: 0.0 };
+    let started = Instant::now();
+    for _ in 0..calls {
+        point = unsafe { fc_vec2_add(point, step) };
+    }
+    report("vec2", started, calls);
+
+    let mut triple = Triple { a: 1, b: 2, c: 3 };
+    let started = Instant::now();
+    for _ in 0..calls {
+        triple = unsafe { fc_triple_next(triple) };
+    }
+    report("triple", started, calls);
+
+    let started = Instant::now();
+    for _ in 0..calls {
+        unsafe { fc_vec2_move(&mut point, 0.5) };
+    }
+    report("move", started, calls);
+
     println!(
         "checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {}",
         bytes[0]
@@ -126,5 +165,9 @@ fn main() {
     println!(
         "checksum {cstr_total} {name_total} {out} {status} {floats_total} {}",
         floats[7]
+    );
+    println!(
+        "checksum {:?} {:?} {} {} {}",
+        point.x, point.y, triple.a, triple.b, triple.c
     );
 }

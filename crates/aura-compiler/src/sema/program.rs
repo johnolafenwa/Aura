@@ -1365,7 +1365,8 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
     }
 
     for class in classes.values() {
-        if !class.decl.copy {
+        // The fields of an `extern "C"` class get their own, narrower check.
+        if !class.decl.copy || class.decl.c_layout {
             continue;
         }
         for field_decl in &class.decl.fields {

@@ -18,6 +18,9 @@ the time measured is the cost of crossing the boundary.
 | `out` | `int32_t fc_out(int64_t, int64_t *)` | a `mut int64` out-parameter |
 | `floats` | `double fc_floats(const double *, int64_t)` | a `ptr[float64]` over a list of 8 |
 | `bump` | `void fc_bump(double *, int64_t)` | a `mut ptr[float64]` over the same list |
+| `vec2` | `Vec2 fc_vec2_add(Vec2, Vec2)` | two 16-byte structs of floats in registers, and one back |
+| `triple` | `Triple fc_triple_next(Triple)` | a 24-byte struct in memory, and one back |
+| `move` | `void fc_vec2_move(Vec2 *, double)` | a `mut Vec2` struct pointer |
 
 ## Running
 
@@ -49,6 +52,9 @@ Linux x86-64 cloud container, 2026-11-10, nanoseconds per call:
 | `out` | 1.9 | 2.0 | 359 | 158 |
 | `floats` | 2.5 | 4.6 | 370 | 229 |
 | `bump` | 2.5 | 2.4 | 353 | 172 |
+| `vec2` | 13.9 | 14.1 | 410 | 297 |
+| `triple` | 13.6 | 10.0 | 303 | 201 |
+| `move` | 9.4 | 3.1 | 439 | 172 |
 
 The container is shared, so a number moves by a few tenths of a nanosecond
 between runs. A `str` argument asks the runtime for its bytes, which is the
@@ -63,3 +69,9 @@ the box of the new `str`.
 In `floats` and `bump` every side passes the address of storage it already
 holds: Aura the list's own elements, Rust a `Vec<f64>`, and Python an array
 made once before the loop.
+
+The struct cases were measured on 2026-11-11. Each call feeds its result to
+the next, so `vec2` and `triple` time the round trip of a struct through
+memory on both sides. In `move`, Rust passes the address of the struct it
+holds. Aura writes the fields to a C copy, passes its address, and reads
+the fields back, which is the 6 ns over Rust.

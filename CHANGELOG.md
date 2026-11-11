@@ -21,6 +21,11 @@ in this file.
   a `list[float64]` and passes a pointer to its first element, with no
   length and no copy. `mut ptr[T]` lets the C function write the elements.
   `T` is any fixed-width scalar.
+- FFI passes C structs. `extern "C" class Name:` declares a struct of
+  scalars and other such classes, laid out as C lays it out. A `Name`
+  parameter or result crosses by value, in registers or in memory as the
+  C calling convention says, and `mut Name` passes a pointer the function
+  can write through. In Aura code the class is an ordinary `copy class`.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

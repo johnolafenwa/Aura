@@ -24319,3 +24319,139 @@ fn public_mir_execution_rejects_a_caller_supplied_link_plan() {
         "MIR that names native libraries can run only through a package-checked path API"
     );
 }
+
+#[test]
+fn ffi_structs_cross_as_c_bytes_and_come_back_as_instances() {
+    use crate::c_layout::{CField, CFieldKind, CStruct};
+    use crate::ffi::{FfiScalar, FfiType, FfiValue};
+
+    // libc returns a struct in registers and fills one through a pointer.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class LongDiv:
+    quot: int64
+    rem: int64
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(n: int32, d: int32) -> Div
+extern "C" def ldiv(n: int64, d: int64) -> LongDiv
+extern "C" def clock_gettime(clock: int32, out: mut Timespec) -> int32
+
+def main() -> int32:
+    small = div(-17, 5)
+    wide = ldiv(9000000000007, 1000)
+    mut now = Timespec(seconds=0, nanoseconds=-1)
+    failed = clock_gettime(0, now)
+    if failed != 0 or now.seconds < 1700000000 or now.nanoseconds < 0:
+        return -1
+    if wide.quot != 9000000000 or wide.rem != 7:
+        return -2
+    return small.quot * 10 + small.rem
+"#,
+    );
+    let output = super::run_trusted(&module).expect("libc structs should cross");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(-32));
+
+    let field = |name: &str, kind| CField {
+        name: name.to_string(),
+        kind,
+    };
+    let inner = CStruct {
+        name: "Flagged".to_string(),
+        fields: vec![
+            field("on", CFieldKind::Scalar(FfiScalar::Bool)),
+            field("level", CFieldKind::Scalar(FfiScalar::F32)),
+        ],
+    };
+    let outer = CStruct {
+        name: "Outer".to_string(),
+        fields: vec![
+            field("id", CFieldKind::Scalar(FfiScalar::I16)),
+            field("flagged", CFieldKind::Struct(inner.clone())),
+        ],
+    };
+    let param = |passing| MirExternParam {
+        name: "value".to_string(),
+        passing,
+        ty: Type::named("Outer"),
+        c_string: false,
+        pointer: false,
+        c_struct: Some(outer.clone()),
+    };
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param(MirReceiverKind::Borrow)).expect("by value"),
+        FfiType::Struct(outer.interned())
+    );
+    assert_eq!(
+        super::ffi_type_for_extern_param(&param(MirReceiverKind::BorrowMut)).expect("by pointer"),
+        FfiType::StructPointer(outer.interned())
+    );
+
+    let instance = |name: &str, fields: Vec<(&str, Value)>| {
+        Value::Instance(InstanceValue {
+            class_name: aura_runtime::runtime_value::RuntimeName::from(name.to_string()),
+            fields: fields
+                .into_iter()
+                .map(|(name, value)| (name.to_string(), value))
+                .collect(),
+        })
+    };
+    let int16 = |value: i64| {
+        Value::Int(
+            IntegerValue::from_typed_signed(i128::from(value), IntegerKind::Int16)
+                .expect("an int16"),
+        )
+    };
+    let flagged = instance(
+        "Flagged",
+        vec![("on", Value::Bool(true)), ("level", Value::Float(0.5))],
+    );
+    let value = instance(
+        "Outer",
+        vec![("id", int16(-2)), ("flagged", flagged.clone())],
+    );
+    let FfiValue::Struct(layout, bytes) =
+        super::ffi_struct_from_runtime(&value, &outer).expect("an instance of the struct")
+    else {
+        panic!("a struct crosses as struct bytes");
+    };
+    assert_eq!(layout, outer.interned());
+    assert_eq!(bytes[..2], (-2_i16).to_le_bytes());
+    assert_eq!(bytes[4], 1);
+    assert_eq!(bytes[8..12], 0.5_f32.to_le_bytes());
+    assert_eq!(bytes.len(), 12);
+    let back = super::struct_runtime_value(layout, &bytes, "probe").expect("the same instance");
+    assert_eq!(back.render(), value.render());
+
+    // A C function can leave any byte in a `bool` field.
+    let mut bad = bytes.clone();
+    bad[4] = 7;
+    let error =
+        super::struct_runtime_value(layout, &bad, "probe").expect_err("a bool field holds 0 or 1");
+    assert_eq!(error.code, "AU4001");
+    assert!(error.message.contains("probe"), "{}", error.message);
+
+    for wrong in [
+        Value::Bool(true),
+        instance("Outer", vec![("id", int16(1))]),
+        instance("Outer", vec![("id", int16(1)), ("flagged", Value::Unit)]),
+        instance(
+            "Outer",
+            vec![("id", Value::Float(1.0)), ("flagged", flagged.clone())],
+        ),
+    ] {
+        let error = super::ffi_struct_from_runtime(&wrong, &outer)
+            .expect_err("the value is not an instance of the struct");
+        assert_eq!(error.code, "AU4005", "{}", error.message);
+    }
+}

@@ -4255,7 +4255,7 @@ fn declaration_parser_reports_the_exact_stage_that_rejected_incomplete_syntax() 
             "extern \"C\" opaque class Handle extra\n",
             "expected Newline",
         ),
-        ("extern \"C\" class Handle\n", "expected KwDef"),
+        ("extern \"C\" class Handle\n", "expected Colon"),
         ("extern \"C\" def \n", "expected identifier"),
         ("extern \"C\" def read -> int32\n", "expected LParen"),
         (
@@ -5602,5 +5602,53 @@ fn extern_symbol_clauses_reject_missing_and_malformed_names() {
             "a C symbol name is one or more printable ASCII characters with no spaces",
             "{name:?}"
         );
+    }
+}
+
+#[test]
+fn extern_c_classes_are_copy_classes_of_fields_only() {
+    let module = parse(concat!(
+        "extern \"C\" class Point:\n    x: float64\n    y: float64\n\n",
+        "public extern \"C\" class Span:\n    \"\"\"A pair of points.\"\"\"\n    lo: Point\n    hi: Point\n\n",
+        "class Plain:\n    x: int32\n",
+    ))
+    .expect("an extern C class is a class");
+    let classes: Vec<&ClassDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Class(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert!(classes[0].c_layout && classes[0].copy && !classes[0].public);
+    assert!(classes[1].c_layout && classes[1].copy && classes[1].public);
+    assert_eq!(classes[1].fields.len(), 2);
+    assert!(!classes[2].c_layout && !classes[2].copy);
+    assert!(module.items[0].declares_ffi() && !module.items[2].declares_ffi());
+
+    let shape = |class: &ClassDecl| serde_json::to_value(class).expect("a class serializes");
+    assert_eq!(shape(classes[0])["c_layout"], serde_json::json!(true));
+    assert!(
+        shape(classes[2]).get("c_layout").is_none(),
+        "an ordinary class serializes as before"
+    );
+
+    for (source, message) in [
+        (
+            "extern \"C\" class Box[T]:\n    value: T\n",
+            "`extern \"C\"` class `Box` cannot have type parameters",
+        ),
+        (
+            "extern \"C\" class Point:\n    x: int32\n    def get(self) -> int32:\n        return self.x\n",
+            "`extern \"C\"` class `Point` declares only fields",
+        ),
+        (
+            "extern \"C\" class Point:\n    x: int32 = 1\n",
+            "field `x` of `extern \"C\"` class `Point` cannot have a default value",
+        ),
+    ] {
+        let error = parse(source).expect_err("the class is not a C struct");
+        assert!(error.message.contains(message), "{}", error.message);
     }
 }

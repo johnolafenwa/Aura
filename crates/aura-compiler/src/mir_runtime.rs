@@ -10937,7 +10937,7 @@ fn ffi_value_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
 
 /// The Aura type of a scalar field of a C struct.
 fn scalar_field_type(scalar: crate::ffi::FfiScalar) -> Type {
-    Type::named(&scalar.ffi_type().to_string())
+    Type::named(scalar.ffi_type().to_string())
 }
 
 /// The instance `value` as the bytes of the C struct `layout`.

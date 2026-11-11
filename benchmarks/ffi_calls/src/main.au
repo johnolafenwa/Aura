@@ -13,6 +13,19 @@ extern "C" def fc_out(value: int64, out: mut int64) -> int32
 extern "C" def fc_floats(values: ptr[float64], count: int64) -> float64
 extern "C" def fc_bump(values: mut ptr[float64], count: int64) -> None
 
+extern "C" class Vec2:
+    x: float64
+    y: float64
+
+extern "C" class Triple:
+    a: int64
+    b: int64
+    c: int64
+
+extern "C" def fc_vec2_add(a: Vec2, b: Vec2) -> Vec2
+extern "C" def fc_triple_next(t: Triple) -> Triple
+extern "C" def fc_vec2_move(v: mut Vec2, by: float64) -> None
+
 def report(name: str, started: int64, calls: int64) -> None:
     elapsed = sys.monotonic_time_ms() - started
     per_call = (elapsed as float64) * 1000000.0 / (calls as float64)
@@ -119,6 +132,31 @@ def main() -> int32:
         i = i + 1
     report("bump", started, calls)
 
+    step = Vec2(x=0.5, y=-0.25)
+    mut point = Vec2(x=0.0, y=0.0)
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        point = fc_vec2_add(point, step)
+        i = i + 1
+    report("vec2", started, calls)
+
+    mut triple = Triple(a=1, b=2, c=3)
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        triple = fc_triple_next(triple)
+        i = i + 1
+    report("triple", started, calls)
+
+    i = 0
+    started = sys.monotonic_time_ms()
+    while i < calls:
+        fc_vec2_move(point, 0.5)
+        i = i + 1
+    report("move", started, calls)
+
     print(f"checksum {total} {narrow} {scaled} {six} {text_total} {bytes_total} {bytes[0]}")
     print(f"checksum {cstr_total} {name_total} {out} {status} {floats_total} {floats[7]}")
+    print(f"checksum {point.x} {point.y} {triple.a} {triple.b} {triple.c}")
     return 0

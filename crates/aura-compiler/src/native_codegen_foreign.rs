@@ -151,6 +151,8 @@ fn c_string_type(ty: &Type) -> FfiType {
 }
 
 /// One argument of a foreign call, loaded and not yet lowered to C values.
+// One per argument, for the length of one call's lowering.
+#[allow(clippy::large_enum_variant)]
 enum ForeignOperand {
     /// A value of the given boundary type.
     Value(DirectFfiType, ValueRef),
@@ -177,12 +179,10 @@ enum ForeignWriteback {
 
 /// The convention foreign calls follow on the machine being built for.
 fn foreign_abi() -> std::result::Result<CAbi, String> {
-    CAbi::host().ok_or_else(|| {
-        format!(
-            "direct backend cannot pass a C struct by value on `{}`",
-            std::env::consts::ARCH
-        )
-    })
+    CAbi::host().ok_or(format!(
+        "direct backend cannot pass a C struct by value on `{}`",
+        std::env::consts::ARCH
+    ))
 }
 
 /// The size of the stack slot that holds one `layout` struct.

@@ -62,4 +62,4 @@ side, which is the layout of a C array.
   behavior. So does one that writes through a `ptr[T]` declared without
   `mut`. The manual says so.
 - `Array[T]` does not cross as a pointer yet.
-- Pointers to structs come with foreign aggregate layout.
+- Pointers to structs are ADR-0077.

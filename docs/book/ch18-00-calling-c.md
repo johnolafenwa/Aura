@@ -440,6 +440,70 @@ list's own storage and copies nothing. A million-element list costs the same
 to pass as a three-element one. That is the form to reach for when you wrap
 BLAS, an image codec, or a model runtime.
 
+## Structs
+
+Many C functions take or return a small struct: a point, a color, a pair of
+results. An `extern "C" class` declares one. It lists the fields in the
+order the C header does, and Aura lays them out exactly as the C compiler
+does, padding included. The C library has two functions we can try it on.
+`div` returns a quotient and a remainder together, and `clock_gettime`
+fills in a struct we hand it by pointer:
+
+*Filename: src/structs.au*
+
+```aura fragment
+extern "C" class Div:
+    quot: int32
+    rem: int32
+
+extern "C" class Timespec:
+    seconds: int64
+    nanoseconds: int64
+
+extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def clock_gettime(clock: int32, time: mut Timespec) -> int32
+
+def main() -> int32:
+    parts = div(17, 5)
+    print(parts.quot)
+    print(parts.rem)
+
+    mut now = Timespec(seconds=0, nanoseconds=0)
+    if clock_gettime(0, now) != 0:
+        return 1
+    print(now.seconds > 1700000000)
+    return 0
+```
+
+<span class="caption">Listing 18-6: A struct result and a struct passed by pointer</span>
+
+```console
+$ aura run src/structs.au
+3
+2
+true
+```
+
+A parameter or result of the class type crosses by value, so `-> Div` is a
+C function that returns `div_t` itself, not a pointer to one. A `mut`
+parameter is the pointer form: `time: mut Timespec` is `struct timespec *`.
+Aura passes the address of a C copy of `now`, and when the call returns,
+`now` holds whatever the function stored. C headers also write
+`const struct timespec *` for a struct the function only reads. Declare that
+as `mut` too, and pass a `mut` variable.
+
+On the Aura side there is nothing foreign about these values. An
+`extern "C"` class is a `copy class`: we build one with keyword arguments,
+read its fields, copy it by assignment, and keep it in a list. What it gives
+up is everything a C struct does not have. It has no methods, no field
+defaults, and no type parameters, and each field is a scalar or another
+`extern "C"` class, which C would hold inline as a nested struct.
+
+Small structs travel in registers and larger ones in memory, by the same
+rules the C compiler follows on the machine we build for, so a call with a
+struct costs a few nanoseconds more than one with plain numbers. C unions,
+bit-fields, and array fields have no Aura spelling.
+
 ## When things go wrong at run time
 
 Some foreign failures Aura can catch. If no library defines the symbol, the
@@ -573,7 +637,7 @@ without a change to your own manifest that a reviewer will see.
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no callbacks from C into Aura, no
-variadic functions such as `printf`, no structs or unions passed by value, no
+variadic functions such as `printf`, no unions or arrays of structs, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
@@ -587,7 +651,7 @@ You can now call a C function from Aura: declare it with `extern "C" def`
 inside a package that opts in with `allow_ffi = true`, name its library
 under `[ffi]`, pass scalars by value,
 text and bytes as temporary views, C strings as `cstr`, lists of numbers as
-`ptr[T]` arrays, and results through
+`ptr[T]` arrays, C structs as `extern "C"` classes, and results through
 `mut` out-parameters, and wrap C objects in opaque handles
 whose ownership the checker tracks, so a use after close or a double close is
 a compile error. You have also seen where the compiler's help ends, at the

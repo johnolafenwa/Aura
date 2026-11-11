@@ -16798,3 +16798,116 @@ def main() -> int32:
         "only the held string needs a view; literals lend constant bytes"
     );
 }
+
+#[test]
+fn direct_ffi_codegen_passes_c_structs_in_registers_and_in_memory() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Vec2:
+    x: float64
+    y: float64
+
+extern "C" class Mixed:
+    count: int32
+    on: bool
+    weight: float32
+
+extern "C" class Triple:
+    a: int64
+    b: int64
+    c: int64
+
+extern "C" class Rect:
+    lo: Vec2
+    hi: Vec2
+
+extern "C" def st_len(v: Vec2) -> float64
+extern "C" def st_add(a: Vec2, b: Vec2) -> Vec2
+extern "C" def st_mixed(m: Mixed) -> Mixed
+extern "C" def st_rotate(t: Triple) -> Triple
+extern "C" def st_grow(r: mut Rect, by: Vec2) -> None
+extern "C" def st_flag(m: mut Mixed) -> bool
+extern "C" def st_spill(
+    a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, m: Mixed, v: Vec2
+) -> int64
+
+def main() -> int32:
+    a = Vec2(x=1.0, y=2.0)
+    sum = st_add(a, a)
+    print(st_len(sum))
+    mut mixed = st_mixed(Mixed(count=1, on=true, weight=0.5))
+    print(st_flag(mixed))
+    print(mixed.count)
+    triple = st_rotate(Triple(a=1, b=2, c=3))
+    print(triple.c)
+    mut rect = Rect(lo=a, hi=sum)
+    st_grow(rect, a)
+    print(rect.hi.y)
+    print(st_spill(1, 2, 3, 4, 5, 6, mixed, a))
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("struct parameters should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "st_len",
+        "st_add",
+        "st_mixed",
+        "st_rotate",
+        "st_grow",
+        "st_flag",
+        "st_spill",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::FfiType;
+    let grow = extern_call("st_grow");
+    let rect = grow.params[0].c_struct.clone().expect("a struct pointer");
+    assert_eq!((rect.size(), rect.leaves().len()), (32, 4));
+    assert_eq!(
+        super::foreign::foreign_param_type(&grow.params[0])
+            .expect("mut Rect is a boundary type")
+            .ffi_type,
+        FfiType::StructPointer(rect.interned())
+    );
+    let vec2 = grow.params[1].c_struct.clone().expect("a struct");
+    assert_eq!(
+        super::foreign::foreign_param_type(&grow.params[1])
+            .expect("Vec2 is a boundary type")
+            .ffi_type,
+        FfiType::Struct(vec2.interned())
+    );
+    let add = extern_call("st_add");
+    assert_eq!(
+        super::foreign::foreign_result_type(&add)
+            .expect("Vec2 is a result type")
+            .ffi_type,
+        FfiType::Struct(vec2.interned())
+    );
+    assert!(extern_call("st_len").c_struct_result.is_none());
+}
