@@ -89,8 +89,10 @@ scope, terminology, authority, and conformance language.
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
 - [Bytes, Text Codecs, And SHA-256](/manual/bytes): `list[uint8]`, strict
-  UTF-8 conversion, canonical hex and base64, typed data errors, and raw
-  SHA-256.
+  UTF-8 conversion, canonical hex and base64, typed data errors, raw
+  SHA-256, and HMAC-SHA256.
+- [Gzip Module](/manual/gzip): gzip compression and bounded decompression of
+  byte lists, with typed errors.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
   exact number classification, deterministic dumping, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact
@@ -100,8 +102,8 @@ scope, terminology, authority, and conformance language.
   cancellation, `yield_now`, typed heterogeneous `select`, `wait_any`,
   `wait_all`, and scheduler-aware waits.
 - [I/O Module](/manual/io): standard input and output, and `io.Error`.
-- [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, scoped
-  file cleanup, and byte and text limits.
+- [Filesystem Module](/manual/filesystem): one-shot helpers, `fs.File`, line
+  and chunk reads, scoped file cleanup, and byte and text limits.
 - [Network Module](/manual/network): TCP, UDP, HTTP, WebSocket, Unix sockets,
   TLS, and HTTP client helpers.
 - [Process Module](/manual/process): subprocess spawning, pipes, completed

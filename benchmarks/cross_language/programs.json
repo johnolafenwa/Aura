@@ -129,6 +129,11 @@
     "bench": ["10000"],
     "expected": "sql_engine statements=4000 inserted=2380 selected=1071 groups=24 updated=383 deleted=206 scans=12 live=2174 checksum=300992313"
   },
+  "stream_io": {
+    "check": ["1000", "{workdir}"],
+    "bench": ["400000", "{workdir}"],
+    "expected": "stream_io lines=1000 value_sum=50655607 retries=122 chunks=1 smaller=1 restored=26096 mac=90f6149effe0aa76268c80d20e4a222532c5922fbe966ea669773d4cb7048b07"
+  },
   "task_pool": {
     "check": ["1000"],
     "bench": ["100000"],

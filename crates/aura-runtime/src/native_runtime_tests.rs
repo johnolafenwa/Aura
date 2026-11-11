@@ -6997,6 +6997,68 @@ fn native_runtime_direct_filesystem_wrappers_cover_file_success_paths() {
     expect_unit(super::aura_direct_file_close(bytes_file_ptr));
     unsafe { release_value(bytes_file_ptr) };
 
+    let lines_file_payload = expect_variant_ptr(
+        super::aura_direct_fs_open(string_value(&data)),
+        "Result",
+        "Ok",
+    );
+    let lines_file = match lines_file_payload.as_slice() {
+        [Value::File(file)] => file.clone(),
+        other => panic!("expected opened fs.File for lines, found {:?}", other),
+    };
+    let lines_file_ptr = boxed_value(Value::File(lines_file));
+    assert_eq!(
+        match expect_optional_payload(expect_result_ok_payload(
+            super::aura_direct_file_read_chunk(lines_file_ptr, int_value(1)),
+        )) {
+            Value::Vec(bytes) => bytes.elements.as_uint8().map(<[u8]>::to_vec),
+            other => panic!("expected a byte list, found {:?}", other),
+        },
+        Some(vec![65])
+    );
+    assert_eq!(
+        string_payload(
+            expect_optional_payload(expect_result_ok_payload(super::aura_direct_file_read_line(
+                lines_file_ptr
+            ))),
+            "`str | None`"
+        ),
+        "BC"
+    );
+    expect_optional_absent_value(expect_result_ok_payload(super::aura_direct_file_read_line(
+        lines_file_ptr,
+    )));
+    assert!(
+        expect_result_ok_vec_strings(super::aura_direct_file_read_lines(
+            lines_file_ptr,
+            int_value(4)
+        ))
+        .is_empty()
+    );
+    assert!(expect_variant_value(
+        expect_result_err_payload(super::aura_direct_file_read_lines(
+            lines_file_ptr,
+            int_value(0)
+        )),
+        "io.Error",
+        "InvalidInput"
+    )
+    .is_empty());
+    expect_optional_absent_value(expect_result_ok_payload(
+        super::aura_direct_file_read_chunk(lines_file_ptr, int_value(8)),
+    ));
+    assert!(expect_variant_value(
+        expect_result_err_payload(super::aura_direct_file_read_chunk(
+            lines_file_ptr,
+            int_value(0)
+        )),
+        "io.Error",
+        "InvalidInput"
+    )
+    .is_empty());
+    expect_unit(super::aura_direct_file_close(lines_file_ptr));
+    unsafe { release_value(lines_file_ptr) };
+
     let created_payload = expect_variant_ptr(
         super::aura_direct_fs_create(string_value(&second)),
         "Result",
@@ -7175,6 +7237,9 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
     expect_unit(super::aura_direct_file_close(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_all(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_bytes(file_ptr));
+    expect_io_result_error(super::aura_direct_file_read_line(file_ptr));
+    expect_io_result_error(super::aura_direct_file_read_lines(file_ptr, int_value(4)));
+    expect_io_result_error(super::aura_direct_file_read_chunk(file_ptr, int_value(4)));
     expect_io_result_error(super::aura_direct_file_write_all(
         file_ptr,
         string_value("closed"),
@@ -12621,6 +12686,21 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "file-read-bytes-type" => {
                 super::aura_direct_file_read_bytes(bool_value(true));
             }
+            "file-read-line-type" => {
+                super::aura_direct_file_read_line(bool_value(true));
+            }
+            "file-read-lines-type" => {
+                super::aura_direct_file_read_lines(bool_value(true), int_value(1));
+            }
+            "file-read-lines-count-type" => {
+                super::aura_direct_file_read_lines(bool_value(true), bool_value(true));
+            }
+            "file-read-chunk-type" => {
+                super::aura_direct_file_read_chunk(bool_value(true), int_value(1));
+            }
+            "file-read-chunk-count-type" => {
+                super::aura_direct_file_read_chunk(bool_value(true), bool_value(true));
+            }
             "file-write-all-text-type" => {
                 super::aura_direct_file_write_all(bool_value(true), bool_value(true));
             }
@@ -13975,6 +14055,17 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("fs-append-type", "expected `str`, found `bool`"),
         ("file-read-all-type", "expected `fs.File`, found `bool`"),
         ("file-read-bytes-type", "expected `fs.File`, found `bool`"),
+        ("file-read-line-type", "expected `fs.File`, found `bool`"),
+        ("file-read-lines-type", "expected `fs.File`, found `bool`"),
+        (
+            "file-read-lines-count-type",
+            "`read_lines(...)` expects `int64`, found `bool`",
+        ),
+        ("file-read-chunk-type", "expected `fs.File`, found `bool`"),
+        (
+            "file-read-chunk-count-type",
+            "`read_chunk(...)` expects `int64`, found `bool`",
+        ),
         ("file-write-all-text-type", "expected `str`, found `bool`"),
         (
             "file-write-all-file-type",

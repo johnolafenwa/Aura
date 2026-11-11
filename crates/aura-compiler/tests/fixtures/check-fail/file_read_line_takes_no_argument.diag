@@ -1,0 +1,5 @@
+error[AU2004]: `read_line` expects 0 arguments, found 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/file_read_line_takes_no_argument.au:6:16
+  |
+6 |     line = try file.read_line(80)
+  |                ^

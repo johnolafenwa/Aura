@@ -206,7 +206,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ### Size Limits
 
-- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Aura 0.14 has no chunked file-read API.
+- Filesystem one-shot reads and `fs.File` whole-file reads are capped at 256 MiB of remaining content. Larger files are read in pieces with `fs.File.read_lines`, `read_line`, and `read_chunk`. A file handle has no seek.
 - Process-pipe and captured-output reads are capped at 64 MiB. So are TCP, Unix, and TLS whole and bounded reads.
 - TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling.
 - A bounded byte count of zero is invalid.

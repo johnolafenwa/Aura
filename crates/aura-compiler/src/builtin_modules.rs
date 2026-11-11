@@ -2278,6 +2278,24 @@ fn bytes_namespace() -> ModuleNamespace {
             ],
             optional_type_ref(type_ref("int64", Vec::new())),
         ),
+        function_info(
+            "bytes",
+            "hmac_sha256",
+            vec![
+                value_param("key", bytes_vec_type_ref()),
+                value_param("message", bytes_vec_type_ref()),
+            ],
+            bytes_vec_type_ref(),
+        ),
+        function_info(
+            "bytes",
+            "constant_time_eq",
+            vec![
+                value_param("left", bytes_vec_type_ref()),
+                value_param("right", bytes_vec_type_ref()),
+            ],
+            type_ref("bool", Vec::new()),
+        ),
     ]
     .into_iter()
     .map(|function| (function.decl.name.clone(), function))
@@ -2294,6 +2312,99 @@ fn bytes_namespace() -> ModuleNamespace {
         all_constants: BTreeMap::new(),
         name: "bytes".to_string(),
         path: "bytes".to_string(),
+        source_path: None,
+        modules: BTreeMap::new(),
+        functions: functions.clone(),
+        extern_functions: BTreeMap::new(),
+        opaque_handles: BTreeMap::new(),
+        classes: BTreeMap::new(),
+        enums: enums.clone(),
+        traits: BTreeMap::new(),
+        trait_impls: Vec::new(),
+        all_functions: functions,
+        all_extern_functions: BTreeMap::new(),
+        all_opaque_handles: BTreeMap::new(),
+        all_classes: BTreeMap::new(),
+        all_enums: enums,
+        all_traits: BTreeMap::new(),
+        imported_modules: BTreeMap::new(),
+        closures: BTreeMap::new(),
+        comprehensions: BTreeMap::new(),
+    }
+}
+
+fn gzip_error_enum_info() -> EnumInfo {
+    let named = |name: &str, ty| EnumPayloadFieldDecl {
+        name: Some(name.to_string()),
+        ty,
+        span: builtin_span(),
+    };
+    builtin_enum_info(
+        "gzip",
+        "Error",
+        vec![
+            (
+                "InvalidData",
+                vec![named("message", type_ref("str", Vec::new()))],
+                true,
+            ),
+            (
+                "OutputTooLarge",
+                vec![named("limit_bytes", type_ref("int64", Vec::new()))],
+                true,
+            ),
+        ],
+    )
+}
+
+/// `gzip`: whole-buffer gzip compression and decompression.
+fn gzip_namespace() -> ModuleNamespace {
+    let functions = vec![
+        function_info(
+            "gzip",
+            "compress",
+            vec![
+                value_param("data", bytes_vec_type_ref()),
+                value_param_with_default(
+                    "level",
+                    type_ref("int64", Vec::new()),
+                    int_expr(aura_runtime::gzip_codec::DEFAULT_GZIP_LEVEL as u128),
+                ),
+            ],
+            bytes_vec_type_ref(),
+        ),
+        function_info(
+            "gzip",
+            "decompress",
+            vec![
+                value_param("data", bytes_vec_type_ref()),
+                value_param_with_default(
+                    "max_bytes",
+                    type_ref("int64", Vec::new()),
+                    int_expr(aura_runtime::gzip_codec::DEFAULT_GZIP_MAX_BYTES as u128),
+                ),
+            ],
+            type_ref(
+                "Result",
+                vec![bytes_vec_type_ref(), type_ref("gzip.Error", Vec::new())],
+            ),
+        ),
+    ]
+    .into_iter()
+    .map(|function| (function.decl.name.clone(), function))
+    .collect::<BTreeMap<_, _>>();
+    let error = gzip_error_enum_info();
+    let enums = BTreeMap::from([(error.decl.name.clone(), error)]);
+    ModuleNamespace {
+        union_injections: Default::default(),
+        narrowed_reads: Default::default(),
+        type_param_calls: Default::default(),
+        all_aliases: BTreeMap::new(),
+        aliases: BTreeMap::new(),
+        constants: BTreeMap::new(),
+        all_constants: BTreeMap::new(),
+        name: "gzip".to_string(),
+        path: "gzip".to_string(),
         source_path: None,
         modules: BTreeMap::new(),
         functions: functions.clone(),
@@ -2375,6 +2486,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "path" => Some(path_namespace()),
         "math" => Some(math_namespace()),
         "bytes" => Some(bytes_namespace()),
+        "gzip" => Some(gzip_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2387,7 +2499,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "json", "iter", "toml", "metrics", "log", "trace", "random",
+    "sys", "path", "math", "bytes", "gzip", "json", "iter", "toml", "metrics", "log", "trace",
+    "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2510,6 +2623,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "path"
             | "math"
             | "bytes"
+            | "gzip"
             | "json"
             | "iter"
             | "prelude"
@@ -2529,8 +2643,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "json",
-        "iter", "prelude", "toml", "log", "metrics", "trace",
+        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
+        "json", "iter", "prelude", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

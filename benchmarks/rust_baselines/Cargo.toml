@@ -8,12 +8,16 @@ publish = false
 [dependencies]
 tokio = { version = "=1.53.1", features = ["rt-multi-thread", "net", "io-util", "time"] }
 serde_json = { version = "=1.0.149", optional = true }
+# `stream_io` uses the gzip implementation Aura's runtime links.
+flate2 = { version = "=1.1.11", default-features = false, features = ["zlib-rs"], optional = true }
+hmac = { version = "=0.12.1", optional = true }
+sha2 = { version = "=0.10.9", optional = true }
 
 [features]
 # The cross-language programs in ../cross_language and the operation probes
 # in ../operation_probes. Off by default, so the release-performance
 # references build exactly as before.
-cross-language = ["dep:serde_json", "tokio/sync"]
+cross-language = ["dep:serde_json", "dep:flate2", "dep:hmac", "dep:sha2", "tokio/sync"]
 
 [profile.release]
 opt-level = 3
@@ -154,6 +158,11 @@ required-features = ["cross-language"]
 [[bin]]
 name = "sql_engine"
 path = "../cross_language/sql_engine/sql_engine.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "stream_io"
+path = "../cross_language/stream_io/stream_io.rs"
 required-features = ["cross-language"]
 
 [[bin]]

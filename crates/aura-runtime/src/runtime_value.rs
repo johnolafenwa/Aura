@@ -4435,9 +4435,299 @@ struct OpenFile {
     buffered: bool,
     /// Bytes written since the last flush, in order.
     pending: Vec<u8>,
+    /// Bytes read ahead of the program by `read_line` and `read_chunk`.
+    read: FileReadBuffer,
+}
+
+/// A line or chunk read of an `fs.File` takes this many bytes from the
+/// operating system at a time, so reading a file in small pieces costs one
+/// trip to the blocking pool per buffer and not one per piece.
+const FILE_READ_BUFFER_BYTES: usize = 64 * 1024;
+
+/// The most lines one `read_lines` call returns.
+pub const MAX_FILE_LINE_BATCH: usize = 1 << 20;
+
+/// The bytes an `fs.File` has read from the host and not yet handed to the
+/// program.
+#[derive(Default)]
+struct FileReadBuffer {
+    /// The buffer. Its length is how much of it has ever been written, so
+    /// a fill zeroes only the bytes it grows by.
+    bytes: Vec<u8>,
+    /// Where the unread bytes start.
+    start: usize,
+    /// Where the unread bytes end.
+    end: usize,
+    /// How many of the unread bytes hold no line feed, so a line that spans
+    /// several fills is searched once.
+    searched: usize,
+    /// The bytes from `start` up to here are whole lines of UTF-8, so
+    /// `take_lines` checks a buffer of lines once instead of line by line.
+    valid_until: usize,
+    /// How many bytes the next fill asks the host for. It starts at
+    /// `FILE_READ_BUFFER_BYTES` and doubles with each fill up to
+    /// `FILE_READ_BUFFER_MAX_BYTES`, because each fill of a file read from
+    /// start to end is one trip to the blocking pool.
+    fill_bytes: usize,
+}
+
+/// The buffer size above which an emptied read buffer gives its memory
+/// back, so one very long line does not pin its size for the file's life.
+const FILE_READ_BUFFER_KEEP_BYTES: usize = 2 * FILE_READ_BUFFER_MAX_BYTES;
+
+/// The most bytes one fill of a read buffer asks the host for.
+const FILE_READ_BUFFER_MAX_BYTES: usize = 1024 * 1024;
+
+impl FileReadBuffer {
+    fn unread(&self) -> &[u8] {
+        &self.bytes[self.start..self.end]
+    }
+
+    /// Drops `count` unread bytes, which may end inside a line.
+    fn consume(&mut self, count: usize) {
+        self.valid_until = 0;
+        self.consume_line(count);
+    }
+
+    /// Drops the `count` unread bytes of one whole line.
+    fn consume_line(&mut self, count: usize) {
+        self.start += count;
+        self.searched = 0;
+        if self.start == self.end {
+            self.reset();
+        }
+    }
+
+    fn reset(&mut self) {
+        self.start = 0;
+        self.end = 0;
+        self.searched = 0;
+        self.valid_until = 0;
+        if self.bytes.len() > FILE_READ_BUFFER_KEEP_BYTES {
+            self.bytes = Vec::new();
+        }
+    }
+
+    /// Takes every unread byte.
+    fn take_all(&mut self) -> Vec<u8> {
+        let unread = self.unread().to_vec();
+        self.reset();
+        unread
+    }
+
+    /// The next line, when the buffer holds its line feed. The line loses
+    /// its LF or CRLF.
+    fn take_line(&mut self) -> Option<io::Result<String>> {
+        let unread = &self.bytes[self.start..self.end];
+        let Some(offset) = memchr::memchr(b'\n', &unread[self.searched..]) else {
+            self.searched = unread.len();
+            return None;
+        };
+        let end = self.searched + offset;
+        let line = decode_file_line(&unread[..end]);
+        self.consume_line(end + 1);
+        Some(line)
+    }
+
+    /// Checks the whole lines the buffer holds from `start` on in one
+    /// pass, and records how far they are UTF-8.
+    fn validate_whole_lines(&mut self) {
+        let unread = &self.bytes[self.start..self.end];
+        let Some(last) = memchr::memrchr(b'\n', unread) else {
+            return;
+        };
+        let valid = match std::str::from_utf8(&unread[..=last]) {
+            Ok(_) => last + 1,
+            // The lines before the one that holds the bad byte.
+            Err(error) => {
+                memchr::memrchr(b'\n', &unread[..error.valid_up_to()]).map_or(0, |feed| feed + 1)
+            }
+        };
+        self.valid_until = self.start + valid;
+    }
+
+    /// Moves whole lines from the buffer into `lines` until it holds
+    /// `max_lines` or the buffer has no further line feed. A line that is
+    /// not UTF-8 ends the batch: it stays in the buffer when `lines`
+    /// already holds earlier lines, and is consumed and returned as the
+    /// error otherwise.
+    fn take_lines(&mut self, lines: &mut Vec<Value>, max_lines: usize) -> io::Result<bool> {
+        while lines.len() < max_lines {
+            let unread = &self.bytes[self.start..self.end];
+            let Some(offset) = memchr::memchr(b'\n', &unread[self.searched..]) else {
+                self.searched = unread.len();
+                return Ok(false);
+            };
+            let end = self.searched + offset;
+            if self.start + end >= self.valid_until {
+                self.validate_whole_lines();
+            }
+            let unread = &self.bytes[self.start..self.end];
+            let line = &unread[..end];
+            let line = line.strip_suffix(b"\r").unwrap_or(line);
+            if self.start + end < self.valid_until {
+                // SAFETY: `validate_whole_lines` found the bytes up to
+                // `valid_until` to be UTF-8 that starts at a line start,
+                // and a line feed or a carriage return is never part of a
+                // longer UTF-8 sequence, so each line among them is UTF-8.
+                lines.push(Value::string(unsafe {
+                    std::str::from_utf8_unchecked(line)
+                }));
+            } else if lines.is_empty() {
+                let error = io_decode_utf8(line).map(drop);
+                self.consume_line(end + 1);
+                return error.map(|()| true);
+            } else {
+                return Ok(true);
+            }
+            self.consume_line(end + 1);
+        }
+        Ok(true)
+    }
+
+    /// The unread bytes as the file's last line, or `None` when there are
+    /// none. The host reported the end of the file.
+    fn take_last_line(&mut self) -> io::Result<Option<String>> {
+        if self.unread().is_empty() {
+            return Ok(None);
+        }
+        let line = decode_file_line(self.unread());
+        self.reset();
+        line.map(Some)
+    }
+
+    /// Reads once from `file` into the buffer and returns how many bytes
+    /// came. Zero means the end of the file.
+    fn fill(&mut self, file: &mut StdFile) -> io::Result<usize> {
+        if self.start > 0 {
+            self.bytes.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.valid_until = self.valid_until.saturating_sub(self.start);
+            self.start = 0;
+        }
+        let fill = self.fill_bytes.max(FILE_READ_BUFFER_BYTES);
+        self.fill_bytes = (fill * 2).min(FILE_READ_BUFFER_MAX_BYTES);
+        let room = self.end + fill;
+        if self.bytes.len() < room {
+            self.bytes.resize(room, 0);
+        }
+        let read = loop {
+            match file.read(&mut self.bytes[self.end..room]) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                result => break result,
+            }
+        };
+        self.end += *read.as_ref().unwrap_or(&0);
+        read
+    }
+}
+
+/// A `list[str]` of `lines`, each a `str` value.
+fn str_list_value(lines: Vec<Value>) -> Value {
+    Value::Vec(VecValue {
+        element_type: SharedType::named("str"),
+        elements: lines.into_iter().collect(),
+        str_view: Default::default(),
+    })
+}
+
+/// One line of a file as text, without the carriage return of a CRLF.
+fn decode_file_line(line: &[u8]) -> io::Result<String> {
+    let line = line.strip_suffix(b"\r").unwrap_or(line);
+    match std::str::from_utf8(line) {
+        Ok(text) => Ok(text.to_owned()),
+        Err(_) => io_decode_utf8(line),
+    }
 }
 
 impl OpenFile {
+    /// Everything left in the file: the bytes read ahead, then the rest
+    /// from the host. Capped at `MAX_FILESYSTEM_READ_BYTES`.
+    fn read_rest(&mut self, label: &str) -> io::Result<Vec<u8>> {
+        let limit = MAX_FILESYSTEM_READ_BYTES.saturating_sub(self.read.unread().len());
+        let rest = read_std_file_with_limit(&mut self.file, label, limit)?;
+        if self.read.unread().is_empty() {
+            return Ok(rest);
+        }
+        let mut bytes = self.read.take_all();
+        bytes.extend_from_slice(&rest);
+        Ok(bytes)
+    }
+
+    /// The next line of the file, read on the calling thread.
+    fn read_line(&mut self) -> io::Result<Option<String>> {
+        loop {
+            if let Some(line) = self.read.take_line() {
+                return line.map(Some);
+            }
+            if self.read.unread().len() >= MAX_STREAM_READ_BYTES {
+                return Err(read_all_limit_error(
+                    "file read_line",
+                    MAX_STREAM_READ_BYTES,
+                ));
+            }
+            if self.read.fill(&mut self.file)? == 0 {
+                return self.read.take_last_line();
+            }
+        }
+    }
+
+    /// Reads from the host until the read buffer holds a line feed, and
+    /// returns whether the file ended first.
+    fn fill_for_lines(&mut self, label: &str) -> io::Result<bool> {
+        loop {
+            let unread = self.read.unread();
+            let unread_len = unread.len();
+            if memchr::memchr(b'\n', &unread[self.read.searched..]).is_some() {
+                return Ok(false);
+            }
+            self.read.searched = unread_len;
+            if unread_len >= MAX_STREAM_READ_BYTES {
+                return Err(read_all_limit_error(label, MAX_STREAM_READ_BYTES));
+            }
+            if self.read.fill(&mut self.file)? == 0 {
+                return Ok(true);
+            }
+        }
+    }
+
+    /// Adds the file's last line, which has no line feed, to `lines`. An
+    /// invalid last line stays for the next call when lines before it are
+    /// going out.
+    fn take_last_lines(&mut self, lines: &mut Vec<Value>) -> io::Result<()> {
+        if lines.is_empty() || std::str::from_utf8(self.read.unread()).is_ok() {
+            lines.extend(self.read.take_last_line()?.map(Value::string));
+        }
+        Ok(())
+    }
+
+    /// Fills `lines` up to `max_lines` lines, read on the calling thread.
+    /// Fewer mean the end of the file, or a line that is not UTF-8 next.
+    fn read_lines(&mut self, lines: &mut Vec<Value>, max_lines: usize) -> io::Result<()> {
+        loop {
+            if self.read.take_lines(lines, max_lines)? {
+                return Ok(());
+            }
+            if self.fill_for_lines("file read_lines")? {
+                return self.take_last_lines(lines);
+            }
+        }
+    }
+
+    /// The next `max_bytes` bytes of the file, or the fewer that remain,
+    /// read on the calling thread. `None` at the end of the file.
+    fn read_chunk(&mut self, max_bytes: usize) -> io::Result<Option<Vec<u8>>> {
+        let buffered = self.read.unread().len().min(max_bytes);
+        let mut chunk = Vec::new();
+        chunk.extend_from_slice(&self.read.unread()[..buffered]);
+        self.read.consume(buffered);
+        if chunk.len() < max_bytes {
+            let missing = (max_bytes - chunk.len()) as u64;
+            (&mut self.file).take(missing).read_to_end(&mut chunk)?;
+        }
+        Ok((!chunk.is_empty()).then_some(chunk))
+    }
+
     /// Hands the buffered bytes to the operating system. The buffer is
     /// emptied even when the write fails, so the failure is reported once
     /// and a later flush does not write a partly written prefix again.
@@ -13410,6 +13700,7 @@ impl FileValue {
                     file,
                     buffered,
                     pending: Vec::new(),
+                    read: FileReadBuffer::default(),
                 })),
                 identity,
             }),
@@ -13459,11 +13750,7 @@ impl FileValue {
                     return Err(closed_resource_error());
                 };
                 open.flush_pending()?;
-                io_decode_utf8(&read_std_file_with_limit(
-                    &mut open.file,
-                    "file read_all",
-                    MAX_FILESYSTEM_READ_BYTES,
-                )?)
+                io_decode_utf8(&open.read_rest("file read_all")?)
             },
             current_lightweight_task_cancellation().as_ref(),
         )
@@ -13479,11 +13766,141 @@ impl FileValue {
                     return Err(closed_resource_error());
                 };
                 open.flush_pending()?;
-                read_std_file_with_limit(
-                    &mut open.file,
-                    "file read_bytes",
-                    MAX_FILESYSTEM_READ_BYTES,
+                open.read_rest("file read_bytes")
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
+    }
+
+    /// The next line of the file without its LF or CRLF, or `None` at the
+    /// end of the file. A line the read buffer already holds costs no trip
+    /// to the blocking pool.
+    pub fn read_line(&self) -> io::Result<Option<String>> {
+        if let Some(mut file) = try_lock_mutex(&self.inner.file) {
+            let Some(open) = file.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            if let Some(line) = open.read.take_line() {
+                return line.map(Some);
+            }
+        }
+        flush_other_buffered_files(Some(&self.inner));
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(open) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                open.flush_pending()?;
+                open.read_line()
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
+    }
+
+    /// The next `max_lines` lines of the file, each without its LF or
+    /// CRLF, or the fewer that remain before its end. An empty list means
+    /// the end of the file. Lines the read buffer already holds cost no
+    /// trip to the blocking pool.
+    pub fn read_lines(&self, max_lines: i64) -> io::Result<Value> {
+        let max_lines = usize::try_from(max_lines)
+            .ok()
+            .filter(|count| (1..=MAX_FILE_LINE_BATCH).contains(count))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "file read_lines requires a line count from 1 to {MAX_FILE_LINE_BATCH}"
+                    ),
                 )
+            })?;
+        // The blocking pool only fills the read buffer. The lines are
+        // built here, on the thread that uses and frees them.
+        let mut lines = Vec::new();
+        let mut at_end = false;
+        loop {
+            let Some(mut file) = try_lock_mutex(&self.inner.file) else {
+                break;
+            };
+            let Some(open) = file.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            if open.read.take_lines(&mut lines, max_lines)? {
+                return Ok(str_list_value(lines));
+            }
+            if at_end {
+                open.take_last_lines(&mut lines)?;
+                return Ok(str_list_value(lines));
+            }
+            drop(file);
+            flush_other_buffered_files(Some(&self.inner));
+            let state = self.inner.clone();
+            at_end = run_blocking_io(
+                move || {
+                    let mut file = lock_mutex(&state.file);
+                    let Some(open) = file.as_mut() else {
+                        return Err(closed_resource_error());
+                    };
+                    open.flush_pending()?;
+                    open.fill_for_lines("file read_lines")
+                },
+                current_lightweight_task_cancellation().as_ref(),
+            )?;
+        }
+        // Another thread holds the handle, so the whole read waits for it
+        // on the blocking pool.
+        flush_other_buffered_files(Some(&self.inner));
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(open) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                open.flush_pending()?;
+                open.read_lines(&mut lines, max_lines)?;
+                Ok(str_list_value(lines))
+            },
+            current_lightweight_task_cancellation().as_ref(),
+        )
+    }
+
+    /// The next `max_bytes` bytes of the file, or the fewer that remain
+    /// before its end, or `None` at the end. A chunk the read buffer
+    /// already holds costs no trip to the blocking pool.
+    pub fn read_chunk(&self, max_bytes: i64) -> io::Result<Option<Vec<u8>>> {
+        let max_bytes = usize::try_from(max_bytes)
+            .ok()
+            .filter(|count| (1..=MAX_FILESYSTEM_READ_BYTES).contains(count))
+            .ok_or_else(|| {
+                io::Error::new(
+                    io::ErrorKind::InvalidInput,
+                    format!(
+                        "file read_chunk requires a byte count from 1 to {MAX_FILESYSTEM_READ_BYTES}"
+                    ),
+                )
+            })?;
+        if let Some(mut file) = try_lock_mutex(&self.inner.file) {
+            let Some(open) = file.as_mut() else {
+                return Err(closed_resource_error());
+            };
+            if open.read.unread().len() >= max_bytes {
+                let chunk = open.read.unread()[..max_bytes].to_vec();
+                open.read.consume(max_bytes);
+                return Ok(Some(chunk));
+            }
+        }
+        flush_other_buffered_files(Some(&self.inner));
+        let state = self.inner.clone();
+        run_blocking_io(
+            move || {
+                let mut file = lock_mutex(&state.file);
+                let Some(open) = file.as_mut() else {
+                    return Err(closed_resource_error());
+                };
+                open.flush_pending()?;
+                open.read_chunk(max_bytes)
             },
             current_lightweight_task_cancellation().as_ref(),
         )

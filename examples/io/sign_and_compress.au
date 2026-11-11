@@ -1,0 +1,53 @@
+import bytes
+import gzip
+
+
+# Compress a payload and sign the compressed bytes with a shared secret, as a
+# sender would before an upload.
+def seal(secret: list[uint8], payload: str) -> (list[uint8], str):
+    packed = gzip.compress(payload.to_bytes())
+    signature = bytes.hex_encode(bytes.hmac_sha256(secret, packed))
+    return (packed, signature)
+
+
+# Check the signature before trusting the bytes, then decompress with a limit
+# on how large the result may be.
+def open_sealed(secret: list[uint8], packed: list[uint8], signature: str) -> str:
+    expected = bytes.hmac_sha256(secret, packed)
+    match bytes.hex_decode(signature):
+        case Result.Ok(received):
+            if not bytes.constant_time_eq(expected, received):
+                return "bad signature"
+        case Result.Err(_):
+            return "bad signature"
+    match gzip.decompress(packed, max_bytes=4096):
+        case Result.Ok(plain):
+            match own str.from_bytes(plain):
+                case Result.Ok(text):
+                    return text
+                case Result.Err(_):
+                    return "not text"
+        case Result.Err(gzip.Error.OutputTooLarge(limit_bytes)):
+            return f"more than {limit_bytes} bytes"
+        case Result.Err(gzip.Error.InvalidData(_)):
+            return "not gzip"
+
+
+def main():
+    secret = "shared secret".to_bytes()
+    payload = "status=ok ".repeat(40)
+    (packed, signature) = seal(secret, payload.clone())
+    print(packed.len() < payload.byte_len())
+    print(signature.byte_len())
+    print(open_sealed(secret, packed, signature.clone()) == payload)
+    print(open_sealed("another secret".to_bytes(), packed, signature.clone()))
+    big = gzip.compress("x".repeat(10000).to_bytes(), level=9)
+    big_signature = bytes.hex_encode(bytes.hmac_sha256(secret, big))
+    print(open_sealed(secret, big, big_signature))
+    print(
+        open_sealed(
+            secret,
+            payload.to_bytes(),
+            bytes.hex_encode(bytes.hmac_sha256(secret, payload.to_bytes())),
+        )
+    )

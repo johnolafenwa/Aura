@@ -1310,6 +1310,9 @@ fn builtin_member_io_network_and_process_metadata_is_stable() {
     let cases = [
         ("fs.File", "read_all", BuiltinMember::FileReadAll),
         ("fs.File", "read_bytes", BuiltinMember::FileReadBytes),
+        ("fs.File", "read_line", BuiltinMember::FileReadLine),
+        ("fs.File", "read_lines", BuiltinMember::FileReadLines),
+        ("fs.File", "read_chunk", BuiltinMember::FileReadChunk),
         ("fs.File", "write_all", BuiltinMember::FileWriteAll),
         ("fs.File", "write_bytes", BuiltinMember::FileWriteBytes),
         ("fs.File", "flush", BuiltinMember::FileFlush),
@@ -1691,6 +1694,7 @@ fn builtin_member_io_network_and_process_bindings_cover_argument_shapes() {
     for member in [
         BuiltinMember::FileReadAll,
         BuiltinMember::FileReadBytes,
+        BuiltinMember::FileReadLine,
         BuiltinMember::FileFlush,
         BuiltinMember::FileClose,
         BuiltinMember::TcpListenerLocalAddr,
@@ -1778,7 +1782,12 @@ fn builtin_member_io_network_and_process_bindings_cover_argument_shapes() {
         assert_eq!(bound.len(), 1);
     }
 
-    for member in [BuiltinMember::FileWriteAll, BuiltinMember::FileWriteBytes] {
+    for member in [
+        BuiltinMember::FileWriteAll,
+        BuiltinMember::FileWriteBytes,
+        BuiltinMember::FileReadLines,
+        BuiltinMember::FileReadChunk,
+    ] {
         let args = [dummy_arg(None)];
         let bound = member
             .bind_args(&args, Span::new(1, 1))

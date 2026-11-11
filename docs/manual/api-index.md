@@ -196,7 +196,8 @@ module imports.
 
 [Bytes, Text Codecs, And SHA-256](/manual/bytes) covers exact UTF-8
 preservation, the strict policy for malformed input, error offsets, ownership,
-up-front output size checks, and the cryptographic scope of SHA-256.
+up-front output size checks, the cryptographic scope of SHA-256, and message
+authentication with HMAC-SHA256.
 
 | API | Signature | Behavior |
 | --- | --- | --- |
@@ -208,6 +209,8 @@ up-front output size checks, and the cryptographic scope of SHA-256.
 | `bytes.base64_decode` | `base64_decode(text: str) -> Result[list[uint8], bytes.Error]` | Strict decode of canonical standard-alphabet input. |
 | `bytes.sha256` | `sha256(value: list[uint8]) -> list[uint8]` | Fresh raw 32-byte FIPS 180-4 digest. |
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
+| `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | Fresh raw 32-byte RFC 2104 HMAC with SHA-256. The key may have any length. |
+| `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | Byte equality in time that does not depend on where the lists differ. Use it to compare signatures. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
@@ -216,6 +219,16 @@ Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
 cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
+
+## Gzip
+
+[Gzip Module](/manual/gzip) covers levels, multi-member streams, the output
+limit, and the error variants.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
+| `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
 
 ## Collections
 
@@ -358,6 +371,9 @@ whose shallow stack use you have measured. It is not the default.
 | `fs.append` | `append(path: str) -> Result[fs.File, io.Error]` | Opens a file for appending and creates it if needed. |
 | `fs.File.read_all` | `read_all() -> Result[str, io.Error]` | Reads the rest of the file as strict UTF-8 text, capped at 256 MiB. |
 | `fs.File.read_bytes` | `read_bytes() -> Result[list[uint8], io.Error]` | Reads the remaining bytes, capped at 256 MiB. |
+| `fs.File.read_line` | `read_line() -> Result[str \| None, io.Error]` | Reads the next line as strict UTF-8 without its LF or CRLF. `None` at the end of the file. |
+| `fs.File.read_lines` | `read_lines(max_lines: int64) -> Result[list[str], io.Error]` | Reads the next `max_lines` lines (1 to 1,048,576), or the fewer that remain. An empty list at the end of the file. |
+| `fs.File.read_chunk` | `read_chunk(max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | Reads the next `max_bytes` bytes (1 to 256 MiB), or the fewer that remain. `None` at the end of the file. |
 | `fs.File.write_all` | `write_all(text: str) -> Result[None, io.Error]` | Writes all of the text. |
 | `fs.File.write_bytes` | `write_bytes(bytes: list[uint8]) -> Result[None, io.Error]` | Writes all of the bytes. |
 | `fs.File.flush` | `flush() -> Result[None, io.Error]` | Flushes pending writes. |
