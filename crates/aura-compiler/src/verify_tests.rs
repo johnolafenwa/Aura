@@ -3872,3 +3872,96 @@ def main():
         "{messages:?}"
     );
 }
+
+#[test]
+fn a_spec_def_unfolds_for_concrete_arguments_of_every_plain_kind() {
+    assert_proved(
+        r#"
+spec def pick(n: int64, flag: bool, label: str, pair: (int64, int64), nothing: None) -> int64:
+    return 0 if n >= 0 else pick(n + 1, not flag, label, pair, nothing) + pair[0]
+
+def run() -> int64:
+    ensures result == pick(-3, true, "a", (2, 5), None)
+    return 6
+
+def main():
+    print(run())
+"#,
+    );
+}
+
+#[test]
+fn contracts_and_defaults_of_a_nested_module_are_verified_through_its_dotted_path() {
+    if smt::SolverCommand::find(None).is_err() {
+        assert!(std::env::var_os("CI").is_none());
+        return;
+    }
+    let dir = std::env::temp_dir().join(format!("aura_verify_nested_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(dir.join("geo")).expect("geo");
+    std::fs::write(
+        dir.join("geo/limits.au"),
+        r#"public spec def small(n: int64) -> bool:
+    return n < 10
+
+public def clamp(n: int64, top: int64 = 100) -> int64:
+    requires small(n)
+    ensures result <= top
+    return n if n < top else top
+
+public def boom(x: int64 = 1 // 0) -> int64:
+    return x
+"#,
+    )
+    .expect("limits.au");
+    let main = dir.join("main.au");
+    std::fs::write(
+        &main,
+        r#"import geo.limits
+
+def good() -> int64:
+    requires geo.limits.small(3)
+    return geo.limits.clamp(3)
+
+def bad() -> int64:
+    return geo.limits.clamp(30)
+
+def defaulted() -> int64:
+    return geo.limits.boom()
+
+def main():
+    print(good())
+"#,
+    )
+    .expect("main.au");
+    let program = crate::check_path(&main).expect("the nested module checks");
+    let module = crate::mir::lower_for_verification(&program);
+    let report = verify_module(&program, &module, &Options::default()).expect("verifies");
+    let open = open_checks(&report);
+    assert!(
+        open.iter()
+            .any(|item| item.starts_with("8 requires failed")),
+        "{open:?}"
+    );
+    assert!(
+        !open.iter().any(|item| item.starts_with("5 ")),
+        "the call that keeps the contract proves: {open:?}"
+    );
+    assert!(
+        open.iter().any(|item| item.starts_with("11 ")),
+        "the imported default is checked at the call: {open:?}"
+    );
+
+    // Ordinary code cannot call the imported `spec def`.
+    std::fs::write(
+        &main,
+        "import geo.limits\n\ndef main():\n    print(geo.limits.small(3))\n",
+    )
+    .expect("main.au");
+    let error = crate::check_path(&main).expect_err("a spec def is not callable from code");
+    assert!(
+        error.message.contains("`geo.limits.small` is a `spec def`"),
+        "{error:?}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}

@@ -25057,3 +25057,79 @@ def main() -> int32:
     // A place that held `None` decides nothing.
     assert!(super::stored_handle(&Value::Unit, &written(first)).is_none());
 }
+
+#[test]
+fn generators_held_in_tuples_lists_classes_enums_and_unions_close_at_return() {
+    let source = r#"from iter import Generator
+
+class Guard:
+    events: Queue[str]
+    name: str
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        _ = self.events.put("exit:" + self.name)
+
+def stream(events: Queue[str], name: own str) -> Generator[int64]:
+    with _g = Guard(events=events, name=name):
+        yield 10
+        yield 20
+
+class Holder:
+    source: Generator[int64]
+
+enum Slot:
+    Full(Generator[int64])
+    Empty
+
+def in_tuple(events: Queue[str]) -> None:
+    mut g = stream(events, "tuple")
+    _ = g.next()
+    pair = (1, g)
+    _ = events.put("end:tuple")
+
+def in_list(events: Queue[str]) -> None:
+    mut g = stream(events, "list")
+    _ = g.next()
+    mut items: list[Generator[int64]] = []
+    items.append(g)
+    _ = events.put("end:list")
+
+def in_class(events: Queue[str]) -> None:
+    mut g = stream(events, "class")
+    _ = g.next()
+    holder = Holder(source=g)
+    _ = events.put("end:class")
+
+def in_enum(events: Queue[str]) -> None:
+    mut g = stream(events, "enum")
+    _ = g.next()
+    slot = Slot.Full(g)
+    _ = events.put("end:enum")
+
+def in_union(events: Queue[str]) -> None:
+    mut g = stream(events, "union")
+    _ = g.next()
+    maybe: Generator[int64] | None = g
+    _ = events.put("end:union")
+
+def main():
+    events = Queue[str]()
+    in_tuple(events)
+    in_list(events)
+    in_class(events)
+    in_enum(events)
+    in_union(events)
+    events.close()
+    mut out: list[str] = []
+    for item in events:
+        out.append(item)
+    assert out == [
+        "end:tuple", "exit:tuple", "end:list", "exit:list", "end:class",
+        "exit:class", "end:enum", "exit:enum", "end:union", "exit:union",
+    ]
+"#;
+    crate::run_source(source).expect("held generators close when their owner returns");
+}

@@ -15881,6 +15881,8 @@ fn a_contracted_extern_with_a_callback_gets_a_wrapper_for_each_callback() {
     requires size == 4
 extern "C" def labs(value: int64) -> int64:
     ensures result >= 0
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64:
+    ensures exponent >= old(exponent) - 2000
 
 def ascending(a: mut int32, b: mut int32) -> int32:
     return a - b
@@ -15894,6 +15896,8 @@ def main():
     qsort(values, 3, 4, descending)
     qsort(values, 3, 4, compare=descending)
     print(labs(-2))
+    mut exponent: int32 = 0
+    print(frexp(48.0, exponent))
 "#;
     let module = lower_ffi_source(source);
     let wrappers = module
@@ -15905,13 +15909,14 @@ def main():
     assert_eq!(
         wrappers,
         [
+            "frexp::__extern_contract",
             "labs::__extern_contract",
             "qsort::__extern_contract::compare=ascending",
             "qsort::__extern_contract::compare=descending",
         ]
     );
     // Each copy names its callback in the foreign call.
-    for (wrapper, callback) in [(wrappers[1], "ascending"), (wrappers[2], "descending")] {
+    for (wrapper, callback) in [(wrappers[2], "ascending"), (wrappers[3], "descending")] {
         let function = module
             .functions
             .iter()
@@ -15936,7 +15941,7 @@ def main():
         assert!(named, "{wrapper}");
     }
     assert_eq!(
-        crate::mir::public_function_name(wrappers[1]),
+        crate::mir::public_function_name(wrappers[2]),
         "qsort",
         "a backtrace shows the declared name"
     );
