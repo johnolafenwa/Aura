@@ -256,7 +256,7 @@ Host filesystem results can differ by operating system and environment. Those di
 
 Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content. One `read_chunk` call returns at most 256 MiB, one `read_lines` call at most 1,048,576 lines, and one line is at most 64 MiB.
 
-Aura 0.13 has none of these:
+Aura 0.14 has none of these:
 
 - seeking to a position in a file
 - recursive directory operations
@@ -274,8 +274,8 @@ After a directory is open, an entry that fails during enumeration is skipped. On
 
 ## Status
 
-Aura 0.13 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
+Aura 0.14 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
 
-The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.13 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.14 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0073: Streaming reads, gzip, and HMAC](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0073-streaming-reads-gzip-and-hmac.md).

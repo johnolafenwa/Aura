@@ -397,7 +397,7 @@ keep nothing, so the caller still owns them afterwards. The same is true of
 The rename is atomic only within one filesystem. If *report.txt* were on a
 different disk from its temporary file, `fs.rename` would fail with an
 `io.Error`, which is one reason the temporary file sits right next to the
-target. Aura 0.13 also has no call to sync the directory itself, which some
+target. Aura 0.14 also has no call to sync the directory itself, which some
 filesystems need before the rename survives a crash. For a health report that
 is regenerated on every run, this recipe is more than enough.
 
@@ -636,7 +636,7 @@ flag turns a byte read into a text read. When you need to convert, use
 because the bytes may not be valid UTF-8.
 
 The Manual's [Filesystem Module](/manual/filesystem) page lists every
-function and its exact contract, including what Aura 0.13 does not have yet:
+function and its exact contract, including what Aura 0.14 does not have yet:
 recursive directory operations, file metadata, permissions, and watchers.
 
 ## Standard input and output

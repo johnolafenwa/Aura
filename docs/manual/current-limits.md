@@ -153,7 +153,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Queue and Task handles are the maintained cross-worker communication surface. All other task captures and results must be owned `Transfer` values, which keeps a share-nothing boundary.
 - A task's cancellation and diagnostic context stay isolated from work running on other workers.
 - Task scheduling, cross-worker completion, and program-output order are unspecified. There is no worker-index or affinity-introspection API.
-- Pinned task execution is maintained on the MIR and direct native backends. Work stealing, preemption, and detached tasks are not available.
+- Task execution is maintained on the MIR and direct native backends. Work stealing covers only children that have not started. Moving a started task, preemption, and detached tasks are not available.
 - Parallel speedup depends on the workload. Automatic parallelism applies only to task execution.
 - MIR is the checked development path, not the performance path. In the multicore control benchmark, four MIR tasks took about `2.1x` the wall time of one task. Interpreter work and synchronization raise the per-task cost when several workers run MIR at once. Use the direct native backend for performance measurements.
 - The scheduler uses persistent reactor registrations for nonblocking descriptors, a timer heap for deadlines, and direct Queue, task-completion, and blocking-pool notifications. When idle it blocks until an event or deadline. It has no periodic scheduler tick.
@@ -191,7 +191,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a separate protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
 - Each submitted protocol job is a bounded, nonblocking step. It returns owned protocol state before cancellation or reactor waiting resumes.
 - The non-Unix WebSocket fallback does not use the protocol-step pool.
-- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.13 runtime shutdown or join API.
+- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.14 runtime shutdown or join API.
 - File reads, resolver work, and listener binding run on the generic blocking-I/O pool. TLS asset bytes are read there, and then PEM parsing and rustls construction run on protocol workers.
 - The process-wide blocking-I/O pool defaults from host parallelism, with fallback `4` and a derived `2..=8` clamp. `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact count without clamping.
 - `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds pending accepted jobs only. Running jobs and admission waiters do not consume it. Without it, the queue is unbounded.
@@ -220,7 +220,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
 - High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses. Redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
-- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.13 contract.
+- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.14 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
@@ -237,7 +237,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Dynamic `json.parse` uses a separate process-global service with two 2 MiB-stack workers and a total in-flight capacity of two.
 - The service reserves capacity before the fallible source copy. Lightweight tasks that find it saturated park through the scheduler. Once admitted, a synchronous parse defers cancellation until the codec completes.
 - Runtime materialization, JSON-aware clone and render, and dumping use iterative traversals.
-- The parse service lives for the whole process and has no 0.13 sizing or shutdown API.
+- The parse service lives for the whole process and has no 0.14 sizing or shutdown API.
 - The bounded `json.is_valid` and `json.parse_string_map` helpers keep their bounded caller-side paths and do not use that service.
 - JSON flat-dictionary and TOML helpers are restricted to typed `dict[str, str]`.
 - JSON has no arbitrary-precision number, streaming codec, or schema validation. A derived `json.Codec` for a generic class or enum is not implemented.
