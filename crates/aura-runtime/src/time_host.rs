@@ -522,7 +522,7 @@ fn local_offset_minutes(unix_seconds: i64) -> i64 {
             if libc::localtime_r(&instant, &mut fields).is_null() {
                 return 0;
             }
-            i64::from(fields.tm_gmtoff)
+            fields.tm_gmtoff as i64
         };
         // Offsets with seconds, used before standard time, round down.
         seconds.div_euclid(60).clamp(-1_439, 1_439)
