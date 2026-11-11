@@ -1180,8 +1180,13 @@ true\nfalse\ntrue\nfalse\n[10.0, 20.0]\n500.0\n180000.0\n";
 
 #[test]
 fn structs_cross_by_value_and_by_pointer_with_backend_parity() {
-    let (package, source) = fixture_package(
-        r#"
+    // Seven floats leave one float register on AArch64, which a `Vec2`
+    // does not fit. C passes it whole on the stack there. A built program
+    // refuses the call, so that host runs the rest of the fixture and
+    // checks the refusal by itself.
+    let spill = "fx_spill_floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, b, 0.5)";
+    let refused = cfg!(target_arch = "aarch64");
+    let main = r#"
 class Scene:
     origin: Vec2
     bounds: Rect
@@ -1294,8 +1299,26 @@ def main() -> int32:
     print(acc.x)
     print(acc.y)
     return 0
-"#,
-    );
+"#;
+    if refused {
+        let (package, source) = fixture_package(&format!(
+            "def main() -> int32:\n    b = Vec2(x=0.5, y=-0.25)\n    print({spill})\n    return 0\n"
+        ));
+        assert_success(&run_mir(&source), "the spilled struct on the interpreter");
+        let build = build_direct(&source, &package.path.join("ffi-fixture-spill"));
+        let stderr = String::from_utf8_lossy(&build.stderr);
+        assert!(!build.status.success(), "{stderr}");
+        assert!(
+            stderr.contains("struct `Vec2` does not fit the argument registers"),
+            "{stderr}"
+        );
+    }
+    let main = if refused {
+        main.replace(spill, "433.0")
+    } else {
+        main.to_string()
+    };
+    let (package, source) = fixture_package(&main);
     let (mir, direct) = run_on_both_backends(&package, &source);
     assert_success(&mir, "structs on the interpreter");
     assert_success(&direct, "structs in a built program");
