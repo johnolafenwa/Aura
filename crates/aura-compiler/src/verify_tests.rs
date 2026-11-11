@@ -3891,6 +3891,60 @@ def main():
 }
 
 #[test]
+fn a_for_invariant_that_ignores_the_target_holds_after_the_loop() {
+    // The clause is checked before the loop asks for each element, so the
+    // code after the loop keeps it, whatever the loop runs over.
+    assert_proved(
+        r#"
+def total(values: list[int64]) -> int64:
+    ensures result >= 0
+    mut sum = 0
+    for value in values:
+        invariant 0 <= sum and sum <= 1000000
+        if 0 <= value and value <= 100 and sum < 1000:
+            sum += value
+    return sum
+
+def adults(ages: dict[str, int64]) -> int64:
+    ensures 0 <= result and result <= 1000
+    mut count = 0
+    for name, age in ages.items():
+        invariant 0 <= count and count <= 1000
+        if age >= 18 and count < 1000:
+            count += 1
+    return count
+
+def positives(values: list[int64]) -> int64:
+    ensures result >= 0
+    mut hits = 0
+    for index, value in enumerate(values):
+        invariant 0 <= hits and hits <= 1000
+        invariant index >= 0
+        if value > 0 and hits < 1000:
+            hits += 1
+    return hits
+
+def skips(values: set[int64]) -> int64:
+    ensures result >= 0
+    mut count = 0
+    for value in values:
+        invariant 0 <= count and count <= 1000
+        if value == 2:
+            continue
+        if count < 1000:
+            count += 1
+    return count
+
+def main():
+    print(total([1, 2, 3]))
+    print(adults({"a": 20, "b": 3}))
+    print(positives([1, -2, 3]))
+    print(skips({1, 2, 5}))
+"#,
+    );
+}
+
+#[test]
 fn contracts_and_defaults_of_a_nested_module_are_verified_through_its_dotted_path() {
     if smt::SolverCommand::find(None).is_err() {
         assert!(std::env::var_os("CI").is_none());
@@ -3968,4 +4022,25 @@ def first(xs: list[int64]) -> int64:
         "{error:?}"
     );
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn a_for_invariant_the_last_iteration_breaks_stays_open() {
+    // The check on the edge back to the loop fails, and so does the claim
+    // that relied on the invariant after the loop.
+    assert_open(
+        r#"
+def last_of(values: list[int64]) -> int64:
+    ensures result >= 0
+    mut last = 0
+    for value in values:
+        invariant last >= 0
+        last = value
+    return last
+
+def main():
+    print(last_of([1, 2]))
+"#,
+        &["6 loop invariant failed"],
+    );
 }

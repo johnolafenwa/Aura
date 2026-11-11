@@ -4353,3 +4353,80 @@ fn generators_run_lazily_and_close_on_the_interpreter() {
         .collect::<Vec<_>>();
     assert_eq!(chain, ["bad", "main"], "{trap:?}");
 }
+
+/// Programs that used to fail after checking: a lambda that calls a method
+/// on an element of a captured list, a local bound to a name a shared
+/// `match` binds or to a borrowed value, an `impl` for a union type, an
+/// explicit type argument that names the enclosing function's type
+/// parameter, and `for` invariants that hold when the loop runs out. The
+/// fixture suites run the same files through both backends.
+#[test]
+fn programs_the_checker_accepted_but_lowering_refused_run() {
+    macro_rules! run_pass {
+        ($name:literal) => {
+            (
+                $name,
+                include_str!(concat!("../tests/fixtures/run-pass/", $name, ".au")),
+                include_str!(concat!("../tests/fixtures/run-pass/", $name, ".stdout")),
+            )
+        };
+    }
+    let fixtures = [
+        run_pass!("lambda_element_method_calls"),
+        run_pass!("match_shared_binding_aliases"),
+        run_pass!("union_type_trait_impls"),
+        run_pass!("explicit_enclosing_type_arguments"),
+        run_pass!("for_invariants_at_loop_end"),
+    ];
+    for (name, source, expected) in fixtures {
+        let output = run_source(source).unwrap_or_else(|error| panic!("{name}: {error:?}"));
+        assert_eq!(
+            output.stdout.replace("\r\n", "\n").trim_end(),
+            expected.replace("\r\n", "\n").trim_end(),
+            "{name}"
+        );
+    }
+}
+
+#[test]
+fn a_for_invariant_that_ignores_the_target_is_checked_when_the_loop_runs_out() {
+    let failed = run_source(include_str!(
+        "../tests/fixtures/run-fail/for_invariant_fails_at_end.au"
+    ))
+    .expect_err("the invariant fails after the last element");
+    assert_eq!(failed.code, "AU4009", "{failed:?}");
+    assert!(
+        failed
+            .message
+            .contains("`invariant` clause failed: `last >= 0`"),
+        "{failed:?}"
+    );
+
+    // The clause is checked before the first element too, and an empty
+    // loop checks it once.
+    let entry = run_source(concat!(
+        "def main():\n",
+        "    limit = 0 - 1\n",
+        "    for value in list[int64]():\n",
+        "        invariant limit >= 0\n",
+        "        print(value)\n",
+    ))
+    .expect_err("the invariant fails on entry");
+    assert_eq!(entry.code, "AU4009", "{entry:?}");
+
+    // A clause that reads the target is checked only with the target
+    // bound, so nothing checks it once the loop runs out.
+    let output = run_source(concat!(
+        "def main():\n",
+        "    mut last = 0\n",
+        "    for value in [1, 2, 3]:\n",
+        "        invariant value > last\n",
+        "        last = value\n",
+        "    for index, value in enumerate([5, 6]):\n",
+        "        invariant index >= 0 and value > index\n",
+        "        last = value\n",
+        "    print(last)\n",
+    ))
+    .expect("target invariants hold in the body");
+    assert_eq!(output.stdout, "6\n");
+}

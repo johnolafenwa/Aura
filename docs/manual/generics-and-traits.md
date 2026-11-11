@@ -355,7 +355,32 @@ A union value dispatches a trait method when every member implements the same tr
 - A `mut self` method mutates the payload in place, and the tag stays fixed.
 - An `own self` method consumes the union.
 
-A result written as `Self` that would differ per member is not one contract. Match the member and declare the result union explicitly. There is no duck typing over common method names, no `impl` for an anonymous union, and no inferred trait intersection.
+A result written as `Self` that would differ per member is not one contract. Match the member and declare the result union explicitly. There is no duck typing over common method names and no inferred trait intersection.
+
+An `impl` can also name a union type. Its methods then run for a direct call on a value of exactly that union type, whichever member the value holds, and the method reads the member with `match self`:
+
+```aura
+trait Named:
+    def name(self) -> str
+
+
+impl Named for int64 | None:
+    def name(self) -> str:
+        match self:
+            case None:
+                return "nothing"
+            case value:
+                return f"int {value}"
+
+
+def main():
+    count: int64 | None = 3
+    print(count.name())  # int 3
+    missing: int64 | None = None
+    print(missing.name())  # nothing
+```
+
+Such an `impl` serves direct calls only. It does not make the union satisfy a trait bound or convert to a trait object: both still ask every member to implement the trait.
 
 The same all-member rule decides whether a union satisfies a trait bound. A union type argument satisfies `T: Named` when every member implements that specialization, and every method the bound exposes, supertraits included, has one coherent contract across the members.
 

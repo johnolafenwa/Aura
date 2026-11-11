@@ -12230,6 +12230,13 @@ struct Lowerer<'a> {
     needed_after_current_stmt: BTreeSet<String>,
     /// Hidden element loans created for contextual element uses.
     contextual_element_loans: BTreeSet<String>,
+    /// For each `for` loop being lowered, the block that asks for its next
+    /// element, once the loop has made it.
+    for_dispatch_blocks: Vec<Option<usize>>,
+    /// Locals that share a value another place keeps: a name a shared
+    /// `match` bound to an enum payload, and a local bound to a borrowed
+    /// parameter, to a view, or to another such local.
+    shared_value_locals: BTreeSet<String>,
     /// The hidden element loan lent for the element expression at a source
     /// position, so a returned view of that argument names the loan.
     contextual_loan_by_span: BTreeMap<(usize, usize), String>,
@@ -12490,6 +12497,8 @@ impl<'a> Lowerer<'a> {
             loan_scopes: Vec::new(),
             needed_after_current_stmt: BTreeSet::new(),
             contextual_element_loans: BTreeSet::new(),
+            for_dispatch_blocks: Vec::new(),
+            shared_value_locals: BTreeSet::new(),
             contextual_loan_by_span: BTreeMap::new(),
             view_return_origin: None,
             initializer_self: false,
@@ -12958,6 +12967,14 @@ impl<'a> Lowerer<'a> {
         if let Some(namespace) = self.program.module_registry.get(path) {
             return Some(namespace);
         }
+        // The name an import binds, such as `sh` for `import shapes as sh`.
+        let imported = match self.current_module_namespace() {
+            Some(current) => &current.imported_modules,
+            None => &self.program.imported_modules,
+        };
+        if let Some(namespace) = imported.get(path) {
+            return Some(namespace);
+        }
         self.current_module_namespace()
             .and_then(|current| Self::find_namespace_in_modules(&current.imported_modules, path))
             .or_else(|| Self::find_namespace_in_modules(&self.program.imported_modules, path))
@@ -13150,6 +13167,22 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// The enclosing function's type parameters, which its bounds and its
+    /// parameter, local and return types name.
+    fn enclosing_type_params(&self) -> BTreeSet<String> {
+        let mut type_params = self
+            .type_param_bounds
+            .keys()
+            .filter(|name| !name.contains('.'))
+            .cloned()
+            .collect::<BTreeSet<_>>();
+        collect_type_params_from_type(&self.return_type, &mut type_params);
+        for ty in self.local_types.values() {
+            collect_type_params_from_type(ty, &mut type_params);
+        }
+        type_params
+    }
+
     fn lower_function_value(&self, expr: &Expr) -> Option<Operand> {
         match &expr.kind {
             ExprKind::Group(inner) => self.lower_function_value(inner),
@@ -13303,8 +13336,15 @@ impl<'a> Lowerer<'a> {
                 lowerer.non_owning_roots.insert(lexical.name.clone());
             }
         }
-        let result = lowerer.lower_expr_for_owned_value(body, Some(&info.return_type));
-        lowerer.terminate(Terminator::Return(result));
+        // The body is lowered as a `return` statement, so the hidden loans
+        // its expression takes (`lambda: items[0].area()` lends `items[0]`
+        // to the call) end before the function returns.
+        let stmt = Stmt::Return(crate::ast::ReturnStmt {
+            value: Some(body.clone()),
+            view: None,
+            span: body.span,
+        });
+        lowerer.lower_stmts(std::slice::from_ref(&stmt));
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
@@ -13494,8 +13534,11 @@ impl<'a> Lowerer<'a> {
         }
     }
 
+    /// Lowers a type written in the function body. A name such as the `T`
+    /// of `run_one[T]` inside `outer[T]` is the enclosing function's type
+    /// parameter, not a type called `T`.
     fn lower_type_ref_with_provenance(&self, type_ref: &crate::ast::TypeRef) -> Type {
-        self.lower_type_ref_scoped(type_ref, &BTreeSet::new())
+        self.lower_type_ref_scoped(type_ref, &self.enclosing_type_params())
     }
 
     /// Lowers a written type in which the names in `type_params` are the
@@ -15459,6 +15502,17 @@ impl<'a> Lowerer<'a> {
             }
             let target = self.render_local_name(name);
             self.local_types.entry(target).or_insert(ty);
+        }
+
+        if let (AssignTarget::Name(name), None) = (&assign.target, assign.op) {
+            // `kept = param` shares the borrowed value, so `again = kept`
+            // shares it too instead of moving out of `kept`. The local
+            // stays a sharing one when another path gives it a value of
+            // its own, where a share is as good as a move.
+            if self.is_non_owning_place_expr(&assign.value) {
+                let target = self.render_local_name(name);
+                self.shared_value_locals.insert(target);
+            }
         }
 
         if let Some((collection, selector, projection, span, target_expr)) =
@@ -18231,6 +18285,11 @@ impl<'a> Lowerer<'a> {
                                 index,
                             },
                         });
+                        if binding.is_some() && !options.consume_payloads {
+                            // The scrutinee keeps this payload: a local
+                            // bound to the name shares it.
+                            self.shared_value_locals.insert(target.clone());
+                        }
                         target
                     };
                     if binding.is_some() {
@@ -19240,6 +19299,7 @@ impl<'a> Lowerer<'a> {
         lower_body: &mut dyn FnMut(&mut Self),
     ) {
         let dispatch_block = self.new_block("for_lockstep");
+        self.record_for_dispatch_block(dispatch_block);
         let body_block = self.new_block("for_body");
         let safepoint_block = self.new_block("for_safepoint");
         let after_block = self.new_block("for_end");
@@ -19478,15 +19538,65 @@ impl<'a> Lowerer<'a> {
             && counted_range_args(for_stmt, self.infer_expr_type(&for_stmt.iterable).as_ref())
                 .is_some();
         if invariants && !counted {
+            // A clause that reads the loop target is checked in the body,
+            // once the target is bound. Any other clause is checked before
+            // the loop asks for its next element, as a `while` invariant
+            // is, so it also holds when the loop runs out.
+            let mut targets = BTreeSet::new();
+            collect_for_target_names(&for_stmt.target, &mut targets);
+            let (in_body, in_header): (Vec<_>, Vec<_>) = for_stmt
+                .contracts
+                .iter()
+                .filter(|clause| clause.kind == crate::ast::ContractKind::Invariant)
+                .cloned()
+                .partition(|clause| {
+                    targets
+                        .iter()
+                        .any(|name| crate::sema::expr_references_name(&clause.condition, name))
+                });
             let mut checked_body = |lowerer: &mut Self| {
-                lowerer
-                    .lower_clause_checks(&for_stmt.contracts, crate::ast::ContractKind::Invariant);
+                lowerer.lower_clause_checks(&in_body, crate::ast::ContractKind::Invariant);
                 lower_body(lowerer);
             };
+            self.for_dispatch_blocks.push(None);
             self.lower_for_loop(for_stmt, checked_binding, &mut checked_body);
+            let dispatch = self
+                .for_dispatch_blocks
+                .pop()
+                .flatten()
+                .expect("every `for` loop records the block that asks for its next element");
+            if !in_header.is_empty() {
+                self.lower_for_header_checks(dispatch, &in_header);
+            }
         } else {
+            self.for_dispatch_blocks.push(None);
             self.lower_for_loop(for_stmt, checked_binding, lower_body);
+            self.for_dispatch_blocks.pop();
         }
+    }
+
+    /// Records the block in which the `for` loop being lowered asks for
+    /// its next element.
+    fn record_for_dispatch_block(&mut self, block: usize) {
+        if let Some(slot @ None) = self.for_dispatch_blocks.last_mut() {
+            *slot = Some(block);
+        }
+    }
+
+    /// Checks `clauses` at the top of a lowered `for` loop's `dispatch`
+    /// block, ahead of the test that asks for the next element. Every edge
+    /// into the loop and every edge back to it names that block, so the
+    /// checks run on entry, after each iteration, and when the loop runs
+    /// out.
+    fn lower_for_header_checks(&mut self, dispatch: usize, clauses: &[crate::ast::ContractClause]) {
+        let resume = self.current_block;
+        let test = self.new_block("for_test");
+        self.blocks[test].instructions = std::mem::take(&mut self.blocks[dispatch].instructions);
+        self.blocks[test].terminator = self.blocks[dispatch].terminator.take();
+        self.switch_to(dispatch);
+        self.lower_clause_checks(clauses, crate::ast::ContractKind::Invariant);
+        self.terminate(Terminator::Goto(self.label(test)));
+        self.switch_to(resume);
     }
 
     fn lower_for_loop(
@@ -19576,6 +19686,7 @@ impl<'a> Lowerer<'a> {
             return;
         }
         let dispatch_block = self.new_block("for_iter");
+        self.record_for_dispatch_block(dispatch_block);
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
 
@@ -20290,6 +20401,7 @@ impl<'a> Lowerer<'a> {
             value: Rvalue::Use(Operand::Int(0)),
         });
         let dispatch_block = self.new_block("for_iter");
+        self.record_for_dispatch_block(dispatch_block);
         let body_block = self.new_block("for_body");
         let continue_block = self.new_block("for_continue");
         let after_block = self.new_block("for_end");
@@ -28566,6 +28678,15 @@ impl<'a> Lowerer<'a> {
                             // member (ADR-0052 A8); the checker requires every
                             // member to implement the method with one result
                             // type, so the first implementing member names it.
+                            // An impl for the union type itself comes first.
+                            if let Some((method, substitutions)) =
+                                self.trait_method_for_receiver(&receiver_type, field)
+                            {
+                                return Some(substitute_type(
+                                    &method.signature.return_type,
+                                    &substitutions,
+                                ));
+                            }
                             return union.members.iter().find_map(|member| {
                                 self.trait_method_for_receiver(member, field).map(
                                     |(method, substitutions)| {
@@ -29487,8 +29608,17 @@ impl<'a> Lowerer<'a> {
         match &expr.kind {
             // A module constant is shared storage: a local bound to it
             // shares the value, as a local bound to a borrowed parameter does.
+            // A name bound to a loan, such as the `square` of a shared
+            // `case Square as square:`, views a value its source still owns:
+            // a local bound to it shares the value as well.
             ExprKind::Name(name) => {
-                self.non_owning_roots.contains(name) || self.resolve_constant_info(name).is_some()
+                self.non_owning_roots.contains(name)
+                    || self.resolve_constant_info(name).is_some()
+                    || {
+                        let local = self.render_local_name(name);
+                        self.view_sources.contains_key(&local)
+                            || self.shared_value_locals.contains(&local)
+                    }
             }
             ExprKind::Group(inner) => self.is_non_owning_place_expr(inner),
             ExprKind::Member { object, .. } => self.is_non_owning_place_expr(object),
@@ -29968,6 +30098,20 @@ impl<'a> Lowerer<'a> {
 
     fn switch_to(&mut self, block_index: usize) {
         self.current_block = block_index;
+    }
+}
+
+/// The names a `for` loop target binds.
+fn collect_for_target_names(target: &BindingTarget, names: &mut BTreeSet<String>) {
+    match target {
+        BindingTarget::Name { name, .. } | BindingTarget::Rest { name, .. } => {
+            names.insert(name.clone());
+        }
+        BindingTarget::Tuple { elements, .. } => {
+            for element in elements {
+                collect_for_target_names(element, names);
+            }
+        }
     }
 }
 
