@@ -489,3 +489,81 @@ fn a_key_is_found_among_keys_of_its_length_and_others() {
         assert!(object.lookup_address(missing).is_none(), "{missing}");
     }
 }
+
+#[test]
+fn a_tape_value_renders_from_the_tape_as_its_values_render() {
+    let cases = [
+        ("null", "json.Value.Null"),
+        ("true", "json.Value.Bool(true)"),
+        ("12", "json.Value.Int(12)"),
+        ("2.5", "json.Value.Float(2.5)"),
+        (r#""text""#, "json.Value.String(text)"),
+        ("[]", "json.Value.Array([])"),
+        ("{}", "json.Value.Object({})"),
+        (
+            r#"[1, [2.5, null, "x"], {"k": false}]"#,
+            "json.Value.Array([json.Value.Int(1), json.Value.Array([json.Value.Float(2.5), \
+             json.Value.Null, json.Value.String(x)]), json.Value.Object({k: \
+             json.Value.Bool(false)})])",
+        ),
+        (
+            r#"{"b": [1, true], "a": {"c": "d"}, "e": null}"#,
+            "json.Value.Object({b: json.Value.Array([json.Value.Int(1), \
+             json.Value.Bool(true)]), a: json.Value.Object({c: json.Value.String(d)}), e: \
+             json.Value.Null})",
+        ),
+    ];
+    for (source, expected) in cases {
+        let value = root(source).into_value();
+        assert_eq!(value.render(), expected, "{source}");
+        // The payload made a value renders the same text.
+        let Value::EnumVariant(mut variant) = value else {
+            panic!("a tape value is an enum variant");
+        };
+        variant.payloads.values_mut();
+        assert_eq!(Value::EnumVariant(variant).render(), expected, "{source}");
+    }
+}
+
+#[test]
+fn a_tape_values_parts_count_what_is_left() {
+    let node = root(r#"[1, "two", [3]]"#);
+    let JsonPayloadParts::Elements(mut elements) = node.payload_parts() else {
+        panic!("an array gives elements");
+    };
+    assert_eq!(elements.len(), 3);
+    elements.next();
+    assert_eq!(elements.size_hint(), (2, Some(2)));
+    assert_eq!(elements.count(), 2);
+
+    let node = root(r#"{"a": 1, "b": {"c": 2}}"#);
+    let JsonPayloadParts::Entries(mut entries) = node.payload_parts() else {
+        panic!("an object gives entries");
+    };
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries.next().map(|(key, _)| key), Some("a"));
+    assert_eq!(entries.size_hint(), (1, Some(1)));
+    assert_eq!(entries.next().map(|(key, _)| key), Some("b"));
+    assert!(entries.next().is_none());
+
+    assert!(matches!(
+        root(r#""text""#).payload_parts(),
+        JsonPayloadParts::Text("text")
+    ));
+    assert!(matches!(
+        root("7").payload_parts(),
+        JsonPayloadParts::Scalar(Value::Int(_))
+    ));
+    // `Null` carries no payload, and its parts are empty.
+    let null = root("null");
+    let JsonPayloadParts::Elements(mut none) = null.payload_parts() else {
+        panic!("null gives no elements");
+    };
+    assert!(none.next().is_none());
+
+    // A variant in a tape has no stored payload.
+    let Value::EnumVariant(variant) = root("[1]").into_value() else {
+        panic!("a tape value is an enum variant");
+    };
+    assert!(variant.payloads.stored(0).is_none());
+}

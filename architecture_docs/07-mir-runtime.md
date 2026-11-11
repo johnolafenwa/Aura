@@ -248,10 +248,12 @@ is forbidden by their internal safety contract.
 Phase 5.7 hosts this scheduler state on N pinned workers. N defaults to the
 available parallelism reported by the host; the provisional
 `AURA_WORKERS=<positive integer>` environment override selects an explicit
-count. A child is assigned when admitted at spawn time and keeps that worker
-for its lifetime. Its coroutine stack never migrates and no worker steals
-another worker's ready tasks. Consequently `yield_now()` requeues only on the
-current worker.
+count. A child starts on its parent's worker, and an idle worker may steal a
+child that has not started. A task binds to the worker that first runs it and
+keeps that worker for its lifetime
+([ADR-0072](decisions/0072-task-placement-and-stack-reuse.md)). Its coroutine
+stack never migrates, and no worker steals a task that has started.
+Consequently `yield_now()` requeues only on the current worker.
 
 Queue and Task handle internals provide the synchronized cross-worker
 notification and observation paths. Accepted ADR-0033 supplies the
@@ -264,9 +266,9 @@ replace another worker's ambient task state.
 MIR and direct-native tasks use the same pinned-worker contract. Ready-task
 order, independent completion order, and emitted-output order remain
 unspecified. The runtime exposes no worker identity or affinity control and
-makes no promise of preemption, migration, work stealing, or workload-wide
-parallel speedup; the multicore claim is limited to admitted Aura task
-execution.
+makes no promise of preemption, migration of a started task, or workload-wide
+parallel speedup. Idle workers steal only children that have not started. The
+multicore claim is limited to admitted Aura task execution.
 
 ## Networking and I/O
 

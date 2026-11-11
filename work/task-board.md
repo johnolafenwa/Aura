@@ -2,6 +2,21 @@
 
 Last updated: 2026-11-11
 
+## The two 0.14.0 regressions (complete)
+
+- Hello world grew 82 KB in 0.14.0 because `print` linked the code that
+  turns a parsed `json.Value` into list and dict values. It renders from
+  the tape now: 1,167,304 bytes down to 1,098,640 on `main`.
+- Fifteen cross-language programs executed 2 to 6% more instructions.
+  Four causes are fixed: a type lookup by name for every new list, a
+  second storage test on every dict read, a value free that called two
+  functions, and loop copies that stopped LLVM inlining a function with
+  one call. The 30 programs execute 76,843M instructions, against 79,828M
+  on 0.14.0 and 79,994M on 0.13.0. Details are in
+  `2026-11-11-0.14-regressions.md`.
+- Open: four programs stay 1 to 2% above 0.13.0, which is the cost of the
+  smaller value header and the JSON tape.
+
 ## Six older compiler bugs (complete)
 
 - Five programs the checker accepted and lowering refused, or the
