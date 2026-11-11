@@ -20,6 +20,10 @@
 //! - a `mut` scalar or `mut Handle | None` argument passes the address of a
 //!   stack word that holds the value, and the word is stored back to the
 //!   argument's place when the call returns
+//! - an `extern "C" class` argument or result crosses by value, as the C
+//!   calling convention passes a struct: in registers, on the stack, or
+//!   through an address. A `mut` argument of such a class passes the
+//!   address of a C copy, and the copy is read back when the call returns
 //! - a handle result boxes the returned address, and a null address ends
 //!   the task with `AU4005` unless the declared result is `Handle | None`
 //! - a `bool` result that is neither 0 nor 1 ends the task with `AU4001`
@@ -30,8 +34,9 @@
 
 use super::*;
 
+use crate::c_layout::{CAbi, CArgument, CPassing, CPiece, CStruct};
 use crate::mir::MirExternParam;
-use crate::native_backend::Extension;
+use crate::native_backend::{Extension, Indirect};
 
 /// How one scalar crosses the C boundary.
 struct ForeignScalar {
@@ -94,6 +99,13 @@ pub(super) fn foreign_param_type(
             _ => FfiType::Pointer(scalar),
         }));
     }
+    if let Some(layout) = &param.c_struct {
+        let layout = layout.interned();
+        return Ok(DirectFfiType::scalar(match param.passing {
+            MirReceiverKind::BorrowMut => FfiType::StructPointer(layout),
+            _ => FfiType::Struct(layout),
+        }));
+    }
     direct_ffi_type_for_source(&param.ty, Some(param.passing))
 }
 
@@ -123,6 +135,9 @@ pub(super) fn foreign_result_type(
 ) -> std::result::Result<DirectFfiType, String> {
     if call.c_string_result {
         return Ok(DirectFfiType::scalar(c_string_type(&call.return_type)));
+    }
+    if let Some(layout) = &call.c_struct_result {
+        return Ok(DirectFfiType::scalar(FfiType::Struct(layout.interned())));
     }
     direct_ffi_type_for_source(&call.return_type, None)
 }
@@ -156,6 +171,35 @@ enum ForeignWriteback {
     /// The `Handle | None` of this union type for the address in the stack
     /// word at this address. The name is the handle's opaque type.
     Handle(String, Type, Val),
+    /// The struct in the C copy at this address.
+    Struct(&'static CStruct, Val),
+}
+
+/// The convention foreign calls follow on the machine being built for.
+fn foreign_abi() -> std::result::Result<CAbi, String> {
+    CAbi::host().ok_or_else(|| {
+        format!(
+            "direct backend cannot pass a C struct by value on `{}`",
+            std::env::consts::ARCH
+        )
+    })
+}
+
+/// The size of the stack slot that holds one `layout` struct.
+fn struct_slot_size(layout: &CStruct) -> u32 {
+    layout.size().next_multiple_of(8) as u32
+}
+
+/// The type a register's piece of a struct travels as.
+fn piece_type(piece: CPiece) -> (i32, ScalarType) {
+    match piece {
+        CPiece::Int { offset, .. } => (offset as i32, types::I64),
+        CPiece::Sse { offset, .. } => (offset as i32, types::F64),
+        CPiece::Float { offset, scalar } => {
+            let scalar = foreign_scalar(scalar.ffi_type()).expect("a float is a scalar");
+            (offset as i32, scalar.ty)
+        }
+    }
 }
 
 /// The foreign call's C signature and argument values, in order.
@@ -173,6 +217,32 @@ impl ForeignArguments {
 
     fn push_word(&mut self, value: Val) {
         self.push(types::I64, Extension::None, value);
+    }
+
+    /// Marks the last argument, an address, as a struct in memory.
+    fn mark_last(&mut self, indirect: Indirect) {
+        let index = self.signature.params.len() - 1;
+        self.signature.indirects.push((index, indirect));
+    }
+
+    /// How many general and floating-point registers the arguments so far
+    /// take, when there are enough of each.
+    fn registers_used(&self, abi: CAbi) -> (usize, usize) {
+        let mut general = 0;
+        let mut float = 0;
+        for (index, ty) in self.signature.params.iter().enumerate() {
+            let indirect = self.signature.indirects.iter().find(|(at, _)| *at == index);
+            match (indirect, ty) {
+                (Some((_, Indirect::ByValue { .. })), _) => {}
+                // AArch64 has a register of its own for a result's address.
+                (Some((_, Indirect::Result { .. })), _) => {
+                    general += usize::from(abi == CAbi::SysV64);
+                }
+                (None, ScalarType::F32 | ScalarType::F64) => float += 1,
+                (None, _) => general += 1,
+            }
+        }
+        (general, float)
     }
 }
 
@@ -230,7 +300,8 @@ impl FunctionCompiler<'_> {
                 FfiType::Out(scalar) => scalar.ffi_type(),
                 other => other,
             };
-            let value = if foreign_scalar(by_value).is_some() {
+            let is_struct = matches!(by_value, FfiType::Struct(_) | FfiType::StructPointer(_));
+            let value = if foreign_scalar(by_value).is_some() || is_struct {
                 value
             } else {
                 self.ensure_opaque(value)?
@@ -257,6 +328,29 @@ impl FunctionCompiler<'_> {
         let mut arguments = ForeignArguments {
             signature: Signature::new(CallConv::C),
             values: Vec::new(),
+        };
+        // A struct result in memory takes its address as the first argument.
+        let struct_result = match &call.c_struct_result {
+            Some(layout) => {
+                let layout = layout.interned();
+                let slot = self.foreign_struct_slot(layout);
+                let passing = layout.passing(foreign_abi()?);
+                match &passing {
+                    CPassing::Memory => {
+                        arguments.push_word(slot);
+                        arguments.mark_last(Indirect::Result {
+                            size: struct_slot_size(layout),
+                        });
+                    }
+                    CPassing::Registers(pieces) => {
+                        for piece in pieces {
+                            arguments.signature.returns.push(piece_type(*piece).1);
+                        }
+                    }
+                }
+                Some((layout, slot, passing))
+            }
+            None => None,
         };
         let mut copies = Vec::new();
         let mut text_copies = Vec::new();
@@ -326,6 +420,18 @@ impl FunctionCompiler<'_> {
                     }
                     ForeignWriteback::Same(value)
                 }
+                FfiType::Struct(layout) => {
+                    let slot = self.foreign_struct_slot(layout);
+                    self.store_foreign_struct(layout, &value, slot);
+                    self.push_foreign_struct(layout, slot, &mut arguments)?;
+                    continue;
+                }
+                FfiType::StructPointer(layout) => {
+                    let slot = self.foreign_struct_slot(layout);
+                    self.store_foreign_struct(layout, &value, slot);
+                    arguments.push_word(slot);
+                    ForeignWriteback::Struct(layout, slot)
+                }
                 ffi_type => {
                     self.push_foreign_argument(ffi_type, &value, &mut arguments, &mut copies);
                     ForeignWriteback::Same(value)
@@ -389,12 +495,31 @@ impl FunctionCompiler<'_> {
                     let address = self.builder.load(types::I64, flags, slot, 0);
                     self.foreign_nullable_handle(address, &name, &union_type)?
                 }
+                ForeignWriteback::Struct(layout, slot) => {
+                    self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
+                }
             };
             let writeback = self.coerce_value(value, &expected)?;
             self.store_place(&place, writeback)?;
         }
 
+        let return_direct = ensure_direct_type(
+            &call.return_type,
+            &self.classes,
+            &format!("extern return from `{}`", call.symbol),
+        )?;
         let result = match (result_scalar, result_handle) {
+            _ if struct_result.is_some() => {
+                let (layout, slot, passing) = struct_result.expect("checked by the guard");
+                if let CPassing::Registers(pieces) = passing {
+                    for (piece, value) in pieces.iter().zip(&invocation.results) {
+                        let (offset, _) = piece_type(*piece);
+                        self.builder
+                            .store(MemFlags::trusted(), *value, slot, offset);
+                    }
+                }
+                self.load_foreign_struct(layout, slot, return_direct.clone(), &call.symbol)?
+            }
             (Some(scalar), _) => {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
             }
@@ -409,13 +534,83 @@ impl FunctionCompiler<'_> {
             }
             (None, None) => unit_value(&mut *self.builder),
         };
-        let return_direct = ensure_direct_type(
-            &call.return_type,
-            &self.classes,
-            &format!("extern return from `{}`", call.symbol),
-        )?;
         let result = self.coerce_value(result, &return_direct)?;
         self.coerce_value(result, target)
+    }
+
+    /// The address of a new zeroed stack slot that holds one `layout`
+    /// struct. The slot is a whole number of 8-byte words, so a register's
+    /// piece of the struct loads and stores as one word.
+    fn foreign_struct_slot(&mut self, layout: &CStruct) -> Val {
+        let size = struct_slot_size(layout);
+        let slot = self.builder.create_sized_stack_slot(size, 3);
+        let address = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        for offset in (0..size).step_by(8) {
+            self.builder
+                .store(MemFlags::trusted(), zero, address, offset as i32);
+        }
+        address
+    }
+
+    /// Stores the class value `value` at `slot` in the C layout. A class
+    /// value has one word per scalar field, in the order of the layout.
+    fn store_foreign_struct(&mut self, layout: &CStruct, value: &ValueRef, slot: Val) {
+        for (leaf, word) in layout.leaves().iter().zip(&value.values) {
+            let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
+            let narrow = self.foreign_scalar_argument(&scalar, *word);
+            self.builder
+                .store(MemFlags::trusted(), narrow, slot, leaf.offset as i32);
+        }
+    }
+
+    /// The class value of type `ty` for the C struct at `slot`, which the
+    /// foreign function `symbol` filled.
+    fn load_foreign_struct(
+        &mut self,
+        layout: &CStruct,
+        slot: Val,
+        ty: DirectType,
+        symbol: &str,
+    ) -> std::result::Result<ValueRef, String> {
+        let mut values = Vec::new();
+        for leaf in layout.leaves() {
+            let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
+            let raw = self
+                .builder
+                .load(scalar.ty, MemFlags::trusted(), slot, leaf.offset as i32);
+            let word = self.foreign_scalar_result(&scalar, raw, symbol)?;
+            values.push(word.values[0]);
+        }
+        Ok(ValueRef { values, ty })
+    }
+
+    /// Appends the C arguments that pass the struct at `slot` by value.
+    fn push_foreign_struct(
+        &mut self,
+        layout: &CStruct,
+        slot: Val,
+        arguments: &mut ForeignArguments,
+    ) -> std::result::Result<(), String> {
+        let abi = foreign_abi()?;
+        let (general, float) = arguments.registers_used(abi);
+        match layout.argument(abi, general, float)? {
+            CArgument::Registers(pieces) => {
+                for piece in pieces {
+                    let (offset, ty) = piece_type(piece);
+                    let value = self.builder.load(ty, MemFlags::trusted(), slot, offset);
+                    arguments.push(ty, Extension::None, value);
+                }
+            }
+            CArgument::Stack => {
+                arguments.push_word(slot);
+                arguments.mark_last(Indirect::ByValue {
+                    size: struct_slot_size(layout),
+                });
+            }
+            CArgument::Address => arguments.push_word(slot),
+        }
+        Ok(())
     }
 
     /// The view of a `str` literal: the bytes in the program's data, or a

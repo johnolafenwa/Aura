@@ -106,7 +106,59 @@ pub enum CPassing {
     Memory,
 }
 
+/// How a struct travels as one argument of a call.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum CArgument {
+    /// In registers, one piece each, in order.
+    Registers(Vec<CPiece>),
+    /// Copied to the argument area of the stack.
+    Stack,
+    /// As the address of a copy the caller makes.
+    Address,
+}
+
 impl CStruct {
+    /// How `abi` passes the struct as an argument that follows arguments
+    /// which took `general_used` general registers and `float_used`
+    /// floating-point registers.
+    ///
+    /// System V passes a struct on the stack when its pieces do not all
+    /// fit the registers that are left. AArch64 does the same, but in a
+    /// stack layout that separate arguments cannot spell, so that case is
+    /// an error here.
+    pub fn argument(
+        &self,
+        abi: CAbi,
+        general_used: usize,
+        float_used: usize,
+    ) -> Result<CArgument, String> {
+        let pieces = match (self.passing(abi), abi) {
+            (CPassing::Registers(pieces), _) => pieces,
+            (CPassing::Memory, CAbi::SysV64) => return Ok(CArgument::Stack),
+            (CPassing::Memory, CAbi::Aapcs64) => return Ok(CArgument::Address),
+        };
+        let general = pieces
+            .iter()
+            .filter(|piece| matches!(piece, CPiece::Int { .. }))
+            .count();
+        let float = pieces.len() - general;
+        let general_registers = match abi {
+            CAbi::SysV64 => 6,
+            CAbi::Aapcs64 => 8,
+        };
+        if general_used + general <= general_registers && float_used + float <= 8 {
+            return Ok(CArgument::Registers(pieces));
+        }
+        match abi {
+            CAbi::SysV64 => Ok(CArgument::Stack),
+            CAbi::Aapcs64 => Err(format!(
+                "struct `{}` does not fit the argument registers that are left on this target; \
+                 declare it earlier in the parameter list or pass it as `mut {}`",
+                self.name, self.name
+            )),
+        }
+    }
+
     /// A copy of the description that lives as long as the process, shared
     /// by every caller that asks for an equal one. A boundary type names a
     /// struct by this reference.

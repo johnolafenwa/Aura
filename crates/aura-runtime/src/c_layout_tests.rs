@@ -189,3 +189,43 @@ fn a_struct_description_round_trips_through_serde() {
     let back: CStruct = serde_json::from_str(&text).expect("and reads back");
     assert_eq!(back, outer);
 }
+
+#[test]
+fn an_argument_takes_registers_only_when_all_of_it_fits() {
+    let pair = scalars("Pair", &[I64, I64]);
+    let mixed = scalars("Mixed", &[I64, F64]);
+    let big = scalars("Big", &[I64, I64, I64]);
+    let vec3 = scalars("Vec3", &[F32, F32, F32]);
+
+    // System V: registers while they last, then the stack.
+    assert_eq!(
+        pair.argument(CAbi::SysV64, 4, 0),
+        Ok(CArgument::Registers(vec![int(0, 8), int(8, 8)]))
+    );
+    assert_eq!(pair.argument(CAbi::SysV64, 5, 0), Ok(CArgument::Stack));
+    assert_eq!(
+        mixed.argument(CAbi::SysV64, 5, 7),
+        Ok(CArgument::Registers(vec![int(0, 8), sse(8, 8)]))
+    );
+    assert_eq!(mixed.argument(CAbi::SysV64, 5, 8), Ok(CArgument::Stack));
+    assert_eq!(big.argument(CAbi::SysV64, 0, 0), Ok(CArgument::Stack));
+
+    // AArch64: registers, or the address of a copy for a large struct.
+    assert_eq!(
+        pair.argument(CAbi::Aapcs64, 6, 0),
+        Ok(CArgument::Registers(vec![int(0, 8), int(8, 8)]))
+    );
+    assert_eq!(big.argument(CAbi::Aapcs64, 8, 8), Ok(CArgument::Address));
+    assert_eq!(
+        vec3.argument(CAbi::Aapcs64, 8, 5),
+        Ok(CArgument::Registers(vec![
+            float(0, F32),
+            float(4, F32),
+            float(8, F32)
+        ]))
+    );
+    let error = pair.argument(CAbi::Aapcs64, 7, 0).unwrap_err();
+    assert!(error.contains("struct `Pair` does not fit"), "{error}");
+    assert!(error.contains("`mut Pair`"), "{error}");
+    assert!(vec3.argument(CAbi::Aapcs64, 0, 6).is_err());
+}
