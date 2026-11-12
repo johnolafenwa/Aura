@@ -29,6 +29,7 @@ version = "0.14.0"
 dependencies = [
  "aura-compiler",
  "blake3",
+ "find-msvc-tools",
  "libc",
  "rcgen",
  "serde_json",

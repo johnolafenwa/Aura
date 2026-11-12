@@ -11,5 +11,8 @@ blake3 = "1.8"
 libc = "0.2"
 serde_json = "1"
 
+[target.'cfg(windows)'.dependencies]
+find-msvc-tools = "0.1"
+
 [dev-dependencies]
 rcgen = "0.13"

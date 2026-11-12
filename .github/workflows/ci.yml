@@ -199,6 +199,13 @@ jobs:
         if: ${{ !cancelled() }}
         run: cargo build --locked -p aura
 
+      - name: Run a program in the interpreter and as a native executable
+        run: |
+          target/debug/aura.exe run --backend mir examples/basics/hello_world.au
+          target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
+          target/hello_world.exe
+          target/debug/aura.exe run --backend direct examples/control_flow.au
+
   native-binaries:
     strategy:
       fail-fast: false

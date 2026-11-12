@@ -545,21 +545,48 @@ impl LlvmModule {
     }
 }
 
-/// Gives every defined function its own ELF section, so `--gc-sections`
-/// drops the ones nothing calls. It runs after the passes, so it also covers any function they
+/// Gives every defined function its own section, so the linker drops the
+/// ones nothing calls: a named ELF section for `--gc-sections`, a COMDAT
+/// group in a COFF object for `/OPT:REF`. It runs after the passes, so it also covers any function they
 /// create. Mach-O needs nothing: LLVM marks its objects
 /// `MH_SUBSECTIONS_VIA_SYMBOLS`, and `-dead_strip` works per symbol.
 fn place_functions_in_own_sections(module: &Module<'_>, triple: &TargetTriple) {
-    if triple.as_str().to_string_lossy().contains("apple") {
+    let triple = triple.as_str().to_string_lossy();
+    if triple.contains("apple") {
         return;
     }
+    let coff = triple.contains("windows");
     let mut function = module.get_first_function();
     while let Some(current) = function {
         if current.count_basic_blocks() > 0 {
-            let section = format!(".text.{}", current.get_name().to_string_lossy());
-            set_section(current, &section);
+            if coff {
+                set_own_comdat(module, current);
+            } else {
+                let section = format!(".text.{}", current.get_name().to_string_lossy());
+                set_section(current, &section);
+            }
         }
         function = current.get_next_function();
+    }
+}
+
+/// Puts `function` in a COMDAT group of its own, which a COFF object writes
+/// as a separate `.text` section that `/OPT:REF` can drop. The group is
+/// never merged with another: each function is defined once.
+fn set_own_comdat(module: &Module<'_>, function: FunctionValue<'_>) {
+    use inkwell::llvm_sys::comdat::{
+        LLVMComdatSelectionKind, LLVMGetOrInsertComdat, LLVMSetComdat, LLVMSetComdatSelectionKind,
+    };
+
+    // SAFETY: `module` and `function` are live values this thread owns, and
+    // LLVM copies the name before the call returns.
+    unsafe {
+        let comdat = LLVMGetOrInsertComdat(module.as_mut_ptr(), function.get_name().as_ptr());
+        LLVMSetComdatSelectionKind(
+            comdat,
+            LLVMComdatSelectionKind::LLVMNoDuplicatesComdatSelectionKind,
+        );
+        LLVMSetComdat(function.as_value_ref(), comdat);
     }
 }
 

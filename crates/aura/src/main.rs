@@ -4555,29 +4555,22 @@ fn link_direct_native_binary(
     // the workspace runtime without changing this build's inputs.
     drop(runtime_lock);
 
-    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
-    let mut command = Command::new(cc);
-    command
-        .args(&temp_objects)
-        .arg(&temp_staticlib)
-        .arg("-o")
-        .arg(output_path);
-    for arg in &native_runtime.native_link_args {
-        command.arg(arg);
-    }
-    match foreign_link_args(&mir.foreign_link, std::env::consts::OS, embed_rpath) {
-        Ok(args) => command.args(args),
+    let mut command = match native_link_command(
+        &temp_objects,
+        &temp_staticlib,
+        output_path,
+        &native_runtime.native_link_args,
+        &mir.foreign_link,
+        debug,
+        embed_rpath,
+    ) {
+        Ok(command) => command,
         Err(error) => {
             let _ = fs::remove_file(&temp_staticlib);
             remove_temp_objects();
             return Err(error);
         }
     };
-    if debug {
-        command.args(debug_binary_link_args(std::env::consts::OS));
-    } else {
-        command.args(user_binary_link_args(std::env::consts::OS));
-    }
 
     let result = command
         .output()
@@ -4609,6 +4602,116 @@ fn link_direct_native_binary(
         strip_user_binary(output_path)?;
     }
     Ok(runtime_identity)
+}
+
+/// The command that links a program's objects with the runtime library: the
+/// C compiler driver named by `CC`, or `cc`.
+#[cfg(not(windows))]
+fn native_link_command(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+    embed_rpath: bool,
+) -> std::result::Result<Command, String> {
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let mut command = Command::new(cc);
+    command
+        .args(objects)
+        .arg(staticlib)
+        .arg("-o")
+        .arg(output_path);
+    for arg in native_link_args {
+        command.arg(arg);
+    }
+    command.args(foreign_link_args(
+        foreign,
+        std::env::consts::OS,
+        embed_rpath,
+    )?);
+    if debug {
+        command.args(debug_binary_link_args(std::env::consts::OS));
+    } else {
+        command.args(user_binary_link_args(std::env::consts::OS));
+    }
+    Ok(command)
+}
+
+/// The command that links a program's objects with the runtime library:
+/// the Microsoft linker, found through the Visual Studio installation with
+/// the library paths of the C runtime and the Windows SDK set. A Windows
+/// program loads a library from its own directory or `PATH`, so there is no
+/// run path to embed.
+#[cfg(windows)]
+fn native_link_command(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+    _embed_rpath: bool,
+) -> std::result::Result<Command, String> {
+    let mut command =
+        find_msvc_tools::find("x86_64-pc-windows-msvc", "link.exe").ok_or_else(|| {
+            "cannot find the Microsoft linker `link.exe`: install the Visual Studio Build Tools \
+             with the \"Desktop development with C++\" workload"
+                .to_string()
+        })?;
+    command.args(msvc_link_args(
+        objects,
+        staticlib,
+        output_path,
+        native_link_args,
+        foreign,
+        debug,
+    )?);
+    Ok(command)
+}
+
+/// The arguments of a Microsoft linker run: the objects, the runtime
+/// library, the output, the system libraries the runtime names, then each
+/// package library search path and library. A release link drops
+/// unreferenced code; a debug link keeps it, writes a program database, and
+/// links the runtime's `aura_debug_render` in for the debugger.
+#[cfg(any(windows, test))]
+fn msvc_link_args(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+) -> std::result::Result<Vec<std::ffi::OsString>, String> {
+    let mut args: Vec<std::ffi::OsString> = vec!["/NOLOGO".into(), "/SUBSYSTEM:CONSOLE".into()];
+    args.extend(objects.iter().map(|object| object.clone().into_os_string()));
+    args.push(staticlib.as_os_str().to_owned());
+    let mut output = std::ffi::OsString::from("/OUT:");
+    output.push(output_path);
+    args.push(output);
+    args.extend(native_link_args.iter().map(std::ffi::OsString::from));
+    for path in &foreign.library_paths {
+        let mut search = std::ffi::OsString::from("/LIBPATH:");
+        search.push(path);
+        args.push(search);
+    }
+    for name in &foreign.libraries {
+        if !aura_compiler::is_valid_link_name(name) {
+            return Err(format!(
+                "cannot link native library `{}`: the name is not a plain library name",
+                name.escape_default()
+            ));
+        }
+        args.push(format!("{name}.lib").into());
+    }
+    if debug {
+        args.extend(["/DEBUG".into(), "/INCLUDE:aura_debug_render".into()]);
+    } else {
+        args.extend(["/OPT:REF".into(), "/OPT:ICF".into()]);
+    }
+    Ok(args)
 }
 
 /// Runs `dsymutil` on a linked debug build, which writes `<output>.dSYM`
@@ -4725,11 +4828,12 @@ fn temporary_direct_object_path(output_path: &Path, unit: usize) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("aura-output");
     let unique = format!(
-        "aura-direct-object-{}-{}-{}-{}.o",
+        "aura-direct-object-{}-{}-{}-{}.{}",
         file_name,
         std::process::id(),
         system_time_nanos(),
-        unit
+        unit,
+        if cfg!(windows) { "obj" } else { "o" }
     );
     std::env::temp_dir().join(unique)
 }
@@ -4740,10 +4844,11 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("aura-output");
     let unique = format!(
-        "aura-direct-runtime-{}-{}-{}.a",
+        "aura-direct-runtime-{}-{}-{}.{}",
         file_name,
         std::process::id(),
-        system_time_nanos()
+        system_time_nanos(),
+        if cfg!(windows) { "lib" } else { "a" }
     );
     std::env::temp_dir().join(unique)
 }
@@ -4984,7 +5089,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if name.starts_with("libaura_runtime") && name.ends_with(".a") {
+            if name.starts_with(RUNTIME_ARCHIVE_STEM) && name.ends_with(RUNTIME_ARCHIVE_SUFFIX) {
                 candidate = Some(path);
             }
         }
@@ -5000,8 +5105,22 @@ fn current_profile() -> &'static str {
     }
 }
 
+/// How the host names the runtime's static library: `libaura_runtime.a`,
+/// or `aura_runtime.lib` on Windows. Cargo puts a hash between the two
+/// parts for the copy under `deps`.
+const RUNTIME_ARCHIVE_STEM: &str = if cfg!(windows) {
+    "aura_runtime"
+} else {
+    "libaura_runtime"
+};
+const RUNTIME_ARCHIVE_SUFFIX: &str = if cfg!(windows) { ".lib" } else { ".a" };
+
 fn static_library_file_name() -> &'static str {
-    "libaura_runtime.a"
+    if cfg!(windows) {
+        "aura_runtime.lib"
+    } else {
+        "libaura_runtime.a"
+    }
 }
 
 #[cfg(test)]
@@ -5045,7 +5164,11 @@ fn resolve_static_library_path_in_target_dir(
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("libaura_runtime-") && name.ends_with(".a"))
+                .map(|name| {
+                    name.strip_prefix(RUNTIME_ARCHIVE_STEM)
+                        .is_some_and(|rest| rest.starts_with('-'))
+                        && name.ends_with(RUNTIME_ARCHIVE_SUFFIX)
+                })
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -5300,9 +5423,10 @@ fn print_version_and_exit() -> ! {
 
 #[cfg(test)]
 mod tests {
+    use super::msvc_link_args;
     use std::fs;
     use std::io;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -6389,6 +6513,83 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux", true),
             Ok(Vec::new())
         );
+    }
+
+    #[test]
+    fn msvc_link_args_order_inputs_output_libraries_and_mode() {
+        let plan = aura_compiler::ForeignLinkPlan {
+            library_paths: vec![PathBuf::from("C:/deps/lib")],
+            libraries: vec!["sqlite3".to_string()],
+            frameworks: vec!["Metal".to_string()],
+        };
+        let text = |args: Vec<std::ffi::OsString>| {
+            args.into_iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let objects = [PathBuf::from("a.obj"), PathBuf::from("b.obj")];
+        let system = ["kernel32.lib".to_string(), "/defaultlib:libcmt".to_string()];
+        let release = msvc_link_args(
+            &objects,
+            Path::new("aura_runtime.lib"),
+            Path::new("out/app.exe"),
+            &system,
+            &plan,
+            false,
+        )
+        .expect("release arguments");
+        assert_eq!(
+            text(release),
+            [
+                "/NOLOGO",
+                "/SUBSYSTEM:CONSOLE",
+                "a.obj",
+                "b.obj",
+                "aura_runtime.lib",
+                "/OUT:out/app.exe",
+                "kernel32.lib",
+                "/defaultlib:libcmt",
+                "/LIBPATH:C:/deps/lib",
+                "sqlite3.lib",
+                "/OPT:REF",
+                "/OPT:ICF",
+            ]
+        );
+        let debug = msvc_link_args(
+            &objects[..1],
+            Path::new("aura_runtime.lib"),
+            Path::new("app.exe"),
+            &[],
+            &aura_compiler::ForeignLinkPlan::default(),
+            true,
+        )
+        .expect("debug arguments");
+        assert_eq!(
+            text(debug),
+            [
+                "/NOLOGO",
+                "/SUBSYSTEM:CONSOLE",
+                "a.obj",
+                "aura_runtime.lib",
+                "/OUT:app.exe",
+                "/DEBUG",
+                "/INCLUDE:aura_debug_render",
+            ]
+        );
+        let hostile = aura_compiler::ForeignLinkPlan {
+            libraries: vec!["/DEFAULTLIB:evil".to_string()],
+            ..aura_compiler::ForeignLinkPlan::default()
+        };
+        let error = msvc_link_args(
+            &objects,
+            Path::new("r.lib"),
+            Path::new("o"),
+            &[],
+            &hostile,
+            false,
+        )
+        .expect_err("a name that is a linker option is refused");
+        assert!(error.contains("not a plain library name"), "{error}");
     }
 
     #[test]
