@@ -289,6 +289,8 @@ pub struct RuntimeReactor {
 
 impl RuntimeReactor {
     pub fn new() -> io::Result<Self> {
+        #[cfg(windows)]
+        crate::windows_process::use_fine_timer_resolution();
         let poll = Poll::new()?;
         let inbox = Arc::new(ReactorInbox {
             id: NEXT_REACTOR_ID.fetch_add(1, Ordering::Relaxed),

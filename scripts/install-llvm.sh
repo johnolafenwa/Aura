@@ -136,6 +136,10 @@ copy_windows_system_libraries() {
       cp "$sdk/$library" "$root/lib/$library"
     fi
   done
+  # LLVM also names a static libxml2, which the archive does not hold. Only
+  # LLVM's manifest merger uses it, and Aura links no code that reaches it,
+  # so an archive with no members answers the name.
+  printf '!<arch>\n' > "$root/lib/xml2s.lib"
 }
 
 if [ -x "$prefix/bin/llvm-config$exe" ] && [ "$("$prefix/bin/llvm-config$exe" --version)" = "$version" ]; then

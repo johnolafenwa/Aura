@@ -4014,9 +4014,11 @@ fn tcp_connect_to_a_literal_address_reports_refusal_from_the_reactor_wait() {
         let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
         probe.local_addr().expect("probe address").port()
     };
+    // Windows retries a refused connection for about two seconds before it
+    // reports the refusal.
     let error = TcpStreamValue::connect(
         &format!("127.0.0.1:{port}"),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
     )
     .expect_err("nothing listens on a port just released");
@@ -17768,6 +17770,9 @@ fn http_stream_helpers_decode_chunked_requests_and_responses() {
 
 #[test]
 fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
+    // The name `localhost` gives Windows the IPv6 address first, where
+    // nothing listens, and Windows takes about two seconds to report that
+    // refusal before the client tries the IPv4 address.
     let temp = TempDir::new("aura-https-client");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
@@ -17786,14 +17791,14 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     let server = thread::spawn(move || {
         let stream = server_listener
             .accept(
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("TLS server should accept");
         loop {
             let line = stream
                 .read_line(
-                    Some(StdDuration::from_secs(2)),
+                    Some(StdDuration::from_secs(10)),
                     Some(&CancellationContext::default()),
                 )
                 .expect("HTTPS request line should read")
@@ -17805,7 +17810,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         stream
             .write_all(
                 "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n6\r\nsecure\r\n0\r\n\r\n",
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("HTTPS response should write");
@@ -17816,7 +17821,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
         cert_path.to_str().expect("UTF-8 certificate path"),
     )
@@ -17839,14 +17844,14 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     let server = thread::spawn(move || {
         let stream = server_listener
             .accept(
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("second TLS server should accept");
         loop {
             let line = stream
                 .read_line(
-                    Some(StdDuration::from_secs(2)),
+                    Some(StdDuration::from_secs(10)),
                     Some(&CancellationContext::default()),
                 )
                 .expect("HTTPS request line should read")
@@ -17858,7 +17863,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         stream
             .write_all(
                 "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nsecure-close",
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("HTTPS response without content length should write");
@@ -17869,7 +17874,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
         cert_path.to_str().expect("UTF-8 certificate path"),
     )
@@ -17885,7 +17890,10 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
 
 #[test]
 fn https_client_reports_incomplete_and_oversized_response_framing() {
-    let timeout = StdDuration::from_secs(2);
+    // The name `localhost` gives Windows the IPv6 address first, where
+    // nothing listens, and Windows takes about two seconds to report that
+    // refusal before the client tries the IPv4 address.
+    let timeout = StdDuration::from_secs(10);
     let temp = TempDir::new("aura-https-response-framing");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");

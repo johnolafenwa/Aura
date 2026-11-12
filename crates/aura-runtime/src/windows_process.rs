@@ -111,3 +111,18 @@ impl Drop for JobGroup {
         unsafe { CloseHandle(self.job) };
     }
 }
+
+/// Asks Windows for a one millisecond timer period for this process. The
+/// default period is 15.6 milliseconds, which would round every short task
+/// sleep and reactor wait up to it. The request lasts until the process
+/// exits and is made once.
+pub(crate) fn use_fine_timer_resolution() {
+    static REQUESTED: std::sync::Once = std::sync::Once::new();
+    REQUESTED.call_once(|| {
+        // SAFETY: the call takes no pointers. A refusal leaves the default
+        // period in place, which is slower and still correct.
+        unsafe {
+            windows_sys::Win32::Media::timeBeginPeriod(1);
+        }
+    });
+}
