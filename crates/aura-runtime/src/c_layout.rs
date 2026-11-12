@@ -63,6 +63,8 @@ pub enum CAbi {
     SysV64,
     /// The procedure call standard of AArch64 Linux and macOS.
     Aapcs64,
+    /// The Microsoft convention of x86-64 Windows.
+    Win64,
 }
 
 impl CAbi {
@@ -76,9 +78,19 @@ impl CAbi {
         }
     }
 
+    /// The convention of the architecture `arch` on the system `os`, as
+    /// `std::env::consts` names them.
+    pub fn of_target(arch: &str, os: &str) -> Option<Self> {
+        match (arch, os) {
+            ("x86_64", "windows") => Some(Self::Win64),
+            (_, "windows") => None,
+            _ => Self::of_arch(arch),
+        }
+    }
+
     /// The convention of the machine this code was built for.
     pub fn host() -> Option<Self> {
-        Self::of_arch(std::env::consts::ARCH)
+        Self::of_target(std::env::consts::ARCH, std::env::consts::OS)
     }
 }
 
@@ -100,9 +112,9 @@ pub enum CPiece {
 pub enum CPassing {
     /// In registers, one piece each, in order.
     Registers(Vec<CPiece>),
-    /// In memory. As an argument, System V copies it to the stack and
-    /// AArch64 passes the address of a copy. As a result, the caller passes
-    /// the address of the storage.
+    /// In memory. As an argument, System V copies it to the stack, and
+    /// AArch64 and Windows pass the address of a copy. As a result, the
+    /// caller passes the address of the storage.
     Memory,
 }
 
@@ -125,7 +137,8 @@ impl CStruct {
     /// System V passes a struct on the stack when its pieces do not all
     /// fit the registers that are left. AArch64 does the same, but in a
     /// stack layout that separate arguments cannot spell, so that case is
-    /// an error here.
+    /// an error here. Windows gives every argument one slot, so its one
+    /// piece always travels as an argument of its own.
     pub fn argument(
         &self,
         abi: CAbi,
@@ -133,9 +146,10 @@ impl CStruct {
         float_used: usize,
     ) -> Result<CArgument, String> {
         let pieces = match (self.passing(abi), abi) {
-            (CPassing::Registers(pieces), _) => pieces,
+            (CPassing::Registers(pieces), CAbi::SysV64 | CAbi::Aapcs64) => pieces,
             (CPassing::Memory, CAbi::SysV64) => return Ok(CArgument::Stack),
-            (CPassing::Memory, CAbi::Aapcs64) => return Ok(CArgument::Address),
+            (CPassing::Memory, CAbi::Aapcs64 | CAbi::Win64) => return Ok(CArgument::Address),
+            (CPassing::Registers(pieces), CAbi::Win64) => return Ok(CArgument::Registers(pieces)),
         };
         let general = pieces
             .iter()
@@ -144,14 +158,14 @@ impl CStruct {
         let float = pieces.len() - general;
         let general_registers = match abi {
             CAbi::SysV64 => 6,
-            CAbi::Aapcs64 => 8,
+            CAbi::Aapcs64 | CAbi::Win64 => 8,
         };
         if general_used + general <= general_registers && float_used + float <= 8 {
             return Ok(CArgument::Registers(pieces));
         }
         match abi {
             CAbi::SysV64 => Ok(CArgument::Stack),
-            CAbi::Aapcs64 => Err(format!(
+            CAbi::Aapcs64 | CAbi::Win64 => Err(format!(
                 "struct `{}` does not fit the argument registers that are left on this target; \
                  declare it earlier in the parameter list or pass it as `mut {}`",
                 self.name, self.name
@@ -246,6 +260,16 @@ impl CStruct {
                     })
                     .collect(),
             );
+        }
+        if abi == CAbi::Win64 {
+            // Windows passes a struct of 1, 2, 4 or 8 bytes as an integer of
+            // that size, whatever its fields, and every other struct in
+            // memory.
+            return if matches!(size, 1 | 2 | 4 | 8) {
+                CPassing::Registers(vec![CPiece::Int { offset: 0, size }])
+            } else {
+                CPassing::Memory
+            };
         }
         if size > 16 {
             return CPassing::Memory;
