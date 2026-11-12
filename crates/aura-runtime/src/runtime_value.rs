@@ -15210,6 +15210,16 @@ impl TcpStreamValue {
             #[cfg(windows)]
             let handle = std::os::windows::io::AsRawSocket::as_raw_socket(&stream);
             wait_for_fd_event(handle, host_io::POLLOUT, deadline, cancellation)?;
+            #[cfg(all(windows, test))]
+            {
+                let mut entry = [host_io::poll_entry(handle, host_io::POLLOUT)];
+                let polled = host_io::poll(&mut entry, 0);
+                eprintln!(
+                    "TEMP-WINDOWS-TRACE connect wake: poll {polled:?} revents {:#x} peer {:?}",
+                    entry[0].revents,
+                    stream.peer_addr()
+                );
+            }
             if let Some(error) = stream.take_error()? {
                 return Err(error);
             }
