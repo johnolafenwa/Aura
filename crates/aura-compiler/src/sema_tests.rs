@@ -33383,3 +33383,56 @@ def count(path: str) -> Result[int64, io.Error]:
         );
     }
 }
+
+#[test]
+fn exported_functions_take_and_return_scalars() {
+    crate::check_source(concat!(
+        "export \"C\" def scale(value: int32, by: float64, out: mut uint8, on: bool) -> float32:\n",
+        "    out = 1\n",
+        "    return 2.0 as float32\n",
+        "export \"C\" def tick() -> None:\n    pass\n",
+        "def main() -> None:\n",
+        "    mut out: uint8 = 0\n",
+        "    print(scale(1, 2.0, out, true))\n",
+        "    tick()\n",
+    ))
+    .expect("a hosted program calls an exported function like any other");
+    for (source, code, expected) in [
+        (
+            "export \"C\" def f(text: str) -> None:\n    pass\n",
+            "AU2002",
+            "parameter `text` of exported function `f` must be a scalar or a `mut` scalar, found `str`",
+        ),
+        (
+            "export \"C\" def f(values: mut list[int64]) -> None:\n    pass\n",
+            "AU2002",
+            "found `mut list[int64]`",
+        ),
+        (
+            "export \"C\" def f() -> str:\n    return \"x\"\n",
+            "AU2002",
+            "exported function `f` must return a scalar or `None`, found `str`",
+        ),
+        (
+            "export \"C\" def f[T](value: T) -> None:\n    pass\n",
+            "AU2005",
+            "exported function `f` cannot have type parameters",
+        ),
+        (
+            "export \"C\" def f(value: int64 = 1) -> None:\n    pass\n",
+            "AU2005",
+            "exported function `f` cannot have parameter defaults",
+        ),
+        (
+            "def wrap(function: def() -> None) -> def() -> None:\n    return function\n@wrap\nexport \"C\" def f() -> None:\n    pass\n",
+            "",
+            "",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("the export is malformed");
+        if !code.is_empty() {
+            assert_eq!(error.code, code, "{source}: {error:?}");
+        }
+        assert!(error.message.contains(expected), "{source}: {error:?}");
+    }
+}

@@ -7,6 +7,18 @@ in this file.
 
 ## Unreleased
 
+- `aura build --freestanding -o kernel.o kernel.au` writes one
+  relocatable object that needs no Aura runtime and no operating system,
+  for kernels, firmware, and routines linked into C programs. `--target`
+  picks `x86_64-unknown-none`, `aarch64-unknown-none`, or
+  `riscv64gc-unknown-none-elf`. The program holds fixed-width numbers,
+  `bool`, classes of those, and unions with `None`. A failed check calls
+  `aura_trap`, which the program defines. `aura check --freestanding`
+  reports anything else as `AU2052`. See the Freestanding Builds manual
+  page.
+- `export "C" def name(...)` defines a function that C code calls by
+  name. Parameters and the result are scalars, and a `mut` parameter is a
+  C pointer.
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
   `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,

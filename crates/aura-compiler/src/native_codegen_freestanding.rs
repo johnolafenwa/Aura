@@ -7,7 +7,7 @@
 //!
 //! - [`prepare`] keeps the functions the exports reach, drops the text an
 //!   assertion would render, and reports each construct that needs the
-//!   runtime as an `AU2060` diagnostic.
+//!   runtime as an `AU2052` diagnostic.
 //! - A failed check calls the trap hook `aura_trap` in place of the
 //!   runtime.
 //! - Each `export "C" def` gets an entry under its C symbol.
@@ -21,7 +21,7 @@ use crate::diag::Diagnostic;
 use crate::ffi::CCallback;
 
 /// The diagnostic code of a construct a freestanding build cannot compile.
-pub(crate) const UNSUPPORTED: &str = "AU2060";
+pub(crate) const UNSUPPORTED: &str = "AU2052";
 
 /// The symbol of the trap hook: `void aura_trap(uint32_t code, const char
 /// *file, size_t file_len, uint32_t line, uint32_t column)`.
@@ -82,6 +82,27 @@ fn export_signature(function: &MirFunction) -> Option<CCallback> {
     crate::mir_runtime::callback_signature(&ty)
 }
 
+/// The marker of an emitter error that reports a construct a freestanding
+/// build cannot compile, which the subset check could not see in the MIR.
+const REFUSAL: &str = "freestanding build cannot compile: ";
+
+/// The emitter error for `what`, a use the program must change.
+pub(super) fn refusal(what: String) -> String {
+    format!("{REFUSAL}{what}")
+}
+
+/// The diagnostic for an emitter error: `AU2052` for a refusal, and an
+/// uncoded one for a fault of the code generator.
+pub(super) fn emitter_diagnostic(error: String) -> Diagnostic {
+    match error.strip_prefix(REFUSAL) {
+        Some(what) => Diagnostic::coded(
+            UNSUPPORTED,
+            format!("{what}, which a freestanding build cannot compile"),
+        ),
+        None => Diagnostic::new(error),
+    }
+}
+
 /// The path the trap hook gets for the source file `path` of the program
 /// at `program_path`: relative to the program file's directory when the
 /// file lies under it, so the object's bytes do not depend on where the
@@ -111,34 +132,10 @@ impl NativeCodegen<'_> {
         let target = self
             .freestanding
             .expect("only a freestanding program is defined here");
-        for function in &self.module.functions {
-            self.define_function(function)?;
-        }
-        for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
-            let signature = entry_signature(&callback, target);
-            let function = self.functions[&name];
-            self.define_body(
-                entry_id,
-                &signature,
-                &format!("callback entry for `{name}`"),
-                |_, builder| {
-                    emit_entry(builder, &callback, function, target);
-                    Ok(())
-                },
-            )?;
-            // The host form of the entry runs this body under the
-            // runtime's guard. Nothing calls it here.
-            let (_, body) = foreign::callback_signatures(&callback);
-            self.define_body(
-                body_id,
-                &body,
-                &format!("callback body for `{name}`"),
-                |_, builder| {
-                    foreign::emit_callback_body(builder, &callback, function);
-                    Ok(())
-                },
-            )?;
-        }
+        // An export is declared before any body is built, so a body that
+        // names the same symbol, as a check names the trap hook, calls the
+        // export.
+        let mut exports = Vec::new();
         for export in &self.module.foreign_link.exports {
             let function = self
                 .module
@@ -167,6 +164,37 @@ impl NativeCodegen<'_> {
                 "failed to declare export `{}`: {}",
                 export.symbol
             );
+            exports.push((export, callback, signature, entry));
+        }
+        for function in &self.module.functions {
+            self.define_function(function)?;
+        }
+        for ((name, callback), (entry_id, body_id)) in self.callback_thunks.clone() {
+            let signature = entry_signature(&callback, target);
+            let function = self.functions[&name];
+            self.define_body(
+                entry_id,
+                &signature,
+                &format!("callback entry for `{name}`"),
+                |_, builder| {
+                    emit_entry(builder, &callback, function, target);
+                    Ok(())
+                },
+            )?;
+            // The host form of the entry runs this body under the
+            // runtime's guard. Nothing calls it here.
+            let (_, body) = foreign::callback_signatures(&callback);
+            self.define_body(
+                body_id,
+                &body,
+                &format!("callback body for `{name}`"),
+                |_, builder| {
+                    foreign::emit_callback_body(builder, &callback, function);
+                    Ok(())
+                },
+            )?;
+        }
+        for (export, callback, signature, entry) in exports {
             let function = self.functions[&export.function];
             self.define_body(
                 entry,
@@ -286,11 +314,10 @@ fn emit_entry(
     let results = builder.call(function, &words).results;
     // The function returns its result, then one word for each `mut`
     // parameter in order.
-    let mut written = results.len() - pointees.len();
-    for (ty, address) in pointees {
-        let narrow = foreign::callback_narrow(builder, ty, results[written]);
+    let written = &results[results.len() - pointees.len()..];
+    for ((ty, address), &word) in pointees.into_iter().zip(written) {
+        let narrow = foreign::callback_narrow(builder, ty, word);
         builder.store(flags, narrow, address, 0);
-        written += 1;
     }
     let Some(result) = callback.result else {
         builder.return_(&[]);
@@ -321,48 +348,50 @@ fn emit_memory_routine(builder: &mut dyn FunctionBackend, name: &str) {
         unreachable!("a memory routine takes three words");
     };
     let flags = MemFlags::new();
+    /// One iteration of a memory routine's loop, given the index. It may
+    /// leave the loop with a result.
+    type LoopBody<'a> = &'a mut dyn FnMut(&mut dyn FunctionBackend, Val) -> Option<(Val, Val)>;
     // A loop over `index` from `start` while `index != end`, by `step`.
     // `body` builds one iteration and may leave the loop with a result;
     // the loop's own exit returns `fallthrough`.
-    let counted =
-        |builder: &mut dyn FunctionBackend,
-         start: Val,
-         end: Val,
-         step: i64,
-         fallthrough: Val,
-         body: &mut dyn FnMut(&mut dyn FunctionBackend, Val) -> Option<(Val, Val)>| {
-            let head = builder.create_block();
-            let index = builder.append_block_param(head, types::I64);
-            let work = builder.create_block();
-            let done = builder.create_block();
-            builder.jump(head, &[start]);
-            builder.switch_to_block(head);
-            let finished = builder.icmp(IntCC::Equal, index, end);
-            builder.brif(finished, done, &[], work, &[]);
-            builder.switch_to_block(work);
-            builder.seal_block(work);
-            let at = if step < 0 {
-                builder.iadd_imm(index, -1)
-            } else {
-                index
-            };
-            if let Some((leave, result)) = body(builder, at) {
-                let out = builder.create_block();
-                let stay = builder.create_block();
-                builder.brif(leave, out, &[], stay, &[]);
-                builder.switch_to_block(out);
-                builder.seal_block(out);
-                builder.return_(&[result]);
-                builder.switch_to_block(stay);
-                builder.seal_block(stay);
-            }
-            let next = builder.iadd_imm(index, step);
-            builder.jump(head, &[next]);
-            builder.seal_block(head);
-            builder.switch_to_block(done);
-            builder.seal_block(done);
-            builder.return_(&[fallthrough]);
+    let counted = |builder: &mut dyn FunctionBackend,
+                   start: Val,
+                   end: Val,
+                   step: i64,
+                   fallthrough: Val,
+                   body: LoopBody<'_>| {
+        let head = builder.create_block();
+        let index = builder.append_block_param(head, types::I64);
+        let work = builder.create_block();
+        let done = builder.create_block();
+        builder.jump(head, &[start]);
+        builder.switch_to_block(head);
+        let finished = builder.icmp(IntCC::Equal, index, end);
+        builder.brif(finished, done, &[], work, &[]);
+        builder.switch_to_block(work);
+        builder.seal_block(work);
+        let at = if step < 0 {
+            builder.iadd_imm(index, -1)
+        } else {
+            index
         };
+        if let Some((leave, result)) = body(builder, at) {
+            let out = builder.create_block();
+            let stay = builder.create_block();
+            builder.brif(leave, out, &[], stay, &[]);
+            builder.switch_to_block(out);
+            builder.seal_block(out);
+            builder.return_(&[result]);
+            builder.switch_to_block(stay);
+            builder.seal_block(stay);
+        }
+        let next = builder.iadd_imm(index, step);
+        builder.jump(head, &[next]);
+        builder.seal_block(head);
+        builder.switch_to_block(done);
+        builder.seal_block(done);
+        builder.return_(&[fallthrough]);
+    };
     let zero = builder.iconst(types::I64, 0);
     let mut copy = |builder: &mut dyn FunctionBackend, at: Val| {
         let source = builder.element_address(second, at);
@@ -532,6 +561,21 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
         );
         return Err(problems);
     }
+    let mut symbols = HashSet::new();
+    for export in &module.foreign_link.exports {
+        if !symbols.insert(export.symbol.as_str()) {
+            problems.push(Diagnostic::coded(
+                UNSUPPORTED,
+                format!(
+                    "two functions are exported as `{}`; an object defines a C symbol once",
+                    export.symbol
+                ),
+            ));
+        }
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
     keep_reached_functions(&mut module);
     for function in &mut module.functions {
         strip_assertion_text(function);
@@ -549,6 +593,16 @@ pub(crate) fn prepare(module: &MirModule) -> std::result::Result<MirModule, Vec<
     for function in &module.functions {
         check_function(function, &classes, &functions, &mut problems);
     }
+    // Each copy of a generic function reports the same line.
+    let mut kept: Vec<Diagnostic> = Vec::new();
+    for problem in problems {
+        let repeated =
+            |other: &Diagnostic| other.span == problem.span && other.message == problem.message;
+        if !kept.iter().any(repeated) {
+            kept.push(problem);
+        }
+    }
+    let problems = kept;
     if problems.is_empty() {
         Ok(module)
     } else {
@@ -683,7 +737,8 @@ fn check_function(
     problems: &mut Vec<Diagnostic>,
 ) {
     let name = public_direct_function_name(&function.name);
-    let mut report = |span: crate::diag::Span, what: String, help: &str| {
+    let found = std::cell::RefCell::new(Vec::<Diagnostic>::new());
+    let report = |span: crate::diag::Span, what: String, help: &str| {
         let mut diagnostic = Diagnostic::coded_at(
             UNSUPPORTED,
             span,
@@ -696,10 +751,12 @@ fn check_function(
             diagnostic.render_path = Some(path.clone());
         }
         // One report for each construct and position is enough.
-        if !problems.iter().any(|known: &Diagnostic| {
-            known.message == diagnostic.message && known.span == diagnostic.span
-        }) {
-            problems.push(diagnostic);
+        let mut found = found.borrow_mut();
+        if !found
+            .iter()
+            .any(|known| known.message == diagnostic.message && known.span == diagnostic.span)
+        {
+            found.push(diagnostic);
         }
     };
     let typed = function
@@ -713,15 +770,22 @@ fn check_function(
                 .filter(|local| !function.params.iter().any(|param| param.name == local.name))
                 .map(|local| (local.name.as_str(), &local.ty, "holds")),
         );
+    // A compiler-made local has no name the source shows. The construct
+    // that fills it is reported where it stands, so its type is reported
+    // only when nothing else in the function is.
+    let mut unnamed = Vec::new();
     for (local, ty, verb) in typed {
-        if !words_only(ty, classes) {
-            // A compiler-made local has no name the source shows.
-            let what = if local.starts_with("__") || local.contains('$') {
-                format!("{verb} a value of type `{ty}`")
-            } else {
-                format!("{verb} `{local}` of type `{ty}`")
-            };
-            report(function.span, what, WORDS_HELP);
+        if words_only(ty, classes) {
+            continue;
+        }
+        if local.starts_with(['%', '_']) || local.contains('$') {
+            unnamed.push(format!("{verb} a value of type `{ty}`"));
+        } else {
+            report(
+                function.span,
+                format!("{verb} `{local}` of type `{ty}`"),
+                WORDS_HELP,
+            );
         }
     }
     if !words_only(&function.return_type, classes) {
@@ -745,8 +809,8 @@ fn check_function(
             }),
         _ => false,
     };
+    let mut span = function.span;
     for block in &function.blocks {
-        let mut span = function.span;
         for instruction in &block.instructions {
             let value = match instruction {
                 Instruction::SourceLocation { line, column } => {
@@ -757,18 +821,27 @@ fn check_function(
                 | Instruction::SourceName { .. }
                 | Instruction::Retain { .. }
                 | Instruction::Release { .. } => continue,
+                // A loan of a place that holds words reads and writes the
+                // words in place.
+                Instruction::Lend { .. }
+                | Instruction::EndLend { .. }
+                | Instruction::BeginLoan { .. }
+                | Instruction::BeginReturnedLoan { .. }
+                | Instruction::Reborrow { .. }
+                | Instruction::ReadLoan { .. }
+                | Instruction::EndLoan { .. }
+                | Instruction::ReturnLoan { .. } => continue,
+                Instruction::WriteLoan { value, .. } => value,
                 Instruction::Assign { value, .. } => value,
                 Instruction::Eval { .. } => continue,
                 Instruction::PushCleanup { .. } | Instruction::PopCleanup { .. } => {
                     report(span, "uses a `with` block".to_string(), "");
                     continue;
                 }
-                _ => {
-                    report(
-                        span,
-                        "borrows a part of a value across statements".to_string(),
-                        "",
-                    );
+                Instruction::IndexInRange { .. }
+                | Instruction::BeginElementLoan { .. }
+                | Instruction::ReborrowElement { .. } => {
+                    report(span, "reads an element of a collection".to_string(), "");
                     continue;
                 }
             };
@@ -799,7 +872,7 @@ fn check_function(
                 )),
                 Rvalue::Binary { .. } => None,
                 Rvalue::Call { callee, args, .. } => {
-                    check_call(callee, args, classes, functions, &is_float)
+                    check_call(callee, args, classes, functions)
                 }
                 Rvalue::ModuleConstant { key, .. } => Some((
                     format!("reads the module constant `{key}`"),
@@ -842,6 +915,12 @@ fn check_function(
             Terminator::Match { .. } => report(span, "matches on an enum value".to_string(), ""),
         }
     }
+    if found.borrow().is_empty() {
+        for what in unnamed {
+            report(function.span, what, WORDS_HELP);
+        }
+    }
+    problems.extend(found.into_inner());
 }
 
 /// Why a freestanding build cannot compile the call of `callee`, if it
@@ -851,7 +930,6 @@ fn check_call(
     args: &[MirArg],
     classes: &HashMap<String, MirClass>,
     functions: &HashSet<&str>,
-    is_float: &dyn Fn(&Operand) -> bool,
 ) -> Option<(String, &'static str)> {
     match callee {
         CallTarget::Name(name) if functions.contains(name.as_str()) => None,
@@ -859,6 +937,10 @@ fn check_call(
             Some((format!("calls `{}`", public_direct_function_name(name)), ""))
         }
         CallTarget::Member {
+            dispatch: Some(MethodDispatch::Static { function }),
+            ..
+        }
+        | CallTarget::TraitMember {
             dispatch: Some(MethodDispatch::Static { function }),
             ..
         } if functions.contains(function.as_str()) => None,
@@ -893,16 +975,19 @@ fn check_call(
             None
         }
         CallTarget::Runtime {
-            op: RuntimeOp::Function(FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max),
+            // The emitter refuses the argument kinds it cannot compute in
+            // words.
+            op:
+                RuntimeOp::Function(
+                    FunctionOp::Abs | FunctionOp::Min | FunctionOp::Max | FunctionOp::Sqrt,
+                ),
             receiver: None,
             ..
         } => None,
-        CallTarget::Runtime {
-            op: RuntimeOp::Function(FunctionOp::Sqrt),
-            receiver: None,
-            ..
-        } if matches!(args, [argument] if is_float(&argument.value)) => None,
-        CallTarget::Runtime { op, .. } => Some((format!("calls `{}`", op.name()), "")),
+        CallTarget::Runtime { op, .. } => Some(match op.name() {
+            name if name.starts_with("__") => ("reads or changes a collection".to_string(), ""),
+            name => (format!("calls `{name}`"), ""),
+        }),
     }
 }
 

@@ -29,6 +29,8 @@ aura check app.au
 | `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
+| `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |

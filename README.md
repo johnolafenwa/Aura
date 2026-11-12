@@ -59,9 +59,11 @@ access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
 The long-term goal is a general-purpose systems language for every kind of
 software: applications, services, databases, language runtimes, embedded
-software, operating systems, and device drivers. Freestanding targets,
-low-level memory facilities, hardware interfaces, and the platform controls
-that scope needs are not implemented yet. [Why Aura](docs/positioning.md)
+software, operating systems, and device drivers. A first
+[freestanding build](docs/manual/freestanding.md) compiles code over
+numbers and plain classes with no runtime. Low-level memory facilities,
+hardware interfaces, and the platform controls that scope needs are not
+implemented yet. [Why Aura](docs/positioning.md)
 explains the project direction.
 
 ## Documentation

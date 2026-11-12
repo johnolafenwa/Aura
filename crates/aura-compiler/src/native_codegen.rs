@@ -79,7 +79,7 @@ pub fn emit_host_debug_objects_with_metadata(
 /// The relocatable object of a freestanding program for `target`
 /// (ADR-0094): the functions `module`'s exports reach, with no call into
 /// the Aura runtime. `Err` holds the constructs the program uses that
-/// need the runtime, as `AU2060` diagnostics, or one diagnostic for a
+/// need the runtime, as `AU2052` diagnostics, or one diagnostic for a
 /// failure of the code generator.
 pub fn emit_freestanding_object(
     module: &MirModule,
@@ -88,7 +88,7 @@ pub fn emit_freestanding_object(
     target: FreestandingTarget,
 ) -> std::result::Result<Vec<u8>, Vec<crate::diag::Diagnostic>> {
     let module = freestanding::prepare(module)?;
-    let internal = |error: String| vec![crate::diag::Diagnostic::new(error)];
+    let internal = |error: String| vec![freestanding::emitter_diagnostic(error)];
     let module = validated_for_emission(&module).map_err(internal)?;
     let object = NativeCodegen::for_target(&module, program_path, program_source, Some(target))
         .and_then(NativeCodegen::emit)
@@ -98,7 +98,7 @@ pub fn emit_freestanding_object(
 }
 
 /// The constructs of `module` a freestanding build cannot compile, as
-/// `AU2060` diagnostics. Lower the program with source locations so each
+/// `AU2052` diagnostics. Lower the program with source locations so each
 /// names its line.
 pub fn check_freestanding(module: &MirModule) -> Vec<crate::diag::Diagnostic> {
     freestanding::prepare(module).err().unwrap_or_default()
@@ -8996,6 +8996,11 @@ impl<'a> FunctionCompiler<'a> {
             | FunctionOp::Sqrt
             | FunctionOp::Round => match self.compile_scalar_math(op, args)? {
                 Some(value) => Ok(value),
+                None if self.freestanding.is_some() => Err(freestanding::refusal(format!(
+                    "`{}` calls `{}` with arguments of kinds it cannot compare or convert in machine words",
+                    self.current_function_name,
+                    RuntimeOp::Function(op).name()
+                ))),
                 None => self.compile_plain_function_op(op, args),
             },
             FunctionOp::ParseInt32 | FunctionOp::ParseInt64 | FunctionOp::ParseFloat64
@@ -19873,6 +19878,9 @@ mod enums;
 mod foreign;
 #[path = "native_codegen_freestanding.rs"]
 mod freestanding;
+#[cfg(test)]
+#[path = "native_codegen_freestanding_tests.rs"]
+mod freestanding_tests;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

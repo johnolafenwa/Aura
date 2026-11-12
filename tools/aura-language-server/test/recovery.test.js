@@ -102,6 +102,21 @@ test("recovery document symbols tolerate empty and nested declarations", () => {
   );
 });
 
+test("recovery finds exported C functions", () => {
+  const source = [
+    'export "C" def kernel_main(code: int64) -> int64:',
+    "    return code",
+    'public export "C" def uart_irq(status: uint32) -> uint32:',
+    "    return status",
+    ""
+  ].join("\n");
+
+  assert.deepEqual(
+    documentSymbols(source).map((symbol) => [symbol.name, symbol.kind]),
+    [["kernel_main", "function"], ["uart_irq", "function"]]
+  );
+});
+
 test("recovery preserves extern C declarations while the compiler is unavailable", () => {
   const ffiSource = [
     'public extern "C" opaque class ProcessHandle',

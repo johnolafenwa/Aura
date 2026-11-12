@@ -369,6 +369,29 @@ test("TextMate tokenization distinguishes returned-view contracts from calls nam
   assert.ok(scopesAt(tokenized, 13, "from").includes("keyword.declaration.view.aura"));
 });
 
+test("extension highlights an exported C function", () => {
+  const grammar = JSON.parse(
+    fs.readFileSync(
+      path.resolve(__dirname, "..", "syntaxes", "aura.tmLanguage.json"),
+      "utf8"
+    )
+  );
+  const rule = grammar.repository.declarations.patterns.find(
+    (pattern) => pattern.name === "meta.definition.export.function.aura"
+  );
+
+  assert.ok(rule);
+  assert.deepEqual(
+    new RegExp(rule.match)
+      .exec('public export "C" def kernel_main(code: int64) -> int64:')
+      ?.slice(1),
+    ["export", '"C"', "def", "kernel_main"]
+  );
+  assert.equal(rule.captures["1"].name, "keyword.declaration.export.aura");
+  // `export` is an ordinary name anywhere else.
+  assert.equal(new RegExp(rule.match).test("export = 1"), false);
+});
+
 test("extension highlights and snippets the maintained extern C surface", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(

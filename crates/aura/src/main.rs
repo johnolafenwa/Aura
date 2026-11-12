@@ -5394,6 +5394,8 @@ fn usage_text() -> &'static str {
        or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
        or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
        or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] -o <output.o> <file.au>\n\
+       or: aura check --freestanding [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\

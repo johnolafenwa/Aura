@@ -157,6 +157,9 @@ The rules for these declarations:
   with a block of fields. It has no methods, invariants, field defaults, or
   type parameters. See [Structs](#structs).
 
+To define a function that C code calls by name, see
+[Exported Functions](/manual/freestanding#exported-functions).
+
 Raw pointer syntax and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
 opaque handle. An extern declaration is direct-call-only, so it cannot be used

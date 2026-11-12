@@ -100,6 +100,7 @@ Several words are contextual:
 | `type` | At module level, `type` followed by an identifier, optional type parameters, and `=` declares a type alias. Elsewhere it is an ordinary identifier. |
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
 | `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
+| `export` | At module level, `export` followed by a string starts an exported function declaration. Elsewhere it is an ordinary identifier. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -291,6 +292,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
 
@@ -306,6 +308,9 @@ extern-function-declaration
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+export-function-declaration
+    = "export", STRING, function-declaration ;
 
 contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
@@ -326,6 +331,12 @@ declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
 contract. `symbol` and `drop` are words only in these clauses.
 [FFI](/manual/ffi) restricts their parameter modes and types.
+
+`export` is a word only when a string follows it at the start of a
+module-level declaration. The string must be exactly `"C"`. The function has
+a body and is otherwise an ordinary function whose parameter and result
+types are limited as [Freestanding Builds](/manual/freestanding#exported-functions)
+describes.
 
 ## Type References And Type Parameters
 

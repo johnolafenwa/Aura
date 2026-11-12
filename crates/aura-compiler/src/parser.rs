@@ -523,6 +523,7 @@ impl Parser {
             } else if seen_statement
                 && self.at_simple(&TokenKind::KwPublic)
                 && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+                && !matches!(self.peek_kind(2), Some(TokenKind::StringLiteral(_)))
             {
                 return Err(Diagnostic::coded_at(
                     "AU1101",
@@ -574,6 +575,9 @@ impl Parser {
                     // `public copy class Name:` declares a class.
                     && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "copy")
                         && matches!(self.peek_kind(2), Some(TokenKind::KwClass)))
+                    // `public export "C" def name` declares a function.
+                    && !(matches!(self.peek_kind(1), Some(TokenKind::Identifier(name)) if name == "export")
+                        && matches!(self.peek_kind(2), Some(TokenKind::StringLiteral(_))))
             }
             _ => false,
         }

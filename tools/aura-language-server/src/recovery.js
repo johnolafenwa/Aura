@@ -109,7 +109,7 @@ function declarationForLine(line, lineNumber) {
   }
 
   const match = line.match(
-    /^(\s*)(?:(?:public|copy)\s+)*(class|enum|trait|def)\s+([A-Za-z_][A-Za-z0-9_]*)/
+    /^(\s*)(?:(?:public|copy)\s+)*(?:export\s+"C"\s+)?(class|enum|trait|def)\s+([A-Za-z_][A-Za-z0-9_]*)/
   );
   if (!match) {
     return null;

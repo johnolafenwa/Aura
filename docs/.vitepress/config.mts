@@ -91,6 +91,7 @@ export default defineConfig({
             { text: 'Functions', link: '/manual/functions' },
             { text: 'Closures', link: '/manual/closures' },
             { text: 'Foreign Function Interface', link: '/manual/ffi' },
+            { text: 'Freestanding Builds', link: '/manual/freestanding' },
             { text: 'Classes', link: '/manual/classes' },
             { text: 'Enums And Pattern Matching', link: '/manual/enums-and-match' },
             { text: 'Generics And Traits', link: '/manual/generics-and-traits' },

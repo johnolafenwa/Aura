@@ -805,7 +805,9 @@ impl FunctionCompiler<'_> {
 
         // A callback that failed under this call, or under an earlier one
         // that kept the callback, fails the call now that C has returned.
-        if !self.callback_refs.is_empty() {
+        // A freestanding callback runs with no guard: a check that fails in
+        // it calls the trap hook there.
+        if !self.callback_refs.is_empty() && self.freestanding.is_none() {
             self.builder
                 .call(self.runtime[RuntimeFn::FfiCallbackCheck], &[]);
         }

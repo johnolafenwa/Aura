@@ -1,7 +1,8 @@
 # Freestanding Builds Design Checkpoint
 
-Status: **Proposed 2026-11-12.** Work proceeds on the defaults below. The
-two choices marked "owner's call" stay open to change until release.
+Status: **Step 1 accepted 2026-11-12 as ADR-0094.** Steps 2 and 3 proceed
+on the defaults below. The choice marked "owner's call" in section F
+stays open to change until release.
 
 A freestanding build compiles Aura code for a machine with no operating
 system and no Aura runtime: a kernel, a bootloader stage, firmware, or a
@@ -54,13 +55,13 @@ A freestanding program holds only values that are machine words.
 | unions of allowed types with `None` that hold no box | enums with payloads, `Result`, `Lookup` |
 | functions, generics, `mut` parameters, `while`, `if`, `for` over `range` | closures, function values, trait objects |
 | `assert`, contracts, checked arithmetic, casts | `print`, f-strings, `try`, `with`, tasks, queues |
-| `extern "C"` calls with scalar, `mut` scalar, struct, and literal text arguments | every builtin module but `mem` |
+| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | every builtin module but `mem` |
 
 - **B1. Check the program the exports reach (default).** The check walks
   the functions reachable from the exported functions. A package may
   hold hosted code the freestanding program never calls.
 - **B2. Report by construct.** Each rejected value or operation is an
-  `AU2060` diagnostic that names the function, the construct, and why a
+  `AU2052` diagnostic that names the function, the construct, and why a
   freestanding build cannot hold it.
 - **B3. A backstop.** After code generation, the build reads the
   object's undefined symbols. Any symbol other than a declared extern,
@@ -80,10 +81,11 @@ not available in the first version.
   ```
 
   The function is defined under its own name as a C symbol with the C
-  calling convention. A `symbol "name"` clause gives another name, as on
-  `extern`. Parameters and the result are scalars. `export` is a word
-  only before an ABI string at the start of a declaration, as `spec` and
-  `lemma` are before `def`. It needs `allow_ffi = true`, like `extern`.
+  calling convention. Parameters are scalars or `mut` scalars, which are
+  C pointers, and the result is a scalar or `None`. `export` is a word
+  only before an ABI string at the start of a declaration. It needs no
+  `allow_ffi`: an export gives foreign code a way in and gives Aura code
+  no new power. There is no `symbol "name"` clause.
 - C2. A body on `extern "C" def`. Rejected: an `extern` block already
   holds a trusted contract, and one word would mean both "defined
   elsewhere" and "defined here".
@@ -133,12 +135,12 @@ scope: the emitter holds every value in 64-bit words.
 ## F. Memory And Hardware
 
 - **F1. A `mem` builtin module (default, owner's call on the gate).**
-  Functions over a `uint64` address: `read_uint32(address)`,
-  `write_uint32(address, value)` and the same for each scalar type;
-  `volatile_` forms that the optimizer never removes, merges, or
-  reorders; and atomic load, store, exchange, add, and compare-exchange,
-  with `fence()`. A read or write through a bad address has undefined
-  behavior, as in C.
+  Functions over a `uint64` address: `read_uint32(address)` and
+  `write_uint32(address, value)`, and the same for `uint8`, `uint16`, and
+  `uint64`; `volatile_` forms that the optimizer never removes, merges,
+  or reorders; and atomic load, store, swap, add, and compare-exchange
+  for `uint32` and `uint64`, with `fence()`. A read or write through a
+  bad address has undefined behavior, as in C.
 - **F2. The gate is `allow_ffi = true`.** Raw memory is the same grant as
   calling C: the package states that it steps outside Aura's memory
   safety. A separate `unsafe` block syntax is deferred.
