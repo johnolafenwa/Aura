@@ -2455,9 +2455,7 @@ enum NativeExecutionOutcome {
 
 struct SpawnedNativeBinary {
     child: process::Child,
-    #[cfg(unix)]
     diagnostic_reader: Option<fs::File>,
-    #[cfg(unix)]
     diagnostic_signal_reader: Option<fs::File>,
 }
 
@@ -2691,26 +2689,58 @@ fn spawn_unix_native_binary_without_shell_fallback(
     })
 }
 
-#[cfg(not(unix))]
-fn spawn_native_binary_without_shell_fallback(
-    binary: &Path,
-    program_args: &[String],
-) -> io::Result<process::Child> {
-    process::Command::new(binary).args(program_args).spawn()
-}
-
-#[cfg(not(unix))]
+/// Starts `binary`. With `capture_structured_diagnostics`, the child
+/// inherits the write ends of two pipes and reads their handle values from
+/// its environment; the read ends stay here. `CreateProcess` runs only an
+/// executable image, so there is no shell fallback to avoid.
+#[cfg(windows)]
 fn spawn_native_binary_with_diagnostic_mode(
     binary: &Path,
     program_args: &[String],
-    _capture_structured_diagnostics: bool,
+    capture_structured_diagnostics: bool,
 ) -> io::Result<SpawnedNativeBinary> {
-    spawn_native_binary_without_shell_fallback(binary, program_args)
-        .map(|child| SpawnedNativeBinary { child })
+    use std::os::windows::io::{AsRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+
+    let mut command = process::Command::new(binary);
+    // A caller-supplied value for the private channel must never reach a
+    // normal launch, which would write to an unrelated handle.
+    command
+        .args(program_args)
+        .env_remove(aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV)
+        .env_remove(aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV);
+    let mut pipes = Vec::new();
+    if capture_structured_diagnostics {
+        for key in [
+            aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+        ] {
+            let (reader, writer) = io::pipe()?;
+            let handle = writer.as_raw_handle();
+            // SAFETY: `handle` is the open write end owned by `writer`.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            command.env(key, (handle as isize).to_string());
+            pipes.push((reader, writer));
+        }
+    }
+    let child = command.spawn()?;
+    // Dropping the write ends here leaves the child as their only owner, so
+    // each reader sees the end of its pipe when the child exits.
+    let mut readers = pipes
+        .into_iter()
+        .map(|(reader, _writer)| fs::File::from(OwnedHandle::from(reader)));
+    Ok(SpawnedNativeBinary {
+        child,
+        diagnostic_reader: readers.next(),
+        diagnostic_signal_reader: readers.next(),
+    })
 }
 
 fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<NativeExecutionOutcome> {
-    #[cfg(unix)]
     let diagnostic_reader = spawned.diagnostic_reader.take().map(|reader| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -2724,7 +2754,6 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
             Ok::<_, io::Error>(bytes)
         })
     });
-    #[cfg(unix)]
     let diagnostic_signal_reader = spawned.diagnostic_signal_reader.take().map(|reader| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -2735,90 +2764,74 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
 
     let status = spawned.child.wait()?;
 
-    #[cfg(unix)]
-    {
-        let diagnostic_bytes = match diagnostic_reader {
-            Some(reader) => reader
-                .join()
-                .map_err(|_| io::Error::other("the native diagnostic-channel reader panicked"))??,
-            None => Vec::new(),
-        };
-        let signal_bytes = match diagnostic_signal_reader {
-            Some(reader) => reader.join().map_err(|_| {
-                io::Error::other("the native diagnostic signal-channel reader panicked")
-            })??,
-            None => Vec::new(),
-        };
-        if status.code().is_none() {
-            return Err(io::Error::other(
-                "native program terminated by a host signal",
-            ));
-        }
-        if signal_bytes.len() > 1
-            || signal_bytes
-                .first()
-                .is_some_and(|marker| *marker != aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid native diagnostic trap-intent marker",
-            ));
-        }
-        let trap_intended = !signal_bytes.is_empty();
-        if diagnostic_bytes.len() > aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "native diagnostic-channel record exceeded the {}-byte limit",
-                    aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
-                ),
-            ));
-        }
-        if status.success() && (trap_intended || !diagnostic_bytes.is_empty()) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native diagnostic channel was used during a successful exit",
-            ));
-        }
-        if !trap_intended && diagnostic_bytes.is_empty() {
-            return Ok(NativeExecutionOutcome::Exited(
-                status.code().expect("signal exits were rejected above"),
-            ));
-        }
-        if trap_intended && diagnostic_bytes.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native runtime signaled a trap without a diagnostic record",
-            ));
-        }
-        if !trap_intended {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native runtime emitted a diagnostic record without signaling a trap",
-            ));
-        }
-        let diagnostic = serde_json::from_slice::<StructuredDiagnostic>(&diagnostic_bytes)
-            .map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid native diagnostic-channel record: {error}"),
-                )
-            })?;
-        Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
+    let diagnostic_bytes = match diagnostic_reader {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| io::Error::other("the native diagnostic-channel reader panicked"))??,
+        None => Vec::new(),
+    };
+    let signal_bytes = match diagnostic_signal_reader {
+        Some(reader) => reader.join().map_err(|_| {
+            io::Error::other("the native diagnostic signal-channel reader panicked")
+        })??,
+        None => Vec::new(),
+    };
+    if status.code().is_none() {
+        return Err(io::Error::other(
+            "native program terminated by a host signal",
+        ));
     }
-
-    #[cfg(not(unix))]
+    if signal_bytes.len() > 1
+        || signal_bytes
+            .first()
+            .is_some_and(|marker| *marker != aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
     {
-        if status.code().is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "native program terminated without an exit status",
-            ));
-        }
-        Ok(NativeExecutionOutcome::Exited(
-            status.code().expect("missing statuses were rejected above"),
-        ))
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid native diagnostic trap-intent marker",
+        ));
     }
+    let trap_intended = !signal_bytes.is_empty();
+    if diagnostic_bytes.len() > aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "native diagnostic-channel record exceeded the {}-byte limit",
+                aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
+            ),
+        ));
+    }
+    if status.success() && (trap_intended || !diagnostic_bytes.is_empty()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native diagnostic channel was used during a successful exit",
+        ));
+    }
+    if !trap_intended && diagnostic_bytes.is_empty() {
+        return Ok(NativeExecutionOutcome::Exited(
+            status.code().expect("signal exits were rejected above"),
+        ));
+    }
+    if trap_intended && diagnostic_bytes.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native runtime signaled a trap without a diagnostic record",
+        ));
+    }
+    if !trap_intended {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native runtime emitted a diagnostic record without signaling a trap",
+        ));
+    }
+    let diagnostic =
+        serde_json::from_slice::<StructuredDiagnostic>(&diagnostic_bytes).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid native diagnostic-channel record: {error}"),
+            )
+        })?;
+    Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
 }
 
 fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
