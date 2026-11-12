@@ -1,0 +1,103 @@
+class Tally:
+    count: int64
+    step: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by * self.step
+
+    def scaled(self, factor: int64) -> int64:
+        return self.count * factor
+
+
+class Counter:
+    name: str
+    count: int64
+    limit: int32
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by
+
+    def clamp(mut self) -> bool:
+        if self.count > (self.limit as int64):
+            self.count = (self.limit as int64)
+            return true
+        return false
+
+    def doubled(self) -> int64:
+        return self.count * 2
+
+    def rename(mut self, name: str) -> None:
+        self.name = name.clone()
+
+
+class Guard:
+    label: str
+    hits: int64
+
+    def __enter__(mut self) -> None:
+        self.hits += 1
+
+    def __exit__(mut self) -> None:
+        print(f"{self.label} closed after {self.hits}")
+
+    def hit(mut self) -> None:
+        self.hits += 1
+
+
+def bump_twice(counter: mut Counter, by: int64) -> None:
+    counter.bump(by)
+    counter.bump(by)
+
+
+def bump_tally(tally: mut Tally) -> None:
+    tally.bump(3)
+
+
+def main() -> None:
+    mut tally = Tally(count=1, step=2)
+    tally.bump(5)
+    bump_tally(tally)
+    print(tally.count)
+    print(tally.scaled(3))
+
+    mut counter = Counter(name="a", count=0, limit=7)
+    counter.bump(4)
+    bump_twice(counter, 3)
+    print(counter.count)
+    print(counter.clamp())
+    print(counter.clamp())
+    print(counter.doubled())
+    counter.rename("b")
+    counter.bump(1)
+    print(f"{counter.name} {counter.count}")
+
+    mut tallies: list[Tally] = []
+    mut counters: list[Counter] = []
+    for i in range(4):
+        tallies.append(Tally(count=i, step=i + 1))
+        counters.append(Counter(name=f"c{i}", count=i * 3, limit=5))
+    for i in range(len(tallies)):
+        tallies[i].bump(2)
+        counters[i].bump(1)
+    for item in mut tallies:
+        item.bump(1)
+    for entry in mut counters:
+        if entry.clamp():
+            entry.bump(-1)
+    mut total: int64 = 0
+    for item in tallies:
+        total += item.scaled(2)
+    for entry in counters:
+        total += entry.doubled()
+    print(total)
+    shared = counters.copy()
+    counters[0].bump(100)
+    print(f"{shared[0].count} {counters[0].count}")
+
+    scale: def(int64) -> int64 = lambda value: tallies[1].scaled(value)
+    print(scale(10))
+
+    with Guard(label="guard", hits=0) as guard:
+        guard.hit()
+        guard.hit()
+        print(guard.hits)

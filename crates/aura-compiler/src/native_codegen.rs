@@ -658,6 +658,9 @@ struct NativeCodegen<'a> {
     /// function backend.
     object: Option<Box<dyn ModuleBackend>>,
     functions: HashMap<String, FuncHandle>,
+    /// The frameless second body of each function that has one (see
+    /// `leaf_variant`).
+    leaf_functions: HashMap<String, FuncHandle>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -913,6 +916,7 @@ impl<'a> NativeCodegen<'a> {
 
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
+        let mut leaf_functions = HashMap::new();
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -946,6 +950,23 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
+            if leaf_variant(function, &classes) {
+                let leaf_id = try_or_string_error!(
+                    object.declare_function(
+                        &mangle_leaf_symbol(&function.name),
+                        Linkage::Local,
+                        &signature
+                    ),
+                    "failed to declare the leaf body of `{}`: {}",
+                    function.name
+                );
+                leaf_functions.insert(function.name.clone(), leaf_id);
+                if small_leaf(function) {
+                    object.mark_inline(leaf_id);
+                }
+            } else if small_leaf(function) && frameless_leaf(function, &classes) {
+                object.mark_inline(func_id);
+            }
             let thunk_signature = thunk_signature();
             let thunk_id = try_or_string_error!(
                 object.declare_function(
@@ -1024,9 +1045,20 @@ impl<'a> NativeCodegen<'a> {
             &function_param_types,
             &classes,
         )?;
-        let program_shapes = shapes::ProgramShapes::new(
+        let mut program_shapes = shapes::ProgramShapes::new(
             module,
             callable_shapes.keys().map(|key| key.function.as_str()),
+        );
+        program_shapes.set_field_only_methods(
+            module
+                .functions
+                .iter()
+                .filter(|function| {
+                    boxed_receiver_fields(function, &classes).is_some()
+                        && leaf_body(function, &classes)
+                })
+                .map(|function| function.name.clone())
+                .collect(),
         );
         let mut callback_thunks = Vec::new();
         for (index, key) in foreign::module_callbacks(module).into_iter().enumerate() {
@@ -1055,6 +1087,7 @@ impl<'a> NativeCodegen<'a> {
             program_source: program_source.to_string(),
             object: Some(object),
             functions,
+            leaf_functions,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1218,7 +1251,16 @@ impl<'a> NativeCodegen<'a> {
             func_id,
             &signature,
             &format!("direct function `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, func_id),
+            |codegen, builder| codegen.emit_function(builder, function, func_id, false),
+        )?;
+        let Some(leaf_id) = self.leaf_functions.get(&function.name).copied() else {
+            return Ok(());
+        };
+        self.define_body(
+            leaf_id,
+            &signature,
+            &format!("the leaf body of `{}`", function.name),
+            |codegen, builder| codegen.emit_function(builder, function, leaf_id, true),
         )
     }
 
@@ -1283,6 +1325,7 @@ impl<'a> NativeCodegen<'a> {
         builder: &mut dyn FunctionBackend,
         function: &MirFunction,
         func_id: FuncHandle,
+        leaf: bool,
     ) -> std::result::Result<(), String> {
         let reachable_blocks = self
             .reachable_blocks
@@ -1333,7 +1376,7 @@ impl<'a> NativeCodegen<'a> {
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let frameless = frameless_leaf(function, &self.classes);
+        let frameless = leaf || frameless_leaf(function, &self.classes);
         let (mut body, entered_in_runtime) = if frameless {
             (entry, builder.iconst(types::I64, 0))
         } else {
@@ -1617,6 +1660,12 @@ impl<'a> NativeCodegen<'a> {
         for (name, func_id) in functions {
             let func_ref = builder.import_function(*func_id);
             function_refs.insert(name.clone(), func_ref);
+        }
+        let mut leaf_refs = HashMap::new();
+        let mut leaf_functions = self.leaf_functions.iter().collect::<Vec<_>>();
+        leaf_functions.sort_by(|left, right| left.0.cmp(right.0));
+        for (name, func_id) in leaf_functions {
+            leaf_refs.insert(name.clone(), builder.import_function(*func_id));
         }
         let mut function_thunk_refs = HashMap::new();
         let mut function_thunks = self.function_thunks.iter().collect::<Vec<_>>();
@@ -2047,6 +2096,7 @@ impl<'a> NativeCodegen<'a> {
             variable_types,
             next_variable_index: variable_index,
             function_refs,
+            leaf_refs,
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -3422,6 +3472,9 @@ struct FunctionCompiler<'a> {
     variable_types: HashMap<String, DirectType>,
     next_variable_index: usize,
     function_refs: HashMap<String, FuncRef>,
+    /// The frameless second bodies (see `leaf_variant`), which a call with
+    /// no write-through sink to hand over calls.
+    leaf_refs: HashMap<String, FuncRef>,
     function_thunk_refs: HashMap<String, FuncRef>,
     /// The entry code of each callback the module passes to C.
     callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
@@ -8682,19 +8735,8 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
-        let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
-            let mut sinks = Vec::with_capacity(mutable_sink_places.len());
-            for place in &mutable_sink_places {
-                sinks.push(match place {
-                    Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.iconst(types::I64, 0),
-                });
-            }
-            let active = self.install_direct_mutable_sinks(&sinks)?;
-            (Some(active), sinks)
-        } else {
-            (None, Vec::new())
-        };
+        let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
+        let func_ref = self.sinkless_callee(name, func_ref, &mutable_sinks);
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
@@ -14189,6 +14231,73 @@ impl<'a> FunctionCompiler<'a> {
         self.mutable_sink_for_resolved_place(resolved)
     }
 
+    /// Whether a write-through sink may follow `place`: it lies in a `mut`
+    /// parameter, whose caller may have handed one over, or in a place a
+    /// cleanup reads. Every other place gets the sink 0 (see
+    /// `mutable_sink_for_static_place`).
+    fn place_may_have_sink(&self, place: &str) -> bool {
+        let root = place.split_once('.').map_or(place, |(root, _)| root);
+        self.mutable_param_indices.contains_key(root)
+            || self.cleanup_places.iter().any(|cleanup_place| {
+                place == cleanup_place
+                    || place
+                        .strip_prefix(cleanup_place.as_str())
+                        .is_some_and(|rest| rest.starts_with('.'))
+            })
+    }
+
+    /// Hands the sinks of the `mut` arguments at `places` to the runtime
+    /// for the next call, and returns whether any is active with the sinks,
+    /// for [`Self::release_active_mutable_sinks`]. When no sink can follow
+    /// any of the places, nothing is emitted and the flag is `None`.
+    fn install_sinks_for_places(
+        &mut self,
+        places: &[Option<String>],
+    ) -> std::result::Result<(Option<Val>, Vec<Val>), String> {
+        let mut resolved = Vec::with_capacity(places.len());
+        let mut any = false;
+        for place in places {
+            resolved.push(match place {
+                Some(place) => {
+                    let resolved = self.resolve_view_place(place)?;
+                    any |= resolved
+                        .alternatives
+                        .iter()
+                        .any(|alternative| self.place_may_have_sink(&alternative.place));
+                    Some(resolved)
+                }
+                None => None,
+            });
+        }
+        if !any {
+            return Ok((None, Vec::new()));
+        }
+        let mut sinks = Vec::with_capacity(resolved.len());
+        for place in resolved {
+            sinks.push(match place {
+                Some(place) => self.mutable_sink_for_resolved_place(place)?,
+                None => self.builder.iconst(types::I64, 0),
+            });
+        }
+        let active = self.install_direct_mutable_sinks(&sinks)?;
+        Ok((Some(active), sinks))
+    }
+
+    /// The body a direct call of `name` enters: its frameless second body
+    /// when the call hands no sink over and the function has one, and
+    /// `framed` otherwise.
+    fn sinkless_callee(
+        &self,
+        name: &str,
+        framed: FuncRef,
+        sinks: &(Option<Val>, Vec<Val>),
+    ) -> FuncRef {
+        match (sinks.0, self.leaf_refs.get(name)) {
+            (None, Some(leaf)) => *leaf,
+            _ => framed,
+        }
+    }
+
     /// Hands `sinks` to the runtime for the next call, unless every one is
     /// 0, so a call that publishes nothing keeps its inline frame push.
     /// Returns whether any sink is active, for
@@ -14761,6 +14870,12 @@ impl<'a> FunctionCompiler<'a> {
         let mut writeback_places = Vec::new();
         let mut mutable_sink_places = vec![None; expected.len()];
         let receiver_expected = expected.first().cloned().unwrap_or(object.ty.clone());
+        // A method that never names its receiver's box reads no tag of it,
+        // and the box goes back to its place as it came.
+        let keeps_shape = self.program_shapes.keeps_receiver_shape(function);
+        if let (true, [word]) = (keeps_shape, object.values.as_slice()) {
+            self.shaped_boxes.insert(*word);
+        }
         let receiver = self.coerce_value(object.clone(), &receiver_expected)?;
         // The receiver and arguments the callee borrows stay the caller's.
         let kept = self.borrowing.get(&method_function_name).cloned();
@@ -14824,23 +14939,21 @@ impl<'a> FunctionCompiler<'a> {
             let transferred = self.transfer_values(&coerced);
             lowered_args.extend(transferred);
         }
-        let mutable_sinks = if mutable_sink_places.iter().any(Option::is_some) {
-            let mut sinks = Vec::with_capacity(mutable_sink_places.len());
-            for place in &mutable_sink_places {
-                sinks.push(match place {
-                    Some(place) => self.mutable_sink_for_place(place)?,
-                    None => self.builder.iconst(types::I64, 0),
-                });
-            }
-            let active = self.install_direct_mutable_sinks(&sinks)?;
-            (Some(active), sinks)
-        } else {
-            (None, Vec::new())
-        };
+        let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
+        let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
         let inst = self.builder.call(func_ref, &lowered_args);
         let results = inst.results;
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
+        if keeps_shape {
+            // The method hands the receiver's box back as it was.
+            if let Some(([word], true)) = writebacks
+                .first()
+                .map(|updated| (updated.values.as_slice(), mutable_receiver))
+            {
+                self.shaped_boxes.insert(*word);
+            }
+        }
         if mutable_receiver {
             // The receiver's place comes first. A float a trait object
             // holds goes back into it with its width.
@@ -17043,6 +17156,110 @@ fn defers_lane_traps(function: &MirFunction) -> bool {
 }
 
 fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    // A call the runtime enters, such as one through a function value,
+    // hands a mutable parameter's write-through sink over in the frame the
+    // runtime pushes. Only a fast iterator's advance method, which only
+    // generated loops call directly, may skip that frame with one. Any
+    // other leaf with a mutable parameter keeps its frame and gets a
+    // second body without one (see `leaf_variant`).
+    if takes_mutable(function) && !function.name.ends_with(FAST_ADVANCE_SUFFIX) {
+        return false;
+    }
+    leaf_body(function, classes)
+}
+
+/// Whether `function` has a `mut self` receiver or a `mut` parameter.
+fn takes_mutable(function: &MirFunction) -> bool {
+    function.receiver == Some(MirReceiverKind::BorrowMut)
+        || function
+            .params
+            .iter()
+            .any(|param| param.passing == MirReceiverKind::BorrowMut)
+}
+
+/// Whether `function` gets a second body that keeps no frame record and
+/// reads no write-through sink: it is a leaf in all but its `mut self`
+/// receiver or `mut` parameters (see `frameless_leaf`). A direct call
+/// whose `mut` arguments are places no sink follows calls this body, which
+/// hands the updated values back as every call does; the function's own
+/// symbol stays the one the runtime and calls with sinks enter.
+fn leaf_variant(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    takes_mutable(function)
+        && !function.name.ends_with(FAST_ADVANCE_SUFFIX)
+        && leaf_body(function, classes)
+}
+
+/// The scalar fields of the receiver of a method of a class kept in a
+/// box, by name, or `None` when `function` has no such receiver. A generic
+/// class keeps a symbolic layout, so it has none here.
+fn boxed_receiver_fields<'c>(
+    function: &MirFunction,
+    classes: &'c HashMap<String, MirClass>,
+) -> Option<HashSet<&'c str>> {
+    function.receiver?;
+    let receiver = function
+        .local_types
+        .iter()
+        .find(|local| local.name == "self")?;
+    let Some(DirectType::Opaque(Type::Named(name, arguments))) = direct_type(&receiver.ty, classes)
+    else {
+        return None;
+    };
+    let class = classes.get(&name)?;
+    if !arguments.is_empty() || !class.type_params.is_empty() {
+        return None;
+    }
+    Some(
+        class
+            .fields
+            .iter()
+            .filter(|field| matches!(direct_type(&field.ty, classes), Some(DirectType::Scalar(_))))
+            .map(|field| field.name.as_str())
+            .collect(),
+    )
+}
+
+/// The largest leaf, in MIR blocks and instructions, inlined into every
+/// direct caller. A larger one is left to LLVM's own cost model.
+const LEAF_INLINE_BLOCKS: usize = 8;
+const LEAF_INLINE_INSTRUCTIONS: usize = 32;
+
+/// Whether a frameless `function` is small enough to inline everywhere:
+/// a few blocks that only branch forward. A loop is left where it is, since
+/// it runs as well in its own function as in its caller's.
+fn small_leaf(function: &MirFunction) -> bool {
+    let position = |label: &String| {
+        function
+            .blocks
+            .iter()
+            .position(|block| &block.label == label)
+    };
+    let forward = function.blocks.iter().enumerate().all(|(index, block)| {
+        let targets = match &block.terminator {
+            Terminator::Goto(label) => vec![label],
+            Terminator::Branch {
+                then_label,
+                else_label,
+                ..
+            } => vec![then_label, else_label],
+            _ => Vec::new(),
+        };
+        targets
+            .into_iter()
+            .all(|label| position(label).is_some_and(|target| target > index))
+    });
+    forward
+        && function.blocks.len() <= LEAF_INLINE_BLOCKS
+        && function
+            .blocks
+            .iter()
+            .map(|block| block.instructions.len())
+            .sum::<usize>()
+            <= LEAF_INLINE_INSTRUCTIONS
+}
+
+/// The body rule of `frameless_leaf`.
+fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     fn words_only(ty: &DirectType) -> bool {
         match ty {
             DirectType::Scalar(_) | DirectType::PlainClass(_) => true,
@@ -17066,29 +17283,39 @@ fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -
     if function.name == "main" || function.blocks.is_empty() {
         return false;
     }
-    // A call the runtime enters, such as one through a function value,
-    // hands a mutable parameter's write-through sink over in the frame the
-    // runtime pushes. Only a fast iterator's advance method, which only
-    // generated loops call directly, may skip that frame with one.
-    let mutable = function.receiver == Some(MirReceiverKind::BorrowMut)
-        || function
-            .params
-            .iter()
-            .any(|param| param.passing == MirReceiverKind::BorrowMut);
-    if mutable && !function.name.ends_with(FAST_ADVANCE_SUFFIX) {
-        return false;
-    }
-    let locals_are_words = function
-        .local_types
+    // A receiver in a box is passed and handed back as one word the
+    // function never owns, and its scalar fields are read and written in
+    // the box. The reads and writes of a box that is not in the typed
+    // layout go through runtime helpers that read no frame.
+    let boxed_receiver = boxed_receiver_fields(function, classes);
+    let locals_are_words = function.local_types.iter().all(|local| {
+        (boxed_receiver.is_some() && local.name == "self")
+            || direct_type(&local.ty, classes).is_some_and(|ty| words_only(&ty))
+    }) && function
+        .params
         .iter()
-        .all(|local| direct_type(&local.ty, classes).is_some_and(|ty| words_only(&ty)))
-        && function
-            .params
-            .iter()
-            .all(|param| direct_type(&param.ty, classes).is_some_and(|ty| words_only(&ty)))
+        .all(|param| direct_type(&param.ty, classes).is_some_and(|ty| words_only(&ty)))
         && direct_type(&function.return_type, classes).is_some_and(|ty| words_only(&ty));
     if !locals_are_words {
         return false;
+    }
+    if let Some(fields) = &boxed_receiver {
+        // Every mention of the receiver is one of its scalar fields.
+        let mut mentions = Vec::new();
+        for block in &function.blocks {
+            for instruction in &block.instructions {
+                crate::mir::instruction_place_mentions(instruction, &mut mentions);
+            }
+            mentions.extend(crate::mir::terminator_place_mentions(&block.terminator));
+        }
+        let scalar_field = |place: &str| match place.split_once('.') {
+            Some(("self", field)) => fields.contains(field),
+            Some(_) => true,
+            None => place != "self",
+        };
+        if !mentions.into_iter().all(scalar_field) {
+            return false;
+        }
     }
     // A float local or literal: float division and the float forms of
     // `abs` and `sqrt` are instructions that cannot fail.
@@ -19213,6 +19440,11 @@ fn default_binder_signature() -> Signature {
     signature.params.push(types::I64);
     signature.params.push(types::I64);
     signature
+}
+
+/// The symbol of a function's frameless second body (see `leaf_variant`).
+fn mangle_leaf_symbol(name: &str) -> String {
+    format!("{}__leaf", mangle_symbol(name))
 }
 
 fn mangle_symbol(name: &str) -> String {
