@@ -557,6 +557,27 @@ median of ten runs, on a busier container than on 8 November:
 slower on `file_io` and `template_render`. Fifteen programs run 2 to 6%
 more instructions than with 0.13.0 while their times are level or lower.
 
+Aura 0.15.0 adds counted loops over lists of numbers, method calls on
+list elements that run in place, and the fixes for the instruction counts
+that rose in 0.14.0. Both compilers measured in the same four passes on
+12 November 2026, median of twenty runs, on a busy container:
+
+| Measure | Aura 0.14.0 | Aura 0.15.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 12.7 s | 12.3 s |
+| Median Aura / Rust, wall time | 3.1x | 2.9x |
+| Median Aura / Python 3.13, wall time | 0.35x | 0.35x |
+| Programs faster than Python | 28 | 28 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 30 programs | 79.6 billion | 76.3 billion |
+
+`nbody` takes 34 ms instead of 84, and `regex_match`, `spreadsheet`, and
+`sql_engine` are 11 to 18% faster. Aura is still slower than Python on
+`file_io` and `template_render`. The suite has four more programs,
+`stream_io`, `regex_scan`, `date_time`, and `http_stream`. Aura is faster
+than Python on all four and takes 1.5 to 3.3 times Rust's time. All 34
+take 15.6 seconds, against 56.1 for Python and 10.8 for Rust.
+
 ### Per-Call Attribution
 
 Eleven symbol-preserving xctrace recordings on the foundations host attribute

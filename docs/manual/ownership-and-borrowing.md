@@ -465,7 +465,7 @@ Every used outer local must be listed exactly once, and every listed local must 
 
 ## FFI Views And Opaque Handles
 
-FFI is the foreign function interface. FFI v0 views are temporary call-boundary capabilities, not first-class Aura references.
+FFI is the foreign function interface. FFI views are temporary call-boundary capabilities, not first-class Aura references.
 
 - Bare `str` and `list[uint8]` retain their owner while exposing a const pointer and byte length for one synchronous foreign call.
 - `mut list[uint8]` requires an exclusive mutable list place. It copies the initial bytes into a same-length scratch buffer, and writes exactly that length back after the foreign function returns.

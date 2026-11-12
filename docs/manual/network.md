@@ -162,7 +162,7 @@ The listener rejects malformed HTTP requests. A malformed request does not leave
 
 An incoming HTTP request is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
 
-Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.14 high-level HTTP API.
+Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.15 high-level HTTP API.
 
 ## HTTP Client
 
@@ -363,7 +363,7 @@ These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs.
 
 ## Status
 
-Aura 0.14 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
+Aura 0.15 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
 
 Nonblocking descriptors stay registered with the runtime's persistent reactor, the event loop that watches for socket readiness, across scheduler turns. Timeout deadlines share the reactor's timer heap. An idle scheduler blocks until a descriptor is ready, another runtime event arrives, or the next deadline passes. It uses no periodic tick.
 
