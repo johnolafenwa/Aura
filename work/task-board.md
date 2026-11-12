@@ -2,18 +2,18 @@
 
 Last updated: 2026-11-12
 
-## Release 0.15.0-preview (in progress)
+## Release 0.15.0-preview (complete)
 
-- Target: release everything merged since 0.14.0 as a technical preview:
-  the rest of trait objects and FFI v1, streaming I/O with the `http`,
+- Released everything merged since 0.14.0 as a technical preview: the
+  rest of trait objects and FFI v1, streaming I/O with the `http`,
   `regex`, `time`, and `gzip` modules, SIMD, Array v2 items 1 to 4, the
-  security review fixes, and the regression and call cost work.
-- Done: version sweep, changelog, measurements against the published
-  0.14.0 archive (30 programs 12.7 s -> 12.3 s, 4.2% fewer instructions,
-  34 programs 15.6 s against Python's 56.1 s), and a fix for a slowdown
-  that #269 introduced in nested loops over lists.
-- Remaining: merge the release PR, push the tag, verify the release run.
-  Details are in `2026-11-12-v0.15.0-preview-release.md`.
+  security review fixes, and the regression and call cost work. It also
+  fixes a slowdown that #269 introduced in nested loops over lists.
+- Against the published 0.14.0 archive the 30 shared programs take 12.3 s
+  instead of 12.7 s and run 4.2% fewer instructions. All 34 take 15.6 s
+  against Python's 56.1 s.
+- Published 2026-11-12 (tag `eb385a0f` on `2213940d`, release run
+  `43262158767`). Details are in `2026-11-12-v0.15.0-preview-release.md`.
 
 ## Children of one TaskGroup start late on Linux (complete)
 
