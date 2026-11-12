@@ -18,7 +18,8 @@ def main() -> int32:
     print(m.pow(2.0))
     print(m.minimum(3.0))
     print(m.maximum(m.transpose().transpose() - 1.0))
-    print(m.sin().cos().tan())
+    # Rounded: the last digit of a chained libm result differs by platform.
+    print((m.sin().cos().tan() * 1000000.0).floor())
     print(m.log2())
     print(m.log10())
     i = Array[int64].from_list([1, -2, 3, -4], [2, 2])
