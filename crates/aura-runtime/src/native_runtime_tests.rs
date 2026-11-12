@@ -8,11 +8,14 @@ use super::{
     runtime_type_pattern_from_name, runtime_type_pattern_matches, value_mut, value_ref,
     value_type_name, with_cancellation_scope, OpaqueValue,
 };
+// Some of these serve only the tests that need Unix.
+#[cfg_attr(not(unix), allow(unused_imports))]
 use crate::diag::{
     Diagnostic, RuntimeCallFrame, RuntimeSourceSpan, RuntimeTaskFrame, Span, StructuredDiagnostic,
 };
 use crate::integer::{IntegerBounds, IntegerKind, IntegerRepresentation, IntegerValue};
 use crate::randomness::SecureRandomError;
+#[cfg_attr(not(unix), allow(unused_imports))]
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
@@ -1782,7 +1785,7 @@ fn start_supervisor_diagnostic_case(
     super::aura_direct_process_supervisor_start(
         boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new())),
         string_value("worker"),
-        string_vec(&["/bin/true"]),
+        string_vec(&[crate::host_tools::TRUE]),
         boxed_value(Value::Unit),
         super::aura_direct_map_empty(),
         stdin,
@@ -4276,7 +4279,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
     assert!(expect_variant_value(io_error, "io.Error", "InvalidInput").is_empty());
 
     let process_error = expect_result_err_payload(super::aura_direct_process_run(
-        string_vec(&["/bin/true"]),
+        string_vec(&[crate::host_tools::TRUE]),
         boxed_value(Value::Unit),
         super::aura_direct_map_empty(),
         super::aura_direct_process_null(),
@@ -4301,7 +4304,7 @@ fn invalid_direct_host_timers_use_typed_io_and_process_errors() {
 
     let supervisor = boxed_value(Value::ProcessSupervisor(ProcessSupervisorValue::new()));
     let name = string_value("invalid-backoff");
-    let command = string_vec(&["/bin/true"]);
+    let command = string_vec(&[crate::host_tools::TRUE]);
     let cwd = boxed_value(Value::Unit);
     let env = super::aura_direct_map_empty();
     let stdin = super::aura_direct_process_null();
@@ -6433,7 +6436,7 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
 
     let io_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf 'alpha\\nbeta'; printf 'err\\n' >&2".to_string(),
         ],
@@ -6503,7 +6506,11 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
     unsafe { release_value(io_child_ptr) };
 
     let cat_child = ProcessChildValue::spawn(
-        vec!["/bin/sh".to_string(), "-c".to_string(), "cat".to_string()],
+        vec![
+            crate::host_tools::SH.to_string(),
+            "-c".to_string(),
+            "cat".to_string(),
+        ],
         None,
         Vec::new(),
         ProcessStdioConfig::Pipe,
@@ -6562,7 +6569,7 @@ fn native_runtime_direct_process_wrappers_cover_streaming_and_signal_paths() {
     for signal_wrapper in signal_wrappers {
         let child = ProcessChildValue::spawn(
             vec![
-                "/bin/sh".to_string(),
+                crate::host_tools::SH.to_string(),
                 "-c".to_string(),
                 "sleep 10".to_string(),
             ],
@@ -6668,7 +6675,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
 
     let slow_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 1".to_string(),
         ],
@@ -6709,7 +6716,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
     group.cancel();
     with_cancellation_scope(cancellation.clone(), || {
         let cancelled_run = expect_result_err_payload(super::aura_direct_process_run(
-            string_vec(&["/bin/sh", "-c", "sleep 1"]),
+            string_vec(&[crate::host_tools::SH, "-c", "sleep 1"]),
             boxed_value(Value::Unit),
             super::aura_direct_map_empty(),
             super::aura_direct_process_null(),
@@ -6723,7 +6730,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
 
     let cancelled_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 1".to_string(),
         ],
@@ -6766,7 +6773,11 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
     unsafe { release_value(cancelled_child_ptr) };
 
     let pipe_child = ProcessChildValue::spawn(
-        vec!["/bin/sh".to_string(), "-c".to_string(), "cat".to_string()],
+        vec![
+            crate::host_tools::SH.to_string(),
+            "-c".to_string(),
+            "cat".to_string(),
+        ],
         None,
         Vec::new(),
         ProcessStdioConfig::Pipe,
@@ -6835,7 +6846,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
     expect_result_ok_unit(super::aura_direct_process_supervisor_start(
         empty_supervisor_ptr,
         string_value("worker"),
-        string_vec(&["/bin/sh", "-c", "sleep 1"]),
+        string_vec(&[crate::host_tools::SH, "-c", "sleep 1"]),
         boxed_value(Value::Unit),
         super::aura_direct_map_empty(),
         super::aura_direct_process_null(),
@@ -6884,7 +6895,7 @@ fn native_runtime_direct_process_wrappers_cover_timeout_and_error_results() {
 #[test]
 fn native_runtime_direct_process_run_wrapper_covers_timeout_result_path() {
     let timed_out = expect_result_err_payload(super::aura_direct_process_run(
-        string_vec(&["/bin/sh", "-c", "sleep 1"]),
+        string_vec(&[crate::host_tools::SH, "-c", "sleep 1"]),
         boxed_value(Value::Unit),
         super::aura_direct_map_empty(),
         super::aura_direct_process_null(),
@@ -6901,7 +6912,7 @@ fn native_runtime_direct_process_run_wrapper_captures_both_streams() {
     let completed = run_lightweight_root_task(|| {
         Ok(expect_result_ok_payload(super::aura_direct_process_run(
             string_vec(&[
-                "/bin/sh",
+                crate::host_tools::SH,
                 "-c",
                 "printf aura-stdout; printf aura-stderr >&2",
             ]),
@@ -6962,7 +6973,7 @@ fn native_runtime_direct_process_supervisor_wrappers_cover_start_wait_and_stop_p
     expect_result_ok_unit(super::aura_direct_process_supervisor_start(
         supervisor_ptr,
         string_value("worker"),
-        string_vec(&["/bin/sh", "-c", "exit 0"]),
+        string_vec(&[crate::host_tools::SH, "-c", "exit 0"]),
         boxed_value(Value::Unit),
         super::aura_direct_map_empty(),
         super::aura_direct_process_null(),
@@ -12191,7 +12202,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
                     aura_core::types::Type::named("Unknown")
                 ),
                 elements: vec![
-                    Value::String("/bin/echo".to_string().into()),
+                    Value::String(crate::host_tools::ECHO.to_string().into()),
                     Value::String("ok".to_string().into()),
                 ]
                 .into(),
@@ -12199,7 +12210,7 @@ fn native_runtime_private_value_decoders_cover_success_paths() {
             }),
             "command",
         ),
-        vec!["/bin/echo".to_string(), "ok".to_string()]
+        vec![crate::host_tools::ECHO.to_string(), "ok".to_string()]
     );
     assert_eq!(
         super::expect_optional_string_value(&Value::Unit, "cwd"),
@@ -12325,7 +12336,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "process-start-cwd-type" => {
                 super::aura_direct_process_start(
-                    string_vec(&["/bin/echo", "ok"]),
+                    string_vec(&[crate::host_tools::ECHO, "ok"]),
                     bool_value(true),
                     super::aura_direct_map_empty(),
                     super::aura_direct_process_null(),
@@ -12336,7 +12347,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "process-start-env-type" => {
                 super::aura_direct_process_start(
-                    string_vec(&["/bin/echo", "ok"]),
+                    string_vec(&[crate::host_tools::ECHO, "ok"]),
                     boxed_value(Value::Unit),
                     bool_value(true),
                     super::aura_direct_process_null(),
@@ -12347,7 +12358,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "process-start-group-type" => {
                 super::aura_direct_process_start(
-                    string_vec(&["/bin/echo", "ok"]),
+                    string_vec(&[crate::host_tools::ECHO, "ok"]),
                     boxed_value(Value::Unit),
                     super::aura_direct_map_empty(),
                     super::aura_direct_process_null(),
@@ -12370,7 +12381,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "process-run-timeout-type" => {
                 super::aura_direct_process_run(
-                    string_vec(&["/bin/echo", "ok"]),
+                    string_vec(&[crate::host_tools::ECHO, "ok"]),
                     boxed_value(Value::Unit),
                     super::aura_direct_map_empty(),
                     super::aura_direct_process_null(),
@@ -12382,7 +12393,7 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             }
             "process-run-group-type" => {
                 super::aura_direct_process_run(
-                    string_vec(&["/bin/echo", "ok"]),
+                    string_vec(&[crate::host_tools::ECHO, "ok"]),
                     boxed_value(Value::Unit),
                     super::aura_direct_map_empty(),
                     super::aura_direct_process_null(),
@@ -24550,12 +24561,11 @@ fn direct_tls_wrappers_cover_listener_accept_and_stream_lifecycle() {
     }
 }
 
-#[cfg(unix)]
 #[test]
 fn direct_process_pipe_reads_report_end_of_stream_as_none() {
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "exit 0".to_string(),
         ],

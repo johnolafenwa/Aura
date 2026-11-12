@@ -4870,6 +4870,8 @@ fn emit_runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     process::exit(1);
 }
 
+// Only Unix has the channel so far, so elsewhere two outcomes never occur.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum InternalDiagnosticEmission {
     /// No usable marker reached the parent, so human stderr remains the only

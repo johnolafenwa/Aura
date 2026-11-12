@@ -1057,7 +1057,6 @@ pub unsafe fn call_host_function(
     written.map(|()| result)
 }
 
-#[cfg(unix)]
 #[derive(Default)]
 struct LoadedLibraries {
     by_request: std::collections::BTreeSet<(u8, String, Vec<PathBuf>)>,
@@ -1065,7 +1064,6 @@ struct LoadedLibraries {
     handles: Vec<usize>,
 }
 
-#[cfg(unix)]
 fn loaded_libraries_registry() -> &'static std::sync::Mutex<LoadedLibraries> {
     static LOADED: std::sync::OnceLock<std::sync::Mutex<LoadedLibraries>> =
         std::sync::OnceLock::new();
@@ -1126,7 +1124,6 @@ fn is_internal_host_symbol(symbol: &str, pointer: *const libc::c_void) -> bool {
     false
 }
 
-#[cfg(unix)]
 fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
     let c_symbol = CString::new(symbol).map_err(|_| FfiError::InvalidSymbolName)?;
     let handles = loaded_libraries_registry()
@@ -1135,56 +1132,174 @@ fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
         .handles
         .clone();
     for handle in handles {
-        // SAFETY: `handle` is a live `dlopen` handle kept for the lifetime of the
-        // process, and `c_symbol` is NUL terminated.
-        let ptr = unsafe {
-            libc::dlerror();
-            libc::dlsym(handle as *mut libc::c_void, c_symbol.as_ptr())
-        };
-        if let Some(function) = HostFunction::new(ptr) {
+        if let Some(function) = HostFunction::new(library_symbol(handle, &c_symbol)) {
             return Ok(function);
         }
     }
 
-    // SAFETY: `c_symbol` is NUL terminated. Clearing dlerror before dlsym lets
-    // us distinguish a stale loader error from this lookup.
-    let pointer = unsafe {
-        libc::dlerror();
-        libc::dlsym(libc::RTLD_DEFAULT, c_symbol.as_ptr())
-    };
+    let pointer = default_namespace_symbol(&c_symbol);
     if !pointer.is_null() && is_internal_host_symbol(symbol, pointer) {
         return Err(FfiError::SymbolNotFound {
             symbol: symbol.to_owned(),
             detail: "symbol resolves to internal Aura host image".to_owned(),
         });
     }
-    HostFunction::new(pointer).ok_or_else(|| {
-        // SAFETY: dlerror returns either null or a loader-owned NUL-terminated
-        // string that remains valid until the next loader call on this thread.
-        let detail = unsafe {
-            let error = libc::dlerror();
-            if error.is_null() {
-                "dynamic loader returned a null address".to_owned()
-            } else {
-                std::ffi::CStr::from_ptr(error)
-                    .to_string_lossy()
-                    .into_owned()
-            }
-        };
-        FfiError::SymbolNotFound {
-            symbol: symbol.to_owned(),
-            detail,
-        }
+    HostFunction::new(pointer).ok_or_else(|| FfiError::SymbolNotFound {
+        symbol: symbol.to_owned(),
+        detail: symbol_lookup_failure(),
     })
 }
 
-#[cfg(not(unix))]
-fn process_symbol(symbol: &str) -> Result<HostFunction, FfiError> {
-    if CString::new(symbol).is_err() {
-        Err(FfiError::InvalidSymbolName)
-    } else {
-        Err(FfiError::UnsupportedProcessLookupPlatform)
+/// The address of `symbol` in the library behind `handle`, or null.
+#[cfg(unix)]
+fn library_symbol(handle: usize, symbol: &std::ffi::CStr) -> *mut c_void {
+    // SAFETY: `handle` is a live `dlopen` handle kept for the lifetime of
+    // the process, and `symbol` is NUL terminated. Clearing dlerror first
+    // lets a later failure report this lookup's error, not a stale one.
+    unsafe {
+        libc::dlerror();
+        libc::dlsym(handle as *mut libc::c_void, symbol.as_ptr())
     }
+}
+
+/// The address of `symbol` in the namespace every program can see without
+/// naming a library: the C library and whatever else the process loaded
+/// globally. Null when no such symbol exists.
+#[cfg(unix)]
+fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
+    // SAFETY: `symbol` is NUL terminated.
+    unsafe {
+        libc::dlerror();
+        libc::dlsym(libc::RTLD_DEFAULT, symbol.as_ptr())
+    }
+}
+
+/// Why the last symbol lookup on this thread found nothing.
+#[cfg(unix)]
+fn symbol_lookup_failure() -> String {
+    // SAFETY: dlerror returns either null or a loader-owned NUL-terminated
+    // string that remains valid until the next loader call on this thread.
+    unsafe {
+        let error = libc::dlerror();
+        if error.is_null() {
+            "dynamic loader returned a null address".to_owned()
+        } else {
+            std::ffi::CStr::from_ptr(error)
+                .to_string_lossy()
+                .into_owned()
+        }
+    }
+}
+
+/// The address of `symbol` in the library behind `handle`, or null.
+#[cfg(windows)]
+fn library_symbol(handle: usize, symbol: &std::ffi::CStr) -> *mut c_void {
+    use windows_sys::Win32::System::LibraryLoader::GetProcAddress;
+    // SAFETY: `handle` is a live module handle kept for the lifetime of the
+    // process, and `symbol` is NUL terminated.
+    match unsafe { GetProcAddress(handle as _, symbol.as_ptr().cast()) } {
+        Some(function) => function as *mut c_void,
+        None => std::ptr::null_mut(),
+    }
+}
+
+/// The module handle of this executable.
+#[cfg(windows)]
+fn host_image_base() -> *mut c_void {
+    // SAFETY: a null name asks for the executable's own module.
+    unsafe { windows_sys::Win32::System::LibraryLoader::GetModuleHandleW(std::ptr::null()) as _ }
+}
+
+/// The address of `symbol` in the namespace every program can see without
+/// naming a library. Windows has no such namespace of its own: a symbol
+/// always belongs to one module. The nearest thing is every module the
+/// process has loaded, searched in load order, with the C runtime loaded
+/// first so its functions are always there. The executable itself is
+/// skipped, as its symbols are Aura's own. Null when no module has the
+/// symbol.
+#[cfg(windows)]
+fn default_namespace_symbol(symbol: &std::ffi::CStr) -> *mut c_void {
+    use windows_sys::Win32::System::LibraryLoader::LoadLibraryW;
+    use windows_sys::Win32::System::ProcessStatus::K32EnumProcessModules;
+    use windows_sys::Win32::System::Threading::GetCurrentProcess;
+
+    static C_RUNTIME: std::sync::Once = std::sync::Once::new();
+    C_RUNTIME.call_once(|| {
+        let name: Vec<u16> = "ucrtbase.dll\0".encode_utf16().collect();
+        // SAFETY: `name` is NUL terminated. The module stays loaded.
+        unsafe { LoadLibraryW(name.as_ptr()) };
+    });
+
+    let host = host_image_base();
+    let mut modules: Vec<*mut c_void> = vec![std::ptr::null_mut(); 256];
+    loop {
+        let size = (modules.len() * std::mem::size_of::<*mut c_void>()) as u32;
+        let mut needed = 0u32;
+        // SAFETY: the pointer and size name `modules`, and `needed` is
+        // writable.
+        let listed = unsafe {
+            K32EnumProcessModules(
+                GetCurrentProcess(),
+                modules.as_mut_ptr().cast(),
+                size,
+                &mut needed,
+            )
+        };
+        if listed == 0 {
+            return std::ptr::null_mut();
+        }
+        let count = needed as usize / std::mem::size_of::<*mut c_void>();
+        if count <= modules.len() {
+            modules.truncate(count);
+            break;
+        }
+        modules = vec![std::ptr::null_mut(); count + 64];
+    }
+    modules
+        .into_iter()
+        .filter(|module| *module != host)
+        .map(|module| library_symbol(module as usize, symbol))
+        .find(|pointer| !pointer.is_null())
+        .unwrap_or(std::ptr::null_mut())
+}
+
+/// Why the last symbol lookup on this thread found nothing.
+#[cfg(windows)]
+fn symbol_lookup_failure() -> String {
+    "no module loaded into the process exports the symbol".to_owned()
+}
+
+/// Whether `symbol` is one of Aura's own, which no program may call as a
+/// foreign function.
+#[cfg(windows)]
+fn is_internal_host_symbol(symbol: &str, pointer: *const c_void) -> bool {
+    use windows_sys::Win32::System::LibraryLoader::{
+        GetModuleHandleExW, GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS,
+        GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+    };
+    if symbol.starts_with("aura_direct_")
+        || symbol.starts_with("aura_debug_")
+        || symbol.starts_with("LLVM")
+        || symbol.starts_with("_ZN")
+        || symbol.starts_with("__rust_")
+        || symbol == "rust_eh_personality"
+    {
+        return true;
+    }
+    if pointer.is_null() {
+        return false;
+    }
+    let mut module = std::ptr::null_mut();
+    // SAFETY: with the from-address flag the "name" is an address to look
+    // up, and `module` is writable.
+    let found = unsafe {
+        GetModuleHandleExW(
+            GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT,
+            pointer.cast(),
+            &mut module,
+        )
+    };
+    found != 0 && std::ptr::eq(module, host_image_base())
 }
 
 /// The function `symbol` among the libraries loaded into the process, as
@@ -1207,6 +1322,8 @@ pub unsafe fn handle_drop(symbol: &str) -> Result<crate::runtime_value::FfiHandl
 fn library_file_names(name: &str) -> Vec<String> {
     if cfg!(target_os = "macos") {
         vec![format!("lib{name}.dylib"), format!("lib{name}.so")]
+    } else if cfg!(windows) {
+        vec![format!("{name}.dll"), format!("lib{name}.dll")]
     } else {
         vec![format!("lib{name}.so")]
     }
@@ -1214,6 +1331,13 @@ fn library_file_names(name: &str) -> Vec<String> {
 
 /// The directories the linker searches for a library by default, where a
 /// library may sit only under a versioned name such as `libsqlite3.so.0`.
+/// Windows keeps no versioned library names: the loader's own search
+/// finds a library by its one name.
+#[cfg(windows)]
+fn system_library_directories() -> Vec<PathBuf> {
+    Vec::new()
+}
+
 #[cfg(unix)]
 fn system_library_directories() -> Vec<PathBuf> {
     let arch = std::env::consts::ARCH;
@@ -1227,7 +1351,6 @@ fn system_library_directories() -> Vec<PathBuf> {
     directories
 }
 
-#[cfg(unix)]
 fn parse_soname_version(suffix: &str) -> Option<Vec<u64>> {
     if suffix.is_empty() {
         return None;
@@ -1240,7 +1363,6 @@ fn parse_soname_version(suffix: &str) -> Option<Vec<u64>> {
 
 /// The files in `directory` that are versions of `file_name`, such as
 /// `libsqlite3.so.0` for `libsqlite3.so`, sorted by descending numeric version.
-#[cfg(unix)]
 fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     let prefix = format!("{file_name}.");
     let mut files = std::fs::read_dir(directory)
@@ -1273,6 +1395,34 @@ fn versioned_library_files(directory: &Path, file_name: &str) -> Vec<PathBuf> {
     files
 }
 
+/// Loads the library at `path`, or the one the loader finds for a bare
+/// file name, and returns its module handle.
+#[cfg(windows)]
+fn open_library(path: &Path) -> Result<usize, String> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::System::LibraryLoader::{
+        LoadLibraryExW, LOAD_WITH_ALTERED_SEARCH_PATH,
+    };
+    let mut wide: Vec<u16> = path.as_os_str().encode_wide().collect();
+    if wide.contains(&0) {
+        return Err("the path contains a NUL character".to_string());
+    }
+    wide.push(0);
+    // A library named by its full path finds the libraries it needs beside
+    // itself. The flag is only valid with such a path.
+    let flags = if path.is_absolute() {
+        LOAD_WITH_ALTERED_SEARCH_PATH
+    } else {
+        0
+    };
+    // SAFETY: `wide` is NUL terminated, and the reserved handle is null.
+    let handle = unsafe { LoadLibraryExW(wide.as_ptr(), std::ptr::null_mut(), flags) };
+    if handle.is_null() {
+        return Err(std::io::Error::last_os_error().to_string());
+    }
+    Ok(handle as usize)
+}
+
 #[cfg(unix)]
 fn open_library(path: &Path) -> Result<usize, String> {
     use std::os::unix::ffi::OsStrExt;
@@ -1303,7 +1453,6 @@ fn open_library(path: &Path) -> Result<usize, String> {
 /// The files to try for the library `name`, in order: each of
 /// `search_paths`, then the loader's own search, then a versioned file in
 /// the system's library directories.
-#[cfg(unix)]
 fn library_candidates(name: &str, search_paths: &[PathBuf]) -> Vec<PathBuf> {
     let file_names = library_file_names(name);
     let mut candidates = Vec::new();
@@ -1323,7 +1472,6 @@ fn library_candidates(name: &str, search_paths: &[PathBuf]) -> Vec<PathBuf> {
 }
 
 /// The files to try for the macOS framework `name`.
-#[cfg(unix)]
 fn framework_candidates(name: &str) -> Vec<PathBuf> {
     ["/System/Library/Frameworks", "/Library/Frameworks"]
         .map(|root| PathBuf::from(format!("{root}/{name}.framework/{name}")))
@@ -1333,7 +1481,6 @@ fn framework_candidates(name: &str) -> Vec<PathBuf> {
 /// Loads the first of `candidates` the loader accepts into the process, so
 /// [`call_process_symbol`] finds its symbols. The failure names `library`
 /// and gives the loader's reason for the first candidate.
-#[cfg(unix)]
 fn load_first(library: &str, candidates: &[PathBuf]) -> Result<usize, FfiError> {
     let mut first_failure = None;
     for candidate in candidates {
@@ -1352,7 +1499,6 @@ fn load_first(library: &str, candidates: &[PathBuf]) -> Result<usize, FfiError> 
 /// once per `(kind, name, canonical_search_paths)` tuple, so the symbols
 /// resolve via explicit `RTLD_LOCAL` handles as they do in a built program.
 /// Frameworks exist only on macOS and are skipped elsewhere.
-#[cfg(unix)]
 pub fn load_libraries(
     libraries: &[String],
     search_paths: &[PathBuf],
@@ -1409,18 +1555,6 @@ pub fn load_libraries(
         }
     }
     Ok(())
-}
-
-#[cfg(not(unix))]
-pub fn load_libraries(
-    libraries: &[String],
-    _search_paths: &[PathBuf],
-    frameworks: &[String],
-) -> Result<(), FfiError> {
-    match libraries.first().or(frameworks.first()) {
-        Some(_) => Err(FfiError::UnsupportedProcessLookupPlatform),
-        None => Ok(()),
-    }
 }
 
 /// Resolves `symbol` from the process-global/system symbol namespace and calls
@@ -2820,9 +2954,58 @@ mod tests {
         let names = library_file_names("sqlite3");
         if cfg!(target_os = "macos") {
             assert_eq!(names, ["libsqlite3.dylib", "libsqlite3.so"]);
+        } else if cfg!(windows) {
+            assert_eq!(names, ["sqlite3.dll", "libsqlite3.dll"]);
         } else {
             assert_eq!(names, ["libsqlite3.so"]);
         }
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn resolves_c_runtime_and_loaded_library_symbols_and_reports_lookup_failures() {
+        let signature = FfiSignature::new(vec![FfiType::I32], FfiType::I32);
+        // SAFETY: the C runtime's `abs` is `int abs(int)`.
+        let magnitude =
+            unsafe { call_process_symbol("abs", &signature, &mut [FfiValue::I32(-41)]) }
+                .expect("the C runtime is always in the default namespace");
+        assert_eq!(magnitude, FfiValue::I32(41));
+
+        load_libraries(&["kernel32".to_owned()], &[], &["Ignored".to_owned()])
+            .expect("kernel32 loads by its bare name, and frameworks are skipped");
+        let signature = FfiSignature::new(vec![], FfiType::I32);
+        // SAFETY: `GetCurrentProcessId` takes nothing and returns a 32-bit
+        // integer.
+        let process_id = unsafe { call_process_symbol("GetCurrentProcessId", &signature, &mut []) }
+            .expect("kernel32 exports GetCurrentProcessId");
+        assert_eq!(process_id, FfiValue::I32(std::process::id() as i32));
+
+        // SAFETY: no foreign call occurs when lookup fails.
+        let error =
+            unsafe { call_process_symbol("__aura_missing_ffi_test_symbol__", &signature, &mut []) }
+                .expect_err("unknown symbol should fail safely");
+        assert_eq!(
+            error.to_string(),
+            "FFI symbol `__aura_missing_ffi_test_symbol__` was not found: \
+             no module loaded into the process exports the symbol"
+        );
+
+        // SAFETY: no lookup occurs after the interior-NUL check fails.
+        let invalid_name = unsafe { call_process_symbol("abs\0ignored", &signature, &mut []) }
+            .expect_err("interior NUL must be rejected before lookup");
+        assert_eq!(invalid_name, FfiError::InvalidSymbolName);
+
+        let missing = load_libraries(&["aura_no_such_library".to_owned()], &[], &[])
+            .expect_err("a library that does not exist must fail to load");
+        assert!(matches!(missing, FfiError::LibraryNotFound { .. }));
+
+        // An Aura runtime name is refused whatever exports it.
+        // SAFETY: no foreign call occurs when lookup is refused.
+        let internal = unsafe { call_process_symbol("aura_direct_probe", &signature, &mut []) }
+            .expect_err("Aura's own symbols are not foreign functions");
+        assert!(matches!(internal, FfiError::SymbolNotFound { .. }));
+        assert!(is_internal_host_symbol("__rust_alloc", std::ptr::null()));
+        assert!(!is_internal_host_symbol("abs", std::ptr::null()));
     }
 
     #[cfg(unix)]

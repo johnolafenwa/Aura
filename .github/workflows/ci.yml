@@ -30,6 +30,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run of the push before it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: never
 
@@ -148,6 +153,33 @@ jobs:
 
       - name: Compare the interpreter with native executables
         run: cargo test --locked -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture
+
+  windows-runtime:
+    # Native Windows is being brought up in steps. This step builds the
+    # runtime and runs its tests; the compiler and `aura build` follow.
+    runs-on: windows-2025
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+
+      - name: Put the POSIX commands the tests spawn on PATH
+        # Git for Windows carries `sh`, `echo`, `true` and the rest.
+        run: echo "C:\\Program Files\\Git\\usr\\bin" >> "$GITHUB_PATH"
+
+      - name: Run the runtime tests
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura-core -p aura-runtime
 
   native-binaries:
     strategy:
