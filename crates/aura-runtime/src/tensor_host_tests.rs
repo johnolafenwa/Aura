@@ -207,6 +207,10 @@ const PLANNED: &[(&str, Expression)] = &[
         let wide = binary(&left, &reshape(&l.row, &[1, 1, 3])?, 0)?;
         matmul(&binary(&wide, &reshape(&l.a, &[2, 1, 3])?, 1)?, &right)
     }),
+    ("matching stacks matmul", |l| {
+        let left = reshape(&binary(&l.a, &l.b, 0)?, &[2, 1, 3])?;
+        matmul(&left, &reshape(&l.tall, &[2, 3, 1])?)
+    }),
     ("permute three axes", |l| {
         let cube = binary(
             &reshape(&l.a, &[2, 3, 1])?,

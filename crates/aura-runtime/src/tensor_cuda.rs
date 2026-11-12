@@ -99,6 +99,48 @@ struct Api {
         DevicePointer,
         c_int,
     ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasSgemmStridedBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        i64,
+        DevicePointer,
+        c_int,
+        i64,
+        *const f32,
+        DevicePointer,
+        c_int,
+        i64,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasDgemmStridedBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+        i64,
+        DevicePointer,
+        c_int,
+        i64,
+        *const f64,
+        DevicePointer,
+        c_int,
+        i64,
+        c_int,
+    ) -> Status,
 }
 
 /// Opens the first of `names` the loader finds.
@@ -194,6 +236,8 @@ impl Api {
             cublasCreate_v2: load!(cublas, cublasCreate_v2),
             cublasSgemm_v2: load!(cublas, cublasSgemm_v2),
             cublasDgemm_v2: load!(cublas, cublasDgemm_v2),
+            cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
+            cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
         })
     }
 }
@@ -688,15 +732,23 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 let (rows, inner, columns) = (*rows as c_int, *inner as c_int, *columns as c_int);
                 let product = (rows as usize) * (columns as usize) * element;
                 let mut status = 0;
-                for (index, (left_offset, right_offset)) in pairs.iter().enumerate() {
-                    // cuBLAS matrices are column-major. A row-major product
-                    // A B is the column-major product of B and A as stored,
-                    // which is the transpose of the same result.
-                    let a = right + (right_offset * element) as u64;
-                    let b = left + (left_offset * element) as u64;
-                    let c = made.pointer + (index * product) as u64;
-                    // SAFETY: each pointer addresses a whole matrix of the
-                    // given size inside its buffer.
+                let count = pairs.len();
+                let stepped = |side: fn(&(usize, usize)) -> usize, step: usize| {
+                    pairs
+                        .iter()
+                        .enumerate()
+                        .all(|(index, pair)| side(pair) == index * step)
+                };
+                let left_stacked = stepped(|pair| pair.0, (rows * inner) as usize);
+                let right_shared = pairs.iter().all(|pair| pair.1 == 0);
+                let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
+                let tall = rows as usize * count;
+                if count > 1 && left_stacked && right_shared && tall <= c_int::MAX as usize {
+                    // A stack of matrices times one shared matrix is one
+                    // product with the stack read as a single tall matrix.
+                    let tall = tall as c_int;
+                    // SAFETY: the left buffer holds `count` matrices in a
+                    // row and the output holds as many products.
                     status = unsafe {
                         if *double {
                             (api.cublasDgemm_v2)(
@@ -704,15 +756,15 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                 0,
                                 0,
                                 columns,
-                                rows,
+                                tall,
                                 inner,
                                 &1.0,
-                                a,
+                                right,
                                 columns,
-                                b,
+                                left,
                                 inner,
                                 &0.0,
-                                c,
+                                made.pointer,
                                 columns,
                             )
                         } else {
@@ -721,21 +773,124 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                                 0,
                                 0,
                                 columns,
-                                rows,
+                                tall,
                                 inner,
                                 &1.0,
-                                a,
+                                right,
                                 columns,
-                                b,
+                                left,
                                 inner,
                                 &0.0,
-                                c,
+                                made.pointer,
                                 columns,
                             )
                         }
                     };
-                    if status != 0 {
-                        break;
+                } else if count > 1 && left_stacked && right_stacked && count <= c_int::MAX as usize
+                {
+                    // Matching stacks on both sides are one batched call.
+                    let (a_step, b_step, c_step) = (
+                        i64::from(inner) * i64::from(columns),
+                        i64::from(rows) * i64::from(inner),
+                        i64::from(rows) * i64::from(columns),
+                    );
+                    // SAFETY: every buffer holds `count` whole matrices
+                    // spaced by its step.
+                    status = unsafe {
+                        if *double {
+                            (api.cublasDgemmStridedBatched)(
+                                runtime.cublas,
+                                0,
+                                0,
+                                columns,
+                                rows,
+                                inner,
+                                &1.0,
+                                right,
+                                columns,
+                                a_step,
+                                left,
+                                inner,
+                                b_step,
+                                &0.0,
+                                made.pointer,
+                                columns,
+                                c_step,
+                                count as c_int,
+                            )
+                        } else {
+                            (api.cublasSgemmStridedBatched)(
+                                runtime.cublas,
+                                0,
+                                0,
+                                columns,
+                                rows,
+                                inner,
+                                &1.0,
+                                right,
+                                columns,
+                                a_step,
+                                left,
+                                inner,
+                                b_step,
+                                &0.0,
+                                made.pointer,
+                                columns,
+                                c_step,
+                                count as c_int,
+                            )
+                        }
+                    };
+                } else {
+                    for (index, (left_offset, right_offset)) in pairs.iter().enumerate() {
+                        // cuBLAS matrices are column-major. A row-major product
+                        // A B is the column-major product of B and A as stored,
+                        // which is the transpose of the same result.
+                        let a = right + (right_offset * element) as u64;
+                        let b = left + (left_offset * element) as u64;
+                        let c = made.pointer + (index * product) as u64;
+                        // SAFETY: each pointer addresses a whole matrix of the
+                        // given size inside its buffer.
+                        status = unsafe {
+                            if *double {
+                                (api.cublasDgemm_v2)(
+                                    runtime.cublas,
+                                    0,
+                                    0,
+                                    columns,
+                                    rows,
+                                    inner,
+                                    &1.0,
+                                    a,
+                                    columns,
+                                    b,
+                                    inner,
+                                    &0.0,
+                                    c,
+                                    columns,
+                                )
+                            } else {
+                                (api.cublasSgemm_v2)(
+                                    runtime.cublas,
+                                    0,
+                                    0,
+                                    columns,
+                                    rows,
+                                    inner,
+                                    &1.0,
+                                    a,
+                                    columns,
+                                    b,
+                                    inner,
+                                    &0.0,
+                                    c,
+                                    columns,
+                                )
+                            }
+                        };
+                        if status != 0 {
+                            break;
+                        }
                     }
                 }
                 buffers[*output] = Some(Arc::new(made));
