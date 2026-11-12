@@ -26,6 +26,22 @@ cargo build --release -p aura -p aura-runtime
 bash benchmarks/tensor/run.sh
 ```
 
+## Workloads
+
+`workloads.au` and `workloads.py` run six whole programs in Aura and in
+PyTorch: training a two layer network with AdamW, labelling a large
+batch with a three layer network, k-means, conjugate gradient on a dense
+system, training a small transformer of the nanoGPT shape, and pricing an
+option by Monte Carlo. Each prints a result that shows the work was done,
+such as the final loss. The two sides draw different random numbers, so
+a result is close to the other side's, not equal to it.
+
+```sh
+bash benchmarks/tensor/run_workloads.sh          # the GPU sides
+bash benchmarks/tensor/run_workloads.sh small    # sizes that finish in seconds
+CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
+```
+
 ## Results
 
 ### NVIDIA A40, CUDA

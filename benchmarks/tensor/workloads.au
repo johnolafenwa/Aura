@@ -1,0 +1,272 @@
+import sys
+import tensor
+from tensor import AdamW, Attention, Device, Embedding, LayerNorm, Linear, Tensor, Variable
+
+
+# Each workload prints `<name> <size> <milliseconds> <result> <first pass
+# milliseconds>`. The first pass runs once before the timed passes and
+# carries the costs paid once, such as compiling an expression for the
+# device.
+
+
+def mlp_train(rows: int64, steps: int64, device: Device) -> None:
+    # A two layer network learns the labels a fixed random linear map
+    # gives 784 wide rows, in batches of 256.
+    batch = 256
+    x = tensor.normal([rows, 784], 1, device)
+    labels = x.matmul(tensor.normal([784, 10], 2, device)).argmax()
+    x.eval()
+    labels.eval()
+    hidden = Linear.create(784, 512, 3, device)
+    output = Linear.create(512, 10, 4, device)
+    mut variables = hidden.variables()
+    variables.extend(output.variables())
+    mut optimizer = AdamW.create(variables, 0.001)
+    mut last: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for step in range(steps + 1):
+        at = (step * batch) % (rows - batch + 1)
+        logits = output.apply(hidden.apply(x.slice(0, at, at + batch)).relu())
+        loss = tensor.cross_entropy(logits, labels.slice(0, at, at + batch))
+        optimizer.step(loss)
+        if step == 0:
+            last = loss.item()
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+        if step == steps:
+            last = loss.item()
+    print(f"mlp_train {steps} {sys.monotonic_time_ms() - start} {last} {first}")
+
+
+def mlp_infer(rows: int64, reps: int64, device: Device) -> None:
+    # A three layer network labels a large batch.
+    x = tensor.normal([rows, 784], 5, device)
+    x.eval()
+    one = Linear.create(784, 2048, 6, device)
+    two = Linear.create(2048, 2048, 7, device)
+    three = Linear.create(2048, 10, 8, device)
+    mut total = 0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps + 1):
+        labels = three.apply(two.apply(one.apply(x).relu()).relu()).argmax()
+        total = labels.sum().item()
+        if rep == 0:
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+    print(f"mlp_infer {rows} {sys.monotonic_time_ms() - start} {total} {first}")
+
+
+def kmeans(rows: int64, rounds: int64, device: Device) -> None:
+    # Lloyd's algorithm on 64 wide points with 256 centres.
+    width = 64
+    count = 256
+    points = tensor.normal([rows, width], 9, device)
+    points.eval()
+    squares = (points * points).sum(1, true)
+    ones = Tensor[float32].full([rows, 1], 1.0, device)
+    mut centres = points.slice(0, 0, count)
+    mut moved: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for round in range(rounds + 1):
+        distances = squares - points.matmul(centres.transpose()) * 2.0 + (
+            centres * centres
+        ).sum(1, true).transpose()
+        nearest = distances.argmin()
+        sums = points.index_add(nearest, count)
+        sizes = ones.index_add(nearest, count).maximum(
+            Tensor[float32].full([1], 1.0, device)
+        )
+        next = sums / sizes
+        moved = (next - centres).abs().sum().item()
+        centres = next
+        if round == 0:
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+    print(f"kmeans {rows} {sys.monotonic_time_ms() - start} {moved} {first}")
+
+
+def conjugate_gradient(side: int64, rounds: int64, device: Device) -> None:
+    # Solves a dense symmetric positive definite system.
+    m = tensor.normal([side, side], 10, device)
+    a = m.matmul(m.transpose()) / side.to_float() + Tensor[float32].full(
+        [1],
+        1.0,
+        device,
+    ) * identity(side, device)
+    a.eval()
+    b = tensor.normal([side, 1], 11, device)
+    mut x = Tensor[float32].zeros([side, 1], device)
+    mut r = b.clone()
+    mut p = b.clone()
+    mut rr = (r * r).sum()
+    mut left: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for round in range(rounds + 1):
+        ap = a.matmul(p)
+        alpha = rr / (p * ap).sum()
+        x = x + p * alpha
+        r = r - ap * alpha
+        next = (r * r).sum()
+        p = r + p * (next / rr)
+        rr = next
+        tensor.evaluate([x.clone(), r.clone(), p.clone(), rr.clone()])
+        if round == 0:
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+    left = (a.matmul(x) - b).abs().max().item()
+    print(f"conjugate_gradient {side} {sys.monotonic_time_ms() - start} {left} {first}")
+
+
+def identity(side: int64, device: Device) -> Tensor[float32]:
+    row = tensor.arange(side, device).reshape([1, side])
+    column = tensor.arange(side, device).reshape([side, 1])
+    one = Tensor[float32].full([1], 1.0, device)
+    zero = Tensor[float32].zeros([1], device)
+    return tensor.choose(
+        row.equal(column),
+        one.broadcast_to([side, side]),
+        zero.broadcast_to([side, side]),
+    )
+
+
+class Block:
+    norm1: LayerNorm
+    mix: Attention
+    norm2: LayerNorm
+    wide: Linear
+    narrow: Linear
+
+    def apply(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.apply(self.norm1.apply(x), true)
+        return attended + self.narrow.apply(
+            self.wide.apply(self.norm2.apply(attended)).gelu()
+        )
+
+    def variables(self) -> list[Variable[float32]]:
+        mut all = self.norm1.variables()
+        all.extend(self.mix.variables())
+        all.extend(self.norm2.variables())
+        all.extend(self.wide.variables())
+        all.extend(self.narrow.variables())
+        return all
+
+
+def wrapped(x: Tensor[int64], count: int64) -> Tensor[int64]:
+    # The remainder of each element by `count`.
+    # Integer tensors do not divide yet, so the quotient goes through floats.
+    quotient = (x.to_float32() / count.to_float()).to_int64()
+    return x - quotient * count
+
+
+def transformer_train(
+    layers: int64,
+    width: int64,
+    steps: int64,
+    device: Device,
+) -> None:
+    # A character model of the nanoGPT shape learns to predict the next
+    # token of rows that count upward.
+    words = 65
+    context = 128
+    batch = 32
+    tokens = Embedding.create(words, width, 20, device)
+    places = Embedding.create(context, width, 21, device)
+    mut blocks: list[Block] = []
+    mut variables = tokens.variables()
+    variables.extend(places.variables())
+    for layer in range(layers):
+        block = Block(
+            norm1=LayerNorm.create(width, device),
+            mix=Attention.create(width, 4, 30 + layer * 10, device),
+            norm2=LayerNorm.create(width, device),
+            wide=Linear.create(width, width * 4, 31 + layer * 10, device),
+            narrow=Linear.create(width * 4, width, 32 + layer * 10, device),
+        )
+        variables.extend(block.variables())
+        blocks.append(block)
+    last = LayerNorm.create(width, device)
+    head = Linear.create(width, words, 22, device)
+    variables.extend(last.variables())
+    variables.extend(head.variables())
+    mut optimizer = AdamW.create(variables, 0.001)
+    where = tensor.arange(context, device)
+    offsets = (tensor.uniform([batch, 1], 23, device) * 65.0).to_int64()
+    inputs = wrapped(where.reshape([1, context]) + offsets, words)
+    wanted = wrapped(where.reshape([1, context]) + offsets + 1, words).reshape(
+        [batch * context]
+    )
+    inputs.eval()
+    wanted.eval()
+    mut loss_now: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for step in range(steps + 1):
+        mut hidden = tokens.apply(inputs) + places.apply(where)
+        for at in range(layers):
+            view block = blocks[at]
+            hidden = block.apply(hidden)
+        logits = head.apply(last.apply(hidden)).reshape([batch * context, words])
+        loss = tensor.cross_entropy(logits, wanted)
+        optimizer.step(loss)
+        if step == 0:
+            loss_now = loss.item()
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+        if step == steps:
+            loss_now = loss.item()
+    print(
+        f"transformer_train {layers}x{width} {sys.monotonic_time_ms() - start} {loss_now} {first}"
+    )
+
+
+def monte_carlo(paths: int64, reps: int64, device: Device) -> None:
+    # Prices a European call from the end value of each path.
+    spot = 100.0
+    strike = 105.0
+    rate = 0.05
+    spread = 0.2
+    mut price: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps + 1):
+        z = tensor.normal([paths], 100 + rep, device)
+        end = (z * spread + (rate - 0.5 * spread * spread)).exp() * spot
+        price = ((end - strike).relu().mean() * 0.951229424500714).item()
+        if rep == 0:
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+    print(f"monte_carlo {paths} {sys.monotonic_time_ms() - start} {price} {first}")
+
+
+def main() -> int32:
+    args = sys.args()
+    mut device = Device.cpu()
+    mut small = false
+    for arg in args:
+        if arg == "gpu":
+            device = Device.default()
+            if not device.is_gpu():
+                print("this machine has no GPU device")
+                return 1
+        if arg == "small":
+            small = true
+    print(f"device {device.name()}")
+    if small:
+        mlp_train(2048, 5, device)
+        mlp_infer(512, 2, device)
+        kmeans(4096, 3, device)
+        conjugate_gradient(128, 20, device)
+        transformer_train(1, 32, 3, device)
+        monte_carlo(100000, 2, device)
+        return 0
+    mlp_train(60000, 500, device)
+    mlp_infer(65536, 20, device)
+    kmeans(200000, 20, device)
+    conjugate_gradient(4096, 100, device)
+    transformer_train(4, 256, 20, device)
+    monte_carlo(10000000, 20, device)
+    return 0
