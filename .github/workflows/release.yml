@@ -103,6 +103,9 @@ jobs:
           - name: macos-arm64
             os: macos-15
             archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-aarch64-apple-darwin
+          - name: windows-x64
+            os: windows-2025
+            archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
 
@@ -135,34 +138,53 @@ jobs:
       # No cache: a release links only the pinned LLVM it downloads, or the
       # Homebrew bottle Homebrew verifies.
       - name: Install LLVM
+        shell: bash
         run: bash scripts/install-llvm.sh
 
       - name: Build release CLI
+        shell: bash
         env:
           AURA_BUILD_COMMIT: ${{ needs.release_identity.outputs.implementation_commit }}
           AURA_BUILD_CHANNEL: preview
         run: cargo build -p aura --release --locked
 
       - name: Check the libraries the CLI loads
+        if: runner.os != 'Windows'
         run: python3 scripts/check-aura-libraries.py target/release/aura
 
       - name: Package CLI
+        if: runner.os != 'Windows'
         shell: bash
         env:
           ARCHIVE_NAME: ${{ matrix.archive }}
         run: scripts/package-cli.sh "$ARCHIVE_NAME"
 
       - name: Smoke test packaged CLI outside the source tree
+        if: runner.os != 'Windows'
         shell: bash
         env:
           ARCHIVE_NAME: ${{ matrix.archive }}
         run: scripts/smoke-cli-archive.sh "$ARCHIVE_NAME.tar.gz"
 
+      - name: Package the Windows CLI
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: scripts/package-cli-windows.sh "$ARCHIVE_NAME"
+
+      - name: Smoke test the packaged Windows CLI outside the source tree
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: scripts/smoke-cli-archive-windows.sh "$ARCHIVE_NAME.zip"
+
       - name: Upload CLI artifact
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: ${{ matrix.archive }}
-          path: ${{ matrix.archive }}.tar.gz
+          path: ${{ matrix.archive }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
           if-no-files-found: error
 
   tools:

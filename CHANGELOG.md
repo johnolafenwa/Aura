@@ -7,6 +7,12 @@ in this file.
 
 ## Unreleased
 
+- Aura runs natively on x86-64 Windows. `aura.exe` checks, formats and
+  runs programs, and `aura build` writes a native `.exe` linked with the
+  Microsoft linker from the Visual Studio C++ build tools. CI builds
+  Aura and runs the runtime, compiler and command tests on a Windows
+  runner, the release workflow publishes an `x86_64-pc-windows-msvc`
+  archive, and `install.ps1` installs it.
 - Linux on arm64 is a supported host. CI builds Aura and runs the
   workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
   publishes an `aarch64-unknown-linux-gnu` archive, and the installer

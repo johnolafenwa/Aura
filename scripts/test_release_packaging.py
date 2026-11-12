@@ -27,6 +27,9 @@ RELEASE_WORKFLOW = REPO_ROOT / ".github" / "workflows" / "release.yml"
 PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli.sh"
 LINK_ARG_WRITER = REPO_ROOT / "scripts" / "write-native-link-args.py"
 SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive.sh"
+WINDOWS_PACKAGE_SCRIPT = REPO_ROOT / "scripts" / "package-cli-windows.sh"
+WINDOWS_SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-cli-archive-windows.sh"
+WINDOWS_INSTALL_SCRIPT = REPO_ROOT / "docs" / "public" / "install.ps1"
 AURA_COMPILER_BUILD = REPO_ROOT / "crates" / "aura-compiler" / "build.rs"
 INSTALL_SCRIPT = REPO_ROOT / "docs" / "public" / "install.sh"
 LANDING_INSTALL_COMPONENT = (
@@ -734,6 +737,72 @@ class ArchiveLayoutTests(unittest.TestCase):
             with self.subTest(osc_terminator=repr(terminator)):
                 cargo_output = f"native-static-libs: -lc\x1b]title{terminator} -lm"
                 self.assertEqual(native_link_args(cargo_output), ["-lc", "-lm"])
+
+
+class WindowsArchiveTests(unittest.TestCase):
+    def test_windows_package_carries_the_runtime_and_its_import_libraries(self) -> None:
+        script = WINDOWS_PACKAGE_SCRIPT.read_text(encoding="utf-8")
+        for contract in (
+            'cp target/release/aura.exe "$archive_root/bin/aura.exe"',
+            'cp target/release/aura_runtime.lib "$archive_root/lib/aura/aura_runtime.lib"',
+            'CARGO_TERM_COLOR=never cargo rustc',
+            'scripts/write-native-link-args.py',
+            'registry/src/*/windows_x86_64_msvc-*/lib/"$library"',
+            'cp "$found" "$archive_root/lib/aura/$library"',
+            '-m zipfile -c "../$archive_name.zip" "$archive_name"',
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, script)
+
+    def test_windows_scripts_reject_other_archive_names(self) -> None:
+        for arguments in (
+            [str(WINDOWS_PACKAGE_SCRIPT), "../escape"],
+            [str(WINDOWS_PACKAGE_SCRIPT), "aura-v0.14.0-x86_64-unknown-linux-gnu"],
+        ):
+            result = subprocess.run(
+                ["bash", *arguments],
+                cwd=REPO_ROOT,
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                timeout=10,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("invalid release archive name", result.stderr)
+
+    def test_windows_smoke_runs_the_archive_without_cargo(self) -> None:
+        script = WINDOWS_SMOKE_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn('CARGO="$missing_cargo"', script)
+        self.assertIn("smoke work directory must be outside the source checkout", script)
+        self.assertIn('run --backend direct "$source_root/examples/basic_addition.au"', script)
+        self.assertIn('build -o "$work_root/basic_addition.exe"', script)
+
+    def test_release_and_ci_build_the_windows_archive(self) -> None:
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        job = release[release.index("  cli:\n"):release.index("  tools:\n")]
+        self.assertIn("os: windows-2025\n", job)
+        self.assertIn("-x86_64-pc-windows-msvc\n", job)
+        self.assertIn('run: scripts/package-cli-windows.sh "$ARCHIVE_NAME"\n', job)
+        self.assertIn('run: scripts/smoke-cli-archive-windows.sh "$ARCHIVE_NAME.zip"\n', job)
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        windows = ci[ci.index("  windows:\n"):ci.index("  native-binaries:\n")]
+        self.assertIn('scripts/package-cli-windows.sh "$archive"', windows)
+        self.assertIn('scripts/smoke-cli-archive-windows.sh "$archive.zip"', windows)
+        self.assertIn("pwsh -NoProfile -File docs/public/install.ps1", windows)
+
+    def test_powershell_installer_verifies_the_checksum_and_runs_last(self) -> None:
+        installer = WINDOWS_INSTALL_SCRIPT.read_text(encoding="utf-8")
+        self.assertIn("v0.14.0-preview", installer)
+        self.assertIn("SHA256SUMS", installer)
+        self.assertIn("Get-FileHash -Algorithm SHA256", installer)
+        self.assertIn("AURA_INSTALL_PREFIX", installer)
+        self.assertIn("AURA_INSTALL_BASE_URL", installer)
+        self.assertIn("x86_64-pc-windows-msvc", installer)
+        # `irm ... | iex` runs whatever arrived, so one call on the last
+        # line starts everything.
+        self.assertEqual(installer.rstrip("\n").splitlines()[-1], "Install-Aura")
+        self.assertEqual(installer.count("\nInstall-Aura\n"), 1)
 
 
 class InstalledArchiveSmokeTests(unittest.TestCase):

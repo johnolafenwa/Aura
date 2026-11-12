@@ -240,6 +240,18 @@ jobs:
             archive="aura-v$version-x86_64-pc-windows-msvc"
             scripts/package-cli-windows.sh "$archive"
             scripts/smoke-cli-archive-windows.sh "$archive.zip"
+            # Install the archive with the PowerShell installer, then build
+            # and run a program with the installed command.
+            mkdir -p "$RUNNER_TEMP/aura-release"
+            cp "$archive.zip" "$RUNNER_TEMP/aura-release/"
+            (cd "$RUNNER_TEMP/aura-release" && sha256sum "$archive.zip" > SHA256SUMS)
+            AURA_INSTALL_RELEASE_TAG="v$version" \
+              AURA_INSTALL_BASE_URL="file:///$(cygpath -m "$RUNNER_TEMP/aura-release")" \
+              AURA_INSTALL_PREFIX="$(cygpath -w "$RUNNER_TEMP/aura-prefix")" \
+              pwsh -NoProfile -File docs/public/install.ps1
+            installed="$RUNNER_TEMP/aura-prefix/bin/aura.exe"
+            "$installed" --version
+            (cd "$RUNNER_TEMP" && "$installed" run --backend direct "$GITHUB_WORKSPACE/examples/basic_addition.au")
           } 2>&1 | tee "$RUNNER_TEMP/package.log"
 
       - name: Show where a failed step stopped

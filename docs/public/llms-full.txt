@@ -469,6 +469,7 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | macOS 15, Apple silicon | `aarch64-apple-darwin` | [Install on macOS](/install/macos) |
 | macOS 15, Intel | `x86_64-apple-darwin` | [Install on macOS](/install/macos) |
 | Ubuntu 24.04 or compatible glibc Linux, x86-64 | `x86_64-unknown-linux-gnu` | [Install on Linux](/install/linux) |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.14 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
 Every guide follows the same three steps.
@@ -950,8 +951,10 @@ request failures appear there. You do not need a separate server package.
 
 # Install Aura On Windows With WSL
 
-Aura has no native Windows executable. On an x86-64 Windows 11 machine, you
-install and run the Linux release inside Windows Subsystem for Linux 2
+The 0.14 release has no native Windows executable, and the
+[native Windows install](/install/windows) starts with the release after
+it. On an x86-64 Windows 11 machine, you can install and run the Linux
+release inside Windows Subsystem for Linux 2
 (WSL 2) with Ubuntu 24.04. The CLI, compiler runtime, your projects, and the
 VS Code language server all run inside WSL 2.
 
@@ -1103,6 +1106,94 @@ compiler ships only as the Linux binary running inside WSL.
 
 The current Aura release has no Linux ARM64 archive. Windows-on-ARM WSL hosts
 are not supported in this preview.
+
+## Source: docs/install/windows.md
+
+# Install Aura On Windows
+
+Aura runs natively on x86-64 Windows 11. The native Windows archive ships
+from the release after 0.14. On 0.14, or on a machine without the Microsoft
+C++ build tools, use [Windows with WSL](/install/windows-wsl).
+
+## 1. Install The Microsoft Linker
+
+`aura run` and `aura build` compile a program to native code and link it
+with the Microsoft linker, `link.exe`. Install the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+and select the **Desktop development with C++** workload. A full Visual
+Studio install with that workload works too.
+
+`aura run --backend mir`, `aura check`, `aura fmt`, and the language server
+need no linker.
+
+## 2. Install Aura
+
+In PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+The installer downloads the `x86_64-pc-windows-msvc` archive and
+`SHA256SUMS`. It rejects the archive if the checksum does not match, and
+otherwise installs under `%LOCALAPPDATA%\Programs\Aura`.
+
+## 3. Add Aura To PATH
+
+Add the `bin` directory to your user `PATH`. You only need to do this once:
+
+```powershell
+$bin = "$env:LOCALAPPDATA\Programs\Aura\bin"
+[Environment]::SetEnvironmentVariable('Path', "$bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+$env:PATH = "$bin;$env:PATH"
+```
+
+New terminals read the user `PATH`. The last command updates the current
+terminal right away.
+
+## 4. Verify The Installation
+
+```powershell
+aura --version
+```
+
+## 5. Run A Program
+
+```powershell
+aura run "$env:LOCALAPPDATA\Programs\Aura\share\aura\examples\basic_addition.au"
+```
+
+The program prints `16`. To write a standalone executable:
+
+```powershell
+aura build -o basic_addition.exe "$env:LOCALAPPDATA\Programs\Aura\share\aura\examples\basic_addition.au"
+.\basic_addition.exe
+```
+
+## What Gets Installed
+
+```text
+%LOCALAPPDATA%\Programs\Aura\
+├── bin\aura.exe
+├── lib\aura\
+│   ├── aura_runtime.lib
+│   ├── native-link-args.json
+│   └── windows.*.lib
+└── share\aura\
+    ├── examples\
+    ├── README.md
+    └── LICENSE
+```
+
+To install under a different directory, set `AURA_INSTALL_PREFIX` before
+running the installer.
+
+## Differences From Linux And macOS
+
+- A program's executable has the `.exe` extension, and `aura build --debug`
+  writes a `.pdb` program database beside it.
+- Packages that name native libraries under `[ffi]` link import libraries
+  (`name.lib`) and load the matching DLLs from `PATH`.
 
 ## Source: docs/manual/index.md
 
