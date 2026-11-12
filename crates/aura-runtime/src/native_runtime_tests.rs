@@ -29259,7 +29259,10 @@ fn http_host_entries_borrow_the_stream_and_read_a_response_through_the_native_ab
         )) >= 0,
         "the pool reports a count"
     );
-    expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+    // Other tests count on their kept connections, so clear the pool alone.
+    crate::runtime_value::http_client::pool_test_lock::alone(|| {
+        expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+    });
 }
 
 #[test]
