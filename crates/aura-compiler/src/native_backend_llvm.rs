@@ -823,6 +823,10 @@ struct FunctionIr {
     /// The callee of each direct call `version_blocks` copied, once per
     /// copy.
     copied_calls: Vec<FuncRef>,
+    /// The copies `version_blocks` made of each select that was not yet
+    /// settled, by the select's result, so a later call for blocks that
+    /// were already copied settles those copies too.
+    select_copies: HashMap<Val, Vec<u32>>,
     current: Option<u32>,
     params_block: Option<u32>,
     /// The source position of the instructions built from here on.
@@ -945,6 +949,7 @@ impl FunctionIr {
             data_refs: Vec::new(),
             sig_refs: Vec::new(),
             copied_calls: Vec::new(),
+            select_copies: HashMap::new(),
             current: None,
             params_block: None,
             location: None,
@@ -1073,6 +1078,15 @@ impl FunctionIr {
                 kept.insert(inst.results[0], constant.ok_or(if_true));
                 inst.op = Op::Copy(if_false);
             }
+            // A copy of this select, in the copy of a loop that shares
+            // these blocks, reads memory as the blocks do. Left alone it
+            // would test the condition on every pass.
+            for copy in self.select_copies.remove(select).unwrap_or_default() {
+                let copy = &mut self.insts[copy as usize];
+                if let Op::Select(_, _, if_false) = copy.op {
+                    copy.op = Op::Copy(if_false);
+                }
+            }
         }
         let escapes = self.layout.iter().any(|block| {
             !set.contains(block)
@@ -1150,6 +1164,9 @@ impl FunctionIr {
                 let index = self.insts.len() as u32;
                 for result in &results {
                     self.value_defs[result.0 as usize] = Some(index);
+                }
+                if let (Op::Select(..), Some(result)) = (&op, original.results.first()) {
+                    self.select_copies.entry(*result).or_default().push(index);
                 }
                 self.insts.push(InstIr {
                     op,
