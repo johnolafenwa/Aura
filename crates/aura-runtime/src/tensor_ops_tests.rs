@@ -616,8 +616,8 @@ fn a_gradient_follows_the_watched_tensors_only() {
 
     let message = |result: Result<Value>| result.unwrap_err().message;
     assert!(message(node_op(&l.counts, 4, &[])).contains("expects a float tensor"));
-    assert!(message(gradient(&product, &l.a)).contains("expects a watched tensor"));
-    assert!(message(gradient(&product, &product)).contains("expects a watched tensor"));
+    assert!(message(gradient(&product, &l.a)).contains("made with `requires_grad()`"));
+    assert!(message(gradient(&product, &product)).contains("made with `requires_grad()`"));
     let vector = watch(&l.row);
     let through_vector = matmul(&l.a, &vector).unwrap();
     assert!(message(gradient(&through_vector, &vector)).contains("rank-one operand"));
@@ -661,10 +661,53 @@ fn a_variable_holds_a_watched_tensor_that_can_be_replaced() {
 
     let message = |result: Result<Value>| result.unwrap_err().message;
     assert!(message(node_op(&l.counts, 6, &[])).contains("expects a float tensor"));
-    assert!(message(node_op(&l.a, 7, &[])).contains("expects a variable"));
-    assert!(message(pair_op(&l.a, &l.b, 4, &[])).contains("expects a variable"));
+    assert!(message(node_op(&l.a, 7, &[])).contains("expects a parameter"));
+    assert!(message(pair_op(&l.a, &l.b, 4, &[])).contains("expects a parameter"));
     assert!(message(pair_op(&variable, &l.row, 4, &[]))
-        .contains("the variable's dtype and shape [2, 3]"));
+        .contains("the parameter's dtype and shape [2, 3]"));
+    // Making a variable of a variable gives another handle to it.
+    let again = node_op(&variable, 6, &[]).unwrap();
+    assert_eq!(node(&again), node(&variable));
+}
+
+#[test]
+fn backward_adds_gradients_to_the_watched_tensors_until_they_are_cleared() {
+    let l = leaves(TensorDevice::Cpu);
+    let weight = watch(&l.a);
+    let grad = |tensor: &Value| array(&node_op(tensor, 11, &[]).unwrap());
+    // No gradient yet reads as zeros.
+    assert_eq!(grad(&weight), float32(&[0.0; 6], &[2, 3]));
+    let doubled = binary(&weight, &l.two, 2).unwrap();
+    node_op(&doubled, 10, &[]).unwrap();
+    assert_eq!(grad(&weight), float32(&[2.0; 6], &[2, 3]));
+    // A second result adds to it.
+    let squared = binary(&weight, &weight, 2).unwrap();
+    node_op(&squared, 10, &[]).unwrap();
+    let expected: Vec<f32> = [1.0_f32, -2.0, 3.0, 4.5, 0.25, 6.0]
+        .iter()
+        .map(|value| 2.0 + 2.0 * value)
+        .collect();
+    assert_eq!(grad(&weight), float32(&expected, &[2, 3]));
+    // The results wait to run with the next group, which runs them.
+    node_op(&l.b, 9, &[]).unwrap();
+    assert!(matches!(&*node(&squared).state(), State::Ready(_)));
+    node_op(&weight, 12, &[]).unwrap();
+    assert_eq!(grad(&weight), float32(&[0.0; 6], &[2, 3]));
+    // A new tensor in a variable starts with no gradient.
+    let variable = node_op(&l.a, 6, &[]).unwrap();
+    let held = node_op(&variable, 7, &[]).unwrap();
+    node_op(&binary(&held, &l.two, 2).unwrap(), 10, &[]).unwrap();
+    assert_eq!(grad(&held), float32(&[2.0; 6], &[2, 3]));
+    pair_op(&variable, &l.b, 4, &[]).unwrap();
+    assert_eq!(
+        grad(&node_op(&variable, 7, &[]).unwrap()),
+        float32(&[0.0; 6], &[2, 3])
+    );
+    node_op(&l.b, 9, &[]).unwrap();
+
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(node_op(&l.counts, 10, &[])).contains("expects a float tensor"));
+    assert!(message(node_op(&l.a, 11, &[])).contains("held by a `Parameter`"));
 }
 
 fn text(value: &str) -> Value {
@@ -1007,4 +1050,55 @@ fn safetensors_files_hold_the_narrow_and_wide_dtypes() {
         .unwrap_err()
         .contains("is not a safetensors file"));
     let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn a_waiting_tensor_the_program_holds_keeps_its_memory() {
+    deferred(|| {
+        let l = leaves(TensorDevice::Cpu);
+        let held = binary(&l.a, &l.b, 0).unwrap();
+        let total = {
+            let dropped = binary(&held, &l.b, 2).unwrap();
+            reduce(&dropped, 0, None).unwrap()
+        };
+        assert!(!node(&held).is_ready());
+        let expected = {
+            let sum = binary(&l.a, &l.b, 0).unwrap();
+            array(&reduce(&binary(&sum, &l.b, 2).unwrap(), 0, None).unwrap())
+        };
+        // Reading the total runs the held tensor's work and keeps it.
+        assert_eq!(array(&total), expected);
+        assert!(node(&held).is_ready());
+        // The next value computed from it starts from that memory: its
+        // plan is two leaves and one step.
+        let next = binary(&held, &l.a, 1).unwrap();
+        let (plan, _) = Plan::collect(node(&next));
+        assert_eq!(plan.slots.len(), 3);
+
+        // A loop that computes each value from the last runs one step
+        // per pass, with or without a tensor read on the way.
+        let mut value = binary(&l.a, &l.b, 0).unwrap();
+        for _ in 0..4 {
+            let following = binary(&value, &l.b, 0).unwrap();
+            let moved = reduce(&binary(&following, &value, 1).unwrap(), 0, None).unwrap();
+            let (plan, _, held) = Plan::collect_held(&[node(&moved)]);
+            assert!(
+                plan.slots.len() <= 7,
+                "the plan grew to {}",
+                plan.slots.len()
+            );
+            // The value of this pass, and on the first pass the one before it.
+            assert!(!held.is_empty() && held.len() <= 2);
+            array(&moved);
+            assert!(node(&following).is_ready());
+            value = following;
+        }
+
+        // Tensors read together keep a held tensor too.
+        let shared = binary(&l.a, &l.b, 2).unwrap();
+        let first = binary(&shared, &l.a, 0).unwrap();
+        let second = binary(&shared, &l.b, 0).unwrap();
+        evaluate_together(&[node(&first).clone(), node(&second).clone()]).unwrap();
+        assert!(node(&shared).is_ready());
+    });
 }

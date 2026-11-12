@@ -185,7 +185,7 @@ pub(crate) fn take_shape(source: &[usize], indices: &[usize], axis: usize) -> Bo
 /// For each index, the entry of `source` at that place along `axis`.
 pub(crate) fn take(source: &ArrayValue, indices: &ArrayValue, axis: usize) -> Result<ArrayValue> {
     let from = Lanes::new(&source.shape, axis);
-    let places = checked_indices(indices, from.length, "tensor::take")?;
+    let places = checked_indices(indices, from.length, "tensor::index_select")?;
     let shape = take_shape(&source.shape, &indices.shape, axis);
     let to = Lanes {
         inner: from.inner,

@@ -7,7 +7,7 @@ program runs on either, and gives the same integers and masks and the
 same floats to within a few units in the last place.
 
 ```aura
-from tensor import Device, Tensor, choose
+from tensor import Device, Tensor
 ```
 
 Use an `Array` for numeric work on the CPU. Use a tensor when the work is
@@ -23,7 +23,7 @@ needs.
 ## Example
 
 ```aura
-from tensor import Device, Tensor, choose
+from tensor import Device, Tensor, where
 
 def main():
     device = Device.default()
@@ -33,7 +33,7 @@ def main():
     y = Tensor[float32].from_array(counts, device)
     total = (x * y).sum()
     print(total.item())
-    capped = choose(x.greater(x.scalar(12.0)), x.scalar(12.0), x)
+    capped = where(x.greater(x.scalar(12.0)), x.scalar(12.0), x)
     print(capped.to_array())
 ```
 
@@ -127,18 +127,18 @@ one.
 | `sqrt()`, `exp()`, `log()`, `sin()`, `cos()`, `tanh()`, `erf()` | The function of each element. Float tensors. |
 | `sigmoid()` | `1 / (1 + exp(-x))` of each element. Float tensors. |
 | `gelu()` | `x * (1 + erf(x / sqrt(2))) / 2` of each element. Float tensors. |
-| `softmax(axis=-1)`, `log_softmax(axis=-1)` | Each lane along `axis` as positive numbers that sum to one, and the logarithm of that, computed without overflow. |
+| `softmax(dim=-1)`, `log_softmax(dim=-1)` | Each lane along `dim` as positive numbers that sum to one, and the logarithm of that, computed without overflow. |
 | `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | A `Tensor[bool]` of where the comparison holds. |
-| `choose(mask, when_true, when_false)` | A module function. Each element of `when_true` where `mask` holds, else of `when_false`. |
-| `sum(axis=None, keep=false)`, `min(...)`, `max(...)`, `mean(...)` | Over every element, as a tensor of shape `[1]`, or along one axis, which removes that axis. With `keep`, the result has the tensor's rank, with length one on each reduced axis, so it broadcasts against the tensor. `mean` is for float tensors and keeps the dtype. |
-| `argmax(axis=-1)`, `argmin(axis=-1)` | A `Tensor[int64]` of the place of the largest or smallest element of each lane along `axis`. The first wins a tie, and a NaN wins over every number. |
+| `where(mask, input, other)` | A module function. Each element of `input` where `mask` holds, else of `other`. |
+| `sum(dim=None, keepdim=false)`, `min(...)`, `max(...)`, `mean(...)` | Over every element, as a tensor of shape `[1]`, or along one axis, which removes that axis. With `keepdim`, the result has the tensor's rank, with length one on each reduced axis, so it broadcasts against the tensor. `mean` is for float tensors and keeps the dtype. |
+| `argmax(dim=-1)`, `argmin(dim=-1)` | A `Tensor[int64]` of the place of the largest or smallest element of each lane along `dim`. The first wins a tie, and a NaN wins over every number. |
 | `matmul(other)` | The matrix product, with the `Array.matmul` shape rules. |
 | `reshape(shape)`, `flatten()`, `transpose()`, `permute(axes)` | The same elements in a new shape or axis order. |
-| `slice(axis, start, stop, step=1)` | The entries from `start` up to, and not including, `stop` along `axis`, `step` apart. A negative bound counts from the end. |
-| `take(indices, axis=0)` | For each index of a `Tensor[int64]`, the entry at that place along `axis`. The shape of `indices` takes the place of the axis. With a table of rows this is an embedding lookup. |
-| `index_add(indices, size, axis=0)` | The reverse of `take`: a tensor with `size` entries along `axis`, where entry `k` is the sum of this tensor's entries whose index is `k`. |
-| `concat(other, axis=0)` | This tensor followed by `other` along `axis`. The module function `concat(parts, axis=0)` joins a list. |
-| `broadcast_to(shape)` | This tensor repeated to a shape that its own broadcasts to. |
+| `slice(dim, start, stop, step=1)` | The entries from `start` up to, and not including, `stop` along `dim`, `step` apart. A negative bound counts from the end. |
+| `index_select(dim, indices)` | For each index of a `Tensor[int64]`, the entry at that place along `dim`. The shape of `indices` takes the place of the axis. With a table of rows this is an embedding lookup. |
+| `index_add(indices, size, dim=0)` | The reverse of `index_select`: a tensor with `size` entries along `dim`, where entry `k` is the sum of this tensor's entries whose index is `k`. |
+| `cat(tensors, dim=0)` | A module function: the tensors of a list, one after another along `dim`. |
+| `expand(shape)` | This tensor repeated to a shape that its own broadcasts to. |
 | `to_int32()`, `to_int64()`, `to_float32()`, `to_float64()` | Each element converted. A float that does not fit the integer type is an error. |
 | `to(device)` | This tensor on another device. |
 | `shape()`, `len()`, `device()` | The shape as `list[int64]`, the element count, and the device. |
@@ -157,7 +157,7 @@ elementwise members take tensors. For a number there, use `relu()`,
 A mistake in shapes or dtypes is reported by the call that makes it, on
 every device, with the message the same `Array` operation gives.
 
-An index given to `take` or `index_add` must be inside the axis. The CPU
+An index given to `index_select` or `index_add` must be inside the axis. The CPU
 device reports one that is not as `AU4007`. A GPU cannot stop the
 program, so there such an index reads as zero and adds nothing.
 
@@ -165,10 +165,10 @@ program, so there such an index reads as zero and adds nothing.
 
 | API | Result |
 | --- | --- |
-| `uniform(shape, seed, device)` | A `Tensor[float32]` of floats spread evenly from zero up to, and not including, one. |
-| `normal(shape, seed, device)` | A `Tensor[float32]` of the normal distribution with mean zero and deviation one. |
+| `rand(shape, seed, device)` | A `Tensor[float32]` of floats spread evenly from zero up to, and not including, one. |
+| `randn(shape, seed, device)` | A `Tensor[float32]` of the normal distribution with mean zero and deviation one. |
 | `arange(count, device)` | A `Tensor[int64]` of the integers from zero up to, and not including, `count`. |
-| `dropout(x, rate, seed)` | `x` with a share `rate` of its elements set to zero and the others scaled up by `1 / (1 - rate)`. |
+| `dropout(x, p, seed)` | `x` with a share `p` of its elements set to zero and the others scaled up by `1 / (1 - p)`. |
 
 A seed always gives the same tensor, on every device, and a longer
 tensor begins with the shorter one of the same seed. Use a new seed for
@@ -177,17 +177,18 @@ GPU makes the numbers in its own memory.
 
 ## Gradients
 
-`watch()` gives a float tensor that gradients are taken with respect to.
-A float tensor computed from a watched tensor remembers how it was made.
+`requires_grad()` gives a float tensor that gradients are taken with
+respect to. A float tensor computed from one remembers how it was made.
 `result.gradient(of)` is the gradient of the sum of `result` with
-respect to the watched tensor `of`, in the shape of `of`.
+respect to `of`, in the shape of `of`. It is a value: nothing changes in
+place.
 
 ```aura
 from tensor import Device, Tensor
 
 def main():
     device = Device.default()
-    x = Tensor[float32].from_array(Array[float32].from_list([1.0, 2.0, 3.0], [3]), device).watch()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, 2.0, 3.0], [3]), device).requires_grad()
     y = (x * x + x * 2.0).sum()
     print(y.gradient(x).to_array())
 ```
@@ -198,56 +199,26 @@ Array[float32](shape=[3], values=[4.0, 6.0, 8.0])
 
 | API | Result |
 | --- | --- |
-| `watch()` | This tensor as one that gradients are taken with respect to. Float tensors only. |
+| `requires_grad()` | This tensor as one that gradients are taken with respect to. Float tensors only. |
 | `detach()` | This tensor as a constant. No gradient passes through it. |
-| `gradient(of)` | The gradient with respect to the watched tensor `of`. A watched tensor the result does not depend on has a gradient of zeros. |
+| `gradient(of)` | The gradient with respect to `of`. A tensor the result does not depend on has a gradient of zeros. |
+| `backward()` | Adds the gradient to the `grad` of every `Parameter` behind this tensor. See the next section. |
 
-The first `gradient` call on a result computes the gradients for every
-watched tensor behind it, and later calls on the same result take them.
-A gradient is built from the ordinary operations, so on a GPU it waits
-and runs with the rest of the expression. Every float operation has a
-gradient except `matmul` with a rank-one operand. Reshape the vector to
-a matrix first. Masks and integer tensors have none. Where several
-elements tie for a `min` or `max`, they share the gradient equally. A
-gradient is not itself tracked, so there are no second derivatives.
+The first `gradient` or `backward` call on a result computes the
+gradients for every tensor behind it, and later calls on the same result
+take them. A gradient is built from the ordinary operations, so on a GPU
+it waits and runs with the rest of the expression. Every float operation
+has a gradient except `matmul` with a rank-one operand. Reshape the
+vector to a matrix first. Masks and integer tensors have none. Where
+several elements tie for a `min` or `max`, they share the gradient
+equally. A gradient is not itself tracked, so there are no second
+derivatives.
 
-## Variables, Layers, and Optimizers
+## Parameters, Layers, and Optimizers
 
-A `Variable[T]` is a watched tensor that can be replaced by another of
-the same shape: a weight that training changes. `Variable[float32].holding(x)` makes one.
-Every clone of a variable names the same variable, so a model and its
-optimizer see one value.
-
-| API | Result |
-| --- | --- |
-| `Variable[T].holding(value: Tensor[T]) -> Variable[T]` | A variable that starts as a float tensor. |
-| `value(self) -> Tensor[T]` | On a variable: the watched tensor it holds now. |
-| `assign(self, value: Tensor[T])` | Replaces the tensor the variable holds. The work `value` waits on runs now. |
-| `evaluate(tensors)` | A module function. Runs the work of a list of tensors as one piece, so an expression several of them share is computed once. |
-
-The module has the layers of a transformer, for `float32`. Each is a
-class whose fields are variables, with `create` to make one with fresh
-weights, `apply` to run it, and `variables()` to list its variables.
-
-| Class or function | What it computes |
-| --- | --- |
-| `Linear.create(inputs, outputs, seed, device)` | `x.matmul(weight) + bias` over the last axis. `weight` has shape `[inputs, outputs]`. |
-| `Embedding.create(count, width, seed, device)` | A row of `weight` for each index of a `Tensor[int64]`. |
-| `LayerNorm.create(width, device)` | Each lane along the last axis moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. |
-| `Attention.create(width, heads, seed, device)` | Self-attention with several heads over a `[batch, length, width]` tensor. `apply(x, causal=false)`. |
-| `MixtureOfExperts.create(width, hidden, experts, active, seed, device)` | Several two layer networks and a gate. `apply(x)` weights the outputs of each row's `active` highest scoring experts by the softmax of their scores. `weights(x)` gives those weights. Every expert runs on every row. |
-| `one_hot(indices, count)` | A mask with one more axis, of length `count`, that holds at the place each index names. |
-| `top_indices(x, count)` | The places of the `count` largest elements of each lane along the last axis, largest first. |
-| `top_mask(x, count)` | A mask in the shape of `x` that holds at the `count` largest elements of each lane along the last axis. |
-| `attention(query, key, value, causal=false)` | Scaled dot-product attention over the last two axes. With `causal`, row `i` attends to rows `0` to `i` only. |
-| `cross_entropy(logits, targets)` | The mean over the rows of `logits` of the negative logarithm of the softmax entry the row's target names. |
-| `SGD.create(variables, rate)` | `step(loss)` moves each variable against its gradient. |
-| `AdamW.create(variables, rate, decay=0.01)` | `step(loss)` takes one Adam step with weight decay. |
-
-An optimizer's `step(loss)` computes the loss, every gradient, and every
-new weight as one piece of GPU work. Read the loss with `item()` after
-the step, not before it. Reading it first runs the model once for the
-loss and again inside the step.
+The names here follow PyTorch: `Parameter`, `forward`, `parameters`,
+`backward`, `grad`, `zero_grad`, and `step`. A training loop reads the
+way it does there:
 
 ```aura
 import tensor
@@ -258,15 +229,93 @@ def main():
     # Learn y = 2 * a - 3 * b + 1 from four points.
     inputs = Tensor[float32].from_array(Array[float32].from_list([1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, -1.0], [4, 2]), device)
     wanted = Tensor[float32].from_array(Array[float32].from_list([3.0, -2.0, 0.0, 8.0], [4, 1]), device)
-    layer = Linear.create(2, 1, 7, device)
-    optimizer = SGD.create(layer.variables(), 0.1)
-    mut step = 0
-    while step < 500:
-        error = layer.apply(inputs) - wanted
-        optimizer.step((error * error).mean())
-        step += 1
-    print(layer.weight.value().to_array())
+    mut model = Linear(2, 1, 7, device)
+    mut optimizer = SGD(model.parameters(), lr=0.1)
+    for step in range(500):
+        error = model.forward(inputs) - wanted
+        loss = (error * error).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    print(model.weight.value().to_array())
 ```
+
+### What Can Change
+
+A `Tensor[T]` never changes. A `Parameter[T]` is the one tensor type
+that does: it holds a float tensor that training replaces. The compiler
+keeps this rule:
+
+> The weights of a model that is not declared `mut` never change.
+
+It holds because of three things. `parameters()` takes `mut self`, so
+only a model declared `mut` can give its parameters to an optimizer.
+`step()` and `zero_grad()` take `mut self`, so the optimizer is declared
+`mut` too. And a program cannot copy a `Parameter`: moving one out of a
+model ends the use of that model. So `model = Linear(...)` without `mut`
+is a model you can pass around and run, and no code can train it.
+
+`loss.backward()` is the one effect the types do not show. It adds to
+the `grad` of each parameter behind `loss`. A gradient is working
+storage: it never changes what `forward` computes.
+
+| API | Result |
+| --- | --- |
+| `Parameter[T](value: Tensor[T])` | A parameter that starts as a float tensor. |
+| `value(self) -> Tensor[T]` | The tensor the parameter holds now. A result computed from it has a gradient with respect to it. |
+| `grad` | A property: the gradients `backward()` has added since the parameter was last replaced. Zeros when there are none. |
+| `copy_(mut self, value: Tensor[T])` | Replaces the tensor the parameter holds, for example with loaded weights, and clears `grad`. |
+| `evaluate(tensors)` | A module function. Runs the work of a list of tensors as one piece, so an expression several of them share is computed once. |
+
+### Gradients Add Up, and a Step Uses Them
+
+Each `backward()` adds to `grad`, as in PyTorch, so a loop can call it
+for several batches before one `step()`. `step()` clears the gradients
+it used. A loop that forgets `zero_grad()` therefore still trains
+correctly, which differs from PyTorch, where the old gradients would
+stay. `zero_grad()` is for dropping gradients that no step will use.
+
+`backward()` does not run anything on a GPU. `step()` runs the loss,
+every gradient, and every new weight as one piece of GPU work. Read the
+loss with `item()` after `step()`. Reading it between `backward()` and
+`step()` is correct and slower: the model runs once for the loss and
+again inside the step.
+
+### Layers
+
+Each layer is a class whose fields are parameters. Its constructor makes
+fresh weights from a seed, `forward` runs it, and `parameters()` lists
+its parameters for an optimizer. A model is a class of your own whose
+fields are layers, with the same two methods.
+
+| Class or function | What it computes |
+| --- | --- |
+| `Linear(in_features, out_features, seed, device)` | `x.matmul(weight) + bias` over the last axis. `weight` has shape `[in_features, out_features]`. |
+| `Embedding(num_embeddings, embedding_dim, seed, device)` | A row of `weight` for each index of a `Tensor[int64]`. |
+| `LayerNorm(normalized_shape, device)` | Each lane along the last axis moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. |
+| `MultiheadAttention(embed_dim, num_heads, seed, device)` | Self-attention with several heads over a `[batch, length, width]` tensor. `forward(x, is_causal=false)`. |
+| `MixtureOfExperts(width, hidden, experts, active, seed, device)` | Several two layer networks and a gate. `forward(x)` weights the outputs of each row's `active` highest scoring experts by the softmax of their scores. `weights(x)` gives those weights. Every expert runs on every row. |
+| `one_hot(indices, num_classes)` | A mask with one more axis, of length `num_classes`, that holds at the place each index names. |
+| `top_indices(x, count)` | The places of the `count` largest elements of each lane along the last axis, largest first. |
+| `top_mask(x, count)` | A mask in the shape of `x` that holds at the `count` largest elements of each lane along the last axis. |
+| `scaled_dot_product_attention(query, key, value, is_causal=false)` | Attention over the last two axes. With `is_causal`, row `i` attends to rows `0` to `i` only. |
+| `cross_entropy(logits, targets)` | The mean over the rows of `logits` of the negative logarithm of the softmax entry the row's target names. |
+| `SGD(params, lr)` | `step()` moves each parameter against its gradient. |
+| `AdamW(params, lr=0.001, weight_decay=0.01)` | `step()` takes one Adam step with weight decay. |
+
+Both optimizers also have `minimize(loss)`, which is `loss.backward()`
+followed by `step()`.
+
+### Differences From PyTorch
+
+- A tensor's dtype is part of its type: `Tensor[float32]`.
+- The device and the random seed are arguments. There is no default
+  device, global seed, or gradient mode to set.
+- A layer's weight has shape `[in_features, out_features]`, and
+  `forward` is called by name.
+- `dim` and `keepdim` are spelled as in PyTorch. Aura's `Array` uses
+  `axis` for the same thing.
+- `step()` clears the gradients it used.
 
 ## Saving and Loading
 
@@ -316,9 +365,9 @@ On a GPU device these run on the GPU:
 - `/`, `pow`, `abs`, `sqrt`, `exp`, `log`, `sin`, `cos`, the four
   reductions, and `matmul` of operands of rank two or more, for float
   tensors
-- `choose`, `reshape`, `flatten`, `transpose`, `permute`
-- on CUDA: `tanh`, `sigmoid`, `erf`, `slice`, `take`, `index_add`,
-  `concat`, `broadcast_to`, `argmax`, `argmin`, and the random tensors.
+- `where`, `reshape`, `flatten`, `transpose`, `permute`
+- on CUDA: `tanh`, `sigmoid`, `erf`, `slice`, `index_select`, `index_add`,
+  `cat`, `expand`, `argmax`, `argmin`, and the random tensors.
   On Metal these run on the CPU for now.
 - conversions from an integer dtype to a float dtype, and from `int32` to
   `int64`
@@ -348,11 +397,11 @@ The directory can be deleted at any time.
 
 | Operation | GPU result compared with the CPU device |
 | --- | --- |
-| Integer arithmetic, comparisons, `choose`, shape changes | Equal. |
+| Integer arithmetic, comparisons, `where`, shape changes | Equal. |
 | `+`, `-`, `*`, `/`, `sqrt`, `abs`, `minimum`, `maximum`, `min`, `max` on `float32` | Equal. |
 | `sum`, `mean`, `matmul` | Within a few units in the last place. The GPU adds in a different order. |
-| `exp`, `log`, `sin`, `cos`, `pow`, `tanh`, `sigmoid`, `erf`, `normal` | Within a few units in the last place. |
-| `slice`, `take`, `concat`, `broadcast_to`, `argmax`, `argmin`, `uniform` | Equal. |
+| `exp`, `log`, `sin`, `cos`, `pow`, `tanh`, `sigmoid`, `erf`, `randn` | Within a few units in the last place. |
+| `slice`, `index_select`, `cat`, `expand`, `argmax`, `argmin`, `rand` | Equal. |
 | `index_add` | Within a few units in the last place. The GPU adds in a different order. |
 
 The test suite checks these on a machine with a GPU. The hosted CI

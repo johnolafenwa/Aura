@@ -1,6 +1,6 @@
 import sys
 import tensor
-from tensor import AdamW, Attention, Device, Embedding, LayerNorm, Linear, Tensor, Variable
+from tensor import AdamW, MultiheadAttention, Device, Embedding, LayerNorm, Linear, Tensor, Parameter
 
 
 # Each workload prints `<name> <size> <milliseconds> <result> <first pass
@@ -13,23 +13,25 @@ def mlp_train(rows: int64, steps: int64, device: Device) -> None:
     # A two layer network learns the labels a fixed random linear map
     # gives 784 wide rows, in batches of 256.
     batch = 256
-    x = tensor.normal([rows, 784], 1, device)
-    labels = x.matmul(tensor.normal([784, 10], 2, device)).argmax()
+    x = tensor.randn([rows, 784], 1, device)
+    labels = x.matmul(tensor.randn([784, 10], 2, device)).argmax()
     x.eval()
     labels.eval()
-    hidden = Linear.create(784, 512, 3, device)
-    output = Linear.create(512, 10, 4, device)
-    mut variables = hidden.variables()
-    variables.extend(output.variables())
-    mut optimizer = AdamW.create(variables, 0.001)
+    mut hidden = Linear(784, 512, 3, device)
+    mut output = Linear(512, 10, 4, device)
+    mut params = hidden.parameters()
+    params.extend(output.parameters())
+    mut optimizer = AdamW(params, lr=0.001)
     mut last: float32 = 0.0
     mut first = 0
     mut start = sys.monotonic_time_ms()
     for step in range(steps + 1):
         at = (step * batch) % (rows - batch + 1)
-        logits = output.apply(hidden.apply(x.slice(0, at, at + batch)).relu())
+        logits = output.forward(hidden.forward(x.slice(0, at, at + batch)).relu())
         loss = tensor.cross_entropy(logits, labels.slice(0, at, at + batch))
-        optimizer.step(loss)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
         if step == 0:
             last = loss.item()
             first = sys.monotonic_time_ms() - start
@@ -41,16 +43,16 @@ def mlp_train(rows: int64, steps: int64, device: Device) -> None:
 
 def mlp_infer(rows: int64, reps: int64, device: Device) -> None:
     # A three layer network labels a large batch.
-    x = tensor.normal([rows, 784], 5, device)
+    x = tensor.randn([rows, 784], 5, device)
     x.eval()
-    one = Linear.create(784, 2048, 6, device)
-    two = Linear.create(2048, 2048, 7, device)
-    three = Linear.create(2048, 10, 8, device)
+    one = Linear(784, 2048, 6, device)
+    two = Linear(2048, 2048, 7, device)
+    three = Linear(2048, 10, 8, device)
     mut total = 0
     mut first = 0
     mut start = sys.monotonic_time_ms()
     for rep in range(reps + 1):
-        labels = three.apply(two.apply(one.apply(x).relu()).relu()).argmax()
+        labels = three.forward(two.forward(one.forward(x).relu()).relu()).argmax()
         total = labels.sum().item()
         if rep == 0:
             first = sys.monotonic_time_ms() - start
@@ -62,7 +64,7 @@ def kmeans(rows: int64, rounds: int64, device: Device) -> None:
     # Lloyd's algorithm on 64 wide points with 256 centres.
     width = 64
     count = 256
-    points = tensor.normal([rows, width], 9, device)
+    points = tensor.randn([rows, width], 9, device)
     points.eval()
     squares = (points * points).sum(1, true)
     ones = Tensor[float32].full([rows, 1], 1.0, device)
@@ -90,14 +92,14 @@ def kmeans(rows: int64, rounds: int64, device: Device) -> None:
 
 def conjugate_gradient(side: int64, rounds: int64, device: Device) -> None:
     # Solves a dense symmetric positive definite system.
-    m = tensor.normal([side, side], 10, device)
+    m = tensor.randn([side, side], 10, device)
     a = m.matmul(m.transpose()) / side.to_float() + Tensor[float32].full(
         [1],
         1.0,
         device,
     ) * identity(side, device)
     a.eval()
-    b = tensor.normal([side, 1], 11, device)
+    b = tensor.randn([side, 1], 11, device)
     mut x = Tensor[float32].zeros([side, 1], device)
     mut r = b.clone()
     mut p = b.clone()
@@ -126,32 +128,32 @@ def identity(side: int64, device: Device) -> Tensor[float32]:
     column = tensor.arange(side, device).reshape([side, 1])
     one = Tensor[float32].full([1], 1.0, device)
     zero = Tensor[float32].zeros([1], device)
-    return tensor.choose(
+    return tensor.where(
         row.equal(column),
-        one.broadcast_to([side, side]),
-        zero.broadcast_to([side, side]),
+        one.expand([side, side]),
+        zero.expand([side, side]),
     )
 
 
 class Block:
     norm1: LayerNorm
-    mix: Attention
+    mix: MultiheadAttention
     norm2: LayerNorm
     wide: Linear
     narrow: Linear
 
-    def apply(self, x: Tensor[float32]) -> Tensor[float32]:
-        attended = x + self.mix.apply(self.norm1.apply(x), true)
-        return attended + self.narrow.apply(
-            self.wide.apply(self.norm2.apply(attended)).gelu()
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.forward(self.norm1.forward(x), true)
+        return attended + self.narrow.forward(
+            self.wide.forward(self.norm2.forward(attended)).gelu()
         )
 
-    def variables(self) -> list[Variable[float32]]:
-        mut all = self.norm1.variables()
-        all.extend(self.mix.variables())
-        all.extend(self.norm2.variables())
-        all.extend(self.wide.variables())
-        all.extend(self.narrow.variables())
+    def parameters(mut self) -> list[Parameter[float32]]:
+        mut all = self.norm1.parameters()
+        all.extend(self.mix.parameters())
+        all.extend(self.norm2.parameters())
+        all.extend(self.wide.parameters())
+        all.extend(self.narrow.parameters())
         return all
 
 
@@ -173,30 +175,30 @@ def transformer_train(
     words = 65
     context = 128
     batch = 32
-    tokens = Embedding.create(words, width, 20, device)
-    places = Embedding.create(context, width, 21, device)
+    mut tokens = Embedding(words, width, 20, device)
+    mut places = Embedding(context, width, 21, device)
     mut blocks: list[Block] = []
-    mut variables = tokens.variables()
-    variables.extend(places.variables())
+    mut params = tokens.parameters()
+    params.extend(places.parameters())
     for layer in range(layers):
-        block = Block(
-            norm1=LayerNorm.create(width, device),
-            mix=Attention.create(width, 4, 30 + layer * 10, device),
-            norm2=LayerNorm.create(width, device),
-            wide=Linear.create(width, width * 4, 31 + layer * 10, device),
-            narrow=Linear.create(width * 4, width, 32 + layer * 10, device),
+        mut block = Block(
+            norm1=LayerNorm(width, device),
+            mix=MultiheadAttention(width, 4, 30 + layer * 10, device),
+            norm2=LayerNorm(width, device),
+            wide=Linear(width, width * 4, 31 + layer * 10, device),
+            narrow=Linear(width * 4, width, 32 + layer * 10, device),
         )
-        variables.extend(block.variables())
+        params.extend(block.parameters())
         blocks.append(block)
-    last = LayerNorm.create(width, device)
-    head = Linear.create(width, words, 22, device)
-    variables.extend(last.variables())
-    variables.extend(head.variables())
-    mut optimizer = AdamW.create(variables, 0.001)
-    where = tensor.arange(context, device)
-    offsets = (tensor.uniform([batch, 1], 23, device) * 65.0).to_int64()
-    inputs = wrapped(where.reshape([1, context]) + offsets, words)
-    wanted = wrapped(where.reshape([1, context]) + offsets + 1, words).reshape(
+    mut last = LayerNorm(width, device)
+    mut head = Linear(width, words, 22, device)
+    params.extend(last.parameters())
+    params.extend(head.parameters())
+    mut optimizer = AdamW(params, lr=0.001)
+    positions = tensor.arange(context, device)
+    offsets = (tensor.rand([batch, 1], 23, device) * 65.0).to_int64()
+    inputs = wrapped(positions.reshape([1, context]) + offsets, words)
+    wanted = wrapped(positions.reshape([1, context]) + offsets + 1, words).reshape(
         [batch * context]
     )
     inputs.eval()
@@ -205,13 +207,15 @@ def transformer_train(
     mut first = 0
     mut start = sys.monotonic_time_ms()
     for step in range(steps + 1):
-        mut hidden = tokens.apply(inputs) + places.apply(where)
+        mut hidden = tokens.forward(inputs) + places.forward(positions)
         for at in range(layers):
             view block = blocks[at]
-            hidden = block.apply(hidden)
-        logits = head.apply(last.apply(hidden)).reshape([batch * context, words])
+            hidden = block.forward(hidden)
+        logits = head.forward(last.forward(hidden)).reshape([batch * context, words])
         loss = tensor.cross_entropy(logits, wanted)
-        optimizer.step(loss)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
         if step == 0:
             loss_now = loss.item()
             first = sys.monotonic_time_ms() - start
@@ -233,7 +237,7 @@ def monte_carlo(paths: int64, reps: int64, device: Device) -> None:
     mut first = 0
     mut start = sys.monotonic_time_ms()
     for rep in range(reps + 1):
-        z = tensor.normal([paths], 100 + rep, device)
+        z = tensor.randn([paths], 100 + rep, device)
         end = (z * spread + (rate - 0.5 * spread * spread)).exp() * spot
         price = ((end - strike).relu().mean() * 0.951229424500714).item()
         if rep == 0:

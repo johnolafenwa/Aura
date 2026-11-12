@@ -1327,7 +1327,7 @@ fn tensor_module_runs_its_whole_api_on_the_cpu_device() {
     assert_eq!(binary.params.len(), 3);
 
     let output = crate::run_source(
-        r#"from tensor import Device, Tensor, choose
+        r#"from tensor import Device, Tensor, where
 
 def main():
     device = Device.cpu()
@@ -1339,7 +1339,7 @@ def main():
     print(z.to_array())
     print(f"{z.shape()} {z.len()} {z.device().name()}")
     print(f"{z.sum().item()} {z.min().item()} {z.max().item()} {z.mean().item()}")
-    print(z.sum(axis=0).to_array())
+    print(z.sum(dim=0).to_array())
     print(x.matmul(y.transpose()).to_array())
     print(x.minimum(y).maximum(-x).to_array())
     print(x.pow(y).sqrt().abs().to_array())
@@ -1348,7 +1348,7 @@ def main():
     print(f"{round_trip < 0.0001} {unit > 5.9999 and unit < 6.0001}")
     mask = x.greater(x.scalar(3.0))
     print(mask.to_array())
-    print(choose(mask, x, -x).to_array())
+    print(where(mask, x, -x).to_array())
     print(f"{x.less(y).to_array()} {x.less_equal(y).to_array()}")
     print(f"{x.greater_equal(y).to_array()} {x.equal(y).to_array()} {x.not_equal(y).to_array()}")
     print(x.reshape([3, 2]).flatten().permute([0]).to_array())
@@ -1361,7 +1361,7 @@ def main():
     print(Tensor[float64].full([1], 0.5, device).item())
     w = z.clone().to(device)
     w.eval()
-    print(w.max(axis=1).to_array())
+    print(w.max(dim=1).to_array())
     match Device.metal():
         case Device as gpu:
             print(gpu.is_gpu())
@@ -1456,20 +1456,20 @@ def main():
     rows = Tensor[int64].from_array(Array[int64].from_list([1, 1, 0], [3]), device)
     print(x.slice(1, 1, 3).to_array())
     print(x.slice(1, 0, -1, 2).to_array())
-    print(x.take(rows).shape())
-    print(x.take(rows, 1).to_array())
-    print(x.concat(x, 1).shape())
-    print(tensor.concat([x.clone(), x.clone(), x.clone()]).shape())
+    print(x.index_select(0, rows).shape())
+    print(x.index_select(1, rows).to_array())
+    print(tensor.cat([x.clone(), x.clone()], 1).shape())
+    print(tensor.cat([x.clone(), x.clone(), x.clone()]).shape())
     print(x.index_add(Tensor[int64].from_array(Array[int64].from_list([1, 1], [2]), device), 3).to_array())
     print(x.argmax().to_array())
     print(x.argmin(0).to_array())
     print(x.sum(1, true).to_array())
-    print(x.max(keep=true).shape())
+    print(x.max(keepdim=true).shape())
     print(x.mean(-2, true).shape())
-    print(x.slice(0, 0, 1).broadcast_to([2, 2, 3]).shape())
+    print(x.slice(0, 0, 1).expand([2, 2, 3]).shape())
     print(tensor.arange(4, device).to_array())
-    print(tensor.uniform([2, 2], 7, device).shape())
-    drift = (tensor.normal([3], 7, device) - tensor.normal([3], 7, device)).abs().max().item()
+    print(tensor.rand([2, 2], 7, device).shape())
+    drift = (tensor.randn([3], 7, device) - tensor.randn([3], 7, device)).abs().max().item()
     print(drift == 0.0)
     print(x.softmax().sum(1).to_array())
     print(f"{x.tanh().shape()} {x.sigmoid().shape()} {x.erf().shape()} {x.gelu().shape()}")
@@ -1510,21 +1510,21 @@ def main():
     # y = 2 * x0 - 3 * x1 + 1
     inputs = Tensor[float32].from_array(Array[float32].from_list([1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, -1.0], [4, 2]), device)
     wanted = Tensor[float32].from_array(Array[float32].from_list([3.0, -2.0, 0.0, 8.0], [4, 1]), device)
-    mut weights = Tensor[float32].zeros([2, 1], device).watch()
-    mut bias = Tensor[float32].zeros([1], device).watch()
+    mut weights = Tensor[float32].zeros([2, 1], device).requires_grad()
+    mut bias = Tensor[float32].zeros([1], device).requires_grad()
     mut step = 0
     while step < 300:
         error = inputs.matmul(weights) + bias - wanted
         loss = (error * error).mean()
-        weights = (weights.detach() - loss.gradient(weights) * 0.1).watch()
-        bias = (bias.detach() - loss.gradient(bias) * 0.1).watch()
+        weights = (weights.detach() - loss.gradient(weights) * 0.1).requires_grad()
+        bias = (bias.detach() - loss.gradient(bias) * 0.1).requires_grad()
         step += 1
     first = weights.slice(0, 0, 1).sum().item()
     second = weights.slice(0, 1, 2).sum().item()
     offset = bias.item()
     print(f"{first > 1.9 and first < 2.1} {second > -3.1 and second < -2.9} {offset > 0.9 and offset < 1.1}")
 
-    logits = Tensor[float32].from_array(Array[float32].from_list([2.0, 0.0, 0.0, 0.0, 0.0, 2.0], [2, 3]), device).watch()
+    logits = Tensor[float32].from_array(Array[float32].from_list([2.0, 0.0, 0.0, 0.0, 0.0, 2.0], [2, 3]), device).requires_grad()
     targets = Tensor[int64].from_array(Array[int64].from_list([0, 1], [2]), device)
     loss = tensor.cross_entropy(logits, targets)
     print(f"{loss.item() > 1.2} {loss.item() < 1.3}")
@@ -1544,55 +1544,55 @@ def main():
 fn a_small_transformer_learns_with_the_tensor_layers() {
     let output = crate::run_source(
         r#"import tensor
-from tensor import Device, Tensor, Variable, LayerNorm, Attention, Linear, Embedding, AdamW
+from tensor import Device, Tensor, Parameter, LayerNorm, MultiheadAttention, Linear, Embedding, AdamW
 
 class Block:
     norm1: LayerNorm
-    mix: Attention
+    mix: MultiheadAttention
     norm2: LayerNorm
     wide: Linear
     narrow: Linear
 
-    def apply(self, x: Tensor[float32]) -> Tensor[float32]:
-        attended = x + self.mix.apply(self.norm1.apply(x), true)
-        return attended + self.narrow.apply(self.wide.apply(self.norm2.apply(attended)).gelu())
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.forward(self.norm1.forward(x), true)
+        return attended + self.narrow.forward(self.wide.forward(self.norm2.forward(attended)).gelu())
 
-    def variables(self) -> list[Variable[float32]]:
-        mut all = self.norm1.variables()
-        all.extend(self.mix.variables())
-        all.extend(self.norm2.variables())
-        all.extend(self.wide.variables())
-        all.extend(self.narrow.variables())
+    def parameters(mut self) -> list[Parameter[float32]]:
+        mut all = self.norm1.parameters()
+        all.extend(self.mix.parameters())
+        all.extend(self.norm2.parameters())
+        all.extend(self.wide.parameters())
+        all.extend(self.narrow.parameters())
         return all
 
 
 def main():
     device = Device.cpu()
     width = 16
-    tokens = tensor.Embedding.create(5, width, 1, device)
-    places = tensor.Embedding.create(8, width, 2, device)
-    block = Block(norm1=tensor.LayerNorm.create(width, device), mix=tensor.Attention.create(width, 2, 10, device), norm2=tensor.LayerNorm.create(width, device), wide=tensor.Linear.create(width, 32, 20, device), narrow=tensor.Linear.create(32, width, 30, device))
-    head = tensor.Linear.create(width, 5, 40, device)
-    mut variables = tokens.variables()
-    variables.extend(places.variables())
-    variables.extend(block.variables())
-    variables.extend(head.variables())
-    mut optimizer = tensor.AdamW.create(variables, 0.01)
+    mut tokens = tensor.Embedding(5, width, 1, device)
+    mut places = tensor.Embedding(8, width, 2, device)
+    mut block = Block(norm1=tensor.LayerNorm(width, device), mix=tensor.MultiheadAttention(width, 2, 10, device), norm2=tensor.LayerNorm(width, device), wide=tensor.Linear(width, 32, 20, device), narrow=tensor.Linear(32, width, 30, device))
+    mut head = tensor.Linear(width, 5, 40, device)
+    mut params = tokens.parameters()
+    params.extend(places.parameters())
+    params.extend(block.parameters())
+    params.extend(head.parameters())
+    mut optimizer = tensor.AdamW(params, lr=0.01)
     # Each row counts up by one, modulo five. The model learns the next token.
     inputs = Tensor[int64].from_array(Array[int64].from_list([0, 1, 2, 3, 4, 0, 1, 2, 2, 3, 4, 0, 1, 2, 3, 4], [2, 8]), device)
     wanted = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3, 4, 0, 1, 2, 3, 3, 4, 0, 1, 2, 3, 4, 0], [16]), device)
-    where = tensor.arange(8, device)
+    positions = tensor.arange(8, device)
     mut step = 0
     while step < 40:
-        hidden = block.apply(tokens.apply(inputs) + places.apply(where))
-        logits = head.apply(hidden).reshape([16, 5])
+        hidden = block.forward(tokens.forward(inputs) + places.forward(positions))
+        logits = head.forward(hidden).reshape([16, 5])
         loss = tensor.cross_entropy(logits, wanted)
-        optimizer.step(loss)
+        optimizer.minimize(loss)
         if step == 0 or step == 39:
             print(loss.item() < 0.01)
         step += 1
-    hidden = block.apply(tokens.apply(inputs) + places.apply(where))
-    print(head.apply(hidden).reshape([16, 5]).argmax().to_array())
+    hidden = block.forward(tokens.forward(inputs) + places.forward(positions))
+    print(head.forward(hidden).reshape([16, 5]).argmax().to_array())
     kept = tensor.dropout(Tensor[float32].full([1000], 1.0, device), 0.25, 3).sum().item()
     print(kept > 900.0 and kept < 1100.0)
 "#,
@@ -1606,7 +1606,7 @@ def main():
 
 #[test]
 fn a_mixture_of_experts_keeps_its_top_experts_and_learns() {
-    // The program names neither `Linear` nor `Variable`, which the
+    // The program names neither `Linear` nor `Parameter`, which the
     // layer's own methods use.
     let output = crate::run_source(
         r#"import tensor
@@ -1618,21 +1618,21 @@ def main():
     print(tensor.top_indices(x, 2).to_array())
     print(tensor.top_mask(x, 2).to_array())
     print(tensor.one_hot(x.argmax(), 4).to_array())
-    layer = MixtureOfExperts.create(4, 8, 3, 2, 7, device)
+    mut layer = MixtureOfExperts(4, 8, 3, 2, 7, device)
     weights = layer.weights(x)
     one = Tensor[float32].full([1], 1.0, device)
-    print(tensor.choose(weights.greater(one * 0.0), one, one * 0.0).sum(1).to_array())
+    print(tensor.where(weights.greater(one * 0.0), one, one * 0.0).sum(1).to_array())
     total = weights.sum().item()
     print(total > 1.9999 and total < 2.0001)
-    rows = tensor.normal([64, 4], 1, device)
+    rows = tensor.randn([64, 4], 1, device)
     wanted = rows * rows - 1.0
-    mut optimizer = AdamW.create(layer.variables(), 0.01)
+    mut optimizer = AdamW(layer.parameters(), lr=0.01)
     mut first: float32 = 0.0
     mut last: float32 = 0.0
     for step in range(200):
-        gap = layer.apply(rows) - wanted
+        gap = layer.forward(rows) - wanted
         loss = (gap * gap).mean()
-        optimizer.step(loss)
+        optimizer.minimize(loss)
         if step == 0:
             first = loss.item()
         last = loss.item()
@@ -1650,6 +1650,122 @@ true
 true
 "
     );
+}
+
+#[test]
+fn a_model_trains_with_backward_and_an_optimizer_step() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Parameter, Linear, AdamW
+
+class Net:
+    hidden: Linear
+    output: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return self.output.forward(self.hidden.forward(x).relu())
+
+    def parameters(mut self) -> list[Parameter[float32]]:
+        mut all = self.hidden.parameters()
+        all.extend(self.output.parameters())
+        return all
+
+
+def main():
+    device = Device.cpu()
+    x = tensor.randn([64, 4], 1, device)
+    y = (x * x).sum(1, true)
+    mut model = Net(hidden=Linear(4, 16, 2, device), output=Linear(16, 1, 3, device))
+    mut optimizer = AdamW(model.parameters(), lr=0.01)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(300):
+        gap = model.forward(x) - y
+        loss = (gap * gap).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first * 0.2)
+    # Gradients add up until the parameter is replaced.
+    mut w = Parameter[float32](Tensor[float32].full([2], 3.0, device))
+    (w.value() * w.value()).sum().backward()
+    print(w.grad.to_array())
+    (w.value() * 2.0).sum().backward()
+    print(w.grad.to_array())
+    moved = w.value().detach() - w.grad * 0.5
+    w.copy_(moved)
+    print(w.value().to_array())
+    print(w.grad.to_array())
+"#,
+    )
+    .expect("a model trains");
+    assert_eq!(
+        output.stdout,
+        "true\nArray[float32](shape=[2], values=[6.0, 6.0])\nArray[float32](shape=[2], values=[8.0, 8.0])\nArray[float32](shape=[2], values=[-1.0, -1.0])\nArray[float32](shape=[2], values=[0.0, 0.0])\n"
+    );
+}
+
+#[test]
+fn the_weights_of_a_model_not_declared_mut_cannot_change() {
+    let check = |body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Device, Tensor, Parameter, Linear, SGD\n\ndef main():\n    device = Device.cpu()\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    // A `mut` layer hands its parameters to an optimizer.
+    check("    mut layer = Linear(2, 1, 7, device)\n    mut optimizer = SGD(layer.parameters(), lr=0.1)\n    optimizer.step()\n")
+        .expect("a mut layer trains");
+    // A layer not declared `mut` does not, and neither private handles
+    // nor moves give a second way to its weights.
+    let zeros = "Tensor[float32].zeros([2, 1], device)";
+    let read = "    print(layer.forward(Tensor[float32].zeros([1, 2], device)).to_array())\n";
+    let cases = [
+        (
+            "    layer = Linear(2, 1, 7, device)\n    optimizer = SGD(layer.parameters(), lr=0.1)\n".to_string(),
+            "method `parameters` requires a mutable receiver",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    layer.weight.copy_({zeros})\n"),
+            "method `copy_` requires a mutable receiver",
+        ),
+        (
+            format!("    mut layer = Linear(2, 1, 7, device)\n    layer.weight.assign({zeros})\n"),
+            "method `assign` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    other = layer.weight.share()\n".to_string(),
+            "method `share` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    layer.weight.zero_grad()\n".to_string(),
+            "method `zero_grad` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    optimizer = SGD(layer.parameters(), lr=0.1)\n    optimizer.step()\n".to_string(),
+            "method `step` requires a mutable receiver",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut stolen = layer.weight\n    stolen.copy_({zeros})\n{read}"),
+            "use of partially moved value `layer`",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut copy = layer\n    mut optimizer = SGD(copy.parameters(), lr=0.1)\n{read}"),
+            "use of moved value `layer`",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut twin = Linear(2, 1, 7, device)\n    twin.weight = layer.weight\n{read}"),
+            "use of partially moved value `layer`",
+        ),
+    ];
+    for (body, expected) in cases {
+        assert_eq!(check(&body).expect_err(&body), expected);
+    }
 }
 
 #[test]

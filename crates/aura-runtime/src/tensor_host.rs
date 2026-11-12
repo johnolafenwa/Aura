@@ -241,6 +241,8 @@ struct TensorNode {
     /// The watched tensor a variable holds now. Only the node behind a
     /// `Variable[T]` has one.
     variable: Option<Mutex<TensorValue>>,
+    /// The sum of the gradients `backward` left on this watched tensor.
+    grad: Mutex<Option<TensorValue>>,
 }
 
 /// The operation that gave a tracked tensor, and its operands.
@@ -295,6 +297,7 @@ impl TensorValue {
             history: None,
             gradients: Mutex::new(None),
             variable: None,
+            grad: Mutex::new(None),
         }))
     }
 
@@ -325,7 +328,7 @@ impl TensorValue {
                 held.lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
             })
-            .ok_or_else(|| tensor_error(name, "expects a variable"))
+            .ok_or_else(|| tensor_error(name, "expects a parameter"))
     }
 
     /// This new tensor as a tracked one. `history` is how it was computed,
@@ -338,6 +341,23 @@ impl TensorValue {
     }
 
     /// Whether a gradient can be asked for with respect to this tensor.
+    /// The gradient `backward` left on this tensor, if any.
+    fn grad(&self) -> Option<TensorValue> {
+        self.0
+            .grad
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+            .clone()
+    }
+
+    fn set_grad(&self, gradient: Option<TensorValue>) {
+        *self
+            .0
+            .grad
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner) = gradient;
+    }
+
     pub fn is_tracked(&self) -> bool {
         self.0.tracked
     }
@@ -397,12 +417,23 @@ impl TensorValue {
         if let State::Ready(storage) = &*self.state() {
             return Ok(storage.clone());
         }
-        let (plan, leaves) = Plan::collect(self);
-        let storage = plan
-            .run(self.device(), &leaves)?
-            .pop()
-            .expect("a plan gives its result");
+        if self.device() == TensorDevice::Metal {
+            // The Metal device runs the plan of one tensor.
+            let (plan, leaves) = Plan::collect(self);
+            let storage = plan
+                .run(self.device(), &leaves)?
+                .pop()
+                .expect("a plan gives its result");
+            *self.state() = State::Ready(storage.clone());
+            return Ok(storage);
+        }
+        let (plan, leaves, held) = Plan::collect_held(&[self]);
+        let mut storages = plan.run(self.device(), &leaves)?.into_iter();
+        let storage = storages.next().expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
+        for (node, storage) in held.iter().zip(storages) {
+            *node.state() = State::Ready(storage);
+        }
         Ok(storage)
     }
 
@@ -448,10 +479,63 @@ impl Plan {
 
     /// One plan for all of `roots`, so work they share runs once.
     fn collect_all(roots: &[&TensorValue]) -> (Self, Vec<Storage>) {
+        let (plan, leaves, _) = Self::collect_nodes(roots);
+        (plan, leaves)
+    }
+
+    /// The plan for `roots`, with one more output for each waiting tensor
+    /// in it that the program still holds, and those tensors in the order
+    /// of their outputs. A tensor the program holds is one it can read
+    /// again, so the run keeps its memory. Without this, a loop that
+    /// computes each value from the last would compute every earlier
+    /// value again on each pass.
+    fn collect_held(roots: &[&TensorValue]) -> (Self, Vec<Storage>, Vec<TensorValue>) {
+        let (mut plan, leaves, nodes) = Self::collect_nodes(roots);
+        // The holders of each node that are part of the waiting work
+        // itself: an operand list, a gradient record, or kept gradients.
+        let mut inside: HashMap<*const TensorNode, usize> = HashMap::new();
+        let mut count = |node: &TensorValue| {
+            *inside.entry(Arc::as_ptr(&node.0)).or_insert(0) += 1;
+        };
+        for node in &nodes {
+            if let State::Pending(pending) = &*node.state() {
+                pending.inputs.iter().for_each(&mut count);
+            }
+            if let Some(history) = &node.0.history {
+                history.inputs.iter().for_each(&mut count);
+            }
+            let kept = node
+                .0
+                .gradients
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            for (watched, gradient) in kept.iter().flatten() {
+                count(watched);
+                count(gradient);
+            }
+        }
+        let mut held = Vec::new();
+        for (slot, node) in nodes.iter().enumerate() {
+            let waits = matches!(plan.slots[slot], Slot::Step { .. });
+            // One holder is the list of nodes here.
+            let holders = Arc::strong_count(&node.0) - 1;
+            let within = inside.get(&Arc::as_ptr(&node.0)).copied().unwrap_or(0);
+            if waits && holders > within && !plan.outputs.contains(&slot) {
+                plan.outputs.push(slot);
+                held.push(node.clone());
+            }
+        }
+        (plan, leaves, held)
+    }
+
+    /// The plan for `roots`, the memory of its leaves, and the tensor of
+    /// each slot.
+    fn collect_nodes(roots: &[&TensorValue]) -> (Self, Vec<Storage>, Vec<TensorValue>) {
         fn visit(
             node: &TensorValue,
             slots: &mut Vec<Slot>,
             leaves: &mut Vec<Storage>,
+            nodes: &mut Vec<TensorValue>,
             seen: &mut HashMap<*const TensorNode, usize>,
         ) -> usize {
             let key = Arc::as_ptr(&node.0);
@@ -475,24 +559,26 @@ impl Plan {
                     operation,
                     inputs: inputs
                         .iter()
-                        .map(|input| visit(input, slots, leaves, seen))
+                        .map(|input| visit(input, slots, leaves, nodes, seen))
                         .collect(),
                     dtype,
                     shape,
                 },
             };
             slots.push(slot);
+            nodes.push(node.clone());
             seen.insert(key, slots.len() - 1);
             slots.len() - 1
         }
         let mut slots = Vec::new();
         let mut leaves = Vec::new();
+        let mut nodes = Vec::new();
         let mut seen = HashMap::new();
         let outputs = roots
             .iter()
-            .map(|root| visit(root, &mut slots, &mut leaves, &mut seen))
+            .map(|root| visit(root, &mut slots, &mut leaves, &mut nodes, &mut seen))
             .collect();
-        (Self { slots, outputs }, leaves)
+        (Self { slots, outputs }, leaves, nodes)
     }
 
     /// The memory of each output, in order.
@@ -564,9 +650,9 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
             .iter()
             .try_for_each(|node| node.storage().map(|_| ()));
     }
-    let (plan, leaves) = Plan::collect_all(&waiting);
+    let (plan, leaves, held) = Plan::collect_held(&waiting);
     let storages = plan.run(device, &leaves)?;
-    for (node, storage) in waiting.iter().zip(storages) {
+    for (node, storage) in waiting.iter().copied().chain(&held).zip(storages) {
         *node.state() = State::Ready(storage);
     }
     Ok(())
@@ -1554,7 +1640,7 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                 &[operand],
             )
         }
-        4 => operand.watched("tensor::watch").map(Value::Tensor),
+        4 => operand.watched("tensor::requires_grad").map(Value::Tensor),
         5 => {
             if !operand.is_tracked() {
                 return Ok(Value::Tensor(operand.clone()));
@@ -1585,7 +1671,11 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
         6 => {
             // A variable: a node that holds a watched tensor and can be
             // given another.
-            let watched = operand.watched("tensor::Variable")?;
+            if operand.0.variable.is_some() {
+                // Already a variable: another handle to it.
+                return Ok(Value::Tensor(operand.clone()));
+            }
+            let watched = operand.watched("tensor::Parameter")?;
             let mut variable = TensorValue::ready(
                 operand.device(),
                 operand.dtype(),
@@ -1598,7 +1688,7 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             Ok(Value::Tensor(variable))
         }
         7 => Ok(Value::Tensor(
-            operand.held("tensor::Variable.value")?.clone(),
+            operand.held("tensor::Parameter.value")?.clone(),
         )),
         8 => {
             // Sets the tensor aside to be run with the others set aside.
@@ -1610,6 +1700,19 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             let mut nodes = TOGETHER.with(|together| std::mem::take(&mut *together.borrow_mut()));
             nodes.push(operand.clone());
             evaluate_together(&nodes)?;
+            Ok(Value::Tensor(operand.clone()))
+        }
+        10 => {
+            // Adds the gradient of this tensor to every watched tensor
+            // behind it, and sets the tensor aside so that it runs with
+            // the optimizer step that follows.
+            tensor_grad::backward_into(operand)?;
+            TOGETHER.with(|together| together.borrow_mut().push(operand.clone()));
+            Ok(Value::Tensor(operand.clone()))
+        }
+        11 => tensor_grad::kept_gradient(operand).map(Value::Tensor),
+        12 => {
+            operand.set_grad(None);
             Ok(Value::Tensor(operand.clone()))
         }
         _ => Err(tensor_error(name, "was given an unknown operation")),
@@ -1627,7 +1730,7 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
         |node: &TensorValue| matches!(node.dtype(), ArrayDType::Int32 | ArrayDType::Int64);
     match int_arg(&args, 2, name)? {
         0 => {
-            let name = "tensor::concat";
+            let name = "tensor::cat";
             let [axis] = parameters(&args, 3, name)?;
             let axis = axis_arg(axis, rank, name)?;
             let fits = right.shape().len() == rank
@@ -1645,7 +1748,7 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             operate(Operation::Concat { axis }, &[left, right])
         }
         1 => {
-            let name = "tensor::take";
+            let name = "tensor::index_select";
             let [axis] = parameters(&args, 3, name)?;
             if !integer(right) {
                 return Err(tensor_error(name, "expects integer indices"));
@@ -1683,13 +1786,13 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
         }
         3 => tensor_grad::gradient(left, right).map(Value::Tensor),
         4 => {
-            let name = "tensor::Variable.assign";
+            let name = "tensor::Parameter.assign";
             let mut held = left.held(name)?;
             if right.dtype() != left.dtype() || right.shape() != left.shape() {
                 return Err(tensor_error(
                     name,
                     format!(
-                        "expects a tensor of the variable's dtype and shape {:?}, found shape {:?}",
+                        "expects a tensor of the parameter's dtype and shape {:?}, found shape {:?}",
                         left.shape(),
                         right.shape()
                     ),

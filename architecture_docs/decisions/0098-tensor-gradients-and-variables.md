@@ -1,4 +1,4 @@
-# ADR-0098: Tensor gradients are built from tensor operations, and a variable is a tensor that can be replaced
+# ADR-0098: Tensor gradients are built from tensor operations, and a parameter is the one tensor that changes
 
 - Status: Accepted
 - Date: 2026-11-12
@@ -21,14 +21,14 @@ same thing on every device.
 
 ### Indexed operations are index maps
 
-`slice`, `broadcast_to`, `concat` and `take` each compute an element of
+`slice`, `expand`, `cat` and `index_select` each compute an element of
 the result from one element of an operand, at an index that is a
 function of the result index. So they fuse into a kernel like an
 elementwise step, with no buffer of their own. The reverse of a slice,
 which gradients need, is one more index map that reads zero outside the
 slice.
 
-`index_add`, the reverse of `take`, is a kernel of its own: one thread
+`index_add`, the reverse of `index_select`, is a kernel of its own: one thread
 adds one element into a buffer of zeros with an atomic add. `argmax` and
 `argmin` reduce one lane in one thread.
 
@@ -48,7 +48,7 @@ kernel.
 
 ### A gradient is an expression
 
-A float tensor computed from a watched tensor keeps the operation that
+A float tensor computed from a tensor marked with `requires_grad()` keeps the operation that
 made it and its operands. `result.gradient(of)` walks those records back
 from the result and builds the gradient of each operand from the
 ordinary tensor operations. On a GPU the gradient is waiting nodes, and
@@ -57,21 +57,51 @@ No second set of kernels exists for the backward pass.
 
 The operations of a gradient are not themselves recorded, so there are
 no second derivatives. The first request computes the gradient for every
-watched tensor behind the result and keeps them on the result.
+such tensor behind the result and keeps them on the result.
 
-The interface is a function of values, `loss.gradient(weight)`, and not
-a `backward()` call that fills a field of each weight. A tensor has no
-field to fill: it is never changed.
+### The names are PyTorch's, and the guarantees are Aura's
 
-### A variable is the one thing that changes
+The owner's direction on 2026-11-12 is that the machine learning side
+reads like PyTorch without losing the core of Aura. The module therefore
+uses PyTorch's names: `rand`, `randn`, `cat`, `where`, `expand`,
+`index_select`, `dim`, `keepdim`, `Parameter`, `forward`,
+`parameters()`, `backward()`, `grad`, `zero_grad()`, `step()`, and layer
+constructors such as `Linear(in_features, out_features, ...)`. A dtype
+stays part of the type, and a device and a seed stay arguments.
 
-Training replaces weights. `Variable[T]` holds a watched tensor and can
-be given another of the same dtype and shape. Its clones name one
-variable, so a model and an optimizer see the same value. Tensors stay
-immutable: an assignment makes the variable hold a different tensor.
+Both forms of a gradient exist. `loss.gradient(of)` is a function of
+values. `loss.backward()` adds the gradient to the `grad` of every
+parameter behind the loss, and an optimizer's `step()` reads them.
+
+### A parameter is the one thing that changes, and `mut` guards it
+
+A `Tensor[T]` never changes. `Parameter[T]` holds a tensor and can be
+given another of the same dtype and shape. The compiler keeps this rule:
+the weights of a model that is not declared `mut` never change.
+
+- `parameters()` of every layer takes `mut self`, so only a model
+  declared `mut` gives its parameters to an optimizer.
+- `step()`, `zero_grad()` and `Parameter.copy_` take `mut self`.
+- A handle to a parameter is copied only inside the module, by
+  `parameters()`. `share`, `assign` and `zero_grad` of `Parameter` are
+  private, and `Parameter` has no public `clone`. Moving a parameter out
+  of a model ends the use of that model.
+
+`backward()` is the one effect the types do not show: the loss does not
+name the parameters whose `grad` it fills. A gradient is working storage
+and never changes what a model computes.
+
+`step()` clears the gradients it used, because it replaces each
+parameter's tensor and a gradient belongs to the tensor it was taken
+for. A loop that forgets `zero_grad()` is correct. Gradients still add
+up over several `backward()` calls before one `step()`.
+
+`backward()` runs nothing. It sets the loss aside, and the `evaluate` in
+`step()` runs the loss, the gradients, the new weights and the
+optimizer's state as one plan.
 
 Layers and optimizers are Aura source in the module. A layer is a class
-whose fields are variables. An optimizer holds clones of them.
+whose fields are parameters. An optimizer holds handles to them.
 
 ### Several tensors run as one plan
 

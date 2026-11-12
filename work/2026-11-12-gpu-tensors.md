@@ -14,7 +14,7 @@ later, on the same tensors (ADR-0097).
 ## Work completed
 
 - The `tensor` module: `Tensor[T]` and `Device`, with elementwise
-  arithmetic and maths, comparisons, `choose`, reductions, `matmul`,
+  arithmetic and maths, comparisons, `where`, reductions, `matmul`,
   shape operations, casts, and moves between devices.
 - Three devices. The CPU device runs the Array kernels and defines what
   each operation means. The Metal device builds one MPSGraph for each
@@ -74,3 +74,16 @@ later, on the same tensors (ADR-0097).
   import. A method of a generic class that names another generic class
   of its module fails to check in a program that does not import that
   other class.
+
+## PyTorch names and the `mut` rule (2026-11-12, evening)
+
+- The owner asked for the machine learning side to read like PyTorch
+  without losing the core of Aura. The module now uses PyTorch's names,
+  with `loss.backward()`, `grad`, `zero_grad()` and `step()`.
+- Rule kept by the compiler: the weights of a model not declared `mut`
+  never change. Nine ways around it are tested and rejected.
+- A40 run of commit 767ffa0: all 33 tensor tests pass. The workload
+  programs show Aura CUDA 5 times faster than PyTorch CUDA on Monte
+  Carlo, level on inference, and 8 to 180 times slower on conjugate
+  gradient, transformer training, MLP training and k-means. The slow
+  rows are open work.

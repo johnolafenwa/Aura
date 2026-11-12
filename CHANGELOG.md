@@ -7,20 +7,24 @@ in this file.
 
 ## Unreleased
 
-- The `tensor` module has gradients. `watch()` marks a float tensor, a
-  tensor computed from it remembers how, and `result.gradient(of)` gives
-  the gradient, built from the ordinary operations so that a GPU runs it
-  as part of a plan. `Variable[T]` is a weight that training replaces,
-  and `evaluate` runs several tensors as one piece of GPU work
-  (ADR-0098).
-- New tensor operations: `slice`, `take`, `index_add`, `concat`,
-  `broadcast_to`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
-  `softmax`, `log_softmax`, and `keep` on the reductions. `uniform`,
-  `normal` and `dropout` make random numbers on the device, the same
-  for a seed on every device.
+- The `tensor` module has gradients, with PyTorch's names.
+  `loss.backward()` adds to the `grad` of each `Parameter`, and an
+  optimizer's `step()` runs the loss, the gradients and the new weights
+  as one piece of GPU work and clears the gradients it used.
+  `result.gradient(of)` gives a gradient as a value. A `Tensor` never
+  changes and a `Parameter` does, and the compiler keeps the rule that
+  the weights of a model not declared `mut` never change:
+  `parameters()`, `step()` and `zero_grad()` take `mut self`, and a
+  `Parameter` cannot be copied (ADR-0098).
+- New tensor operations: `slice`, `index_select`, `index_add`, `cat`,
+  `expand`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
+  `softmax`, `log_softmax`, and `dim` and `keepdim` on the reductions.
+  `rand`, `randn` and `dropout` make random numbers on the device, the
+  same for a seed on every device.
 - The `tensor` module has the layers of a transformer, written in Aura:
-  `Linear`, `Embedding`, `LayerNorm`, `Attention`, `attention`,
-  `cross_entropy`, and the optimizers `SGD` and `AdamW`.
+  `Linear`, `Embedding`, `LayerNorm`, `MultiheadAttention`,
+  `scaled_dot_product_attention`, `cross_entropy`, and the optimizers
+  `SGD` and `AdamW`.
 - `tensor.MixtureOfExperts` is a layer of several networks and a gate
   that keeps each row's highest scoring experts. `one_hot`,
   `top_indices` and `top_mask` pick the largest elements of each lane.

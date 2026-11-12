@@ -421,37 +421,77 @@ pub(super) fn gradient(result: &TensorValue, wrt: &TensorValue) -> Result<Tensor
     if !wrt.is_tracked() || wrt.0.history.is_some() {
         return Err(tensor_error(
             name,
-            "expects a watched tensor; make one with `watch()`",
+            "expects a tensor made with `requires_grad()` or held by a `Parameter`",
         ));
     }
     if !matches!(result.dtype(), ArrayDType::Float32 | ArrayDType::Float64) {
         return Err(tensor_error(name, "expects a float tensor"));
     }
+    let found = gradients(result)?
+        .into_iter()
+        .find(|(watched, _)| watched == wrt)
+        .map(|(_, gradient)| gradient);
+    match found {
+        Some(gradient) => Ok(gradient),
+        // The result does not depend on the tensor.
+        None => zeros_like(wrt),
+    }
+}
+
+/// Zeros in the shape of `like`, not recorded.
+fn zeros_like(like: &TensorValue) -> Result<TensorValue> {
+    unrecorded(|| number(like, 0.0).and_then(|zero| expand(&zero, like.shape())))
+}
+
+/// Runs `work` with no history recorded for the tensors it makes.
+fn unrecorded<T>(work: impl FnOnce() -> T) -> T {
+    let before = RECORDING.with(|recording| recording.replace(false));
+    let made = work();
+    RECORDING.with(|recording| recording.set(before));
+    made
+}
+
+/// The gradients of `result` with respect to every watched tensor behind
+/// it. The first call computes them, and later calls take them.
+fn gradients(result: &TensorValue) -> Result<Vec<(TensorValue, TensorValue)>> {
     let mut kept = result
         .0
         .gradients
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     if kept.is_none() {
-        let before = RECORDING.with(|recording| recording.replace(false));
-        let made = backward(result);
-        RECORDING.with(|recording| recording.set(before));
-        *kept = Some(made?);
+        *kept = Some(unrecorded(|| backward(result))?);
     }
-    let found = kept
-        .as_ref()
-        .expect("the gradients were just computed")
-        .iter()
-        .find(|(watched, _)| watched == wrt)
-        .map(|(_, gradient)| gradient.clone());
-    match found {
+    Ok(kept.clone().expect("the gradients were just computed"))
+}
+
+/// Adds the gradient of `result` to the gradient kept on every watched
+/// tensor behind it, as `loss.backward()` does.
+pub(super) fn backward_into(result: &TensorValue) -> Result<()> {
+    if !matches!(result.dtype(), ArrayDType::Float32 | ArrayDType::Float64) {
+        return Err(tensor_error("tensor::backward", "expects a float tensor"));
+    }
+    for (watched, gradient) in gradients(result)? {
+        let total = match watched.grad() {
+            Some(before) => unrecorded(|| add(&before, &gradient))?,
+            None => gradient,
+        };
+        watched.set_grad(Some(total));
+    }
+    Ok(())
+}
+
+/// The gradient `backward` left on the watched tensor `wrt`: zeros when
+/// none has been left since it was last cleared.
+pub(super) fn kept_gradient(wrt: &TensorValue) -> Result<TensorValue> {
+    if !wrt.is_tracked() || wrt.0.history.is_some() {
+        return Err(tensor_error(
+            "tensor::grad",
+            "expects a tensor made with `requires_grad()` or held by a `Parameter`",
+        ));
+    }
+    match wrt.grad() {
         Some(gradient) => Ok(gradient),
-        // The result does not depend on the tensor.
-        None => {
-            let before = RECORDING.with(|recording| recording.replace(false));
-            let zeros = number(wrt, 0.0).and_then(|zero| expand(&zero, wrt.shape()));
-            RECORDING.with(|recording| recording.set(before));
-            zeros
-        }
+        None => zeros_like(wrt),
     }
 }
