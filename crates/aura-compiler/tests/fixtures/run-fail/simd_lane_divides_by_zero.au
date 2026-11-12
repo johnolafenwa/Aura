@@ -1,0 +1,8 @@
+from simd import F64x2
+
+
+def main() -> int32:
+    ones = F64x2.splat(1.0)
+    print((ones / F64x2(l0=4.0, l1=8.0)).to_list())
+    print((ones / F64x2(l0=4.0, l1=0.0)).to_list())
+    return 0

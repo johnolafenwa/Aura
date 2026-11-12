@@ -884,6 +884,106 @@ fn direct_array_abi_accepts_positive_literal_representations_at_signed_boundarie
 }
 
 #[test]
+fn direct_array_products_cross_the_native_abi() {
+    let matrix = |values: &[i64], shape: &[i64]| {
+        super::aura_direct_array_from_vec(
+            1,
+            integer_vector(IntegerKind::Int64, values),
+            integer_vector(IntegerKind::Int64, shape),
+            1,
+            1,
+        )
+    };
+    let left = matrix(&[1, 2, 3, 4], &[2, 2]);
+    let right = matrix(&[5, 6, 7, 8], &[2, 2]);
+
+    let dot = super::aura_direct_array_dot(left, right, 3, 5);
+    assert_eq!(
+        unsafe { take_value(dot) },
+        Value::Int(IntegerValue::from_i64(70))
+    );
+    let squared = super::aura_direct_array_dot(left, left, 3, 5);
+    assert_eq!(
+        unsafe { take_value(squared) },
+        Value::Int(IntegerValue::from_i64(30))
+    );
+    let product = super::aura_direct_array_matmul(left, right, 7, 9);
+    assert_eq!(
+        unsafe { take_value(product) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int64(vec![19, 22, 43, 50].into_boxed_slice()),
+            )
+            .unwrap()
+        )
+    );
+    let square = super::aura_direct_array_matmul(left, left, 7, 9);
+    assert_eq!(
+        unsafe { take_value(square) },
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into_boxed_slice(),
+                ArrayStorage::Int64(vec![7, 10, 15, 22].into_boxed_slice()),
+            )
+            .unwrap()
+        )
+    );
+
+    let capture = |invoke: Box<dyn FnOnce() + Send>| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("an invalid Array product should trap")
+    };
+    let row = matrix(&[1, 2, 3], &[3]);
+    let (left_address, row_address) = (left as usize, row as usize);
+    let diagnostic = capture(Box::new(move || {
+        let _ = super::aura_direct_array_dot(
+            left_address as *mut OpaqueValue,
+            row_address as *mut OpaqueValue,
+            11,
+            13,
+        );
+    }));
+    assert_eq!(diagnostic.code, "AU4007");
+    assert_eq!(diagnostic.span, Some(Span::new(11, 13)));
+    let diagnostic = capture(Box::new(move || {
+        let _ = super::aura_direct_array_matmul(
+            left_address as *mut OpaqueValue,
+            row_address as *mut OpaqueValue,
+            15,
+            17,
+        );
+    }));
+    assert_eq!(diagnostic.code, "AU4007");
+    assert_eq!(diagnostic.span, Some(Span::new(15, 17)));
+
+    let scalar = boxed_value(Value::Int(IntegerValue::from_i64(4)));
+    let scalar_address = scalar as usize;
+    let diagnostic = capture(Box::new(move || {
+        let _ = super::aura_direct_array_dot(
+            left_address as *mut OpaqueValue,
+            scalar_address as *mut OpaqueValue,
+            19,
+            21,
+        );
+    }));
+    assert_eq!(diagnostic.code, "AU4001");
+    assert_eq!(
+        diagnostic.message,
+        "direct Array ABI received operands `Array[int64]` and `integer` for an Array product"
+    );
+
+    for value in [left, right, row, scalar] {
+        unsafe { release_value(value) };
+    }
+}
+
+#[test]
 fn direct_array_public_abi_rejects_invalid_codes_and_runtime_values_exactly() {
     fn capture_diagnostic(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
         run_lightweight_root_task(move || {
@@ -29259,7 +29359,10 @@ fn http_host_entries_borrow_the_stream_and_read_a_response_through_the_native_ab
         )) >= 0,
         "the pool reports a count"
     );
-    expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+    // Other tests count on their kept connections, so clear the pool alone.
+    crate::runtime_value::http_client::pool_test_lock::alone(|| {
+        expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+    });
 }
 
 #[test]

@@ -1,0 +1,6 @@
+error[AU4003]: list index `5` is out of bounds for length `5`
+ --> crates/aura-compiler/tests/fixtures/run-fail/simd_store_writes_past_its_list.au:5:22
+  |
+5 |     F32x4.splat(2.5).store(out, at)
+  |                      ^
+  = note: Aura call chain (innermost first): fill at 4:1 -> main at 8:1

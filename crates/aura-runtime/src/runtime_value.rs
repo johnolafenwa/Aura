@@ -24,6 +24,7 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
+use crate::array_simd;
 pub use crate::collection_index::{DictEntries, SetElements, SharedVec};
 pub use crate::list_elements::ListElements;
 use base64::Engine as _;
@@ -1726,6 +1727,11 @@ pub enum ArrayReduction {
     Min = 1,
     Max = 2,
     Mean = 3,
+    /// `sum` with a float Array's elements added in the reordered,
+    /// vectorized order of `array_simd` (ADR-0086).
+    FastSum = 4,
+    /// `mean` over that reordered sum.
+    FastMean = 5,
 }
 
 impl ArrayReduction {
@@ -1735,12 +1741,14 @@ impl ArrayReduction {
             1 => Some(Self::Min),
             2 => Some(Self::Max),
             3 => Some(Self::Mean),
+            4 => Some(Self::FastSum),
+            5 => Some(Self::FastMean),
             _ => None,
         }
     }
 
     const fn name(self) -> &'static str {
-        const NAMES: [&str; 4] = ["sum", "min", "max", "mean"];
+        const NAMES: [&str; 6] = ["sum", "min", "max", "mean", "fast_sum", "fast_mean"];
         NAMES[self as usize]
     }
 }
@@ -2023,7 +2031,21 @@ impl ArrayValue {
             ));
         }
         let shape = self.try_shape()?;
-        let storage = match (&self.storage, &other.storage) {
+        let storage = array_simd::widest(
+            #[inline(always)]
+            || self.binary_storage(other, operation, mode),
+        )?;
+        Self::new(shape, storage)
+    }
+
+    #[inline(always)]
+    fn binary_storage(
+        &self,
+        other: &Self,
+        operation: ArrayBinaryOp,
+        mode: IntegerArithmeticMode,
+    ) -> Result<ArrayStorage> {
+        Ok(match (&self.storage, &other.storage) {
             (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => ArrayStorage::Int32(
                 array_integer_binary(left, right, operation, mode)?.into_boxed_slice(),
             ),
@@ -2037,8 +2059,7 @@ impl ArrayValue {
                 array_float64_binary(left, right, operation, mode)?.into_boxed_slice(),
             ),
             _ => unreachable!("matching array dtypes imply matching storage variants"),
-        };
-        Self::new(shape, storage)
+        })
     }
 
     pub fn scalar_binary(
@@ -2049,7 +2070,22 @@ impl ArrayValue {
         mode: IntegerArithmeticMode,
     ) -> Result<Self> {
         let shape = self.try_shape()?;
-        let storage = match &self.storage {
+        let storage = array_simd::widest(
+            #[inline(always)]
+            || self.scalar_binary_storage(scalar, scalar_left, operation, mode),
+        )?;
+        Self::new(shape, storage)
+    }
+
+    #[inline(always)]
+    fn scalar_binary_storage(
+        &self,
+        scalar: &Value,
+        scalar_left: bool,
+        operation: ArrayBinaryOp,
+        mode: IntegerArithmeticMode,
+    ) -> Result<ArrayStorage> {
+        Ok(match &self.storage {
             ArrayStorage::Int32(values) => {
                 let scalar = array_int32_scalar(scalar, 0)?;
                 ArrayStorage::Int32(
@@ -2078,20 +2114,139 @@ impl ArrayValue {
                         .into_boxed_slice(),
                 )
             }
+        })
+    }
+
+    /// The sum of the products of matching elements of two Arrays of one
+    /// shape and dtype (ADR-0086). A float Array adds the rounded products
+    /// in the reordered order of `array_simd`. An integer Array is checked:
+    /// the first product or running sum out of range reports `AU4002`.
+    pub fn dot(&self, other: &Self) -> Result<Value> {
+        if self.shape != other.shape || self.dtype() != other.dtype() {
+            return Err(Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array dot requires the same shape and dtype, found {:?} {} and {:?} {}",
+                    self.shape,
+                    self.dtype().runtime_type_name(),
+                    other.shape,
+                    other.dtype().runtime_type_name()
+                ),
+            ));
+        }
+        let overflow = |index: usize| {
+            Diagnostic::coded(
+                "AU4002",
+                format!("array dot overflowed at flat index {index}"),
+            )
         };
-        Self::new(shape, storage)
+        match (&self.storage, &other.storage) {
+            (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => {
+                array_simd::checked_integer_dot(left, right)
+                    .map(|sum| Value::Int(IntegerValue::from_i32(sum)))
+                    .map_err(overflow)
+            }
+            (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => {
+                array_simd::checked_integer_dot(left, right)
+                    .map(|sum| Value::Int(IntegerValue::from_i64(sum)))
+                    .map_err(overflow)
+            }
+            (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => Ok(canonical_float(
+                f64::from(array_simd::striped_dot(left, right)),
+            )),
+            (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => {
+                Ok(canonical_float(array_simd::striped_dot(left, right)))
+            }
+            _ => unreachable!("matching array dtypes imply matching storage variants"),
+        }
+    }
+
+    /// The matrix product of two Arrays of one dtype (ADR-0086): a rank-2
+    /// Array by a rank-2 Array, a rank-2 Array by a rank-1 Array, or a
+    /// rank-1 Array by a rank-2 Array, where the inner dimensions agree.
+    /// Each result element adds its products in ascending order of the
+    /// inner index. An integer product is checked and reports `AU4002`.
+    pub fn matmul(&self, other: &Self) -> Result<Self> {
+        let mismatch = || {
+            Diagnostic::coded(
+                "AU4007",
+                format!(
+                    "array matmul requires shapes [n, k] and [k, m], [n, k] and [k], or [k] and [k, m] of one dtype, found {:?} {} and {:?} {}",
+                    self.shape,
+                    self.dtype().runtime_type_name(),
+                    other.shape,
+                    other.dtype().runtime_type_name()
+                ),
+            )
+        };
+        if self.dtype() != other.dtype() {
+            return Err(mismatch());
+        }
+        // A rank-1 left operand is one row, and a rank-1 right operand is
+        // one column.
+        let (rows, inner, right_inner, columns, shape): (usize, usize, usize, usize, Vec<usize>) =
+            match (&*self.shape, &*other.shape) {
+                (&[n, k], &[k2, m]) => (n, k, k2, m, vec![n, m]),
+                (&[n, k], &[k2]) => (n, k, k2, 1, vec![n]),
+                (&[k], &[k2, m]) => (1, k, k2, m, vec![m]),
+                _ => return Err(mismatch()),
+            };
+        if inner != right_inner {
+            return Err(mismatch());
+        }
+        let len = rows
+            .checked_mul(columns)
+            .ok_or_else(|| array_allocation_error("array matmul result", usize::MAX))?;
+        let matrix_vector = other.rank() == 1;
+        let overflow = |index: usize| {
+            Diagnostic::coded(
+                "AU4002",
+                format!("array matmul overflowed at flat index {index}"),
+            )
+        };
+        let storage = match (&self.storage, &other.storage) {
+            (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => {
+                let mut output = try_filled_array_storage(len, 0_i32, "array matmul result")?;
+                array_simd::integer_matmul(left, right, &mut output, rows, inner, columns)
+                    .map_err(overflow)?;
+                ArrayStorage::Int32(output)
+            }
+            (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => {
+                let mut output = try_filled_array_storage(len, 0_i64, "array matmul result")?;
+                array_simd::integer_matmul(left, right, &mut output, rows, inner, columns)
+                    .map_err(overflow)?;
+                ArrayStorage::Int64(output)
+            }
+            (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => {
+                let mut output = try_filled_array_storage(len, 0.0_f32, "array matmul result")?;
+                if matrix_vector {
+                    array_simd::float_matrix_vector(left, right, &mut output, rows, inner);
+                } else {
+                    array_simd::float_matmul(left, right, &mut output, rows, inner, columns);
+                }
+                ArrayStorage::Float32(output)
+            }
+            (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => {
+                let mut output = try_filled_array_storage(len, 0.0_f64, "array matmul result")?;
+                if matrix_vector {
+                    array_simd::float_matrix_vector(left, right, &mut output, rows, inner);
+                } else {
+                    array_simd::float_matmul(left, right, &mut output, rows, inner, columns);
+                }
+                ArrayStorage::Float64(output)
+            }
+            _ => unreachable!("matching array dtypes imply matching storage variants"),
+        };
+        Self::new(shape.into_boxed_slice(), storage)
     }
 
     pub fn reduce(&self, reduction: ArrayReduction) -> Result<Value> {
         if self.is_empty() {
+            use ArrayReduction::{FastSum, Sum};
             return match (reduction, self.dtype()) {
-                (ArrayReduction::Sum, ArrayDType::Int32) => {
-                    Ok(Value::Int(IntegerValue::from_i32(0)))
-                }
-                (ArrayReduction::Sum, ArrayDType::Int64) => {
-                    Ok(Value::Int(IntegerValue::from_i64(0)))
-                }
-                (ArrayReduction::Sum, _) => Ok(Value::Float(0.0)),
+                (Sum | FastSum, ArrayDType::Int32) => Ok(Value::Int(IntegerValue::from_i32(0))),
+                (Sum | FastSum, ArrayDType::Int64) => Ok(Value::Int(IntegerValue::from_i64(0))),
+                (Sum | FastSum, _) => Ok(Value::Float(0.0)),
                 _ => Err(Diagnostic::coded(
                     "AU4007",
                     format!(
@@ -2469,6 +2624,7 @@ impl<'a, T: Copy> IntegerLanes<'a, T> {
 /// saturating modes cannot fail. Checked mode reports the first overflowing
 /// flat index, as an element-by-element loop would. The operation is fixed
 /// in each closure, so every block loop compiles to straight-line code.
+#[inline(always)]
 fn integer_array_kernel<T: ArrayInteger + Default>(
     len: usize,
     left: IntegerLanes<'_, T>,
@@ -2576,6 +2732,7 @@ impl<T: Copy + Default> IntegerBlocks<'_, T> {
     }
 }
 
+#[inline(always)]
 fn array_integer_binary<T: ArrayInteger + Default>(
     left: &[T],
     right: &[T],
@@ -2591,6 +2748,7 @@ fn array_integer_binary<T: ArrayInteger + Default>(
     )
 }
 
+#[inline(always)]
 fn array_integer_scalar_binary<T: ArrayInteger + Default>(
     values: &[T],
     scalar: T,
@@ -2610,6 +2768,7 @@ fn array_integer_scalar_binary<T: ArrayInteger + Default>(
 /// sum cannot leave `min..=max`, given its largest magnitude, is added with
 /// one vectorized pass. Any other block is added element by element to
 /// find the first prefix that overflows.
+#[inline(always)]
 fn checked_integer_array_sum<T: ArrayInteger + Ord + Into<i128>>(
     values: &[T],
     min: i128,
@@ -2664,6 +2823,7 @@ fn validate_float_array_mode(mode: IntegerArithmeticMode) -> Result<()> {
 // Keep allocation and divisor validation before publishing any output.
 // Hoist operation selection out of the slice loop so LLVM can vectorize
 // independent elements; reductions below deliberately retain their order.
+#[inline(always)]
 fn array_float32_binary(
     left: &[f32],
     right: &[f32],
@@ -2697,6 +2857,7 @@ fn array_float32_binary(
     Ok(output)
 }
 
+#[inline(always)]
 fn array_float32_scalar_binary(
     values: &[f32],
     scalar: f32,
@@ -2734,6 +2895,7 @@ fn array_float32_scalar_binary(
     Ok(output)
 }
 
+#[inline(always)]
 fn array_float64_binary(
     left: &[f64],
     right: &[f64],
@@ -2767,6 +2929,7 @@ fn array_float64_binary(
     Ok(output)
 }
 
+#[inline(always)]
 fn array_float64_scalar_binary(
     values: &[f64],
     scalar: f64,
@@ -2805,16 +2968,28 @@ fn array_float64_scalar_binary(
 }
 
 fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value> {
+    use array_simd::widest;
     match reduction {
-        ArrayReduction::Sum => {
-            let sum = checked_integer_array_sum(values, i32::MIN.into(), i32::MAX.into())?;
+        ArrayReduction::Sum | ArrayReduction::FastSum => {
+            let sum = widest(
+                #[inline(always)]
+                || checked_integer_array_sum(values, i32::MIN.into(), i32::MAX.into()),
+            )?;
             Ok(Value::Int(IntegerValue::from_i32(sum as i32)))
         }
         ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i32(
-            *values.iter().min().expect("empty arrays were rejected"),
+            widest(
+                #[inline(always)]
+                || values.iter().copied().min(),
+            )
+            .expect("empty arrays were rejected"),
         ))),
         ArrayReduction::Max => Ok(Value::Int(IntegerValue::from_i32(
-            *values.iter().max().expect("empty arrays were rejected"),
+            widest(
+                #[inline(always)]
+                || values.iter().copied().max(),
+            )
+            .expect("empty arrays were rejected"),
         ))),
         ArrayReduction::Mean => {
             let sum = values
@@ -2822,20 +2997,35 @@ fn reduce_int32_array(values: &[i32], reduction: ArrayReduction) -> Result<Value
                 .fold(0.0_f64, |sum, value| sum + *value as f64);
             Ok(Value::Float(sum / values.len() as f64))
         }
+        ArrayReduction::FastMean => Ok(Value::Float(
+            array_simd::striped_sum_i32_as_f64(values) / values.len() as f64,
+        )),
     }
 }
 
 fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value> {
+    use array_simd::widest;
     match reduction {
-        ArrayReduction::Sum => {
-            let sum = checked_integer_array_sum(values, i64::MIN.into(), i64::MAX.into())?;
+        ArrayReduction::Sum | ArrayReduction::FastSum => {
+            let sum = widest(
+                #[inline(always)]
+                || checked_integer_array_sum(values, i64::MIN.into(), i64::MAX.into()),
+            )?;
             Ok(Value::Int(IntegerValue::from_i64(sum as i64)))
         }
         ArrayReduction::Min => Ok(Value::Int(IntegerValue::from_i64(
-            *values.iter().min().expect("empty arrays were rejected"),
+            widest(
+                #[inline(always)]
+                || values.iter().copied().min(),
+            )
+            .expect("empty arrays were rejected"),
         ))),
         ArrayReduction::Max => Ok(Value::Int(IntegerValue::from_i64(
-            *values.iter().max().expect("empty arrays were rejected"),
+            widest(
+                #[inline(always)]
+                || values.iter().copied().max(),
+            )
+            .expect("empty arrays were rejected"),
         ))),
         ArrayReduction::Mean => {
             let sum = values
@@ -2843,67 +3033,73 @@ fn reduce_int64_array(values: &[i64], reduction: ArrayReduction) -> Result<Value
                 .fold(0.0_f64, |sum, value| sum + *value as f64);
             Ok(Value::Float(sum / values.len() as f64))
         }
+        ArrayReduction::FastMean => Ok(Value::Float(
+            array_simd::striped_sum_i64_as_f64(values) / values.len() as f64,
+        )),
     }
+}
+
+/// A float reduction's result, with every NaN the one canonical NaN.
+fn canonical_float(value: f64) -> Value {
+    Value::Float(if value.is_nan() { f64::NAN } else { value })
+}
+
+/// A left-to-right float reduction's result. A NaN element gives the one
+/// canonical NaN, and it makes every later sum NaN, so `has_nan` is only
+/// asked for when `result` is NaN.
+#[inline(always)]
+fn strict_float_result(result: f64, has_nan: impl FnOnce() -> bool) -> Value {
+    Value::Float(if result.is_nan() && has_nan() {
+        f64::NAN
+    } else {
+        result
+    })
 }
 
 fn reduce_float32_array(values: &[f32], reduction: ArrayReduction) -> Result<Value> {
-    if values.iter().any(|value| value.is_nan()) {
-        return Ok(Value::Float(f64::NAN));
-    }
-    match reduction {
-        ArrayReduction::Sum => Ok(Value::Float(
-            values.iter().fold(0.0_f32, |sum, value| sum + *value) as f64,
-        )),
-        ArrayReduction::Min => Ok(Value::Float(
-            values
-                .iter()
-                .copied()
-                .reduce(f32::min)
-                .expect("empty arrays were rejected") as f64,
-        )),
-        ArrayReduction::Max => Ok(Value::Float(
-            values
-                .iter()
-                .copied()
-                .reduce(f32::max)
-                .expect("empty arrays were rejected") as f64,
-        )),
-        ArrayReduction::Mean => {
-            let sum = values
-                .iter()
-                .fold(0.0_f64, |sum, value| sum + *value as f64);
-            Ok(Value::Float(sum / values.len() as f64))
+    Ok(match reduction {
+        ArrayReduction::Min => {
+            canonical_float(array_simd::float_min(values).map_or(f64::NAN, f64::from))
         }
-    }
+        ArrayReduction::Max => {
+            canonical_float(array_simd::float_max(values).map_or(f64::NAN, f64::from))
+        }
+        ArrayReduction::FastSum => canonical_float(f64::from(array_simd::striped_sum(values))),
+        ArrayReduction::FastMean => {
+            canonical_float(array_simd::striped_sum_f64(values) / values.len() as f64)
+        }
+        ArrayReduction::Sum | ArrayReduction::Mean => {
+            let result = if reduction == ArrayReduction::Sum {
+                f64::from(values.iter().fold(0.0_f32, |sum, value| sum + *value))
+            } else {
+                let sum = values
+                    .iter()
+                    .fold(0.0_f64, |sum, value| sum + f64::from(*value));
+                sum / values.len() as f64
+            };
+            strict_float_result(result, || values.iter().any(|value| value.is_nan()))
+        }
+    })
 }
 
 fn reduce_float64_array(values: &[f64], reduction: ArrayReduction) -> Result<Value> {
-    if values.iter().any(|value| value.is_nan()) {
-        return Ok(Value::Float(f64::NAN));
-    }
-    match reduction {
-        ArrayReduction::Sum => Ok(Value::Float(
-            values.iter().fold(0.0_f64, |sum, value| sum + *value),
-        )),
-        ArrayReduction::Min => Ok(Value::Float(
-            values
-                .iter()
-                .copied()
-                .reduce(f64::min)
-                .expect("empty arrays were rejected"),
-        )),
-        ArrayReduction::Max => Ok(Value::Float(
-            values
-                .iter()
-                .copied()
-                .reduce(f64::max)
-                .expect("empty arrays were rejected"),
-        )),
-        ArrayReduction::Mean => {
-            let sum = values.iter().fold(0.0_f64, |sum, value| sum + *value);
-            Ok(Value::Float(sum / values.len() as f64))
+    Ok(match reduction {
+        ArrayReduction::Min => canonical_float(array_simd::float_min(values).unwrap_or(f64::NAN)),
+        ArrayReduction::Max => canonical_float(array_simd::float_max(values).unwrap_or(f64::NAN)),
+        ArrayReduction::FastSum => canonical_float(array_simd::striped_sum(values)),
+        ArrayReduction::FastMean => {
+            canonical_float(array_simd::striped_sum(values) / values.len() as f64)
         }
-    }
+        ArrayReduction::Sum | ArrayReduction::Mean => {
+            let sum = values.iter().fold(0.0_f64, |sum, value| sum + *value);
+            let result = if reduction == ArrayReduction::Sum {
+                sum
+            } else {
+                sum / values.len() as f64
+            };
+            strict_float_result(result, || values.iter().any(|value| value.is_nan()))
+        }
+    })
 }
 
 fn normalize_slice_endpoint(

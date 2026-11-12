@@ -236,6 +236,8 @@ runtime_functions! {
     ArrayBinary => ("aura_direct_array_binary", [I64, I64, I64, I64, I64, I64, I64], Some(I64)),
     ArrayMap => ("aura_direct_array_map", [I64, I64, I64, I64, I64], Some(I64)),
     ArrayReduce => ("aura_direct_array_reduce", [I64, I64, I64, I64], Some(I64)),
+    ArrayDot => ("aura_direct_array_dot", [I64, I64, I64, I64], Some(I64)),
+    ArrayMatmul => ("aura_direct_array_matmul", [I64, I64, I64, I64], Some(I64)),
     MapEmpty => ("aura_direct_map_empty", [], Some(I64)),
     MapLen => ("aura_direct_map_len", [I64], Some(I64)),
     MapIsEmpty => ("aura_direct_map_is_empty", [I64], Some(I64)),

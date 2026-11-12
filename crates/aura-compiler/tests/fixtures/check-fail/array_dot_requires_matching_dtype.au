@@ -1,0 +1,4 @@
+def main():
+    left = Array[float64].zeros([2])
+    right = Array[float32].zeros([2])
+    print(left.dot(right))

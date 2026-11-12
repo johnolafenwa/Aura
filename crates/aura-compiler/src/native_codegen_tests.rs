@@ -1037,6 +1037,10 @@ def main():
     minimum = values.min()
     maximum = values.max()
     average = values.mean()
+    print(values.fast_sum())
+    print(values.fast_mean())
+    print(values.dot(copied))
+    print(values.matmul(copied))
     print(rows)
     print(added)
     print(scaled)
@@ -1066,6 +1070,8 @@ def main():
         "aura_direct_array_binary",
         "aura_direct_array_map",
         "aura_direct_array_reduce",
+        "aura_direct_array_dot",
+        "aura_direct_array_matmul",
     ] {
         assert!(
             referenced.iter().any(|symbol| symbol.contains(required)),
@@ -15983,11 +15989,12 @@ def main():
     // Unoptimized, so constant arguments do not fold the calls away.
     let object = emit_unoptimized_object(&mir).expect("scalar math source should emit directly");
     let referenced = object_referenced_symbols(&object);
-    for symbol in [
-        "aura_direct_sqrt_f64",
-        "aura_direct_round_f64",
-        "aura_direct_fail_narrow_overflow",
-    ] {
+    // A square root is one instruction, with no call.
+    assert!(
+        !referenced.iter().any(|name| name.contains("sqrt")),
+        "a square root should not be a call, referenced: {referenced:?}"
+    );
+    for symbol in ["aura_direct_round_f64", "aura_direct_fail_narrow_overflow"] {
         assert!(
             referenced.iter().any(|name| name.ends_with(symbol)),
             "scalar math should call `{symbol}`, referenced: {referenced:?}"
@@ -17422,6 +17429,55 @@ fn element_method_call_fixtures_emit_directly() {
         let mir = lower_source_to_mir(source).expect("element call fixture should lower");
         emit_host_object(&mir).expect("element call fixture should emit directly");
     }
+}
+
+#[test]
+fn integer_lane_methods_join_their_overflow_checks() {
+    let mir = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/simd_integer_lanes.au"
+    ))
+    .expect("the integer lane fixture should lower");
+    let method = |name: &str| {
+        mir.functions
+            .iter()
+            .find(|function| function.name == name)
+            .unwrap_or_else(|| panic!("`{name}` should lower"))
+    };
+    // A method that only adds, subtracts, or multiplies lanes and builds
+    // its result is seen whole when it returns, so its checks can wait.
+    for name in [
+        "Add[simd.I64x4, simd.I64x4] for simd.I64x4.add",
+        "Sub[simd.I64x2, simd.I64x2] for simd.I64x2.sub",
+        "Neg[simd.I64x4] for simd.I64x4.neg",
+        "simd::I64x4.sum",
+        "simd::I64x4.splat",
+    ] {
+        assert!(super::defers_lane_traps(method(name)), "{name}");
+    }
+    // A method with a branch or a call checks as it goes, and so does
+    // every function outside the module.
+    for name in [
+        "simd::I64x4.min",
+        "simd::I64x4.abs",
+        "simd::I64x4.to_list",
+        "total",
+        "main",
+    ] {
+        assert!(!super::defers_lane_traps(method(name)), "{name}");
+    }
+
+    // Both forms compile, and both report through the overflow failure.
+    let checked = emit_unoptimized_object(&mir).expect("the checks after each lane should emit");
+    let joined = crate::native_backend::with_joined_lane_checks(|| emit_unoptimized_object(&mir))
+        .expect("the joined checks should emit");
+    for object in [&checked, &joined] {
+        assert!(object_referenced_symbols(object)
+            .iter()
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")));
+    }
+    assert_ne!(checked, joined);
+    crate::native_backend::with_joined_lane_checks(|| emit_host_object(&mir))
+        .expect("the joined checks should optimize");
 }
 
 const LEAF_METHODS_SOURCE: &str = r#"

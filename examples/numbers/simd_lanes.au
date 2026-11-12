@@ -1,0 +1,40 @@
+from simd import F32x8, F64x4
+
+
+# The dot product four elements at a time. The four lanes of `acc` are
+# four running sums, so the result can differ in its last bits from a
+# sum taken left to right.
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+
+# Holds every sample between `low` and `high`, eight at a time.
+def clamp(samples: mut list[float32], low: float32, high: float32):
+    lo = F32x8.splat(low)
+    hi = F32x8.splat(high)
+    for i in range(0, len(samples) - 7, 8):
+        F32x8.load(samples, i).max(lo).min(hi).store(samples, i)
+    for i in range(len(samples) - len(samples) % 8, len(samples)):
+        sample = samples[i]
+        samples[i] = max(low, min(high, sample))
+
+
+def main() -> int32:
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+
+    mut samples: list[float32] = [-2.0, 0.25, 1.5, 0.75, -0.5, 3.0, 0.0, 1.0, 9.0, -9.0]
+    clamp(samples, 0.0, 1.0)
+    print(samples)
+
+    lanes = F64x4.load(xs, 1)
+    print((lanes * lanes).sqrt().to_list())
+    print(lanes.mul_add(F64x4.splat(2.0), F64x4.splat(1.0)).sum())
+    return 0

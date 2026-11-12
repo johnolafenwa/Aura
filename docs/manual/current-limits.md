@@ -113,10 +113,19 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, matrix multiplication, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, a matrix product over more than two dimensions, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
 - First-axis slices are fresh owned copies.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
+
+### SIMD Lane Values
+
+- The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
+- `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
+- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
+- A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
+- The interpreter backend computes each lane as a separate float.
 
 ### Foreign Functions
 

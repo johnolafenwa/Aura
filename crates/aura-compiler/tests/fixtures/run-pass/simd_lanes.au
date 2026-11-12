@@ -1,0 +1,111 @@
+from simd import F32x8, F64x2
+import simd
+
+
+class Buffer:
+    data: list[float64]
+
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = simd.F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + simd.F64x4.load(xs, i) * simd.F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+
+def blend(xs: list[float32], ys: list[float32], out: mut list[float32], t: float32):
+    weight = F32x8.splat(t)
+    rest = F32x8.splat(1.0) - weight
+    limit = len(xs) - 7
+    mut i: int64 = 0
+    while i < limit:
+        mixed = F32x8.load(xs, i) * weight + F32x8.load(ys, i) * rest
+        mixed.store(out, i)
+        i += 8
+    while i < len(xs):
+        out[i] = xs[i] * t + ys[i] * (1.0 - t)
+        i += 1
+
+
+def norms(xs: list[float64], ys: list[float64]) -> list[float64]:
+    mut out: list[float64] = []
+    for i in range(len(xs)):
+        out.append(0.0)
+    for i in range(0, len(xs) - 1, 2):
+        x = F64x2.load(xs, i)
+        y = F64x2.load(ys, i)
+        (x * x + y * y).sqrt().store(out, i)
+    return out
+
+
+def clamp(xs: mut list[float64], low: float64, high: float64):
+    lo = simd.F64x4.splat(low)
+    hi = simd.F64x4.splat(high)
+    for i in range(0, len(xs) - 3, 4):
+        simd.F64x4.load(xs, i).max(lo).min(hi).store(xs, i)
+
+
+def first(buffer: Buffer) -> simd.F64x4:
+    # The list is a field, so this call runs the method itself.
+    return simd.F64x4.load(buffer.data, 0)
+
+
+def named(xs: list[float64]) -> simd.F64x4:
+    return simd.F64x4.load(values=xs, at=1)
+
+
+def main() -> int32:
+    mut xs: list[float32] = []
+    mut ys: list[float32] = []
+    mut out: list[float32] = []
+    for i in range(19):
+        xs.append(i.to_float() as float32)
+        ys.append((i * 2).to_float() as float32)
+        out.append(0.0)
+    blend(xs, ys, out, 0.25)
+    print(out)
+
+    a = [3.0, 5.0, 8.0, 7.0]
+    b = [4.0, 12.0, 15.0, 24.0]
+    print(norms(a, b))
+    print(dot(a, b))
+    print(
+        dot([1.5, 2.0, -3.0, 4.0, 0.5, 6.0, 7.0], [2.0, 0.5, 1.0, -1.0, 8.0, 0.25, 3.0])
+    )
+
+    mut wide = [-5.0, 0.5, 12.0, 3.0, 99.0, -1.0, 2.0, 7.5, -8.0]
+    clamp(wide, 0.0, 10.0)
+    print(wide)
+
+    buffer = Buffer(data=[1.5, 2.5, 3.5, 4.5, 5.5])
+    lanes = first(buffer)
+    print(lanes.to_list())
+    print(named(buffer.data).sum())
+    loader = simd.F64x4.load
+    print(loader(buffer.data, 1).l3)
+
+    pair = F64x2(l0=1.0, l1=-0.0)
+    print((-pair).to_list())
+    print(pair.abs().to_list())
+    print(pair.min(F64x2.splat(0.5)).max(F64x2.splat(0.0)).to_list())
+    print(pair.mul_add(F64x2.splat(2.0), F64x2.splat(1.0)).to_list())
+    print((pair / F64x2.splat(4.0) - pair).to_list())
+    print(pair.l0 + pair.l1)
+
+    mut target = [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    tail = len(target) - 4
+    (lanes + simd.F64x4.splat(1.0)).store(target, tail)
+    lanes.store(target, -6)
+    print(target)
+
+    eight = F32x8.load(xs, 3)
+    print(eight.sum())
+    print((eight / F32x8.splat(4.0)).to_list())
+    four = simd.F32x4.load(ys, 15)
+    print(four.sqrt().to_list())
+    print(four.max(simd.F32x4.splat(33.0)).abs().sum())
+    print(F64x2.splat(-4.0).sqrt().to_list())
+    return 0

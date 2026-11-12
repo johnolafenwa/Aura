@@ -1,0 +1,4 @@
+def main():
+    values: list[int64] = [1, 2, 3, 9223372036854775807]
+    array = Array[int64].from_list(values, [2, 2])
+    print(array.matmul(array))

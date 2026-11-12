@@ -127,7 +127,12 @@ fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<V
             }) =>
         {
             match op {
-                ListOp::Len => Some(ViewUse::Reads),
+                ListOp::Len | ListOp::IndexScalar(_) | ListOp::IndexScalarUnchecked(_) => {
+                    Some(ViewUse::Reads)
+                }
+                // A store into unshared storage of the element's own kind
+                // keeps the storage, its form, and its length.
+                ListOp::SetIndexScalar(_) => Some(ViewUse::Writes),
                 ListOp::Index | ListOp::IndexUnchecked if pure_index => Some(ViewUse::Reads),
                 ListOp::Index | ListOp::IndexUnchecked => Some(ViewUse::Writes),
                 _ => None,
@@ -396,6 +401,12 @@ pub(super) struct ListSnapshot {
     pub(super) entries: Vec<(Blk, Val, Val)>,
     /// The access codes the loop's operations check the view for.
     pub(super) expected: Vec<i64>,
+    /// The element accesses that stay in range while the guards hold
+    /// (see `native_codegen_range_loops`).
+    pub(super) range: Option<super::range_loops::RangeProof>,
+    /// The call slot of the mutable parameter that holds the list, whose
+    /// write-through sink must be absent for the loop's copy to run.
+    pub(super) sink: Option<usize>,
 }
 
 impl FunctionCompiler<'_> {
@@ -571,6 +582,40 @@ impl FunctionCompiler<'_> {
             let has_room = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
             qualifies = self.builder.band(qualifies, has_room);
         }
+        if let Some(slot) = snapshot.sink {
+            // A caller that asked for each write to be handed back takes
+            // a reference to the list with it, so the storage is shared.
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            qualifies = self.builder.band(qualifies, direct);
+        }
+        if let Some(proof) = &snapshot.range {
+            let (code, _) = super::scalar_list_slot(proof.element);
+            let exact = self.builder.icmp_imm(IntCC::Equal, access, code as i64);
+            qualifies = self.builder.band(qualifies, exact);
+            for guard in &proof.guards {
+                use super::range_loops::{RangeBound, RangeGuard};
+                let holds = match guard {
+                    RangeGuard::AtLeast { place, least } => {
+                        let value = self.range_word(place)?;
+                        self.builder
+                            .icmp_imm(IntCC::SignedGreaterThanOrEqual, value, *least)
+                    }
+                    RangeGuard::Within { bound, distance } => {
+                        let bound = match bound {
+                            RangeBound::Place(place) => self.range_word(place)?,
+                            RangeBound::Int(value) => self.builder.iconst(types::I64, *value),
+                        };
+                        // A length is far below the range of `int64`, so
+                        // the difference is exact.
+                        let limit = self.builder.iadd_imm(len, -*distance);
+                        self.builder
+                            .icmp(IntCC::SignedLessThanOrEqual, bound, limit)
+                    }
+                };
+                qualifies = self.builder.band(qualifies, holds);
+            }
+        }
         let ok = self.builder.uextend(types::I64, qualifies);
         self.builder.jump(join_block, &[ok, access, len, elements]);
 
@@ -589,6 +634,56 @@ impl FunctionCompiler<'_> {
             self.builder.def_var(variable, value);
         }
         Ok((params[0], params[1]))
+    }
+
+    /// The value of the `int64` local `place`, which a range guard reads.
+    fn range_word(&mut self, place: &str) -> std::result::Result<Val, String> {
+        let vars = self.local_vars(place)?;
+        let [var] = vars.as_slice() else {
+            return Err(format!(
+                "direct backend guarded a range on `{place}`, which is not one word"
+            ));
+        };
+        Ok(self.builder.use_var(*var))
+    }
+
+    /// The loop whose copy runs the access being compiled on `list` with
+    /// no bounds check, as an index into `list_snapshots`.
+    pub(super) fn range_covered(&self, list: Val) -> Option<usize> {
+        let index = *self.snapshot_vals.get(&list)?;
+        let proof = self.list_snapshots[index].range.as_ref()?;
+        proof
+            .covered
+            .contains(&(
+                self.current_snapshot_label.clone(),
+                self.current_snapshot_instruction,
+            ))
+            .then_some(index)
+    }
+
+    /// The loop whose copy computes the checked sum being compiled with no
+    /// overflow check, as an index into `list_snapshots`.
+    pub(super) fn range_exact(&self) -> Option<usize> {
+        let position = (
+            self.current_snapshot_label.clone(),
+            self.current_snapshot_instruction,
+        );
+        self.list_snapshots.iter().position(|snapshot| {
+            snapshot
+                .range
+                .as_ref()
+                .is_some_and(|proof| proof.exact.contains(&position))
+        })
+    }
+
+    /// `kept` in the copy of loop `index` that runs while its view
+    /// qualifies, and `otherwise` in the loop as written.
+    pub(super) fn keep_in_copy(&mut self, index: usize, kept: Val, otherwise: Val) -> Val {
+        let ok = self.builder.use_var(self.list_snapshots[index].ok);
+        let holds = self.builder.icmp_imm(IntCC::NotEqual, ok, 0);
+        let select = self.builder.select(holds, kept, otherwise);
+        self.list_snapshots[index].selects.push((select, false));
+        select
     }
 
     /// Notes that an operation checks the view of `list` for `access`.
@@ -671,9 +766,16 @@ impl FunctionCompiler<'_> {
                 .collect::<Vec<_>>();
             // A loop over one list whose operations all check for one
             // access code runs its copy only for that code, which the copy
-            // then knows.
+            // then knows. A loop with a range proof checked the code where
+            // it was entered.
+            let code_of = |snapshot: &ListSnapshot| {
+                snapshot
+                    .range
+                    .as_ref()
+                    .map(|proof| super::scalar_list_slot(proof.element).0 as i64)
+            };
             let expected = match group.as_slice() {
-                [only] => {
+                [only] if code_of(&self.list_snapshots[*only]).is_none() => {
                     let codes = &self.list_snapshots[*only].expected;
                     codes
                         .first()
@@ -686,12 +788,13 @@ impl FunctionCompiler<'_> {
             let mut selects = Vec::new();
             for member in &group {
                 done[*member] = true;
+                let known = code_of(&self.list_snapshots[*member]).or(expected);
                 blocks.extend(self.list_snapshots[*member].ir_blocks.iter().copied());
                 selects.extend(
                     self.list_snapshots[*member]
                         .selects
                         .iter()
-                        .map(|(select, access)| (*select, expected.filter(|_| *access))),
+                        .map(|(select, access)| (*select, known.filter(|_| *access))),
                 );
             }
             let overlaps = blocks.iter().any(|block| copied.contains(block));

@@ -1,0 +1,9 @@
+def sum_before(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for i in range(len(xs)):
+        total += xs[i - 4]
+    return total
+
+def main():
+    xs: list[int64] = [1, 2, 3]
+    print(sum_before(xs))

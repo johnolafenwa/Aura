@@ -151,9 +151,9 @@ fn is_builtin_binary_operator(op: BinaryOp, left_ty: &Type, right_ty: &Type) -> 
     }
 }
 
-/// The arguments of a `for` loop's `range(stop)` or `range(start, stop)`
-/// iterable when the loop can count on int64 locals instead of stepping a
-/// Range value. Only a positional call qualifies; anything else keeps
+/// The arguments of a `for` loop's `range(stop)`, `range(start, stop)`, or
+/// `range(start, stop, step)` with a positive literal step, when the loop
+/// can count on int64 locals instead of stepping a Range value. Only a positional call qualifies; anything else keeps
 /// `ForRange`. `range` cannot be redefined, so a Range-typed call to it is
 /// the builtin.
 fn counted_range_args<'a>(
@@ -174,8 +174,33 @@ fn counted_range_args<'a>(
         return None;
     };
     let named_range = matches!(&callee.kind, ExprKind::Name(name) if name == "range");
-    (named_range && matches!(args.len(), 1 | 2) && args.iter().all(|arg| arg.name.is_none()))
-        .then_some(args.as_slice())
+    let counted = match args.as_slice() {
+        [_] | [_, _] => true,
+        // A counted loop checks its invariants once more when it ends,
+        // with the target at the cursor's final value. Past a step that
+        // value can lie beyond `stop`, so a stepped loop with invariants
+        // keeps the Range value and checks them in the body alone.
+        [_, _, step] => {
+            counted_range_step(&step.value).is_some()
+                && !for_stmt
+                    .contracts
+                    .iter()
+                    .any(|clause| clause.kind == crate::ast::ContractKind::Invariant)
+        }
+        _ => false,
+    };
+    (named_range && counted && args.iter().all(|arg| arg.name.is_none())).then_some(args.as_slice())
+}
+
+/// The step of a `range(start, stop, step)` a loop can count by: a positive
+/// integer literal. Any other step keeps the Range value, which also counts
+/// down and reports a zero step.
+fn counted_range_step(step: &Expr) -> Option<u128> {
+    match &step.kind {
+        ExprKind::Group(inner) => counted_range_step(inner),
+        ExprKind::Int(value) if (1..=i64::MAX as u128).contains(value) => Some(*value),
+        _ => None,
+    }
 }
 
 fn is_float_type(ty: &Type) -> bool {
@@ -13940,6 +13965,10 @@ impl<'a> Lowerer<'a> {
             module_name: self.module_name.to_string(),
             source_path: if self.module_name == self.program.module_name {
                 self.program.source_path.clone()
+            } else if self.module_name == simd::SIMD_MODULE {
+                // A trap inside a lane method is not at a line of the
+                // program, so it names the standard library file.
+                Some(simd::SIMD_SOURCE_PATH.to_string())
             } else {
                 self.program
                     .module_registry
@@ -19684,15 +19713,24 @@ impl<'a> Lowerer<'a> {
         self.record_for_dispatch_block(dispatch_block);
         let body_block = self.new_block("for_body");
         let after_block = self.new_block("for_end");
+        // The cursor, the last value it advances from, and the step of a
+        // counted range with a step above 1.
+        let mut stepped_advance = None;
+        // The block a counted range binds its target in.
+        let mut stepped_next = dispatch_block;
 
         match iterable_ty {
             Some(Type::Named(name, _)) if name == "Range" && counted_range.is_some() => {
                 let binding = simple_binding
                     .clone()
                     .expect("tuple targets are rejected for Range iteration by sema");
-                let (cursor, stop) = counted_range
+                let (cursor, stop, step) = counted_range
                     .take()
                     .expect("the guard checked the counted range");
+                if step > 1 {
+                    let last = self.lower_stepped_range_last(&cursor, &stop, step, for_stmt.span);
+                    stepped_advance = Some((cursor.clone(), last, step));
+                }
                 self.terminate(Terminator::Goto(self.label(dispatch_block)));
                 self.switch_to(dispatch_block);
                 let invariants = for_stmt
@@ -19717,13 +19755,13 @@ impl<'a> Lowerer<'a> {
                 } else {
                     Some(binding)
                 };
-                self.lower_counted_range_test(
+                stepped_next = self.lower_counted_range_test(
                     step_binding,
                     cursor,
                     stop,
+                    step,
                     for_stmt.span,
-                    body_block,
-                    after_block,
+                    (body_block, after_block),
                 );
             }
             Some(Type::Named(name, _)) if name == "Range" => {
@@ -20214,7 +20252,14 @@ impl<'a> Lowerer<'a> {
 
         self.switch_to(safepoint_block);
         self.emit(Instruction::Safepoint);
-        self.terminate(Terminator::Goto(self.label(dispatch_block)));
+        if let Some((cursor, last, step)) = stepped_advance {
+            // The advance stays below `stop`, so the next iteration starts
+            // without the loop's first test.
+            self.lower_stepped_range_advance(cursor, last, step, for_stmt.span, after_block);
+            self.terminate(Terminator::Goto(self.label(stepped_next)));
+        } else {
+            self.terminate(Terminator::Goto(self.label(dispatch_block)));
+        }
 
         self.switch_to(after_block);
     }
@@ -20268,15 +20313,29 @@ impl<'a> Lowerer<'a> {
     /// loan, so writes land in the list and reads copy nothing.
     /// Evaluates a counted range's endpoints once, in source order, as the
     /// `range` call would, and returns the cursor and stop locals.
-    fn lower_counted_range_endpoints(&mut self, args: &[crate::ast::Argument]) -> (String, String) {
+    fn lower_counted_range_endpoints(
+        &mut self,
+        args: &[crate::ast::Argument],
+    ) -> (String, String, u128) {
         let int64 = Type::named("int64");
-        let (start, stop) = match args {
-            [stop] => (Operand::Int(0), self.lower_index_domain_expr(&stop.value)),
+        let (start, stop, step) = match args {
+            [stop] => (
+                Operand::Int(0),
+                self.lower_index_domain_expr(&stop.value),
+                1,
+            ),
             [start, stop] => {
                 let start = self.lower_index_domain_expr(&start.value);
-                (start, self.lower_index_domain_expr(&stop.value))
+                (start, self.lower_index_domain_expr(&stop.value), 1)
             }
-            _ => unreachable!("counted_range_args admits one or two arguments"),
+            [start, stop, step] => {
+                let start = self.lower_index_domain_expr(&start.value);
+                let stop = self.lower_index_domain_expr(&stop.value);
+                let step = counted_range_step(&step.value)
+                    .expect("counted_range_args admits a positive literal step");
+                (start, stop, step)
+            }
+            _ => unreachable!("counted_range_args admits one to three arguments"),
         };
         let cursor = self.new_typed_temp(int64.clone());
         self.emit(Instruction::Assign {
@@ -20288,22 +20347,158 @@ impl<'a> Lowerer<'a> {
             target: end.clone(),
             value: Rvalue::Use(stop),
         });
-        (cursor, end)
+        (cursor, end, step)
+    }
+
+    /// The bound a stepped range's cursor advances below: an iteration at
+    /// `cursor` has a successor when `cursor + step < stop`, which is
+    /// `cursor < stop - step`. When `stop - step` would pass the least
+    /// `int64`, no iteration has a successor, and the bound is the first
+    /// cursor, which no cursor is below.
+    fn lower_stepped_range_last(
+        &mut self,
+        cursor: &str,
+        stop: &str,
+        step: u128,
+        span: crate::diag::Span,
+    ) -> String {
+        let int64 = Type::named("int64");
+        let last = self.new_typed_temp(int64.clone());
+        let negative = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: negative.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(stop.to_string()),
+                right: Operand::Int(0),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        let low_block = self.new_block("for_range_last_low");
+        let keep_block = self.new_block("for_range_last_first");
+        let back_block = self.new_block("for_range_last_back");
+        let ready_block = self.new_block("for_range_ready");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(negative),
+            then_label: self.label(low_block),
+            else_label: self.label(back_block),
+        });
+        self.switch_to(low_block);
+        // A negative `stop` is below `int64` min plus the step exactly when
+        // `stop + int64 max` is below the step less one. The sum is at
+        // least -1, so it never traps.
+        let raised = self.new_typed_temp(int64);
+        self.emit(Instruction::Assign {
+            target: raised.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(stop.to_string()),
+                right: Operand::Int(i64::MAX as u128),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
+        let passes = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: passes.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(raised),
+                right: Operand::Int(step - 1),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(passes),
+            then_label: self.label(keep_block),
+            else_label: self.label(back_block),
+        });
+        self.switch_to(keep_block);
+        self.emit(Instruction::Assign {
+            target: last.clone(),
+            value: Rvalue::Use(Operand::Place(cursor.to_string())),
+        });
+        self.terminate(Terminator::Goto(self.label(ready_block)));
+        self.switch_to(back_block);
+        // `stop` is at least `int64` min plus the step here, so the
+        // difference never traps.
+        self.emit(Instruction::Assign {
+            target: last.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Sub,
+                left: Operand::Place(stop.to_string()),
+                right: Operand::Int(step),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
+        self.terminate(Terminator::Goto(self.label(ready_block)));
+        self.switch_to(ready_block);
+        last
+    }
+
+    /// Ends a stepped range's iteration: advances the cursor while it is
+    /// below `last` (see `lower_stepped_range_last`), and otherwise leaves
+    /// the loop. The advance never traps, and the cursor it leaves is
+    /// below `stop`, so the caller jumps to the block that binds the
+    /// target. The loop then has this one test, which lets LLVM count its
+    /// iterations.
+    fn lower_stepped_range_advance(
+        &mut self,
+        cursor: String,
+        last: String,
+        step: u128,
+        span: crate::diag::Span,
+        after_block: usize,
+    ) {
+        let more = self.new_typed_temp(Type::named("bool"));
+        self.emit(Instruction::Assign {
+            target: more.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Less,
+                left: Operand::Place(cursor.clone()),
+                right: Operand::Place(last),
+                span,
+                trap: ArithmeticTrap::None,
+            },
+        });
+        let advance_block = self.new_block("for_range_step");
+        self.terminate(Terminator::Branch {
+            condition: Operand::Place(more),
+            then_label: self.label(advance_block),
+            else_label: self.label(after_block),
+        });
+        self.switch_to(advance_block);
+        self.emit(Instruction::Assign {
+            target: cursor.clone(),
+            value: Rvalue::Binary {
+                op: BinaryOp::Add,
+                left: Operand::Place(cursor),
+                right: Operand::Int(step),
+                span,
+                trap: ArithmeticTrap::Overflow,
+            },
+        });
     }
 
     /// Branches to the body while `cursor < stop`, binding the cursor (unless
-    /// the caller bound it before the test) and stepping it first, as
-    /// `ForRange` does. The step cannot overflow: the cursor stays below
-    /// `stop`, which is at most `int64` max.
+    /// the caller bound it before the test) and, for a step of 1, stepping
+    /// it first, as `ForRange` does. That step cannot overflow: the cursor
+    /// stays below `stop`, which is at most `int64` max. A larger step
+    /// advances where the iteration ends (see
+    /// `lower_stepped_range_advance`). The blocks are the loop's body and
+    /// the block after the loop. Returns the block that binds the cursor.
     fn lower_counted_range_test(
         &mut self,
         binding: Option<String>,
         cursor: String,
         stop: String,
+        step: u128,
         span: crate::diag::Span,
-        body_block: usize,
-        after_block: usize,
-    ) {
+        (body_block, after_block): (usize, usize),
+    ) -> usize {
         let next_block = self.new_block("for_range_next");
         let more = self.new_typed_temp(Type::named("bool"));
         self.emit(Instruction::Assign {
@@ -20328,19 +20523,22 @@ impl<'a> Lowerer<'a> {
                 value: Rvalue::Use(Operand::Place(cursor.clone())),
             });
         }
-        // The cursor is below `stop`, so the advance never traps; the
-        // backend drops the check it names.
-        self.emit(Instruction::Assign {
-            target: cursor.clone(),
-            value: Rvalue::Binary {
-                op: BinaryOp::Add,
-                left: Operand::Place(cursor),
-                right: Operand::Int(1),
-                span,
-                trap: ArithmeticTrap::Overflow,
-            },
-        });
+        if step == 1 {
+            // The cursor is below `stop`, so the advance never traps; the
+            // backend drops the check it names.
+            self.emit(Instruction::Assign {
+                target: cursor.clone(),
+                value: Rvalue::Binary {
+                    op: BinaryOp::Add,
+                    left: Operand::Place(cursor),
+                    right: Operand::Int(1),
+                    span,
+                    trap: ArithmeticTrap::Overflow,
+                },
+            });
+        }
         self.terminate(Terminator::Goto(self.label(body_block)));
+        next_block
     }
 
     fn lower_list_iteration_by_loan(
@@ -24846,6 +25044,9 @@ impl<'a> Lowerer<'a> {
                 if let Some(value) = self.lower_span_member_call(expr, object, field, args) {
                     return value;
                 }
+                if let Some(value) = self.lower_simd_lane_call(expr, callee, args) {
+                    return value;
+                }
             }
             _ => {}
         }
@@ -26633,6 +26834,9 @@ impl<'a> Lowerer<'a> {
                             }
                             (BuiltinMember::ArraySet, 1) | (BuiltinMember::ArrayFill, 0) => {
                                 Some(class_args[0].clone())
+                            }
+                            (BuiltinMember::ArrayDot | BuiltinMember::ArrayMatmul, 0) => {
+                                Some(Type::Named("Array".to_string(), class_args.clone()))
                             }
                             (
                                 BuiltinMember::ArrayWrappingAdd
@@ -30391,6 +30595,9 @@ fn mir_class_type_name(
 
 #[path = "mir_spans.rs"]
 mod spans;
+
+#[path = "mir_simd.rs"]
+mod simd;
 
 #[path = "mir_sort.rs"]
 mod sort;

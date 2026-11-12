@@ -13023,7 +13023,29 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::ArraySum
                                 | BuiltinMember::ArrayMin
                                 | BuiltinMember::ArrayMax => Ok(dtype.clone()),
-                                BuiltinMember::ArrayMean => Ok(Type::named("float64")),
+                                BuiltinMember::ArrayFastSum => Ok(dtype.clone()),
+                                BuiltinMember::ArrayMean | BuiltinMember::ArrayFastMean => {
+                                    Ok(Type::named("float64"))
+                                }
+                                BuiltinMember::ArrayDot | BuiltinMember::ArrayMatmul => {
+                                    let other = ordered_args[0]
+                                        .expect("Array product binding should retain its operand");
+                                    let other_ty = self.type_of_expr(&other.value, locals)?;
+                                    if other_ty != receiver_ty {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            other.span,
+                                            format!(
+                                                "`Array.{field}` expects `{receiver_ty}`, found `{other_ty}`"
+                                            ),
+                                        ));
+                                    }
+                                    if builtin_member == BuiltinMember::ArrayDot {
+                                        Ok(dtype.clone())
+                                    } else {
+                                        Ok(receiver_ty.clone())
+                                    }
+                                }
                                 BuiltinMember::ArrayWrappingAdd
                                 | BuiltinMember::ArrayWrappingSub
                                 | BuiltinMember::ArrayWrappingMul

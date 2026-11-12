@@ -1,0 +1,2 @@
+def main():
+    print(Array[float64].zeros([0]).fast_mean())

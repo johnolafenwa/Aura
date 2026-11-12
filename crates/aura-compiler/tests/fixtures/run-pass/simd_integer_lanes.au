@@ -1,0 +1,77 @@
+# The integer lane values of the `simd` module. Every operation is the
+# checked scalar operation in each lane.
+from simd import I64x2, I64x4
+import simd
+
+
+def add(xs: list[int64], ys: list[int64], out: mut list[int64]):
+    for i in range(0, len(xs) - 3, 4):
+        (I64x4.load(xs, i) + I64x4.load(ys, i)).store(out, i)
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        out[i] = xs[i] + ys[i]
+
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    mut sum = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        sum += xs[i]
+    return sum
+
+
+def spread(xs: list[int64], ys: list[int64]) -> list[int64]:
+    mut out: list[int64] = []
+    for i in range(len(xs)):
+        out.append(0)
+    low = I64x2.splat(-5)
+    high = I64x2.splat(5)
+    for i in range(0, len(xs) - 1, 2):
+        (I64x2.load(xs, i) - I64x2.load(ys, i)).max(low).min(high).store(out, i)
+    return out
+
+
+def main():
+    xs: list[int64] = [1, -2, 3, -4, 5, -6, 7, -8, 9, 10]
+    ys: list[int64] = [10, 20, 30, 40, 50, 60, 70, 80, 90, 100]
+    mut out: list[int64] = [0, 0, 0, 0, 0, 0, 0, 0, 0, 0]
+    add(xs, ys, out)
+    print(out)
+    print(total(xs))
+    print(total([]))
+    print(spread(xs, ys))
+
+    a = I64x4(l0=1, l1=-2, l2=3, l3=-4)
+    b = I64x4.splat(3)
+    print((a + b).to_list())
+    print((a - b).to_list())
+    print((a * b).to_list())
+    print((-a).to_list())
+    print(a.abs().to_list())
+    print(a.min(b).to_list())
+    print(a.max(b).to_list())
+    print(a.sum())
+    print(a.l2 + b.l3)
+
+    # The limits of int64 are values like any other.
+    big: int64 = 9223372036854775807
+    least = -big - 1
+    edge = I64x4(l0=big, l1=least, l2=big - 1, l3=least + 1)
+    step = I64x4(l0=0, l1=0, l2=1, l3=-1)
+    print((edge + step).to_list())
+    print((edge - I64x4(l0=0, l1=0, l2=-1, l3=1)).to_list())
+    print((-I64x4(l0=big, l1=least + 1, l2=0, l3=-1)).to_list())
+    print((edge * I64x4(l0=1, l1=1, l2=0, l3=-1)).to_list())
+    print(I64x4(l0=big, l1=least, l2=1, l3=0).sum())
+
+    pair = simd.I64x2(l0=40, l1=2)
+    print((pair + pair).sum())
+    print((pair - simd.I64x2.splat(41)).to_list())
+    print((pair * pair).to_list())
+    print((-pair).abs().to_list())
+    print(pair.min(simd.I64x2.splat(7)).max(simd.I64x2.splat(3)).to_list())
+    mut cells: list[int64] = [0, 0, 0]
+    pair.store(cells, 1)
+    print(cells)
+    print(I64x2.load(cells, -2).to_list())

@@ -1,0 +1,84 @@
+# A `for` over `range(start, stop, step)` with a positive literal step
+# counts on int64 locals. These cases pin the values a Range value gave.
+
+
+def bump(counter: mut int64) -> int64:
+    counter += 10
+    return counter
+
+
+def pairs(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for i in range(0, len(xs) - 1, 2):
+        total += xs[i] * xs[i + 1]
+    return total
+
+
+def pairs_from(xs: list[int64], start: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(start, len(xs) - 1, 2):
+        total += xs[i] * xs[i + 1]
+    return total
+
+
+def main():
+    for i in range(1, 12, 4):
+        print(i)
+    for i in range(5, 5, 3):
+        print(i)
+    for i in range(9223372036854775800, 9223372036854775807, 5):
+        print(i)
+    low: int64 = -9223372036854775807
+    for i in range(low - 1, low + 2, 2):
+        print(i)
+    # A stop too close to the least int64 to subtract the step from.
+    for i in range(low - 1, low, 3):
+        print(i)
+    for i in range(low - 1, low + 2, 3):
+        print(i)
+    for i in range(low - 1, low + 3, 3):
+        print(i)
+    for i in range(-10, -3, 3):
+        if i == -7:
+            continue
+        print(i)
+    for i in range(0, 100, 7):
+        if i > 20:
+            break
+        print(i)
+    mut total = 0
+    for i in range(3, 1000, (250)):
+        for j in range(i, i + 4, 2):
+            total += j
+    print(total)
+
+    # The stop is read once, after the start.
+    mut c: int64 = 1
+    mut n: int64 = 30
+    mut seen = list[int64]()
+    for i in range(bump(c), c + n, 8):
+        n = 0
+        seen.append(i)
+    print(seen)
+
+    # The loop variable is a fresh value each time around.
+    mut shifted = list[int64]()
+    for i in range(0, 9, 3):
+        mut j = i
+        j += 100
+        shifted.append(j)
+    print(shifted)
+    print(pairs([1, 2, 3, 4, 5]))
+    print(pairs([]))
+    print(pairs_from([1, 2, 3, 4, 5], 1))
+    print(pairs_from([1, 2, 3, 4, 5], 3))
+    print(pairs_from([1, 2, 3, 4, 5], 4))
+    print(pairs_from([1, 2, 3, 4, 5], -2))
+    print(pairs_from([7], 0))
+
+    # A step that is not a positive literal still counts the same values.
+    step = 4
+    for i in range(1, 12, step):
+        print(i)
+    for i in range(10, 0, -4):
+        print(i)

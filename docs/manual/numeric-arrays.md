@@ -79,11 +79,18 @@ from a mixed numeric source.
 | `min()` | `T` |
 | `max()` | `T` |
 | `mean()` | `float64` for every input dtype |
+| `fast_sum()` | `T`; the sum in the fixed reordered order |
+| `fast_mean()` | `float64`; the mean in the fixed reordered order |
+| `dot(other: Array[T])` | `T`; inner product of two Arrays of the same shape |
+| `matmul(other: Array[T])` | fresh `Array[T]`; matrix product |
 
 `map` requires a repeatable callable whose bare parameter type and return
 type match exactly. The checker rejects a consuming closure, a `mut` or `own`
 parameter, and an unsupported result dtype. `set` and `fill` require a mutable
 Array place.
+
+`dot` and `matmul` take an Array of exactly the receiver's type. They borrow
+both operands and consume neither.
 
 ### Indexing And Slicing
 
@@ -166,7 +173,81 @@ order.
 - `mean()` accumulates and returns a `float64` result for every source
   dtype.
 
-The contract promises no reassociation and no vectorized reduction order.
+`sum` and `mean` promise no reassociation and no vectorized reduction
+order. A float `min` treats `-0.0` as below `0.0`, and `max` treats `0.0` as
+above `-0.0`.
+
+### Reordered Reductions
+
+A left-to-right float sum is a chain in which each addition waits for the one
+before it, so it adds one element at a time on any CPU. `fast_sum()` and
+`fast_mean()` add in another order that a CPU can run many elements wide:
+
+```aura
+def main() -> int32:
+    values = Array[float64].full([1000000], 0.1)
+    print(values.sum())
+    print(values.fast_sum())
+    return 0
+```
+
+The order is fixed, so the result is the same on every CPU and in both
+backends. For `n` elements, let `w` be the largest multiple of 32 that is at
+most `n`:
+
+1. Element `i < w` is added to partial sum `i % 32`, in index order. Each
+   partial sum starts at zero.
+2. The 32 partial sums are added in halves. Sum `s` takes sum `s + 16`, then
+   `s + 8`, `s + 4`, `s + 2`, and `s + 1`.
+3. Elements `w` to `n - 1` are added to that total in index order.
+
+- `fast_sum()` adds in the element type. `fast_mean()` widens each element
+  to `float64`, adds in that order, and divides by the count.
+- The result can differ from `sum()` and `mean()` in the last digits. Both
+  propagate NaN.
+- On an integer Array `fast_sum()` is `sum()`: exact and checked.
+- `fast_sum()` of an empty Array is zero, and `fast_mean()` requires at
+  least one element.
+
+### Dot And Matrix Products
+
+`left.dot(right)` requires two Arrays of the same shape, of any rank, and
+returns the sum of the products of matching elements. A float `dot` rounds
+each product in the element type and adds the products in the reordered
+order above. An integer `dot` is checked: the first product or running sum,
+in index order, that leaves the element type's range is `AU4002`.
+
+`left.matmul(right)` accepts three pairs of shapes:
+
+| Left | Right | Result |
+| --- | --- | --- |
+| `[n, k]` | `[k, m]` | `[n, m]` |
+| `[n, k]` | `[k]` | `[n]` |
+| `[k]` | `[k, m]` | `[m]` |
+
+```aura
+def main() -> int32:
+    left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    right = Array[float64].from_list([5.0, 6.0, 7.0, 8.0], [2, 2])
+    product = left.matmul(right)
+    print(product[0, 0])
+    print(product[1, 1])
+    print(left.dot(right))
+    return 0
+```
+
+Each result element starts at zero and adds its `k` products in ascending
+order of the inner index, rounding each product before it is added. That is
+the order of the plain three-loop program, so `matmul` gives that program's
+bits. An integer `matmul` is checked and reports `AU4002`.
+
+A large float product of two matrices runs on several threads. Each thread
+computes whole rows of the result, and no element is shared, so the bits
+are the same on any number of threads. A product whose `n * k * m` is under
+about two million runs on the calling thread. `AURA_ARRAY_THREADS` sets the
+most threads one product may use. The default is the number of CPUs the
+process may run on, a product never uses more than 16, and
+`AURA_ARRAY_THREADS=1` keeps every product on the calling thread.
 
 ## Ownership And Evaluation Order
 
@@ -211,7 +292,7 @@ Runtime codes:
 
 | Code | Cause |
 | --- | --- |
-| `AU4002` | Checked integer Array arithmetic overflows. |
+| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
 | `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
 | `AU4005` | Shape product or element count overflows, or allocation fails. |
@@ -223,7 +304,9 @@ Runtime codes:
 - a `from_list` element count that does not match the shape
 - an Array/Array operation whose shapes differ
 - a direct coordinate count that does not match the runtime rank
-- `min`, `max`, or `mean` on an empty Array
+- `min`, `max`, `mean`, or `fast_mean` on an empty Array
+- a `dot` whose shapes differ
+- a `matmul` whose shapes are not one of the three accepted pairs
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -235,6 +318,7 @@ MIR and direct execution both implement:
 - constructors, indexing, and mutation
 - first-axis copies
 - `map` and reductions
+- `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
 - scalar forms and exact-shape elementwise operations
 
@@ -253,7 +337,7 @@ more. They do not have:
 
 - array-shape broadcasting or mixed promotion
 - views, reshape, or transpose
-- matrix multiplication
+- a matrix product over more than two dimensions
 - equality or ordering
 - multidimensional slicing, step slices, or slice assignment
 - autograd, device placement, or distributed storage
@@ -340,8 +424,30 @@ builds. The cases cover:
 - NaN payloads, infinities, and signed zero
 - arithmetic modes and first-trap indices
 
-The kernels do not reassociate, do not approximate division, and add no new
-numeric policy.
+The elementwise kernels do not reassociate, do not approximate division, and
+add no new numeric policy.
+
+### Kernel Width
+
+On x86-64 the runtime holds two copies of each kernel: one for the baseline
+instruction set, with 128-bit registers, and one for AVX2, with 256-bit
+registers. The first Array operation of a process asks the CPU which it has,
+so a program built for any x86-64 machine runs the wide copies where they
+exist. On arm64 there is one copy, which uses NEON.
+
+The copies give the same bits. No kernel uses fused multiply-add, and no
+kernel lets the register width decide the order of its floating-point
+operations.
+
+With AVX2 a float `matmul` of two matrices copies a block of the right
+operand into a packed buffer and computes two rows by sixteen `float64`
+columns of the result at a time, which keeps the running sums in
+registers. The additions for each element stay in the same order.
+
+Set `AURA_ARRAY_KERNELS=baseline` to make a process use the baseline copies,
+to compare the two or to rule the wide ones out. `--target-cpu` in
+[CLI and Tooling](/manual/cli-and-tooling) is the matching choice for the
+program's own compiled code.
 
 ## Status
 
@@ -351,5 +457,7 @@ It does not include tensor placement, views, shape transformations, or
 distributed execution.
 
 Design records:
-[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
+[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md),
+[ADR-0085: Target CPU and kernel dispatch](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0085-target-cpu-and-kernel-dispatch.md),
+[ADR-0086: Array products and reordered reductions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0086-array-products-and-reordered-reductions.md),
 and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).

@@ -16,6 +16,29 @@ Last updated: 2026-11-12
   worker may take it, by design. Two children cost about 0.3 to 0.5 ms
   more per round than one.
 
+## SIMD (complete)
+
+- Target: the four pieces John asked for on 2026-11-11: wider Array
+  kernels, more vectorized Array kernels, vectorizable user loops, and
+  explicit vector types. Details are in `2026-11-11-simd.md`.
+- Done: AVX2 copies of the Array kernels chosen at run time,
+  `--target-cpu`, `Array.fast_sum`, `fast_mean`, `dot`, and `matmul`
+  (ADR-0085, ADR-0086). Counted loops over lists of numbers run with
+  one range check at entry and vectorize, at the speed of the same loops
+  in Rust. The `simd` module has float lane values `F64x2`,
+  `F64x4`, `F32x4`, and `F32x8` (ADR-0087), and `range` loops with a
+  literal step count on plain integers.
+- Gap work after the first table (2026-11-11): stepped loops have one
+  test in each iteration and lane loads two entry guards, and `I64x2`
+  and `I64x4` add checked `int64` lanes (ADR-0092). A float `matmul`
+  runs in register tiles and on several threads with the same bits
+  (ADR-0093).
+- Gaps that stay: NumPy is about twice as fast at `matmul` on one
+  thread because it fuses each multiply with its add. Rust is up to 1.5
+  times faster on two lane kernels in a host-CPU build.
+- Possible follow-ups: `int32` lanes, the joined integer check and
+  `matmul` tiles on AArch64, lane loads from an `Array`, and counted
+  loops over `Array` elements.
 ## The two 0.14.0 regressions (complete)
 
 - Hello world grew 82 KB in 0.14.0 because `print` linked the code that

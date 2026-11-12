@@ -1,0 +1,92 @@
+from simd import F32x8, F64x4
+import sys
+
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    return acc.sum()
+
+
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    factor = F64x4.splat(a)
+    for i in range(0, len(xs) - 3, 4):
+        F64x4.load(xs, i).mul_add(factor, F64x4.load(ys, i)).store(ys, i)
+
+
+def norms(xs: list[float64], ys: list[float64], out: mut list[float64]):
+    for i in range(0, len(xs) - 3, 4):
+        x = F64x4.load(xs, i)
+        y = F64x4.load(ys, i)
+        (x * x + y * y).sqrt().store(out, i)
+
+
+def clamp(xs: mut list[float64], low: float64, high: float64):
+    lo = F64x4.splat(low)
+    hi = F64x4.splat(high)
+    for i in range(0, len(xs) - 3, 4):
+        F64x4.load(xs, i).max(lo).min(hi).store(xs, i)
+
+
+def absdiff(xs: list[float32], ys: list[float32], out: mut list[float32]):
+    for i in range(0, len(xs) - 7, 8):
+        (F32x8.load(xs, i) - F32x8.load(ys, i)).abs().store(out, i)
+
+
+def sum8(xs: list[float32]) -> float32:
+    mut acc = F32x8.splat(0.0)
+    for i in range(0, len(xs) - 7, 8):
+        acc = acc + F32x8.load(xs, i)
+    return acc.sum()
+
+
+def main() -> int32:
+    n: int64 = 1024
+    reps: int64 = 400000
+    mut xs: list[float64] = []
+    mut ys: list[float64] = []
+    mut out: list[float64] = []
+    mut fx: list[float32] = []
+    mut fy: list[float32] = []
+    mut fo: list[float32] = []
+    for i in range(n):
+        xs.append((i % 1000).to_float() * 0.5 + 1.0)
+        ys.append((i % 1000).to_float() * 0.25 - 3.0)
+        out.append(0.0)
+        fx.append(((i % 100).to_float() * 0.5) as float32)
+        fy.append(((i % 70).to_float() * 0.25) as float32)
+        fo.append(0.0)
+
+    mut acc = 0.0
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += dot(xs, ys)
+    print(f"dot {n} {sys.monotonic_time_ms() - start} {acc}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        saxpy(0.0000001, xs, ys)
+    print(f"saxpy {n} {sys.monotonic_time_ms() - start} {ys[7]}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        norms(xs, ys, out)
+    print(f"norms {n} {sys.monotonic_time_ms() - start} {out[7]}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        clamp(out, 3.0, 200.0)
+    print(f"clamp {n} {sys.monotonic_time_ms() - start} {out[7]} {out[1000]}")
+
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        absdiff(fx, fy, fo)
+    print(f"absdiff {n} {sys.monotonic_time_ms() - start} {fo[7]}")
+
+    mut total: float32 = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        total += sum8(fx)
+    print(f"sum8 {n} {sys.monotonic_time_ms() - start} {total}")
+    return 0

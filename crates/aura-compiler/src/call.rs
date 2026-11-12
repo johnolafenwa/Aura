@@ -406,6 +406,8 @@ const ARRAY_SET_PARAMS: [BuiltinParam; 2] = [
 ];
 const ARRAY_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
+const ARRAY_OTHER_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "other", ReceiverKind::Borrow)];
 const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "f", ReceiverKind::Borrow)];
 const ARITHMETIC_RHS_PARAMS: [BuiltinParam; 1] =
@@ -1236,6 +1238,10 @@ pub enum BuiltinMember {
     ArrayMin,
     ArrayMax,
     ArrayMean,
+    ArrayFastSum,
+    ArrayFastMean,
+    ArrayDot,
+    ArrayMatmul,
     ArrayWrappingAdd,
     ArrayWrappingSub,
     ArrayWrappingMul,
@@ -1559,6 +1565,10 @@ impl BuiltinMember {
             ("Array", "min") => Some(Self::ArrayMin),
             ("Array", "max") => Some(Self::ArrayMax),
             ("Array", "mean") => Some(Self::ArrayMean),
+            ("Array", "fast_sum") => Some(Self::ArrayFastSum),
+            ("Array", "fast_mean") => Some(Self::ArrayFastMean),
+            ("Array", "dot") => Some(Self::ArrayDot),
+            ("Array", "matmul") => Some(Self::ArrayMatmul),
             ("Array", "wrapping_add") => Some(Self::ArrayWrappingAdd),
             ("Array", "wrapping_sub") => Some(Self::ArrayWrappingSub),
             ("Array", "wrapping_mul") => Some(Self::ArrayWrappingMul),
@@ -1797,6 +1807,10 @@ impl BuiltinMember {
             Self::ArrayMin => "min",
             Self::ArrayMax => "max",
             Self::ArrayMean => "mean",
+            Self::ArrayFastSum => "fast_sum",
+            Self::ArrayFastMean => "fast_mean",
+            Self::ArrayDot => "dot",
+            Self::ArrayMatmul => "matmul",
             Self::VecLen => "len",
             Self::VecIsEmpty => "is_empty",
             Self::VecClone | Self::MapClone => "copy",
@@ -2006,6 +2020,10 @@ impl BuiltinMember {
             Self::ArrayMin => "min() -> T",
             Self::ArrayMax => "max() -> T",
             Self::ArrayMean => "mean() -> float64",
+            Self::ArrayFastSum => "fast_sum() -> T",
+            Self::ArrayFastMean => "fast_mean() -> float64",
+            Self::ArrayDot => "dot(other: Array[T]) -> T",
+            Self::ArrayMatmul => "matmul(other: Array[T]) -> Array[T]",
             Self::ArrayWrappingAdd => "wrapping_add(rhs: Array[T] | T) -> Array[T]",
             Self::ArrayWrappingSub => "wrapping_sub(rhs: Array[T] | T) -> Array[T]",
             Self::ArrayWrappingMul => "wrapping_mul(rhs: Array[T] | T) -> Array[T]",
@@ -2324,6 +2342,18 @@ impl BuiltinMember {
             Self::ArrayMin => "Returns the minimum Array element.",
             Self::ArrayMax => "Returns the maximum Array element.",
             Self::ArrayMean => "Returns the arithmetic mean as `float64`.",
+            Self::ArrayFastSum => {
+                "Returns the sum of all Array elements. A float Array adds them in a fixed vectorized order, not left to right."
+            }
+            Self::ArrayFastMean => {
+                "Returns the arithmetic mean as `float64`, over a sum added in a fixed vectorized order."
+            }
+            Self::ArrayDot => {
+                "Returns the sum of the products of matching elements of two Arrays of one shape."
+            }
+            Self::ArrayMatmul => {
+                "Returns the matrix product of two Arrays whose inner dimensions agree."
+            }
             Self::ArrayWrappingAdd
             | Self::ArrayWrappingSub
             | Self::ArrayWrappingMul => {
@@ -2579,6 +2609,8 @@ impl BuiltinMember {
             | Self::ArrayMin
             | Self::ArrayMax
             | Self::ArrayMean
+            | Self::ArrayFastSum
+            | Self::ArrayFastMean
             | Self::VecLen
             | Self::VecIsEmpty
             | Self::VecClone
@@ -2689,6 +2721,9 @@ impl BuiltinMember {
             }
             Self::ArrayFill => {
                 BuiltinCallShape::fixed(&ARRAY_VALUE_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayDot | Self::ArrayMatmul => {
+                BuiltinCallShape::fixed(&ARRAY_OTHER_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::ArrayMap => {
                 BuiltinCallShape::fixed(&ARRAY_CALLBACK_PARAMS, CallConvention::PositionalOrNamed)

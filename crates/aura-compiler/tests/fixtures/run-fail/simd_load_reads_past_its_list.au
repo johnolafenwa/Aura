@@ -1,0 +1,14 @@
+from simd import F64x4
+
+
+def sum_lanes(xs: list[float64]) -> float64:
+    mut total = 0.0
+    for i in range(0, len(xs), 4):
+        total += F64x4.load(xs, i).sum()
+    return total
+
+
+def main() -> int32:
+    print(sum_lanes([1.0, 2.0, 3.0, 4.0]))
+    print(sum_lanes([1.0, 2.0, 3.0, 4.0, 5.0, 6.0]))
+    return 0

@@ -1,0 +1,18 @@
+from simd import I64x2
+
+
+def lower(values: list[int64], by: int64, out: mut list[int64]):
+    step = I64x2.splat(by)
+    for i in range(0, len(values) - 1, 2):
+        (I64x2.load(values, i) - step).store(out, i)
+
+
+def main() -> int32:
+    least: int64 = -9223372036854775807 - 1
+    values: list[int64] = [5, 6, 7, least + 2]
+    mut out: list[int64] = [0, 0, 0, 0]
+    lower(values, 2, out)
+    print(out)
+    lower(values, 3, out)
+    print(out)
+    return 0

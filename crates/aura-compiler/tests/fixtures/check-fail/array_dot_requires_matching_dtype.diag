@@ -1,0 +1,5 @@
+error[AU2002]: `Array.dot` expects `Array[float64]`, found `Array[float32]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_dot_requires_matching_dtype.au:4:20
+  |
+4 |     print(left.dot(right))
+  |                    ^

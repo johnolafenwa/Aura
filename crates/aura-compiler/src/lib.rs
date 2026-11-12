@@ -53,6 +53,10 @@ pub use mir_runtime::{
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
+pub use native_backend::{
+    set_target_cpu as set_native_target_cpu, target_cpu as native_target_cpu,
+    target_cpu_identity as native_target_cpu_identity, target_cpu_names as native_target_cpu_names,
+};
 pub use native_codegen::{
     emit_host_debug_objects_with_metadata as emit_host_native_debug_objects_with_metadata,
     emit_host_object as emit_host_native_object,
@@ -123,14 +127,14 @@ pub mod native_runtime_coverage {
     pub use super::native_runtime::DIRECT_VALUE_LIVE_COUNT;
     pub use super::native_runtime::{
         aura_direct_arg_buffer_new, aura_direct_arg_buffer_store_owned, aura_direct_array_binary,
-        aura_direct_array_clone, aura_direct_array_fill_in_place, aura_direct_array_from_vec,
-        aura_direct_array_full, aura_direct_array_get, aura_direct_array_index,
-        aura_direct_array_len, aura_direct_array_map, aura_direct_array_reduce,
-        aura_direct_array_set_in_place, aura_direct_array_set_index_in_place,
-        aura_direct_array_shape, aura_direct_array_slice, aura_direct_array_zeros,
-        aura_direct_binary_value, aura_direct_binary_value_at, aura_direct_box_bool,
-        aura_direct_box_f64, aura_direct_box_i32, aura_direct_box_i64, aura_direct_box_u64,
-        aura_direct_cast_float_to_integer, aura_direct_cast_integer_to_float,
+        aura_direct_array_clone, aura_direct_array_dot, aura_direct_array_fill_in_place,
+        aura_direct_array_from_vec, aura_direct_array_full, aura_direct_array_get,
+        aura_direct_array_index, aura_direct_array_len, aura_direct_array_map,
+        aura_direct_array_matmul, aura_direct_array_reduce, aura_direct_array_set_in_place,
+        aura_direct_array_set_index_in_place, aura_direct_array_shape, aura_direct_array_slice,
+        aura_direct_array_zeros, aura_direct_binary_value, aura_direct_binary_value_at,
+        aura_direct_box_bool, aura_direct_box_f64, aura_direct_box_i32, aura_direct_box_i64,
+        aura_direct_box_u64, aura_direct_cast_float_to_integer, aura_direct_cast_integer_to_float,
         aura_direct_cast_integer_to_integer, aura_direct_cast_value, aura_direct_channel_new,
         aura_direct_channel_recv, aura_direct_channel_send_timeout_value,
         aura_direct_channel_try_send, aura_direct_close_value, aura_direct_compare_str_literal,
