@@ -361,6 +361,7 @@ fn function_decl(name: &str, return_type: &str) -> FunctionDecl {
         contracts: Vec::new(),
         spec: false,
         lemma: false,
+        export: None,
     }
 }
 

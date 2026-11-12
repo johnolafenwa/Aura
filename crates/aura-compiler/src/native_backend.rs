@@ -153,6 +153,59 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
     Ok(Box::new(llvm::LlvmModule::for_host()?))
 }
 
+/// A machine with no operating system that a freestanding build writes
+/// an object for (ADR-0094).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum FreestandingTarget {
+    X86_64,
+    Aarch64,
+    Riscv64,
+}
+
+impl FreestandingTarget {
+    /// Every target, in the order `--target` lists them.
+    pub const ALL: [Self; 3] = [Self::X86_64, Self::Aarch64, Self::Riscv64];
+
+    /// The name `--target` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64-unknown-none",
+            Self::Aarch64 => "aarch64-unknown-none",
+            Self::Riscv64 => "riscv64gc-unknown-none-elf",
+        }
+    }
+
+    /// The target `name` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.name() == name)
+    }
+
+    /// The target with the architecture of the build machine.
+    pub fn host() -> Option<Self> {
+        Self::of_arch(std::env::consts::ARCH)
+    }
+
+    fn of_arch(arch: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.arch() == arch)
+    }
+
+    /// The architecture, as `std::env::consts::ARCH` spells it.
+    pub fn arch(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+            Self::Riscv64 => "riscv64",
+        }
+    }
+}
+
+/// The module backend for a freestanding object for `target`.
+pub(crate) fn freestanding_module_backend(
+    target: FreestandingTarget,
+) -> Result<Box<dyn ModuleBackend>, String> {
+    Ok(Box::new(llvm::LlvmModule::for_freestanding(target)?))
+}
+
 /// An SSA value.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Val(pub(crate) u32);
@@ -498,6 +551,12 @@ pub(crate) trait ModuleBackend {
     /// Asks the code generator to inline `function`, a small local
     /// function, into every caller.
     fn mark_inline(&mut self, function: FuncHandle);
+
+    /// Makes `function`, an export, a weak definition: another object's
+    /// definition of the symbol replaces it at link time. Its body is
+    /// compiled as written, so a byte loop stays a loop and never becomes
+    /// a call of the C routine it defines.
+    fn mark_weak_routine(&mut self, function: FuncHandle);
 
     /// Defines `function`, whose body `body` builds. A body that fails
     /// leaves the function undefined.

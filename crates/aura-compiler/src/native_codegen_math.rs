@@ -191,8 +191,8 @@ impl FunctionCompiler<'_> {
         let magnitude = self.builder.iconst(types::I64, smallest.wrapping_neg());
         let kind_word = self.builder.iconst(types::I64, kind.direct_kind_word());
         let (line, column) = self.span_values(None);
-        self.builder.call(
-            self.runtime[RuntimeFn::FailNarrowOverflow],
+        self.call_failure(
+            RuntimeFn::FailNarrowOverflow,
             &[magnitude, unsigned, kind_word, line, column],
         );
         self.builder.trap(TrapCode::IntegerOverflow);

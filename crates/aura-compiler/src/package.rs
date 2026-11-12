@@ -142,11 +142,29 @@ pub struct ForeignLinkPlan {
     pub library_paths: Vec<PathBuf>,
     /// macOS frameworks, such as `Accelerate`.
     pub frameworks: Vec<String>,
+    /// The program's `export "C"` functions, which a freestanding build
+    /// defines as C symbols. Lowering fills it in, not a manifest.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub exports: Vec<ForeignExport>,
+}
+
+/// One `export "C"` function: the MIR function and the C symbol a
+/// freestanding build defines for it.
+#[derive(Clone, Debug, Eq, PartialEq, Serialize, Deserialize)]
+pub struct ForeignExport {
+    pub function: String,
+    pub symbol: String,
 }
 
 impl ForeignLinkPlan {
+    /// Whether the plan names no native library.
     pub fn is_empty(&self) -> bool {
         self.libraries.is_empty() && self.library_paths.is_empty() && self.frameworks.is_empty()
+    }
+
+    /// Whether the plan names nothing at all, so MIR leaves it out.
+    pub fn is_blank(&self) -> bool {
+        self.is_empty() && self.exports.is_empty()
     }
 
     /// Adds what `other` names and this plan does not, keeping the order.

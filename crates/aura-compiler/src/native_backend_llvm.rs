@@ -33,7 +33,8 @@ use inkwell::intrinsics::Intrinsic;
 use inkwell::module::{FlagBehavior, Linkage as LlvmLinkage, Module};
 use inkwell::passes::PassBuilderOptions;
 use inkwell::targets::{
-    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine, TargetTriple,
+    CodeModel, FileType, InitializationConfig, RelocMode, Target, TargetMachine,
+    TargetMachineOptions, TargetTriple,
 };
 use inkwell::types::{
     AnyType, BasicMetadataTypeEnum, BasicType, BasicTypeEnum, FunctionType, IntType,
@@ -93,6 +94,8 @@ pub(super) struct LlvmModule {
     /// Whether the object is a debug build, written without the pass
     /// pipeline and with DWARF for the functions that have a source.
     debug_info: bool,
+    /// The machine of a freestanding object. A host object has none.
+    freestanding: Option<super::FreestandingTarget>,
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -108,6 +111,7 @@ struct FunctionDecl {
     body: Option<FunctionIr>,
     task_invariant: bool,
     inline: bool,
+    weak_routine: bool,
     source: Option<FunctionSource>,
 }
 
@@ -128,6 +132,18 @@ impl LlvmModule {
             data: Vec::new(),
             names: HashMap::new(),
             debug_info: false,
+            freestanding: None,
+        })
+    }
+
+    pub(super) fn for_freestanding(target: super::FreestandingTarget) -> Result<Self, String> {
+        freestanding_target_machine(target)?;
+        Ok(Self {
+            functions: Vec::new(),
+            data: Vec::new(),
+            names: HashMap::new(),
+            debug_info: false,
+            freestanding: Some(target),
         })
     }
 }
@@ -220,6 +236,7 @@ impl ModuleBackend for LlvmModule {
                     body: None,
                     task_invariant: false,
                     inline: false,
+                    weak_routine: false,
                     source: None,
                 });
                 self.names.insert(name.to_string(), Symbol::Function(id));
@@ -289,6 +306,10 @@ impl ModuleBackend for LlvmModule {
 
     fn mark_inline(&mut self, function: FuncHandle) {
         self.functions[function.0 as usize].inline = true;
+    }
+
+    fn mark_weak_routine(&mut self, function: FuncHandle) {
+        self.functions[function.0 as usize].weak_routine = true;
     }
 
     fn enable_debug_info(&mut self) {
@@ -467,6 +488,9 @@ impl LlvmModule {
     /// The host machine the object is written for. A debug build's machine
     /// optimizes nothing, so every variable keeps its stack slot.
     fn target_machine(&self) -> Result<TargetMachine, String> {
+        if let Some(target) = self.freestanding {
+            return freestanding_target_machine(target);
+        }
         if self.debug_info {
             host_target_machine_at(OptimizationLevel::None)
         } else {
@@ -596,6 +620,64 @@ fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, Str
         .clone()
         .map_err(|error| format!("failed to initialize the LLVM host target: {error}"))?;
     target_machine_at(&host_triple(), level)
+}
+
+/// The machine a freestanding object for `target` is written for.
+///
+/// Code is position independent, so the linker script may place it at any
+/// address. The x86-64 machine keeps no red zone, since an interrupt
+/// handler runs on the stack of the code it interrupts. AArch64 never
+/// reads or writes a wide value at an unaligned address, which faults
+/// while the system control register forbids it. RISC-V is RV64GC with
+/// the `lp64d` calling convention, and reaches every symbol relative to
+/// the program counter.
+fn freestanding_target_machine(target: super::FreestandingTarget) -> Result<TargetMachine, String> {
+    use super::FreestandingTarget;
+    static INITIALIZED: OnceLock<()> = OnceLock::new();
+    INITIALIZED.get_or_init(|| {
+        let config = InitializationConfig::default();
+        Target::initialize_x86(&config);
+        Target::initialize_aarch64(&config);
+        Target::initialize_riscv(&config);
+    });
+    let (triple, cpu, features, abi, code_model) = match target {
+        FreestandingTarget::X86_64 => (
+            "x86_64-unknown-none-elf",
+            "x86-64",
+            "",
+            None,
+            CodeModel::Default,
+        ),
+        FreestandingTarget::Aarch64 => (
+            "aarch64-unknown-none-elf",
+            "generic",
+            "+strict-align",
+            None,
+            CodeModel::Default,
+        ),
+        FreestandingTarget::Riscv64 => (
+            "riscv64-unknown-none-elf",
+            "generic-rv64",
+            "+m,+a,+f,+d,+c",
+            Some("lp64d"),
+            CodeModel::Medium,
+        ),
+    };
+    let triple = TargetTriple::create(triple);
+    let llvm_target = Target::from_triple(&triple)
+        .map_err(|error| format!("LLVM has no target for {triple}: {error}"))?;
+    let mut options = TargetMachineOptions::new()
+        .set_cpu(cpu)
+        .set_features(features)
+        .set_level(OptimizationLevel::Default)
+        .set_reloc_mode(RelocMode::PIC)
+        .set_code_model(code_model);
+    if let Some(abi) = abi {
+        options = options.set_abi(abi);
+    }
+    llvm_target
+        .create_target_machine_from_options(&triple, options)
+        .ok_or_else(|| format!("LLVM could not create a target machine for {triple}"))
 }
 
 /// A machine for `triple`, whose target must already be initialized.
@@ -1915,6 +1997,8 @@ struct ObjectLowerer<'ctx, 'm> {
     /// The functions whose bodies this unit lowers, in declaration order.
     bodies: Vec<usize>,
     debug: Option<DebugInfo<'ctx>>,
+    /// Whether the object is written for RISC-V.
+    riscv: bool,
 }
 
 /// The DWARF of a debug build's module, as its functions are lowered.
@@ -2182,6 +2266,9 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             });
         let always_inline =
             context.create_enum_attribute(Attribute::get_named_enum_kind_id("alwaysinline"), 0);
+        let no_unwind =
+            context.create_enum_attribute(Attribute::get_named_enum_kind_id("nounwind"), 0);
+        let no_builtins = context.create_string_attribute("no-builtins", "");
         let mut bodies = Vec::new();
         let functions = object
             .functions
@@ -2209,9 +2296,28 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
                         .set_visibility(GlobalVisibility::Hidden);
                 }
                 if placement != Placement::Elsewhere {
-                    function.add_attribute(AttributeLoc::Function, uwtable);
-                    function.add_attribute(AttributeLoc::Function, probe_stack);
+                    // A freestanding object has no unwinder and no guard
+                    // page, so it carries no unwind table and no probe.
+                    if object.freestanding.is_none() {
+                        function.add_attribute(AttributeLoc::Function, uwtable);
+                        function.add_attribute(AttributeLoc::Function, probe_stack);
+                    } else {
+                        function.add_attribute(AttributeLoc::Function, no_unwind);
+                    }
                     bodies.push(index);
+                }
+                if decl.weak_routine {
+                    function.set_linkage(LlvmLinkage::WeakAny);
+                    function.add_attribute(AttributeLoc::Function, no_builtins);
+                    // A fallback stays a plain byte loop: small, and with
+                    // no vector code.
+                    for name in ["minsize", "optsize"] {
+                        function.add_attribute(
+                            AttributeLoc::Function,
+                            context
+                                .create_enum_attribute(Attribute::get_named_enum_kind_id(name), 0),
+                        );
+                    }
                 }
                 if decl.task_invariant {
                     for attribute in &task_invariant {
@@ -2269,6 +2375,7 @@ impl<'ctx, 'm> ObjectLowerer<'ctx, 'm> {
             globals,
             bodies,
             debug,
+            riscv: object.freestanding == Some(super::FreestandingTarget::Riscv64),
         };
         for (index, fields) in initialized {
             if let Some(contents) = &object.data[index].contents {
@@ -3033,6 +3140,13 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     let name = match extension {
                         Extension::None => continue,
                         Extension::Sign => "signext",
+                        // RISC-V keeps every 32-bit integer sign-extended
+                        // in its register, unsigned ones too.
+                        Extension::Zero
+                            if self.object.riscv && signature.params[index] == ScalarType::I32 =>
+                        {
+                            "signext"
+                        }
                         Extension::Zero => "zeroext",
                     };
                     call.add_attribute(

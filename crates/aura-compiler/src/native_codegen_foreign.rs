@@ -45,16 +45,16 @@ use crate::mir_runtime::callback_signature;
 use crate::native_backend::{Extension, Indirect};
 
 /// How one scalar crosses the C boundary.
-struct ForeignScalar {
+pub(super) struct ForeignScalar {
     /// The C type the value travels as.
-    ty: ScalarType,
+    pub(super) ty: ScalarType,
     /// How the narrow C type fills a full register.
     extension: Extension,
     /// The Aura scalar the value is on this side.
     kind: ScalarKind,
 }
 
-fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
+pub(super) fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
     let (ty, extension, kind) = match ffi_type {
         FfiType::Bool => (types::I8, Extension::Zero, ScalarKind::Bool),
         FfiType::U8 => (types::I8, Extension::Zero, ScalarKind::Uint8),
@@ -152,7 +152,11 @@ fn callback_result_type(result: crate::ffi::FfiScalar) -> ScalarType {
 }
 
 /// The Aura word of the C value `raw` that a callback received.
-fn callback_word(builder: &mut dyn FunctionBackend, scalar: &ForeignScalar, raw: Val) -> Val {
+pub(super) fn callback_word(
+    builder: &mut dyn FunctionBackend,
+    scalar: &ForeignScalar,
+    raw: Val,
+) -> Val {
     let bits = match (scalar.ty, scalar.extension) {
         (ScalarType::I64 | ScalarType::F64, _) => return raw,
         (ScalarType::F32, _) => return builder.fpromote(types::F64, raw),
@@ -178,7 +182,7 @@ fn callback_word(builder: &mut dyn FunctionBackend, scalar: &ForeignScalar, raw:
 }
 
 /// The C value of type `ty` for the Aura word `word`.
-fn callback_narrow(builder: &mut dyn FunctionBackend, ty: ScalarType, word: Val) -> Val {
+pub(super) fn callback_narrow(builder: &mut dyn FunctionBackend, ty: ScalarType, word: Val) -> Val {
     match ty {
         ScalarType::I64 | ScalarType::F64 => word,
         ScalarType::F32 => builder.fdemote(types::F32, word),
@@ -281,7 +285,11 @@ impl NativeCodegen<'_> {
 /// The code the guard runs: it calls the Aura function `target` with the
 /// words of the frame, and stores the result and what the function wrote
 /// to its `mut` parameters back to the frame.
-fn emit_callback_body(builder: &mut dyn FunctionBackend, callback: &CCallback, target: FuncHandle) {
+pub(super) fn emit_callback_body(
+    builder: &mut dyn FunctionBackend,
+    callback: &CCallback,
+    target: FuncHandle,
+) {
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
     builder.switch_to_block(entry);
@@ -430,10 +438,10 @@ enum ForeignWriteback {
 }
 
 /// The convention foreign calls follow on the machine being built for.
-fn foreign_abi() -> std::result::Result<CAbi, String> {
-    CAbi::host().ok_or(format!(
-        "direct backend cannot pass a C struct by value on `{}`",
-        std::env::consts::ARCH
+fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<CAbi, String> {
+    let arch = freestanding.map_or(std::env::consts::ARCH, FreestandingTarget::arch);
+    CAbi::of_arch(arch).ok_or(format!(
+        "direct backend cannot pass a C struct by value on `{arch}`"
     ))
 }
 
@@ -602,7 +610,7 @@ impl FunctionCompiler<'_> {
             Some(layout) => {
                 let layout = layout.interned();
                 let slot = self.foreign_struct_slot(layout);
-                let passing = layout.passing(foreign_abi()?);
+                let passing = layout.passing(foreign_abi(self.freestanding)?);
                 match &passing {
                     CPassing::Memory => {
                         arguments.push_word(slot);
@@ -891,7 +899,7 @@ impl FunctionCompiler<'_> {
         slot: Val,
         arguments: &mut ForeignArguments,
     ) -> std::result::Result<(), String> {
-        let abi = foreign_abi()?;
+        let abi = foreign_abi(self.freestanding)?;
         let (general, float) = arguments.registers_used(abi);
         match layout.argument(abi, general, float)? {
             CArgument::Registers(pieces) => {
@@ -1206,11 +1214,16 @@ impl FunctionCompiler<'_> {
         self.builder.brif(invalid, fail, &[], valid, &[]);
         self.builder.switch_to_block(fail);
         self.builder.seal_block(fail);
-        let (symbol_ptr, symbol_len) = self.string_constant(symbol.as_bytes())?;
-        self.builder.call(
-            self.runtime[RuntimeFn::FfiBadBool],
-            &[byte, symbol_ptr, symbol_len],
-        );
+        if self.freestanding.is_some() {
+            let (line, column) = self.span_values(None);
+            self.call_trap_hook(super::freestanding::TRAP_FOREIGN_VALUE, line, column);
+        } else {
+            let (symbol_ptr, symbol_len) = self.string_constant(symbol.as_bytes())?;
+            self.builder.call(
+                self.runtime[RuntimeFn::FfiBadBool],
+                &[byte, symbol_ptr, symbol_len],
+            );
+        }
         self.builder.trap(TrapCode::User(2));
         self.builder.switch_to_block(valid);
         self.builder.seal_block(valid);

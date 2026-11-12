@@ -330,6 +330,11 @@ pub struct FunctionDecl {
     /// each call. A call written as a statement is erased at run time.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub lemma: bool,
+    /// `export "C" def`: the ABI string. A freestanding build defines the
+    /// function under its own name as a symbol with that calling
+    /// convention. Every other build compiles it as an ordinary function.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub export: Option<String>,
 }
 
 /// The contextual keyword of a yield statement.

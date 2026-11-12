@@ -226,6 +226,7 @@ fn rewrite(function: &mut FunctionDecl) -> Result<FunctionDecl> {
         contracts: Vec::new(),
         spec: false,
         lemma: false,
+        export: None,
     };
 
     // `return __aura_iter.__aura_generator[T](__aura_generator_body(

@@ -277,6 +277,7 @@ fn function_info(
             contracts: Vec::new(),
             spec: false,
             lemma: false,
+            export: None,
         },
         signature: FunctionSignature {
             params: lowered_params,
@@ -328,6 +329,7 @@ fn generic_function_info(
             contracts: Vec::new(),
             spec: false,
             lemma: false,
+            export: None,
         },
         signature: FunctionSignature {
             params: lowered_params,

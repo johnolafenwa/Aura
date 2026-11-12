@@ -69,7 +69,15 @@ fn main() {
         }
         "check" => {
             let (diagnostic_format, input_args) = parse_diagnostic_format(args.collect::<Vec<_>>());
+            let freestanding = input_args.iter().any(|arg| arg == "--freestanding");
+            let input_args = input_args
+                .into_iter()
+                .filter(|arg| arg != "--freestanding")
+                .collect::<Vec<_>>();
             let input = read_input(&mut input_args.into_iter());
+            if freestanding {
+                report_freestanding_problems(&input, diagnostic_format);
+            }
             let result = if input.from_stdin {
                 check_path_with_source(Path::new(&input.path), &input.source)
             } else {
@@ -212,6 +220,10 @@ fn main() {
         }
         "build" => {
             let remaining = args.collect::<Vec<_>>();
+            if remaining.iter().any(|arg| arg == "--freestanding") {
+                build_freestanding(remaining);
+                return;
+            }
             let (diagnostic_format, remaining) = parse_diagnostic_format(remaining);
             let remove_proved_checks = remaining.iter().any(|arg| arg == "--remove-proved-checks");
             let remaining: Vec<String> = remaining
@@ -4400,6 +4412,160 @@ fn emit_diagnostic(format: DiagnosticFormat, path: &str, source: &str, error: &D
     }
 }
 
+/// Reports what a freestanding build of `input` cannot compile, and exits
+/// when it finds anything (ADR-0094). A program an ordinary check rejects
+/// reports that error.
+fn report_freestanding_problems(input: &Input, format: DiagnosticFormat) {
+    let path = Path::new(&input.path);
+    let lowered = if input.from_stdin {
+        lower_path_with_source_to_mir_with_source_locations(path, &input.source)
+    } else {
+        lower_path_to_mir_with_source_locations(path)
+    };
+    let problems = match lowered {
+        Ok(mir) => aura_compiler::check_freestanding(&mir),
+        Err(error) => vec![error],
+    };
+    if !problems.is_empty() {
+        emit_diagnostics(format, &input.path, &input.source, problems);
+        process::exit(1);
+    }
+}
+
+/// Reports `errors` together: each as text, or all in one JSON report. An
+/// error in another file of the program is shown with that file's source.
+fn emit_diagnostics(format: DiagnosticFormat, path: &str, source: &str, errors: Vec<Diagnostic>) {
+    let errors = errors
+        .into_iter()
+        .map(|error| match error.render_path.clone() {
+            Some(other) if other != path && error.render_source.is_none() => {
+                match fs::read_to_string(&other) {
+                    Ok(text) => error.with_render_context(other, text),
+                    Err(_) => error,
+                }
+            }
+            _ => error,
+        })
+        .collect::<Vec<_>>();
+    match format {
+        DiagnosticFormat::Human => {
+            for error in &errors {
+                eprintln!("{}", render_error(path, source, error));
+            }
+        }
+        DiagnosticFormat::Json => {
+            let report = serde_json::json!({
+                "schema_version": 1,
+                "diagnostics": errors
+                    .iter()
+                    .map(|error| error.structured(path))
+                    .collect::<Vec<_>>(),
+            });
+            eprintln!("{}", report);
+        }
+    }
+}
+
+/// `aura build --freestanding`: writes one relocatable object for a
+/// machine with no operating system, and links nothing (ADR-0094).
+fn build_freestanding(args: Vec<String>) {
+    let (diagnostic_format, args) = parse_diagnostic_format(args);
+    let mut target = None;
+    let mut remove_proved_checks = false;
+    let mut rest = Vec::new();
+    let mut args = args.into_iter();
+    while let Some(arg) = args.next() {
+        match arg.as_str() {
+            "--freestanding" => {}
+            "--remove-proved-checks" => remove_proved_checks = true,
+            "--target" => target = Some(args.next().unwrap_or_else(|| print_usage_and_exit(2))),
+            _ => rest.push(arg),
+        }
+    }
+    let known = || {
+        aura_compiler::FreestandingTarget::ALL
+            .iter()
+            .map(|target| format!("`{}`", target.name()))
+            .collect::<Vec<_>>()
+            .join(", ")
+    };
+    let target = match target {
+        Some(name) => aura_compiler::FreestandingTarget::parse(&name).unwrap_or_else(|| {
+            eprintln!(
+                "aura: unknown freestanding target `{name}`; the targets are {}",
+                known()
+            );
+            process::exit(2);
+        }),
+        None => aura_compiler::FreestandingTarget::host().unwrap_or_else(|| {
+            eprintln!(
+                "aura: no freestanding target matches this machine; pass `--target` with one of {}",
+                known()
+            );
+            process::exit(2);
+        }),
+    };
+    let (output_path, debug, _, input_args) = parse_build_args(rest);
+    if debug {
+        eprintln!("aura: `--debug` does not apply to a freestanding build");
+        process::exit(2);
+    }
+    let input = read_input(&mut input_args.into_iter());
+    report_freestanding_problems(&input, diagnostic_format);
+    let path = Path::new(&input.path);
+    let lowered = if remove_proved_checks {
+        let options = aura_compiler::verify::Options {
+            cache_dir: verify_cache_root(),
+            ..aura_compiler::verify::Options::default()
+        };
+        aura_compiler::lower_path_to_mir_with_proved_checks(
+            path,
+            input.from_stdin.then_some(input.source.as_str()),
+            false,
+            &options,
+        )
+        .map(|(mir, removed)| {
+            if diagnostic_format == DiagnosticFormat::Human {
+                eprintln!(
+                    "aura: {} checks proved and removed ({} bounds, {} arithmetic, {} assertion)",
+                    removed.total(),
+                    removed.bounds,
+                    removed.arithmetic,
+                    removed.assertions
+                );
+            }
+            mir
+        })
+    } else if input.from_stdin {
+        lower_path_with_source_to_mir(path, &input.source)
+    } else {
+        lower_path_to_mir(path)
+    };
+    let object = lowered.map_err(|error| vec![error]).and_then(|mir| {
+        aura_compiler::emit_freestanding_object(&mir, &input.path, &input.source, target)
+    });
+    let written = object.and_then(|object| {
+        fs::write(&output_path, &object).map_err(|error| {
+            vec![Diagnostic::new(format!(
+                "failed to write `{}`: {error}",
+                output_path.display()
+            ))]
+        })?;
+        Ok(object.len())
+    });
+    match written {
+        Ok(bytes) => eprintln!(
+            "aura: built `{}` for `{}` (freestanding object, {bytes} bytes)",
+            output_path.display(),
+            target.name()
+        ),
+        Err(errors) => {
+            emit_diagnostics(diagnostic_format, &input.path, &input.source, errors);
+            process::exit(1);
+        }
+    }
+}
+
 fn emit_structured_diagnostic(error: StructuredDiagnostic) {
     let report = serde_json::json!({
         "schema_version": 1,
@@ -6355,6 +6521,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             libraries: vec!["sqlite3".to_string(), "stdc++".to_string()],
             library_paths: vec![PathBuf::from("/pkg/native,lib")],
             frameworks: vec!["Accelerate".to_string()],
+            exports: Vec::new(),
         };
         let text = |args: Vec<std::ffi::OsString>| {
             args.into_iter()
@@ -6409,6 +6576,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 libraries,
                 library_paths: Vec::new(),
                 frameworks,
+                exports: Vec::new(),
             };
             for os in ["linux", "macos"] {
                 assert_eq!(

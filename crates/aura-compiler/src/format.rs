@@ -1080,7 +1080,7 @@ impl<'a> Formatter<'a> {
         let signature = prefix.is_none()
             && matches!(
                 first_token(items).map(|index| self.toks[index].text.as_str()),
-                Some("def" | "public" | "extern")
+                Some("def" | "public" | "extern" | "export")
             );
         let arrow = items.iter().position(|item| {
             signature && matches!(item, Item::Tok(index) if self.toks[*index].text == "->")

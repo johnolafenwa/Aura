@@ -7802,6 +7802,7 @@ fn function_decl(name: &str) -> FunctionDecl {
         contracts: Vec::new(),
         spec: false,
         lemma: false,
+        export: None,
     }
 }
 

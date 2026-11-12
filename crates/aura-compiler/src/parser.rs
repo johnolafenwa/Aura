@@ -81,6 +81,7 @@ fn class_invariant_method(
         contracts: invariants,
         spec: false,
         lemma: false,
+        export: None,
     }
 }
 
@@ -537,6 +538,7 @@ impl Parser {
                 || self.at_keyword_def()
                 || self.at_spec_def_start()
                 || self.at_lemma_def_start()
+                || self.at_export_def_start()
                 || self.at_keyword_trait()
                 || self.at_keyword_impl()
             {
@@ -621,6 +623,8 @@ impl Parser {
             self.parse_extern_item(public)
         } else if self.at_keyword_def() {
             Ok(Item::Function(self.parse_function(public)?))
+        } else if self.at_export_def_start() {
+            Ok(Item::Function(self.parse_export_function(public)?))
         } else if self.at_spec_def_start() {
             self.bump();
             let mut function = self.parse_function(public)?;
@@ -655,6 +659,39 @@ impl Parser {
     fn at_spec_def_start(&self) -> bool {
         matches!(self.current_kind(), TokenKind::Identifier(name) if name == "spec")
             && matches!(self.peek_kind(1), Some(TokenKind::KwDef))
+    }
+
+    /// `export "C" def`: `export` is a keyword only before an ABI string.
+    fn at_export_def_start(&self) -> bool {
+        matches!(self.current_kind(), TokenKind::Identifier(name) if name == "export")
+            && matches!(
+                self.peek_kind(1),
+                Some(TokenKind::StringLiteral(_) | TokenKind::TripleStringLiteral(_))
+            )
+    }
+
+    /// The function of an `export "C" def` declaration: an ordinary
+    /// function a freestanding build also defines as a C symbol.
+    fn parse_export_function(&mut self, public: bool) -> Result<FunctionDecl> {
+        self.bump();
+        let abi_token = self.bump();
+        let abi = match abi_token.kind {
+            TokenKind::StringLiteral(abi) if abi == "C" => abi,
+            _ => {
+                return Err(parse_error(
+                    abi_token.span,
+                    "`export` supports only the `\"C\"` ABI: write `export \"C\" def`",
+                ));
+            }
+        };
+        if !self.at_keyword_def() {
+            return Err(self.error_here(
+                "expected `def` after `export \"C\"`; only a function can be exported",
+            ));
+        }
+        let mut function = self.parse_function(public)?;
+        function.export = Some(abi);
+        Ok(function)
     }
 
     /// `lemma def`: `lemma` is a keyword only before `def`.
@@ -1435,6 +1472,7 @@ impl Parser {
             contracts,
             spec: false,
             lemma: false,
+            export: None,
         })
     }
 
@@ -1684,6 +1722,7 @@ impl Parser {
             contracts,
             spec: false,
             lemma: false,
+            export: None,
         })
     }
 
