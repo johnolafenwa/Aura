@@ -12,7 +12,12 @@ arithmetic.
   argument `gpu`, on `Device.default()`. Every pass reads its result with `eval()` or `item()`,
   so the GPU does the work inside the timed loop.
 - **NumPy and PyTorch** (`ops.py`) run the same expressions. The PyTorch
-  MPS side calls `torch.mps.synchronize()` after each pass.
+  MPS and CUDA sides wait for the device after each pass.
+
+Each row prints `<name> <size> <milliseconds> <checksum> <first pass
+milliseconds>`. Every row runs once before its timed passes. That first
+pass carries what an expression costs once, such as compiling it for the
+device, and its time is the last column.
 
 ## Running
 
@@ -23,7 +28,51 @@ bash benchmarks/tensor/run.sh
 
 ## Results
 
+### NVIDIA A40, CUDA
+
+NVIDIA A40 with 46 GB on a rented cloud machine, driver 595.91, CUDA
+13.2, PyTorch 2.8.0, 2026-11-12. Milliseconds for all the timed
+repetitions of a row, then the first pass alone. The Aura column is the
+third of three runs and the PyTorch column the second of two; the runs
+of each side agreed to a few milliseconds. The machine's CPUs were
+shared and busy (load average 13 to 18 on 96 cores), so the CPU sides
+are not recorded here.
+
+| Row | Elements | Repetitions | Aura, CUDA device | PyTorch, CUDA | Aura first pass | Aura first pass, empty kernel cache | PyTorch first pass |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `x + y` | 1,024 | 2,000 | 21 | 41 | 0 | 13 | 9 |
+| `(x * y + x).sqrt()` | 1,024 | 2,000 | 33 | 69 | 0 | 15 | 17 |
+| `(x * y).sum()` | 1,024 | 2,000 | 49 | 60 | 0 | 54 | 0 |
+| `(x.sin() * y.cos()).abs().maximum(y.log())` | 1,024 | 2,000 | 34 | 128 | 0 | 15 | 34 |
+| `x + y` | 16,777,216 | 20 | 7 | 7 | 3 | 15 | 1 |
+| `(x * y + x).sqrt()` | 16,777,216 | 20 | 8 | 19 | 0 | 23 | 1 |
+| `(x * y).sum()` | 16,777,216 | 20 | 6 | 10 | 1 | 94 | 0 |
+| `(x.sin() * y.cos()).abs().maximum(y.log())` | 16,777,216 | 20 | 8 | 34 | 0 | 17 | 1 |
+| `matmul` then `max` | 64 by 64 | 500 | 26 | 18 | 55 | 119 | 73 |
+| `matmul` then `max` | 1,024 by 1,024 | 10 | 2 | 1 | 1 | 125 | 0 |
+
+What the numbers say:
+
+- On large tensors the CUDA device is level with PyTorch for one
+  addition and two to four times faster for longer expressions. Aura
+  compiles a whole expression into one kernel that passes over the data
+  once, where PyTorch runs one kernel and writes one temporary tensor
+  for each operation.
+- One small piece of work costs 10 to 25 microseconds, about half of
+  PyTorch's. The small `matmul` row is the exception: it is a cuBLAS
+  call and two reduction kernels, and it is 1.4 times slower than
+  PyTorch.
+- The first evaluation of an expression compiles its kernel, which takes
+  13 to 23 ms for an elementwise expression and more for a whole
+  reduction, which has several kernels. The compiled kernels are kept on
+  disk, so only the first run of a program pays this. On later runs the
+  first pass costs what a timed pass costs. The 55 ms on the first
+  `matmul` is cuBLAS starting, which PyTorch pays too.
+
 ### Apple M2 Pro, Metal
+
+These times were taken before the first pass was timed on its own, so
+each figure includes its row's first pass.
 
 Apple M2 Pro with 16 GB, macOS 26.5, 2026-11-12, with other work on the
 machine (load average about 4). Milliseconds for all the repetitions of a

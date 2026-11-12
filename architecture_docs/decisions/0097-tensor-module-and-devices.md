@@ -132,8 +132,8 @@ compiles it with NVRTC at run time, once for each distinct plan.
   `t + 2n` and so on, 64 for each thread, so neighbouring threads read
   neighbouring memory. The next stage reduces what the threads wrote, and
   a last stage of one thread reduces at most 128 values. On an NVIDIA
-  A40 this made a sum of 16.8 million elements about PLACEHOLDER times
-  faster than one stage of square-root runs.
+  A40 this made a sum of 16.8 million elements about four times faster
+  than one stage of square-root runs.
 - `matmul` is a cuBLAS `gemm` for each matrix pair of the batch. cuBLAS
   is column-major, so the row-major product A B is asked for as the
   product of B and A as stored.
