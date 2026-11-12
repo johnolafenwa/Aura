@@ -30172,3 +30172,130 @@ fn direct_array_element_entries_read_and_write_by_coordinate_words() {
         super::aura_direct_release_value(boxed);
     }
 }
+
+#[test]
+fn direct_array_fill_set_slice_and_update_entries_change_the_boxed_array() {
+    fn capture_diagnostic(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid direct Array input should trap")
+    }
+    let int32 = |value: i32| Value::Int(IntegerValue::from_i32(value));
+    let elements = |array: *mut OpaqueValue| {
+        super::with_array(array, |array| {
+            (0..array.len())
+                .map(|index| array.value_at_flat(index))
+                .collect::<Vec<_>>()
+        })
+    };
+
+    let shape = integer_vector(IntegerKind::Int64, &[2, 2]);
+    let array = super::aura_direct_array_full(0, shape, super::aura_direct_box_i32(7), 1, 1);
+    assert_eq!(super::aura_direct_array_len(array), 4);
+    assert_eq!(elements(array), vec![int32(7); 4]);
+
+    // `set` gives the element it replaced, and an indexed assignment
+    // gives nothing.
+    let first = integer_vector(IntegerKind::Int64, &[0, 0]);
+    let previous =
+        super::aura_direct_array_set_in_place(array, first, super::aura_direct_box_i32(1), 1, 1);
+    assert_eq!(
+        expect_optional_present(previous),
+        int32(7),
+        "set returns the previous element"
+    );
+    let last = integer_vector(IntegerKind::Int64, &[1, 1]);
+    let nothing = super::aura_direct_array_set_index_in_place(
+        array,
+        last,
+        super::aura_direct_box_i32(4),
+        1,
+        1,
+    );
+    assert_eq!(unsafe { take_value(nothing) }, Value::Unit);
+    assert_eq!(
+        elements(array),
+        vec![int32(1), int32(7), int32(7), int32(4)]
+    );
+
+    // A first-axis slice is the second row.
+    let row = super::aura_direct_array_slice(array, 1, 1, 0, 0, 1, 1);
+    assert_eq!(elements(row), vec![int32(7), int32(4)]);
+
+    // `array[0, :] += 10` through plain selection words.
+    use crate::array_views::{ARRAY_SELECTION_INDEX, ARRAY_SELECTION_SLICE};
+    let done = super::aura_direct_array_update_words_in_place(
+        array,
+        ARRAY_SELECTION_INDEX,
+        0,
+        0,
+        0,
+        ARRAY_SELECTION_SLICE,
+        0,
+        0,
+        1,
+        super::aura_direct_box_i32(10),
+        0,
+        1,
+        1,
+    );
+    assert_eq!(unsafe { take_value(done) }, Value::Unit);
+    assert_eq!(
+        elements(array),
+        vec![int32(11), int32(17), int32(7), int32(4)]
+    );
+
+    let address = array as usize;
+    let outside = capture_diagnostic(move || {
+        let far = integer_vector(IntegerKind::Int64, &[5, 0]);
+        let _ = super::aura_direct_array_set_in_place(
+            address as *mut OpaqueValue,
+            far,
+            super::aura_direct_box_i32(0),
+            3,
+            4,
+        );
+    });
+    assert_eq!(outside.code, "AU4003");
+    let outside = capture_diagnostic(move || {
+        let far = integer_vector(IntegerKind::Int64, &[0, 9]);
+        let _ = super::aura_direct_array_set_index_in_place(
+            address as *mut OpaqueValue,
+            far,
+            super::aura_direct_box_i32(0),
+            3,
+            4,
+        );
+    });
+    assert_eq!(outside.code, "AU4003");
+    let operation = capture_diagnostic(move || {
+        let _ = super::aura_direct_array_update_words_in_place(
+            address as *mut OpaqueValue,
+            ARRAY_SELECTION_INDEX,
+            0,
+            0,
+            0,
+            ARRAY_SELECTION_SLICE,
+            0,
+            0,
+            1,
+            super::aura_direct_box_i32(1),
+            99,
+            3,
+            4,
+        );
+    });
+    assert_eq!(
+        operation.message,
+        "direct Array ABI received invalid binary operation code `99`"
+    );
+    let dtype = capture_diagnostic(move || {
+        let shape = integer_vector(IntegerKind::Int64, &[1]);
+        let _ = super::aura_direct_array_full(99, shape, super::aura_direct_box_i32(0), 3, 4);
+    });
+    assert_eq!(dtype.code, "AU4001", "{}", dtype.message);
+}
