@@ -7852,81 +7852,101 @@ fn native_runtime_direct_network_wrappers_cover_timeout_and_error_results() {
         ));
     }
 
+    eprintln!("TEMP-WINDOWS-TRACE step 1");
     expect_io_result_error(super::aura_direct_net_connect(string_value("127.0.0.1:0")));
+    eprintln!("TEMP-WINDOWS-TRACE step 2");
     expect_io_result_error(super::aura_direct_net_connect_timeout(
         string_value("127.0.0.1:0"),
         duration_value(1),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 3");
     expect_io_result_error(super::aura_direct_net_listen(string_value(
         "127.0.0.1:not-a-port",
     )));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 4");
     let tcp_listener = match expect_result_ok_payload(super::aura_direct_net_listen(string_value(
         "127.0.0.1:0",
     ))) {
         Value::TcpListener(listener) => listener,
         other => panic!("expected timeout net.TcpListener, found {:?}", other),
     };
+    eprintln!("TEMP-WINDOWS-TRACE step 5");
     expect_io_result_error(super::aura_direct_tcp_listener_accept(
         boxed_value(Value::TcpListener(tcp_listener.clone())),
         duration_value(0),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 6");
     expect_unit(super::aura_direct_tcp_listener_close(boxed_value(
         Value::TcpListener(tcp_listener),
     )));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 7");
     expect_io_result_error(super::aura_direct_net_udp_bind(string_value(
         "127.0.0.1:not-a-port",
     )));
+    eprintln!("TEMP-WINDOWS-TRACE step 8");
     let udp_socket = match expect_result_ok_payload(super::aura_direct_net_udp_bind(string_value(
         "127.0.0.1:0",
     ))) {
         Value::UdpSocket(socket) => socket,
         other => panic!("expected timeout net.UdpSocket, found {:?}", other),
     };
+    eprintln!("TEMP-WINDOWS-TRACE step 9");
     let udp_recv = expect_result_ok_payload(super::aura_direct_udp_socket_recv(
         boxed_value(Value::UdpSocket(udp_socket.clone())),
         int_value(16),
         duration_value(0),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 10");
     expect_optional_absent_value(udp_recv);
+    eprintln!("TEMP-WINDOWS-TRACE step 11");
     let udp_recv_from = expect_result_ok_payload(super::aura_direct_udp_socket_recv_from(
         boxed_value(Value::UdpSocket(udp_socket.clone())),
         int_value(16),
         duration_value(0),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 12");
     expect_optional_absent_value(udp_recv_from);
+    eprintln!("TEMP-WINDOWS-TRACE step 13");
     expect_unit(super::aura_direct_udp_socket_close(boxed_value(
         Value::UdpSocket(udp_socket),
     )));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 14");
     expect_io_result_error(super::aura_direct_net_http_listen(string_value(
         "127.0.0.1:not-a-port",
     )));
+    eprintln!("TEMP-WINDOWS-TRACE step 15");
     let http_listener = match expect_result_ok_payload(super::aura_direct_net_http_listen(
         string_value("127.0.0.1:0"),
     )) {
         Value::HttpListener(listener) => listener,
         other => panic!("expected timeout net.HttpListener, found {:?}", other),
     };
+    eprintln!("TEMP-WINDOWS-TRACE step 16");
     expect_io_result_error(super::aura_direct_http_listener_accept(
         boxed_value(Value::HttpListener(http_listener.clone())),
         duration_value(0),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 17");
     expect_unit(super::aura_direct_http_listener_close(boxed_value(
         Value::HttpListener(http_listener),
     )));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 18");
     expect_io_result_error(super::aura_direct_net_tls_listen(
         string_value("127.0.0.1:0"),
         string_value("/tmp/aura-missing-cert.pem"),
         string_value("/tmp/aura-missing-key.pem"),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 19");
     expect_io_result_error(super::aura_direct_net_tls_connect(
         string_value("127.0.0.1:0"),
         string_value("localhost"),
         string_value("/tmp/aura-missing-ca.pem"),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 20");
     expect_io_result_error(super::aura_direct_net_tls_connect_timeout(
         string_value("127.0.0.1:0"),
         string_value("localhost"),
@@ -7934,23 +7954,28 @@ fn native_runtime_direct_network_wrappers_cover_timeout_and_error_results() {
         duration_value(1),
     ));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 21");
     expect_io_result_error(super::aura_direct_net_websocket_listen(string_value(
         "127.0.0.1:not-a-port",
     )));
+    eprintln!("TEMP-WINDOWS-TRACE step 22");
     expect_io_result_error(super::aura_direct_net_websocket_connect(string_value(
         "not-a-url",
     )));
 
+    eprintln!("TEMP-WINDOWS-TRACE step 23");
     let websocket_listener = match expect_result_ok_payload(
         super::aura_direct_net_websocket_listen(string_value("127.0.0.1:0")),
     ) {
         Value::WebSocketListener(listener) => listener,
         other => panic!("expected timeout net.WebSocketListener, found {:?}", other),
     };
+    eprintln!("TEMP-WINDOWS-TRACE step 24");
     expect_io_result_error(super::aura_direct_websocket_listener_accept(
         boxed_value(Value::WebSocketListener(websocket_listener.clone())),
         duration_value(0),
     ));
+    eprintln!("TEMP-WINDOWS-TRACE step 25");
     expect_unit(super::aura_direct_close_value(
         boxed_value(Value::WebSocketListener(websocket_listener)),
         0,

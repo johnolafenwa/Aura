@@ -179,10 +179,17 @@ jobs:
         # Git for Windows carries `sh`, `echo`, `true` and the rest.
         run: echo "C:\\Program Files\\Git\\usr\\bin" >> "$GITHUB_PATH"
 
+      - name: Trace the network wrapper test (temporary)
+        timeout-minutes: 12
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura-runtime --lib -- native_runtime_direct_network_wrappers_cover_timeout_and_error_results --nocapture
+
       - name: Run the runtime tests
+        if: ${{ !cancelled() }}
         # The tests take a few minutes. The limit turns a hung test into a
         # failure whose log names it.
-        timeout-minutes: 25
+        timeout-minutes: 12
         env:
           RUST_MIN_STACK: 33554432
         run: cargo test --locked -p aura-core -p aura-runtime
