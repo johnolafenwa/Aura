@@ -68,7 +68,7 @@ fn write_package(temp: &TempDir, dir: &str, name: &str, dependencies: &str) -> P
 }
 
 fn canonical_manifest_path(temp: &TempDir, package_dir: &str) -> PathBuf {
-    fs::canonicalize(temp.path.join(package_dir).join(MANIFEST_NAME))
+    aura_core::host_path::canonicalize(temp.path.join(package_dir).join(MANIFEST_NAME))
         .expect("fixture manifest should canonicalize")
 }
 
@@ -122,7 +122,7 @@ fn extern_declarations_enforce_manifest_authorization_during_module_loading() {
         standalone_error.message,
         format!(
             "FFI declarations in `{}` require an Aura package manifest; add `Aura.toml` with `[package] allow_ffi = true`",
-            fs::canonicalize(&standalone)
+            aura_core::host_path::canonicalize(&standalone)
                 .expect("standalone fixture should canonicalize")
                 .display()
         )
@@ -175,7 +175,7 @@ fn ffi_authorization_rejects_paths_outside_the_discovered_package_graph() {
         diagnostic.message,
         format!(
             "could not determine the Aura package for FFI declaration in `{}`",
-            fs::canonicalize(&outside_path)
+            aura_core::host_path::canonicalize(&outside_path)
                 .expect("outside fixture should canonicalize")
                 .display()
         )
@@ -1016,7 +1016,8 @@ fn package_update_and_workspace_helpers_cover_edge_paths() {
     assert!(update.updated_packages.is_empty());
     assert_eq!(
         update.lockfile_root,
-        fs::canonicalize(temp.path.join("workspace")).expect("workspace should canonicalize")
+        aura_core::host_path::canonicalize(temp.path.join("workspace"))
+            .expect("workspace should canonicalize")
     );
     let lockfile = fs::read_to_string(temp.path.join("workspace/Aura.lock"))
         .expect("workspace update should write lockfile");
@@ -1100,7 +1101,8 @@ fn package_resolver_reports_graph_limit_and_workspace_lookup_edges() {
     assert_eq!(
         load_workspace_member_dirs(&temp.path.join("valid_workspace"))
             .expect("valid workspace members should load"),
-        vec![fs::canonicalize(valid_member_dir).expect("member dir should canonicalize")]
+        vec![aura_core::host_path::canonicalize(valid_member_dir)
+            .expect("member dir should canonicalize")]
     );
 
     temp.write(
@@ -1260,7 +1262,8 @@ fn package_path_cache_and_validation_helpers_cover_remaining_edges() {
     assert!(canonical_missing.ends_with("nested/missing.au"));
 
     let source_root = temp.path.join("root/src");
-    let canonical_source_root = fs::canonicalize(&source_root).expect("source root");
+    let canonical_source_root =
+        aura_core::host_path::canonicalize(&source_root).expect("source root");
     assert_eq!(
         canonicalize_if_exists(&source_root).expect("existing paths should canonicalize"),
         canonical_source_root
@@ -1375,7 +1378,7 @@ fn package_git_dependency_resolution_uses_cached_revision_selectors() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-rev-selector-cache");
     fs::create_dir_all(temp.path.join("local_repo")).expect("failed to create local repo dir");
-    let source = fs::canonicalize(temp.path.join("local_repo"))
+    let source = aura_core::host_path::canonicalize(temp.path.join("local_repo"))
         .expect("local repo path should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -1418,7 +1421,7 @@ fn package_git_dependency_resolution_reuses_the_locked_branch_revision() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-locked-branch-cache");
     fs::create_dir_all(temp.path.join("local_repo")).expect("failed to create local repo dir");
-    let source = fs::canonicalize(temp.path.join("local_repo"))
+    let source = aura_core::host_path::canonicalize(temp.path.join("local_repo"))
         .expect("local repo path should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -1475,7 +1478,7 @@ fn package_resolver_reports_git_dependency_resolution_and_package_name_errors() 
     let _cache_home = EnvVarGuard::set("XDG_CACHE_HOME", temp.path.join("cache-mismatch"));
     let source_dir = temp.path.join("cached-source");
     fs::create_dir_all(&source_dir).expect("failed to create source dir");
-    let source = fs::canonicalize(&source_dir)
+    let source = aura_core::host_path::canonicalize(&source_dir)
         .expect("source path should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -1518,14 +1521,14 @@ fn package_git_resolution_and_checkout_helpers_cover_live_git_edges() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-live-git-helper-edges");
     let repo = init_git_package_repo(&temp, "util-repo", "util");
-    let source = fs::canonicalize(&repo)
+    let source = aura_core::host_path::canonicalize(&repo)
         .expect("repo should canonicalize")
         .to_string_lossy()
         .to_string();
     let main_rev = run_git(&repo, &["rev-parse", "HEAD"]);
     run_git(&repo, &["tag", "v1.0.0"]);
     fs::create_dir_all(temp.path.join("not-a-git-repo")).expect("failed to create non-repo");
-    let non_repo_source = fs::canonicalize(temp.path.join("not-a-git-repo"))
+    let non_repo_source = aura_core::host_path::canonicalize(temp.path.join("not-a-git-repo"))
         .expect("non-repo path should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -1763,8 +1766,8 @@ fn package_graph_helpers_report_unusual_but_supported_edges() {
         "util/src/lib.au",
         "public def answer() -> int32:\n    return 42\n",
     );
-    let main_path =
-        fs::canonicalize(app_dir.join("src/main.au")).expect("main path should canonicalize");
+    let main_path = aura_core::host_path::canonicalize(app_dir.join("src/main.au"))
+        .expect("main path should canonicalize");
     let graph = PackageGraph::discover_for_entry(&main_path)
         .expect("package discovery should succeed")
         .expect("entry should be in a package");
@@ -1773,8 +1776,8 @@ fn package_graph_helpers_report_unusual_but_supported_edges() {
         "app/tests/smoke.au",
         "from helpers import answer\n\ndef main() -> int32:\n    return answer()\n",
     );
-    let test_path =
-        fs::canonicalize(app_dir.join("tests/smoke.au")).expect("test entry should canonicalize");
+    let test_path = aura_core::host_path::canonicalize(app_dir.join("tests/smoke.au"))
+        .expect("test entry should canonicalize");
     let test_graph = PackageGraph::discover_for_entry(&test_path)
         .expect("package test entry should be accepted")
         .expect("test entry should discover its package");
@@ -1855,8 +1858,8 @@ fn package_graph_helpers_report_unusual_but_supported_edges() {
 
     let bad_lock_app = write_package(&temp, "bad_lock_app", "bad_lock_app", "");
     fs::create_dir_all(bad_lock_app.join(LOCKFILE_NAME)).expect("failed to create bad lockfile");
-    let bad_lock_main =
-        fs::canonicalize(bad_lock_app.join("src/main.au")).expect("bad lock main canonical");
+    let bad_lock_main = aura_core::host_path::canonicalize(bad_lock_app.join("src/main.au"))
+        .expect("bad lock main canonical");
     let bad_lock = PackageGraph::discover_for_entry(&bad_lock_main)
         .expect_err("directory lockfiles should fail package discovery");
     assert!(bad_lock.message.contains("failed to read lockfile"));
@@ -1867,7 +1870,7 @@ fn public_package_graph_round_trips_git_locks_and_rejects_version_only_dependenc
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-public-git-lock-contract");
     let repository = init_git_package_repo(&temp, "util-repo", "util");
-    let source = fs::canonicalize(&repository)
+    let source = aura_core::host_path::canonicalize(&repository)
         .expect("git dependency source should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -1883,8 +1886,8 @@ fn public_package_graph_round_trips_git_locks_and_rejects_version_only_dependenc
             toml_string(&source)
         ),
     );
-    let main_path =
-        fs::canonicalize(app_dir.join("src/main.au")).expect("package entry should canonicalize");
+    let main_path = aura_core::host_path::canonicalize(app_dir.join("src/main.au"))
+        .expect("package entry should canonicalize");
     let graph = PackageGraph::discover_for_entry(&main_path)
         .expect("a local git dependency should resolve")
         .expect("the entry should discover a package graph");
@@ -1920,8 +1923,9 @@ fn public_package_graph_round_trips_git_locks_and_rejects_version_only_dependenc
         "version_only",
         "\n[dependencies]\nutil = \"1.2.3\"\n",
     );
-    let version_only_entry = fs::canonicalize(version_only_dir.join("src/main.au"))
-        .expect("version-only entry should canonicalize");
+    let version_only_entry =
+        aura_core::host_path::canonicalize(version_only_dir.join("src/main.au"))
+            .expect("version-only entry should canonicalize");
     let version_error = PackageGraph::discover_for_entry(&version_only_entry)
         .expect_err("version-only dependencies should fail public package discovery");
     assert_eq!(
@@ -1939,7 +1943,7 @@ fn package_discovery_accepts_only_the_aura_manifest_name() {
         "[package]\nname = \"old\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
     );
     temp.write("old/src/main.au", "def main():\n    print(1)\n");
-    let old_entry = fs::canonicalize(temp.path.join("old/src/main.au"))
+    let old_entry = aura_core::host_path::canonicalize(temp.path.join("old/src/main.au"))
         .expect("old-name fixture entry should canonicalize");
     assert!(
         PackageGraph::discover_for_entry(&old_entry)
@@ -1953,14 +1957,14 @@ fn package_discovery_accepts_only_the_aura_manifest_name() {
         "[package]\nname = \"current\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
     );
     temp.write("current/src/main.au", "def main():\n    print(2)\n");
-    let current_entry = fs::canonicalize(temp.path.join("current/src/main.au"))
+    let current_entry = aura_core::host_path::canonicalize(temp.path.join("current/src/main.au"))
         .expect("Aura fixture entry should canonicalize");
     let graph = PackageGraph::discover_for_entry(&current_entry)
         .expect("Aura manifest discovery should succeed")
         .expect("Aura.toml should create a package");
     assert_eq!(
         graph.root_source_root,
-        fs::canonicalize(temp.path.join("current/src"))
+        aura_core::host_path::canonicalize(temp.path.join("current/src"))
             .expect("Aura source root should canonicalize")
     );
 }
@@ -2523,7 +2527,8 @@ library_paths = ["lib"]
         .expect("package graph should exist");
     let plan = graph.foreign_link_plan();
     assert_eq!(plan.libraries, ["shared", "native_only", "app_only"]);
-    let root = fs::canonicalize(&temp.path).expect("the fixture root should canonicalize");
+    let root = aura_core::host_path::canonicalize(&temp.path)
+        .expect("the fixture root should canonicalize");
     assert_eq!(
         plan.library_paths,
         [root.join("native/lib"), root.join("app/vendor")]
@@ -2557,7 +2562,7 @@ fn git_dependency_rejects_symlinks_introduced_on_checked_out_revision() {
     let _env_lock = lock_package_env();
     let temp = TempDir::new("aura-package-git-rev-symlink");
     let repo = init_git_package_repo(&temp, "util-repo", "util");
-    let source = fs::canonicalize(&repo)
+    let source = aura_core::host_path::canonicalize(&repo)
         .expect("repo should canonicalize")
         .to_string_lossy()
         .to_string();
@@ -2648,7 +2653,7 @@ fn git_source_validation_enforces_allowed_protocols_and_offline_mode() {
 
     let temp = TempDir::new("aura-package-offline-git");
     let repo = init_git_package_repo(&temp, "util-repo", "util");
-    let local_source = fs::canonicalize(&repo)
+    let local_source = aura_core::host_path::canonicalize(&repo)
         .expect("repo should canonicalize")
         .to_string_lossy()
         .to_string();

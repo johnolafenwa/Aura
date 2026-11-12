@@ -121,7 +121,7 @@ fn public_path_entry_and_dependency_update_facades_preserve_results() {
     assert!(update.updated_packages.is_empty());
     assert_eq!(
         update.lockfile_root,
-        fs::canonicalize(temp.path()).expect("package root should canonicalize")
+        aura_core::host_path::canonicalize(temp.path()).expect("package root should canonicalize")
     );
     let lockfile = fs::read_to_string(temp.path().join("Aura.lock"))
         .expect("the public update facade should write Aura.lock");
@@ -1244,7 +1244,8 @@ fn module_loader_package_qualification_ignores_paths_outside_graph_sources() {
     fs::write(&main_path, "def main():\n    pass\n").expect("failed to write main module");
 
     let loader = ModuleLoader::new(&main_path).expect("package loader should initialize");
-    let canonical_main = fs::canonicalize(&main_path).expect("main path should canonicalize");
+    let canonical_main =
+        aura_core::host_path::canonicalize(&main_path).expect("main path should canonicalize");
     assert_eq!(loader.module_name_for_path(&canonical_main), "main");
     let mut program = check_source("def main():\n    pass\n").expect("program should check");
     let outside_path = temp.path().join("outside.au");
@@ -1684,13 +1685,14 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
     assert!(absolutize(&relative_path).is_absolute());
     assert_eq!(
         absolutize(&user_path),
-        fs::canonicalize(&user_path).expect("user path should canonicalize")
+        aura_core::host_path::canonicalize(&user_path).expect("user path should canonicalize")
     );
     assert_eq!(
         canonicalize_if_exists(&user_path).expect("existing helper paths should canonicalize"),
-        fs::canonicalize(&user_path).expect("user path should canonicalize")
+        aura_core::host_path::canonicalize(&user_path).expect("user path should canonicalize")
     );
-    let canonical_temp = fs::canonicalize(temp.path()).expect("temp root should canonicalize");
+    let canonical_temp =
+        aura_core::host_path::canonicalize(temp.path()).expect("temp root should canonicalize");
     let missing_nested = temp.path().join("missing").join("leaf.au");
     assert_eq!(
         absolutize(&missing_nested),
@@ -1724,7 +1726,7 @@ fn module_loader_helper_functions_cover_namespace_and_export_paths() {
             .expect("package root should infer");
     assert_eq!(
         inferred_root,
-        fs::canonicalize(temp.path()).expect("temp root should canonicalize")
+        aura_core::host_path::canonicalize(temp.path()).expect("temp root should canonicalize")
     );
     assert!(import_exists_from_root(
         temp.path(),
@@ -2146,7 +2148,7 @@ fn module_loader_reports_import_resolution_and_export_errors() {
         .expect("invalid override should fall back to the entry dir");
     assert_eq!(
         fallback_root,
-        fs::canonicalize(temp.path()).expect("temp root should canonicalize")
+        aura_core::host_path::canonicalize(temp.path()).expect("temp root should canonicalize")
     );
 
     let program = check_path(&module_path).expect("module should check");
@@ -3850,14 +3852,16 @@ fn maintained_hello_world_example_runs() {
 fn absolutize_joins_relative_paths_onto_the_canonical_current_directory() {
     let relative = Path::new("aura-lib-relative-probe").join("leaf.au");
     let current = std::env::current_dir().expect("current directory");
-    let canonical_current = fs::canonicalize(&current).expect("current directory canonicalizes");
+    let canonical_current =
+        aura_core::host_path::canonicalize(&current).expect("current directory canonicalizes");
     assert_eq!(absolutize(&relative), canonical_current.join(&relative));
 }
 
 #[test]
 fn canonicalize_if_exists_resolves_missing_leaves_under_existing_directories() {
     let temp = TempDir::new("aura-lib-canonicalize-leaf");
-    let canonical_root = fs::canonicalize(temp.path()).expect("temp root canonicalizes");
+    let canonical_root =
+        aura_core::host_path::canonicalize(temp.path()).expect("temp root canonicalizes");
     let missing = temp.path().join("missing").join("leaf.au");
     assert_eq!(
         canonicalize_if_exists(&missing).expect("missing leaves resolve against the root"),
