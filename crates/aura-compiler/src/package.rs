@@ -1588,7 +1588,13 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
     let parent = checkout_dir
         .parent()
         .expect("git checkout cache paths should have parent directories");
-    let temp_checkout = unique_temp_path(parent, rev)?;
+    // A short name: Windows limits a working directory to 248 characters
+    // and the cache path already holds two hashes.
+    let temp_checkout = parent.join(format!(
+        ".t{}-{}",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     if temp_checkout.exists() {
         let _ = fs::remove_dir_all(&temp_checkout);
     }
@@ -1871,7 +1877,7 @@ fn git_cache_root() -> Result<PathBuf> {
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
         return Ok(PathBuf::from(cache_home).join("aura").join("git"));
     }
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = aura_core::host_path::home_dir() {
         return Ok(PathBuf::from(home).join(".cache").join("aura").join("git"));
     }
     Err(Diagnostic::new(

@@ -77,6 +77,10 @@ aura build -o basic_addition.exe "$env:LOCALAPPDATA\Programs\Aura\share\aura\exa
 To install under a different directory, set `AURA_INSTALL_PREFIX` before
 running the installer.
 
+Aura keeps built programs, proofs and git dependencies under
+`%USERPROFILE%\.cache\aura`. Set `AURA_CACHE_DIR` to keep built programs
+and proofs elsewhere.
+
 ## Differences From Linux And macOS
 
 - A program's executable has the `.exe` extension, and `aura build --debug`

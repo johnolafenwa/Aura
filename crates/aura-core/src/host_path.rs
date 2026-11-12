@@ -49,9 +49,36 @@ pub fn without_verbatim_prefix(path: &str) -> Option<String> {
     (fits && plain_components && !plain.contains('/')).then_some(plain)
 }
 
+/// The user's home directory: `HOME`, or `USERPROFILE` on Windows, where
+/// `HOME` is set only inside Unix-like shells.
+pub fn home_dir() -> Option<std::ffi::OsString> {
+    home_dir_from(std::env::var_os("HOME"), std::env::var_os("USERPROFILE"))
+}
+
+fn home_dir_from(
+    home: Option<std::ffi::OsString>,
+    profile: Option<std::ffi::OsString>,
+) -> Option<std::ffi::OsString> {
+    let profile = if cfg!(windows) { profile } else { None };
+    home.filter(|value| !value.is_empty())
+        .or(profile.filter(|value| !value.is_empty()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{canonicalize, without_verbatim_prefix};
+    use super::{canonicalize, home_dir_from, without_verbatim_prefix};
+
+    #[test]
+    fn the_home_directory_falls_back_to_the_windows_profile() {
+        let home = Some("/home/ada".into());
+        let profile = Some(r"C:\Users\ada".into());
+        assert_eq!(home_dir_from(home.clone(), profile.clone()), home);
+        assert_eq!(home_dir_from(home.clone(), None), home);
+        let fallback = if cfg!(windows) { profile.clone() } else { None };
+        assert_eq!(home_dir_from(None, profile.clone()), fallback);
+        assert_eq!(home_dir_from(Some("".into()), profile), fallback);
+        assert_eq!(home_dir_from(None, Some("".into())), None);
+    }
 
     #[test]
     fn verbatim_drive_and_share_paths_lose_their_prefix() {

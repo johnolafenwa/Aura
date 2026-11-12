@@ -2142,6 +2142,7 @@ fn package_io_helpers_cover_local_error_paths() {
         // user could pre-seed a checkout there.
         let _xdg_home = EnvVarGuard::remove("XDG_CACHE_HOME");
         let _home = EnvVarGuard::remove("HOME");
+        let _profile = EnvVarGuard::remove("USERPROFILE");
         let error = git_cache_root().expect_err("no per-user cache directory is known");
         assert!(
             error.message.contains("XDG_CACHE_HOME") && error.message.contains("HOME"),

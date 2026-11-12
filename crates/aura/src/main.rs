@@ -2889,7 +2889,7 @@ fn native_cache_root() -> Option<PathBuf> {
         let explicit = PathBuf::from(explicit);
         (!explicit.as_os_str().is_empty()).then_some(explicit)?
     } else {
-        let home = PathBuf::from(std::env::var_os("HOME")?);
+        let home = PathBuf::from(aura_compiler::host_path::home_dir()?);
         if home.as_os_str().is_empty() {
             return None;
         }
@@ -4501,14 +4501,12 @@ fn handle_verify_command(args: Vec<String>) {
 fn verify_cache_root() -> Option<PathBuf> {
     match std::env::var_os("AURA_CACHE_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => Some(PathBuf::from(dir).join("verify")),
-        None => std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(|home| {
-                PathBuf::from(home)
-                    .join(".cache")
-                    .join("aura")
-                    .join("verify")
-            }),
+        None => aura_compiler::host_path::home_dir().map(|home| {
+            PathBuf::from(home)
+                .join(".cache")
+                .join("aura")
+                .join("verify")
+        }),
     }
 }
 
