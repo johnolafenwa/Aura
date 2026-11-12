@@ -180,6 +180,9 @@ jobs:
         run: echo "C:\\Program Files\\Git\\usr\\bin" >> "$GITHUB_PATH"
 
       - name: Run the runtime tests
+        # The tests take a few minutes. The limit turns a hung test into a
+        # failure whose log names it.
+        timeout-minutes: 25
         env:
           RUST_MIN_STACK: 33554432
         run: cargo test --locked -p aura-core -p aura-runtime
@@ -200,6 +203,8 @@ jobs:
         run: cargo build --locked -p aura
 
       - name: Run a program in the interpreter and as a native executable
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
         run: |
           target/debug/aura.exe run --backend mir examples/basics/hello_world.au
           target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
