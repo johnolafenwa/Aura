@@ -12938,6 +12938,7 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "HttpListener")
                                 | ("net", "HttpExchange")
                                 | ("http", "Stream")
+                                | ("tensor", "Node")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")

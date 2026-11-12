@@ -20,6 +20,7 @@ const SIMD_SOURCE: &str = include_str!("../std/simd.au");
 const REGEX_SOURCE: &str = include_str!("../std/regex.au");
 const TIME_SOURCE: &str = include_str!("../std/time.au");
 const HTTP_SOURCE: &str = include_str!("../std/http.au");
+const TENSOR_SOURCE: &str = include_str!("../std/tensor.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
@@ -30,6 +31,7 @@ fn module_source(name: &str) -> Option<&'static str> {
         "regex" => Some(REGEX_SOURCE),
         "time" => Some(TIME_SOURCE),
         "http" => Some(HTTP_SOURCE),
+        "tensor" => Some(TENSOR_SOURCE),
         _ => None,
     }
 }

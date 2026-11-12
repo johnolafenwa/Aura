@@ -1,0 +1,323 @@
+# The Aura-source part of the builtin `tensor` module. The compiler checks
+# this file as module `tensor` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. A `Tensor[T]` holds a
+# `tensor.Node`: memory that a device owns. Every operation is a host call
+# on nodes, so the same source runs on the CPU device and on a GPU.
+import tensor
+
+
+public trait Sub[Rhs, Out]:
+    """Subtraction of `Rhs`, producing `Out`. `-` calls `sub` when no builtin
+    subtraction applies."""
+    def sub(self, rhs: Rhs) -> Out
+
+
+public trait Mul[Rhs, Out]:
+    """Multiplication by `Rhs`, producing `Out`. `*` calls `mul` when no
+    builtin multiplication applies."""
+    def mul(self, rhs: Rhs) -> Out
+
+
+public trait Div[Rhs, Out]:
+    """Division by `Rhs`, producing `Out`. `/` calls `div` when no builtin
+    division applies."""
+    def div(self, rhs: Rhs) -> Out
+
+
+public trait Neg[Out]:
+    """Negation, producing `Out`. Unary `-` calls `neg` when no builtin
+    negation applies."""
+    def neg(self) -> Out
+
+
+public copy class Device:
+    """Where a tensor's memory lives and its operations run."""
+    kind: int64
+
+    public def cpu() -> Device:
+        """The CPU device. Every machine has it."""
+        return Device(kind=0)
+
+    public def metal() -> Device | None:
+        """The Metal GPU of this Mac, or `None` when there is none."""
+        if tensor.__aura_device_available(1):
+            return Device(kind=1)
+        return None
+
+    public def default() -> Device:
+        """The GPU when this machine has one Aura can use, else the CPU."""
+        if tensor.__aura_device_available(1):
+            return Device(kind=1)
+        return Device(kind=0)
+
+    public def name(self) -> str:
+        """`"cpu"` or `"metal"`."""
+        if self.kind == 1:
+            return "metal"
+        return "cpu"
+
+    public def is_gpu(self) -> bool:
+        return self.kind != 0
+
+
+public class Tensor[T]:
+    """Numbers of one dtype on a device. A tensor is never changed: each
+    operation gives a new one. Shapes follow the `Array` rules."""
+    node: tensor.Node
+
+    public def shape(self) -> list[int64]:
+        return tensor.__aura_shape(self.node)
+
+    public def len(self) -> int64:
+        """The number of elements."""
+        return tensor.__aura_len(self.node)
+
+    public def device(self) -> Device:
+        return Device(kind=tensor.__aura_device(self.node))
+
+    public def clone(self) -> Tensor[T]:
+        """Another handle to the same memory. Nothing is copied."""
+        return Tensor[T](node=tensor.__aura_share(self.node))
+
+    public def eval(self) -> None:
+        """Runs any work this tensor is still waiting on. A device failure
+        is reported here."""
+        tensor.__aura_eval(self.node)
+
+    public def reshape(self, shape: list[int64]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_reshape(self.node, shape))
+
+    public def flatten(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_reshape(self.node, [self.len()]))
+
+    public def transpose(self) -> Tensor[T]:
+        """The axes in reverse order."""
+        return Tensor[T](node=tensor.__aura_permute(self.node, list[int64]()))
+
+    public def permute(self, axes: list[int64]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_permute(self.node, axes))
+
+    public def matmul(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_matmul(self.node, other.node))
+
+    public def minimum(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, other.node, 16))
+
+    public def maximum(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, other.node, 17))
+
+    public def pow(self, exponent: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, exponent.node, 18))
+
+    public def abs(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 0))
+
+    public def sqrt(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 1))
+
+    public def exp(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 2))
+
+    public def log(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 3))
+
+    public def sin(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 6))
+
+    public def cos(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 7))
+
+    public def less(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 0))
+
+    public def less_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 1))
+
+    public def greater(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 2))
+
+    public def greater_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 3))
+
+    public def equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 4))
+
+    public def not_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 5))
+
+    public def sum(self, axis: int64 | None = None) -> Tensor[T]:
+        """The sum of every element as a tensor of shape `[1]`, or of each
+        lane along `axis`. The order of the additions is not fixed."""
+        return Tensor[T](node=reduce(self.node, 0, axis))
+
+    public def min(self, axis: int64 | None = None) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 1, axis))
+
+    public def max(self, axis: int64 | None = None) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 2, axis))
+
+    public def mean(self, axis: int64 | None = None) -> Tensor[T]:
+        """The mean, in the tensor's own dtype. Float tensors only."""
+        return Tensor[T](node=reduce(self.node, 3, axis))
+
+    public def to_int32(self) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_cast(self.node, 0))
+
+    public def to_int64(self) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_cast(self.node, 1))
+
+    public def to_float32(self) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_cast(self.node, 2))
+
+    public def to_float64(self) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_cast(self.node, 3))
+
+
+def reduce(node: tensor.Node, reduction: int64, axis: int64 | None) -> tensor.Node:
+    match axis:
+        case None:
+            return tensor.__aura_reduce(node, reduction, 0, false)
+        case int64 as lane:
+            return tensor.__aura_reduce(node, reduction, lane, true)
+
+
+public def choose[T](mask: Tensor[bool], when_true: Tensor[T], when_false: Tensor[T]) -> Tensor[T]:
+    """Each element of `when_true` where `mask` holds, else of
+    `when_false`. The three shapes broadcast."""
+    return Tensor[T](node=tensor.__aura_where(mask.node, when_true.node, when_false.node))
+
+
+impl[T] Add[Tensor[T], Tensor[T]] for Tensor[T]:
+    def add(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 0))
+
+
+impl[T] Sub[Tensor[T], Tensor[T]] for Tensor[T]:
+    def sub(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 1))
+
+
+impl[T] Mul[Tensor[T], Tensor[T]] for Tensor[T]:
+    def mul(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 2))
+
+
+impl[T] Div[Tensor[T], Tensor[T]] for Tensor[T]:
+    def div(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 3))
+
+
+impl[T] Neg[Tensor[T]] for Tensor[T]:
+    def neg(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 64))
+
+
+public trait Elements[A, E]:
+    """The members of a tensor that name its dtype: moving to and from an
+    `Array`, and single elements."""
+    def from_array(values: A, device: Device) -> Self
+    def full(shape: list[int64], value: E, device: Device) -> Self
+    def zeros(shape: list[int64], device: Device) -> Self
+    def to_array(self) -> A
+    def item(self) -> E
+    def scalar(self, value: E) -> Self
+
+
+impl Elements[Array[int32], int32] for Tensor[int32]:
+    def from_array(values: Array[int32], device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_from_array_i32(values, device.kind))
+
+    def full(shape: list[int64], value: int32, device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32(shape, value, 0, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32(shape, 0, 0, device.kind))
+
+    def to_array(self) -> Array[int32]:
+        return tensor.__aura_to_array_i32(self.node)
+
+    def item(self) -> int32:
+        return tensor.__aura_item_i32(self.node)
+
+    def scalar(self, value: int32) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32([1], value, 0, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[int64], int64] for Tensor[int64]:
+    def from_array(values: Array[int64], device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_from_array_i64(values, device.kind))
+
+    def full(shape: list[int64], value: int64, device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64(shape, value, 1, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64(shape, 0, 1, device.kind))
+
+    def to_array(self) -> Array[int64]:
+        return tensor.__aura_to_array_i64(self.node)
+
+    def item(self) -> int64:
+        return tensor.__aura_item_i64(self.node)
+
+    def scalar(self, value: int64) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64([1], value, 1, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[float32], float32] for Tensor[float32]:
+    def from_array(values: Array[float32], device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_from_array_f32(values, device.kind))
+
+    def full(shape: list[int64], value: float32, device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32(shape, value, 2, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32(shape, 0.0, 2, device.kind))
+
+    def to_array(self) -> Array[float32]:
+        return tensor.__aura_to_array_f32(self.node)
+
+    def item(self) -> float32:
+        return tensor.__aura_item_f32(self.node)
+
+    def scalar(self, value: float32) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32([1], value, 2, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[float64], float64] for Tensor[float64]:
+    def from_array(values: Array[float64], device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_from_array_f64(values, device.kind))
+
+    def full(shape: list[int64], value: float64, device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64(shape, value, 3, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64(shape, 0.0, 3, device.kind))
+
+    def to_array(self) -> Array[float64]:
+        return tensor.__aura_to_array_f64(self.node)
+
+    def item(self) -> float64:
+        return tensor.__aura_item_f64(self.node)
+
+    def scalar(self, value: float64) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64([1], value, 3, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[bool], bool] for Tensor[bool]:
+    def from_array(values: Array[bool], device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_from_array_bool(values, device.kind))
+
+    def full(shape: list[int64], value: bool, device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool(shape, value, 4, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool(shape, false, 4, device.kind))
+
+    def to_array(self) -> Array[bool]:
+        return tensor.__aura_to_array_bool(self.node)
+
+    def item(self) -> bool:
+        return tensor.__aura_item_bool(self.node)
+
+    def scalar(self, value: bool) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool([1], value, 4, tensor.__aura_device(self.node)))
