@@ -7,6 +7,60 @@ in this file.
 
 ## Unreleased
 
+## VS Code extension 0.15.0 — 2026-11-12
+
+- Bundles language server 0.15.0. The semantic interface version stays 20.
+- Completion, hover, go to definition, references, and signature help
+  work on a method call on a trait object, and `dyn` is highlighted
+  before a trait name.
+- Completion no longer offers the private fields and methods of a class
+  from another module.
+- Commands run as structured tasks, PowerShell arguments are quoted
+  literally, a bare `aura` is never run from the workspace directory, and
+  a newer save cancels a running `aura verify`.
+
+## 0.15.0 — 2026-11-12 (technical preview)
+
+Aura 0.15.0 finishes trait objects and FFI v1, adds streaming I/O with
+four standard library modules, and makes numeric code fast with SIMD and
+a larger `Array`. Trait objects gain `value as dyn Trait`, `match` on the
+held type, and `Transfer` traits for tasks and queues, and a call on one
+costs 34 instructions against 12 for Rust's `Box<dyn Trait>`, down from
+about 4,600. The three known trait object issues of 0.14.0 are fixed. FFI
+passes C strings, out-parameters, arrays, structs by value, and
+callbacks, and releases opaque handles with a `drop` function, so
+`examples/packages/sqlite_notes` binds the system SQLite library. Files
+are read in lines and chunks in constant memory. The new `http` module is
+a streaming HTTP client, and `regex`, `time`, and `gzip` join it, with a
+reference streaming agent in `examples/agents/streaming_agent`. The new
+`simd` module has float and checked `int64` lane values, counted loops
+over lists of numbers run at the speed of the same loops in Rust, Array
+kernels use AVX2 where the CPU has it, and `--target-cpu` compiles a
+program for a named CPU. Arrays gain slices with steps on every axis,
+`reshape`, `transpose`, slice assignment, broadcasting, axis reductions,
+masks, elementwise math, batched `matmul`, and element access in place,
+and views share storage instead of copying. A method call on a list
+element costs 26 to 92 instructions instead of about 2,800.
+`aura verify` reads the contracts of imported modules and checks
+contracts on `extern "C"` functions at run time, and the findings of the
+2026-11-10 security review are fixed. Measured against 0.14.0 on the Linux measurement host, the 30
+programs of the [cross-language suite](benchmarks/cross_language/README.md)
+that both build run 4.2% fewer instructions and take 12.3 seconds instead
+of 12.7, `nbody` takes 34 ms instead of 84, and the median program takes
+2.9 times Rust's time, down from 3.1. The four new programs are all
+faster than Python, and all 34 take 15.6 seconds against Python's 56.1. Breaking:
+`net.http_request_text`, `net.http_request_bytes`, their `_timeout`
+forms, and `net.HttpResponse` are removed in favour of the `http` module.
+`array[start:end]` shares the source's elements instead of copying them,
+and two Array operands whose shapes broadcast give a result instead of
+`AU4007`; programs print the same results. A `for` invariant that does
+not read the loop target is also checked when the loop runs out, so a
+program whose invariant fails only then now stops with `AU4009`. Git
+dependencies accept only `https://`, `ssh://`, `git@host:path`, and local
+paths. Linux hello world shrinks from 1,162,576 to 1,117,088
+bytes. The semantic interface stays 20, and the native cache
+format stays `v10`.
+
 - Children started together in a `TaskGroup` reach idle workers sooner
   on Linux. An idle worker waits 20 microseconds for a new child to
   become available to it, and the Linux poller rounded that wait up to a
