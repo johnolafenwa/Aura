@@ -2046,6 +2046,66 @@ fn path_namespace() -> ModuleNamespace {
     )
 }
 
+/// The `mem` module: reads and writes at a raw address, with volatile and
+/// atomic forms (ADR-0095).
+fn mem_namespace() -> ModuleNamespace {
+    let unsigned = |bits: u32| type_ref(&format!("uint{bits}"), Vec::new());
+    let none = || type_ref("None", Vec::new());
+    let address = || value_param("address", unsigned(64));
+    let mut functions = Vec::new();
+    for bits in [8, 16, 32, 64] {
+        for prefix in ["", "volatile_"] {
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}read_uint{bits}"),
+                vec![address()],
+                unsigned(bits),
+            ));
+            functions.push(function_info(
+                "mem",
+                &format!("{prefix}write_uint{bits}"),
+                vec![address(), value_param("value", unsigned(bits))],
+                none(),
+            ));
+        }
+    }
+    for bits in [32, 64] {
+        let value = || value_param("value", unsigned(bits));
+        functions.push(function_info(
+            "mem",
+            &format!("atomic_load_uint{bits}"),
+            vec![address()],
+            unsigned(bits),
+        ));
+        functions.push(function_info(
+            "mem",
+            &format!("atomic_store_uint{bits}"),
+            vec![address(), value()],
+            none(),
+        ));
+        for name in ["atomic_swap", "atomic_add"] {
+            functions.push(function_info(
+                "mem",
+                &format!("{name}_uint{bits}"),
+                vec![address(), value()],
+                unsigned(bits),
+            ));
+        }
+        functions.push(function_info(
+            "mem",
+            &format!("atomic_compare_exchange_uint{bits}"),
+            vec![
+                address(),
+                value_param("expected", unsigned(bits)),
+                value_param("replacement", unsigned(bits)),
+            ],
+            unsigned(bits),
+        ));
+    }
+    functions.push(function_info("mem", "fence", Vec::new(), none()));
+    function_only_namespace("mem", functions)
+}
+
 fn math_namespace() -> ModuleNamespace {
     let float = || type_ref("float64", Vec::new());
     let unary_float =
@@ -2690,6 +2750,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "sys" => Some(sys_namespace()),
         "path" => Some(path_namespace()),
         "math" => Some(math_namespace()),
+        "mem" => Some(mem_namespace()),
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
         "regex" => Some(regex_namespace()),
@@ -2709,7 +2770,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml",
+    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml",
     "metrics", "log", "trace", "random",
 ];
 
@@ -2832,6 +2893,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "sys"
             | "path"
             | "math"
+            | "mem"
             | "bytes"
             | "gzip"
             | "http"
@@ -2857,9 +2919,9 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
-        "regex", "time", "http", "json", "iter", "prelude", "simd", "toml", "log", "metrics",
-        "trace",
+        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
+        "gzip", "regex", "time", "http", "json", "iter", "prelude", "simd", "toml", "log",
+        "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

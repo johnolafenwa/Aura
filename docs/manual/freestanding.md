@@ -73,7 +73,7 @@ Every value is one or more machine words. Nothing lives on a heap.
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
 | `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
-| `abs`, `min`, `max`, `sqrt` | Every builtin module |
+| `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
 | Module constants with a literal value | Module constants computed when the program starts |
 | `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
@@ -135,6 +135,21 @@ export "C" def halve(value: int64) -> int64:
 `aura build --freestanding --remove-proved-checks` removes the checks that
 `aura verify` proves can never fail, as in a hosted build. See
 [Verification](/manual/verification#trust).
+
+## Hardware Access
+
+The [`mem` module](/manual/mem) reads and writes integers at a raw address,
+with volatile forms for device registers and atomic forms for cells shared
+between cores. It needs `allow_ffi = true` in `Aura.toml`.
+
+```aura fragment
+import mem
+
+UART: uint64 = 268435456
+
+export "C" def put(byte: uint8) -> None:
+    mem.volatile_write_uint8(UART, byte)
+```
 
 ## Targets
 
@@ -217,8 +232,9 @@ holds 115 bytes of memory routines and the file name for the trap hook.
 ## Current Limits
 
 - No heap values. A freestanding program cannot allocate.
-- No reads or writes of raw addresses, no volatile or atomic access, and no
-  inline assembly. Hardware access goes through `extern "C"` functions.
+- No inline assembly and no port I/O instructions. Memory-mapped devices
+  are reached with the [`mem` module](/manual/mem), and everything else
+  through `extern "C"` functions.
 - No mutable module-level state. Keep state in the entry function's locals,
   behind `mut` parameters, or in C.
 - 32-bit targets are not supported.

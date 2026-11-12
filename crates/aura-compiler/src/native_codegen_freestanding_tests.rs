@@ -406,6 +406,77 @@ fn two_exports_with_one_symbol_are_refused() {
 }
 
 #[test]
+fn memory_functions_compile_to_instructions_on_every_target() {
+    let source = r#"
+import mem
+
+UART: uint64 = 268435456
+
+export "C" def put(byte: uint8) -> None:
+    mem.volatile_write_uint8(UART, byte)
+
+export "C" def status() -> uint32:
+    return mem.volatile_read_uint32(UART + 4) | mem.volatile_read_uint32(UART + 4)
+
+export "C" def copy_word(source: uint64, target: uint64) -> uint64:
+    value = mem.read_uint64(source)
+    mem.write_uint64(target, value)
+    mem.write_uint16(target + 8, mem.read_uint16(source + 8))
+    mem.write_uint32(target + 12, mem.read_uint32(source + 12))
+    mem.write_uint8(target + 10, mem.read_uint8(source + 10))
+    return value
+
+export "C" def lock(cell: uint64) -> bool:
+    return mem.atomic_compare_exchange_uint32(cell, 0, 1) == 0
+
+export "C" def bump(cell: uint64) -> uint64:
+    previous = mem.atomic_add_uint64(cell, 1)
+    mem.fence()
+    old = mem.atomic_swap_uint32(cell + 8, 7)
+    mem.atomic_store_uint64(cell + 16, previous)
+    mem.atomic_store_uint32(cell + 24, mem.atomic_load_uint32(cell + 8))
+    mem.volatile_write_uint16(cell + 28, mem.volatile_read_uint16(cell + 30))
+    mem.volatile_write_uint64(cell + 32, mem.volatile_read_uint64(cell + 40))
+    mem.volatile_write_uint32(cell + 48, mem.volatile_read_uint8(cell + 49) as uint32)
+    grown = mem.atomic_add_uint32(cell + 8, 1) as uint64
+    kept = mem.atomic_swap_uint64(cell, 3) + mem.atomic_compare_exchange_uint64(cell, 3, 4)
+    return mem.atomic_load_uint64(cell) + (old as uint64) + grown + kept
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert_eq!(global, ["bump", "copy_word", "lock", "put", "status"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
+}
+
+#[test]
+fn every_mem_function_is_a_host_builtin_the_emitter_compiles_inline() {
+    let namespace = crate::builtin_modules::builtin_module_namespace(&["mem".to_string()])
+        .expect("`mem` is a builtin module");
+    assert_eq!(namespace.all_functions.len(), 27);
+    for name in namespace.all_functions.keys() {
+        let qualified = format!("mem::{name}");
+        assert!(
+            crate::runtime_ops::HostBuiltin::from_name(&qualified).is_some(),
+            "`{qualified}` has a runtime entry"
+        );
+        let (access, _) = super::freestanding::memory_operation(&qualified)
+            .unwrap_or_else(|| panic!("`{qualified}` is a memory operation"));
+        let returns_none = !access.has_result();
+        let declared_none = name.contains("write") || name.contains("store") || name == "fence";
+        assert_eq!(returns_none, declared_none, "{qualified}");
+    }
+    for name in [
+        "mem::read_uint128",
+        "mem::peek_uint8",
+        "math::floor",
+        "read_uint8",
+    ] {
+        assert_eq!(super::freestanding::memory_operation(name), None, "{name}");
+    }
+}
+
+#[test]
 fn a_generic_function_reports_a_problem_once() {
     let found = problems(
         r#"

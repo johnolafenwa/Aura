@@ -227,7 +227,7 @@ pub fn check_source(source: &str) -> Result<Program> {
 }
 
 fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
-    if module.items.iter().any(Item::declares_ffi) {
+    if module.uses_ffi() {
         return Err(Diagnostic::coded(
             "AU2999",
             "FFI declarations require a manifest-rooted Aura package; add `Aura.toml` with `[package] allow_ffi = true` and use a path-based compiler API",
@@ -677,7 +677,7 @@ impl ModuleLoader {
         let display_path = path.display().to_string();
         let module = parse_source(&source)
             .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
-        if module.items.iter().any(Item::declares_ffi) {
+        if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
                 None => {

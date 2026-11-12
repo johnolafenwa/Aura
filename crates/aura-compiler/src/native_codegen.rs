@@ -9379,6 +9379,9 @@ impl<'a> FunctionCompiler<'a> {
                 return self.coerce_value(text, &target);
             }
         }
+        if let Some(value) = self.compile_memory_access(name, args)? {
+            return Ok(value);
+        }
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
         }

@@ -1,8 +1,8 @@
 # Freestanding Builds Design Checkpoint
 
-Status: **Step 1 accepted 2026-11-12 as ADR-0094.** Steps 2 and 3 proceed
-on the defaults below. The choice marked "owner's call" in section F
-stays open to change until release.
+Status: **Steps 1 and 2 accepted 2026-11-12 as ADR-0094 and ADR-0095.**
+Step 3 proceeds on the defaults below. The choice marked "owner's call"
+in section F stays open to change until release.
 
 A freestanding build compiles Aura code for a machine with no operating
 system and no Aura runtime: a kernel, a bootloader stage, firmware, or a
@@ -162,8 +162,9 @@ C library's definitions replace them at link time.
 - On Linux the tests link objects with a C harness and no C library
   startup, run them, and compare results with `aura run` of the same
   source.
-- A bare-metal example boots under QEMU on each target and prints
-  through a UART.
+- A bare-metal example boots under QEMU on RISC-V and AArch64 and prints
+  through a UART. x86-64 is proved by linking into a C program: a PC
+  needs a long-mode boot stub and port I/O in assembly.
 - Size and speed are measured against C and Rust `no_std` builds of the
   same routines.
 

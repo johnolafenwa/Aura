@@ -19,6 +19,7 @@
 use super::*;
 use crate::diag::Diagnostic;
 use crate::ffi::CCallback;
+use crate::native_backend::MemoryAccess;
 
 /// The diagnostic code of a construct a freestanding build cannot compile.
 pub(crate) const UNSUPPORTED: &str = "AU2052";
@@ -923,6 +924,67 @@ fn check_function(
     problems.extend(found.into_inner());
 }
 
+/// The access a `mem` function makes and the integer it reads or writes.
+pub(super) fn memory_operation(name: &str) -> Option<(MemoryAccess, ScalarKind)> {
+    let operation = name.strip_prefix("mem::")?;
+    if operation == "fence" {
+        return Some((MemoryAccess::Fence, ScalarKind::Unit));
+    }
+    let (operation, width) = operation.rsplit_once("_uint")?;
+    let kind = match width {
+        "8" => ScalarKind::Uint8,
+        "16" => ScalarKind::Uint16,
+        "32" => ScalarKind::Uint32,
+        "64" => ScalarKind::Uint64,
+        _ => return None,
+    };
+    let access = match operation {
+        "read" => MemoryAccess::Read,
+        "write" => MemoryAccess::Write,
+        "volatile_read" => MemoryAccess::VolatileRead,
+        "volatile_write" => MemoryAccess::VolatileWrite,
+        "atomic_load" => MemoryAccess::AtomicLoad,
+        "atomic_store" => MemoryAccess::AtomicStore,
+        "atomic_swap" => MemoryAccess::AtomicSwap,
+        "atomic_add" => MemoryAccess::AtomicAdd,
+        "atomic_compare_exchange" => MemoryAccess::AtomicCompareExchange,
+        _ => return None,
+    };
+    Some((access, kind))
+}
+
+impl FunctionCompiler<'_> {
+    /// A call of a `mem` function as inline code: one load, store, or
+    /// atomic instruction, in hosted and freestanding builds alike.
+    pub(super) fn compile_memory_access(
+        &mut self,
+        name: &str,
+        args: &[MirArg],
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        let Some((access, kind)) = memory_operation(name) else {
+            return Ok(None);
+        };
+        let mut words = Vec::with_capacity(args.len());
+        for argument in args {
+            words.push(self.load_operand(&argument.value)?.values[0]);
+        }
+        let width = match kind {
+            ScalarKind::Uint8 => types::I8,
+            ScalarKind::Uint16 => types::I16,
+            ScalarKind::Uint32 => types::I32,
+            _ => types::I64,
+        };
+        let value = match self.builder.memory_access(access, width, &words) {
+            Some(word) => ValueRef {
+                values: vec![word],
+                ty: DirectType::Scalar(kind),
+            },
+            None => unit_value(self.builder),
+        };
+        Ok(Some(value))
+    }
+}
+
 /// Why a freestanding build cannot compile the call of `callee`, if it
 /// cannot.
 fn check_call(
@@ -984,6 +1046,11 @@ fn check_call(
             receiver: None,
             ..
         } => None,
+        // A `mem` function is one instruction.
+        CallTarget::Runtime {
+            op: RuntimeOp::Host(builtin),
+            ..
+        } if memory_operation(builtin.name()).is_some() => None,
         CallTarget::Runtime { op, .. } => Some(match op.name() {
             name if name.starts_with("__") => ("reads or changes a collection".to_string(), ""),
             name => (format!("calls `{name}`"), ""),

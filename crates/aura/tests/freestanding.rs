@@ -532,3 +532,173 @@ fn proved_checks_are_removed_from_a_freestanding_object() {
         .windows(b"aura_trap".len())
         .any(|window| window == b"aura_trap"));
 }
+
+const MEMORY_MANIFEST: &str =
+    "[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n";
+
+/// A program over the `mem` module that runs hosted on a block from the C
+/// allocator and exports the same routine for a freestanding build.
+const MEMORY_PROGRAM: &str = r#"
+import mem
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+export "C" def exercise(block: uint64) -> uint64:
+    mem.write_uint64(block, 18446744073709551615)
+    mem.write_uint8(block + 1, 0)
+    mut total = mem.read_uint64(block) % 1000003
+    total = total + (mem.read_uint16(block + 1) as uint64)
+    mem.volatile_write_uint32(block + 8, 4000000000)
+    total = total + (mem.volatile_read_uint32(block + 8) as uint64)
+    mem.volatile_write_uint16(block + 12, 65535)
+    total = total + (mem.volatile_read_uint8(block + 13) as uint64)
+    mem.atomic_store_uint32(block + 16, 5)
+    total = total + (mem.atomic_add_uint32(block + 16, 4294967295) as uint64)
+    total = total + (mem.atomic_load_uint32(block + 16) as uint64)
+    total = total + (mem.atomic_compare_exchange_uint32(block + 16, 4, 9) as uint64)
+    total = total + (mem.atomic_compare_exchange_uint32(block + 16, 4, 11) as uint64)
+    total = total + (mem.atomic_swap_uint32(block + 16, 1) as uint64)
+    mem.atomic_store_uint64(block + 24, 10)
+    total = total + mem.atomic_add_uint64(block + 24, 5)
+    total = total + mem.atomic_swap_uint64(block + 24, 99)
+    total = total + mem.atomic_compare_exchange_uint64(block + 24, 99, 100)
+    mem.fence()
+    return total + mem.atomic_load_uint64(block + 24)
+
+def main() -> None:
+    block = malloc(64)
+    print(exercise(block))
+    free(block)
+"#;
+
+#[test]
+fn the_mem_module_reads_and_writes_the_same_bytes_in_every_backend() {
+    let workspace = Workspace::new();
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    workspace.write("src/main.au", MEMORY_PROGRAM);
+    let hosted = workspace.aura(&["run", "src/main.au"]);
+    assert!(hosted.status.success(), "{}", stderr(&hosted));
+    let expected = stdout(&hosted);
+    assert!(expected.trim().parse::<u64>().is_ok(), "{expected}");
+
+    let build = workspace.aura(&["build", "-o", "board", "src/main.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let native = Command::new(workspace.path.join("board"))
+        .output()
+        .expect("the binary should start");
+    assert!(native.status.success(), "{}", stderr(&native));
+    assert_eq!(stdout(&native), expected);
+
+    for target in [
+        "x86_64-unknown-none",
+        "aarch64-unknown-none",
+        "riscv64gc-unknown-none-elf",
+    ] {
+        let output = workspace.aura(&[
+            "build",
+            "--freestanding",
+            "--target",
+            target,
+            "-o",
+            "board.o",
+            "src/main.au",
+        ]);
+        assert!(output.status.success(), "{target}: {}", stderr(&output));
+    }
+
+    let Some(compiler) = c_compiler() else {
+        return;
+    };
+    let build = workspace.aura(&["build", "--freestanding", "-o", "board.o", "src/main.au"]);
+    assert!(build.status.success(), "{}", stderr(&build));
+    let harness = workspace.write(
+        "board.c",
+        "#include <stdint.h>\n#include <stdio.h>\nuint64_t exercise(uint64_t block);\nvoid aura_trap(void) { puts(\"trap\"); }\nint main(void) { uint64_t block[8] = {0}; printf(\"%llu\\n\", (unsigned long long)exercise((uint64_t)block)); return 0; }\n",
+    );
+    let binary = workspace.path.join("board-c");
+    let link = Command::new(compiler)
+        .arg(&harness)
+        .arg(workspace.path.join("board.o"))
+        .arg("-o")
+        .arg(&binary)
+        .output()
+        .expect("the C compiler should start");
+    assert!(link.status.success(), "{}", stderr(&link));
+    let run = Command::new(&binary)
+        .output()
+        .expect("the linked program should start");
+    assert_eq!(stdout(&run), expected);
+}
+
+#[test]
+fn the_mem_module_needs_the_ffi_permission() {
+    let workspace = Workspace::new();
+    let source = "import mem\n\ndef main() -> None:\n    mem.fence()\n";
+    workspace.write("loose.au", source);
+    let output = workspace.aura(&["check", "loose.au"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("allow_ffi = true"),
+        "{}",
+        stderr(&output)
+    );
+
+    workspace.write(
+        "Aura.toml",
+        "[package]\nname = \"board\"\nversion = \"0.1.0\"\nedition = \"2026\"\n",
+    );
+    workspace.write(
+        "src/main.au",
+        "from mem import fence\n\ndef main() -> None:\n    fence()\n",
+    );
+    let output = workspace.aura(&["check", "src/main.au"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        stderr(&output).contains("allow_ffi = true"),
+        "{}",
+        stderr(&output)
+    );
+
+    workspace.write("Aura.toml", MEMORY_MANIFEST);
+    let output = workspace.aura(&["run", "src/main.au"]);
+    assert!(output.status.success(), "{}", stderr(&output));
+}
+
+#[test]
+fn the_bare_metal_example_builds_for_its_boards() {
+    let example = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/freestanding/kernel");
+    let source = example.join("src/main.au");
+    let workspace = Workspace::new();
+    for target in ["riscv64gc-unknown-none-elf", "aarch64-unknown-none"] {
+        let output = Command::new(aura_bin())
+            .args(["build", "--freestanding", "--target", target, "-o"])
+            .arg(workspace.path.join("kernel.o"))
+            .arg(&source)
+            .env("AURA_CACHE_DIR", workspace.path.join("cache"))
+            .output()
+            .expect("aura should start");
+        assert!(output.status.success(), "{target}: {}", stderr(&output));
+        let object = fs::read(workspace.path.join("kernel.o")).expect("the object exists");
+        for symbol in [&b"kernel_main\0"[..], b"aura_trap\0", b"power_off\0"] {
+            assert!(
+                object.windows(symbol.len()).any(|window| window == symbol),
+                "{target}: the object names {}",
+                String::from_utf8_lossy(symbol)
+            );
+        }
+    }
+    // The README and the book quote the line of the overflow the example
+    // makes on purpose.
+    let text = fs::read_to_string(&source).expect("the example exists");
+    let line = text
+        .lines()
+        .position(|line| line.trim() == "small = small + 1")
+        .expect("the example overflows a uint8")
+        + 1;
+    let readme = fs::read_to_string(example.join("README.md")).expect("the README exists");
+    assert!(
+        readme.contains(&format!("trap 1 main.au:{line}:13")),
+        "line {line}"
+    );
+}

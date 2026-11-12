@@ -601,11 +601,221 @@ pub fn host_trace_event(args: Vec<Value>, _program_args: Option<&[String]>) -> R
     host_log_record("trace::event", args)
 }
 
+/// One `mem` operation at a raw address. The caller vouches for the
+/// address, as C code does for a pointer: a bad one has undefined behavior.
+fn host_mem(name: &str, args: Vec<Value>) -> Result<Value> {
+    use std::sync::atomic::{fence, AtomicU32, AtomicU64, Ordering::SeqCst};
+    let operation = name.strip_prefix("mem::").unwrap_or(name);
+    if operation == "fence" {
+        host_expect_arity(name, &args, 0)?;
+        fence(SeqCst);
+        return Ok(Value::Unit);
+    }
+    let (operation, width) = operation
+        .rsplit_once("_uint")
+        .expect("a `mem` operation names its width");
+    let kind = match width {
+        "8" => IntegerKind::Uint8,
+        "16" => IntegerKind::Uint16,
+        "32" => IntegerKind::Uint32,
+        _ => IntegerKind::Uint64,
+    };
+    let word = |index: usize| -> Result<u64> {
+        match args.get(index) {
+            Some(Value::Int(value)) => value
+                .as_i128()
+                .and_then(|value| u64::try_from(value).ok())
+                .ok_or_else(|| mem_argument_error(name)),
+            _ => Err(mem_argument_error(name)),
+        }
+    };
+    let result = |value: u64| {
+        IntegerValue::from_typed_unsigned(u128::from(value), kind)
+            .map(Value::Int)
+            .ok_or_else(|| mem_argument_error(name))
+    };
+    let arity = match operation {
+        "read" | "volatile_read" | "atomic_load" => 1,
+        "atomic_compare_exchange" => 3,
+        _ => 2,
+    };
+    host_expect_arity(name, &args, arity)?;
+    let address = word(0)? as usize;
+    // SAFETY: the program states that `address` is valid for this access;
+    // the `mem` module is available only to a package with `allow_ffi`.
+    unsafe {
+        match (operation, kind) {
+            ("read", IntegerKind::Uint8) => {
+                result(u64::from((address as *const u8).read_unaligned()))
+            }
+            ("read", IntegerKind::Uint16) => {
+                result(u64::from((address as *const u16).read_unaligned()))
+            }
+            ("read", IntegerKind::Uint32) => {
+                result(u64::from((address as *const u32).read_unaligned()))
+            }
+            ("read", _) => result((address as *const u64).read_unaligned()),
+            ("volatile_read", IntegerKind::Uint8) => {
+                result(u64::from((address as *const u8).read_volatile()))
+            }
+            ("volatile_read", IntegerKind::Uint16) => {
+                result(u64::from((address as *const u16).read_volatile()))
+            }
+            ("volatile_read", IntegerKind::Uint32) => {
+                result(u64::from((address as *const u32).read_volatile()))
+            }
+            ("volatile_read", _) => result((address as *const u64).read_volatile()),
+            ("write", IntegerKind::Uint8) => {
+                (address as *mut u8).write_unaligned(word(1)? as u8);
+                Ok(Value::Unit)
+            }
+            ("write", IntegerKind::Uint16) => {
+                (address as *mut u16).write_unaligned(word(1)? as u16);
+                Ok(Value::Unit)
+            }
+            ("write", IntegerKind::Uint32) => {
+                (address as *mut u32).write_unaligned(word(1)? as u32);
+                Ok(Value::Unit)
+            }
+            ("write", _) => {
+                (address as *mut u64).write_unaligned(word(1)?);
+                Ok(Value::Unit)
+            }
+            ("volatile_write", IntegerKind::Uint8) => {
+                (address as *mut u8).write_volatile(word(1)? as u8);
+                Ok(Value::Unit)
+            }
+            ("volatile_write", IntegerKind::Uint16) => {
+                (address as *mut u16).write_volatile(word(1)? as u16);
+                Ok(Value::Unit)
+            }
+            ("volatile_write", IntegerKind::Uint32) => {
+                (address as *mut u32).write_volatile(word(1)? as u32);
+                Ok(Value::Unit)
+            }
+            ("volatile_write", _) => {
+                (address as *mut u64).write_volatile(word(1)?);
+                Ok(Value::Unit)
+            }
+            (_, IntegerKind::Uint32) => {
+                let cell = &*(address as *const AtomicU32);
+                match operation {
+                    "atomic_load" => result(u64::from(cell.load(SeqCst))),
+                    "atomic_store" => {
+                        cell.store(word(1)? as u32, SeqCst);
+                        Ok(Value::Unit)
+                    }
+                    "atomic_swap" => result(u64::from(cell.swap(word(1)? as u32, SeqCst))),
+                    "atomic_add" => result(u64::from(cell.fetch_add(word(1)? as u32, SeqCst))),
+                    _ => {
+                        let previous = cell
+                            .compare_exchange(word(1)? as u32, word(2)? as u32, SeqCst, SeqCst)
+                            .unwrap_or_else(|current| current);
+                        result(u64::from(previous))
+                    }
+                }
+            }
+            _ => {
+                let cell = &*(address as *const AtomicU64);
+                match operation {
+                    "atomic_load" => result(cell.load(SeqCst)),
+                    "atomic_store" => {
+                        cell.store(word(1)?, SeqCst);
+                        Ok(Value::Unit)
+                    }
+                    "atomic_swap" => result(cell.swap(word(1)?, SeqCst)),
+                    "atomic_add" => result(cell.fetch_add(word(1)?, SeqCst)),
+                    _ => {
+                        let previous = cell
+                            .compare_exchange(word(1)?, word(2)?, SeqCst, SeqCst)
+                            .unwrap_or_else(|current| current);
+                        result(previous)
+                    }
+                }
+            }
+        }
+    }
+}
+
+fn mem_argument_error(name: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        format!("`{}` expects unsigned integers", name.replace("::", ".")),
+    )
+}
+
+macro_rules! host_mem_functions {
+    ($($function:ident => $name:literal;)*) => {
+        $(
+            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+                host_mem($name, args)
+            }
+        )*
+    };
+}
+
+host_mem_functions! {
+    host_mem_read_uint8 => "mem::read_uint8";
+    host_mem_read_uint16 => "mem::read_uint16";
+    host_mem_read_uint32 => "mem::read_uint32";
+    host_mem_read_uint64 => "mem::read_uint64";
+    host_mem_write_uint8 => "mem::write_uint8";
+    host_mem_write_uint16 => "mem::write_uint16";
+    host_mem_write_uint32 => "mem::write_uint32";
+    host_mem_write_uint64 => "mem::write_uint64";
+    host_mem_volatile_read_uint8 => "mem::volatile_read_uint8";
+    host_mem_volatile_read_uint16 => "mem::volatile_read_uint16";
+    host_mem_volatile_read_uint32 => "mem::volatile_read_uint32";
+    host_mem_volatile_read_uint64 => "mem::volatile_read_uint64";
+    host_mem_volatile_write_uint8 => "mem::volatile_write_uint8";
+    host_mem_volatile_write_uint16 => "mem::volatile_write_uint16";
+    host_mem_volatile_write_uint32 => "mem::volatile_write_uint32";
+    host_mem_volatile_write_uint64 => "mem::volatile_write_uint64";
+    host_mem_atomic_load_uint32 => "mem::atomic_load_uint32";
+    host_mem_atomic_load_uint64 => "mem::atomic_load_uint64";
+    host_mem_atomic_store_uint32 => "mem::atomic_store_uint32";
+    host_mem_atomic_store_uint64 => "mem::atomic_store_uint64";
+    host_mem_atomic_swap_uint32 => "mem::atomic_swap_uint32";
+    host_mem_atomic_swap_uint64 => "mem::atomic_swap_uint64";
+    host_mem_atomic_add_uint32 => "mem::atomic_add_uint32";
+    host_mem_atomic_add_uint64 => "mem::atomic_add_uint64";
+    host_mem_atomic_compare_exchange_uint32 => "mem::atomic_compare_exchange_uint32";
+    host_mem_atomic_compare_exchange_uint64 => "mem::atomic_compare_exchange_uint64";
+    host_mem_fence => "mem::fence";
+}
+
 /// The owned-argument function for a host builtin, or `None` for a name the
 /// table does not hold.
 pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
     let function: HostBuiltinFn = match name {
         "math::floor" => host_math_floor,
+        "mem::read_uint8" => host_mem_read_uint8,
+        "mem::read_uint16" => host_mem_read_uint16,
+        "mem::read_uint32" => host_mem_read_uint32,
+        "mem::read_uint64" => host_mem_read_uint64,
+        "mem::write_uint8" => host_mem_write_uint8,
+        "mem::write_uint16" => host_mem_write_uint16,
+        "mem::write_uint32" => host_mem_write_uint32,
+        "mem::write_uint64" => host_mem_write_uint64,
+        "mem::volatile_read_uint8" => host_mem_volatile_read_uint8,
+        "mem::volatile_read_uint16" => host_mem_volatile_read_uint16,
+        "mem::volatile_read_uint32" => host_mem_volatile_read_uint32,
+        "mem::volatile_read_uint64" => host_mem_volatile_read_uint64,
+        "mem::volatile_write_uint8" => host_mem_volatile_write_uint8,
+        "mem::volatile_write_uint16" => host_mem_volatile_write_uint16,
+        "mem::volatile_write_uint32" => host_mem_volatile_write_uint32,
+        "mem::volatile_write_uint64" => host_mem_volatile_write_uint64,
+        "mem::atomic_load_uint32" => host_mem_atomic_load_uint32,
+        "mem::atomic_load_uint64" => host_mem_atomic_load_uint64,
+        "mem::atomic_store_uint32" => host_mem_atomic_store_uint32,
+        "mem::atomic_store_uint64" => host_mem_atomic_store_uint64,
+        "mem::atomic_swap_uint32" => host_mem_atomic_swap_uint32,
+        "mem::atomic_swap_uint64" => host_mem_atomic_swap_uint64,
+        "mem::atomic_add_uint32" => host_mem_atomic_add_uint32,
+        "mem::atomic_add_uint64" => host_mem_atomic_add_uint64,
+        "mem::atomic_compare_exchange_uint32" => host_mem_atomic_compare_exchange_uint32,
+        "mem::atomic_compare_exchange_uint64" => host_mem_atomic_compare_exchange_uint64,
+        "mem::fence" => host_mem_fence,
         "math::ceil" => host_math_ceil,
         "math::trunc" => host_math_trunc,
         "math::pow" => host_math_pow,
@@ -870,3 +1080,7 @@ pub fn host_str_from_bytes_ref(value: &Value) -> Result<Value> {
         Err(error) => bytes_codec_error_to_result(error),
     }
 }
+
+#[cfg(test)]
+#[path = "host_builtins_mem_tests.rs"]
+mod mem_tests;

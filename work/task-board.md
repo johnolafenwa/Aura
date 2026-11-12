@@ -2,7 +2,7 @@
 
 Last updated: 2026-11-12
 
-## Freestanding builds (step 1 complete, steps 2 and 3 open)
+## Freestanding builds (complete)
 
 - Target: Batch 12 of the roadmap, approved by John on 2026-11-12. Design
   in `architecture_docs/28-freestanding-design-checkpoint.md`. Details are
@@ -11,24 +11,13 @@ Last updated: 2026-11-12
   `aura check --freestanding`, `export "C" def`, the `aura_trap` hook,
   targets x86-64, AArch64, and RISC-V, `AU2052`, the undefined-symbol
   backstop, the manual page, and `benchmarks/freestanding`.
-- Open: the `mem` module for raw, volatile, and atomic access
-  (ADR-0095), then bare-metal examples that boot under QEMU and a book
-  chapter.
+- Done (ADR-0095): the `mem` module for plain, volatile, and atomic
+  access at a raw address, inline in native code, gated by `allow_ffi`.
+- Done: `examples/freestanding/kernel` boots under QEMU on RISC-V and
+  AArch64 with output, a lock, and a trap report all in Aura, and book
+  section 18.2 walks through it.
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
-## Children of one TaskGroup start late on Linux (complete)
-
-- Reported by the Array v2 work: two CPU-bound children of one
-  `TaskGroup` took twice as long as one.
-- The children did run in parallel. The second one started about a
-  millisecond late, because an idle worker's 20 microsecond wait was
-  rounded up to a millisecond by `epoll_wait`. For a child of about a
-  millisecond that looks like running one after the other.
-- The reactor spins through a caller's wait shorter than 500
-  microseconds. Details are in `2026-11-12-task-start-delay.md`.
-- Open: an older child still waits 250 microseconds before another
-  worker may take it, by design. Two children cost about 0.3 to 0.5 ms
-  more per round than one.
 
 ## SIMD (complete)
 

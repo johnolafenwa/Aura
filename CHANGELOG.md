@@ -16,6 +16,11 @@ in this file.
   `aura_trap`, which the program defines. `aura check --freestanding`
   reports anything else as `AU2052`. See the Freestanding Builds manual
   page.
+- New `mem` module: `read_uint32(address)`, `write_uint32(address, value)`
+  and the same for 8, 16, and 64 bits, `volatile_` forms for device
+  registers, atomic load, store, swap, add, and compare-exchange for 32
+  and 64 bits, and `fence()`. Each call is one instruction in native
+  code. Importing it needs `allow_ffi = true`.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.

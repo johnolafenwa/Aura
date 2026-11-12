@@ -63,7 +63,31 @@ four times as fast as clang 18.
 - `gcd_sum` is 1.5 times C because `%` rounds toward negative infinity
   and keeps its overflow check.
 
-## Next
+## Work completed (step 2, ADR-0095)
 
-Step 2 is the `mem` module (ADR-0095). Step 3 is bare-metal examples
-under QEMU and a book chapter.
+- The `mem` module: `read_uintN` and `write_uintN`, volatile forms, atomic
+  load, store, swap, add, and compare-exchange, and `fence()`.
+- Native code compiles each call to one LLVM load, store, `atomicrmw`,
+  `cmpxchg`, or `fence` through a new backend operation. The MIR
+  interpreter runs the same functions as host builtins.
+- Importing `mem` needs `allow_ffi = true`.
+- Evidence: a backend test reads the LLVM IR for each access; a runtime
+  test drives every function at every width; a CLI test runs one program
+  under `aura run`, as a hosted binary, and as a freestanding object
+  linked into C, and compares the three outputs.
+
+## Work completed (step 3)
+
+- `examples/freestanding/kernel`: one Aura source boots under
+  `qemu-system-riscv64` and `qemu-system-aarch64`, prints computed results
+  over the serial port, raises a counter under a lock, and reports an
+  overflow through an `aura_trap` hook written in Aura. Both boards print
+  the same five lines.
+- Book section 18.2, "Without an Operating System".
+
+## Possible follow-ups
+
+- A freestanding allocator, which would bring `str` and collections.
+- Text literals as byte data, so a program can print a message.
+- Mutable module-level state.
+- An x86-64 board, x86-64 without SSE, and 32-bit targets.

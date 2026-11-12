@@ -43,7 +43,10 @@ use inkwell::values::{
     AsValueRef, BasicMetadataValueEnum, BasicValue, BasicValueEnum, FunctionValue, GlobalValue,
     InstructionValue, IntValue, PhiValue, PointerValue,
 };
-use inkwell::{AddressSpace, FloatPredicate, GlobalVisibility, IntPredicate, OptimizationLevel};
+use inkwell::{
+    AddressSpace, AtomicOrdering, AtomicRMWBinOp, FloatPredicate, GlobalVisibility, IntPredicate,
+    OptimizationLevel,
+};
 
 use units::{Partition, Placement};
 
@@ -51,7 +54,8 @@ use super::{
     AliasClass, Blk, Call, CallConv, DataAddress, DataDescription, DataHandle, DataRef,
     DebugEncoding, DebugRecord, DebugVariable, DefineError, Extension, FloatCC, FuncHandle,
     FuncRef, FunctionBackend, FunctionBody, FunctionSource, Indirect, Inst, IntCC, Linkage,
-    MemFlags, ModuleBackend, NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode, Val, Var,
+    MemFlags, MemoryAccess, ModuleBackend, NoWrapOp, ScalarType, SigRef, Signature, Slot, TrapCode,
+    Val, Var,
 };
 
 /// The pass pipeline every object runs. Step 9c measured `O1`, `O2`, and
@@ -761,6 +765,7 @@ enum Op {
     Overflow(OverflowOp, Val, Val),
     Load(LoadKind, MemFlags, Val, i32),
     Store(MemFlags, Val, Val, i32),
+    Memory(MemoryAccess, ScalarType, Vec<Val>),
     StackAddr(Slot, i32),
     FuncAddr(FuncRef),
     SymbolValue(DataRef),
@@ -946,7 +951,7 @@ fn op_operands(op: &Op) -> Vec<Val> {
         Op::Select(condition, if_true, if_false) => vec![*condition, *if_true, *if_false],
         Op::Load(_, _, address, _) => vec![*address],
         Op::Store(_, value, address, _) => vec![*value, *address],
-        Op::Call(_, args) | Op::Return(args) => args.clone(),
+        Op::Call(_, args) | Op::Return(args) | Op::Memory(_, _, args) => args.clone(),
         Op::CallIndirect(_, callee, args) => std::iter::once(*callee)
             .chain(args.iter().copied())
             .collect(),
@@ -990,6 +995,7 @@ fn map_op(op: &Op, value: impl Fn(Val) -> Val, block: impl Fn(Blk) -> Blk) -> Op
         Op::Store(flags, stored, address, offset) => {
             Op::Store(*flags, value(*stored), value(*address), *offset)
         }
+        Op::Memory(access, width, operands) => Op::Memory(*access, *width, values(operands)),
         Op::StackAddr(slot, offset) => Op::StackAddr(*slot, *offset),
         Op::FuncAddr(function) => Op::FuncAddr(*function),
         Op::SymbolValue(data) => Op::SymbolValue(*data),
@@ -1763,6 +1769,21 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn umul_overflow(&mut self, left: Val, right: Val) -> (Val, Val) {
         self.overflow(OverflowOp::Umul, left, right)
+    }
+
+    fn memory_access(
+        &mut self,
+        access: MemoryAccess,
+        width: ScalarType,
+        operands: &[Val],
+    ) -> Option<Val> {
+        let op = Op::Memory(access, width, operands.to_vec());
+        if access.has_result() {
+            Some(self.ir.push_value(op, ScalarType::I64))
+        } else {
+            self.ir.push_effect(op);
+            None
+        }
     }
 
     fn load(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val {
@@ -2731,6 +2752,128 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         }
     }
 
+    /// Lowers one access of the `mem` module. A result is zero-extended
+    /// to a word.
+    fn memory_access(
+        &self,
+        access: MemoryAccess,
+        width: ScalarType,
+        operands: &[Val],
+    ) -> Result<Option<IntValue<'ctx>>, String> {
+        const ORDER: AtomicOrdering = AtomicOrdering::SequentiallyConsistent;
+        if access == MemoryAccess::Fence {
+            built(self.builder.build_fence(ORDER, false, ""))?;
+            return Ok(None);
+        }
+        let ty = self.int_type(width);
+        let natural = ty.get_bit_width() / 8;
+        let pointer = built(self.builder.build_int_to_ptr(
+            self.int(operands[0])?,
+            self.context.ptr_type(AddressSpace::default()),
+            "",
+        ))?;
+        let narrow = |index: usize| -> Result<IntValue<'ctx>, String> {
+            let word = self.int(operands[index])?;
+            if natural == 8 {
+                Ok(word)
+            } else {
+                built(self.builder.build_int_truncate(word, ty, ""))
+            }
+        };
+        let widen = |value: IntValue<'ctx>| -> Result<Option<IntValue<'ctx>>, String> {
+            if natural == 8 {
+                Ok(Some(value))
+            } else {
+                built(
+                    self.builder
+                        .build_int_z_extend(value, self.context.i64_type(), ""),
+                )
+                .map(Some)
+            }
+        };
+        let problem = |error: &'static str| move |_| error.to_string();
+        match access {
+            MemoryAccess::Read | MemoryAccess::VolatileRead | MemoryAccess::AtomicLoad => {
+                let loaded = built(self.builder.build_load(ty, pointer, ""))?;
+                let instruction = loaded
+                    .as_instruction_value()
+                    .ok_or("a memory read is not an instruction")?;
+                match access {
+                    MemoryAccess::Read => {
+                        instruction
+                            .set_alignment(1)
+                            .map_err(problem("a read takes an alignment"))?;
+                    }
+                    MemoryAccess::VolatileRead => {
+                        instruction
+                            .set_alignment(natural)
+                            .map_err(problem("a read takes an alignment"))?;
+                        instruction
+                            .set_volatile(true)
+                            .map_err(problem("a read can be volatile"))?;
+                    }
+                    _ => {
+                        instruction
+                            .set_alignment(natural)
+                            .map_err(problem("a read takes an alignment"))?;
+                        instruction
+                            .set_atomic_ordering(ORDER)
+                            .map_err(problem("a read can be atomic"))?;
+                    }
+                }
+                widen(loaded.into_int_value())
+            }
+            MemoryAccess::Write | MemoryAccess::VolatileWrite | MemoryAccess::AtomicStore => {
+                let stored = built(self.builder.build_store(pointer, narrow(1)?))?;
+                match access {
+                    MemoryAccess::Write => {
+                        stored
+                            .set_alignment(1)
+                            .map_err(problem("a write takes an alignment"))?;
+                    }
+                    MemoryAccess::VolatileWrite => {
+                        stored
+                            .set_alignment(natural)
+                            .map_err(problem("a write takes an alignment"))?;
+                        stored
+                            .set_volatile(true)
+                            .map_err(problem("a write can be volatile"))?;
+                    }
+                    _ => {
+                        stored
+                            .set_alignment(natural)
+                            .map_err(problem("a write takes an alignment"))?;
+                        stored
+                            .set_atomic_ordering(ORDER)
+                            .map_err(problem("a write can be atomic"))?;
+                    }
+                }
+                Ok(None)
+            }
+            MemoryAccess::AtomicSwap | MemoryAccess::AtomicAdd => {
+                let op = if access == MemoryAccess::AtomicSwap {
+                    AtomicRMWBinOp::Xchg
+                } else {
+                    AtomicRMWBinOp::Add
+                };
+                let previous = built(self.builder.build_atomicrmw(op, pointer, narrow(1)?, ORDER))?;
+                widen(previous)
+            }
+            MemoryAccess::AtomicCompareExchange => {
+                let pair = built(self.builder.build_cmpxchg(
+                    pointer,
+                    narrow(1)?,
+                    narrow(2)?,
+                    ORDER,
+                    ORDER,
+                ))?;
+                let previous = built(self.builder.build_extract_value(pair, 0, ""))?;
+                widen(previous.into_int_value())
+            }
+            MemoryAccess::Fence => unreachable!("a fence was lowered above"),
+        }
+    }
+
     fn int_type(&self, ty: ScalarType) -> IntType<'ctx> {
         match ty {
             ScalarType::I8 => self.context.i8_type(),
@@ -3049,6 +3192,11 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
                     }
                 };
                 self.define(inst, value);
+            }
+            Op::Memory(access, width, operands) => {
+                if let Some(value) = self.memory_access(*access, *width, operands)? {
+                    self.define(inst, value.into());
+                }
             }
             Op::Store(flags, value, address, offset) => {
                 let pointer = self.address(*address, *offset)?;

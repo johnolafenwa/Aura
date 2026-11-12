@@ -153,6 +153,40 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
     Ok(Box::new(llvm::LlvmModule::for_host()?))
 }
 
+/// An access the `mem` module makes at a raw address (ADR-0095).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryAccess {
+    /// A read the optimizer may move or remove. Any alignment.
+    Read,
+    /// A write the optimizer may move or merge. Any alignment.
+    Write,
+    /// A read that happens exactly once, where the program says.
+    VolatileRead,
+    /// A write that happens exactly once, where the program says.
+    VolatileWrite,
+    AtomicLoad,
+    AtomicStore,
+    /// Stores the value and gives the previous one.
+    AtomicSwap,
+    /// Adds the value, wrapping, and gives the previous one.
+    AtomicAdd,
+    /// Stores the replacement if the cell holds the expected value, and
+    /// gives the previous one either way.
+    AtomicCompareExchange,
+    /// Orders every earlier access before every later one.
+    Fence,
+}
+
+impl MemoryAccess {
+    /// Whether the access gives a value.
+    pub fn has_result(self) -> bool {
+        !matches!(
+            self,
+            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::Fence
+        )
+    }
+}
+
 /// A machine with no operating system that a freestanding build writes
 /// an object for (ADR-0094).
 #[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
@@ -721,6 +755,17 @@ pub(crate) trait FunctionBackend {
     fn usub_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
     fn smul_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
     fn umul_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
+
+    /// One access of the `mem` module. `operands` are 64-bit words: the
+    /// address, then the access's values. `width` is the integer type the
+    /// access reads or writes. The result, when the access has one, is that
+    /// integer zero-extended to a word.
+    fn memory_access(
+        &mut self,
+        access: MemoryAccess,
+        width: ScalarType,
+        operands: &[Val],
+    ) -> Option<Val>;
 
     fn load(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn uload8(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;

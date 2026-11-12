@@ -152,6 +152,19 @@ pub struct Module {
     pub top_level_stmts: Vec<Stmt>,
 }
 
+impl Module {
+    /// Whether the module steps outside Aura's memory safety, which only a
+    /// package with `allow_ffi = true` may do: it holds an FFI declaration
+    /// or imports the `mem` module.
+    pub fn uses_ffi(&self) -> bool {
+        self.items.iter().any(Item::declares_ffi)
+            || self.imports.iter().any(|import| match &import.kind {
+                ImportKind::Module { path, .. } => path == &["mem"],
+                ImportKind::From { module_path, .. } => module_path == &["mem"],
+            })
+    }
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct ConstantDecl {
     pub public: bool,
