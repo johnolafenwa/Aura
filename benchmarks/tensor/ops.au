@@ -22,42 +22,60 @@ def elementwise(side: int64, reps: int64, device: Device) -> None:
     x = grid(side, 0.25, device)
     y = grid(side, 0.125, device)
     mut acc: float32 = 0.0
+    # Each row runs once before its timed passes. That first pass carries
+    # the costs paid once for an expression, such as compiling it for the
+    # device, and its time is the last column.
     mut start = sys.monotonic_time_ms()
+    (x + y).eval()
+    mut first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
     for rep in range(reps):
         z = x + y
         z.eval()
-    print(f"add {side * side} {sys.monotonic_time_ms() - start} {(x + y).sum().item()}")
+    print(f"add {side * side} {sys.monotonic_time_ms() - start} {(x + y).sum().item()} {first}")
 
+    start = sys.monotonic_time_ms()
+    (x * y + x).sqrt().eval()
+    first = sys.monotonic_time_ms() - start
     start = sys.monotonic_time_ms()
     for rep in range(reps):
         z = (x * y + x).sqrt()
         z.eval()
     print(
-        f"mul_add_sqrt {side * side} {sys.monotonic_time_ms() - start} {(x * y + x).sqrt().sum().item()}"
+        f"mul_add_sqrt {side * side} {sys.monotonic_time_ms() - start} {(x * y + x).sqrt().sum().item()} {first}"
     )
 
     start = sys.monotonic_time_ms()
+    warm = (x * y).sum().item()
+    first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
     for rep in range(reps):
         acc = acc + (x * y).sum().item()
-    print(f"mul_sum {side * side} {sys.monotonic_time_ms() - start} {acc}")
+    print(f"mul_sum {side * side} {sys.monotonic_time_ms() - start} {acc} {first}")
 
+    start = sys.monotonic_time_ms()
+    (x.sin() * y.cos()).abs().maximum(y.log()).eval()
+    first = sys.monotonic_time_ms() - start
     start = sys.monotonic_time_ms()
     for rep in range(reps):
         z = (x.sin() * y.cos()).abs().maximum(y.log())
         z.eval()
     print(
-        f"sin_cos_log_max {side * side} {sys.monotonic_time_ms() - start} {(x.sin() * y.cos()).abs().maximum(y.log()).max().item()}"
+        f"sin_cos_log_max {side * side} {sys.monotonic_time_ms() - start} {(x.sin() * y.cos()).abs().maximum(y.log()).max().item()} {first}"
     )
 
 
 def products(side: int64, reps: int64, device: Device) -> None:
     a = grid(side, 0.001, device)
     b = grid(side, 0.002, device)
+    mut start = sys.monotonic_time_ms()
+    warm = a.matmul(b).max().item()
+    first = sys.monotonic_time_ms() - start
     start = sys.monotonic_time_ms()
     mut acc: float32 = 0.0
     for rep in range(reps):
         acc = acc + a.matmul(b).max().item()
-    print(f"matmul {side}x{side} {sys.monotonic_time_ms() - start} {acc}")
+    print(f"matmul {side}x{side} {sys.monotonic_time_ms() - start} {acc} {first}")
 
 
 def main() -> int32:

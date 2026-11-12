@@ -2,7 +2,7 @@
 # Runs the tensor benchmark on the CPU device and, on a Mac with a usable
 # GPU, on that device, then the same work in NumPy, PyTorch, and MLX
 # where they are installed. Each row prints
-# `<name> <size> <milliseconds> <checksum>`.
+# `<name> <size> <milliseconds> <checksum> <first pass milliseconds>`.
 set -euo pipefail
 
 HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
