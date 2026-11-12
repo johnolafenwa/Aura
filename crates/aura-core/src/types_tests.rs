@@ -365,3 +365,18 @@ fn names_trait_object_finds_one_anywhere_in_a_type() {
         assert!(holder.names_trait_object(), "{holder:?}");
     }
 }
+
+#[test]
+fn closure_call_kinds_have_labels_and_ranks_in_order() {
+    let kinds = [
+        (ClosureCallKind::Repeatable, "Shared"),
+        (ClosureCallKind::MutableRepeatable, "Mutable"),
+        (ClosureCallKind::Consuming, "Consuming"),
+    ];
+    for (index, (kind, label)) in kinds.into_iter().enumerate() {
+        assert_eq!(kind.label(), label);
+        assert_eq!(usize::from(kind.rank()), index);
+        assert!(ClosureCallKind::Consuming.admits(kind));
+    }
+    assert!(!ClosureCallKind::Repeatable.admits(ClosureCallKind::Consuming));
+}

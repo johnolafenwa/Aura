@@ -932,3 +932,17 @@ fn a_class_in_a_box_keeps_the_fields_it_accepts_inline_and_the_rest_in_boxes() {
     let (decoded, root) = decode_descriptor(&descriptor).expect("a descriptor");
     assert!(matches!(decoded.get(root).kind, LayoutKind::Struct { .. }));
 }
+
+#[test]
+fn a_table_counts_the_layouts_it_holds() {
+    let env = LayoutEnv::default();
+    let builder = LayoutBuilder::new(&env);
+    let empty = builder.into_table();
+    assert!(empty.is_empty());
+    assert_eq!(empty.len(), 0);
+
+    let (table, id) = layout_of(&env, &Type::Unit);
+    assert!(!table.is_empty());
+    assert_eq!(table.len(), table.ids().count());
+    assert!(table.ids().any(|each| each == id));
+}

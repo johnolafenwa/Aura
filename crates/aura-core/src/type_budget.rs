@@ -753,3 +753,7 @@ fn aggregate_error(span: Span, limit: usize) -> Diagnostic {
 fn capacity_error(span: Span, message: impl Into<String>) -> Diagnostic {
     Diagnostic::capacity_at(span, message)
 }
+
+#[cfg(test)]
+#[path = "type_budget_tests.rs"]
+mod tests;
