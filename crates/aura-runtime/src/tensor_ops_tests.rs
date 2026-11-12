@@ -834,3 +834,177 @@ fn tensors_set_aside_run_as_one_plan() {
 fn expected_sum_of(l: &Leaves) -> Value {
     binary(&l.a, &l.b, 0).unwrap()
 }
+
+#[test]
+fn a_number_becomes_a_one_element_tensor_of_the_other_dtype() {
+    let l = leaves(TensorDevice::Cpu);
+    let like =
+        |tensor: &Value, value: Value| host_tensor_scalar_like(vec![tensor.clone(), value], None);
+    let double = cast(&l.a, ArrayDType::Float64).unwrap();
+    assert_eq!(
+        floats(&array(&like(&l.a, Value::Float(1.5)).unwrap())),
+        [1.5]
+    );
+    assert_eq!(
+        floats(&array(&like(&double, Value::Float(2.5)).unwrap())),
+        [2.5]
+    );
+    assert_eq!(floats(&array(&like(&l.a, int(3)).unwrap())), [3.0]);
+    assert_eq!(floats(&array(&like(&double, int(4)).unwrap())), [4.0]);
+    assert_eq!(places(&array(&like(&l.counts, int(5)).unwrap())), [5]);
+    assert_eq!(array(&like(&l.small, int(6)).unwrap()), int32(&[6], &[1]));
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(like(&l.small, int(1 << 40))).contains("which `int32` cannot hold"));
+    assert!(message(like(&l.counts, Value::Float(1.0))).contains("cannot use a float"));
+    let mask = compare(&l.a, &l.b, 0).unwrap();
+    assert!(message(like(&mask, int(1))).contains("`Tensor[bool]`"));
+}
+
+#[test]
+fn the_indexed_kernels_take_every_dtype_they_document() {
+    let l = leaves(TensorDevice::Cpu);
+    let mask = compare(&l.a, &l.b, 0).unwrap();
+    // Joins of integers and of masks.
+    assert_eq!(
+        places(&array(&pair_op(&l.counts, &l.counts, 0, &[0]).unwrap())).len(),
+        2 * node(&l.counts).len()
+    );
+    assert_eq!(
+        array(&pair_op(&l.small, &l.small, 0, &[0]).unwrap()).len(),
+        2 * node(&l.small).len()
+    );
+    assert_eq!(array(&pair_op(&mask, &mask, 0, &[0]).unwrap()).len(), 12);
+    // Sums by index of both integer dtypes, with `int32` indices.
+    let flat = |tensor: &Value| reshape(tensor, &[-1]).unwrap();
+    let counts = flat(&l.counts);
+    let small = flat(&l.small);
+    let zeros = |length: usize| indices(&vec![0; length], &[length], &l.a);
+    let short = tensor(
+        int32(&vec![0; node(&small).len()], &[node(&small).len()]),
+        TensorDevice::Cpu,
+    );
+    let total = array(&pair_op(&counts, &zeros(node(&counts).len()), 2, &[0, 2]).unwrap());
+    assert_eq!(
+        places(&total)[0],
+        places(&array(&counts))
+            .iter()
+            .fold(0_i64, |sum, &value| sum.wrapping_add(value))
+    );
+    assert_eq!(
+        array(&pair_op(&small, &short, 2, &[0, 2]).unwrap()).len(),
+        2
+    );
+    // The largest of `int32` elements, and of `float64` elements with a NaN.
+    assert_eq!(array(&node_op(&small, 2, &[0]).unwrap()).len(), 1);
+    let nan = tensor(float64(&[1.0, f64::NAN, 3.0], &[3]), TensorDevice::Cpu);
+    assert_eq!(array(&node_op(&nan, 2, &[0]).unwrap()).len(), 1);
+    // Counting up in `float64`.
+    assert_eq!(
+        floats(&array(&filled(&[3], 2, 0, ArrayDType::Float64).unwrap())),
+        [0.0, 1.0, 2.0]
+    );
+    // The kernels refuse masks and float indices themselves.
+    let bools = array(&mask);
+    let numbers = array(&l.a);
+    assert!(tensor_kernels::arg_reduce(&bools, 0, true)
+        .unwrap_err()
+        .message
+        .contains("found a `Tensor[bool]`"));
+    assert!(tensor_kernels::index_add(&bools, &array(&zeros(2)), 0, 2)
+        .unwrap_err()
+        .message
+        .contains("found a `Tensor[bool]`"));
+    assert!(tensor_kernels::take(&numbers, &numbers, 0)
+        .unwrap_err()
+        .message
+        .contains("integer indices"));
+}
+
+#[test]
+fn a_gradient_passes_through_a_conversion_and_a_permutation() {
+    let double = |x: &[Value]| cast(&x[0], ArrayDType::Float64);
+    check_gradients(
+        "cast",
+        &[float32(&[1.0, -2.0, 3.0, 4.5, 0.25, 6.0], &[2, 3])],
+        double,
+    );
+    check_gradients(
+        "permute from the end",
+        &[float32(&[1.0, -2.0, 3.0, 4.5, 0.25, 6.0], &[2, 3])],
+        |x| binary(&permute(&x[0], &[-1, -2])?, &permute(&x[0], &[1, 0])?, 2),
+    );
+}
+
+#[test]
+fn safetensors_files_hold_the_narrow_and_wide_dtypes() {
+    let directory = std::env::temp_dir().join(format!("aura-tensor-dtypes-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("model.safetensors");
+    let path_text = text(path.to_str().unwrap());
+    let l = leaves(TensorDevice::Cpu);
+    let load = |name: &str, dtype: ArrayDType| {
+        outcome(
+            host_tensor_weights_load(
+                vec![path_text.clone(), text(name), int(dtype as i64), int(0)],
+                None,
+            )
+            .unwrap(),
+        )
+    };
+    // A `float64` tensor and a mask are written under their own dtypes.
+    let double = cast(&l.a, ArrayDType::Float64).unwrap();
+    let mask = compare(&l.a, &l.b, 0).unwrap();
+    for (name, tensor) in [("double", &double), ("mask", &mask)] {
+        host_tensor_weights_put(vec![path_text.clone(), text(name), tensor.clone()], None).unwrap();
+    }
+    outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap()).unwrap();
+    assert_eq!(
+        floats(&array(&load("double", ArrayDType::Float64).unwrap())),
+        floats(&array(&l.a))
+    );
+    assert!(load("mask", ArrayDType::Int64)
+        .unwrap_err()
+        .contains("has dtype BOOL, which does not load as `int64`"));
+
+    // Narrow integers widen, and a zero half keeps its sign.
+    let header = br#"{"w":{"dtype":"I16","shape":[2],"data_offsets":[0,4]},"s":{"dtype":"I8","shape":[2],"data_offsets":[4,6]},"u":{"dtype":"U8","shape":[2],"data_offsets":[6,8]},"z":{"dtype":"F16","shape":[2],"data_offsets":[8,12]},"c":{"dtype":"C64","shape":[1],"data_offsets":[12,20]},"bad":{"dtype":"I16","shape":[3],"data_offsets":[0,4]}}"#;
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(header);
+    bytes.extend((-300_i16).to_le_bytes());
+    bytes.extend(7_i16.to_le_bytes());
+    bytes.extend([0xFF, 0x02, 0xFF, 0x02]);
+    bytes.extend(0x0000_u16.to_le_bytes());
+    bytes.extend(0x8000_u16.to_le_bytes());
+    bytes.extend([0_u8; 8]);
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(
+        places(&array(&load("w", ArrayDType::Int64).unwrap())),
+        [-300, 7]
+    );
+    assert_eq!(
+        places(&array(&load("s", ArrayDType::Int64).unwrap())),
+        [-1, 2]
+    );
+    assert_eq!(
+        places(&array(&load("u", ArrayDType::Int64).unwrap())),
+        [255, 2]
+    );
+    let zeros = floats(&array(&load("z", ArrayDType::Float32).unwrap()));
+    assert!(zeros[0] == 0.0 && zeros[0].is_sign_positive());
+    assert!(zeros[1] == 0.0 && zeros[1].is_sign_negative());
+    assert!(load("c", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("has dtype C64, which is not read"));
+    assert!(load("bad", ArrayDType::Int64)
+        .unwrap_err()
+        .contains("describes tensor `bad` wrongly"));
+
+    // A header that is JSON and not an object.
+    let mut bytes = 2_u64.to_le_bytes().to_vec();
+    bytes.extend_from_slice(b"[]");
+    std::fs::write(&path, &bytes).unwrap();
+    assert!(load("w", ArrayDType::Int64)
+        .unwrap_err()
+        .contains("is not a safetensors file"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
