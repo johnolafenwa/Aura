@@ -104,11 +104,56 @@ jobs:
       - name: Run repo gate
         run: npm run ci
 
+  platform-tests:
+    # Hosts that run the workspace tests without the coverage floors, which
+    # are recorded on x86-64 Linux and arm64 macOS only.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+
+      - name: Install LLVM's system libraries
+        if: runner.os == 'Linux'
+        # The Linux llvm-config names a static libzstd and libxml2.
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
+
+      - name: Cache LLVM
+        if: runner.os == 'Linux'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
+      - name: Install Z3
+        run: bash scripts/install-z3.sh
+
+      - name: Run the workspace tests
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked
+
+      - name: Compare the interpreter with native executables
+        run: cargo test --locked -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture
+
   native-binaries:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 

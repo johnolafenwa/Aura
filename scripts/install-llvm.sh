@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Installs the static LLVM libraries that the `llvm` cargo feature links.
 #
-# On Linux, downloads the official LLVM release archive, checks its SHA-256
+# On Linux, x86-64 or arm64, downloads the official LLVM release archive, checks its SHA-256
 # before extracting anything, and keeps only what llvm-sys needs:
 # llvm-config, the LLVM and LLVM-C headers, and the static libLLVM and
 # libPolly archives.
@@ -47,6 +47,10 @@ case "$(uname -s)-$(uname -m)" in
   Linux-x86_64)
     archive="LLVM-${version}-Linux-X64.tar.xz"
     sha256=ff32497b6801267ee427bc69cdaeecfb2d19578af8c2a942e864c45215f9a2ac
+    ;;
+  Linux-aarch64 | Linux-arm64)
+    archive="LLVM-${version}-Linux-ARM64.tar.xz"
+    sha256=cf2e84d965a95954971cafc71d18c0eb38e723c3ac7276286fd5636df4374b3a
     ;;
   Darwin-arm64 | Darwin-x86_64)
     check_bottle

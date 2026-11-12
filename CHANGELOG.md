@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- Linux on arm64 is a supported host. CI builds Aura and runs the
+  workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
+  publishes an `aarch64-unknown-linux-gnu` archive, and the installer
+  selects it.
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
   `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,

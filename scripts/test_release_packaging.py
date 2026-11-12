@@ -153,7 +153,7 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
             encoding="utf-8"
         )
         pins = re.findall(r"^    sha256=([0-9a-f]{64})$", installer, re.MULTILINE)
-        self.assertEqual(len(pins), 1, "the Linux archive is pinned")
+        self.assertEqual(len(pins), 2, "the Linux x86-64 and arm64 archives are pinned")
         self.assertIn("brew install llvm@22", installer)
         self.assertLess(
             installer.index('if [ "$actual" != "$sha256" ]'),
@@ -181,7 +181,12 @@ class HostedWorkflowHardeningTests(unittest.TestCase):
     def test_release_cli_links_llvm_and_checks_the_libraries_it_loads(self) -> None:
         workflow = RELEASE_WORKFLOW.read_text(encoding="utf-8")
         job = workflow[workflow.index("  cli:\n"):workflow.index("  tools:\n")]
-        for runner in ("os: ubuntu-24.04", "os: macos-15-intel", "os: macos-15"):
+        for runner in (
+            "os: ubuntu-24.04\n",
+            "os: ubuntu-24.04-arm\n",
+            "os: macos-15-intel\n",
+            "os: macos-15\n",
+        ):
             self.assertIn(runner, job)
         self.assertIn("        run: bash scripts/install-llvm.sh\n", job)
         self.assertNotIn("actions/cache", job, "a release links no cached LLVM")
@@ -293,6 +298,8 @@ class LandingAndInstallerTests(unittest.TestCase):
             target = "x86_64-apple-darwin"
         elif system == "Linux" and machine in {"x86_64", "amd64"}:
             target = "x86_64-unknown-linux-gnu"
+        elif system == "Linux" and machine in {"aarch64", "arm64"}:
+            target = "aarch64-unknown-linux-gnu"
         else:
             self.skipTest(f"installer has no release archive for {system} {machine}")
 

@@ -26,6 +26,9 @@ main() {
     Linux-x86_64|Linux-amd64)
       target=x86_64-unknown-linux-gnu
       ;;
+    Linux-aarch64|Linux-arm64)
+      target=aarch64-unknown-linux-gnu
+      ;;
     *)
       fail "no release archive is available for $(uname -s) $(uname -m)"
       ;;

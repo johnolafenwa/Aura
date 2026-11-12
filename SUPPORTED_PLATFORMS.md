@@ -5,6 +5,7 @@ Aura 0.14 is a technical preview. It supports these hosts:
 | Host | Architecture | CI | Release archive | Native `aura build` |
 | --- | --- | --- | --- | --- |
 | Ubuntu 24.04 / compatible glibc Linux | x86-64 | Yes | Yes | Yes, with a host C compiler |
+| Ubuntu 24.04 / compatible glibc Linux | arm64 | Yes, tests without the coverage floors | From the next release | Yes, with a host C compiler |
 | macOS 15 | x86-64 | Release smoke | Yes | Yes, with Xcode command-line tools |
 | macOS 15 | Apple silicon | Yes | Yes | Yes, with Xcode command-line tools |
 | Windows 11 with WSL 2 and Ubuntu 24.04 | x86-64 | Inherits Linux behavior. No dedicated WSL runner | Use the Linux archive inside WSL | Yes, with `build-essential` inside WSL |

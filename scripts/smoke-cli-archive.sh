@@ -46,6 +46,10 @@ case "$top_level" in
     release_version="${top_level#aura-v}"
     release_version="${release_version%-x86_64-unknown-linux-gnu}"
     ;;
+  aura-v*-aarch64-unknown-linux-gnu)
+    release_version="${top_level#aura-v}"
+    release_version="${release_version%-aarch64-unknown-linux-gnu}"
+    ;;
   aura-v*-x86_64-apple-darwin)
     release_version="${top_level#aura-v}"
     release_version="${release_version%-x86_64-apple-darwin}"
