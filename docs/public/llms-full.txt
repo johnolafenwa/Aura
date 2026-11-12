@@ -25164,7 +25164,7 @@ runs as one piece of GPU work when the program reads it: `to_array()`,
 `item()`, `to(device)`, or `eval()`. This is why a long expression costs
 one trip to the GPU and not one for each operator.
 
-```aura
+```aura fragment
 z = (x * y + x).sqrt()    # nothing has run on the GPU
 z.eval()                  # the three operations run together
 ```
