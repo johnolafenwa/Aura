@@ -10957,8 +10957,12 @@ fn mir_functions_preserve_defining_paths_with_source_only_fallback_remaining_abs
         .parent()
         .expect("compiler crate should live under repo root")
         .to_path_buf();
-    let entry_path = repo_root.join("examples/modules/trait_impl_imports.au");
-    let imported_path = repo_root.join("examples/modules/pkg/user.au");
+    // Frames carry the path as the host spells it.
+    let host_path = |relative: &str| {
+        aura_core::host_path::canonicalize(repo_root.join(relative)).expect("the example exists")
+    };
+    let entry_path = host_path("examples/modules/trait_impl_imports.au");
+    let imported_path = host_path("examples/modules/pkg/user.au");
     let module = crate::lower_path_to_mir(&entry_path).expect("module program should lower");
 
     for name in ["show", "main"] {

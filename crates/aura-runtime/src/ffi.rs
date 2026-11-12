@@ -1510,7 +1510,7 @@ pub fn load_libraries(
     let raw_paths = search_paths.to_vec();
     let canonical_paths = search_paths
         .iter()
-        .map(|path| std::fs::canonicalize(path).unwrap_or_else(|_| path.clone()))
+        .map(|path| aura_core::host_path::canonicalize(path).unwrap_or_else(|_| path.clone()))
         .collect::<Vec<_>>();
     let frameworks = frameworks.iter().filter(|_| cfg!(target_os = "macos"));
     let wanted = libraries

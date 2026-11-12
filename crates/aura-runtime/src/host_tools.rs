@@ -28,3 +28,9 @@ pub const FALSE: &str = if cfg!(windows) {
 } else {
     concat!("/usr/bin", "/false")
 };
+/// Copies standard input to standard output.
+pub const CAT: &str = if cfg!(windows) {
+    "cat"
+} else {
+    concat!("/bin", "/cat")
+};

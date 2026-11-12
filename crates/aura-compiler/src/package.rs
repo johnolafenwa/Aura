@@ -1907,7 +1907,7 @@ fn hash_source_key(source: &str) -> String {
 }
 
 fn canonicalize_dir(path: &Path) -> Result<PathBuf> {
-    fs::canonicalize(path).map_err(|error| {
+    aura_core::host_path::canonicalize(path).map_err(|error| {
         Diagnostic::new(format!(
             "failed to resolve package path `{}`: {}",
             path.display(),
@@ -1917,7 +1917,7 @@ fn canonicalize_dir(path: &Path) -> Result<PathBuf> {
 }
 
 fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
-    if let Ok(canonical) = fs::canonicalize(path) {
+    if let Ok(canonical) = aura_core::host_path::canonicalize(path) {
         return Ok(canonical);
     }
 
@@ -1929,7 +1929,7 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
         existing_ancestor = parent;
     }
 
-    let canonical_ancestor = match fs::canonicalize(existing_ancestor) {
+    let canonical_ancestor = match aura_core::host_path::canonicalize(existing_ancestor) {
         Ok(canonical) => canonical,
         Err(error) => {
             return Err(Diagnostic::new(format!(

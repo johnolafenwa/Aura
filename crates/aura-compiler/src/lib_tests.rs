@@ -1318,8 +1318,10 @@ fn module_constant_plan_reports_an_entry_missing_from_the_loader_cache() {
             .contains("constant initialization plan is missing loaded module"),
         "unexpected invariant diagnostic: {error:?}"
     );
+    // The loader names the module by its resolved path.
+    let resolved = aura_core::host_path::canonicalize(&main_path).expect("the module exists");
     assert!(
-        error.message.contains(&main_path.display().to_string()),
+        error.message.contains(&resolved.display().to_string()),
         "the invariant diagnostic should identify the missing module: {error:?}"
     );
 }
@@ -3133,6 +3135,9 @@ fn categorized_examples_run_with_expected_output() {
         ];
 
     for (path, source, expected_stdout) in cases {
+        if example_needs_unix_paths(source) {
+            continue;
+        }
         let output = run_source(source).unwrap_or_else(|error| {
             panic!("{} should run: {}", path, error);
         });
@@ -3142,6 +3147,16 @@ fn categorized_examples_run_with_expected_output() {
             path
         );
     }
+}
+
+/// Whether an example cannot run on this host because it names a Unix
+/// path, such as `/bin/echo` or a file under `/tmp`. These still
+/// type-check on every host.
+fn example_needs_unix_paths(source: &str) -> bool {
+    cfg!(windows)
+        && ["\"/tmp/", "\"/bin/", "\"/usr/"]
+            .iter()
+            .any(|path| source.contains(path))
 }
 
 #[test]
@@ -3157,6 +3172,9 @@ fn additional_categorized_examples_type_check() {
 fn additional_categorized_examples_run_with_expected_output() {
     let _guard = lock_io_example();
     for (path, source, expected_stdout) in ADDITIONAL_EXAMPLE_CASES {
+        if example_needs_unix_paths(source) {
+            continue;
+        }
         let output = run_source(source).unwrap_or_else(|error| {
             panic!("{} should run: {}", path, error);
         });

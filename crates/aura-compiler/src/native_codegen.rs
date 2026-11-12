@@ -20064,7 +20064,7 @@ fn debug_source_path_as_given(path: &str, program_path: &str) -> String {
     let Some(given_directory) = program.parent() else {
         return path;
     };
-    let Ok(resolved_directory) = std::fs::canonicalize(given_directory) else {
+    let Ok(resolved_directory) = aura_core::host_path::canonicalize(given_directory) else {
         return path;
     };
     match std::path::Path::new(&path).strip_prefix(&resolved_directory) {

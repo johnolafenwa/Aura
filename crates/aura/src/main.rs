@@ -845,7 +845,8 @@ fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String>
                 path.display()
             ));
         }
-        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let canonical =
+            aura_compiler::host_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if !visited_dirs.insert(canonical) {
             return Ok(());
         }
@@ -1121,10 +1122,11 @@ fn test_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
 }
 
 fn normalized_test_display_path(path: &Path) -> String {
-    let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let absolute =
+        aura_compiler::host_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let display = std::env::current_dir()
         .ok()
-        .and_then(|cwd| fs::canonicalize(cwd).ok())
+        .and_then(|cwd| aura_compiler::host_path::canonicalize(cwd).ok())
         .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf))
         .unwrap_or(absolute);
     display.to_string_lossy().replace('\\', "/")

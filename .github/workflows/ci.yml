@@ -192,7 +192,7 @@ jobs:
 
       - name: Install Z3
         if: ${{ !cancelled() }}
-        run: bash scripts/install-z3.sh
+        run: bash scripts/install-z3.sh 2>&1 | tee "$RUNNER_TEMP/z3-install.log"
 
       - name: Build the compiler and the aura command
         if: ${{ !cancelled() }}
@@ -262,6 +262,8 @@ jobs:
         # The job log is long, so the failures are repeated at its end.
         if: ${{ failure() }}
         run: |
+          tail -n 15 "$RUNNER_TEMP/z3-install.log" || true
+          command -v z3 || echo "z3 is not on PATH"
           grep -E "^error|^warning: unused|panicked" -A 12 "$RUNNER_TEMP/aura-build.log" | tail -n 40 || true
           tail -n 40 "$RUNNER_TEMP/smoke.log" || true
           grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true

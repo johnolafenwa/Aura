@@ -1130,7 +1130,14 @@ fn unit_objects_join_at_link_time_whatever_the_thread_count() {
             .map(|(_, _, scope)| *scope)
             .collect::<Vec<_>>()
     };
-    assert_eq!(defined("entry"), vec![object::SymbolScope::Dynamic]);
+    // COFF has one scope for every external symbol. ELF and Mach-O tell an
+    // exported symbol from a hidden one.
+    let exported = if cfg!(windows) {
+        object::SymbolScope::Linkage
+    } else {
+        object::SymbolScope::Dynamic
+    };
+    assert_eq!(defined("entry"), vec![exported]);
     // Copies are gone: the owner alone defines the small function and the
     // constant data, as hidden symbols the other units reach.
     for name in ["tiny", "table", "counter"] {
