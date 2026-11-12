@@ -19,6 +19,33 @@ Last updated: 2026-11-12
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
 
+## Release 0.15.0-preview (in progress)
+
+- Target: release everything merged since 0.14.0 as a technical preview:
+  the rest of trait objects and FFI v1, streaming I/O with the `http`,
+  `regex`, `time`, and `gzip` modules, SIMD, Array v2 items 1 to 4, the
+  security review fixes, and the regression and call cost work.
+- Done: version sweep, changelog, measurements against the published
+  0.14.0 archive (30 programs 12.7 s -> 12.3 s, 4.2% fewer instructions,
+  34 programs 15.6 s against Python's 56.1 s), and a fix for a slowdown
+  that #269 introduced in nested loops over lists.
+- Remaining: merge the release PR, push the tag, verify the release run.
+  Details are in `2026-11-12-v0.15.0-preview-release.md`.
+
+## Children of one TaskGroup start late on Linux (complete)
+
+- Reported by the Array v2 work: two CPU-bound children of one
+  `TaskGroup` took twice as long as one.
+- The children did run in parallel. The second one started about a
+  millisecond late, because an idle worker's 20 microsecond wait was
+  rounded up to a millisecond by `epoll_wait`. For a child of about a
+  millisecond that looks like running one after the other.
+- The reactor spins through a caller's wait shorter than 500
+  microseconds. Details are in `2026-11-12-task-start-delay.md`.
+- Open: an older child still waits 250 microseconds before another
+  worker may take it, by design. Two children cost about 0.3 to 0.5 ms
+  more per round than one.
+
 ## Array v2 (complete)
 
 - Target: the four items John approved on 2026-11-11: views and shape
