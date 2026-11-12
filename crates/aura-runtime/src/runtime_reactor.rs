@@ -32,6 +32,13 @@ static NEXT_REACTOR_ID: AtomicU64 = AtomicU64::new(1);
 const MIN_TIMER_HEAP_COMPACTION_THRESHOLD: usize = 64;
 const TIMER_HEAP_LIVE_MULTIPLIER: usize = 2;
 const TIMER_HEAP_STALE_ALLOWANCE: usize = 16;
+/// A caller's wait shorter than this spins instead of sleeping in the
+/// platform poller. Linux `epoll_wait` counts in milliseconds and rounds
+/// up, so the scheduler's 20 microsecond wait for a child to become
+/// stealable slept for a whole millisecond there.
+const SHORT_WAIT_LIMIT: Duration = Duration::from_micros(500);
+/// How often a short wait asks the poller about armed descriptors.
+const SHORT_WAIT_DESCRIPTOR_SLICE: Duration = Duration::from_micros(20);
 
 /// Identifies one suspension of a task. A later epoch for the same task makes
 /// every source registered under an older key stale.
@@ -391,12 +398,19 @@ impl RuntimeReactor {
             }
 
             let timeout = self.poll_timeout(caller_deadline);
-            if !self.begin_blocking_poll() {
-                continue;
+            match timeout {
+                Some(wait) if caller_deadline.is_some() && wait < SHORT_WAIT_LIMIT => {
+                    self.wait_briefly(wait)?;
+                }
+                _ => {
+                    if !self.begin_blocking_poll() {
+                        continue;
+                    }
+                    let polled = self.poll_mio_once(timeout);
+                    lock_unpoisoned(&self.inbox.state).blocked = false;
+                    polled?;
+                }
             }
-            let polled = self.poll_mio_once(timeout);
-            lock_unpoisoned(&self.inbox.state).blocked = false;
-            polled?;
 
             let control_notified = self.drain_inbox()?;
             self.mark_expired_timers(Instant::now());
@@ -409,6 +423,51 @@ impl RuntimeReactor {
             if caller_deadline.is_some_and(|deadline| deadline <= Instant::now()) {
                 return Ok(Vec::new());
             }
+        }
+    }
+
+    /// Waits up to `wait`, which is shorter than `SHORT_WAIT_LIMIT`, for a
+    /// notification or descriptor readiness, without sleeping in the
+    /// platform poller. The poller would round the wait up to a millisecond.
+    fn wait_briefly(&mut self, wait: Duration) -> io::Result<()> {
+        let start = Instant::now();
+        loop {
+            self.poll_mio_once(Some(Duration::ZERO))?;
+            if !self.ready.is_empty() {
+                return Ok(());
+            }
+            // Only the poller reports descriptor readiness, so while a
+            // descriptor wait is armed it is asked again every slice.
+            let slice = if self.has_descriptor_waits() {
+                (start.elapsed() + SHORT_WAIT_DESCRIPTOR_SLICE).min(wait)
+            } else {
+                wait
+            };
+            loop {
+                for _ in 0..64 {
+                    if self.inbox.signaled.load(Ordering::Acquire) {
+                        return Ok(());
+                    }
+                    std::hint::spin_loop();
+                }
+                if start.elapsed() >= slice {
+                    break;
+                }
+            }
+            if start.elapsed() >= wait {
+                return Ok(());
+            }
+        }
+    }
+
+    fn has_descriptor_waits(&self) -> bool {
+        #[cfg(unix)]
+        {
+            !self.key_fds.is_empty()
+        }
+        #[cfg(not(unix))]
+        {
+            false
         }
     }
 
@@ -1040,6 +1099,70 @@ mod tests {
     }
 
     #[test]
+    fn a_wait_shorter_than_a_millisecond_is_not_rounded_up() {
+        // The platform poller counts in milliseconds, so a 20 microsecond
+        // wait handed to it sleeps for a whole one. The scheduler waits that
+        // long for a child to become stealable; rounded up, every such
+        // child started a millisecond late. The fastest of many waits
+        // shows the rounding without depending on a quiet machine.
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let wait = Duration::from_micros(20);
+        // A new poller's first wait can return early on its own.
+        assert!(reactor.poll(Some(wait)).unwrap().is_empty());
+        let fastest = (0..50)
+            .map(|_| {
+                let start = Instant::now();
+                assert!(reactor.poll(Some(wait)).unwrap().is_empty());
+                let elapsed = start.elapsed();
+                assert!(elapsed >= wait);
+                elapsed
+            })
+            .min()
+            .unwrap();
+        assert!(
+            fastest < Duration::from_micros(500),
+            "a 20 microsecond wait took at least {fastest:?}"
+        );
+    }
+
+    #[test]
+    fn a_short_wait_ends_at_a_notification_or_a_timer() {
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let handle = reactor.handle();
+        let key = WaitKey(1, 1);
+        reactor.begin_wait(key).unwrap();
+
+        // A wake that arrives during the wait is returned by it.
+        let waker = reactor.handle();
+        let sender = thread::spawn(move || waker.wake(key).unwrap());
+        let woken = (0..10_000)
+            .map(|_| reactor.poll(Some(Duration::from_micros(300))).unwrap())
+            .find(|keys| !keys.is_empty());
+        sender.join().unwrap();
+        assert_eq!(woken, Some(vec![key]));
+
+        // A control notification ends the wait with no key.
+        handle.notify_control().unwrap();
+        let start = Instant::now();
+        assert!(reactor
+            .poll(Some(Duration::from_micros(300)))
+            .unwrap()
+            .is_empty());
+        assert!(start.elapsed() < Duration::from_secs(5));
+
+        // A timer due inside the wait fires in it.
+        let timed = WaitKey(2, 1);
+        reactor.begin_wait(timed).unwrap();
+        reactor
+            .add_deadline(timed, Instant::now() + Duration::from_micros(100))
+            .unwrap();
+        let fired = (0..10_000)
+            .map(|_| reactor.poll(Some(Duration::from_micros(300))).unwrap())
+            .find(|keys| !keys.is_empty());
+        assert_eq!(fired, Some(vec![timed]));
+    }
+
+    #[test]
     fn a_superseded_epoch_makes_its_old_timer_stale() {
         let mut reactor = RuntimeReactor::new().unwrap();
         let now = Instant::now();
@@ -1457,6 +1580,31 @@ mod tests {
             let start = Instant::now();
             reactor.spin_for_notification(Duration::from_secs(10));
             assert!(start.elapsed() < Duration::from_secs(5));
+        }
+
+        #[test]
+        fn a_short_wait_admits_descriptor_readiness() {
+            let mut reactor = RuntimeReactor::new().unwrap();
+            let (stream, mut peer) = UnixStream::pair().unwrap();
+            let reader = WaitKey(1, 1);
+            reactor.begin_wait(reader).unwrap();
+            reactor
+                .add_fd(reader, stream.as_raw_fd(), IoInterest::READABLE)
+                .unwrap();
+
+            // Nothing is readable: the wait runs to its end.
+            let start = Instant::now();
+            assert!(reactor
+                .poll(Some(Duration::from_micros(200)))
+                .unwrap()
+                .is_empty());
+            assert!(start.elapsed() >= Duration::from_micros(200));
+
+            peer.write_all(b"x").unwrap();
+            let ready = (0..10_000)
+                .map(|_| reactor.poll(Some(Duration::from_micros(200))).unwrap())
+                .find(|keys| !keys.is_empty());
+            assert_eq!(ready, Some(vec![reader]));
         }
 
         #[test]
