@@ -1,0 +1,49 @@
+def show(grid: Array[float64]):
+    print(grid[1, 2])
+
+def main():
+    mut grid = Array[float64].zeros([3, 4])
+    for i in range(3):
+        for j in range(4):
+            grid[i, j] = (i * 10 + j) as float64
+    print(grid)
+    print(grid[-1, -1])
+    grid[1, 2] += 0.5
+    grid[-1, 0] *= 2.0
+    show(grid)
+    copy = grid.clone()
+    grid[0, 0] = 99.0
+    print(copy[0, 0])
+    print(grid[0, 0])
+    turned = grid.transpose()
+    print(turned[3, 2])
+    mut t2 = grid.transpose()
+    t2[0, 1] = -1.0
+    print(t2[0, 1])
+    print(grid[1, 0])
+    mut ints = Array[int32].zeros([2, 2, 2])
+    ints[1, 1, 1] = 7
+    ints[0, 1, 0] -= 3
+    print(ints)
+    mut longs = Array[int64].zeros([2, 1, 2, 2])
+    longs[1, 0, 1, 1] = 9000000000
+    print(longs[1, 0, 1, 1] + longs[0, 0, 0, 0])
+    mut singles = Array[float32].zeros([4])
+    singles[2] = 0.1
+    singles[-1] = 2.5
+    print(singles)
+    print(singles[2])
+    mut flat = Array[int64].zeros([5])
+    for i in range(5):
+        flat[i] = i * i
+    flat[4] += 1
+    print(flat)
+    view = flat[1:4]
+    mut owned = flat[1:4]
+    owned[0] = 100
+    print(view)
+    print(owned)
+    print(flat)
+    mut five = Array[int32].zeros([1, 1, 1, 1, 2])
+    five[0, 0, 0, 0, 1] = 5
+    print(five[0, 0, 0, 0, 1])

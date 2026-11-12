@@ -256,15 +256,70 @@ fn float_maximum<T: KernelFloat>(left: T, right: T) -> T {
 }
 
 #[inline(always)]
-fn compare<T: PartialOrd>(operation: ArrayCompareOp, left: T, right: T) -> bool {
-    match operation {
-        ArrayCompareOp::Less => left < right,
-        ArrayCompareOp::LessEqual => left <= right,
-        ArrayCompareOp::Greater => left > right,
-        ArrayCompareOp::GreaterEqual => left >= right,
-        ArrayCompareOp::Equal => left == right,
-        ArrayCompareOp::NotEqual => left != right,
+/// Appends `count` elements of one run of `choose`: each comes from
+/// `when_true` where the mask holds `true` and from `when_false`
+/// elsewhere. An operand is its elements, the position of the run's first
+/// element, and the step between elements, which is zero for one element
+/// repeated. A run that walks the mask forward, with each side either
+/// forward or repeated, is a loop over slices with no index arithmetic.
+fn choose_run<T: Copy>(
+    output: &mut Vec<T>,
+    (mask, mask_at, mask_step): (&[bool], usize, isize),
+    (when_true, true_at, true_step): (&[T], usize, isize),
+    (when_false, false_at, false_step): (&[T], usize, isize),
+    count: usize,
+) {
+    let pick = |flag: bool, chosen: T, otherwise: T| if flag { chosen } else { otherwise };
+    if mask_step == 1 && matches!(true_step, 0 | 1) && matches!(false_step, 0 | 1) {
+        let mask = &mask[mask_at..mask_at + count];
+        fn forward<T>(values: &[T], at: usize, count: usize) -> &[T] {
+            &values[at..at + count]
+        }
+        match (true_step, false_step) {
+            (1, 1) => {
+                let (chosen, otherwise) = (
+                    forward(when_true, true_at, count),
+                    forward(when_false, false_at, count),
+                );
+                output.extend(
+                    mask.iter()
+                        .zip(chosen)
+                        .zip(otherwise)
+                        .map(|((flag, chosen), otherwise)| pick(*flag, *chosen, *otherwise)),
+                );
+            }
+            (1, _) => {
+                let otherwise = when_false[false_at];
+                output.extend(
+                    mask.iter()
+                        .zip(forward(when_true, true_at, count))
+                        .map(|(flag, chosen)| pick(*flag, *chosen, otherwise)),
+                );
+            }
+            (_, 1) => {
+                let chosen = when_true[true_at];
+                output.extend(
+                    mask.iter()
+                        .zip(forward(when_false, false_at, count))
+                        .map(|(flag, otherwise)| pick(*flag, chosen, *otherwise)),
+                );
+            }
+            _ => {
+                let (chosen, otherwise) = (when_true[true_at], when_false[false_at]);
+                output.extend(mask.iter().map(|flag| pick(*flag, chosen, otherwise)));
+            }
+        }
+        return;
     }
+    let at =
+        |position: usize, step: isize, index: isize| (position as isize + index * step) as usize;
+    output.extend((0..count as isize).map(|index| {
+        pick(
+            mask[at(mask_at, mask_step, index)],
+            when_true[at(true_at, true_step, index)],
+            when_false[at(false_at, false_step, index)],
+        )
+    }));
 }
 
 /// A layout that repeats one element over every axis of `shape`.
@@ -546,18 +601,32 @@ impl ArrayValue {
                                 (&scalar[..], &scalar_layout)
                             }
                         };
-                        array_simd::widest(
-                            #[inline(always)]
-                            || {
-                                zip_elements(
-                                    &shape,
-                                    (&**values, &left_layout),
-                                    right,
-                                    label,
-                                    |lhs, rhs| compare(operation, lhs, rhs),
-                                )
-                            },
-                        )?
+                        // One loop for each operation, so the loop holds
+                        // one comparison and no branch on the operation.
+                        macro_rules! mask_of {
+                            ($holds:expr) => {
+                                array_simd::widest(
+                                    #[inline(always)]
+                                    || {
+                                        zip_elements(
+                                            &shape,
+                                            (&**values, &left_layout),
+                                            right,
+                                            label,
+                                            $holds,
+                                        )
+                                    },
+                                )?
+                            };
+                        }
+                        match operation {
+                            ArrayCompareOp::Equal => mask_of!(|lhs, rhs| lhs == rhs),
+                            ArrayCompareOp::NotEqual => mask_of!(|lhs, rhs| lhs != rhs),
+                            ArrayCompareOp::Less => mask_of!(|lhs, rhs| lhs < rhs),
+                            ArrayCompareOp::LessEqual => mask_of!(|lhs, rhs| lhs <= rhs),
+                            ArrayCompareOp::Greater => mask_of!(|lhs, rhs| lhs > rhs),
+                            ArrayCompareOp::GreaterEqual => mask_of!(|lhs, rhs| lhs >= rhs),
+                        }
                     })*
                     ArrayStorage::Bool(_) => return Err(mask_error(name)),
                 }
@@ -582,9 +651,13 @@ impl ArrayValue {
             ArrayMaskOp::Any => Value::Bool(values.contains(&true)),
             ArrayMaskOp::All => Value::Bool(!values.contains(&false)),
             ArrayMaskOp::Count => {
+                // A block of at most 255 flags sums in one byte, which
+                // the compiler adds many at a time.
                 let count = values
-                    .iter()
-                    .map(|value| usize::from(*value))
+                    .chunks(255)
+                    .map(|block| {
+                        usize::from(block.iter().map(|value| u8::from(*value)).sum::<u8>())
+                    })
                     .sum::<usize>();
                 Value::Int(IntegerValue::from_i64(count as i64))
             }
@@ -667,16 +740,13 @@ impl ArrayValue {
                             &shape,
                             [&mask_layout, &*true_layout, &*false_layout],
                             |[mask_at, true_at, false_at], [mask_step, true_step, false_step], count| {
-                                let at = |position: usize, step: isize, index: isize| {
-                                    (position as isize + index * step) as usize
-                                };
-                                output.extend((0..count as isize).map(|index| {
-                                    if mask[at(mask_at, mask_step, index)] {
-                                        true_values[at(true_at, true_step, index)]
-                                    } else {
-                                        false_values[at(false_at, false_step, index)]
-                                    }
-                                }));
+                                choose_run(
+                                    &mut output,
+                                    (mask, mask_at, mask_step),
+                                    (true_values, true_at, true_step),
+                                    (false_values, false_at, false_step),
+                                    count,
+                                );
                                 true
                             },
                         );

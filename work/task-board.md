@@ -2,12 +2,12 @@
 
 Last updated: 2026-11-11
 
-## Array v2 (in progress)
+## Array v2 (complete)
 
 - Target: the four items John approved on 2026-11-11: views and shape
   operations, broadcasting with axis reductions and elementwise math,
   matrix products beyond two dimensions, and zero-copy transport. Tensor
-  and device interop is deferred. Details are in
+  and device interop is deferred until John decides on it. Details are in
   `2026-11-11-array-v2.md`.
 - Done: item 1. Arrays share reference-counted storage and copy on write
   (ADR-0088). An index takes a coordinate or a slice per axis, with
@@ -19,7 +19,16 @@ Last updated: 2026-11-11
   masks with `choose` work on both backends. Arithmetic reads views in
   place, selection updates run in place, and a temporary lends its
   buffer.
-- Remaining: items 3 and 4.
+- Done: item 3 (ADR-0090). `matmul` multiplies stacks of matrices over
+  leading dimensions that broadcast.
+- Done: item 4 (ADR-0091). Compiled code reads and writes `grid[i, j]` in
+  place and reads an Array's layout once per loop. An `extern "C"`
+  parameter of type `Array[T]` is a pointer to the elements. The `simd`
+  lane classes have `load_array` and `store_array`. Tasks share an
+  Array's buffer through `clone()`.
+- Verification: the runtime and compiler unit tests, the fixtures, the
+  FFI acceptance test, and `benchmarks/array_elements` on both backends.
+- Remaining: none in scope. Follow-up candidates are in the work note.
 
 ## SIMD (complete)
 

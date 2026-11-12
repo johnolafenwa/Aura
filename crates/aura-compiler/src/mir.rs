@@ -13091,7 +13091,9 @@ impl<'a> Lowerer<'a> {
                     passing: lower_receiver_kind(*passing),
                     ty: ty.clone(),
                     c_string: function.decl.c_string_param(index),
-                    pointer: function.decl.pointer_param(index),
+                    // An `Array[T]` crosses as `ptr[T]` does (ADR-0091).
+                    pointer: function.decl.pointer_param(index)
+                        || matches!(ty, Type::Named(name, _) if name == "Array"),
                     c_struct: function.c_struct_params.get(index).cloned().flatten(),
                 })
                 .collect(),
@@ -15624,6 +15626,20 @@ impl<'a> Lowerer<'a> {
                     );
                     return;
                 }
+            }
+            if let Some(coordinates) = array_element_coordinates(object_ty.as_ref(), index) {
+                let Some(Type::Named(_, args)) = object_ty.as_ref() else {
+                    unreachable!("element coordinates belong to an Array")
+                };
+                let element_ty = args[0].clone();
+                self.lower_array_element_assign(
+                    assign,
+                    &coordinates,
+                    lowered_object,
+                    receiver_place,
+                    &element_ty,
+                );
+                return;
             }
             let (index_field, set_index_field, index_ty, target_ty) = match object_ty.as_ref() {
                 Some(Type::Named(name, args)) if name == "dict" && args.len() == 2 => (
@@ -21773,6 +21789,29 @@ impl<'a> Lowerer<'a> {
                     );
                     return Operand::Place(temp);
                 }
+                if let Some(coordinates) = array_element_coordinates(object_type.as_ref(), index) {
+                    // Rank-1 reads keep the one-word index, which a counted
+                    // loop proves in range.
+                    if coordinates.len() > 1 {
+                        let receiver_place = match &lowered_object {
+                            Operand::Place(place) | Operand::MovePlace(place) => {
+                                Some(place.clone())
+                            }
+                            _ => self.render_place_expr_option(object),
+                        };
+                        let words = self.lower_array_coordinate_words(&coordinates);
+                        self.emit_array_element_call(
+                            &temp,
+                            crate::runtime_ops::READ_AT_MEMBER,
+                            lowered_object,
+                            receiver_place,
+                            words,
+                            None,
+                            index.span,
+                        );
+                        return Operand::Place(temp);
+                    }
+                }
                 let lowered_index = match object_type.as_ref() {
                     Some(Type::Named(name, args)) if name == "list" && args.len() == 1 => {
                         let relative = self.lower_index_domain_expr(index);
@@ -23868,6 +23907,125 @@ impl<'a> Lowerer<'a> {
                 type_args: Default::default(),
             },
         });
+    }
+
+    /// The coordinates of an element access as words: each evaluated once,
+    /// in source order, and zeros after the last (ADR-0091).
+    fn lower_array_coordinate_words(&mut self, coordinates: &[&Expr]) -> Vec<Operand> {
+        let int64 = Type::named("int64");
+        let mut words = vec![Operand::Int(coordinates.len() as u128)];
+        for coordinate in coordinates {
+            let value = self.lower_index_domain_expr(coordinate);
+            // A later coordinate or the assigned value may write the
+            // variable an earlier coordinate names.
+            let word = match value {
+                Operand::Int(_) => value,
+                value => {
+                    let temp = self.new_typed_temp(int64.clone());
+                    self.emit(Instruction::Assign {
+                        target: temp.clone(),
+                        value: Rvalue::Use(value),
+                    });
+                    Operand::Place(temp)
+                }
+            };
+            words.push(word);
+        }
+        words.resize(
+            1 + crate::runtime_ops::ARRAY_COORDINATE_WORDS,
+            Operand::Int(0),
+        );
+        words
+    }
+
+    /// `result = object.member(rank, c0, c1, c2, c3, [value,] line, column)`:
+    /// an element read or write by coordinate words.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_array_element_call(
+        &mut self,
+        result: &str,
+        member: &str,
+        object: Operand,
+        receiver_place: Option<String>,
+        mut words: Vec<Operand>,
+        value: Option<Operand>,
+        span: Span,
+    ) {
+        words.extend(value);
+        words.extend([
+            Operand::Int(span.line as u128),
+            Operand::Int(span.column as u128),
+        ]);
+        self.emit(Instruction::Assign {
+            target: result.to_string(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object,
+                    field: member.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: words
+                    .into_iter()
+                    .map(|value| MirArg {
+                        name: None,
+                        value,
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
+    }
+
+    /// `object[c0, c1, ...] = value` and `object[c0, c1, ...] op= value`
+    /// for integer coordinates. The coordinates are evaluated once, before
+    /// the value.
+    fn lower_array_element_assign(
+        &mut self,
+        assign: &AssignStmt,
+        coordinates: &[&Expr],
+        lowered_object: Operand,
+        receiver_place: Option<String>,
+        element_ty: &Type,
+    ) {
+        let words = self.lower_array_coordinate_words(coordinates);
+        let value = if let Some(op) = assign.op {
+            let current = self.new_typed_temp(element_ty.clone());
+            self.emit_array_element_call(
+                &current,
+                crate::runtime_ops::READ_AT_MEMBER,
+                lowered_object.clone(),
+                receiver_place.clone(),
+                words.clone(),
+                None,
+                assign.span,
+            );
+            let compound = Expr {
+                kind: ExprKind::Binary {
+                    op,
+                    left: Box::new(Expr {
+                        kind: ExprKind::Name(current),
+                        span: assign.span,
+                    }),
+                    right: Box::new(assign.value.clone()),
+                },
+                span: assign.span,
+            };
+            self.lower_expr_with_expected(&compound, Some(element_ty))
+        } else {
+            self.lower_expr_for_owned_value(&assign.value, Some(element_ty))
+        };
+        let temp = self.new_typed_temp(Type::Unit);
+        self.emit_array_element_call(
+            &temp,
+            crate::runtime_ops::WRITE_AT_MEMBER,
+            lowered_object,
+            receiver_place,
+            words,
+            Some(value),
+            assign.span,
+        );
     }
 
     fn lower_array_coordinate_expr(&mut self, expr: &Expr) -> Operand {
@@ -30900,6 +31058,37 @@ fn tuple_constant_index(expr: &Expr) -> Option<usize> {
         ExprKind::Group(inner) => tuple_constant_index(inner),
         _ => None,
     }
+}
+
+/// The coordinates of `object[index]` when `object` is a numeric Array
+/// and the index names one element with at most
+/// [`crate::runtime_ops::ARRAY_COORDINATE_WORDS`] integers. Such an access
+/// passes its coordinates as words (ADR-0091). A mask element, a longer
+/// index, and an index with a slice lower another way.
+fn array_element_coordinates<'e>(object: Option<&Type>, index: &'e Expr) -> Option<Vec<&'e Expr>> {
+    let Some(Type::Named(name, args)) = object else {
+        return None;
+    };
+    let [Type::Named(dtype, _)] = args.as_slice() else {
+        return None;
+    };
+    if name != "Array" || !matches!(dtype.as_str(), "int32" | "int64" | "float32" | "float64") {
+        return None;
+    }
+    if crate::parser::index_has_slice(index) {
+        return None;
+    }
+    fn components(expr: &Expr) -> Vec<&Expr> {
+        match &expr.kind {
+            ExprKind::Group(inner) => components(inner),
+            ExprKind::Tuple(elements) => elements.iter().collect(),
+            _ => vec![expr],
+        }
+    }
+    let coordinates = components(index);
+    (1..=crate::runtime_ops::ARRAY_COORDINATE_WORDS)
+        .contains(&coordinates.len())
+        .then_some(coordinates)
 }
 
 fn array_coordinate_type(expr: &Expr) -> Type {

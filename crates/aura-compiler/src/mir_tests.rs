@@ -15571,7 +15571,7 @@ fn step8d_collection_members_lower_to_specialized_runtime_ops() {
         RuntimeOp::Set(SetOp::ContainsInt64),
         RuntimeOp::Array(ArrayOp::Clone),
         RuntimeOp::Array(ArrayOp::Sum),
-        RuntimeOp::Array(ArrayOp::Index),
+        RuntimeOp::Array(ArrayOp::ReadAt),
     ] {
         assert!(found.contains(&op), "{op} in main: {found:?}");
     }

@@ -7239,7 +7239,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no matrix product over more than two dimensions, `for` iteration, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
 - Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
@@ -7248,7 +7248,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
 - `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
-- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- `load` and `store` take a `list`, and `load_array` and `store_array` take a rank-1 `Array`. None reads a `Span` or `list[uint8]` bytes as floats.
 - A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
 - A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
 - The interpreter backend computes each lane as a separate float.
@@ -11645,6 +11645,43 @@ when the list keeps its elements unboxed. Lists of scalars do. The checker
 rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
 with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
 form for bytes with a length.
+
+### Arrays
+
+A parameter of type `Array[T]` is also a pointer to the first of a run of
+scalars. The argument is an Array, and its elements cross in row-major
+order (ADR-0091).
+
+```aura fragment
+extern "C" def cblas_ddot(
+    n: int32, x: Array[float64], incx: int32, y: Array[float64], incy: int32
+) -> float64
+
+def main() -> int32:
+    x = Array[float64].full([4], 2.0)
+    y = Array[float64].full([4], 0.5)
+    print(cblas_ddot(4, x, 1, y, 1))
+    return 0
+```
+
+| Declaration | C type | Contract |
+| --- | --- | --- |
+| `values: Array[T]` | `const T *` | the function reads the elements |
+| `values: mut Array[T]` | `T *` | the function reads and writes the elements |
+
+`T` is `int32`, `int64`, `float32`, or `float64`. The rules for a `ptr[T]`
+apply: no length crosses, the pointer is valid only during the call, and an
+empty Array passes a null pointer.
+
+A built program passes the address of the Array's own elements when the
+Array is one row-major block. A strided view, such as a transposed matrix
+or a stepped slice, is packed into a temporary block for a read. A `mut
+Array[T]` argument first becomes one row-major block that no other Array
+shares, so the function writes that Array only and a clone keeps its
+elements. `aura run` on the interpreter copies the elements in and out.
+
+`Array[bool]` is `AU2002`: convert a mask with `as Array[int32]` first.
+`own Array[T]` is `AU3004`, and an Array cannot be a result.
 
 ### Structs
 
@@ -18599,13 +18636,19 @@ each product in the element type and adds the products in the reordered
 order above. An integer `dot` is checked: the first product or running sum,
 in index order, that leaves the element type's range is `AU4002`.
 
-`left.matmul(right)` accepts three pairs of shapes:
+`left.matmul(right)` accepts three pairs of shapes. The last two
+dimensions of an operand are its matrix, and `..` stands for any leading
+batch dimensions:
 
 | Left | Right | Result |
 | --- | --- | --- |
-| `[n, k]` | `[k, m]` | `[n, m]` |
-| `[n, k]` | `[k]` | `[n]` |
-| `[k]` | `[k, m]` | `[m]` |
+| `[.., n, k]` | `[.., k, m]` | `[.., n, m]` |
+| `[.., n, k]` | `[k]` | `[.., n]` |
+| `[k]` | `[.., k, m]` | `[.., m]` |
+
+The batch dimensions of the two operands broadcast like the shapes of an
+arithmetic operation. The result holds one matrix product per batch
+position. A rank-1 operand is one vector for every position (ADR-0090).
 
 ```aura
 def main() -> int32:
@@ -18622,6 +18665,19 @@ Each result element starts at zero and adds its `k` products in ascending
 order of the inner index, rounding each product before it is added. That is
 the order of the plain three-loop program, so `matmul` gives that program's
 bits. An integer `matmul` is checked and reports `AU4002`.
+
+```aura
+def main() -> int32:
+    layers = Array[float64].full([3, 2, 2], 2.0)
+    inputs = Array[float64].full([2, 4], 1.0)
+    outputs = layers.matmul(inputs)
+    print(outputs.shape())
+    print(outputs.sum())
+    return 0
+```
+
+`layers` holds three matrices and `inputs` holds one, so `outputs` has
+shape `[3, 2, 4]`. Each of the three products is the plain product above.
 
 A large float product of two matrices runs on several threads. Each thread
 computes whole rows of the result, and no element is shared, so the bits
@@ -18695,7 +18751,7 @@ Runtime codes:
 - a slice assignment whose value does not broadcast to the selected shape
 - `min`, `max`, `mean`, or `fast_mean` on an empty Array or an empty lane
 - a `dot` whose shapes differ
-- a `matmul` whose shapes are not one of the three accepted pairs
+- a `matmul` whose shapes are not one of the three accepted pairs, or whose batch dimensions do not broadcast
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -18717,6 +18773,57 @@ reads a strided or broadcast operand where it lies. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
 
+## Element Access, Foreign Calls, And Tasks
+
+A built program reads `grid[i, j]` where the element lies, with one range
+check per coordinate and no runtime call. This holds for an index of one to
+four integer coordinates on an `int32`, `int64`, `float32`, or `float64`
+Array that is one row-major block. An element write, `grid[i, j] = value`
+or `grid[i, j] += value`, also runs in place when no other Array shares the
+buffer. Any other access gives the same result through the runtime: a
+strided view such as a transposed matrix, a mask element, an index of five
+or more coordinates, and the first write after a `clone()` or a slice, which
+copies the buffer (ADR-0091).
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            grid[row, column] = (row * 4 + column) as float64
+    grid[1, 1] += 0.5
+    print(grid[1, 1])
+    print(grid[-1, -1])
+    return 0
+```
+
+A loop whose only uses of an Array are element reads and writes checks the
+Array once at its entry and then reaches each element by address. Keep other
+members out of the loop to get that form, apart from `len()`: read
+`grid.shape` or a reduction before the loop, not inside it.
+
+An `extern "C"` function takes an Array as a pointer to its first element.
+See [FFI](ffi.md#arrays). The `simd` lane classes load from a rank-1 Array
+with `load_array` and write with `store_array`. See [SIMD](simd.md).
+
+An Array moved into a task or sent through a queue takes its buffer along.
+`clone()` shares the buffer, so tasks that each receive a clone read the
+same elements, and no elements are copied. A task that writes its clone
+gets a private copy at the first write.
+
+```aura
+def total(values: Array[float64]) -> float64:
+    return values.sum()
+
+def main() -> int32:
+    values = Array[float64].full([1000], 0.5)
+    with TaskGroup() as group:
+        first = group.start(total, values.clone())
+        second = group.start(total, values.clone())
+        print(first.result_or(0.0, timeout=1s) + second.result_or(0.0, timeout=1s))
+    return 0
+```
+
 The compiler's analysis and the language server expose the same constructors,
 member signatures, result types, hover, definitions, completions, and
 diagnostics. The bundled VS Code extension uses that compiler-owned surface.
@@ -18727,13 +18834,12 @@ Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
 not have:
 
 - mixed promotion between dtypes
-- a matrix product over more than two dimensions
 - equality or ordering operators: use the comparison members
 - math members on `float32`: convert with `as Array[float64]` first
 - iteration with `for`
 - a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage
-- aliasing of foreign buffers
+- a foreign function that keeps an Array's pointer after its call
 
 Shape metadata is dynamic, and the checker does not prove that shapes are
 compatible. Allocation is limited by host memory and the element-count checks.
@@ -22642,6 +22748,8 @@ There are no lane classes for `int32` or the other narrow integers. See
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
 | `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
+| `V.load_array` | `load_array(values: Array[E], at: int64) -> V` | The elements of the rank-1 Array `values` from index `at`, one for each lane. |
+| `store_array` | `store_array(self, values: mut Array[E], at: int64)` | Writes the lanes over the elements of the rank-1 Array `values` from index `at`. |
 | `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
 | `/` | `V` with `V`, float classes only | The division in each lane. |
 | unary `-` | `V` | Each lane negated. |
@@ -22739,8 +22847,8 @@ module's source, and the call chain names your function:
 
 ```text
 error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
- --> <std>/simd.au:486:72
-  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+ --> <std>/simd.au:570:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 569:5 -> main at 4:1
 ```
 
 How much faster the lanes are depends on the target CPU:
@@ -22832,8 +22940,10 @@ These limits apply:
 
 - **A program that starts tasks** checks whether to yield once in each loop
   iteration. The lane arithmetic inside an iteration is still vector code.
-- **`Array` elements** are not loaded directly. Use the `Array` kernels, or
-  copy into a list.
+- **`Array` elements** load with `load_array` and store with
+  `store_array`, from a rank-1 Array. Call `flatten()` on a matrix first,
+  which shares its elements. A range check runs for each element, where a
+  counted loop over a list checks its range once.
 - **`aura run` on the interpreter backend** computes each lane as a
   separate float. The results are the same and there is no speedup.
 
@@ -36446,6 +36556,35 @@ An array can't grow or shrink, so there's no `append`. You can look at the
 same elements under another shape, though, and write to whole rows and
 columns at once. Both come up later in this section.
 
+A loop over the elements is a fine way to fill or read an array when no
+whole-array method says what you mean:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    mut table = Array[int64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            table[row, column] = (row + 1) * (column + 1)
+    mut diagonal = 0
+    for i in range(3):
+        diagonal += table[i, i]
+    print(table)
+    print(diagonal)
+```
+
+```console
+$ aura run src/main.au
+Array[int64](shape=[3, 4], values=[1, 2, 3, 4, 2, 4, 6, 8, 3, 6, 9, 12])
+14
+```
+
+In a native build, a read or a write like `table[row, column]` goes straight
+to the element after a range check on each coordinate. A loop that touches
+the array only through its elements runs about as fast as the same loop over
+a list.
+
 ## Arithmetic on whole arrays
 
 Here's where arrays earn their place:
@@ -36877,6 +37016,11 @@ Array[float64](shape=[2], values=[88.3, 88.3])
 has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
 into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
 
+An array with more than two dimensions is a stack of matrices. `matmul`
+uses the last two dimensions as the matrix and multiplies once per
+matrix in the stack, so a `[10, 2, 3]` array times a `[3, 4]` array is a
+`[10, 2, 4]` array. You don't need a loop over the stack.
+
 `sum` adds from left to right, which is the order you'd add by hand and the
 slowest order for a CPU. When an array is large and the last digit doesn't
 matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
@@ -36940,8 +37084,10 @@ operation is defined lane by lane. It can differ in the last digit from a
 plain left-to-right sum, since the additions happen in a different order.
 
 There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
-back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
-[Manual](/manual/simd) has the full list.
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. When
+the numbers live in a one-dimensional array, `load_array` and `store_array`
+do the same job: `F64x4.load_array(xs, i)` reads four elements of an
+`Array[float64]`. The [Manual](/manual/simd) has the full list.
 
 ### One Number per Row
 

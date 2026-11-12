@@ -1,0 +1,17 @@
+Array[float64](shape=[3, 4], values=[0.0, 1.0, 2.0, 3.0, 10.0, 11.0, 12.0, 13.0, 20.0, 21.0, 22.0, 23.0])
+23.0
+12.5
+0.0
+99.0
+23.0
+-1.0
+10.0
+Array[int32](shape=[2, 2, 2], values=[0, 0, -3, 0, 0, 0, 0, 7])
+9000000000
+Array[float32](shape=[4], values=[0.0, 0.0, 0.1, 2.5])
+0.1
+Array[int64](shape=[5], values=[0, 1, 4, 9, 17])
+Array[int64](shape=[3], values=[1, 4, 9])
+Array[int64](shape=[3], values=[100, 4, 9])
+Array[int64](shape=[5], values=[0, 1, 4, 9, 17])
+5

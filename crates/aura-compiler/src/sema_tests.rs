@@ -2246,6 +2246,61 @@ extern "C" def bad(value: mut Handle) -> None
 }
 
 #[test]
+fn ffi_array_parameters_are_element_pointers() {
+    check_ffi_source_for_test(
+        r#"extern "C" def dot(count: uint64, left: Array[float64], right: Array[float64]) -> float64
+extern "C" def scale(values: mut Array[float32], count: uint64) -> None
+extern "C" def total(values: Array[int32], count: uint64) -> int64
+extern "C" def bump(values: mut Array[int64], count: uint64) -> None
+
+def main():
+    mut values = Array[float64].zeros([2, 2])
+    print(dot(4, values, values))
+"#,
+    )
+    .expect("numeric Array parameters should check");
+
+    let owned = check_ffi_source_for_test(
+        r#"extern "C" def bad(values: own Array[float64]) -> None
+"#,
+    )
+    .expect_err("an owned Array parameter must fail");
+    assert_eq!(owned.code, "AU3004", "{}", owned.message);
+
+    let mask = check_ffi_source_for_test(
+        r#"extern "C" def bad(flags: Array[bool]) -> None
+"#,
+    )
+    .expect_err("a mask parameter must fail");
+    assert_eq!(mask.code, "AU2002", "{}", mask.message);
+    assert!(
+        mask.help
+            .iter()
+            .any(|help| help.contains("as Array[int32]")),
+        "{:?}",
+        mask.help
+    );
+
+    let returned = check_ffi_source_for_test(
+        r#"extern "C" def bad() -> Array[float64]
+"#,
+    )
+    .expect_err("an Array result must fail");
+    assert_eq!(returned.code, "AU2002", "{}", returned.message);
+
+    let mismatch = check_ffi_source_for_test(
+        r#"extern "C" def total(values: Array[int32], count: uint64) -> int64
+
+def main():
+    values = Array[float64].zeros([2])
+    print(total(values, 2))
+"#,
+    )
+    .expect_err("an Array of another dtype must fail");
+    assert_eq!(mismatch.code, "AU2002", "{}", mismatch.message);
+}
+
+#[test]
 fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
     let rejected = [
         (

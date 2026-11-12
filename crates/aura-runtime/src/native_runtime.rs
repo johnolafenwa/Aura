@@ -9973,6 +9973,94 @@ pub extern "C-unwind" fn aura_direct_array_set_index_in_place(
     })
 }
 
+/// The coordinates an element access passes as plain words: the first
+/// `rank` of the four.
+fn direct_array_coordinate_words(
+    rank: i64,
+    words: &[i64; DIRECT_ARRAY_MAX_RANK],
+) -> std::result::Result<&[i64], Diagnostic> {
+    usize::try_from(rank)
+        .ok()
+        .filter(|rank| (1..=DIRECT_ARRAY_MAX_RANK).contains(rank))
+        .map(|rank| &words[..rank])
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!("direct Array ABI received invalid coordinate count `{rank}`"),
+            )
+        })
+}
+
+/// `array[c0, c1, ...]` for `rank` integer coordinates (ADR-0091): the
+/// element as one word. A float is its `float64` bits, and an integer is
+/// sign-extended. Generated code reads a row-major Array in place and
+/// calls this for a view, a shared value, or a coordinate out of range.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_read_at(
+    array: *mut OpaqueValue,
+    rank: i64,
+    c0: i64,
+    c1: i64,
+    c2: i64,
+    c3: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let words = [c0, c1, c2, c3];
+        let coordinates =
+            direct_array_result(direct_array_coordinate_words(rank, &words), line, column);
+        let value = with_array(array, |array| array.get(coordinates));
+        match direct_array_result(value, line, column) {
+            Value::Float(value) => value.to_bits() as i64,
+            Value::Bool(value) => i64::from(value),
+            Value::Int(value) => value
+                .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
+                .expect("an Array integer element fits in int64"),
+            other => runtime_error(format!(
+                "direct Array ABI read an element of type `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
+}
+
+/// `array[c0, c1, ...] = value` for `rank` integer coordinates
+/// (ADR-0091). `bits` is the element as [`aura_direct_array_read_at`]
+/// returns one. Generated code writes a row-major Array that holds its
+/// buffer alone in place and calls this otherwise.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_write_at(
+    array: *mut OpaqueValue,
+    rank: i64,
+    c0: i64,
+    c1: i64,
+    c2: i64,
+    c3: i64,
+    bits: i64,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let words = [c0, c1, c2, c3];
+        let coordinates =
+            direct_array_result(direct_array_coordinate_words(rank, &words), line, column);
+        let result = with_array_mut(array, |array| {
+            let value = match array.dtype() {
+                ArrayDType::Int32 => Value::Int(IntegerValue::from_i32(bits as i32)),
+                ArrayDType::Int64 => Value::Int(IntegerValue::from_i64(bits)),
+                ArrayDType::Float32 | ArrayDType::Float64 => {
+                    Value::Float(f64::from_bits(bits as u64))
+                }
+                ArrayDType::Bool => Value::Bool(bits != 0),
+            };
+            array.set(coordinates, value)
+        });
+        let _ = direct_array_result(result, line, column);
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_array_slice(
     array: *mut OpaqueValue,

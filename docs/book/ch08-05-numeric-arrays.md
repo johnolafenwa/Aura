@@ -174,6 +174,35 @@ An array can't grow or shrink, so there's no `append`. You can look at the
 same elements under another shape, though, and write to whole rows and
 columns at once. Both come up later in this section.
 
+A loop over the elements is a fine way to fill or read an array when no
+whole-array method says what you mean:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    mut table = Array[int64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            table[row, column] = (row + 1) * (column + 1)
+    mut diagonal = 0
+    for i in range(3):
+        diagonal += table[i, i]
+    print(table)
+    print(diagonal)
+```
+
+```console
+$ aura run src/main.au
+Array[int64](shape=[3, 4], values=[1, 2, 3, 4, 2, 4, 6, 8, 3, 6, 9, 12])
+14
+```
+
+In a native build, a read or a write like `table[row, column]` goes straight
+to the element after a range check on each coordinate. A loop that touches
+the array only through its elements runs about as fast as the same loop over
+a list.
+
 ## Arithmetic on whole arrays
 
 Here's where arrays earn their place:
@@ -673,8 +702,10 @@ operation is defined lane by lane. It can differ in the last digit from a
 plain left-to-right sum, since the additions happen in a different order.
 
 There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
-back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
-[Manual](/manual/simd) has the full list.
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. When
+the numbers live in a one-dimensional array, `load_array` and `store_array`
+do the same job: `F64x4.load_array(xs, i)` reads four elements of an
+`Array[float64]`. The [Manual](/manual/simd) has the full list.
 
 ### One Number per Row
 

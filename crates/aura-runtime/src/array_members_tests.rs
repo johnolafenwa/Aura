@@ -778,3 +778,53 @@ fn matmul_reports_batch_mismatches_and_overflow_positions() {
     assert_eq!(error.code, "AU4002");
     assert_eq!(error.message, "array matmul overflowed at flat index 3");
 }
+
+#[test]
+fn choose_takes_each_run_shape_and_count_adds_long_masks() {
+    let flags = mask(&[4], &[true, false, false, true]);
+    let ones = floats(&[4], &[1.0, 2.0, 3.0, 4.0]);
+    let tens = floats(&[4], &[10.0, 20.0, 30.0, 40.0]);
+    // Both sides walk forward.
+    assert_eq!(
+        flags
+            .choose(
+                &Value::Array(ones.clone()),
+                &Value::Array(tens.clone()),
+                ArrayDType::Float64
+            )
+            .unwrap(),
+        floats(&[4], &[1.0, 20.0, 30.0, 4.0])
+    );
+    // A side that walks backward takes the indexed run.
+    assert_eq!(
+        flags
+            .choose(
+                &Value::Array(reversed(&ones)),
+                &Value::Array(tens.clone()),
+                ArrayDType::Float64
+            )
+            .unwrap(),
+        floats(&[4], &[4.0, 20.0, 30.0, 1.0])
+    );
+    assert_eq!(
+        reversed(&flags)
+            .choose(&Value::Array(ones), &Value::Float(0.0), ArrayDType::Float64)
+            .unwrap(),
+        floats(&[4], &[1.0, 0.0, 0.0, 4.0])
+    );
+
+    // More flags than one byte counts.
+    let long = (0..1000).map(|index| index % 3 != 0).collect::<Vec<_>>();
+    assert_eq!(
+        mask(&[1000], &long)
+            .mask_reduce(ArrayMaskOp::Count)
+            .unwrap(),
+        int(666)
+    );
+    assert_eq!(
+        mask(&[510], &[true; 510])
+            .mask_reduce(ArrayMaskOp::Count)
+            .unwrap(),
+        int(510)
+    );
+}

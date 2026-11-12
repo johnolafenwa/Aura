@@ -588,6 +588,57 @@ reads a strided or broadcast operand where it lies. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
 
+## Element Access, Foreign Calls, And Tasks
+
+A built program reads `grid[i, j]` where the element lies, with one range
+check per coordinate and no runtime call. This holds for an index of one to
+four integer coordinates on an `int32`, `int64`, `float32`, or `float64`
+Array that is one row-major block. An element write, `grid[i, j] = value`
+or `grid[i, j] += value`, also runs in place when no other Array shares the
+buffer. Any other access gives the same result through the runtime: a
+strided view such as a transposed matrix, a mask element, an index of five
+or more coordinates, and the first write after a `clone()` or a slice, which
+copies the buffer (ADR-0091).
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            grid[row, column] = (row * 4 + column) as float64
+    grid[1, 1] += 0.5
+    print(grid[1, 1])
+    print(grid[-1, -1])
+    return 0
+```
+
+A loop whose only uses of an Array are element reads and writes checks the
+Array once at its entry and then reaches each element by address. Keep other
+members out of the loop to get that form, apart from `len()`: read
+`grid.shape` or a reduction before the loop, not inside it.
+
+An `extern "C"` function takes an Array as a pointer to its first element.
+See [FFI](ffi.md#arrays). The `simd` lane classes load from a rank-1 Array
+with `load_array` and write with `store_array`. See [SIMD](simd.md).
+
+An Array moved into a task or sent through a queue takes its buffer along.
+`clone()` shares the buffer, so tasks that each receive a clone read the
+same elements, and no elements are copied. A task that writes its clone
+gets a private copy at the first write.
+
+```aura
+def total(values: Array[float64]) -> float64:
+    return values.sum()
+
+def main() -> int32:
+    values = Array[float64].full([1000], 0.5)
+    with TaskGroup() as group:
+        first = group.start(total, values.clone())
+        second = group.start(total, values.clone())
+        print(first.result_or(0.0, timeout=1s) + second.result_or(0.0, timeout=1s))
+    return 0
+```
+
 The compiler's analysis and the language server expose the same constructors,
 member signatures, result types, hover, definitions, completions, and
 diagnostics. The bundled VS Code extension uses that compiler-owned surface.
@@ -598,13 +649,12 @@ Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
 not have:
 
 - mixed promotion between dtypes
-- a matrix product over more than two dimensions
 - equality or ordering operators: use the comparison members
 - math members on `float32`: convert with `as Array[float64]` first
 - iteration with `for`
 - a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage
-- aliasing of foreign buffers
+- a foreign function that keeps an Array's pointer after its call
 
 Shape metadata is dynamic, and the checker does not prove that shapes are
 compatible. Allocation is limited by host memory and the element-count checks.

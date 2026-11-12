@@ -161,10 +161,7 @@ fn every_dtype_runs_through_the_strided_walk() {
         let float = matches!(storage, ArrayStorage::Float32(_) | ArrayStorage::Float64(_));
         let grid = ArrayValue::new([2, 3].into(), storage).unwrap();
         let turned = grid.transpose().unwrap();
-        let scalar = match grid.get(&[0, 1]).unwrap() {
-            Value::Float(value) => Value::Float(value),
-            other => other,
-        };
+        let scalar = grid.get(&[0, 1]).unwrap();
         let mut operations = vec![ArrayBinaryOp::Add, ArrayBinaryOp::Sub, ArrayBinaryOp::Mul];
         if float {
             operations.push(ArrayBinaryOp::Div);

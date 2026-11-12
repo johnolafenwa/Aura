@@ -847,6 +847,14 @@ pub const SELECT_WORDS_MEMBER: &str = "__select_words";
 pub const ASSIGN_WORDS_MEMBER: &str = "__assign_words";
 /// `object[selection] op= value` for one or two components.
 pub const UPDATE_WORDS_MEMBER: &str = "__update_words";
+/// `object[c0, c1, ...]` for integer coordinates, which travel as plain
+/// arguments after their count (ADR-0091).
+pub const READ_AT_MEMBER: &str = "__read_at";
+/// `object[c0, c1, ...] = value` for integer coordinates (ADR-0091).
+pub const WRITE_AT_MEMBER: &str = "__write_at";
+/// The coordinate arguments of [`READ_AT_MEMBER`] and [`WRITE_AT_MEMBER`].
+/// An index with fewer coordinates passes zeros for the rest.
+pub const ARRAY_COORDINATE_WORDS: usize = aura_runtime::native_runtime::DIRECT_ARRAY_MAX_RANK;
 /// A private member of the Array members of ADR-0089 (see `ArrayOp::ReduceAxis`).
 pub const REDUCE_AXIS_MEMBER: &str = "__reduce_axis";
 /// A private member of the Array members of ADR-0089 (see `ArrayOp::MeanAxis`).
@@ -1070,6 +1078,27 @@ const UPDATE_WORDS_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("line"),
     CallableParam::required("column"),
 ];
+const READ_AT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("rank"),
+    CallableParam::required("c0"),
+    CallableParam::required("c1"),
+    CallableParam::required("c2"),
+    CallableParam::required("c3"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const WRITE_AT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("rank"),
+    CallableParam::required("c0"),
+    CallableParam::required("c1"),
+    CallableParam::required("c2"),
+    CallableParam::required("c3"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+/// The position of `value` among [`WRITE_AT_PARAMS`].
+pub const WRITE_AT_VALUE: usize = 1 + ARRAY_COORDINATE_WORDS;
 const KEY_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("key"),
     CallableParam::required("line"),
@@ -1875,6 +1904,13 @@ pub enum ArrayOp {
     /// column)`: `object[selection] op= value` for one or two components.
     /// `operation` is an Array binary operation code.
     UpdateWords,
+    /// `object[c0, c1, ...]` for integer coordinates passed as words
+    /// (ADR-0091). Compiled code reads a row-major Array in place.
+    ReadAt,
+    /// `object[c0, c1, ...] = value` for integer coordinates passed as
+    /// words. Compiled code writes in place while the Array holds its
+    /// buffer alone.
+    WriteAt,
     /// `__reduce_axis(kind, axis, line, column)`: `sum`, `min`, `max`, or
     /// `fast_sum` along one axis. `kind` is a reduction code.
     ReduceAxis,
@@ -1947,6 +1983,8 @@ impl ArrayOp {
         ArrayOp::SelectWords,
         ArrayOp::AssignWords,
         ArrayOp::UpdateWords,
+        ArrayOp::ReadAt,
+        ArrayOp::WriteAt,
         ArrayOp::ReduceAxis,
         ArrayOp::MeanAxis,
         ArrayOp::Unary,
@@ -1999,6 +2037,8 @@ impl ArrayOp {
             | ArrayOp::SelectWords
             | ArrayOp::AssignWords
             | ArrayOp::UpdateWords
+            | ArrayOp::ReadAt
+            | ArrayOp::WriteAt
             | ArrayOp::ReduceAxis
             | ArrayOp::MeanAxis
             | ArrayOp::Unary
@@ -2058,6 +2098,8 @@ impl ArrayOp {
             ArrayOp::SelectWords => SELECT_WORDS_MEMBER,
             ArrayOp::AssignWords => ASSIGN_WORDS_MEMBER,
             ArrayOp::UpdateWords => UPDATE_WORDS_MEMBER,
+            ArrayOp::ReadAt => READ_AT_MEMBER,
+            ArrayOp::WriteAt => WRITE_AT_MEMBER,
             ArrayOp::ReduceAxis => REDUCE_AXIS_MEMBER,
             ArrayOp::MeanAxis => MEAN_AXIS_MEMBER,
             ArrayOp::Unary => UNARY_MEMBER,
@@ -2086,6 +2128,8 @@ impl ArrayOp {
             SELECT_WORDS_MEMBER => ArrayOp::SelectWords,
             ASSIGN_WORDS_MEMBER => ArrayOp::AssignWords,
             UPDATE_WORDS_MEMBER => ArrayOp::UpdateWords,
+            READ_AT_MEMBER => ArrayOp::ReadAt,
+            WRITE_AT_MEMBER => ArrayOp::WriteAt,
             REDUCE_AXIS_MEMBER => ArrayOp::ReduceAxis,
             MEAN_AXIS_MEMBER => ArrayOp::MeanAxis,
             UNARY_MEMBER => ArrayOp::Unary,
@@ -2111,6 +2155,8 @@ impl ArrayOp {
             ArrayOp::SelectWords => SELECT_WORDS_PARAMS,
             ArrayOp::AssignWords => ASSIGN_WORDS_PARAMS,
             ArrayOp::UpdateWords => UPDATE_WORDS_PARAMS,
+            ArrayOp::ReadAt => READ_AT_PARAMS,
+            ArrayOp::WriteAt => WRITE_AT_PARAMS,
             ArrayOp::ReduceAxis | ArrayOp::MeanAxis => ARRAY_KIND_AXIS_PARAMS,
             ArrayOp::Unary
             | ArrayOp::UnaryInt64
@@ -2176,6 +2222,8 @@ impl ArrayOp {
             ArrayOp::SelectWords => helper(RuntimeFn::ArraySelectWords),
             ArrayOp::AssignWords => helper(RuntimeFn::ArrayAssignWordsInPlace),
             ArrayOp::UpdateWords => helper(RuntimeFn::ArrayUpdateWordsInPlace),
+            ArrayOp::ReadAt => helper(RuntimeFn::ArrayReadAt),
+            ArrayOp::WriteAt => helper(RuntimeFn::ArrayWriteAt),
             ArrayOp::ReduceAxis => helper(RuntimeFn::ArrayReduceAxis),
             ArrayOp::MeanAxis => helper(RuntimeFn::ArrayReduceAxis),
             ArrayOp::Unary => helper(RuntimeFn::ArrayUnary),
@@ -2226,13 +2274,15 @@ impl ArrayOp {
             | ArrayOp::SetIndex
             | ArrayOp::Assign
             | ArrayOp::AssignWords
-            | ArrayOp::UpdateWords => Type::Unit,
+            | ArrayOp::UpdateWords
+            | ArrayOp::WriteAt => Type::Unit,
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max
             | ArrayOp::FastSum
             | ArrayOp::Dot
-            | ArrayOp::Index => return dtype,
+            | ArrayOp::Index
+            | ArrayOp::ReadAt => return dtype,
             ArrayOp::Mean | ArrayOp::FastMean => Type::named("float64"),
             ArrayOp::MeanAxis | ArrayOp::UnaryFloat64 | ArrayOp::CastFloat64 => {
                 array(vec![Type::named("float64")])
@@ -3343,8 +3393,10 @@ impl RuntimeOp {
             RuntimeOp::Array(ArrayOp::AssignWords | ArrayOp::UpdateWords) => {
                 private(&[ASSIGN_WORDS_VALUE])
             }
+            RuntimeOp::Array(ArrayOp::WriteAt) => private(&[WRITE_AT_VALUE]),
             RuntimeOp::Array(
                 ArrayOp::Index
+                | ArrayOp::ReadAt
                 | ArrayOp::Slice
                 | ArrayOp::Select
                 | ArrayOp::SelectWords

@@ -680,6 +680,24 @@ fn validate_ffi_parameter(
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
+    // An `Array[T]` crosses as a pointer to its first element, as a
+    // `ptr[T]` list does (ADR-0091). A mask has no C layout to promise.
+    let array = matches!(ty, Type::Named(name, _) if name == "Array");
+    if array
+        && !matches!(ty, Type::Named(_, elements) if elements.iter().all(|element| {
+            matches!(element, Type::Named(dtype, _) if matches!(dtype.as_str(), "int32" | "int64" | "float32" | "float64"))
+        }))
+    {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!(
+                "Array parameter `{param_name}` must hold `int32`, `int64`, `float32`, or `float64` elements, found `{ty}`"
+            ),
+        )
+        .with_help("convert a mask with `as Array[int32]` before the call"));
+    }
+    let pointer = pointer || array;
     // The parser writes `ptr[T]` as `list[T]`, so the type has one argument.
     if let (true, Type::Named(_, elements)) = (pointer, ty) {
         if !elements.iter().all(ffi_scalar_type) {

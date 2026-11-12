@@ -27290,13 +27290,42 @@ fn rank_one_arrays_expose_their_storage_as_a_list_view() {
         vec![2, 2],
         ArrayStorage::Int64(vec![1, 2, 3, 4].into_boxed_slice().into()),
     );
+    // A rank of two to four publishes the elements, the address of the
+    // extents, and the address of the buffer's holder count.
+    let (elements, extents) = view(grid);
+    assert_eq!(unsafe { *(elements as *const i64).add(3) }, 4);
     assert_eq!(
-        view(grid),
-        (0, 0),
-        "another rank always takes the runtime path"
+        unsafe { std::slice::from_raw_parts(extents as *const usize, 2) },
+        [2, 2]
     );
-    assert_eq!(list_view_access(grid), DirectListAccess::None as u32);
-    for value in [int64, int32, float32, float64, grid] {
+    assert_eq!(
+        list_view_access(grid),
+        super::direct_array_access(DirectListAccess::ArrayInt64, 2)
+    );
+    let holders = |array: *mut OpaqueValue| unsafe {
+        let layout = super::direct_list_layout();
+        let address =
+            *((array as *const u8).add(layout.holders_offset as usize) as *const *const usize);
+        *address
+    };
+    assert_eq!(holders(grid), 1);
+    let shared = super::with_array(grid, |array| array.try_clone().unwrap());
+    assert_eq!(holders(grid), 2, "a clone is another holder");
+    drop(shared);
+    assert_eq!(holders(grid), 1);
+    // A strided view and a rank above four take the runtime path.
+    let turned = boxed_value(Value::Array(
+        super::with_array(grid, |array| array.transpose()).unwrap(),
+    ));
+    let deep = array(
+        vec![1, 1, 1, 1, 2],
+        ArrayStorage::Int64(vec![1, 2].into_boxed_slice().into()),
+    );
+    for hidden in [turned, deep] {
+        assert_eq!(view(hidden), (0, 0));
+        assert_eq!(list_view_access(hidden), DirectListAccess::None as u32);
+    }
+    for value in [int64, int32, float32, float64, grid, turned, deep] {
         unsafe { super::aura_direct_release_value(value) };
     }
 }
@@ -29705,4 +29734,116 @@ fn direct_array_members_cover_axis_elementwise_mask_and_cast_entries() {
         Value::Array(mask(&[false, true]))
     );
     let _ = (taken(flags), taken(limit), taken(grid));
+}
+
+#[test]
+fn direct_array_element_entries_read_and_write_by_coordinate_words() {
+    fn capture_diagnostic(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid direct Array element input should trap")
+    }
+    let array_of =
+        |pointer: *mut OpaqueValue| super::with_array(pointer, |array| array.try_clone().unwrap());
+
+    let grid = ArrayValue::new(
+        vec![2, 3].into(),
+        ArrayStorage::Float64(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into()),
+    )
+    .unwrap();
+    let boxed = boxed_value(Value::Array(grid.try_clone().unwrap()));
+    let read = |pointer, row, column| {
+        f64::from_bits(super::aura_direct_array_read_at(pointer, 2, row, column, 0, 0, 1, 1) as u64)
+    };
+    assert_eq!(read(boxed, 1, 2), 6.0);
+    assert_eq!(read(boxed, -1, -3), 4.0);
+    // The write copies the buffer `grid` shares and then lands.
+    super::aura_direct_array_write_at(boxed, 2, 0, 1, 0, 0, 7.5f64.to_bits() as i64, 1, 1);
+    assert_eq!(read(boxed, 0, 1), 7.5);
+    assert_eq!(grid.get(&[0, 1]).unwrap(), Value::Float(2.0));
+
+    // A strided view reads and writes through its own layout.
+    let turned = boxed_value(Value::Array(array_of(boxed).transpose().unwrap()));
+    assert_eq!(read(turned, 1, 0), 7.5);
+    super::aura_direct_array_write_at(turned, 2, 2, 1, 0, 0, 0.5f64.to_bits() as i64, 1, 1);
+    assert_eq!(read(turned, 2, 1), 0.5);
+
+    for (storage, bits, expected) in [
+        (ArrayStorage::Int32(vec![0; 16].into()), -3i64, -3i64),
+        (ArrayStorage::Int64(vec![0; 16].into()), i64::MIN, i64::MIN),
+        (
+            ArrayStorage::Float32(vec![0.0; 16].into()),
+            1.5f64.to_bits() as i64,
+            1.5f64.to_bits() as i64,
+        ),
+        (ArrayStorage::Bool(vec![false; 16].into()), 1, 1),
+    ] {
+        let cube = boxed_value(Value::Array(
+            ArrayValue::new(vec![2, 2, 2, 2].into(), storage).unwrap(),
+        ));
+        super::aura_direct_array_write_at(cube, 4, 1, 0, 1, 1, bits, 1, 1);
+        assert_eq!(
+            super::aura_direct_array_read_at(cube, 4, 1, 0, 1, 1, 1, 1),
+            expected
+        );
+        assert_eq!(
+            super::aura_direct_array_read_at(cube, 4, 0, 0, 0, 0, 1, 1),
+            0
+        );
+        unsafe { super::aura_direct_release_value(cube) };
+    }
+
+    let address = boxed as usize;
+    for (rank, message) in [
+        (0, "direct Array ABI received invalid coordinate count `0`"),
+        (5, "direct Array ABI received invalid coordinate count `5`"),
+        (
+            -1,
+            "direct Array ABI received invalid coordinate count `-1`",
+        ),
+    ] {
+        let read = capture_diagnostic(move || {
+            super::aura_direct_array_read_at(address as *mut OpaqueValue, rank, 0, 0, 0, 0, 3, 4);
+        });
+        assert_eq!(read.code, "AU4001");
+        assert_eq!(read.message, message);
+        let write = capture_diagnostic(move || {
+            super::aura_direct_array_write_at(
+                address as *mut OpaqueValue,
+                rank,
+                0,
+                0,
+                0,
+                0,
+                0,
+                3,
+                4,
+            );
+        });
+        assert_eq!(write.message, message);
+    }
+    let outside = capture_diagnostic(move || {
+        super::aura_direct_array_read_at(address as *mut OpaqueValue, 2, 2, 0, 0, 0, 3, 4);
+    });
+    assert_eq!(outside.code, "AU4003");
+    assert_eq!(
+        outside.message,
+        "array coordinate 2 on axis 0 normalizes to 2, outside 0..2"
+    );
+    let outside = capture_diagnostic(move || {
+        super::aura_direct_array_write_at(address as *mut OpaqueValue, 2, 0, -4, 0, 0, 0, 3, 4);
+    });
+    assert_eq!(outside.code, "AU4003");
+    let rank = capture_diagnostic(move || {
+        super::aura_direct_array_read_at(address as *mut OpaqueValue, 1, 0, 0, 0, 0, 3, 4);
+    });
+    assert_eq!(rank.code, "AU4007", "{}", rank.message);
+    unsafe {
+        super::aura_direct_release_value(turned);
+        super::aura_direct_release_value(boxed);
+    }
 }

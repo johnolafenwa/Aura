@@ -6575,9 +6575,10 @@ impl MirRuntime {
             }
             let written = match ffi_value {
                 FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
-                FfiValue::Elements(scalar, words) => {
-                    elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?
-                }
+                FfiValue::Elements(scalar, words) => match &argument.value {
+                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
+                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
+                },
                 FfiValue::Struct(layout, bytes) => {
                     struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
@@ -7419,6 +7420,38 @@ impl MirRuntime {
                         error
                     })?;
                 Ok(Value::Unit)
+            }
+            crate::runtime_ops::READ_AT_MEMBER | crate::runtime_ops::WRITE_AT_MEMBER => {
+                use crate::runtime_ops as ops;
+                let values = evaluate_named_args(args, env)?;
+                let write = field == ops::WRITE_AT_MEMBER;
+                debug_assert_eq!(
+                    values.len(),
+                    3 + ops::ARRAY_COORDINATE_WORDS + usize::from(write)
+                );
+                let mut words = [0_i64; ops::ARRAY_COORDINATE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values[1..]) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let rank = usize::try_from(array_selection_word(&values[0].value)?)
+                    .ok()
+                    .filter(|rank| (1..=words.len()).contains(rank))
+                    .ok_or_else(|| Diagnostic::coded("AU4001", "invalid Array coordinate count"))?;
+                let coordinates = &words[..rank];
+                let leading = values.len() - 2;
+                let line = self.mir_index_from_value(values[leading].value.clone())?;
+                let column = self.mir_index_from_value(values[leading + 1].value.clone())?;
+                let result = if write {
+                    array_place_mut(env, object_place)?
+                        .set(coordinates, values[ops::WRITE_AT_VALUE].value.clone())
+                        .map(|_| Value::Unit)
+                } else {
+                    array_place_ref(env, object_place)?.get(coordinates)
+                };
+                result.map_err(|mut error| {
+                    error.span = Some(Span::new(line, column));
+                    error
+                })
             }
             SELECT_MEMBER => {
                 let values = evaluate_named_args(args, env)?;
@@ -11658,6 +11691,29 @@ fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
             ),
         )
     };
+    // An `Array[T]` parameter passes its elements in row-major order.
+    if let Value::Array(array) = value {
+        use crate::ffi::FfiScalar;
+        use aura_runtime::runtime_value::ArrayStorage;
+        let words = match (&*array.elements()?, scalar) {
+            (ArrayStorage::Int32(values), FfiScalar::I32) => values
+                .iter()
+                .map(|value| u64::from(*value as u32))
+                .collect(),
+            (ArrayStorage::Int64(values), FfiScalar::I64) => {
+                values.iter().map(|value| *value as u64).collect()
+            }
+            (ArrayStorage::Float32(values), FfiScalar::F32) => values
+                .iter()
+                .map(|value| u64::from(value.to_bits()))
+                .collect(),
+            (ArrayStorage::Float64(values), FfiScalar::F64) => {
+                values.iter().map(|value| value.to_bits()).collect()
+            }
+            _ => return Err(mismatch()),
+        };
+        return Ok(FfiValue::Elements(scalar, words));
+    }
     let Value::Vec(vector) = value else {
         return Err(mismatch());
     };
@@ -11670,6 +11726,37 @@ fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(FfiValue::Elements(scalar, words))
+}
+
+/// The Array a `mut Array[T]` argument holds after the call: the shape of
+/// `passed` with the elements the function left in `words`.
+fn array_elements_runtime_value(
+    scalar: crate::ffi::FfiScalar,
+    words: &[u64],
+    passed: &ArrayValue,
+) -> Result<Value> {
+    use crate::ffi::FfiScalar;
+    use aura_runtime::runtime_value::ArrayStorage;
+    let storage = match scalar {
+        FfiScalar::I32 => ArrayStorage::Int32(words.iter().map(|word| *word as i32).collect()),
+        FfiScalar::I64 => ArrayStorage::Int64(words.iter().map(|word| *word as i64).collect()),
+        FfiScalar::F32 => ArrayStorage::Float32(
+            words
+                .iter()
+                .map(|word| f32::from_bits(*word as u32))
+                .collect(),
+        ),
+        FfiScalar::F64 => {
+            ArrayStorage::Float64(words.iter().map(|word| f64::from_bits(*word)).collect())
+        }
+        other => {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!("an Array cannot hold FFI scalar `{}`", other.ffi_type()),
+            ))
+        }
+    };
+    ArrayValue::new(passed.shape.clone(), storage).map(Value::Array)
 }
 
 /// The list a `mut ptr[T]` argument of type `ty` holds after the call.

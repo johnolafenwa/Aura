@@ -27,6 +27,19 @@ in this file.
   an Array, `array[::2]`, is accepted instead of `AU2003`.
 - `aura fmt` keeps the space after a comma before a slice colon:
   `grid[1, :]`.
+- Arrays: a built program reads and writes `grid[i, j]` in place. An
+  index of one to four integer coordinates on a numeric Array checks each
+  coordinate and touches the element where it lies. A write runs in place
+  while no other Array shares the buffer. These accesses called the
+  runtime before, and now run about as fast as list element access
+  (ADR-0091). A loop whose only uses of an Array are element accesses
+  and `len()` checks the Array once at its entry.
+- Arrays: `choose` and a mask's `count` run several elements at a time.
+- FFI: an `extern "C"` parameter of type `Array[T]` or `mut Array[T]`
+  passes a pointer to the Array's elements, with no copy for a row-major
+  Array.
+- `simd`: each lane class has `load_array` and `store_array` for a rank-1
+  Array.
 - Arrays: `matmul` multiplies stacks of matrices. The last two dimensions
   are the matrix and the leading dimensions are a batch that broadcasts:
   `[.., n, k]` by `[.., k, m]` gives `[.., n, m]`. Each product gives the

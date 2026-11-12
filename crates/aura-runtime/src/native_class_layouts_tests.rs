@@ -485,7 +485,10 @@ fn a_typed_instance_box_shows_its_block_while_confined() {
     let typed = typed_book(prefix, FIRST_TEST_ACCESS + 30);
     let data = typed.data() as usize;
     let value = instance(&format!("{prefix}Book"), InstanceFields::Typed(typed));
-    assert_eq!(list_view_of(&value), (FIRST_TEST_ACCESS + 30, data, 0, 0, 0));
+    assert_eq!(
+        list_view_of(&value),
+        (FIRST_TEST_ACCESS + 30, data, 0, 0, 0)
+    );
     let boxed = boxed_value(value);
     let header = unsafe { &*boxed };
     assert_eq!(

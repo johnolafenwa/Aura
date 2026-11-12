@@ -2060,6 +2060,19 @@ impl ArrayValue {
         Ok(&mut self.base)
     }
 
+    /// Makes the Array one row-major block that no other Array shares, so
+    /// a foreign function may write its elements where they lie
+    /// (ADR-0091).
+    pub fn make_writable(&mut self) -> Result<()> {
+        match self.elements_mut()? {
+            ArrayStorage::Int32(values) => values.try_make_mut("Array pointer").map(|_| ()),
+            ArrayStorage::Int64(values) => values.try_make_mut("Array pointer").map(|_| ()),
+            ArrayStorage::Float32(values) => values.try_make_mut("Array pointer").map(|_| ()),
+            ArrayStorage::Float64(values) => values.try_make_mut("Array pointer").map(|_| ()),
+            ArrayStorage::Bool(values) => values.try_make_mut("Array pointer").map(|_| ()),
+        }
+    }
+
     /// Where each element lies in `base`: the view's own strides, or the
     /// row-major strides of a contiguous Array.
     pub(crate) fn layout(&self) -> Cow<'_, Strides> {
