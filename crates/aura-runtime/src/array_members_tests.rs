@@ -828,3 +828,28 @@ fn choose_takes_each_run_shape_and_count_adds_long_masks() {
         int(510)
     );
 }
+
+#[test]
+fn make_writable_gives_one_unshared_row_major_block_for_every_dtype() {
+    for array in [
+        floats(&[3], &[1.0, 2.0, 3.0]),
+        singles(&[3], &[1.0, 2.0, 3.0]),
+        ints(&[3], &[1, 2, 3]),
+        shorts(&[3], &[1, 2, 3]),
+        mask(&[3], &[true, false, true]),
+    ] {
+        // A clone shares the buffer until it is made writable.
+        let mut copy = array.try_clone().unwrap();
+        assert!(copy.shares_buffer_with(&array));
+        copy.make_writable().unwrap();
+        assert!(!copy.shares_buffer_with(&array));
+        assert_eq!(copy, array);
+        // A strided view becomes a row-major block with the same elements.
+        let mut turned = reversed(&array);
+        let expected = turned.try_clone().unwrap();
+        turned.make_writable().unwrap();
+        assert!(turned.is_contiguous());
+        assert!(!turned.shares_buffer_with(&array));
+        assert_eq!(turned, expected);
+    }
+}
