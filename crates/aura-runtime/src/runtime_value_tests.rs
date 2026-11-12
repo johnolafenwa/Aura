@@ -14296,17 +14296,26 @@ fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
             .local_addr()
             .map_err(|error| Diagnostic::new(error.to_string()))?;
         let server_body = body.clone();
+        let timer_progressed = Arc::new(AtomicBool::new(false));
+        let timer_progressed_in_server = timer_progressed.clone();
         let server = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
             let exchange = listener
                 .accept(Some(timeout), None)
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
+            // The response waits for the timer task, so the client is still
+            // inside its request when the timer fires. A loopback transfer
+            // can otherwise finish before a one millisecond sleep ends, as
+            // it does on Windows.
+            while !timer_progressed_in_server.load(Ordering::SeqCst) {
+                sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)
+                    .map_err(|error| Diagnostic::new(error.to_string()))?;
+            }
             exchange
                 .respond_bytes(200, &server_body, Vec::new())
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
             Ok(Value::Unit)
         })?;
 
-        let timer_progressed = Arc::new(AtomicBool::new(false));
         let timer_progressed_in_task = timer_progressed.clone();
         let timer = spawn_lightweight_task(move || {
             sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)

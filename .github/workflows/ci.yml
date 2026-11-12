@@ -198,10 +198,12 @@ jobs:
         if: ${{ !cancelled() }}
         timeout-minutes: 15
         run: |
-          target/debug/aura.exe run --backend mir examples/basics/hello_world.au
-          target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
-          target/hello_world.exe
-          target/debug/aura.exe run --backend direct examples/control_flow.au
+          {
+            target/debug/aura.exe run --backend mir examples/basics/hello_world.au
+            target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
+            target/hello_world.exe
+            target/debug/aura.exe run --backend direct examples/control_flow.au
+          } 2>&1 | tee "$RUNNER_TEMP/smoke.log"
 
       - name: Run the runtime tests
         if: ${{ !cancelled() }}
@@ -216,7 +218,8 @@ jobs:
         # The job log is long, so the failures are repeated at its end.
         if: ${{ failure() }}
         run: |
-          tail -n 60 "$RUNNER_TEMP/aura-build.log" || true
+          grep -E "^error|^warning: unused|panicked" -A 12 "$RUNNER_TEMP/aura-build.log" | tail -n 40 || true
+          tail -n 40 "$RUNNER_TEMP/smoke.log" || true
           grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true
 
   native-binaries:
