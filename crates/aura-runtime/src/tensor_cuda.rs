@@ -294,8 +294,9 @@ impl Runtime {
     }
 }
 
+static RUNTIME: OnceLock<Option<Runtime>> = OnceLock::new();
+
 fn runtime() -> Option<&'static Runtime> {
-    static RUNTIME: OnceLock<Option<Runtime>> = OnceLock::new();
     RUNTIME.get_or_init(Runtime::start).as_ref()
 }
 
@@ -316,7 +317,13 @@ pub(crate) struct Buffer {
 
 impl Drop for Buffer {
     fn drop(&mut self) {
-        let Some(runtime) = runtime() else { return };
+        // A buffer exists only after the runtime started. Reading the
+        // started runtime, and not starting one, keeps the code that
+        // loads the CUDA libraries out of a program that makes no tensor:
+        // every program can drop a value, and a value can hold a tensor.
+        let Some(runtime) = RUNTIME.get().and_then(Option::as_ref) else {
+            return;
+        };
         let mut pool = runtime.pool();
         if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
             pool.bytes += self.bytes;
