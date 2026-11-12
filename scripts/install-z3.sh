@@ -43,5 +43,10 @@ esac
 "$prefix/solver/z3" --version
 echo "export PATH=$prefix/solver:\$PATH"
 if [ -n "${GITHUB_PATH:-}" ]; then
-  echo "$prefix/solver" >> "$GITHUB_PATH"
+  solver_dir="$prefix/solver"
+  # GitHub Actions on Windows reads this file as Windows paths.
+  if command -v cygpath >/dev/null 2>&1; then
+    solver_dir="$(cygpath -w "$solver_dir")"
+  fi
+  echo "$solver_dir" >> "$GITHUB_PATH"
 fi
