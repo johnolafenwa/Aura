@@ -139,4 +139,5 @@ traced event, the time to launch its actions, and the time waiting for
 them. It also writes a line for each read into host memory and for each
 operation that ran in host memory. `AURA_TENSOR_TRACE=1` adds the
 slowest actions of each piece of work, and waits for the device after
-every action to time it, so that run is slower.
+every action to time it, so that run is slower. `AURA_TENSOR_TRACE=all`
+lists every action in place of the slowest.

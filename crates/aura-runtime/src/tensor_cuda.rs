@@ -760,9 +760,11 @@ fn report(plan: &Plan, traced: &Traced, timings: &mut [(String, std::time::Durat
         traced.copied,
         traced.copied_elements,
     );
-    if super::tensor_host::trace_level() == 1 {
+    let level = super::tensor_host::trace_level();
+    if level != 2 {
         timings.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-        for (label, time) in timings.iter().take(6) {
+        let shown = if level == 3 { timings.len() } else { 6 };
+        for (label, time) in timings.iter().take(shown) {
             eprintln!("aura tensor:   {:.2}ms {label}", millis(*time));
         }
     }
@@ -1099,7 +1101,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             buffers[buffer] = None;
         }
         if trace > 0 {
-            if trace == 1 {
+            if trace != 2 {
                 // Waiting after each action gives the action its own time.
                 // SAFETY: the context is current on this thread.
                 unsafe { (api.cuCtxSynchronize)() };

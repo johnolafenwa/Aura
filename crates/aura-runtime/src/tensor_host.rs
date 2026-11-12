@@ -726,14 +726,16 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
 
 /// What `AURA_TENSOR_TRACE` asks to be written to standard error: `0`
 /// nothing, `2` one line for each run of a plan, each read into host
-/// memory and each operation that ran in host memory, and any other
-/// value those lines and the slowest actions of each run. The fuller
-/// trace waits for the device after every action, so it runs slower.
+/// memory and each operation that ran in host memory, `all` (`3`) those
+/// lines and every action of each run, and any other value those lines
+/// and the slowest actions of each run. The fuller traces wait for the
+/// device after every action, so they run slower.
 pub(crate) fn trace_level() -> u8 {
     static LEVEL: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
     *LEVEL.get_or_init(|| match std::env::var("AURA_TENSOR_TRACE").as_deref() {
         Err(_) | Ok("" | "0") => 0,
         Ok("2") => 2,
+        Ok("all") => 3,
         Ok(_) => 1,
     })
 }
