@@ -72,8 +72,42 @@ unsafe impl Send for Buffer {}
 // SAFETY: as above.
 unsafe impl Sync for Buffer {}
 
+/// Buffers no tensor holds any more, by size. Allocating a large buffer
+/// costs more than the arithmetic that fills it, and a loop makes and
+/// drops buffers of the same few sizes, so a dropped buffer waits here for
+/// the next tensor of its size.
+struct Pool {
+    free: HashMap<usize, Vec<usize>>,
+    bytes: usize,
+}
+
+/// The most memory the pool keeps. A buffer dropped beyond it is released.
+const MAX_POOLED_BYTES: usize = 1 << 29;
+
+fn pool() -> std::sync::MutexGuard<'static, Pool> {
+    static POOL: OnceLock<Mutex<Pool>> = OnceLock::new();
+    POOL.get_or_init(|| {
+        Mutex::new(Pool {
+            free: HashMap::new(),
+            bytes: 0,
+        })
+    })
+    .lock()
+    .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
 impl Drop for Buffer {
     fn drop(&mut self) {
+        let mut pool = pool();
+        if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
+            pool.bytes += self.bytes;
+            pool.free
+                .entry(self.bytes)
+                .or_default()
+                .push(self.handle as usize);
+            return;
+        }
+        drop(pool);
         // SAFETY: `handle` is the one reference this value owns.
         unsafe { aura_metal_buffer_release(self.handle) }
     }
@@ -88,7 +122,22 @@ fn element_bytes(dtype: ArrayDType) -> usize {
 }
 
 impl Buffer {
+    /// A buffer of `bytes` bytes whose contents are not set.
     fn new(bytes: usize) -> Result<Self> {
+        let pooled = {
+            let mut pool = pool();
+            let handle = pool.free.get_mut(&bytes).and_then(Vec::pop);
+            if handle.is_some() {
+                pool.bytes -= bytes;
+            }
+            handle
+        };
+        if let Some(handle) = pooled {
+            return Ok(Self {
+                handle: handle as *mut c_void,
+                bytes,
+            });
+        }
         // SAFETY: the shim returns a retained buffer or null.
         let handle = unsafe { aura_metal_buffer_new(bytes) };
         if handle.is_null() {
