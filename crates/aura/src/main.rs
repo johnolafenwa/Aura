@@ -4767,7 +4767,61 @@ fn native_link_command(
         foreign,
         debug,
     )?);
+    // An installed runtime keeps the import libraries it names beside it. A
+    // source checkout finds them in the Cargo registry they were built from.
+    let mut search = Vec::new();
+    search.extend(staticlib.parent().map(Path::to_path_buf));
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".cargo")));
+    if let Some(cargo_home) = cargo_home {
+        search.extend(windows_import_library_dirs(native_link_args, &cargo_home));
+    }
+    for directory in search {
+        let mut argument = std::ffi::OsString::from("/LIBPATH:");
+        argument.push(directory);
+        command.arg(argument);
+    }
     Ok(command)
+}
+
+/// The Cargo registry directories that hold the `windows.<version>.lib`
+/// import libraries among `native_link_args`. The Rust `windows-targets`
+/// crates ship those libraries, and the runtime's static library names them
+/// without carrying them.
+#[cfg(any(windows, test))]
+fn windows_import_library_dirs(native_link_args: &[String], cargo_home: &Path) -> Vec<PathBuf> {
+    let Ok(registries) = fs::read_dir(cargo_home.join("registry").join("src")) else {
+        return Vec::new();
+    };
+    let registries = registries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    let mut directories = Vec::new();
+    for argument in native_link_args {
+        let Some(version) = argument
+            .strip_prefix("windows.")
+            .and_then(|rest| rest.strip_suffix(".lib"))
+            .filter(|version| {
+                !version.is_empty()
+                    && version
+                        .chars()
+                        .all(|character| character.is_ascii_digit() || character == '.')
+            })
+        else {
+            continue;
+        };
+        for registry in &registries {
+            let directory = registry
+                .join(format!("windows_x86_64_msvc-{version}"))
+                .join("lib");
+            if directory.join(argument).is_file() && !directories.contains(&directory) {
+                directories.push(directory);
+            }
+        }
+    }
+    directories
 }
 
 /// The arguments of a Microsoft linker run: the objects, the runtime
@@ -6627,6 +6681,36 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux", true),
             Ok(Vec::new())
         );
+    }
+
+    #[test]
+    fn windows_import_library_dirs_find_the_registry_copies_the_runtime_names() {
+        let root = std::env::temp_dir().join(format!(
+            "aura-import-libs-{}-{}",
+            std::process::id(),
+            super::system_time_nanos()
+        ));
+        let library_dir = root
+            .join("registry")
+            .join("src")
+            .join("index.crates.io-0000")
+            .join("windows_x86_64_msvc-0.48.5")
+            .join("lib");
+        std::fs::create_dir_all(&library_dir).expect("registry directory should be created");
+        std::fs::write(library_dir.join("windows.0.48.5.lib"), b"")
+            .expect("import library should be written");
+        let args = [
+            "kernel32.lib".to_string(),
+            "windows.0.48.5.lib".to_string(),
+            "windows.0.52.6.lib".to_string(),
+            "windows.evil.lib".to_string(),
+        ];
+        assert_eq!(
+            super::windows_import_library_dirs(&args, &root),
+            vec![library_dir]
+        );
+        assert!(super::windows_import_library_dirs(&args, &root.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
     }
 
     #[test]
