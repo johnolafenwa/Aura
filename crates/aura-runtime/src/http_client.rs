@@ -1858,6 +1858,44 @@ pub fn http_host_function(name: &str) -> Option<host_builtins::HostBuiltinFn> {
     })
 }
 
+/// Keeps a test that clears the whole pool apart from tests that count on a
+/// kept connection. The pool is one per process and tests run side by side.
+#[cfg(test)]
+pub(crate) mod pool_test_lock {
+    use std::cell::RefCell;
+    use std::sync::{PoisonError, RwLock, RwLockReadGuard};
+
+    static LOCK: RwLock<()> = RwLock::new(());
+
+    thread_local! {
+        static SHARED: RefCell<Option<RwLockReadGuard<'static, ()>>> =
+            const { RefCell::new(None) };
+    }
+
+    /// Holds the pool against a clear until this thread ends.
+    pub(crate) fn share() {
+        SHARED.with(|shared| {
+            let mut shared = shared.borrow_mut();
+            if shared.is_none() {
+                *shared = Some(LOCK.read().unwrap_or_else(PoisonError::into_inner));
+            }
+        });
+    }
+
+    /// Runs `clear` while no other test holds the pool.
+    pub(crate) fn alone<T>(clear: impl FnOnce() -> T) -> T {
+        let shared = SHARED.with(|shared| shared.borrow_mut().take()).is_some();
+        let result = {
+            let _alone = LOCK.write().unwrap_or_else(PoisonError::into_inner);
+            clear()
+        };
+        if shared {
+            share();
+        }
+        result
+    }
+}
+
 #[cfg(test)]
 #[path = "http_client_tests.rs"]
 mod tests;
