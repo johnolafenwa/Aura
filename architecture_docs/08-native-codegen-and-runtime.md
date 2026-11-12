@@ -125,6 +125,23 @@ depth limit of 256 calls stay exact.
 - **Validation.** The main wrapper passes every descriptor to
   `aura_direct_validate_frame_descriptors` before the first call, so an
   inline push stores only descriptors whose text is valid UTF-8.
+- **Leaves.** A function that calls nothing and holds only words keeps
+  no record: no callee and no runtime helper can read it. Its trap paths
+  push the record before they stop the program, so a trace still names
+  it. A method of a class kept in a box counts when every use of `self`
+  reads or writes a scalar field. A leaf of at most 8 blocks and 32 MIR
+  instructions with no loop is inlined into every direct caller.
+- **Leaves with `mut` parameters.** A caller hands a write-through sink
+  over through the frame flags, so a function with a `mut self` receiver
+  or a `mut` parameter keeps its record. Such a leaf also gets a second
+  body, `aura_fn_<name>__leaf`, with no record and no sinks. A direct
+  call enters it when no sink can follow any `mut` argument: none lies
+  in a `mut` parameter of the caller or in a place a cleanup reads.
+  Calls through function values, trait objects, and the runtime enter
+  the function's own symbol as before.
+- **Receiver tags.** A method that only reads and writes scalar fields of
+  its boxed receiver hands the box back as it was, so its caller checks
+  the box's type tag neither before nor after the call.
 
 The accessor keeps the current task's stack in a scheduler slot, which
 every task switch clears. A task's stack keeps its address while the task

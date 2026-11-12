@@ -1,0 +1,13 @@
+class Tally:
+    count: int64
+    step: int64
+
+    def bump(mut self, by: int64) -> None:
+        self.count += by * self.step
+
+
+def main() -> None:
+    mut tally = Tally(count=9223372036854775800, step=2)
+    tally.bump(3)
+    print(tally.count)
+    tally.bump(1)
