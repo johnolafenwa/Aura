@@ -30,8 +30,15 @@ in this file.
   trait's own module. It was checked and compiled in the importing
   module before, where those names did not resolve.
 - A training loop on a CUDA device that slices a new batch each step no
-  longer compiles new kernels for each batch. `AURA_TENSOR_TRACE=1`
-  writes the time of each piece of CUDA work to standard error.
+  longer compiles new kernels for each batch. A training step of a deep
+  network runs as one piece of GPU work: a chain of waiting operations
+  was cut every 128 operations and is now cut every 8,192. Long chains
+  of tensors are collected and freed without recursion.
+- `AURA_TENSOR_TRACE=1` writes to standard error each piece of CUDA
+  work with the host time before it, its slowest actions, each read into
+  host memory, and each operation that ran in host memory.
+  `AURA_TENSOR_TRACE=2` writes one line for each and does not slow the
+  run.
 - New tensor operations: `slice`, `index_select`, `index_add`, `cat`,
   `expand`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
   `softmax`, `log_softmax`, and `dim` and `keepdim` on the reductions.

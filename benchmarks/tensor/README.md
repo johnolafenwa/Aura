@@ -129,3 +129,14 @@ What the numbers say:
   a different order. The 1,024-element `sum` row differs more between
   Aura and Python only because the Aura program keeps its running total
   in `float32`.
+
+## Tracing a Run
+
+`AURA_TENSOR_TRACE=2` makes a program on the CUDA device write one line
+to standard error for each piece of GPU work: the size of its plan,
+whether its kernels were already compiled, the host time since the last
+traced event, the time to launch its actions, and the time waiting for
+them. It also writes a line for each read into host memory and for each
+operation that ran in host memory. `AURA_TENSOR_TRACE=1` adds the
+slowest actions of each piece of work, and waits for the device after
+every action to time it, so that run is slower.

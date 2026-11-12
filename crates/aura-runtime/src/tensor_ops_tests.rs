@@ -1119,3 +1119,17 @@ fn slices_that_differ_in_their_start_share_a_plan() {
         assert_eq!(second_sum, [86.0]);
     });
 }
+
+#[test]
+fn a_long_tracked_chain_is_freed_without_recursion() {
+    let l = leaves(TensorDevice::Cpu);
+    let watched = node_op(&l.a, 4, &[]).unwrap();
+    let mut total = watched.clone();
+    // Each tensor holds the one before it as its history. Freeing them
+    // one inside another would need a stack frame for each.
+    for _ in 0..500_000 {
+        total = binary(&total, &l.two, 0).unwrap();
+    }
+    drop(total);
+    assert!(node(&watched).is_ready());
+}

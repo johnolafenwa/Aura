@@ -246,6 +246,48 @@ struct TensorNode {
     grad: Mutex<Option<TensorValue>>,
 }
 
+/// The tensors `node` holds, moved out of it into `into`.
+fn release_held(node: &mut TensorNode, into: &mut Vec<TensorValue>) {
+    let state = node
+        .state
+        .get_mut()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let State::Pending(pending) = state {
+        into.append(&mut pending.inputs);
+    }
+    if let Some(history) = &mut node.history {
+        into.append(&mut history.inputs);
+    }
+    let kept = node
+        .gradients
+        .get_mut()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    for (watched, gradient) in kept.take().into_iter().flatten() {
+        into.push(watched);
+        into.push(gradient);
+    }
+    let grad = node
+        .grad
+        .get_mut()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    into.extend(grad.take());
+}
+
+impl Drop for TensorNode {
+    /// Frees the tensors this one holds without recursion: a chain of
+    /// waiting or tracked tensors can be thousands long, and freeing each
+    /// from inside the one before it would overflow the stack.
+    fn drop(&mut self) {
+        let mut held = Vec::new();
+        release_held(self, &mut held);
+        while let Some(value) = held.pop() {
+            if let Some(mut node) = Arc::into_inner(value.0) {
+                release_held(&mut node, &mut held);
+            }
+        }
+    }
+}
+
 /// The operation that gave a tracked tensor, and its operands.
 struct History {
     operation: Operation,
@@ -270,8 +312,10 @@ impl std::fmt::Debug for TensorValue {
 }
 
 /// A chain of waiting nodes longer than this runs when it is made, so a
-/// loop that never reads a result cannot grow one without bound.
-const MAX_PENDING_DEPTH: usize = 128;
+/// loop that never reads a result cannot grow one without bound. A
+/// training step of a deep network is a chain of a few thousand nodes,
+/// and it must stay one plan.
+const MAX_PENDING_DEPTH: usize = 8192;
 
 impl TensorValue {
     fn ready(
@@ -440,7 +484,18 @@ impl TensorValue {
 
     /// The tensor's elements in host memory.
     fn elements(&self) -> Result<ArrayValue> {
-        self.storage()?.to_host(self.dtype() as i64, self.shape())
+        let storage = self.storage()?;
+        if trace_level() > 0 && self.device().is_gpu() {
+            let host = trace_gap();
+            let elements = storage.to_host(self.dtype() as i64, self.shape());
+            eprintln!(
+                "aura tensor: read shape={:?} host={host:.2}ms copy={:.2}ms",
+                self.shape(),
+                trace_gap()
+            );
+            return elements;
+        }
+        storage.to_host(self.dtype() as i64, self.shape())
     }
 }
 
@@ -532,53 +587,63 @@ impl Plan {
     /// The plan for `roots`, the memory of its leaves, and the tensor of
     /// each slot.
     fn collect_nodes(roots: &[&TensorValue]) -> (Self, Vec<Storage>, Vec<TensorValue>) {
-        fn visit(
-            node: &TensorValue,
-            slots: &mut Vec<Slot>,
-            leaves: &mut Vec<Storage>,
-            nodes: &mut Vec<TensorValue>,
-            seen: &mut HashMap<*const TensorNode, usize>,
-        ) -> usize {
-            let key = Arc::as_ptr(&node.0);
-            if let Some(&slot) = seen.get(&key) {
-                return slot;
-            }
-            let waiting = match &*node.state() {
-                State::Ready(storage) => {
-                    leaves.push(storage.clone());
-                    None
-                }
-                State::Pending(pending) => {
-                    Some((pending.operation.clone(), pending.inputs.clone()))
-                }
-            };
-            let dtype = node.dtype() as i64;
-            let shape = node.shape().to_vec();
-            let slot = match waiting {
-                None => Slot::Leaf { dtype, shape },
-                Some((operation, inputs)) => Slot::Step {
-                    operation,
-                    inputs: inputs
-                        .iter()
-                        .map(|input| visit(input, slots, leaves, nodes, seen))
-                        .collect(),
-                    dtype,
-                    shape,
-                },
-            };
-            slots.push(slot);
-            nodes.push(node.clone());
-            seen.insert(key, slots.len() - 1);
-            slots.len() - 1
-        }
         let mut slots = Vec::new();
         let mut leaves = Vec::new();
         let mut nodes = Vec::new();
-        let mut seen = HashMap::new();
-        let outputs = roots
-            .iter()
-            .map(|root| visit(root, &mut slots, &mut leaves, &mut nodes, &mut seen))
-            .collect();
+        let mut seen: HashMap<*const TensorNode, usize> = HashMap::new();
+        let mut outputs = Vec::with_capacity(roots.len());
+        // A chain of waiting nodes can be thousands long, so the walk
+        // keeps its own stack. A node is entered once to queue its
+        // operands and once more, after them, to take its slot.
+        let mut stack: Vec<(TensorValue, bool)> = Vec::new();
+        for root in roots {
+            stack.push(((*root).clone(), false));
+            while let Some((node, entered)) = stack.pop() {
+                let key = Arc::as_ptr(&node.0);
+                if seen.contains_key(&key) {
+                    continue;
+                }
+                let waiting = match &*node.state() {
+                    State::Ready(storage) => {
+                        leaves.push(storage.clone());
+                        None
+                    }
+                    State::Pending(pending) => {
+                        Some((pending.operation.clone(), pending.inputs.clone()))
+                    }
+                };
+                let dtype = node.dtype() as i64;
+                let shape = node.shape().to_vec();
+                let slot = match waiting {
+                    None => Slot::Leaf { dtype, shape },
+                    Some((operation, inputs)) => {
+                        if !entered {
+                            stack.push((node.clone(), true));
+                            // The first operand is walked first.
+                            for input in inputs.into_iter().rev() {
+                                if !seen.contains_key(&Arc::as_ptr(&input.0)) {
+                                    stack.push((input, false));
+                                }
+                            }
+                            continue;
+                        }
+                        Slot::Step {
+                            operation,
+                            inputs: inputs
+                                .iter()
+                                .map(|input| seen[&Arc::as_ptr(&input.0)])
+                                .collect(),
+                            dtype,
+                            shape,
+                        }
+                    }
+                };
+                slots.push(slot);
+                nodes.push(node.clone());
+                seen.insert(key, slots.len() - 1);
+            }
+            outputs.push(seen[&Arc::as_ptr(&root.0)]);
+        }
         (Self { slots, outputs }, leaves, nodes)
     }
 
@@ -657,6 +722,33 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
         *node.state() = State::Ready(storage);
     }
     Ok(())
+}
+
+/// What `AURA_TENSOR_TRACE` asks to be written to standard error: `0`
+/// nothing, `2` one line for each run of a plan, each read into host
+/// memory and each operation that ran in host memory, and any other
+/// value those lines and the slowest actions of each run. The fuller
+/// trace waits for the device after every action, so it runs slower.
+pub(crate) fn trace_level() -> u8 {
+    static LEVEL: std::sync::OnceLock<u8> = std::sync::OnceLock::new();
+    *LEVEL.get_or_init(|| match std::env::var("AURA_TENSOR_TRACE").as_deref() {
+        Err(_) | Ok("" | "0") => 0,
+        Ok("2") => 2,
+        Ok(_) => 1,
+    })
+}
+
+/// The milliseconds since the last call, for the trace: the time the
+/// program spent between two traced events.
+pub(crate) fn trace_gap() -> f64 {
+    static LAST: Mutex<Option<std::time::Instant>> = Mutex::new(None);
+    let mut last = LAST
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    let now = std::time::Instant::now();
+    let gap = last.map_or(0.0, |last| now.duration_since(last).as_secs_f64() * 1000.0);
+    *last = Some(now);
+    gap
 }
 
 thread_local! {
@@ -1121,6 +1213,15 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
             }
             return Ok(Value::Tensor(node));
         }
+    }
+    if trace_level() > 0 && device.is_gpu() {
+        eprintln!(
+            "aura tensor: in host memory {operation:?} over {:?}",
+            inputs
+                .iter()
+                .map(|input| (input.dtype(), input.shape().to_vec()))
+                .collect::<Vec<_>>()
+        );
     }
     let arrays = inputs
         .iter()

@@ -633,44 +633,52 @@ impl Compiled {
     }
 }
 
-/// Whether `AURA_TENSOR_TRACE` asks for the time of each run on standard
-/// error. Tracing waits for the device after every action, so a traced
-/// run is slower than an untraced one.
-fn tracing() -> bool {
-    static TRACE: OnceLock<bool> = OnceLock::new();
-    *TRACE.get_or_init(|| std::env::var_os("AURA_TENSOR_TRACE").is_some_and(|value| value != "0"))
+/// The times of one traced run.
+struct Traced {
+    known: bool,
+    /// Host time since the last traced event: building the expression,
+    /// collecting the plan, and everything else the program did.
+    host: f64,
+    prepared: std::time::Duration,
+    launched: std::time::Duration,
+    waited: std::time::Duration,
+    /// Leaves copied from host memory for this run, and their elements.
+    copied: usize,
+    copied_elements: usize,
 }
 
-/// Writes one traced run: its size, the time to find or compile its
-/// kernels, the time of its actions by kind, and its slowest actions.
-fn report(
-    plan: &Plan,
-    known: bool,
-    prepared: std::time::Duration,
-    total: std::time::Duration,
-    timings: &mut [(String, std::time::Duration)],
-) {
+/// Writes one traced run: its size, the host time before it, the time to
+/// find or compile its kernels, to launch its actions and to wait for
+/// them, and with the fuller trace its actions by kind and its slowest
+/// actions.
+fn report(plan: &Plan, traced: &Traced, timings: &mut [(String, std::time::Duration)]) {
     let millis = |duration: std::time::Duration| duration.as_secs_f64() * 1000.0;
     let of = |kind: &str| -> (usize, f64) {
         let chosen = timings.iter().filter(|(label, _)| label.starts_with(kind));
         (
             chosen.clone().count(),
-            chosen.map(|(_, time)| millis(*time)).sum(),
+            chosen.fold(0.0, |sum, (_, time)| sum + millis(*time)),
         )
     };
     let (kernels, kernel_time) = of("kernel");
     let (products, product_time) = of("matmul");
     eprintln!(
-        "aura tensor: plan slots={} outputs={} {} prepare={:.2}ms total={:.2}ms kernels={kernels} in {kernel_time:.2}ms matmuls={products} in {product_time:.2}ms",
+        "aura tensor: plan slots={} outputs={} {} host={:.2}ms prepare={:.2}ms launch={:.2}ms wait={:.2}ms copied={} of {} elements kernels={kernels} in {kernel_time:.2}ms matmuls={products} in {product_time:.2}ms",
         plan.slots.len(),
         plan.outputs.len(),
-        if known { "known" } else { "new" },
-        millis(prepared),
-        millis(total),
+        if traced.known { "known" } else { "new" },
+        traced.host,
+        millis(traced.prepared),
+        millis(traced.launched),
+        millis(traced.waited),
+        traced.copied,
+        traced.copied_elements,
     );
-    timings.sort_by_key(|entry| std::cmp::Reverse(entry.1));
-    for (label, time) in timings.iter().take(6) {
-        eprintln!("aura tensor:   {:.2}ms {label}", millis(*time));
+    if super::tensor_host::trace_level() == 1 {
+        timings.sort_by_key(|entry| std::cmp::Reverse(entry.1));
+        for (label, time) in timings.iter().take(6) {
+            eprintln!("aura tensor:   {:.2}ms {label}", millis(*time));
+        }
     }
 }
 
@@ -682,7 +690,12 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let runtime = started()?;
     runtime.enter()?;
     let api = &runtime.api;
-    let trace = tracing();
+    let trace = super::tensor_host::trace_level();
+    let host = if trace > 0 {
+        super::tensor_host::trace_gap()
+    } else {
+        0.0
+    };
     let began = std::time::Instant::now();
     let mut compiled = runtime
         .compiled
@@ -700,6 +713,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let mut timings: Vec<(String, std::time::Duration)> = Vec::new();
     let mut buffers: Vec<Option<Arc<Buffer>>> = vec![None; compiled.program.buffers];
     let mut leaves = leaves.iter();
+    let mut copied = 0_usize;
+    let mut copied_elements = 0_usize;
     for (slot, buffer) in plan.slots.iter().zip(buffers.iter_mut()) {
         if matches!(slot, Slot::Leaf { .. }) {
             *buffer = Some(
@@ -707,7 +722,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     Storage::Cuda(buffer) => Arc::clone(buffer),
                     // A leaf in host memory is copied to the device for this
                     // run.
-                    Storage::Host(elements) => Arc::new(Buffer::from_array(elements)?),
+                    Storage::Host(elements) => {
+                        copied += 1;
+                        copied_elements += elements.len();
+                        Arc::new(Buffer::from_array(elements)?)
+                    }
                 },
             );
         }
@@ -947,10 +966,12 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         if outcome.is_err() {
             break;
         }
-        if trace {
-            // Waiting after each action gives the action its own time.
-            // SAFETY: the context is current on this thread.
-            unsafe { (api.cuCtxSynchronize)() };
+        if trace > 0 {
+            if trace == 1 {
+                // Waiting after each action gives the action its own time.
+                // SAFETY: the context is current on this thread.
+                unsafe { (api.cuCtxSynchronize)() };
+            }
             let label = match action {
                 Action::Kernel {
                     name,
@@ -969,13 +990,24 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             timings.push((label, action_began.elapsed()));
         }
     }
-    if trace {
-        report(plan, known, prepared, began.elapsed(), &mut timings);
-    }
+    let launched = began.elapsed();
     // The kernels run after the launch returns. Wait for them before any
     // buffer of this run is dropped or read.
     // SAFETY: the context is current on this thread.
     let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
+    if trace > 0 {
+        let traced = Traced {
+            known,
+            host,
+            prepared,
+            launched,
+            waited: began.elapsed() - launched,
+            copied,
+            copied_elements,
+        };
+        report(plan, &traced, &mut timings);
+        super::tensor_host::trace_gap();
+    }
     outcome?;
     finished?;
     Ok(plan
