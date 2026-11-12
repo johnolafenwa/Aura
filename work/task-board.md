@@ -2,6 +2,17 @@
 
 Last updated: 2026-11-12
 
+## GPU tensors (in progress)
+
+- Target: tensors on a GPU for real machine learning work, training and
+  inference, checked against PyTorch on an NVIDIA A40 and an Apple M2
+  Pro: automatic differentiation, transformer and mixture-of-experts
+  support, convolution, mixed precision, optimisers, weights on disk.
+- Done: the `tensor` module with CPU, Metal, and CUDA devices, operators
+  with a number on either side, and benchmarks beside PyTorch.
+- Remaining: the operations, automatic differentiation, layers, and
+  whole-program benchmarks listed in `2026-11-12-gpu-tensors.md`.
+
 ## Release 0.15.0-preview (in progress)
 
 - Target: release everything merged since 0.14.0 as a technical preview:

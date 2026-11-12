@@ -345,10 +345,10 @@ fn builtin_imports_with(
 }
 
 fn builtin_module_registry_with_user(
-    with_source_parts: bool,
+    source_parts: &BTreeSet<String>,
     user_modules: impl IntoIterator<Item = (String, ModuleNamespace)>,
 ) -> BTreeMap<String, ModuleNamespace> {
-    let mut registry = builtin_sources::builtin_registry(with_source_parts);
+    let mut registry = builtin_sources::builtin_registry(source_parts);
     registry.extend(user_modules);
     registry
 }
@@ -356,7 +356,7 @@ fn builtin_module_registry_with_user(
 fn check_module_with_builtin_imports(module: ast::Module) -> Result<Program> {
     let imported_bindings = builtin_imports(&module)?;
     let module_registry = builtin_module_registry_with_user(
-        builtin_sources::imports_source_part(&module),
+        &builtin_sources::imported_source_parts(&module),
         BTreeMap::new(),
     );
     sema::check_with_context(
@@ -616,9 +616,9 @@ struct ModuleLoader {
     package_graph: Option<PackageGraph>,
     cache: HashMap<PathBuf, LoadedModule>,
     stack: Vec<PathBuf>,
-    /// Whether a loaded module imports a builtin module with an Aura-source
-    /// part, so the registry must carry that part.
-    uses_source_parts: bool,
+    /// The builtin modules with an Aura-source part that a loaded module
+    /// imports, so the registry must carry those parts.
+    source_parts: BTreeSet<String>,
 }
 
 impl ModuleLoader {
@@ -639,7 +639,7 @@ impl ModuleLoader {
             package_graph,
             cache: HashMap::new(),
             stack: Vec::new(),
-            uses_source_parts: false,
+            source_parts: BTreeSet::new(),
         })
     }
 
@@ -800,7 +800,9 @@ impl ModuleLoader {
             match &import.kind {
                 ImportKind::From { module_path, names } => {
                     if builtin_modules::builtin_module_namespace(module_path).is_some() {
-                        self.uses_source_parts |= builtin_sources::has_source_part(module_path);
+                        if builtin_sources::has_source_part(module_path) {
+                            self.source_parts.insert(module_path[0].clone());
+                        }
                         for imported_name in names {
                             let binding = builtin_modules::builtin_imported_binding(
                                 module_path,
@@ -854,7 +856,9 @@ impl ModuleLoader {
                 }
                 ImportKind::Module { path, alias } => {
                     if let Some(leaf) = builtin_sources::importable_builtin_namespace(path) {
-                        self.uses_source_parts |= builtin_sources::has_source_part(path);
+                        if builtin_sources::has_source_part(path) {
+                            self.source_parts.insert(path[0].clone());
+                        }
                         if let Some(alias) = alias {
                             insert_aliased_namespace_import(
                                 &mut bindings,
@@ -882,7 +886,7 @@ impl ModuleLoader {
 
     fn build_module_registry(&self) -> BTreeMap<String, ModuleNamespace> {
         builtin_module_registry_with_user(
-            self.uses_source_parts,
+            &self.source_parts,
             self.cache.values().map(|loaded| {
                 let path = loaded
                     .program

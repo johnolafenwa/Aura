@@ -1,0 +1,60 @@
+# GPU tensors: the `tensor` module and its devices
+
+Date: 2026-11-12
+
+## Goal
+
+Tensors that compute on a GPU, checked against PyTorch on real machine
+learning work, for training and inference: automatic differentiation,
+what transformers and mixture-of-experts models need, convolution,
+mixed precision, optimisers, and weights on disk. The first step is a
+layer over the vendors' libraries. A kernel layer in Aura syntax comes
+later, on the same tensors (ADR-0097).
+
+## Work completed
+
+- The `tensor` module: `Tensor[T]` and `Device`, with elementwise
+  arithmetic and maths, comparisons, `choose`, reductions, `matmul`,
+  shape operations, casts, and moves between devices.
+- Three devices. The CPU device runs the Array kernels and defines what
+  each operation means. The Metal device builds one MPSGraph for each
+  distinct expression. The CUDA device writes each expression as CUDA C,
+  compiles it with NVRTC, keeps the compiled kernel in memory and on
+  disk, and calls cuBLAS for `matmul`.
+- Operators take a number on either side: `x * 2.0`, `1 - x`.
+- A program carries the Aura-source part of a builtin module only when
+  it imports that module. Before, a program that imported `json` carried
+  the function names and frame descriptors of every such module, about
+  27 KB for `tensor` alone.
+- The type checker lets a generic implementation such as
+  `impl[T] Scale[T] for float64` satisfy the bound `Scale[int32]`.
+
+## Verification
+
+- Apple M2 Pro, Metal: every tensor test passes, with 50 expressions
+  compared with the Array kernels on the device.
+- NVIDIA A40, CUDA 13.2: every tensor test passes, with 56 expressions
+  compared on the device.
+- `benchmarks/tensor/README.md` has the times beside PyTorch on both
+  machines. On large tensors both devices are level with PyTorch for one
+  addition and ahead of it for longer expressions.
+- Hosted CI has no usable GPU. The plan path runs there on the CPU
+  device, and the generated CUDA source runs there compiled as C++.
+
+## Follow-up
+
+- Operations: `argmax`, `argmin`, top-k, `tanh`, `erf`, `sigmoid`,
+  softmax, slicing, concat, gather, scatter, random numbers.
+- Automatic differentiation.
+- Layer norm, attention, embedding, dropout, AdamW, weights on disk.
+- Convolution, pooling, batch norm.
+- `float16`.
+- Whole programs beside PyTorch: MLP training, large-batch inference,
+  k-means, conjugate gradient, Monte Carlo pricing, GPT-2 inference,
+  nanoGPT training, a mixture-of-experts transformer, ResNet-18 and a
+  CIFAR-10 CNN.
+- Two compiler gaps found on the way. Two impls of one trait for one
+  type that differ only in the trait's arguments type-check, but
+  compiled code does not tell them apart. A method of an imported class
+  cannot bound its own type parameter by a trait the importing module
+  did not import.

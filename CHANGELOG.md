@@ -23,6 +23,10 @@ in this file.
 - Tensor operators take a number on either side: `x * 2.0`, `1 - x`. The
   number takes the tensor's dtype. `relu`, `clamp`, and `powf` are
   members.
+- A program carries the Aura-source part of a builtin module only when
+  it imports that module. A program that imported `json` carried the
+  function names and frame descriptors of `regex`, `time`, `http`, and
+  `simd` as well, which made its executable larger.
 - Fixed: a generic implementation such as `impl[T] Scale[T] for float64`
   now satisfies the bound `Scale[int32]`. A type parameter that the
   implemented type does not fix takes the argument the bound names.

@@ -11,7 +11,7 @@ use crate::ast::ImportKind;
 use crate::builtin_modules::builtin_module_namespace;
 use crate::sema::{ModuleContext, ModuleNamespace};
 use std::cell::RefCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 const JSON_SOURCE: &str = include_str!("../std/json.au");
 const ITER_SOURCE: &str = include_str!("../std/iter.au");
@@ -41,13 +41,23 @@ pub(crate) fn has_source_part(path: &[String]) -> bool {
     matches!(path, [name] if module_source(name).is_some())
 }
 
-/// Whether `module` imports a builtin module that has an Aura-source part.
-pub(crate) fn imports_source_part(module: &crate::ast::Module) -> bool {
-    module.imports.iter().any(|import| match &import.kind {
-        ImportKind::Module { path, .. } => has_source_part(path),
-        ImportKind::From { module_path, .. } => has_source_part(module_path),
-    })
+/// The builtin modules with an Aura-source part that `module` imports.
+pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<String> {
+    module
+        .imports
+        .iter()
+        .filter_map(|import| match &import.kind {
+            ImportKind::Module { path, .. } => Some(path),
+            ImportKind::From { module_path, .. } => Some(module_path),
+        })
+        .filter(|path| has_source_part(path))
+        .map(|path| path[0].clone())
+        .collect()
 }
+
+/// The modules whose items the others use without importing them: the
+/// traits behind operators and `for`.
+const IMPLICIT_PARTS: [&str; 2] = ["prelude", "iter"];
 
 thread_local! {
     static CHECKED: RefCell<BTreeMap<String, ModuleNamespace>> = const { RefCell::new(BTreeMap::new()) };
@@ -112,13 +122,18 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
     host.comprehensions.extend(part.comprehensions);
 }
 
-/// The builtin module registry, with the Aura-source parts merged in when
-/// `with_source_parts` is set. Programs that import no such module keep the
-/// host-only registry, so their output carries none of these items.
-pub(crate) fn builtin_registry(with_source_parts: bool) -> BTreeMap<String, ModuleNamespace> {
+/// The builtin module registry, with the Aura-source parts of the modules
+/// in `parts` merged in, and with them the parts every other part relies
+/// on. A program that imports no such module keeps the host-only registry,
+/// and one that imports `json` carries nothing of `tensor`: every function
+/// of a merged part is named in the program's output.
+pub(crate) fn builtin_registry(parts: &BTreeSet<String>) -> BTreeMap<String, ModuleNamespace> {
     let mut registry = crate::builtin_modules::builtin_module_registry();
-    if with_source_parts {
+    if !parts.is_empty() {
         for (name, namespace) in registry.iter_mut() {
+            if !parts.contains(name) && !IMPLICIT_PARTS.contains(&name.as_str()) {
+                continue;
+            }
             if let Some(part) = source_part(name) {
                 merge(namespace, part);
             }
