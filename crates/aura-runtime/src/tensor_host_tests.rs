@@ -881,6 +881,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             let read: &[usize] = match action {
                 Action::Kernel { inputs, .. } => inputs,
                 Action::Matmul { left, right, .. } => &[*left, *right],
+                Action::Alias { input, .. } => std::slice::from_ref(input),
             };
             for &buffer in read {
                 assert!(
@@ -896,13 +897,20 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     threads,
                     inputs,
                     clear,
+                    more,
                 } => {
                     let mut made = vec![if *clear { 0 } else { 0xAA_u8 }; *bytes];
                     let kernel = function(library, name);
-                    let pointers: Vec<*const u8> = inputs
-                        .iter()
-                        .map(|&input| buffers[input].as_ptr())
-                        .collect();
+                    // The buffers written beside the first come before
+                    // the ones the kernel reads.
+                    for &(other, bytes) in more {
+                        buffers[other] = vec![0xAA_u8; bytes];
+                    }
+                    let mut pointers: Vec<*const u8> = Vec::new();
+                    for &(other, _) in more {
+                        pointers.push(buffers[other].as_mut_ptr().cast_const());
+                    }
+                    pointers.extend(inputs.iter().map(|&input| buffers[input].as_ptr()));
                     for thread in 0..threads.div_ceil(BLOCK_THREADS).max(1) * BLOCK_THREADS {
                         // SAFETY: the kernel takes the output and one
                         // pointer for each input, and checks its index.
@@ -932,7 +940,21 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                                         unsafe extern "C" fn(*mut u8, P, P, P, P),
                                     >(kernel)(out, a, b, c, d)
                                 }
-                                _ => panic!("a test kernel has one to four inputs"),
+                                [a, b, c, d, e] => {
+                                    std::mem::transmute::<
+                                        *mut std::ffi::c_void,
+                                        unsafe extern "C" fn(*mut u8, P, P, P, P, P),
+                                    >(kernel)(out, a, b, c, d, e)
+                                }
+                                [a, b, c, d, e, f] => std::mem::transmute::<
+                                    *mut std::ffi::c_void,
+                                    unsafe extern "C" fn(*mut u8, P, P, P, P, P, P),
+                                >(kernel)(
+                                    out, a, b, c, d, e, f
+                                ),
+                                _ => {
+                                    panic!("a test kernel has one to six pointers after the first")
+                                }
                             }
                         }
                     }
@@ -948,6 +970,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     inner,
                     columns,
                     pairs,
+                    swapped,
                 } => {
                     assert!(!double, "the test products are float32");
                     let read = |buffer: &[u8], index: usize| {
@@ -959,8 +982,18 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                             for column in 0..*columns {
                                 let mut sum = 0.0_f32;
                                 for k in 0..*inner {
-                                    sum += read(&buffers[*left], left_at + row * inner + k)
-                                        * read(&buffers[*right], right_at + k * columns + column);
+                                    let left_place = if swapped.0 {
+                                        k * rows + row
+                                    } else {
+                                        row * inner + k
+                                    };
+                                    let right_place = if swapped.1 {
+                                        column * inner + k
+                                    } else {
+                                        k * columns + column
+                                    };
+                                    sum += read(&buffers[*left], left_at + left_place)
+                                        * read(&buffers[*right], right_at + right_place);
                                 }
                                 let at = (product * rows * columns + row * columns + column) * 4;
                                 made[at..at + 4].copy_from_slice(&sum.to_ne_bytes());
@@ -968,6 +1001,9 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                         }
                     }
                     buffers[*output] = made;
+                }
+                Action::Alias { output, input } => {
+                    buffers[*output] = buffers[*input].clone();
                 }
             }
             for &buffer in &finished[index] {
@@ -1026,7 +1062,9 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     .iter()
                     .map(|action| match action {
                         Action::Kernel { threads, .. } => *threads,
-                        Action::Matmul { .. } => panic!("a reduction has no matmul"),
+                        Action::Matmul { .. } | Action::Alias { .. } => {
+                            panic!("a reduction is kernels")
+                        }
                     })
                     .collect();
                 assert_eq!(threads, [313, 5, 1]);

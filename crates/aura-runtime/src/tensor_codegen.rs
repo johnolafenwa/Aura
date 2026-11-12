@@ -35,6 +35,9 @@ pub(crate) enum Action {
         threads: usize,
         inputs: Vec<usize>,
         clear: bool,
+        /// More buffers the kernel writes, each a buffer number and its
+        /// bytes. Their pointers follow the first argument.
+        more: Vec<(usize, usize)>,
     },
     /// A row-major matrix product of `rows` by `inner` and `inner` by
     /// `columns` matrices into a new buffer numbered `output`. Each pair
@@ -50,7 +53,13 @@ pub(crate) enum Action {
         inner: usize,
         columns: usize,
         pairs: Vec<(usize, usize)>,
+        /// Whether the left and the right buffer hold each matrix with
+        /// its rows and columns swapped, so no kernel copies a transpose.
+        swapped: (bool, bool),
     },
+    /// Buffer `output` is buffer `input`: a reshape of memory that
+    /// exists moves no element.
+    Alias { output: usize, input: usize },
 }
 
 /// A plan as CUDA C and the actions that run it.
@@ -235,6 +244,9 @@ struct Generator<'a> {
     plan: &'a Plan,
     /// Whether each slot has a buffer when the steps after it run.
     materialized: Vec<bool>,
+    /// The results each kernel writes beside its own: steps only that
+    /// kernel reads, which the program keeps.
+    beside: Vec<Vec<usize>>,
     source: String,
     actions: Vec<Action>,
     buffers: usize,
@@ -264,6 +276,27 @@ fn fuses(operation: &Operation) -> bool {
     )
 }
 
+/// Whether `operation` over an operand of `rank` axes swaps the last two
+/// axes and keeps the rest.
+fn swaps_matrix(operation: &Operation, rank: usize) -> bool {
+    let Operation::Permute(axes) = operation else {
+        return false;
+    };
+    if axes.is_empty() {
+        return rank == 2;
+    }
+    rank >= 2
+        && axes.len() == rank
+        && axes.iter().enumerate().all(|(place, &axis)| {
+            let wanted = match place {
+                place if place == rank - 2 => rank - 1,
+                place if place == rank - 1 => rank - 2,
+                place => place,
+            };
+            axis as usize == wanted
+        })
+}
+
 impl<'a> Generator<'a> {
     fn new(plan: &'a Plan) -> Self {
         let count = plan.slots.len();
@@ -280,7 +313,7 @@ impl<'a> Generator<'a> {
                 }
             }
         }
-        let materialized = plan
+        let mut materialized: Vec<bool> = plan
             .slots
             .iter()
             .enumerate()
@@ -295,9 +328,80 @@ impl<'a> Generator<'a> {
                 }
             })
             .collect();
+        // A reshape of memory that exists is that memory, at no cost.
+        for index in 0..count {
+            if let Slot::Step {
+                operation: Operation::Reshape(_),
+                inputs,
+                ..
+            } = &plan.slots[index]
+            {
+                materialized[index] |= materialized[inputs[0]];
+            }
+        }
+        // A product reads a transpose of memory that exists in place, so
+        // a transpose only products read is never written.
+        let mut matmul_uses = vec![0_usize; count];
+        for slot in &plan.slots {
+            if let Slot::Step {
+                operation: Operation::Matmul,
+                inputs,
+                ..
+            } = slot
+            {
+                for &input in inputs {
+                    matmul_uses[input] += 1;
+                }
+            }
+        }
+        for index in 0..count {
+            if Self::transpose_of(plan, &materialized, index).is_some()
+                && uses[index] == matmul_uses[index]
+                && !plan.outputs.contains(&index)
+            {
+                materialized[index] = false;
+            }
+        }
+        // A result the program keeps that only one elementwise kernel
+        // reads is written by that kernel, as the moving averages of an
+        // optimizer are by the kernel of the new weight.
+        let mut user = vec![usize::MAX; count];
+        for (index, slot) in plan.slots.iter().enumerate() {
+            if let Slot::Step { inputs, .. } = slot {
+                for &input in inputs {
+                    user[input] = index;
+                }
+            }
+        }
+        let elementwise = |index: usize| {
+            matches!(&plan.slots[index], Slot::Step { operation, .. }
+                if fuses(operation) && !matches!(operation, Operation::Reshape(_)))
+        };
+        let mut beside = vec![Vec::new(); count];
+        for index in (0..count).rev() {
+            if !(materialized[index]
+                && elementwise(index)
+                && uses[index] == 1
+                && !feeds_matmul[index]
+                && plan.outputs.contains(&index))
+            {
+                continue;
+            }
+            let mut owner = user[index];
+            while !materialized[owner] {
+                owner = user[owner];
+            }
+            if elementwise(owner)
+                && slot_shape(&plan.slots[owner]) == slot_shape(&plan.slots[index])
+            {
+                materialized[index] = false;
+                beside[owner].push(index);
+            }
+        }
         Self {
             plan,
             materialized,
+            beside,
             source: PREAMBLE.to_string(),
             actions: Vec::new(),
             buffers: count,
@@ -506,6 +610,21 @@ impl<'a> Generator<'a> {
         }
     }
 
+    /// The slot `slot` is the matrix transpose of, when that slot's
+    /// memory exists in a run.
+    fn transpose_of(plan: &Plan, materialized: &[bool], slot: usize) -> Option<usize> {
+        let Slot::Step {
+            operation, inputs, ..
+        } = &plan.slots[slot]
+        else {
+            return None;
+        };
+        let rank = match &plan.slots[inputs[0]] {
+            Slot::Leaf { shape, .. } | Slot::Step { shape, .. } => shape.len(),
+        };
+        (swaps_matrix(operation, rank) && materialized[inputs[0]]).then_some(inputs[0])
+    }
+
     fn scratch(&mut self) -> usize {
         self.buffers += 1;
         self.buffers - 1
@@ -522,13 +641,27 @@ impl<'a> Generator<'a> {
         let (parameters, arguments) = self.signature(&leaves);
         let count = len(self.shape(slot));
         let result = c_type(self.dtype(slot));
+        // The results written beside this one have its shape, and their
+        // functions are already emitted as parts of this kernel.
+        let beside = self.beside[slot].clone();
+        let (mut outputs, mut writes) = (String::new(), String::new());
+        for &other in &beside {
+            write!(outputs, ", {}* out{other}", c_type(self.dtype(other)))
+                .expect("writing to a string cannot fail");
+            write!(writes, " out{other}[j] = v{slot}_{other}(j{arguments});")
+                .expect("writing to a string cannot fail");
+        }
         writeln!(
             self.source,
-            "extern \"C\" __global__ void k{slot}({result}* out{parameters}) {{\n    \
+            "extern \"C\" __global__ void k{slot}({result}* out{outputs}{parameters}) {{\n    \
              long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
-             if (j < {count}LL) out[j] = v{slot}_{slot}(j{arguments});\n}}"
+             if (j < {count}LL) {{ out[j] = v{slot}_{slot}(j{arguments});{writes} }}\n}}"
         )
         .expect("writing to a string cannot fail");
+        let more = beside
+            .iter()
+            .map(|&other| (other, count * element_bytes(self.dtype(other))))
+            .collect();
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
@@ -536,6 +669,7 @@ impl<'a> Generator<'a> {
             threads: count,
             inputs: leaves,
             clear: false,
+            more,
         });
     }
 
@@ -589,6 +723,7 @@ impl<'a> Generator<'a> {
             threads: count,
             inputs: leaves,
             clear: true,
+            more: Vec::new(),
         });
     }
 
@@ -652,6 +787,7 @@ impl<'a> Generator<'a> {
                 threads,
                 inputs: leaves.clone(),
                 clear: false,
+                more: Vec::new(),
             });
             let mut inputs = leaves;
             inputs.push(partial);
@@ -662,6 +798,7 @@ impl<'a> Generator<'a> {
                 threads: lanes,
                 inputs,
                 clear: false,
+                more: Vec::new(),
             });
             return;
         }
@@ -688,6 +825,7 @@ impl<'a> Generator<'a> {
             threads: lanes,
             inputs: leaves,
             clear: false,
+            more: Vec::new(),
         });
     }
 
@@ -763,6 +901,7 @@ impl<'a> Generator<'a> {
                         threads,
                         inputs: leaves,
                         clear: false,
+                        more: Vec::new(),
                     });
                     self.actions.push(Action::Kernel {
                         name: format!("k{slot}"),
@@ -771,6 +910,7 @@ impl<'a> Generator<'a> {
                         threads: lanes,
                         inputs: vec![partial],
                         clear: false,
+                        more: Vec::new(),
                     });
                     return;
                 }
@@ -795,6 +935,7 @@ impl<'a> Generator<'a> {
                     threads: lanes,
                     inputs: leaves,
                     clear: false,
+                    more: Vec::new(),
                 });
             }
             None => {
@@ -850,6 +991,7 @@ impl<'a> Generator<'a> {
                             Some(input) => vec![input],
                         },
                         clear: false,
+                        more: Vec::new(),
                     });
                     if last {
                         break;
@@ -882,6 +1024,9 @@ impl<'a> Generator<'a> {
             })
             .collect();
         let dtype = self.dtype(slot);
+        let stored = |side: usize| Self::transpose_of(self.plan, &self.materialized, side);
+        let swapped = (stored(left).is_some(), stored(right).is_some());
+        let (left, right) = (stored(left).unwrap_or(left), stored(right).unwrap_or(right));
         self.actions.push(Action::Matmul {
             left,
             right,
@@ -892,6 +1037,7 @@ impl<'a> Generator<'a> {
             inner,
             columns,
             pairs,
+            swapped,
         });
     }
 
@@ -916,6 +1062,12 @@ impl<'a> Generator<'a> {
                 }
                 Operation::ArgReduce { largest, axis } => {
                     self.arg_reduce(slot, *largest, *axis, inputs[0]);
+                }
+                Operation::Reshape(_) if self.materialized[inputs[0]] => {
+                    self.actions.push(Action::Alias {
+                        output: slot,
+                        input: inputs[0],
+                    });
                 }
                 _ => self.map(slot),
             }
@@ -1012,6 +1164,7 @@ pub(crate) fn finished_buffers(program: &Program, plan: &Plan) -> Vec<Vec<usize>
         let read: &[usize] = match action {
             Action::Kernel { inputs, .. } => inputs,
             Action::Matmul { left, right, .. } => &[*left, *right],
+            Action::Alias { input, .. } => std::slice::from_ref(input),
         };
         for &buffer in read {
             last.insert(buffer, index);

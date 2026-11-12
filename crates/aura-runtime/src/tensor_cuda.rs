@@ -852,6 +852,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 threads,
                 inputs,
                 clear,
+                more,
             } => Buffer::new(*bytes).and_then(|made| {
                 if *clear {
                     // SAFETY: the buffer holds `bytes` bytes.
@@ -859,6 +860,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     check(status, "clear a buffer")?;
                 }
                 let mut arguments: Vec<DevicePointer> = vec![made.pointer];
+                for &(other, bytes) in more {
+                    let beside = Buffer::new(bytes)?;
+                    arguments.push(beside.pointer);
+                    buffers[other] = Some(Arc::new(beside));
+                }
                 arguments.extend(inputs.iter().map(|&input| pointer(&buffers, input)));
                 let mut addresses: Vec<*mut c_void> = arguments
                     .iter_mut()
@@ -896,10 +902,18 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 inner,
                 columns,
                 pairs,
+                swapped,
             } => Buffer::new(*bytes).and_then(|made| {
                 let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
                 let element = if *double { 8 } else { 4 };
                 let (rows, inner, columns) = (*rows as c_int, *inner as c_int, *columns as c_int);
+                // cuBLAS reads a matrix stored with its rows and columns
+                // swapped when told so: the operation and how far apart
+                // its columns are, for the right and the left operand.
+                let (right_op, right_step): (c_int, c_int) =
+                    if swapped.1 { (1, inner) } else { (0, columns) };
+                let (left_op, left_step): (c_int, c_int) =
+                    if swapped.0 { (1, rows) } else { (0, inner) };
                 let product = (rows as usize) * (columns as usize) * element;
                 let mut status = 0;
                 let count = pairs.len();
@@ -913,7 +927,12 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 let right_shared = pairs.iter().all(|pair| pair.1 == 0);
                 let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
                 let tall = rows as usize * count;
-                if count > 1 && left_stacked && right_shared && tall <= c_int::MAX as usize {
+                if count > 1
+                    && left_stacked
+                    && right_shared
+                    && !swapped.0
+                    && tall <= c_int::MAX as usize
+                {
                     // A stack of matrices times one shared matrix is one
                     // product with the stack read as a single tall matrix.
                     let tall = tall as c_int;
@@ -923,16 +942,16 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         if *double {
                             (api.cublasDgemm_v2)(
                                 runtime.cublas,
-                                0,
-                                0,
+                                right_op,
+                                left_op,
                                 columns,
                                 tall,
                                 inner,
                                 &1.0,
                                 right,
-                                columns,
+                                right_step,
                                 left,
-                                inner,
+                                left_step,
                                 &0.0,
                                 made.pointer,
                                 columns,
@@ -940,16 +959,16 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         } else {
                             (api.cublasSgemm_v2)(
                                 runtime.cublas,
-                                0,
-                                0,
+                                right_op,
+                                left_op,
                                 columns,
                                 tall,
                                 inner,
                                 &1.0,
                                 right,
-                                columns,
+                                right_step,
                                 left,
-                                inner,
+                                left_step,
                                 &0.0,
                                 made.pointer,
                                 columns,
@@ -970,17 +989,17 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         if *double {
                             (api.cublasDgemmStridedBatched)(
                                 runtime.cublas,
-                                0,
-                                0,
+                                right_op,
+                                left_op,
                                 columns,
                                 rows,
                                 inner,
                                 &1.0,
                                 right,
-                                columns,
+                                right_step,
                                 a_step,
                                 left,
-                                inner,
+                                left_step,
                                 b_step,
                                 &0.0,
                                 made.pointer,
@@ -991,17 +1010,17 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                         } else {
                             (api.cublasSgemmStridedBatched)(
                                 runtime.cublas,
-                                0,
-                                0,
+                                right_op,
+                                left_op,
                                 columns,
                                 rows,
                                 inner,
                                 &1.0,
                                 right,
-                                columns,
+                                right_step,
                                 a_step,
                                 left,
-                                inner,
+                                left_step,
                                 b_step,
                                 &0.0,
                                 made.pointer,
@@ -1025,16 +1044,16 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             if *double {
                                 (api.cublasDgemm_v2)(
                                     runtime.cublas,
-                                    0,
-                                    0,
+                                    right_op,
+                                    left_op,
                                     columns,
                                     rows,
                                     inner,
                                     &1.0,
                                     a,
-                                    columns,
+                                    right_step,
                                     b,
-                                    inner,
+                                    left_step,
                                     &0.0,
                                     c,
                                     columns,
@@ -1042,16 +1061,16 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                             } else {
                                 (api.cublasSgemm_v2)(
                                     runtime.cublas,
-                                    0,
-                                    0,
+                                    right_op,
+                                    left_op,
                                     columns,
                                     rows,
                                     inner,
                                     &1.0,
                                     a,
-                                    columns,
+                                    right_step,
                                     b,
-                                    inner,
+                                    left_step,
                                     &0.0,
                                     c,
                                     columns,
@@ -1066,6 +1085,10 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 buffers[*output] = Some(Arc::new(made));
                 check(status, "multiply matrices")
             }),
+            Action::Alias { output, input } => {
+                buffers[*output] = buffers[*input].clone();
+                Ok(())
+            }
         };
         if outcome.is_err() {
             break;
@@ -1095,6 +1118,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                     pairs,
                     ..
                 } => format!("matmul {rows}x{inner}x{columns} products={}", pairs.len()),
+                Action::Alias { .. } => continue,
             };
             timings.push((label, action_began.elapsed()));
         }

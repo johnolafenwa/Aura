@@ -117,3 +117,14 @@ later, on the same tensors (ADR-0097).
   long lane alone was the slow part of k-means.
 - Integer sums stay in host memory on a GPU device: the CPU sum reports
   an overflow and a GPU kernel would wrap.
+- A40 at 6687d35: k-means 39 ms against PyTorch's 68 ms. Transformer
+  training 415 ms against 297 to 330 ms: a step was 647 kernels and 99
+  products, and none stood out.
+- Three changes cut the kernels of a transformer step (626 to 372 in a
+  local count at width 16, same loss). A product reads a transpose of
+  memory that exists through the cuBLAS operation flags, so no kernel
+  copies it. A reshape of memory that exists is an `Alias` action that
+  shares the buffer. A kept result that only one elementwise kernel
+  reads, of the same shape, is written by that kernel (`more` on
+  `Action::Kernel`), so AdamW writes a weight and its two averages in
+  one kernel in place of three.
