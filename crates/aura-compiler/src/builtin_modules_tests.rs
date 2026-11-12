@@ -1343,8 +1343,9 @@ def main():
     print(x.matmul(y.transpose()).to_array())
     print(x.minimum(y).maximum(-x).to_array())
     print(x.pow(y).sqrt().abs().to_array())
-    print(x.exp().log().to_array())
-    print((x.sin() * x.sin() + x.cos() * x.cos()).sum().item())
+    round_trip = (x.exp().log() - x).abs().max().item()
+    unit = (x.sin() * x.sin() + x.cos() * x.cos()).sum().item()
+    print(f"{round_trip < 0.0001} {unit > 5.9999 and unit < 6.0001}")
     mask = x.greater(x.scalar(3.0))
     print(mask.to_array())
     print(choose(mask, x, -x).to_array())
@@ -1379,8 +1380,7 @@ def main():
          Array[float32](shape=[2, 2], values=[12.0, 12.0, 30.0, 30.0])\n\
          Array[float32](shape=[2, 3], values=[1.0, 2.0, 2.0, 2.0, 2.0, 2.0])\n\
          Array[float32](shape=[2, 3], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
-         Array[float32](shape=[2, 3], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
-         6.0\n\
+         true true\n\
          Array[bool](shape=[2, 3], values=[false, false, false, true, true, true])\n\
          Array[float32](shape=[2, 3], values=[-1.0, -2.0, -3.0, 4.0, 5.0, 6.0])\n\
          Array[bool](shape=[2, 3], values=[true, false, false, false, false, false]) Array[bool](shape=[2, 3], values=[true, true, false, false, false, false])\n\

@@ -355,7 +355,10 @@ fn creation_and_inspection() {
     assert_eq!(format!("{:?}", node(&l.a)), "<tensor-node>");
     assert!(!node(&l.a).is_empty());
     let stays = host_tensor_to_device(vec![l.a.clone(), int(0)], None).unwrap();
-    assert_eq!(stays, l.a, "a tensor already on the device is the same tensor");
+    assert_eq!(
+        stays, l.a,
+        "a tensor already on the device is the same tensor"
+    );
     let same = cast(&l.a, ArrayDType::Float32).unwrap();
     assert_eq!(same, l.a, "a cast to the same dtype is the same tensor");
     let empty = tensor(float32(&[], &[0, 3]), TensorDevice::Cpu);
@@ -476,21 +479,39 @@ fn the_metal_device_exists_only_on_macos() {
 /// last place for a sum, whose order differs, and for the library's
 /// `exp`, `log`, `sin`, `cos` and `pow`.
 #[cfg(target_os = "macos")]
-fn close(name: &str, gpu: &ArrayValue, host: &ArrayValue) {
-    assert_eq!(gpu.dtype(), host.dtype(), "{name}: dtype");
-    assert_eq!(gpu.shape, host.shape, "{name}: shape");
-    for index in 0..host.len() {
-        match (gpu.value_at_flat(index), host.value_at_flat(index)) {
-            (Value::Float(gpu), Value::Float(host)) => {
-                let tolerance = 8.0 * f64::from(f32::EPSILON) * host.abs().max(1.0);
-                assert!(
-                    (gpu - host).abs() <= tolerance || (gpu.is_nan() && host.is_nan()),
-                    "{name}: element {index} is {gpu} on the gpu and {host} on the host"
-                );
-            }
-            (gpu, host) => assert_eq!(gpu, host, "{name}: element {index}"),
-        }
+fn differences(name: &str, gpu: &ArrayValue, host: &ArrayValue) -> Vec<String> {
+    if gpu.dtype() != host.dtype() || gpu.shape != host.shape {
+        return vec![format!(
+            "{name}: {:?} {:?} on the gpu and {:?} {:?} on the host",
+            gpu.dtype(),
+            gpu.shape,
+            host.dtype(),
+            host.shape
+        )];
     }
+    (0..host.len())
+        .filter_map(|index| {
+            let (gpu, host) = (gpu.value_at_flat(index), host.value_at_flat(index));
+            let same = match (&gpu, &host) {
+                (Value::Float(gpu), Value::Float(host)) => {
+                    let tolerance = 8.0 * f64::from(f32::EPSILON) * host.abs().max(1.0);
+                    gpu == host
+                        || (gpu.is_nan() && host.is_nan())
+                        || (gpu - host).abs() <= tolerance
+                }
+                (gpu, host) => gpu == host,
+            };
+            (!same).then(|| {
+                format!("{name}: element {index} is {gpu:?} on the gpu and {host:?} on the host")
+            })
+        })
+        .collect()
+}
+
+#[cfg(target_os = "macos")]
+fn close(name: &str, gpu: &ArrayValue, host: &ArrayValue) {
+    let found = differences(name, gpu, host);
+    assert!(found.is_empty(), "{}", found.join("\n"));
 }
 
 #[cfg(target_os = "macos")]
@@ -556,13 +577,15 @@ fn the_metal_device_keeps_special_values() {
         ("abs", |a, _| unary(a, 0)),
         ("negate", |a, _| unary(a, NEGATE_OPERATION)),
     ];
+    let mut found = Vec::new();
     for (name, expression) in cases {
         let (a, b) = special(TensorDevice::Cpu);
         let host = expression(&a, &b).unwrap();
         let (a, b) = special(TensorDevice::Metal);
         let gpu = expression(&a, &b).unwrap();
-        close(name, &array(&gpu), &array(&host));
+        found.extend(differences(name, &array(&gpu), &array(&host)));
     }
+    assert!(found.is_empty(), "{}", found.join("\n"));
     let (a, _) = special(TensorDevice::Metal);
     let home = host_tensor_to_device(vec![a.clone(), int(0)], None).unwrap();
     assert_eq!(node(&home).device(), TensorDevice::Cpu);

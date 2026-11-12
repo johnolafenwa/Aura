@@ -29305,7 +29305,9 @@ impl<'a> Lowerer<'a> {
                                 // own module's implementations are for.
                                 let type_name = self
                                     .resolve_class_info(inner_name)
-                                    .map(|class| mir_class_type_name(self.program, class, inner_name))
+                                    .map(|class| {
+                                        mir_class_type_name(self.program, class, inner_name)
+                                    })
                                     .unwrap_or_else(|| inner_name.clone());
                                 Some(Type::Named(
                                     type_name,
