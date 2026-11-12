@@ -4682,7 +4682,7 @@ fn link_direct_native_binary(
         } else {
             Err(format!(
                 "direct backend link failed:\n{}",
-                String::from_utf8_lossy(&output.stderr)
+                linker_failure_text(&output.stdout, &output.stderr)
             ))
         }
     });
@@ -4854,6 +4854,18 @@ fn strip_user_binary(path: &Path) -> std::result::Result<(), String> {
 
 fn native_keep_symbols() -> bool {
     std::env::var_os("AURA_NATIVE_KEEP_SYMBOLS").is_some_and(|value| value == "1")
+}
+
+/// The text a failed linker printed. The Microsoft linker reports its errors
+/// on standard output, so that stream follows standard error.
+fn linker_failure_text(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    [stderr.trim_end(), stdout.trim_end()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
 }
 
 /// The link arguments of a debug build: no section garbage collection, and
@@ -6614,6 +6626,18 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         assert_eq!(
             super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux", true),
             Ok(Vec::new())
+        );
+    }
+
+    #[test]
+    fn linker_failure_text_reports_both_output_streams() {
+        assert_eq!(
+            super::linker_failure_text(b"LINK : fatal error LNK1181\r\n", b""),
+            "LINK : fatal error LNK1181"
+        );
+        assert_eq!(
+            super::linker_failure_text(b"note\n", b"ld: error\n"),
+            "ld: error\nnote"
         );
     }
 
