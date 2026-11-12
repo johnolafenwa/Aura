@@ -1,0 +1,5 @@
+error[AU2002]: `Array.reshape` expects `list[int64]`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_reshape_shape_type.au:3:26
+  |
+3 |     print(values.reshape(6))
+  |                          ^

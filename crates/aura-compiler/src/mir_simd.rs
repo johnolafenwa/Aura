@@ -11,6 +11,9 @@
 //! lanes.store(xs, i)       =>   xs[i] = lanes.l0; xs[i + 1] = lanes.l1; ...
 //! ```
 //!
+//! `load_array` and `store_array` do the same over a rank-1 `Array`
+//! (ADR-0091).
+//!
 //! The index and the stored value are evaluated once, into temporaries.
 //! Both backends, the verifier, and the range proofs of a counted loop then
 //! see plain indexing, and an index out of range reports at the call. The
@@ -51,15 +54,16 @@ impl Lowerer<'_> {
         .flatten()
     }
 
-    /// The list argument of a lane load or store, when it is a local.
-    fn simd_list_argument<'e>(&self, argument: &'e Argument) -> Option<&'e Expr> {
+    /// The list argument of a lane load or store, or the Array argument
+    /// of an Array load or store, when it is a local.
+    fn simd_list_argument<'e>(&self, argument: &'e Argument, holder: &str) -> Option<&'e Expr> {
         let ExprKind::Name(name) = &argument.value.kind else {
             return None;
         };
         let local = self.render_local_name(name);
         matches!(
             self.local_types.get(&local),
-            Some(Type::Named(list, _)) if list == "list"
+            Some(Type::Named(list, _)) if list == holder
         )
         .then_some(&argument.value)
     }
@@ -122,11 +126,15 @@ impl Lowerer<'_> {
             return None;
         }
         let int64 = Type::named("int64");
+        let holder = match field.as_str() {
+            "load" | "store" => "list",
+            _ => "Array",
+        };
         match field.as_str() {
-            "load" => {
+            "load" | "load_array" => {
                 let (class, _) = self.resolve_associated_method(object, field)?;
                 let lanes = self.simd_lanes_of(class)?;
-                let values = self.simd_list_argument(values)?.clone();
+                let values = self.simd_list_argument(values, holder)?.clone();
                 let class_ty = self.infer_expr_type(call)?;
                 let at = self.simd_temporary(&at.value, int64);
                 let construct = Expr {
@@ -144,7 +152,7 @@ impl Lowerer<'_> {
                 };
                 Some(self.lower_expr_with_expected(&construct, Some(&class_ty)))
             }
-            "store" => {
+            "store" | "store_array" => {
                 let receiver_ty = self.infer_expr_type(object)?;
                 let Type::Named(class_name, type_args) = &receiver_ty else {
                     return None;
@@ -153,7 +161,7 @@ impl Lowerer<'_> {
                     return None;
                 }
                 let lanes = self.simd_lanes_of(self.resolve_class_info(class_name)?)?;
-                let values = self.simd_list_argument(values)?.clone();
+                let values = self.simd_list_argument(values, holder)?.clone();
                 let stored = self.simd_temporary(object, receiver_ty);
                 let at = self.simd_temporary(&at.value, int64);
                 for lane in 0..lanes {

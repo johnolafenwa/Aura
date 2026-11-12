@@ -1,0 +1,5 @@
+error[AU3003]: cannot assign through immutable place `values[..]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_slice_assignment_immutable.au:3:5
+  |
+3 |     values[0, :] = 1
+  |     ^

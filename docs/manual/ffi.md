@@ -316,6 +316,43 @@ rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
 with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
 form for bytes with a length.
 
+### Arrays
+
+A parameter of type `Array[T]` is also a pointer to the first of a run of
+scalars. The argument is an Array, and its elements cross in row-major
+order (ADR-0091).
+
+```aura fragment
+extern "C" def cblas_ddot(
+    n: int32, x: Array[float64], incx: int32, y: Array[float64], incy: int32
+) -> float64
+
+def main() -> int32:
+    x = Array[float64].full([4], 2.0)
+    y = Array[float64].full([4], 0.5)
+    print(cblas_ddot(4, x, 1, y, 1))
+    return 0
+```
+
+| Declaration | C type | Contract |
+| --- | --- | --- |
+| `values: Array[T]` | `const T *` | the function reads the elements |
+| `values: mut Array[T]` | `T *` | the function reads and writes the elements |
+
+`T` is `int32`, `int64`, `float32`, or `float64`. The rules for a `ptr[T]`
+apply: no length crosses, the pointer is valid only during the call, and an
+empty Array passes a null pointer.
+
+A built program passes the address of the Array's own elements when the
+Array is one row-major block. A strided view, such as a transposed matrix
+or a stepped slice, is packed into a temporary block for a read. A `mut
+Array[T]` argument first becomes one row-major block that no other Array
+shares, so the function writes that Array only and a clone keeps its
+elements. `aura run` on the interpreter copies the elements in and out.
+
+`Array[bool]` is `AU2002`: convert a mask with `as Array[int32]` first.
+`own Array[T]` is `AU3004`, and an Array cannot be a result.
+
 ### Structs
 
 `extern "C" class` declares a C struct. Its fields are laid out as a C

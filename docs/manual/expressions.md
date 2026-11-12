@@ -417,11 +417,12 @@ need a negative value. Negative values are not valid host waits.
 
 ### Array Operators
 
-`Array[T]` adds exact-shape elementwise `+`, `-`, and `*` for its four
-supported numeric dtypes. A same-dtype scalar may appear on either side.
-Floating Arrays also support `/`. Integer Array `/` is the same `AU2003`
-static error as scalar integer `/`. Every result is a fresh Array. There is
-no array-shape broadcasting and no mixed promotion. See
+`Array[T]` adds elementwise `+`, `-`, and `*` for its four numeric dtypes.
+Two Arrays of one dtype broadcast, and a same-dtype scalar may appear on
+either side. Floating Arrays also support `/`. Integer Array `/` is the
+same `AU2003` static error as scalar integer `/`. Every result is a fresh
+Array. There is no mixed promotion, and `Array[bool]` has no arithmetic.
+`array as Array[U]` converts between the numeric dtypes. See
 [Numeric Arrays](/manual/numeric-arrays).
 
 ### Equality
@@ -825,16 +826,19 @@ UTF-8 str. Integer `string[index]` is unavailable.
 
 ### Array Slices
 
-An Array slice applies the range only to axis zero. It copies complete rows
-and keeps all later dimensions. Its first result dimension is `end - start`.
-It follows the same rules as other slices: the `int64` domain, one-time
-negative normalization, no clamping, `AU4003`, an owned copy, no step, and no
-assignment. It is not a multidimensional slice or a view.
+An Array index takes one component per axis, and each component is a
+coordinate or a slice: `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`. A slice
+keeps its axis and a coordinate removes it. Each slice follows the same
+rules as other slices: the `int64` domain, one-time negative normalization,
+no clamping, and `AU4003`. The result shares the source's elements instead
+of copying them, and an Array index with a slice can be assigned to.
+[Numeric Arrays](/manual/numeric-arrays#selections) has the details.
 
 ### Steps And Assignment
 
 `value[start:end:step]` selects every `step`-th element of a `list`, `Span`,
-or `str` into a fresh owned value (ADR-0066). The step is in the `int64`
+or `str` into a fresh owned value (ADR-0066). An `Array` takes the same
+form on each axis. The step is in the `int64`
 index domain and may be negative. An empty step, as in `value[::]`, is a
 one-colon slice.
 
@@ -848,11 +852,10 @@ one-colon slice.
   otherwise the slice stops the program with `AU4003`.
 - A zero step stops the program with `AU4003`.
 - A `str` step counts Unicode scalar values.
-- `Array` values have no stepped slice; the checker reports `AU2003`.
 
-Slice assignment and compound assignment report `AU2005` with `slice
-assignment is unavailable because slices are owned copies; mutate the source
-by index or build a new value`.
+Slice assignment and compound assignment to a list or `str` report `AU2005`
+with `slice assignment is unavailable because slices are owned copies;
+mutate the source by index or build a new value`. An `Array` accepts both.
 
 ## Collection Literals
 
@@ -1263,7 +1266,7 @@ Compile-time codes:
 | `AU2002` | A type, constructor-payload, match-result, or index-type mismatch. |
 | `AU2003` | An unsupported unary, binary, compound, membership, or cast operator. |
 | `AU2004` | Call or constructor argument binding failed. |
-| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment. |
+| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment to a list or `str`. |
 | `AU2008` | Equality on a union that has a member without equality. |
 | `AU2010` | A value is not a direct member of its expected union. |
 | `AU2011` | A literal that more than one union member could accept. |

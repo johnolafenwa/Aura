@@ -1,0 +1,6 @@
+error[AU4007]: array axis 2 is outside rank 2
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_axis_out_of_range.au:3:16
+  |
+3 |     print(grid.sum(2))
+  |                ^
+  = note: Aura call chain (innermost first): main at 1:1

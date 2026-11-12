@@ -3899,19 +3899,20 @@ impl Parser {
             if self.eat_simple(&TokenKind::LBracket).is_some() {
                 chain_len += 1;
                 self.check_expression_chain_limit(chain_len)?;
-                if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
-                    expr = self.finish_slice(expr, None, colon.span)?;
-                    continue;
-                }
-                let first = self.parse_expr()?;
-                if let Some(colon) = self.eat_simple(&TokenKind::Colon) {
-                    expr = self.finish_slice(expr, Some(Box::new(first)), colon.span)?;
-                    continue;
+                let first = self.parse_index_component()?;
+                if !self.at_simple(&TokenKind::Comma) {
+                    if let Some(slice) = array_axis_slice_parts(&first) {
+                        // One slice alone keeps the forms a list or `str`
+                        // slice has always had.
+                        self.expect_simple(TokenKind::RBracket)?;
+                        expr = single_axis_slice(expr, slice);
+                        continue;
+                    }
                 }
                 let index = if self.eat_simple(&TokenKind::Comma).is_some() {
                     let mut elements = vec![first];
                     loop {
-                        elements.push(self.parse_expr()?);
+                        elements.push(self.parse_index_component()?);
                         if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
@@ -3995,7 +3996,14 @@ impl Parser {
             self.peek_kind(1),
             Some(TokenKind::Identifier(name)) if name == crate::sema::TRAIT_OBJECT_TYPE_NAME
         ) && matches!(self.peek_kind(2), Some(TokenKind::Identifier(_)));
+        // `array as Array[T]` converts an Array's elements. `Array` alone
+        // is an ordinary name.
+        let starts_array = matches!(
+            self.peek_kind(1),
+            Some(TokenKind::Identifier(name)) if name == "Array"
+        ) && matches!(self.peek_kind(2), Some(TokenKind::LBracket));
         starts_trait_object
+            || starts_array
             || matches!(self.peek_kind(1), Some(TokenKind::KwMut | TokenKind::KwOwn))
             || matches!(
                 self.peek_kind(1),
@@ -4335,52 +4343,47 @@ impl Parser {
         )
     }
 
-    /// Parses the rest of a slice after its first colon: the end, then an
-    /// optional `:step`, then the closing bracket. A slice with a written
-    /// step becomes a call of the hidden stepped-slice builtin, whose
-    /// callee carries the colon's span for runtime failures; an omitted
-    /// endpoint is a `BuiltinOmitted` argument.
-    fn finish_slice(
-        &mut self,
-        object: Expr,
-        start: Option<Box<Expr>>,
-        colon_span: Span,
-    ) -> Result<Expr> {
-        let end = if self.at_simple(&TokenKind::RBracket) || self.at_simple(&TokenKind::Colon) {
+    /// Parses one component of an index: an expression, or a slice
+    /// `start:end:step` with any part omitted. A slice is a call of the
+    /// hidden stepped-slice builtin with an omitted object, whose callee
+    /// carries the first colon's span for diagnostics and runtime failures
+    /// (see [`array_axis_slice_parts`]).
+    fn parse_index_component(&mut self) -> Result<Expr> {
+        let start = if self.at_simple(&TokenKind::Colon) {
             None
         } else {
-            Some(Box::new(self.parse_expr()?))
+            Some(self.parse_expr()?)
         };
-        let step = if self.eat_simple(&TokenKind::Colon).is_some()
-            && !self.at_simple(&TokenKind::RBracket)
-        {
+        let Some(colon) = self.eat_simple(&TokenKind::Colon) else {
+            return Ok(start.expect("a component without a colon parsed an expression"));
+        };
+        let colon_span = colon.span;
+        let at_end = |parser: &Self| {
+            parser.at_simple(&TokenKind::RBracket)
+                || parser.at_simple(&TokenKind::Colon)
+                || parser.at_simple(&TokenKind::Comma)
+        };
+        let end = if at_end(self) {
+            None
+        } else {
+            Some(self.parse_expr()?)
+        };
+        let step = if self.eat_simple(&TokenKind::Colon).is_some() && !at_end(self) {
             Some(self.parse_expr()?)
         } else {
             None
         };
-        self.expect_simple(TokenKind::RBracket)?;
-        let span = object.span;
-        let Some(step) = step else {
-            return Ok(Expr {
-                kind: ExprKind::Slice {
-                    object: Box::new(object),
-                    start,
-                    end,
-                    colon_span,
-                },
-                span,
-            });
-        };
-        let argument = |value: Expr| Argument {
-            span: value.span,
-            name: None,
-            value,
-        };
-        let omitted = |endpoint: Option<Box<Expr>>| {
-            endpoint.map(|endpoint| *endpoint).unwrap_or(Expr {
+        let span = start.as_ref().map_or(colon_span, |start| start.span);
+        let argument = |value: Option<Expr>| {
+            let value = value.unwrap_or(Expr {
                 kind: ExprKind::BuiltinOmitted,
                 span: colon_span,
-            })
+            });
+            Argument {
+                span: value.span,
+                name: None,
+                value,
+            }
         };
         Ok(Expr {
             kind: ExprKind::Call {
@@ -4389,22 +4392,14 @@ impl Parser {
                     span: colon_span,
                 }),
                 args: vec![
-                    argument(object),
-                    argument(omitted(start)),
-                    argument(omitted(end)),
+                    argument(None),
+                    argument(start),
+                    argument(end),
                     argument(step),
                 ],
             },
             span,
         })
-    }
-
-    fn slice_assignment_error(&self) -> Diagnostic {
-        Diagnostic::coded_at(
-            "AU2005",
-            self.current_span(),
-            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
-        )
     }
 
     fn parse_args(&mut self) -> Result<Vec<Argument>> {
@@ -4687,20 +4682,13 @@ impl Parser {
             }
 
             if self.eat_simple(&TokenKind::LBracket).is_some() {
-                if self.at_simple(&TokenKind::Colon) {
-                    return Err(self.slice_assignment_error());
-                }
-                let first = self.parse_expr()?;
-                if self.at_simple(&TokenKind::Colon) {
-                    return Err(self.slice_assignment_error());
-                }
+                // A slice component stays in the index: the checker accepts
+                // it for an `Array` target and rejects it for any other.
+                let first = self.parse_index_component()?;
                 let index = if self.eat_simple(&TokenKind::Comma).is_some() {
                     let mut elements = vec![first];
                     loop {
-                        elements.push(self.parse_expr()?);
-                        if self.at_simple(&TokenKind::Colon) {
-                            return Err(self.slice_assignment_error());
-                        }
+                        elements.push(self.parse_index_component()?);
                         if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
@@ -5689,6 +5677,98 @@ fn offset_type_ref_span(type_ref: &mut TypeRef, line: usize, column_offset: usiz
                 view_return.span.column += column_offset;
             }
         }
+    }
+}
+
+/// The parts of a slice component of an index, `start:end:step`, each
+/// `None` when omitted. `colon_span` is the first colon.
+pub(crate) struct ArrayAxisSlice<'a> {
+    pub start: Option<&'a Expr>,
+    pub end: Option<&'a Expr>,
+    pub step: Option<&'a Expr>,
+    pub colon_span: Span,
+}
+
+/// Reads `component` as a slice inside an index: a call of the hidden
+/// stepped-slice builtin whose object is omitted. `None` for an ordinary
+/// index expression.
+pub(crate) fn array_axis_slice_parts(component: &Expr) -> Option<ArrayAxisSlice<'_>> {
+    let ExprKind::Call { callee, args } = &component.kind else {
+        return None;
+    };
+    if !matches!(&callee.kind, ExprKind::Name(name) if name == STEPPED_SLICE_BUILTIN) {
+        return None;
+    }
+    let [object, start, end, step] = args.as_slice() else {
+        return None;
+    };
+    if !matches!(object.value.kind, ExprKind::BuiltinOmitted) {
+        return None;
+    }
+    fn written(argument: &Argument) -> Option<&Expr> {
+        (!matches!(argument.value.kind, ExprKind::BuiltinOmitted)).then_some(&argument.value)
+    }
+    Some(ArrayAxisSlice {
+        start: written(start),
+        end: written(end),
+        step: written(step),
+        colon_span: callee.span,
+    })
+}
+
+/// Whether any component of `index` is a slice.
+pub(crate) fn index_has_slice(index: &Expr) -> bool {
+    match &index.kind {
+        ExprKind::Tuple(elements) => elements
+            .iter()
+            .any(|element| array_axis_slice_parts(element).is_some()),
+        _ => array_axis_slice_parts(index).is_some(),
+    }
+}
+
+/// `object[start:end]` or `object[start:end:step]` for a slice that is the
+/// whole index. A slice without a step is an [`ExprKind::Slice`], and one
+/// with a step is a call of the stepped-slice builtin on `object`.
+fn single_axis_slice(object: Expr, slice: ArrayAxisSlice<'_>) -> Expr {
+    let span = object.span;
+    let colon_span = slice.colon_span;
+    let boxed = |part: Option<&Expr>| part.cloned().map(Box::new);
+    let Some(step) = slice.step else {
+        return Expr {
+            kind: ExprKind::Slice {
+                object: Box::new(object),
+                start: boxed(slice.start),
+                end: boxed(slice.end),
+                colon_span,
+            },
+            span,
+        };
+    };
+    let argument = |value: Expr| Argument {
+        span: value.span,
+        name: None,
+        value,
+    };
+    let omitted = |endpoint: Option<&Expr>| {
+        endpoint.cloned().unwrap_or(Expr {
+            kind: ExprKind::BuiltinOmitted,
+            span: colon_span,
+        })
+    };
+    Expr {
+        kind: ExprKind::Call {
+            callee: Box::new(Expr {
+                kind: ExprKind::Name(STEPPED_SLICE_BUILTIN.to_string()),
+                span: colon_span,
+            }),
+            args: vec![
+                argument(object),
+                argument(omitted(slice.start)),
+                argument(omitted(slice.end)),
+                argument(step.clone()),
+            ],
+        },
+        span,
     }
 }
 

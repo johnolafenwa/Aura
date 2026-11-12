@@ -1,4 +1,4 @@
 def main():
     values = Array[int32].zeros(shape=[1])
-    mapped = values.map[bool](f=lambda value: value > 0)
+    mapped = values.map[str](f=lambda value: "x")
     print(mapped)

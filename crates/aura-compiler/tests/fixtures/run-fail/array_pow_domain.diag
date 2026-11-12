@@ -1,0 +1,6 @@
+error[AU4001]: floating power domain error at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_pow_domain.au:3:18
+  |
+3 |     print(values.pow(0.5))
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

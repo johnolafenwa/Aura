@@ -42,6 +42,8 @@ There are no lane classes for `int32` or the other narrow integers. See
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
 | `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
+| `V.load_array` | `load_array(values: Array[E], at: int64) -> V` | The elements of the rank-1 Array `values` from index `at`, one for each lane. |
+| `store_array` | `store_array(self, values: mut Array[E], at: int64)` | Writes the lanes over the elements of the rank-1 Array `values` from index `at`. |
 | `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
 | `/` | `V` with `V`, float classes only | The division in each lane. |
 | unary `-` | `V` | Each lane negated. |
@@ -139,8 +141,8 @@ module's source, and the call chain names your function:
 
 ```text
 error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
- --> <std>/simd.au:486:72
-  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+ --> <std>/simd.au:570:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 569:5 -> main at 4:1
 ```
 
 How much faster the lanes are depends on the target CPU:
@@ -232,7 +234,9 @@ These limits apply:
 
 - **A program that starts tasks** checks whether to yield once in each loop
   iteration. The lane arithmetic inside an iteration is still vector code.
-- **`Array` elements** are not loaded directly. Use the `Array` kernels, or
-  copy into a list.
+- **`Array` elements** load with `load_array` and store with
+  `store_array`, from a rank-1 Array. Call `flatten()` on a matrix first,
+  which shares its elements. A range check runs for each element, where a
+  counted loop over a list checks its range once.
 - **`aura run` on the interpreter backend** computes each lane as a
   separate float. The results are the same and there is no speedup.

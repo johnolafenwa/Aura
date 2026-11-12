@@ -1,0 +1,33 @@
+def main():
+    mut stack = Array[int64].zeros([2, 2, 3])
+    mut value = 0
+    for layer in range(2):
+        for row in range(2):
+            for column in range(3):
+                stack[layer, row, column] = value
+                value += 1
+    mut shared = Array[int64].zeros([3, 2])
+    for row in range(3):
+        for column in range(2):
+            shared[row, column] = row * 2 + column
+    # One matrix serves every layer.
+    print(stack.matmul(shared))
+    print(stack.matmul(shared).shape())
+    # A vector is one column on the right and one row on the left.
+    mut column_vector = Array[int64].zeros([3])
+    column_vector[0] = 1
+    column_vector[1] = 2
+    column_vector[2] = 3
+    print(stack.matmul(column_vector))
+    mut row_vector = Array[int64].zeros([2])
+    row_vector[0] = 1
+    row_vector[1] = 2
+    print(row_vector.matmul(stack))
+    # Layers pair up, and a view supplies its elements in order.
+    paired = stack.permute([0, 2, 1])
+    print(stack.matmul(paired))
+    weights = Array[float64].full([4, 1, 2, 2], 0.5)
+    inputs = Array[float64].full([3, 2, 5], 2.0)
+    outputs = weights.matmul(inputs)
+    print(outputs.shape())
+    print(outputs.sum())

@@ -703,7 +703,7 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice assignment
+- slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`

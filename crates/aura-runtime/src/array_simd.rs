@@ -218,6 +218,45 @@ pub(crate) fn striped_sum<T: KernelFloat>(values: &[T]) -> T {
     )
 }
 
+/// The reordered sum of `count` elements of `values` that lie `step`
+/// apart from `position`, with the bits `striped_sum` gives for the same
+/// elements in one slice.
+pub(crate) fn striped_sum_strided<T: KernelFloat>(
+    values: &[T],
+    position: usize,
+    step: isize,
+    count: usize,
+) -> T {
+    let Some(last) = count.checked_sub(1) else {
+        return T::default();
+    };
+    // Both ends are checked once, so the loops below read unchecked.
+    let end = position as isize + last as isize * step;
+    assert!(position < values.len() && (0..values.len() as isize).contains(&end));
+    let element = |index: usize| {
+        // SAFETY: every index is below `count`, and the first and last
+        // elements were checked to lie inside `values`.
+        unsafe { *values.get_unchecked((position as isize + index as isize * step) as usize) }
+    };
+    widest(
+        #[inline(always)]
+        || {
+            let groups = count / STRIPES;
+            let mut partial = [T::default(); STRIPES];
+            for group in 0..groups {
+                for (stripe, slot) in partial.iter_mut().enumerate() {
+                    *slot += element(group * STRIPES + stripe);
+                }
+            }
+            let mut total = fold_stripes(partial);
+            for index in groups * STRIPES..count {
+                total += element(index);
+            }
+            total
+        },
+    )
+}
+
 /// The reordered sum of a float Array's elements, each widened to
 /// `float64` first.
 pub(crate) fn striped_sum_f64<T: KernelFloat>(values: &[T]) -> f64 {

@@ -1,0 +1,5 @@
+error[AU2002]: casts are only supported between numeric types, found `Array[int64]` and `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_cast_to_scalar_unavailable.au:3:12
+  |
+3 |     print((values as float64))
+  |            ^

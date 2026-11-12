@@ -1,0 +1,6 @@
+error[AU2003]: a slice among the components of an index is available only for `Array[T]`, found `list[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/slice_component_outside_array.au:3:22
+  |
+3 |     print(values[0, 1:])
+  |                      ^
+  = help: slice a list or `str` with one slice, such as `values[1:3]`

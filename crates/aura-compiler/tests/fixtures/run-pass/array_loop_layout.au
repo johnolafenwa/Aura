@@ -1,0 +1,76 @@
+def fill(grid: mut Array[float64], n: int64):
+    for i in range(n):
+        for j in range(n):
+            grid[i, j] = (i * n + j) as float64
+
+def smooth(source: Array[float64], target: mut Array[float64], n: int64):
+    for i in range(1, n - 1):
+        for j in range(1, n - 1):
+            target[i, j] = (source[i - 1, j] + source[i + 1, j] + source[i, j - 1] + source[i, j + 1]) * 0.25
+
+def total(values: Array[int32]) -> int64:
+    mut sum = 0
+    for i in range(values.len()):
+        sum += values[i] as int64
+    return sum
+
+def negative(values: Array[int64]) -> int64:
+    mut sum = 0
+    for i in range(1, 5):
+        sum += values[-i] * i
+    return sum
+
+def main():
+    n = 6
+    mut grid = Array[float64].zeros([n, n])
+    fill(grid, n)
+    shared = grid.clone()
+    mut out = grid.clone()
+    smooth(grid, out, n)
+    print(out)
+    print(shared[2, 2])
+    # the loop writes a buffer that `kept` shares
+    kept = out.clone()
+    for i in range(n):
+        out[i, i] = -1.0
+    print(out[3, 3])
+    print(kept[3, 3])
+    # a strided view in a loop
+    turned = grid.transpose()
+    mut sum = 0.0
+    for i in range(n):
+        for j in range(n):
+            sum += turned[i, j] * (i as float64)
+    print(sum)
+    mut row = grid[2, :]
+    for j in range(n):
+        row[j] += 100.0
+    print(row)
+    print(grid[2, 1])
+    mut small = Array[int32].zeros([7])
+    for i in range(7):
+        small[i] = (i * i) as int32
+    print(total(small))
+    mut longs = Array[int64].zeros([5])
+    for i in range(5):
+        longs[i] = i + 1
+    print(negative(longs))
+    # the Array is replaced inside the loop
+    mut moving = Array[float64].zeros([3])
+    for i in range(3):
+        moving[i] = 1.0
+        if i == 1:
+            moving = Array[float64].full([3], 9.0)
+    print(moving)
+    # two ranks of access to one value
+    mut cube = Array[float32].zeros([2, 2, 2])
+    for i in range(2):
+        for j in range(2):
+            for k in range(2):
+                cube[i, j, k] = (i * 4 + j * 2 + k) as float32
+    mut acc = 0.0
+    for i in range(2):
+        acc += (cube[i, 1, 1] as float64)
+        plane = cube[i, :, :]
+        acc += (plane[0, 1] as float64)
+    print(acc)

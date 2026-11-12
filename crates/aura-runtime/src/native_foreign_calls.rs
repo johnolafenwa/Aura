@@ -23,7 +23,7 @@ use super::{
     value_type_name, with_value, OpaqueValue,
 };
 use crate::list_elements::ListForm;
-use crate::runtime_value::{FfiHandleDrop, FfiHandleValue, Value, VecValue};
+use crate::runtime_value::{ArrayValue, FfiHandleDrop, FfiHandleValue, Value, VecValue};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -231,6 +231,22 @@ unsafe fn write_elements(out: *mut ForeignView, pointer: *const u8, length: usiz
     out.length = length;
 }
 
+/// The address of the first element of the row-major `array`, whose
+/// dtype must be the scalar the list access code `access` names.
+fn array_elements_address(array: &ArrayValue, access: i64) -> *const u8 {
+    use crate::runtime_value::ArrayStorage;
+    match (array.storage(), scalar_form(access)) {
+        (ArrayStorage::Int32(values), ListForm::Int32) => values.as_ptr().cast(),
+        (ArrayStorage::Int64(values), ListForm::Int64) => values.as_ptr().cast(),
+        (ArrayStorage::Float32(values), ListForm::Float32) => values.as_ptr().cast(),
+        (ArrayStorage::Float64(values), ListForm::Float64) => values.as_ptr().cast(),
+        _ => runtime_error(format!(
+            "FFI argument expected an Array of another element type, but received `Array[{}]`",
+            array.dtype().runtime_type_name()
+        )),
+    }
+}
+
 /// Writes the address of the first element of the list `value` to `out`,
 /// laid out as a C array of the scalar that `access` names, with the
 /// element count. A list that keeps its elements in that form lends them
@@ -249,6 +265,29 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_elements(
     out: *mut ForeignView,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| unsafe {
+        // An `Array[T]` lends its own elements when they are one
+        // row-major block, and a packed copy of a view otherwise.
+        let packed = with_value(value, |value| {
+            let Value::Array(array) = value else {
+                return None;
+            };
+            Some(if array.is_contiguous() {
+                write_elements(out, array_elements_address(array, access), array.len());
+                std::ptr::null_mut()
+            } else {
+                let Ok(elements) = array.elements() else {
+                    runtime_error("FFI argument could not copy an Array view");
+                };
+                let Ok(copy) = ArrayValue::new(array.shape.clone(), elements.into_owned()) else {
+                    runtime_error("FFI argument could not copy an Array view");
+                };
+                write_elements(out, array_elements_address(&copy, access), copy.len());
+                boxed_value(Value::Array(copy))
+            })
+        });
+        if let Some(copy) = packed {
+            return copy;
+        }
         let form = scalar_form(access);
         with_value(value, |value| {
             let Value::Vec(vector) = value else {
@@ -300,6 +339,21 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_elements_mut(
     out: *mut ForeignView,
 ) {
     task_runtime_boundary(|| unsafe {
+        // An `Array[T]` is made one row-major block that no other Array
+        // shares, and then lends its elements.
+        let lent = value_mut(value, |value| {
+            let Value::Array(array) = value else {
+                return false;
+            };
+            if let Err(error) = array.make_writable() {
+                runtime_diagnostic_error(error);
+            }
+            write_elements(out, array_elements_address(array, access), array.len());
+            true
+        });
+        if lent {
+            return;
+        }
         let form = scalar_form(access);
         value_mut(value, |value| {
             let Value::Vec(vector) = value else {

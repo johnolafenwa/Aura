@@ -1,0 +1,5 @@
+error[AU2002]: binding `row` has annotated type `int32`, but value has type `Array[int32]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_selection_element_read_is_not_an_array.au:3:5
+  |
+3 |     row: int32 = values[0, :]
+  |     ^

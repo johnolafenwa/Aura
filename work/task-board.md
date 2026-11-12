@@ -16,6 +16,34 @@ Last updated: 2026-11-12
   worker may take it, by design. Two children cost about 0.3 to 0.5 ms
   more per round than one.
 
+## Array v2 (complete)
+
+- Target: the four items John approved on 2026-11-11: views and shape
+  operations, broadcasting with axis reductions and elementwise math,
+  matrix products beyond two dimensions, and zero-copy transport. Tensor
+  and device interop is deferred until John decides on it. Details are in
+  `2026-11-11-array-v2.md`.
+- Done: item 1. Arrays share reference-counted storage and copy on write
+  (ADR-0088). An index takes a coordinate or a slice per axis, with
+  steps. `reshape`, `flatten`, `transpose`, `permute`, and slice
+  assignment work on both backends.
+- Done: item 2 (ADR-0089). Arrays of one dtype broadcast. Reductions take
+  an axis. `abs`, `minimum`, `maximum`, the `float64` math members,
+  `as Array[T]`, `to_float`, the comparison members, and `Array[bool]`
+  masks with `choose` work on both backends. Arithmetic reads views in
+  place, selection updates run in place, and a temporary lends its
+  buffer.
+- Done: item 3 (ADR-0090). `matmul` multiplies stacks of matrices over
+  leading dimensions that broadcast.
+- Done: item 4 (ADR-0091). Compiled code reads and writes `grid[i, j]` in
+  place and reads an Array's layout once per loop. An `extern "C"`
+  parameter of type `Array[T]` is a pointer to the elements. The `simd`
+  lane classes have `load_array` and `store_array`. Tasks share an
+  Array's buffer through `clone()`.
+- Verification: the runtime and compiler unit tests, the fixtures, the
+  FFI acceptance test, and `benchmarks/array_elements` on both backends.
+- Remaining: none in scope. Follow-up candidates are in the work note.
+
 ## SIMD (complete)
 
 - Target: the four pieces John asked for on 2026-11-11: wider Array
@@ -39,6 +67,7 @@ Last updated: 2026-11-12
 - Possible follow-ups: `int32` lanes, the joined integer check and
   `matmul` tiles on AArch64, lane loads from an `Array`, and counted
   loops over `Array` elements.
+
 ## The two 0.14.0 regressions (complete)
 
 - Hello world grew 82 KB in 0.14.0 because `print` linked the code that

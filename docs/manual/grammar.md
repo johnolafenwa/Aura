@@ -692,7 +692,7 @@ view-statement
 
 assignment-target
     = identifier,
-      { ".", identifier | "[", expression, "]" } ;
+      { ".", identifier | index-suffix } ;
 
 unpack-target
     = binding-target, ",", binding-target,
@@ -999,8 +999,10 @@ postfix-expression
       | trait-object-cast-suffix } ;
 
 index-suffix
-    = "[", expression, { ",", expression }, "]"
-    | "[", [ expression ], ":", [ expression ], "]" ;
+    = "[", index-component, { ",", index-component }, "]" ;
+index-component
+    = expression
+    | [ expression ], ":", [ expression ], [ ":", [ expression ] ] ;
 member-suffix = ".", identifier ;
 call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
@@ -1045,18 +1047,18 @@ not chains.
 
 ### Indexing And Slicing
 
-Comma-separated index expressions are accepted only for `Array[T]`, which
-requires one `int64` coordinate per runtime axis. Other indexable types take
-one index expression.
+Comma-separated index components are accepted only for `Array[T]`, which
+takes one component per runtime axis. A component is an expression or a
+slice, so `grid[1, :]` and `grid[::2, 1:3]` are Array indexes. Other
+indexable types take one index expression or one slice.
 
-The one-colon bracket forms are owned slices. Each endpoint is optional, so
-`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` all use the
-second `index-suffix` alternative. On `Array[T]`, the range copies the first
-axis.
+The bracket forms with a colon are slices. Each endpoint is optional, so
+`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` are all
+slices. A second colon adds a step: `value[start:end:step]`.
 
-A second colon is reserved step syntax. It is rejected with `AU2005` and is
-not part of the accepted grammar. A slice suffix is an expression only and
-cannot be an assignment target.
+An index with a slice among its components is an assignment target only on
+an `Array[T]`. [Numeric Arrays](/manual/numeric-arrays) defines selections
+and slice assignment.
 
 ## Primary Expressions And Literals
 

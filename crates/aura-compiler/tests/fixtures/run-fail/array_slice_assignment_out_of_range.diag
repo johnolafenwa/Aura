@@ -1,0 +1,6 @@
+error[AU4003]: array coordinate 3 on axis 1 normalizes to 3, outside 0..3
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_slice_assignment_out_of_range.au:4:5
+  |
+4 |     values[:, 3] = 1
+  |     ^
+  = note: Aura call chain (innermost first): main at 1:1

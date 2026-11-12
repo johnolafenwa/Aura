@@ -1,0 +1,5 @@
+error[AU2004]: `transpose` expects 0 arguments, found 1
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_transpose_takes_no_arguments.au:3:11
+  |
+3 |     print(values.transpose(1))
+  |           ^

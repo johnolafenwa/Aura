@@ -1,0 +1,36 @@
+import simd
+
+def dot(xs: Array[float64], ys: Array[float64]) -> float64:
+    n = xs.len()
+    mut acc = simd.F64x4.splat(0.0)
+    mut i = 0
+    while i + 4 <= n:
+        acc = acc + simd.F64x4.load_array(xs, i) * simd.F64x4.load_array(ys, i)
+        i += 4
+    mut total = acc.l0 + acc.l1 + acc.l2 + acc.l3
+    while i < n:
+        total += xs[i] * ys[i]
+        i += 1
+    return total
+
+def main():
+    mut xs = Array[float64].zeros([10])
+    mut ys = Array[float64].zeros([10])
+    for i in range(10):
+        xs[i] = i as float64
+        ys[i] = 0.5
+    print(dot(xs, ys))
+    mut scaled = xs.clone()
+    mut i = 0
+    while i + 4 <= 10:
+        (simd.F64x4.load_array(xs, i) * simd.F64x4.splat(2.0)).store_array(scaled, i)
+        i += 4
+    print(scaled)
+    print(xs)
+    mut longs = Array[int64].zeros([4])
+    simd.I64x2(l0=3, l1=4).store_array(longs, 2)
+    print(simd.I64x2.load_array(longs, 2).l1)
+    mut singles = Array[float32].zeros([8])
+    simd.F32x8.splat(1.5).store_array(singles, 0)
+    print(simd.F32x4.load_array(singles, 4).l3)
+    print(simd.F64x2.load_array(xs, 8).l1)

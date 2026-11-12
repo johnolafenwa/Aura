@@ -1242,7 +1242,7 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             "Array equality is not supported",
         ),
         (
-            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: value > 0)\n    print(mapped)\n",
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: \"x\")\n    print(mapped)\n",
             "AU2002",
             "Array.map callback must return",
         ),
@@ -1306,7 +1306,7 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
             "invalid constructor dtype",
             "def main():\n    values = Array[str].zeros([1])\n    print(values)\n",
             "AU2002",
-            "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
+            "Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`",
         ),
         (
             "unknown constructor",
@@ -1384,7 +1384,7 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
             "map output dtype",
             "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[str](widen))\n",
             "AU2002",
-            "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
+            "Array.map output dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`",
         ),
         (
             "integer-only method",
@@ -2243,6 +2243,61 @@ extern "C" def bad(value: mut Handle) -> None
             diagnostic.message
         );
     }
+}
+
+#[test]
+fn ffi_array_parameters_are_element_pointers() {
+    check_ffi_source_for_test(
+        r#"extern "C" def dot(count: uint64, left: Array[float64], right: Array[float64]) -> float64
+extern "C" def scale(values: mut Array[float32], count: uint64) -> None
+extern "C" def total(values: Array[int32], count: uint64) -> int64
+extern "C" def bump(values: mut Array[int64], count: uint64) -> None
+
+def main():
+    mut values = Array[float64].zeros([2, 2])
+    print(dot(4, values, values))
+"#,
+    )
+    .expect("numeric Array parameters should check");
+
+    let owned = check_ffi_source_for_test(
+        r#"extern "C" def bad(values: own Array[float64]) -> None
+"#,
+    )
+    .expect_err("an owned Array parameter must fail");
+    assert_eq!(owned.code, "AU3004", "{}", owned.message);
+
+    let mask = check_ffi_source_for_test(
+        r#"extern "C" def bad(flags: Array[bool]) -> None
+"#,
+    )
+    .expect_err("a mask parameter must fail");
+    assert_eq!(mask.code, "AU2002", "{}", mask.message);
+    assert!(
+        mask.help
+            .iter()
+            .any(|help| help.contains("as Array[int32]")),
+        "{:?}",
+        mask.help
+    );
+
+    let returned = check_ffi_source_for_test(
+        r#"extern "C" def bad() -> Array[float64]
+"#,
+    )
+    .expect_err("an Array result must fail");
+    assert_eq!(returned.code, "AU2002", "{}", returned.message);
+
+    let mismatch = check_ffi_source_for_test(
+        r#"extern "C" def total(values: Array[int32], count: uint64) -> int64
+
+def main():
+    values = Array[float64].zeros([2])
+    print(total(values, 2))
+"#,
+    )
+    .expect_err("an Array of another dtype must fail");
+    assert_eq!(mismatch.code, "AU2002", "{}", mismatch.message);
 }
 
 #[test]
@@ -31880,11 +31935,11 @@ def main() -> None:
         ),
         (
             r#"def main() -> None:
-    values = Array[int32].zeros([4])
+    values = {1: 2}
     print(values[::2])
 "#,
             "AU2003",
-            r#"stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `Array[int32]`"#,
+            r#"stepped slicing is available only for `Array[T]`, `list[T]`, `Span[T]`, and `str`, found `dict[int64, int64]`"#,
         ),
         (
             r#"def sorted(value: int64) -> int64:
@@ -33380,5 +33435,165 @@ def count(path: str) -> Result[int64, io.Error]:
             "{statement}: {}",
             error.message
         );
+    }
+}
+
+#[test]
+fn array_selections_type_check_reads_views_and_slice_assignment() {
+    crate::check_source(
+        r#"
+def main():
+    mut values = Array[float64].zeros([3, 4])
+    narrow: int32 = 1
+    row: Array[float64] = values[narrow, :]
+    column: Array[float64] = values[:, -1]
+    block: Array[float64] = values[::2, 1:3]
+    reversed: Array[float64] = values[::-1]
+    stepped: Array[float64] = values[0:3:narrow]
+    item: float64 = values[1, 2]
+    turned: Array[float64] = values.transpose()
+    reshaped: Array[float64] = values.reshape([2, -1])
+    flat: Array[float64] = values.flatten()
+    swapped: Array[float64] = values.permute(axes=[1, 0])
+    values[0, :] = 1
+    values[1, :] = 2.5
+    values[:, 0] = column
+    values[1:, :] = values[:-1, :]
+    values[::2] += 1
+    values[2, 1:3] *= block[0, :]
+    print(row.len() + reversed.len() + stepped.len() + turned.len())
+    print(item + reshaped[0, 0] + flat[0] + swapped[0, 0])
+"#,
+    )
+    .expect("Array selections, layout members, and slice assignment should type-check");
+}
+
+#[test]
+fn array_selections_reject_misuse_in_the_library_checker() {
+    for (source, code, message) in [
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([2, 3])
+    values[0, :] = 1.5
+"#,
+            "AU2002",
+            "cannot assign value of type `float64` through a slice of `Array[int32]`; assign `Array[int32]` or `int32`",
+        ),
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([2, 3])
+    values[0, :] = Array[int64].zeros([3])
+"#,
+            "AU2002",
+            "cannot assign value of type `Array[int64]` through a slice of `Array[int32]`; assign `Array[int32]` or `int32`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    values[0, :] = 1
+"#,
+            "AU3003",
+            "cannot assign through immutable place `values[..]`",
+        ),
+        (
+            r#"def main():
+    mut values = Array[int32].zeros([4])
+    values[::-1] = values
+"#,
+            "AU3002",
+            "cannot consume `values` while `values` remains mutably borrowed by the indexed assignment target",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values[0, 1.0:])
+"#,
+            "AU2002",
+            "slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values[0, ::1.5])
+"#,
+            "AU2002",
+            "slice endpoints and steps must have type `int64` or a losslessly narrower integer type, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values["a", :])
+"#,
+            "AU2002",
+            "Array indices must have type `int64` or a losslessly narrower integer type, found `str`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.reshape(6))
+"#,
+            "AU2002",
+            "`Array.reshape` expects `list[int64]`, found `int64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.permute([0.5, 1.0]))
+"#,
+            "AU2002",
+            "list literal elements must all have type `int64`, found `float64`",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.transpose(1))
+"#,
+            "AU2004",
+            "`transpose` expects 0 arguments, found 1",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    print(values.flatten(1))
+"#,
+            "AU2004",
+            "`flatten` expects 0 arguments, found 1",
+        ),
+        (
+            r#"def main():
+    values = Array[int32].zeros([2, 3])
+    row: int32 = values[0, :]
+    print(row)
+"#,
+            "AU2002",
+            "binding `row` has annotated type `int32`, but value has type `Array[int32]`",
+        ),
+        (
+            r#"def main():
+    values = [1, 2, 3]
+    print(values[0, 1:])
+"#,
+            "AU2003",
+            "a slice among the components of an index is available only for `Array[T]`, found `list[int64]`",
+        ),
+        (
+            r#"def main():
+    mut values = {1: 2}
+    values[0:1] = 3
+"#,
+            "AU2005",
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+        ),
+        (
+            r#"def replace(values: mut list[int32]):
+    values[:] += values
+"#,
+            "AU2005",
+            "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+        ),
+    ] {
+        let diagnostic = crate::check_source(source).expect_err(message);
+        assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
+        assert_eq!(diagnostic.message, message, "{source}");
     }
 }

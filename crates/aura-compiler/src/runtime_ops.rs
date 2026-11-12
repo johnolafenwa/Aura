@@ -826,6 +826,54 @@ pub const SET_INDEX_MEMBER: &str = "__set_index";
 pub const SLICE_MEMBER: &str = "__slice";
 /// The private member a stepped slice `items[a:b:k]` lowers to.
 pub const SLICE_STEP_MEMBER: &str = "__slice_step";
+/// The private member an `Array` index with a slice among its components
+/// lowers to, such as `values[i, a:b]`.
+pub const SELECT_MEMBER: &str = "__select";
+/// The private member an assignment through such an index lowers to.
+pub const ASSIGN_MEMBER: &str = "__assign";
+/// `__select` for an index of one or two components, whose selection
+/// words travel as eight plain arguments instead of one tuple.
+pub const SELECT_WORDS_MEMBER: &str = "__select_words";
+/// `__assign` for an index of one or two components.
+pub const ASSIGN_WORDS_MEMBER: &str = "__assign_words";
+/// `object[selection] op= value` for one or two components.
+pub const UPDATE_WORDS_MEMBER: &str = "__update_words";
+/// `object[c0, c1, ...]` for integer coordinates, which travel as plain
+/// arguments after their count (ADR-0091).
+pub const READ_AT_MEMBER: &str = "__read_at";
+/// `object[c0, c1, ...] = value` for integer coordinates (ADR-0091).
+pub const WRITE_AT_MEMBER: &str = "__write_at";
+/// The coordinate arguments of [`READ_AT_MEMBER`] and [`WRITE_AT_MEMBER`].
+/// An index with fewer coordinates passes zeros for the rest.
+pub const ARRAY_COORDINATE_WORDS: usize = aura_runtime::native_runtime::DIRECT_ARRAY_MAX_RANK;
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::ReduceAxis`).
+pub const REDUCE_AXIS_MEMBER: &str = "__reduce_axis";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::MeanAxis`).
+pub const MEAN_AXIS_MEMBER: &str = "__mean_axis";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::Unary`).
+pub const UNARY_MEMBER: &str = "__unary";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::UnaryInt64`).
+pub const UNARY_INT64_MEMBER: &str = "__unary_int64";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::UnaryFloat64`).
+pub const UNARY_FLOAT64_MEMBER: &str = "__unary_float64";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::Pairwise`).
+pub const PAIRWISE_MEMBER: &str = "__pairwise";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::Compare`).
+pub const COMPARE_MEMBER: &str = "__compare";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::MaskTest`).
+pub const MASK_TEST_MEMBER: &str = "__mask_test";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::MaskCount`).
+pub const MASK_COUNT_MEMBER: &str = "__mask_count";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::Choose`).
+pub const CHOOSE_MEMBER: &str = "__choose";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::CastInt32`).
+pub const CAST_INT32_MEMBER: &str = "__cast_int32";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::CastInt64`).
+pub const CAST_INT64_MEMBER: &str = "__cast_int64";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::CastFloat32`).
+pub const CAST_FLOAT32_MEMBER: &str = "__cast_float32";
+/// A private member of the Array members of ADR-0089 (see `ArrayOp::CastFloat64`).
+pub const CAST_FLOAT64_MEMBER: &str = "__cast_float64";
 /// The private optional read a `for` loop over a borrowed collection lowers
 /// to.
 pub const INDEX_OPTION_MEMBER: &str = "__index_option";
@@ -951,6 +999,97 @@ const SET_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("line"),
     CallableParam::required("column"),
 ];
+const ARRAY_SPAN_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ARRAY_KIND_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ARRAY_KIND_AXIS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind"),
+    CallableParam::required("axis"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ARRAY_OTHER_KIND_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("other"),
+    CallableParam::required("kind"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ARRAY_CHOOSE_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("when_true"),
+    CallableParam::required("when_false"),
+    CallableParam::required("dtype"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const SELECT_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const ASSIGN_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+/// The position of `value` among [`ASSIGN_WORDS_PARAMS`] and
+/// [`UPDATE_WORDS_PARAMS`].
+pub const ASSIGN_WORDS_VALUE: usize = 8;
+const UPDATE_WORDS_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("kind0"),
+    CallableParam::required("start0"),
+    CallableParam::required("end0"),
+    CallableParam::required("step0"),
+    CallableParam::required("kind1"),
+    CallableParam::required("start1"),
+    CallableParam::required("end1"),
+    CallableParam::required("step1"),
+    CallableParam::required("value"),
+    CallableParam::required("operation"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const READ_AT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("rank"),
+    CallableParam::required("c0"),
+    CallableParam::required("c1"),
+    CallableParam::required("c2"),
+    CallableParam::required("c3"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+const WRITE_AT_PARAMS: &[CallableParam<'static>] = &[
+    CallableParam::required("rank"),
+    CallableParam::required("c0"),
+    CallableParam::required("c1"),
+    CallableParam::required("c2"),
+    CallableParam::required("c3"),
+    CallableParam::required("value"),
+    CallableParam::required("line"),
+    CallableParam::required("column"),
+];
+/// The position of `value` among [`WRITE_AT_PARAMS`].
+pub const WRITE_AT_VALUE: usize = 1 + ARRAY_COORDINATE_WORDS;
 const KEY_INDEX_PARAMS: &[CallableParam<'static>] = &[
     CallableParam::required("key"),
     CallableParam::required("line"),
@@ -1723,6 +1862,10 @@ pub enum ArrayOp {
     FastMean,
     Dot,
     Matmul,
+    Reshape,
+    Flatten,
+    Transpose,
+    Permute,
     WrappingAdd,
     WrappingSub,
     WrappingMul,
@@ -1735,6 +1878,65 @@ pub enum ArrayOp {
     SetIndex,
     /// `__slice(start, has_start, end, has_end, line, column)`.
     Slice,
+    /// `__select(selection, line, column)`: an index with a slice among
+    /// its components. `selection` is a tuple of `int64` words, four per
+    /// component (see `aura_runtime::array_views`).
+    Select,
+    /// `__assign(selection, value, line, column)`: an assignment through
+    /// such an index.
+    Assign,
+    /// `__select_words(kind0, start0, end0, step0, kind1, start1, end1,
+    /// step1, line, column)`: `Select` for one or two components.
+    SelectWords,
+    /// `__assign_words(kind0, ..., step1, value, line, column)`: `Assign`
+    /// for one or two components.
+    AssignWords,
+    /// `__update_words(kind0, ..., step1, value, operation, line,
+    /// column)`: `object[selection] op= value` for one or two components.
+    /// `operation` is an Array binary operation code.
+    UpdateWords,
+    /// `object[c0, c1, ...]` for integer coordinates passed as words
+    /// (ADR-0091). Compiled code reads a row-major Array in place.
+    ReadAt,
+    /// `object[c0, c1, ...] = value` for integer coordinates passed as
+    /// words. Compiled code writes in place while the Array holds its
+    /// buffer alone.
+    WriteAt,
+    /// `__reduce_axis(kind, axis, line, column)`: `sum`, `min`, `max`, or
+    /// `fast_sum` along one axis. `kind` is a reduction code.
+    ReduceAxis,
+    /// `__mean_axis(kind, axis, line, column)`: `mean` or `fast_mean` along
+    /// one axis, which gives `Array[float64]`.
+    MeanAxis,
+    /// `__unary(kind, line, column)`: an elementwise member that keeps the
+    /// dtype. `kind` is an `ArrayUnaryOp` code.
+    Unary,
+    /// `__unary_int64(kind, line, column)`: `floor`, `ceil`, or `trunc`.
+    UnaryInt64,
+    /// `__unary_float64(kind, line, column)`: `to_float`.
+    UnaryFloat64,
+    /// `__pairwise(other, kind, line, column)`: `minimum`, `maximum`,
+    /// `pow`, `logical_and`, or `logical_or`. `kind` is an `ArrayPairOp`
+    /// code.
+    Pairwise,
+    /// `__compare(other, kind, line, column)`: a comparison member, which
+    /// gives `Array[bool]`. `kind` is an `ArrayCompareOp` code.
+    Compare,
+    /// `__mask_test(kind, line, column)`: `any` or `all` of a mask.
+    MaskTest,
+    /// `__mask_count(kind, line, column)`: `count` of a mask.
+    MaskCount,
+    /// `__choose(when_true, when_false, dtype, line, column)`: `choose` on
+    /// a mask. `dtype` is the result's dtype code.
+    Choose,
+    /// `__cast_int32(line, column)`: `array as Array[int32]`.
+    CastInt32,
+    /// `__cast_int64(line, column)`: `array as Array[int64]`.
+    CastInt64,
+    /// `__cast_float32(line, column)`: `array as Array[float32]`.
+    CastFloat32,
+    /// `__cast_float64(line, column)`: `array as Array[float64]`.
+    CastFloat64,
 }
 
 impl ArrayOp {
@@ -1754,6 +1956,10 @@ impl ArrayOp {
         ArrayOp::FastMean,
         ArrayOp::Dot,
         ArrayOp::Matmul,
+        ArrayOp::Reshape,
+        ArrayOp::Flatten,
+        ArrayOp::Transpose,
+        ArrayOp::Permute,
         ArrayOp::WrappingAdd,
         ArrayOp::WrappingSub,
         ArrayOp::WrappingMul,
@@ -1763,6 +1969,27 @@ impl ArrayOp {
         ArrayOp::Index,
         ArrayOp::SetIndex,
         ArrayOp::Slice,
+        ArrayOp::Select,
+        ArrayOp::Assign,
+        ArrayOp::SelectWords,
+        ArrayOp::AssignWords,
+        ArrayOp::UpdateWords,
+        ArrayOp::ReadAt,
+        ArrayOp::WriteAt,
+        ArrayOp::ReduceAxis,
+        ArrayOp::MeanAxis,
+        ArrayOp::Unary,
+        ArrayOp::UnaryInt64,
+        ArrayOp::UnaryFloat64,
+        ArrayOp::Pairwise,
+        ArrayOp::Compare,
+        ArrayOp::MaskTest,
+        ArrayOp::MaskCount,
+        ArrayOp::Choose,
+        ArrayOp::CastInt32,
+        ArrayOp::CastInt64,
+        ArrayOp::CastFloat32,
+        ArrayOp::CastFloat64,
     ];
 
     const fn builtin_member(self) -> Option<BuiltinMember> {
@@ -1783,13 +2010,40 @@ impl ArrayOp {
             ArrayOp::FastMean => M::ArrayFastMean,
             ArrayOp::Dot => M::ArrayDot,
             ArrayOp::Matmul => M::ArrayMatmul,
+            ArrayOp::Reshape => M::ArrayReshape,
+            ArrayOp::Flatten => M::ArrayFlatten,
+            ArrayOp::Transpose => M::ArrayTranspose,
+            ArrayOp::Permute => M::ArrayPermute,
             ArrayOp::WrappingAdd => M::ArrayWrappingAdd,
             ArrayOp::WrappingSub => M::ArrayWrappingSub,
             ArrayOp::WrappingMul => M::ArrayWrappingMul,
             ArrayOp::SaturatingAdd => M::ArraySaturatingAdd,
             ArrayOp::SaturatingSub => M::ArraySaturatingSub,
             ArrayOp::SaturatingMul => M::ArraySaturatingMul,
-            ArrayOp::Index | ArrayOp::SetIndex | ArrayOp::Slice => return None,
+            ArrayOp::Index
+            | ArrayOp::SetIndex
+            | ArrayOp::Slice
+            | ArrayOp::Select
+            | ArrayOp::Assign
+            | ArrayOp::SelectWords
+            | ArrayOp::AssignWords
+            | ArrayOp::UpdateWords
+            | ArrayOp::ReadAt
+            | ArrayOp::WriteAt
+            | ArrayOp::ReduceAxis
+            | ArrayOp::MeanAxis
+            | ArrayOp::Unary
+            | ArrayOp::UnaryInt64
+            | ArrayOp::UnaryFloat64
+            | ArrayOp::Pairwise
+            | ArrayOp::Compare
+            | ArrayOp::MaskTest
+            | ArrayOp::MaskCount
+            | ArrayOp::Choose
+            | ArrayOp::CastInt32
+            | ArrayOp::CastInt64
+            | ArrayOp::CastFloat32
+            | ArrayOp::CastFloat64 => return None,
         })
     }
 
@@ -1811,6 +2065,10 @@ impl ArrayOp {
             M::ArrayFastMean => ArrayOp::FastMean,
             M::ArrayDot => ArrayOp::Dot,
             M::ArrayMatmul => ArrayOp::Matmul,
+            M::ArrayReshape => ArrayOp::Reshape,
+            M::ArrayFlatten => ArrayOp::Flatten,
+            M::ArrayTranspose => ArrayOp::Transpose,
+            M::ArrayPermute => ArrayOp::Permute,
             M::ArrayWrappingAdd => ArrayOp::WrappingAdd,
             M::ArrayWrappingSub => ArrayOp::WrappingSub,
             M::ArrayWrappingMul => ArrayOp::WrappingMul,
@@ -1826,6 +2084,27 @@ impl ArrayOp {
             ArrayOp::Index => INDEX_MEMBER,
             ArrayOp::SetIndex => SET_INDEX_MEMBER,
             ArrayOp::Slice => SLICE_MEMBER,
+            ArrayOp::Select => SELECT_MEMBER,
+            ArrayOp::Assign => ASSIGN_MEMBER,
+            ArrayOp::SelectWords => SELECT_WORDS_MEMBER,
+            ArrayOp::AssignWords => ASSIGN_WORDS_MEMBER,
+            ArrayOp::UpdateWords => UPDATE_WORDS_MEMBER,
+            ArrayOp::ReadAt => READ_AT_MEMBER,
+            ArrayOp::WriteAt => WRITE_AT_MEMBER,
+            ArrayOp::ReduceAxis => REDUCE_AXIS_MEMBER,
+            ArrayOp::MeanAxis => MEAN_AXIS_MEMBER,
+            ArrayOp::Unary => UNARY_MEMBER,
+            ArrayOp::UnaryInt64 => UNARY_INT64_MEMBER,
+            ArrayOp::UnaryFloat64 => UNARY_FLOAT64_MEMBER,
+            ArrayOp::Pairwise => PAIRWISE_MEMBER,
+            ArrayOp::Compare => COMPARE_MEMBER,
+            ArrayOp::MaskTest => MASK_TEST_MEMBER,
+            ArrayOp::MaskCount => MASK_COUNT_MEMBER,
+            ArrayOp::Choose => CHOOSE_MEMBER,
+            ArrayOp::CastInt32 => CAST_INT32_MEMBER,
+            ArrayOp::CastInt64 => CAST_INT64_MEMBER,
+            ArrayOp::CastFloat32 => CAST_FLOAT32_MEMBER,
+            ArrayOp::CastFloat64 => CAST_FLOAT64_MEMBER,
             _ => return None,
         })
     }
@@ -1835,14 +2114,52 @@ impl ArrayOp {
             INDEX_MEMBER => ArrayOp::Index,
             SET_INDEX_MEMBER => ArrayOp::SetIndex,
             SLICE_MEMBER => ArrayOp::Slice,
+            SELECT_MEMBER => ArrayOp::Select,
+            ASSIGN_MEMBER => ArrayOp::Assign,
+            SELECT_WORDS_MEMBER => ArrayOp::SelectWords,
+            ASSIGN_WORDS_MEMBER => ArrayOp::AssignWords,
+            UPDATE_WORDS_MEMBER => ArrayOp::UpdateWords,
+            READ_AT_MEMBER => ArrayOp::ReadAt,
+            WRITE_AT_MEMBER => ArrayOp::WriteAt,
+            REDUCE_AXIS_MEMBER => ArrayOp::ReduceAxis,
+            MEAN_AXIS_MEMBER => ArrayOp::MeanAxis,
+            UNARY_MEMBER => ArrayOp::Unary,
+            UNARY_INT64_MEMBER => ArrayOp::UnaryInt64,
+            UNARY_FLOAT64_MEMBER => ArrayOp::UnaryFloat64,
+            PAIRWISE_MEMBER => ArrayOp::Pairwise,
+            COMPARE_MEMBER => ArrayOp::Compare,
+            MASK_TEST_MEMBER => ArrayOp::MaskTest,
+            MASK_COUNT_MEMBER => ArrayOp::MaskCount,
+            CHOOSE_MEMBER => ArrayOp::Choose,
+            CAST_INT32_MEMBER => ArrayOp::CastInt32,
+            CAST_INT64_MEMBER => ArrayOp::CastInt64,
+            CAST_FLOAT32_MEMBER => ArrayOp::CastFloat32,
+            CAST_FLOAT64_MEMBER => ArrayOp::CastFloat64,
             _ => return None,
         })
     }
 
     const fn private_params(self) -> Option<&'static [CallableParam<'static>]> {
         Some(match self {
-            ArrayOp::Index => INDEX_PARAMS,
-            ArrayOp::SetIndex => SET_INDEX_PARAMS,
+            ArrayOp::Index | ArrayOp::Select => INDEX_PARAMS,
+            ArrayOp::SetIndex | ArrayOp::Assign => SET_INDEX_PARAMS,
+            ArrayOp::SelectWords => SELECT_WORDS_PARAMS,
+            ArrayOp::AssignWords => ASSIGN_WORDS_PARAMS,
+            ArrayOp::UpdateWords => UPDATE_WORDS_PARAMS,
+            ArrayOp::ReadAt => READ_AT_PARAMS,
+            ArrayOp::WriteAt => WRITE_AT_PARAMS,
+            ArrayOp::ReduceAxis | ArrayOp::MeanAxis => ARRAY_KIND_AXIS_PARAMS,
+            ArrayOp::Unary
+            | ArrayOp::UnaryInt64
+            | ArrayOp::UnaryFloat64
+            | ArrayOp::MaskTest
+            | ArrayOp::MaskCount => ARRAY_KIND_PARAMS,
+            ArrayOp::Pairwise | ArrayOp::Compare => ARRAY_OTHER_KIND_PARAMS,
+            ArrayOp::Choose => ARRAY_CHOOSE_PARAMS,
+            ArrayOp::CastInt32
+            | ArrayOp::CastInt64
+            | ArrayOp::CastFloat32
+            | ArrayOp::CastFloat64 => ARRAY_SPAN_PARAMS,
             ArrayOp::Slice => SLICE_PARAMS,
             _ => return None,
         })
@@ -1876,6 +2193,12 @@ impl ArrayOp {
             ArrayOp::FastMean => spanned(RuntimeFn::ArrayReduce, &[5]),
             ArrayOp::Dot => spanned(RuntimeFn::ArrayDot, &[]),
             ArrayOp::Matmul => spanned(RuntimeFn::ArrayMatmul, &[]),
+            // The shape operations pass a kind word: 0 reshape, 1 permute
+            // with their list, and 0 flatten, 1 transpose without one.
+            ArrayOp::Reshape => spanned(RuntimeFn::ArrayReshape, &[0]),
+            ArrayOp::Permute => spanned(RuntimeFn::ArrayReshape, &[1]),
+            ArrayOp::Flatten => spanned(RuntimeFn::ArrayRelayout, &[0]),
+            ArrayOp::Transpose => spanned(RuntimeFn::ArrayRelayout, &[1]),
             ArrayOp::WrappingAdd => spanned(RuntimeFn::ArrayBinary, &[0, 0, 1]),
             ArrayOp::WrappingSub => spanned(RuntimeFn::ArrayBinary, &[0, 1, 1]),
             ArrayOp::WrappingMul => spanned(RuntimeFn::ArrayBinary, &[0, 2, 1]),
@@ -1885,6 +2208,27 @@ impl ArrayOp {
             ArrayOp::Index => helper(RuntimeFn::ArrayIndex),
             ArrayOp::SetIndex => helper(RuntimeFn::ArraySetIndexInPlace),
             ArrayOp::Slice => helper(RuntimeFn::ArraySlice),
+            ArrayOp::Select => helper(RuntimeFn::ArraySelect),
+            ArrayOp::Assign => helper(RuntimeFn::ArrayAssignInPlace),
+            ArrayOp::SelectWords => helper(RuntimeFn::ArraySelectWords),
+            ArrayOp::AssignWords => helper(RuntimeFn::ArrayAssignWordsInPlace),
+            ArrayOp::UpdateWords => helper(RuntimeFn::ArrayUpdateWordsInPlace),
+            ArrayOp::ReadAt => helper(RuntimeFn::ArrayReadAt),
+            ArrayOp::WriteAt => helper(RuntimeFn::ArrayWriteAt),
+            ArrayOp::ReduceAxis => helper(RuntimeFn::ArrayReduceAxis),
+            ArrayOp::MeanAxis => helper(RuntimeFn::ArrayReduceAxis),
+            ArrayOp::Unary => helper(RuntimeFn::ArrayUnary),
+            ArrayOp::UnaryInt64 => helper(RuntimeFn::ArrayUnary),
+            ArrayOp::UnaryFloat64 => helper(RuntimeFn::ArrayUnary),
+            ArrayOp::Pairwise => helper(RuntimeFn::ArrayPairwise),
+            ArrayOp::Compare => helper(RuntimeFn::ArrayCompare),
+            ArrayOp::MaskTest => helper(RuntimeFn::ArrayMaskReduce),
+            ArrayOp::MaskCount => helper(RuntimeFn::ArrayMaskReduce),
+            ArrayOp::Choose => helper(RuntimeFn::ArrayChoose),
+            ArrayOp::CastInt32 => helper_with(RuntimeFn::ArrayCast, &[0], 0),
+            ArrayOp::CastInt64 => helper_with(RuntimeFn::ArrayCast, &[1], 0),
+            ArrayOp::CastFloat32 => helper_with(RuntimeFn::ArrayCast, &[2], 0),
+            ArrayOp::CastFloat64 => helper_with(RuntimeFn::ArrayCast, &[3], 0),
         }
     }
 
@@ -1898,24 +2242,58 @@ impl ArrayOp {
             ArrayOp::Len => Type::named("int64"),
             ArrayOp::Clone
             | ArrayOp::Matmul
+            | ArrayOp::Reshape
+            | ArrayOp::Flatten
+            | ArrayOp::Transpose
+            | ArrayOp::Permute
+            | ArrayOp::Select
+            | ArrayOp::SelectWords
             | ArrayOp::WrappingAdd
             | ArrayOp::WrappingSub
             | ArrayOp::WrappingMul
             | ArrayOp::SaturatingAdd
             | ArrayOp::SaturatingSub
             | ArrayOp::SaturatingMul
+            | ArrayOp::ReduceAxis
+            | ArrayOp::Unary
+            | ArrayOp::Pairwise
             | ArrayOp::Slice => receiver?.clone(),
             ArrayOp::Get | ArrayOp::Set => {
                 optional_type(dtype.unwrap_or_else(|| Type::named("Unknown")))
             }
-            ArrayOp::Fill | ArrayOp::SetIndex => Type::Unit,
+            ArrayOp::Fill
+            | ArrayOp::SetIndex
+            | ArrayOp::Assign
+            | ArrayOp::AssignWords
+            | ArrayOp::UpdateWords
+            | ArrayOp::WriteAt => Type::Unit,
             ArrayOp::Sum
             | ArrayOp::Min
             | ArrayOp::Max
             | ArrayOp::FastSum
             | ArrayOp::Dot
-            | ArrayOp::Index => return dtype,
+            | ArrayOp::Index
+            | ArrayOp::ReadAt => return dtype,
             ArrayOp::Mean | ArrayOp::FastMean => Type::named("float64"),
+            ArrayOp::MeanAxis | ArrayOp::UnaryFloat64 | ArrayOp::CastFloat64 => {
+                array(vec![Type::named("float64")])
+            }
+            ArrayOp::UnaryInt64 | ArrayOp::CastInt64 => array(vec![Type::named("int64")]),
+            ArrayOp::CastInt32 => array(vec![Type::named("int32")]),
+            ArrayOp::CastFloat32 => array(vec![Type::named("float32")]),
+            ArrayOp::Compare => array(vec![Type::named("bool")]),
+            ArrayOp::MaskTest => Type::named("bool"),
+            ArrayOp::MaskCount => Type::named("int64"),
+            // An Array argument names the result type; two elements name
+            // its dtype.
+            ArrayOp::Choose => {
+                let is_array = |ty: &&Type| matches!(ty, Type::Named(name, _) if name == "Array");
+                let values = || args.iter().take(2).flatten();
+                match values().find(is_array) {
+                    Some(ty) => ty.clone(),
+                    None => array(vec![values().next()?.clone()]),
+                }
+            }
             ArrayOp::Map => match args.first() {
                 Some(Some(
                     Type::Function { return_type, .. } | Type::Closure { return_type, .. },
@@ -2901,6 +3279,16 @@ impl RuntimeOp {
                 .private_params()
                 .expect("a private op names its parameters")
                 .to_vec(),
+            // A reduction over the whole Array takes no argument. One over
+            // an axis lowers to the private axis members.
+            RuntimeOp::Array(
+                ArrayOp::Sum
+                | ArrayOp::Min
+                | ArrayOp::Max
+                | ArrayOp::Mean
+                | ArrayOp::FastSum
+                | ArrayOp::FastMean,
+            ) => Vec::new(),
             _ => {
                 let params = self
                     .builtin_member()
@@ -3015,7 +3403,32 @@ impl RuntimeOp {
             RuntimeOp::Set(SetOp::IndexOption | SetOp::TakeIndexOption) => private(&[]),
             RuntimeOp::Set(_) => member(),
             RuntimeOp::Array(ArrayOp::SetIndex) => private(&[1]),
-            RuntimeOp::Array(ArrayOp::Index | ArrayOp::Slice) => private(&[]),
+            RuntimeOp::Array(ArrayOp::Assign) => private(&[1]),
+            RuntimeOp::Array(ArrayOp::AssignWords | ArrayOp::UpdateWords) => {
+                private(&[ASSIGN_WORDS_VALUE])
+            }
+            RuntimeOp::Array(ArrayOp::WriteAt) => private(&[WRITE_AT_VALUE]),
+            RuntimeOp::Array(
+                ArrayOp::Index
+                | ArrayOp::ReadAt
+                | ArrayOp::Slice
+                | ArrayOp::Select
+                | ArrayOp::SelectWords
+                | ArrayOp::ReduceAxis
+                | ArrayOp::MeanAxis
+                | ArrayOp::Unary
+                | ArrayOp::UnaryInt64
+                | ArrayOp::UnaryFloat64
+                | ArrayOp::Pairwise
+                | ArrayOp::Compare
+                | ArrayOp::MaskTest
+                | ArrayOp::MaskCount
+                | ArrayOp::Choose
+                | ArrayOp::CastInt32
+                | ArrayOp::CastInt64
+                | ArrayOp::CastFloat32
+                | ArrayOp::CastFloat64,
+            ) => private(&[]),
             RuntimeOp::Array(_) => member(),
             // A restore puts the extracted values back into the list.
             RuntimeOp::Span(SpanOp::Restore) => private(&[1]),

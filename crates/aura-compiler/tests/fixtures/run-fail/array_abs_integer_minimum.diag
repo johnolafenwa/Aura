@@ -1,0 +1,6 @@
+error[AU4002]: array abs overflowed at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_abs_integer_minimum.au:3:18
+  |
+3 |     print(values.abs())
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

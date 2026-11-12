@@ -129,3 +129,116 @@ fn loops_that_read_views_once_compile_with_their_copies() {
     crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
         .expect("the loops should compile");
 }
+
+const ARRAY_SOURCE: &str = r#"
+def smooth(source: Array[float64], target: mut Array[float64], n: int64):
+    for i in range(1, n - 1):
+        for j in range(1, n - 1):
+            target[i, j] = (source[i - 1, j] + source[i + 1, j]) * 0.5
+
+def total(values: Array[int32], n: int64) -> int64:
+    mut sum = 0
+    for i in range(n):
+        sum += values[i] as int64
+    return sum
+
+def mixed(cube: Array[float32], n: int64) -> float64:
+    mut sum = 0.0
+    for i in range(n):
+        sum += cube[i, 0, 0] as float64
+        sum += cube[i, 0] as float64
+    return sum
+
+def measured(values: Array[int64], n: int64) -> int64:
+    mut sum = 0
+    for i in range(n):
+        sum += values[i] + values.len()
+    return sum
+
+def summed(values: Array[int64], n: int64) -> int64:
+    mut sum = 0
+    for i in range(n):
+        sum += values[i] + values.sum()
+    return sum
+
+def main():
+    mut grid = Array[float64].zeros([4, 4])
+    smooth(grid.clone(), grid, 4)
+    print(grid)
+    print(total(Array[int32].zeros([3]), 3))
+    print(mixed(Array[float32].zeros([2, 2, 2]), 2))
+    print(measured(Array[int64].zeros([2]), 2))
+    print(summed(Array[int64].zeros([2]), 2))
+"#;
+
+fn array_function(name: &str) -> MirFunction {
+    lower_source_to_mir(ARRAY_SOURCE)
+        .expect("the source should lower")
+        .functions
+        .into_iter()
+        .find(|function| function.name == name)
+        .expect("the function should exist")
+}
+
+#[test]
+fn a_loop_of_array_element_accesses_reads_the_layout_once() {
+    let smooth = array_function("smooth");
+    let found = list_snapshot_regions(&smooth, |_| true, |_| true);
+    let source = found
+        .iter()
+        .find(|region| region.list == "source")
+        .expect("the loop reads `source`");
+    assert!(!source.writes);
+    assert_eq!(super::array_region_rank(&smooth, source, |_| true), Some(2));
+    let target = found
+        .iter()
+        .find(|region| region.list == "target")
+        .expect("the loop writes `target`");
+    assert!(target.writes);
+    assert_eq!(super::array_region_rank(&smooth, target, |_| true), Some(2));
+
+    let total = array_function("total");
+    let found = list_snapshot_regions(&total, |_| true, |_| true);
+    let [region] = found.as_slice() else {
+        panic!("one loop reads `values`: {found:?}");
+    };
+    assert_eq!(super::array_region_rank(&total, region, |_| true), Some(1));
+    // An index that is not one word names no rank.
+    assert_eq!(super::array_region_rank(&total, region, |_| false), None);
+}
+
+#[test]
+fn a_loop_with_two_ranks_or_another_member_keeps_reading_the_view() {
+    let mixed = array_function("mixed");
+    let found = list_snapshot_regions(&mixed, |_| true, |_| true);
+    for region in &found {
+        assert_eq!(
+            super::array_region_rank(&mixed, region, |_| true),
+            None,
+            "{region:?}"
+        );
+    }
+    // The element count may be read in the loop.
+    let measured = array_function("measured");
+    let found = list_snapshot_regions(&measured, |_| true, |_| true);
+    let [region] = found.as_slice() else {
+        panic!("one loop reads `values`: {found:?}");
+    };
+    assert_eq!(
+        super::array_region_rank(&measured, region, |_| true),
+        Some(1)
+    );
+    let summed = array_function("summed");
+    assert_eq!(
+        list_snapshot_regions(&summed, |_| true, |_| true),
+        Vec::new()
+    );
+}
+
+#[test]
+fn array_loops_compile_with_their_copies() {
+    let module = lower_source_to_mir(ARRAY_SOURCE).expect("the source should lower");
+    crate::native_backend::without_optimization(|| super::super::emit_host_object(&module))
+        .expect("the loops should compile");
+    super::super::emit_host_object(&module).expect("the loops should compile optimized");
+}

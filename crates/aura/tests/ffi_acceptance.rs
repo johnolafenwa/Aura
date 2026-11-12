@@ -547,6 +547,26 @@ void fx_widen_all(const int8_t *a, const uint8_t *b, const uint16_t *c,
                   const uint32_t *d, int64_t *out, int64_t n) {
     for (int64_t i = 0; i < n; i++) out[i] = a[i] + b[i] + c[i] + (int64_t)d[i];
 }
+double ax_dot(const double *a, const double *b, int64_t n) {
+    double total = 0.0;
+    for (int64_t i = 0; i < n; i++) total += a[i] * b[i];
+    return total;
+}
+void ax_scale(double *v, int64_t n, double k) {
+    for (int64_t i = 0; i < n; i++) v[i] *= k;
+}
+int64_t ax_sum_i32(const int32_t *v, int64_t n) {
+    int64_t total = 0;
+    for (int64_t i = 0; i < n; i++) total = total * 10 + v[i];
+    return total;
+}
+void ax_count_i64(int64_t *v, int64_t n, int64_t start) {
+    for (int64_t i = 0; i < n; i++) v[i] = start + i;
+}
+void ax_halve_f32(float *v, int64_t n) {
+    for (int64_t i = 0; i < n; i++) v[i] *= 0.5f;
+}
+bool ax_is_null(const double *v) { return v == NULL; }
 bool fx_is_null(const double *v) { return v == NULL; }
 bool fx_is_null_mut(int32_t *v) { return v == NULL; }
 void fx_bad_flags(bool *v) { *(uint8_t *)v = 7; }
@@ -768,6 +788,12 @@ extern "C" def fx_widen_all(
     a: ptr[int8], b: ptr[uint8], c: ptr[uint16], d: ptr[uint32],
     out: mut ptr[int64], n: int64
 ) -> None
+extern "C" def ax_dot(a: Array[float64], b: Array[float64], n: int64) -> float64
+extern "C" def ax_scale(v: mut Array[float64], n: int64, k: float64) -> None
+extern "C" def ax_sum_i32(v: Array[int32], n: int64) -> int64
+extern "C" def ax_count_i64(v: mut Array[int64], n: int64, start: int64) -> None
+extern "C" def ax_halve_f32(v: mut Array[float32], n: int64) -> None
+extern "C" def ax_is_null(v: Array[float64]) -> bool
 extern "C" def fx_is_null(v: ptr[float64]) -> bool
 extern "C" def fx_is_null_mut(v: mut ptr[int32]) -> bool
 extern "C" def fx_bad_flags(v: mut ptr[bool]) -> None
@@ -1174,6 +1200,92 @@ def main() -> int32:
 328350\n14\n[9, 18, 27, 36]\n4.0\n[0.5, 1.5]\n1\n[false, true, true]\n2\n\
 18446744073709551615\n[4295033084, -122]\n\
 true\nfalse\ntrue\nfalse\n[10.0, 20.0]\n500.0\n180000.0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn array_parameters_lend_their_elements_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Model:
+    weights: Array[float64]
+
+def main() -> int32:
+    xs = Array[float64].full([3], 2.0)
+    mut ys = Array[float64].zeros([3])
+    ys[0] = 1.0
+    ys[1] = 2.0
+    ys[2] = 3.0
+    print(ax_dot(xs, ys, 3))
+    print(ax_dot(ys, ys, 2))
+
+    # A write lands in the Array, and a clone keeps its elements.
+    kept = ys.clone()
+    ax_scale(ys, 3, 2.5)
+    print(ys)
+    print(kept)
+
+    # A matrix crosses in row-major order.
+    mut grid = Array[int32].zeros([2, 3])
+    for row in range(2):
+        for column in range(3):
+            grid[row, column] = (row * 3 + column + 1) as int32
+    print(ax_sum_i32(grid, 6))
+    # A view is packed for a read: the columns, then a reversed row.
+    print(ax_sum_i32(grid.transpose(), 6))
+    print(ax_sum_i32(grid[1, ::-1], 3))
+    print(ax_sum_i32(grid[:, 1], 2))
+
+    # A written view becomes its own block and leaves its source alone.
+    mut column = grid[:, 1] as Array[float64]
+    mut picked = column[::-1]
+    ax_scale(picked, 2, 10.0)
+    print(picked)
+    print(column)
+
+    mut counts = Array[int64].zeros([2, 2])
+    ax_count_i64(counts, 4, 9000000000)
+    print(counts)
+    print(counts[1, 1])
+    mut halves = Array[float32].full([4], 3.0)
+    ax_halve_f32(halves, 2)
+    print(halves)
+
+    empty = Array[float64].zeros([0])
+    print(ax_is_null(empty))
+    print(ax_is_null(xs))
+
+    mut model = Model(weights=Array[float64].full([2], 1.5))
+    ax_scale(model.weights, 2, 2.0)
+    print(model.weights)
+    print(ax_dot(model.weights, model.weights, 2))
+
+    mut round = 0
+    mut total = 0.0
+    while round < 2000:
+        ax_scale(ys, 3, 1.0)
+        total += ax_dot(xs, ys, 3)
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "forced MIR Array pointer fixture run");
+    assert_success(&direct, "direct Array pointer fixture run");
+    let expected = "\
+12.0\n5.0\n\
+Array[float64](shape=[3], values=[2.5, 5.0, 7.5])\n\
+Array[float64](shape=[3], values=[1.0, 2.0, 3.0])\n\
+123456\n142536\n654\n25\n\
+Array[float64](shape=[2], values=[50.0, 20.0])\n\
+Array[float64](shape=[2], values=[2.0, 5.0])\n\
+Array[int64](shape=[2, 2], values=[9000000000, 9000000001, 9000000002, 9000000003])\n\
+9000000003\n\
+Array[float32](shape=[4], values=[1.5, 1.5, 3.0, 3.0])\n\
+true\nfalse\n\
+Array[float64](shape=[2], values=[3.0, 3.0])\n18.0\n60000.0\n";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
 }

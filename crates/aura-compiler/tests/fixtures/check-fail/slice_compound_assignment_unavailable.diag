@@ -1,5 +1,6 @@
 error[AU2005]: slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
- --> crates/aura-compiler/tests/fixtures/parse-fail/slice_compound_assignment_unavailable.au:2:12
+ --> crates/aura-compiler/tests/fixtures/check-fail/slice_compound_assignment_unavailable.au:2:12
   |
 2 |     values[:] += values
   |            ^
+  = help: an `Array[T]` accepts slice assignment: `values[1:3] = 0.0`

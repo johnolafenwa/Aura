@@ -797,3 +797,99 @@ fn a_handle_with_a_drop_function_releases_its_object_once() {
         assert_eq!(releases_of(address(3)), 0, "a type with no drop function");
     }
 }
+
+#[test]
+fn an_array_lends_its_elements_as_a_pointer() {
+    use crate::runtime_value::{ArrayStorage, ArrayValue};
+    const INT64: i64 = 2;
+    const INT32: i64 = 8;
+    let array_of = |pointer: *mut OpaqueValue| unsafe {
+        with_value(pointer, |value| match value {
+            Value::Array(array) => array.try_clone().unwrap(),
+            other => panic!("expected an Array, found {other:?}"),
+        })
+    };
+    unsafe {
+        let grid = ArrayValue::new(
+            vec![2, 3].into(),
+            ArrayStorage::Float64(vec![1.0, 2.0, 3.0, 4.0, 5.0, 6.0].into()),
+        )
+        .unwrap();
+        let boxed = boxed_value(Value::Array(grid.try_clone().unwrap()));
+        let mut view = empty_view();
+        let copy = aura_direct_ffi_elements(boxed, FLOAT64, &mut view);
+        assert!(copy.is_null(), "a row-major Array lends its own elements");
+        assert_eq!(view.length, 6);
+        assert_eq!(
+            slice::from_raw_parts(view.pointer.cast::<f64>(), 6),
+            [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+        );
+
+        // A strided view is packed for a read.
+        let turned = boxed_value(Value::Array(grid.transpose().unwrap()));
+        let mut view = empty_view();
+        let copy = aura_direct_ffi_elements(turned, FLOAT64, &mut view);
+        assert!(!copy.is_null(), "a view needs a packed copy");
+        assert_eq!(
+            slice::from_raw_parts(view.pointer.cast::<f64>(), 6),
+            [1.0, 4.0, 2.0, 5.0, 3.0, 6.0]
+        );
+        aura_direct_release_value(copy);
+
+        // A write goes to this Array alone: the buffer `grid` shares is
+        // copied first, and a view becomes one row-major block.
+        let mut view = empty_view();
+        aura_direct_ffi_elements_mut(boxed, FLOAT64, &mut view);
+        assert_eq!(view.length, 6);
+        slice::from_raw_parts_mut(view.pointer.cast_mut().cast::<f64>(), 6)[0] = 9.0;
+        assert_eq!(array_of(boxed).get(&[0, 0]).unwrap(), Value::Float(9.0));
+        assert_eq!(grid.get(&[0, 0]).unwrap(), Value::Float(1.0));
+        let mut view = empty_view();
+        aura_direct_ffi_elements_mut(turned, FLOAT64, &mut view);
+        slice::from_raw_parts_mut(view.pointer.cast_mut().cast::<f64>(), 6)[1] = 8.0;
+        assert_eq!(array_of(turned).get(&[0, 1]).unwrap(), Value::Float(8.0));
+        assert_eq!(grid.get(&[1, 0]).unwrap(), Value::Float(4.0));
+        aura_direct_release_value(turned);
+        aura_direct_release_value(boxed);
+
+        for (storage, access) in [
+            (ArrayStorage::Int32(vec![1, 2].into()), INT32),
+            (ArrayStorage::Int64(vec![1, 2].into()), INT64),
+            (ArrayStorage::Float32(vec![1.0, 2.0].into()), FLOAT32),
+        ] {
+            let boxed = boxed_value(Value::Array(
+                ArrayValue::new(vec![2].into(), storage).unwrap(),
+            ));
+            let mut view = empty_view();
+            assert!(aura_direct_ffi_elements(boxed, access, &mut view).is_null());
+            assert_eq!(view.length, 2);
+            assert!(!view.pointer.is_null());
+            let mut view = empty_view();
+            aura_direct_ffi_elements_mut(boxed, access, &mut view);
+            assert_eq!(view.length, 2);
+            aura_direct_release_value(boxed);
+        }
+    }
+
+    for mutable in [false, true] {
+        let message = capture_diagnostic(move || unsafe {
+            let flags = boxed_value(Value::Array(
+                ArrayValue::new(vec![1].into(), ArrayStorage::Bool(vec![true].into())).unwrap(),
+            ));
+            let mut view = empty_view();
+            match mutable {
+                true => aura_direct_ffi_elements_mut(flags, FLOAT64, &mut view),
+                false => {
+                    aura_direct_ffi_elements(flags, FLOAT64, &mut view);
+                }
+            }
+        })
+        .message;
+        assert!(
+            message.contains(
+                "FFI argument expected an Array of another element type, but received `Array[bool]`"
+            ),
+            "{message}"
+        );
+    }
+}

@@ -1,0 +1,6 @@
+error[AU4003]: slice end `4` is outside `0..=3`
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_selection_end_out_of_range.au:3:11
+  |
+3 |     print(values[0, 1:4])
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

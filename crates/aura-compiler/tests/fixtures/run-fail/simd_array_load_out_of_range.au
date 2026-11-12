@@ -1,0 +1,5 @@
+import simd
+
+def main():
+    values = Array[float64].zeros([6])
+    print(simd.F64x4.load_array(values, 4).l3)

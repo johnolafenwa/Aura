@@ -1,0 +1,20 @@
+def total(values: Array[float64]) -> float64:
+    return values.sum()
+
+def bump(values: own Array[float64]) -> float64:
+    mut mine = values
+    mine[0] = 100.0
+    mine[1] += 1.0
+    return mine.sum()
+
+def main() -> int32:
+    values = Array[float64].full([1000], 0.5)
+    with TaskGroup() as group:
+        first = group.start(total, values.clone())
+        second = group.start(bump, values.clone())
+        third = group.start(total, values.clone())
+        print(first.result_or(0.0, timeout=1s))
+        print(second.result_or(0.0, timeout=1s))
+        print(third.result_or(0.0, timeout=1s))
+    print(values.sum())
+    return 0

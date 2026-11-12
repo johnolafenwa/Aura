@@ -1,0 +1,5 @@
+def main():
+    mask = Array[bool].zeros([2])
+    floats = Array[float64].zeros([2])
+    ints = Array[int64].zeros([2])
+    print(mask.choose(floats, ints))
