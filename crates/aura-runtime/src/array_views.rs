@@ -420,6 +420,16 @@ impl ArrayValue {
                 };
                 write_array(values.try_make_mut(label)?, &selected, elements, source);
             }
+            (ArrayStorage::Bool(values), Some(source)) => {
+                let ArrayStorage::Bool(elements) = &source.base else {
+                    unreachable!("matching array dtypes imply matching storage variants")
+                };
+                write_array(values.try_make_mut(label)?, &selected, elements, source);
+            }
+            (ArrayStorage::Bool(values), None) => {
+                let scalar = crate::runtime_value::array_bool_scalar(value, 0)?;
+                write_scalar(values.try_make_mut(label)?, &selected, scalar);
+            }
             (ArrayStorage::Int32(values), None) => {
                 let scalar = array_int32_scalar(value, 0)?;
                 write_scalar(values.try_make_mut(label)?, &selected, scalar);

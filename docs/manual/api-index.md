@@ -138,10 +138,17 @@ ownership, diagnostics, and backend behavior.
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
 | `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
 | `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| Array axis reductions | `sum(axis)`, `min(axis)`, `max(axis)`, `mean(axis)`, `fast_sum(axis)`, `fast_mean(axis)` | Reduces each lane along `axis: int64` and returns an Array with that axis removed. A negative axis counts from the last. An axis outside the rank is `AU4007`. |
+| Array elementwise members | `abs()`, `minimum(other)`, `maximum(other)` | Every numeric dtype. `other` is an Array that broadcasts or one element. `abs` of an integer minimum is `AU4002`. |
+| Array math members | `sqrt()`, `exp()`, `log()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `pow(exponent)` | `Array[float64]` only. Each follows the `math` function, and a fault names the element's flat index. |
+| Array rounding members | `floor()`, `ceil()`, `trunc()` | `Array[float64]` to `Array[int64]`. An element outside `int64` is `AU4002`. |
+| Array conversion | `array as Array[U]`, `to_float()` | The cast converts each element as the scalar cast does and reports the first that fails. `to_float()` converts an integer Array to `Array[float64]`. |
+| Array comparison members | `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | Numeric dtypes. Returns `Array[bool]`. |
+| Mask members | `any()`, `all()`, `count()`, `logical_and(other)`, `logical_or(other)`, `logical_not()`, `choose(when_true, when_false)` | `Array[bool]` only. `choose` takes each element from `when_true` where the mask is `true`. |
 | `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
 | `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
-| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
-| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
+| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
+| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 
 ## Math
 

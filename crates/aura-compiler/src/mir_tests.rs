@@ -16190,11 +16190,16 @@ def main():
     let count = |op: &str| rendered.matches(&format!("Array({op})")).count();
     assert_eq!(
         count("SelectWords"),
-        3,
-        "a mixed index, a stepped slice, and a compound assignment's read: {rendered}"
+        2,
+        "a mixed index and a stepped slice: {rendered}"
+    );
+    assert_eq!(
+        count("UpdateWords"),
+        1,
+        "a compound assignment updates its selection in place: {rendered}"
     );
     assert_eq!(count("Slice"), 2, "one-colon slices keep the row slice");
-    assert_eq!(count("AssignWords"), 2, "{rendered}");
+    assert_eq!(count("AssignWords"), 1, "{rendered}");
     // Three components pass their words as a tuple.
     assert_eq!(count("Select"), 1, "{rendered}");
     assert_eq!(count("Assign"), 1, "{rendered}");

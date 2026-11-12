@@ -133,6 +133,7 @@ fn fingerprint(result: Result<Value, Diagnostic>) -> String {
                     .iter()
                     .flat_map(|v| v.to_bits().to_le_bytes())
                     .collect(),
+                ArrayStorage::Bool(values) => values.iter().map(|v| u8::from(*v)).collect(),
             };
             digest.update(bytes);
         }

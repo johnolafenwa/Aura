@@ -1242,7 +1242,7 @@ fn array_surface_rejects_invalid_dtypes_mixed_arithmetic_and_invalid_members() {
             "Array equality is not supported",
         ),
         (
-            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: value > 0)\n    print(mapped)\n",
+            "def main():\n    values = Array[int32].zeros(shape=[1])\n    mapped = values.map(lambda value: \"x\")\n    print(mapped)\n",
             "AU2002",
             "Array.map callback must return",
         ),
@@ -1306,7 +1306,7 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
             "invalid constructor dtype",
             "def main():\n    values = Array[str].zeros([1])\n    print(values)\n",
             "AU2002",
-            "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
+            "Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`",
         ),
         (
             "unknown constructor",
@@ -1384,7 +1384,7 @@ fn array_surface_reports_reachable_constructor_member_and_operator_contracts() {
             "map output dtype",
             "def widen(value: int32) -> float64:\n    return value.to_float()\n\ndef main():\n    values = Array[int32].zeros([1])\n    print(values.map[str](widen))\n",
             "AU2002",
-            "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`",
+            "Array.map output dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`",
         ),
         (
             "integer-only method",

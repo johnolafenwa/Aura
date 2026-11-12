@@ -926,8 +926,43 @@ pub(super) fn is_array_dtype(ty: &Type) -> bool {
         ty,
         Type::Named(name, args)
             if args.is_empty()
-                && matches!(name.as_str(), "int32" | "int64" | "float32" | "float64")
+                && matches!(name.as_str(), "int32" | "int64" | "float32" | "float64" | "bool")
     )
+}
+
+/// The dtypes an Array member is available for.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(super) enum ArrayDtypeClass {
+    /// Every dtype but `bool`.
+    Numeric,
+    Integer,
+    Float64,
+    Bool,
+}
+
+impl ArrayDtypeClass {
+    pub(super) fn admits(self, dtype: &Type) -> bool {
+        let Type::Named(name, args) = dtype else {
+            return false;
+        };
+        args.is_empty()
+            && match self {
+                Self::Numeric => matches!(name.as_str(), "int32" | "int64" | "float32" | "float64"),
+                Self::Integer => matches!(name.as_str(), "int32" | "int64"),
+                Self::Float64 => name == "float64",
+                Self::Bool => name == "bool",
+            }
+    }
+
+    /// The Arrays the class names, for a diagnostic.
+    pub(super) const fn describe(self) -> &'static str {
+        match self {
+            Self::Numeric => "numeric Arrays",
+            Self::Integer => "integer Arrays",
+            Self::Float64 => "`Array[float64]`",
+            Self::Bool => "`Array[bool]`",
+        }
+    }
 }
 
 /// The element type of a list, or of a `Span[T]` view, whose elements are

@@ -336,6 +336,9 @@ impl ArrayValue {
     /// Array with `axis` removed whose elements reduce the lanes along
     /// it. A rank-1 Array gives one element.
     pub fn reduce_axis(&self, reduction: ArrayReduction, axis: i64) -> Result<Self> {
+        if !self.dtype().is_numeric() {
+            return Err(crate::runtime_value::mask_error(reduction.name()));
+        }
         let axis = self.normalize_axis(axis)?;
         let layout = self.layout();
         let len = self.shape[axis];
@@ -384,6 +387,7 @@ impl ArrayValue {
                     ArrayStorage::Int64(_) => ArrayStorage::Int64(vec![0; count].into()),
                     ArrayStorage::Float32(_) => ArrayStorage::Float32(vec![0.0; count].into()),
                     ArrayStorage::Float64(_) => ArrayStorage::Float64(vec![0.0; count].into()),
+                    ArrayStorage::Bool(_) => unreachable!("a mask was rejected above"),
                 }
             }
             ArrayStorage::Int32(values) if means => {
@@ -410,6 +414,7 @@ impl ArrayValue {
             ArrayStorage::Float64(values) => {
                 ArrayStorage::Float64(reduce_axis_same(values, &lanes, reduction)?.into())
             }
+            ArrayStorage::Bool(_) => unreachable!("a mask was rejected above"),
         };
         Self::new(shape.into(), storage)
     }

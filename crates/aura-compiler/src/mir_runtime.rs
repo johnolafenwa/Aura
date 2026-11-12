@@ -7478,6 +7478,73 @@ impl MirRuntime {
                     })?;
                 Ok(Value::Unit)
             }
+            crate::runtime_ops::REDUCE_AXIS_MEMBER
+            | crate::runtime_ops::MEAN_AXIS_MEMBER
+            | crate::runtime_ops::UNARY_MEMBER
+            | crate::runtime_ops::UNARY_INT64_MEMBER
+            | crate::runtime_ops::UNARY_FLOAT64_MEMBER
+            | crate::runtime_ops::PAIRWISE_MEMBER
+            | crate::runtime_ops::COMPARE_MEMBER
+            | crate::runtime_ops::MASK_TEST_MEMBER
+            | crate::runtime_ops::MASK_COUNT_MEMBER
+            | crate::runtime_ops::CHOOSE_MEMBER
+            | crate::runtime_ops::CAST_INT32_MEMBER
+            | crate::runtime_ops::CAST_INT64_MEMBER
+            | crate::runtime_ops::CAST_FLOAT32_MEMBER
+            | crate::runtime_ops::CAST_FLOAT64_MEMBER => {
+                use crate::runtime_ops as ops;
+                use crate::runtime_value::{
+                    ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp,
+                };
+                let values = evaluate_named_args(args, env)?;
+                // Every member ends with its source line and column.
+                let leading = values.len() - 2;
+                let line = self.mir_index_from_value(values[leading].value.clone())?;
+                let column = self.mir_index_from_value(values[leading + 1].value.clone())?;
+                let word = |index: usize| array_selection_word(&values[index].value);
+                let unknown = || Diagnostic::coded("AU4001", "invalid Array member code");
+                let array = array_place_ref(env, object_place)?;
+                let result = match field {
+                    ops::REDUCE_AXIS_MEMBER | ops::MEAN_AXIS_MEMBER => {
+                        let axis = word(1)?;
+                        ArrayReduction::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|reduction| array.reduce_axis(reduction, axis))
+                            .map(Value::Array)
+                    }
+                    ops::UNARY_MEMBER | ops::UNARY_INT64_MEMBER | ops::UNARY_FLOAT64_MEMBER => {
+                        ArrayUnaryOp::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|operation| array.unary(operation))
+                            .map(Value::Array)
+                    }
+                    ops::PAIRWISE_MEMBER => ArrayPairOp::from_code(word(1)?)
+                        .ok_or_else(unknown)
+                        .and_then(|operation| array.pairwise(&values[0].value, operation))
+                        .map(Value::Array),
+                    ops::COMPARE_MEMBER => ArrayCompareOp::from_code(word(1)?)
+                        .ok_or_else(unknown)
+                        .and_then(|operation| array.compare(&values[0].value, operation))
+                        .map(Value::Array),
+                    ops::MASK_TEST_MEMBER | ops::MASK_COUNT_MEMBER => {
+                        ArrayMaskOp::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|operation| array.mask_reduce(operation))
+                    }
+                    ops::CHOOSE_MEMBER => ArrayDType::from_code(word(2)?)
+                        .ok_or_else(unknown)
+                        .and_then(|dtype| array.choose(&values[0].value, &values[1].value, dtype))
+                        .map(Value::Array),
+                    ops::CAST_INT32_MEMBER => array.cast(ArrayDType::Int32).map(Value::Array),
+                    ops::CAST_INT64_MEMBER => array.cast(ArrayDType::Int64).map(Value::Array),
+                    ops::CAST_FLOAT32_MEMBER => array.cast(ArrayDType::Float32).map(Value::Array),
+                    _ => array.cast(ArrayDType::Float64).map(Value::Array),
+                };
+                result.map_err(|mut error| {
+                    error.span = Some(Span::new(line, column));
+                    error
+                })
+            }
             UPDATE_WORDS_MEMBER => {
                 let mut values = evaluate_named_args(args, env)?;
                 debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 4);

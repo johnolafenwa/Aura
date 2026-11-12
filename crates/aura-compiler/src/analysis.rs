@@ -4199,7 +4199,22 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::ArrayWrappingMul
                 | BuiltinMember::ArraySaturatingAdd
                 | BuiltinMember::ArraySaturatingSub
-                | BuiltinMember::ArraySaturatingMul => Some(receiver_type.clone()),
+                | BuiltinMember::ArraySaturatingMul
+                | BuiltinMember::ArrayAbs
+                | BuiltinMember::ArrayMinimum
+                | BuiltinMember::ArrayMaximum
+                | BuiltinMember::ArraySqrt
+                | BuiltinMember::ArrayExp
+                | BuiltinMember::ArrayLog
+                | BuiltinMember::ArrayLog2
+                | BuiltinMember::ArrayLog10
+                | BuiltinMember::ArraySin
+                | BuiltinMember::ArrayCos
+                | BuiltinMember::ArrayTan
+                | BuiltinMember::ArrayPow
+                | BuiltinMember::ArrayLogicalAnd
+                | BuiltinMember::ArrayLogicalOr
+                | BuiltinMember::ArrayLogicalNot => Some(receiver_type.clone()),
                 BuiltinMember::ArrayGet | BuiltinMember::ArraySet => {
                     let payload = receiver_type
                         .type_arguments()
@@ -4209,7 +4224,26 @@ impl<'a> AnalysisBuilder<'a> {
                     Some(optional_type(payload))
                 }
                 BuiltinMember::ArrayFill => Some(Type::Unit),
-                BuiltinMember::ArrayMap => None,
+                BuiltinMember::ArrayMap | BuiltinMember::ArrayChoose => None,
+                BuiltinMember::ArrayFloor
+                | BuiltinMember::ArrayCeil
+                | BuiltinMember::ArrayTrunc => {
+                    Some(Type::Named("Array".to_string(), vec![Type::named("int64")]))
+                }
+                BuiltinMember::ArrayToFloat => Some(Type::Named(
+                    "Array".to_string(),
+                    vec![Type::named("float64")],
+                )),
+                BuiltinMember::ArrayLess
+                | BuiltinMember::ArrayLessEqual
+                | BuiltinMember::ArrayGreater
+                | BuiltinMember::ArrayGreaterEqual
+                | BuiltinMember::ArrayEqual
+                | BuiltinMember::ArrayNotEqual => {
+                    Some(Type::Named("Array".to_string(), vec![Type::named("bool")]))
+                }
+                BuiltinMember::ArrayAny | BuiltinMember::ArrayAll => Some(Type::named("bool")),
+                BuiltinMember::ArrayCount => Some(Type::named("int64")),
                 BuiltinMember::ArraySum
                 | BuiltinMember::ArrayMin
                 | BuiltinMember::ArrayMax
@@ -8002,6 +8036,35 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::ArraySaturatingAdd,
         BuiltinMember::ArraySaturatingSub,
         BuiltinMember::ArraySaturatingMul,
+        BuiltinMember::ArrayAbs,
+        BuiltinMember::ArrayMinimum,
+        BuiltinMember::ArrayMaximum,
+        BuiltinMember::ArraySqrt,
+        BuiltinMember::ArrayExp,
+        BuiltinMember::ArrayLog,
+        BuiltinMember::ArrayLog2,
+        BuiltinMember::ArrayLog10,
+        BuiltinMember::ArraySin,
+        BuiltinMember::ArrayCos,
+        BuiltinMember::ArrayTan,
+        BuiltinMember::ArrayPow,
+        BuiltinMember::ArrayFloor,
+        BuiltinMember::ArrayCeil,
+        BuiltinMember::ArrayTrunc,
+        BuiltinMember::ArrayToFloat,
+        BuiltinMember::ArrayLess,
+        BuiltinMember::ArrayLessEqual,
+        BuiltinMember::ArrayGreater,
+        BuiltinMember::ArrayGreaterEqual,
+        BuiltinMember::ArrayEqual,
+        BuiltinMember::ArrayNotEqual,
+        BuiltinMember::ArrayAny,
+        BuiltinMember::ArrayAll,
+        BuiltinMember::ArrayCount,
+        BuiltinMember::ArrayLogicalAnd,
+        BuiltinMember::ArrayLogicalOr,
+        BuiltinMember::ArrayLogicalNot,
+        BuiltinMember::ArrayChoose,
         BuiltinMember::FileReadAll,
         BuiltinMember::FileReadBytes,
         BuiltinMember::FileReadLine,

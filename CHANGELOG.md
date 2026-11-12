@@ -27,6 +27,32 @@ in this file.
   an Array, `array[::2]`, is accepted instead of `AU2003`.
 - `aura fmt` keeps the space after a comma before a slice colon:
   `grid[1, :]`.
+- Arrays: `matmul` multiplies stacks of matrices. The last two dimensions
+  are the matrix and the leading dimensions are a batch that broadcasts:
+  `[.., n, k]` by `[.., k, m]` gives `[.., n, m]`. Each product gives the
+  bits of the two-dimensional `matmul` (ADR-0090).
+- Arrays broadcast. Two Arrays of one dtype combine when their shapes,
+  aligned at the last axis, are equal or one along each axis:
+  `grid + row`, `grid - grid.mean(0)`, `column * row`. Shapes that do not
+  broadcast are still `AU4007`. Dtypes are never promoted (ADR-0089).
+- Arrays: `sum`, `min`, `max`, `mean`, `fast_sum`, and `fast_mean` take an
+  axis and return an Array with that axis removed: `grid.sum(0)`,
+  `grid.mean(-1)`.
+- Arrays: elementwise members `abs`, `minimum`, `maximum`, and for
+  `float64` `sqrt`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`,
+  `pow`, `floor`, `ceil`, and `trunc`. Each follows the scalar function,
+  and a fault names the flat index of the element.
+- Arrays: `array as Array[T]` converts every element as the scalar cast
+  does, and `to_float()` converts an integer Array to `float64`.
+- Arrays: `Array[bool]` is a dtype. `less`, `less_equal`, `greater`,
+  `greater_equal`, `equal`, and `not_equal` return a mask. A mask has
+  `any`, `all`, `count`, `logical_and`, `logical_or`, `logical_not`, and
+  `choose(when_true, when_false)`. `==` on Arrays is still an error.
+- Arrays: arithmetic reads views where they lie, `grid[:, j] *= 2.0`
+  updates the selected elements in place, and `(a + b) * 0.5` reuses the
+  buffer of its temporary.
+- Changed: two Array operands whose shapes broadcast give a result
+  instead of `AU4007`.
 
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with

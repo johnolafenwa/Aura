@@ -78,6 +78,9 @@ fn sample_args(op: RuntimeOp) -> Vec<Option<Type>> {
             params: Vec::new(),
             return_type: Box::new(Type::named("int64")),
         })],
+        RuntimeOp::Array(ArrayOp::Choose) => {
+            vec![Some(Type::named("int64")), Some(Type::named("int64"))]
+        }
         _ => Vec::new(),
     }
 }

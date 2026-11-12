@@ -13,7 +13,13 @@ Last updated: 2026-11-11
   (ADR-0088). An index takes a coordinate or a slice per axis, with
   steps. `reshape`, `flatten`, `transpose`, `permute`, and slice
   assignment work on both backends.
-- Remaining: items 2, 3, and 4.
+- Done: item 2 (ADR-0089). Arrays of one dtype broadcast. Reductions take
+  an axis. `abs`, `minimum`, `maximum`, the `float64` math members,
+  `as Array[T]`, `to_float`, the comparison members, and `Array[bool]`
+  masks with `choose` work on both backends. Arithmetic reads views in
+  place, selection updates run in place, and a temporary lends its
+  buffer.
+- Remaining: items 3 and 4.
 
 ## SIMD (complete)
 

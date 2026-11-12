@@ -720,7 +720,7 @@ fn array_matmul_checks_shapes_and_multiplies_each_dtype() {
         (&a, &w),
         (&v, &a),
         (&a, &i64s),
-        (&float_array(&[1, 2, 3], vec![0.0; 6]), &b),
+        (&float_array(&[1, 2, 2], vec![0.0; 4]), &b),
     ] {
         let error = left.matmul(right).unwrap_err();
         assert_eq!(error.code, "AU4007");

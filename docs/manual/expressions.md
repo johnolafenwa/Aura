@@ -417,11 +417,12 @@ need a negative value. Negative values are not valid host waits.
 
 ### Array Operators
 
-`Array[T]` adds exact-shape elementwise `+`, `-`, and `*` for its four
-supported numeric dtypes. A same-dtype scalar may appear on either side.
-Floating Arrays also support `/`. Integer Array `/` is the same `AU2003`
-static error as scalar integer `/`. Every result is a fresh Array. There is
-no array-shape broadcasting and no mixed promotion. See
+`Array[T]` adds elementwise `+`, `-`, and `*` for its four numeric dtypes.
+Two Arrays of one dtype broadcast, and a same-dtype scalar may appear on
+either side. Floating Arrays also support `/`. Integer Array `/` is the
+same `AU2003` static error as scalar integer `/`. Every result is a fresh
+Array. There is no mixed promotion, and `Array[bool]` has no arithmetic.
+`array as Array[U]` converts between the numeric dtypes. See
 [Numeric Arrays](/manual/numeric-arrays).
 
 ### Equality

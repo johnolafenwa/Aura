@@ -466,7 +466,7 @@ owner's region.
 | `AU4004` | zero divisor | Division by zero. | Check the divisor before dividing. |
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
-| `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
+| `AU4007` | numeric Array shape or reduction violation | Array shapes that do not broadcast, an axis outside the rank, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
 | `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
 
 Each runtime code's precise causes are listed under
@@ -476,12 +476,13 @@ Each runtime code's precise causes are listed under
 
 - rank-zero or negative-dimension construction
 - a `from_list` count mismatch
-- an exact-shape operator mismatch
+- an operator, comparison, or `choose` whose shapes do not broadcast
+- a reduction axis outside the rank
 - a direct coordinate-count or runtime-rank mismatch
 - an index with more components than the runtime rank
 - a `reshape` or `permute` the Array's shape does not allow
 - a slice assignment whose value does not broadcast to the selection
-- empty `min`, `max`, or `mean`
+- `min`, `max`, or `mean` of an empty Array or an empty lane
 
 Shape-product or element-count overflow and allocation failure stay `AU4005`.
 Out-of-range coordinates and invalid slice bounds or steps stay `AU4003`.

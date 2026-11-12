@@ -265,9 +265,10 @@ List slicing creates a clone-producing obligation for `T`. Copy elements are cop
 - Its constructors require exact `list[int64]` shape metadata.
 - An Array index takes one component per axis. With a slice among its components it has type `Array[T]`; with coordinates only it has type `T`. Slices use the list endpoint and step rules.
 - Assignment through an Array index with a slice takes a value of type `T` or `Array[T]`. The value may read the target Array, and may not move it.
-- Array/Array arithmetic requires identical `T`. Runtime shape equality is checked with `AU4007`.
-- Scalar arithmetic requires exactly `T`, with no mixed promotion or broadcasting. Integer Array `/` is `AU2003`.
-- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the four Array dtypes.
+- Array/Array arithmetic requires identical numeric `T`. Whether the shapes broadcast is checked at run time with `AU4007`.
+- Scalar arithmetic requires exactly `T`, with no mixed promotion. Integer Array `/` and arithmetic on `Array[bool]` are `AU2003`.
+- An Array member called on a dtype it does not have is `AU2003`. A comparison member has type `Array[bool]`, and `array as Array[U]` has type `Array[U]` for numeric `T` and `U`.
+- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the five Array dtypes.
 - `sum`, `min`, and `max` return `T`. `mean` returns `float64` for all dtypes.
 - Mutable `set`, `fill`, and indexed assignment require a mutable Array place.
 - Array `get` converts an invalid coordinate or a runtime-rank mismatch to `None`. `set` traps for either failure, and returns the replaced scalar in `Some` only after a valid update.

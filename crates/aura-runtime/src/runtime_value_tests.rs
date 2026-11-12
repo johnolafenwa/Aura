@@ -1078,7 +1078,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     assert_eq!(from_vec_error.code, "AU4007");
     assert_eq!(
         from_vec_error.message,
-        "Array values require int32, int64, float32, or float64 elements, found `str`"
+        "Array values require int32, int64, float32, float64, or bool elements, found `str`"
     );
 
     let from_values_error = ArrayValue::from_values(
@@ -1090,7 +1090,7 @@ fn array_construction_rejects_unsupported_types_and_inexact_scalar_metadata() {
     assert_eq!(from_values_error.code, "AU4007");
     assert_eq!(
         from_values_error.message,
-        "Array values require int32, int64, float32, or float64 elements, found `(int32,)`"
+        "Array values require int32, int64, float32, float64, or bool elements, found `(int32,)`"
     );
 
     assert_eq!(
@@ -2438,7 +2438,9 @@ fn dense_array_reductions_define_empty_and_dtype_behavior() {
         let expected = match array.dtype() {
             ArrayDType::Int64 => Value::Int(IntegerValue::from_i64(0)),
             ArrayDType::Float32 | ArrayDType::Float64 => Value::Float(0.0),
-            ArrayDType::Int32 => unreachable!("the int32 empty identity is covered above"),
+            ArrayDType::Int32 | ArrayDType::Bool => {
+                unreachable!("the int32 empty identity is covered above")
+            }
         };
         assert_eq!(
             array.reduce(ArrayReduction::Sum).unwrap(),

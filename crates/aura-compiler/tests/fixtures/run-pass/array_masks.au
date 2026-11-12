@@ -1,0 +1,58 @@
+def flip(mask: Array[bool]) -> Array[bool]:
+    return mask.logical_not()
+
+
+def count_true(mask: Array[bool]) -> int64:
+    mut total = 0
+    for index in range(mask.len()):
+        if mask[index]:
+            total += 1
+    return total
+
+
+def main() -> int32:
+    mut flags = Array[bool].from_list([true, false, true, false], [2, 2])
+    print(flags[0, 0])
+    flags[0, 1] = true
+    print(flags)
+    flags[1, :] = true
+    print(flags)
+    flags[:, 0] = Array[bool].from_list([false, false], [2])
+    print(flags)
+    print(flip(flags))
+    print(flags.get([1, 1]))
+    print(flags.set([1, 1], false))
+    flags.fill(true)
+    print(flags.all())
+    full = Array[bool].full([3], true)
+    print(full)
+    print(count_true(full))
+    print(full.len())
+    print(full.clone())
+    print(flags.transpose().reshape([4]).flatten())
+    values = Array[int32].from_list([1, 2, 3, 4], [4])
+    print(values.map(lambda value: value > 2))
+    print(values.greater(2).map(lambda flag: not flag))
+    print(values.greater(2).choose(values, 0 - values))
+    print(values.maximum(3))
+    print(values.minimum(Array[int32].from_list([4, 3, 2, 1], [4])))
+    print(values.abs())
+    print(values.to_float())
+    print((values as Array[int64]))
+    print((values as Array[float32]).abs())
+    singles = values as Array[float32]
+    print(singles.sum(0))
+    print(singles.less(2.5))
+    print(singles.maximum(2.5))
+    print((singles as Array[float64]).sqrt())
+    view = values[::-1]
+    print(view.greater(2))
+    print(view.abs())
+    print((view as Array[float64]))
+    grid = Array[float64].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    print(grid.transpose().sum(0))
+    print(grid[:, 1:].sum(1))
+    print(grid.greater(grid.mean(0)))
+    print(grid.sum(1).reshape([2, 1]))
+    print(grid / grid.sum(1).reshape([2, 1]))
+    return 0

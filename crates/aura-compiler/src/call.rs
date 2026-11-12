@@ -408,6 +408,14 @@ const ARRAY_VALUE_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "value", ReceiverKind::Borrow)];
 const ARRAY_OTHER_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "other", ReceiverKind::Borrow)];
+const ARRAY_AXIS_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(optional, "axis", ReceiverKind::Borrow)];
+const ARRAY_EXPONENT_PARAMS: [BuiltinParam; 1] =
+    [builtin_param!(required, "exponent", ReceiverKind::Borrow)];
+const ARRAY_CHOOSE_PARAMS: [BuiltinParam; 2] = [
+    builtin_param!(required, "when_true", ReceiverKind::Borrow),
+    builtin_param!(required, "when_false", ReceiverKind::Borrow),
+];
 const ARRAY_AXES_PARAMS: [BuiltinParam; 1] =
     [builtin_param!(required, "axes", ReceiverKind::Borrow)];
 const ARRAY_CALLBACK_PARAMS: [BuiltinParam; 1] =
@@ -1254,6 +1262,35 @@ pub enum BuiltinMember {
     ArraySaturatingAdd,
     ArraySaturatingSub,
     ArraySaturatingMul,
+    ArrayAbs,
+    ArrayMinimum,
+    ArrayMaximum,
+    ArraySqrt,
+    ArrayExp,
+    ArrayLog,
+    ArrayLog2,
+    ArrayLog10,
+    ArraySin,
+    ArrayCos,
+    ArrayTan,
+    ArrayPow,
+    ArrayFloor,
+    ArrayCeil,
+    ArrayTrunc,
+    ArrayToFloat,
+    ArrayLess,
+    ArrayLessEqual,
+    ArrayGreater,
+    ArrayGreaterEqual,
+    ArrayEqual,
+    ArrayNotEqual,
+    ArrayAny,
+    ArrayAll,
+    ArrayCount,
+    ArrayLogicalAnd,
+    ArrayLogicalOr,
+    ArrayLogicalNot,
+    ArrayChoose,
     VecLen,
     VecIsEmpty,
     VecClone,
@@ -1587,6 +1624,35 @@ impl BuiltinMember {
             ("Array", "wrapping_add") => Some(Self::ArrayWrappingAdd),
             ("Array", "wrapping_sub") => Some(Self::ArrayWrappingSub),
             ("Array", "wrapping_mul") => Some(Self::ArrayWrappingMul),
+            ("Array", "abs") => Some(Self::ArrayAbs),
+            ("Array", "minimum") => Some(Self::ArrayMinimum),
+            ("Array", "maximum") => Some(Self::ArrayMaximum),
+            ("Array", "sqrt") => Some(Self::ArraySqrt),
+            ("Array", "exp") => Some(Self::ArrayExp),
+            ("Array", "log") => Some(Self::ArrayLog),
+            ("Array", "log2") => Some(Self::ArrayLog2),
+            ("Array", "log10") => Some(Self::ArrayLog10),
+            ("Array", "sin") => Some(Self::ArraySin),
+            ("Array", "cos") => Some(Self::ArrayCos),
+            ("Array", "tan") => Some(Self::ArrayTan),
+            ("Array", "pow") => Some(Self::ArrayPow),
+            ("Array", "floor") => Some(Self::ArrayFloor),
+            ("Array", "ceil") => Some(Self::ArrayCeil),
+            ("Array", "trunc") => Some(Self::ArrayTrunc),
+            ("Array", "to_float") => Some(Self::ArrayToFloat),
+            ("Array", "less") => Some(Self::ArrayLess),
+            ("Array", "less_equal") => Some(Self::ArrayLessEqual),
+            ("Array", "greater") => Some(Self::ArrayGreater),
+            ("Array", "greater_equal") => Some(Self::ArrayGreaterEqual),
+            ("Array", "equal") => Some(Self::ArrayEqual),
+            ("Array", "not_equal") => Some(Self::ArrayNotEqual),
+            ("Array", "any") => Some(Self::ArrayAny),
+            ("Array", "all") => Some(Self::ArrayAll),
+            ("Array", "count") => Some(Self::ArrayCount),
+            ("Array", "logical_and") => Some(Self::ArrayLogicalAnd),
+            ("Array", "logical_or") => Some(Self::ArrayLogicalOr),
+            ("Array", "logical_not") => Some(Self::ArrayLogicalNot),
+            ("Array", "choose") => Some(Self::ArrayChoose),
             ("Array", "saturating_add") => Some(Self::ArraySaturatingAdd),
             ("Array", "saturating_sub") => Some(Self::ArraySaturatingSub),
             ("Array", "saturating_mul") => Some(Self::ArraySaturatingMul),
@@ -1829,6 +1895,35 @@ impl BuiltinMember {
             Self::ArrayMean => "mean",
             Self::ArrayFastSum => "fast_sum",
             Self::ArrayFastMean => "fast_mean",
+            Self::ArrayAbs => "abs",
+            Self::ArrayMinimum => "minimum",
+            Self::ArrayMaximum => "maximum",
+            Self::ArraySqrt => "sqrt",
+            Self::ArrayExp => "exp",
+            Self::ArrayLog => "log",
+            Self::ArrayLog2 => "log2",
+            Self::ArrayLog10 => "log10",
+            Self::ArraySin => "sin",
+            Self::ArrayCos => "cos",
+            Self::ArrayTan => "tan",
+            Self::ArrayPow => "pow",
+            Self::ArrayFloor => "floor",
+            Self::ArrayCeil => "ceil",
+            Self::ArrayTrunc => "trunc",
+            Self::ArrayToFloat => "to_float",
+            Self::ArrayLess => "less",
+            Self::ArrayLessEqual => "less_equal",
+            Self::ArrayGreater => "greater",
+            Self::ArrayGreaterEqual => "greater_equal",
+            Self::ArrayEqual => "equal",
+            Self::ArrayNotEqual => "not_equal",
+            Self::ArrayAny => "any",
+            Self::ArrayAll => "all",
+            Self::ArrayCount => "count",
+            Self::ArrayLogicalAnd => "logical_and",
+            Self::ArrayLogicalOr => "logical_or",
+            Self::ArrayLogicalNot => "logical_not",
+            Self::ArrayChoose => "choose",
             Self::ArrayDot => "dot",
             Self::ArrayMatmul => "matmul",
             Self::ArrayReshape => "reshape",
@@ -2045,13 +2140,44 @@ impl BuiltinMember {
             Self::ArraySet => "set(index: list[int64], value: T) -> T | None",
             Self::ArrayFill => "fill(value: T) -> None",
             Self::ArrayMap => "map[U](f: def(T) -> U) -> Array[U]",
-            Self::ArraySum => "sum() -> T",
-            Self::ArrayMin => "min() -> T",
-            Self::ArrayMax => "max() -> T",
-            Self::ArrayMean => "mean() -> float64",
-            Self::ArrayFastSum => "fast_sum() -> T",
-            Self::ArrayFastMean => "fast_mean() -> float64",
+            Self::ArraySum => "sum(axis: int64 = whole Array) -> T | Array[T]",
+            Self::ArrayMin => "min(axis: int64 = whole Array) -> T | Array[T]",
+            Self::ArrayMax => "max(axis: int64 = whole Array) -> T | Array[T]",
+            Self::ArrayMean => "mean(axis: int64 = whole Array) -> float64 | Array[float64]",
+            Self::ArrayFastSum => "fast_sum(axis: int64 = whole Array) -> T | Array[T]",
+            Self::ArrayFastMean => {
+                "fast_mean(axis: int64 = whole Array) -> float64 | Array[float64]"
+            }
             Self::ArrayDot => "dot(other: Array[T]) -> T",
+            Self::ArrayAbs => "abs() -> Array[T]",
+            Self::ArrayMinimum => "minimum(other: Array[T] | T) -> Array[T]",
+            Self::ArrayMaximum => "maximum(other: Array[T] | T) -> Array[T]",
+            Self::ArraySqrt => "sqrt() -> Array[float64]",
+            Self::ArrayExp => "exp() -> Array[float64]",
+            Self::ArrayLog => "log() -> Array[float64]",
+            Self::ArrayLog2 => "log2() -> Array[float64]",
+            Self::ArrayLog10 => "log10() -> Array[float64]",
+            Self::ArraySin => "sin() -> Array[float64]",
+            Self::ArrayCos => "cos() -> Array[float64]",
+            Self::ArrayTan => "tan() -> Array[float64]",
+            Self::ArrayPow => "pow(exponent: Array[float64] | float64) -> Array[float64]",
+            Self::ArrayFloor => "floor() -> Array[int64]",
+            Self::ArrayCeil => "ceil() -> Array[int64]",
+            Self::ArrayTrunc => "trunc() -> Array[int64]",
+            Self::ArrayToFloat => "to_float() -> Array[float64]",
+            Self::ArrayLess => "less(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayLessEqual => "less_equal(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayGreater => "greater(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayGreaterEqual => "greater_equal(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayEqual => "equal(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayNotEqual => "not_equal(other: Array[T] | T) -> Array[bool]",
+            Self::ArrayAny => "any() -> bool",
+            Self::ArrayAll => "all() -> bool",
+            Self::ArrayCount => "count() -> int64",
+            Self::ArrayLogicalAnd => "logical_and(other: Array[bool] | bool) -> Array[bool]",
+            Self::ArrayLogicalOr => "logical_or(other: Array[bool] | bool) -> Array[bool]",
+            Self::ArrayLogicalNot => "logical_not() -> Array[bool]",
+            Self::ArrayChoose => "choose[T](when_true: Array[T] | T, when_false: Array[T] | T) -> Array[T]",
             Self::ArrayMatmul => "matmul(other: Array[T]) -> Array[T]",
             Self::ArrayReshape => "reshape(shape: list[int64]) -> Array[T]",
             Self::ArrayFlatten => "flatten() -> Array[T]",
@@ -2376,10 +2502,18 @@ impl BuiltinMember {
             Self::ArrayMap => {
                 "Calls a repeatable shared callback for every scalar and returns a new numeric Array."
             }
-            Self::ArraySum => "Returns the sum of all Array elements.",
-            Self::ArrayMin => "Returns the minimum Array element.",
-            Self::ArrayMax => "Returns the maximum Array element.",
-            Self::ArrayMean => "Returns the arithmetic mean as `float64`.",
+            Self::ArraySum => {
+                "Returns the sum of all Array elements, or with an axis the sums along it as an Array."
+            }
+            Self::ArrayMin => {
+                "Returns the minimum Array element, or with an axis the minima along it as an Array."
+            }
+            Self::ArrayMax => {
+                "Returns the maximum Array element, or with an axis the maxima along it as an Array."
+            }
+            Self::ArrayMean => {
+                "Returns the arithmetic mean as `float64`, or with an axis the means along it as an Array."
+            }
             Self::ArrayFastSum => {
                 "Returns the sum of all Array elements. A float Array adds them in a fixed vectorized order, not left to right."
             }
@@ -2396,6 +2530,93 @@ impl BuiltinMember {
                 "Returns the elements under a new shape with the same element count. One dimension may be `-1`, which takes the length the others leave."
             }
             Self::ArrayFlatten => "Returns the elements as a rank-1 Array, in row-major order.",
+            Self::ArrayAbs => {
+                "Returns the magnitude of each element."
+            }
+            Self::ArrayMinimum => {
+                "Returns the smaller of each element and the matching element of `other`, which broadcasts."
+            }
+            Self::ArrayMaximum => {
+                "Returns the larger of each element and the matching element of `other`, which broadcasts."
+            }
+            Self::ArraySqrt => {
+                "Returns the square root of each element of a `float64` Array."
+            }
+            Self::ArrayExp => {
+                "Returns `math.exp` of each element of a `float64` Array."
+            }
+            Self::ArrayLog => {
+                "Returns `math.log` of each element of a `float64` Array."
+            }
+            Self::ArrayLog2 => {
+                "Returns `math.log2` of each element of a `float64` Array."
+            }
+            Self::ArrayLog10 => {
+                "Returns `math.log10` of each element of a `float64` Array."
+            }
+            Self::ArraySin => {
+                "Returns `math.sin` of each element of a `float64` Array."
+            }
+            Self::ArrayCos => {
+                "Returns `math.cos` of each element of a `float64` Array."
+            }
+            Self::ArrayTan => {
+                "Returns `math.tan` of each element of a `float64` Array."
+            }
+            Self::ArrayPow => {
+                "Returns `math.pow` of each element of a `float64` Array and `exponent`, which broadcasts."
+            }
+            Self::ArrayFloor => {
+                "Returns `math.floor` of each element of a `float64` Array."
+            }
+            Self::ArrayCeil => {
+                "Returns `math.ceil` of each element of a `float64` Array."
+            }
+            Self::ArrayTrunc => {
+                "Returns `math.trunc` of each element of a `float64` Array."
+            }
+            Self::ArrayToFloat => {
+                "Returns each element of an integer Array as the nearest `float64`."
+            }
+            Self::ArrayLess => {
+                "Returns a mask that is `true` where the element is less than the matching element of `other`."
+            }
+            Self::ArrayLessEqual => {
+                "Returns a mask that is `true` where the element is at most the matching element of `other`."
+            }
+            Self::ArrayGreater => {
+                "Returns a mask that is `true` where the element is greater than the matching element of `other`."
+            }
+            Self::ArrayGreaterEqual => {
+                "Returns a mask that is `true` where the element is at least the matching element of `other`."
+            }
+            Self::ArrayEqual => {
+                "Returns a mask that is `true` where the element equals the matching element of `other`."
+            }
+            Self::ArrayNotEqual => {
+                "Returns a mask that is `true` where the element differs from the matching element of `other`."
+            }
+            Self::ArrayAny => {
+                "Returns whether any element of a mask is `true`."
+            }
+            Self::ArrayAll => {
+                "Returns whether every element of a mask is `true`."
+            }
+            Self::ArrayCount => {
+                "Returns the number of `true` elements of a mask."
+            }
+            Self::ArrayLogicalAnd => {
+                "Returns a mask that is `true` where both masks are."
+            }
+            Self::ArrayLogicalOr => {
+                "Returns a mask that is `true` where either mask is."
+            }
+            Self::ArrayLogicalNot => {
+                "Returns a mask with every element inverted."
+            }
+            Self::ArrayChoose => {
+                "Returns an Array that takes each element from `when_true` where the mask is `true` and from `when_false` elsewhere."
+            }
             Self::ArrayTranspose => {
                 "Returns the Array with its axes in reverse order, so a matrix's rows become its columns."
             }
@@ -2658,13 +2879,24 @@ impl BuiltinMember {
             | Self::ArrayShape
             | Self::ArrayLen
             | Self::ArrayClone
-            | Self::ArraySum
-            | Self::ArrayMin
-            | Self::ArrayMax
-            | Self::ArrayMean
-            | Self::ArrayFastSum
-            | Self::ArrayFastMean
             | Self::ArrayFlatten
+            | Self::ArrayAbs
+            | Self::ArraySqrt
+            | Self::ArrayExp
+            | Self::ArrayLog
+            | Self::ArrayLog2
+            | Self::ArrayLog10
+            | Self::ArraySin
+            | Self::ArrayCos
+            | Self::ArrayTan
+            | Self::ArrayFloor
+            | Self::ArrayCeil
+            | Self::ArrayTrunc
+            | Self::ArrayToFloat
+            | Self::ArrayAny
+            | Self::ArrayAll
+            | Self::ArrayCount
+            | Self::ArrayLogicalNot
             | Self::ArrayTranspose
             | Self::VecLen
             | Self::VecIsEmpty
@@ -2782,8 +3014,33 @@ impl BuiltinMember {
             Self::ArrayFill => {
                 BuiltinCallShape::fixed(&ARRAY_VALUE_PARAMS, CallConvention::PositionalOrNamed)
             }
-            Self::ArrayDot | Self::ArrayMatmul => {
+            Self::ArrayDot
+            | Self::ArrayMatmul
+            | Self::ArrayMinimum
+            | Self::ArrayMaximum
+            | Self::ArrayLess
+            | Self::ArrayLessEqual
+            | Self::ArrayGreater
+            | Self::ArrayGreaterEqual
+            | Self::ArrayEqual
+            | Self::ArrayNotEqual
+            | Self::ArrayLogicalAnd
+            | Self::ArrayLogicalOr => {
                 BuiltinCallShape::fixed(&ARRAY_OTHER_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArraySum
+            | Self::ArrayMin
+            | Self::ArrayMax
+            | Self::ArrayMean
+            | Self::ArrayFastSum
+            | Self::ArrayFastMean => {
+                BuiltinCallShape::fixed(&ARRAY_AXIS_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayPow => {
+                BuiltinCallShape::fixed(&ARRAY_EXPONENT_PARAMS, CallConvention::PositionalOrNamed)
+            }
+            Self::ArrayChoose => {
+                BuiltinCallShape::fixed(&ARRAY_CHOOSE_PARAMS, CallConvention::PositionalOrNamed)
             }
             Self::ArrayReshape => {
                 BuiltinCallShape::fixed(&ARRAY_SHAPE_PARAMS, CallConvention::PositionalOrNamed)

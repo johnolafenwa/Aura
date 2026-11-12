@@ -75,7 +75,7 @@ None of this is observable except in time and memory.
 | --- | --- | --- |
 | `abs()` | every numeric dtype | The magnitude of each element. An integer minimum is `AU4002`. |
 | `minimum(other)`, `maximum(other)` | every numeric dtype | The smaller or larger of each pair. `other` is an Array that broadcasts or one element. A float pair with a NaN gives NaN, and `-0.0` is below `0.0`, as `min` and `max` order them. |
-| `sqrt()` | `float64` | The square root. A finite negative element is `AU4001`. |
+| `sqrt()` | `float64` | The square root. A negative element gives NaN, as scalar `sqrt` does. |
 | `exp()`, `log()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()` | `float64` | The `math` function of each element, with that function's domain and overflow rules. |
 | `pow(exponent: float64)` | `float64` | `math.pow` of each element and `exponent`. |
 | `floor()`, `ceil()`, `trunc()` | `float64` | `Array[int64]`, as the `math` functions return `int64`. An element that does not fit is `AU4002`. |
@@ -89,7 +89,7 @@ None of this is observable except in time and memory.
 ### Conversion
 
 - **`array as Array[T]` converts each element as the scalar cast
-  does.** An integer must fit the target. An integer to a float must be
+  does.** The cast reads its operand and does not move it. An integer must fit the target. An integer to a float must be
   exact. A float to an integer must be finite and in range, and is
   truncated toward zero. The first element that fails reports the
   scalar cast's diagnostic with its flat index.

@@ -1,0 +1,5 @@
+error[AU2003]: `Array.sqrt` is available only for `Array[float64]`, found `Array[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_math_requires_float64.au:3:18
+  |
+3 |     print(values.sqrt())
+  |                  ^

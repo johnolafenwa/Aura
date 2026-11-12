@@ -29552,3 +29552,157 @@ fn every_direct_task_start_test_holds_claim_flag_test_guard() {
         unguarded.join("\n")
     );
 }
+
+#[test]
+fn direct_array_members_cover_axis_elementwise_mask_and_cast_entries() {
+    use crate::runtime_value::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
+    fn capture_diagnostic(invoke: impl FnOnce() + Send + 'static) -> Diagnostic {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                invoke();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid direct Array member input should trap")
+    }
+    fn assert_diagnostic(diagnostic: &Diagnostic, code: &str, message: &str, span: Option<Span>) {
+        assert_eq!(diagnostic.code, code);
+        assert_eq!(diagnostic.message, message);
+        assert_eq!(diagnostic.span, span);
+    }
+    let floats = |shape: &[usize], values: &[f64]| {
+        ArrayValue::new(shape.into(), ArrayStorage::Float64(values.to_vec().into())).unwrap()
+    };
+    let ints = |shape: &[usize], values: &[i64]| {
+        ArrayValue::new(shape.into(), ArrayStorage::Int64(values.to_vec().into())).unwrap()
+    };
+    let mask = |values: &[bool]| {
+        ArrayValue::new(
+            vec![values.len()].into(),
+            ArrayStorage::Bool(values.to_vec().into()),
+        )
+        .unwrap()
+    };
+    let taken = |pointer: *mut OpaqueValue| unsafe { take_value(pointer) };
+
+    let grid = boxed_value(Value::Array(floats(&[2, 2], &[1.0, 4.0, 9.0, 16.0])));
+    assert_eq!(
+        taken(super::aura_direct_array_reduce_axis(grid, 0, 0, 1, 1)),
+        Value::Array(floats(&[2], &[10.0, 20.0]))
+    );
+    assert_eq!(
+        taken(super::aura_direct_array_unary(
+            grid,
+            ArrayUnaryOp::Sqrt as i64,
+            1,
+            1
+        )),
+        Value::Array(floats(&[2, 2], &[1.0, 2.0, 3.0, 4.0]))
+    );
+    // One value may be both operands.
+    assert_eq!(
+        taken(super::aura_direct_array_pairwise(
+            grid,
+            grid,
+            ArrayPairOp::Maximum as i64,
+            1,
+            1
+        )),
+        Value::Array(floats(&[2, 2], &[1.0, 4.0, 9.0, 16.0]))
+    );
+    let limit = boxed_value(Value::Float(5.0));
+    assert_eq!(
+        taken(super::aura_direct_array_pairwise(
+            grid,
+            limit,
+            ArrayPairOp::Minimum as i64,
+            1,
+            1
+        )),
+        Value::Array(floats(&[2, 2], &[1.0, 4.0, 5.0, 5.0]))
+    );
+    let large = super::aura_direct_array_compare(grid, limit, ArrayCompareOp::Greater as i64, 1, 1);
+    assert_eq!(
+        taken(super::aura_direct_array_mask_reduce(
+            large,
+            ArrayMaskOp::Count as i64,
+            1,
+            1
+        )),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+    assert_eq!(
+        taken(super::aura_direct_array_choose(large, grid, limit, 3, 1, 1)),
+        Value::Array(floats(&[2, 2], &[5.0, 5.0, 9.0, 16.0]))
+    );
+    assert_eq!(
+        taken(super::aura_direct_array_choose(
+            large, limit, limit, 3, 1, 1
+        )),
+        Value::Array(floats(&[2, 2], &[5.0; 4]))
+    );
+    assert_eq!(
+        taken(super::aura_direct_array_cast(grid, 1, 1, 1)),
+        Value::Array(ints(&[2, 2], &[1, 4, 9, 16]))
+    );
+    assert_eq!(
+        taken(large),
+        Value::Array(
+            ArrayValue::new(
+                vec![2, 2].into(),
+                ArrayStorage::Bool(vec![false, false, true, true].into())
+            )
+            .unwrap()
+        )
+    );
+
+    let address = grid as usize;
+    let invalid = |call: fn(*mut OpaqueValue) -> *mut OpaqueValue| {
+        capture_diagnostic(move || {
+            let _ = call(address as *mut OpaqueValue);
+        })
+    };
+    for diagnostic in [
+        invalid(|grid| super::aura_direct_array_unary(grid, 99, 7, 9)),
+        invalid(|grid| super::aura_direct_array_pairwise(grid, grid, 99, 7, 9)),
+        invalid(|grid| super::aura_direct_array_compare(grid, grid, 99, 7, 9)),
+        invalid(|grid| super::aura_direct_array_mask_reduce(grid, 99, 7, 9)),
+        invalid(|grid| super::aura_direct_array_choose(grid, grid, grid, 99, 7, 9)),
+        invalid(|grid| super::aura_direct_array_cast(grid, 99, 7, 9)),
+    ] {
+        assert_diagnostic(
+            &diagnostic,
+            "AU4007",
+            "unknown array member code 99",
+            Some(Span::new(7, 9)),
+        );
+    }
+    let diagnostic = invalid(|grid| super::aura_direct_array_reduce_axis(grid, 0, 5, 7, 9));
+    assert_eq!(diagnostic.span, Some(Span::new(7, 9)));
+    assert!(
+        diagnostic.message.contains("axis"),
+        "{}",
+        diagnostic.message
+    );
+    let scalar = boxed_value(Value::Float(1.0)) as usize;
+    let diagnostic = capture_diagnostic(move || {
+        let scalar = scalar as *mut OpaqueValue;
+        let _ = super::aura_direct_array_pairwise(scalar, scalar, 0, 7, 9);
+    });
+    assert!(
+        diagnostic.message.contains("expected `Array`"),
+        "{}",
+        diagnostic.message
+    );
+    let flags = boxed_value(Value::Array(mask(&[true, false])));
+    assert_eq!(
+        taken(super::aura_direct_array_unary(
+            flags,
+            ArrayUnaryOp::LogicalNot as i64,
+            1,
+            1
+        )),
+        Value::Array(mask(&[false, true]))
+    );
+    let _ = (taken(flags), taken(limit), taken(grid));
+}

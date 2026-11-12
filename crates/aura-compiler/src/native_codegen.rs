@@ -255,6 +255,7 @@ fn direct_array_dtype_code(ty: &Type) -> std::result::Result<i64, String> {
             "int64" => Ok(1),
             "float32" => Ok(2),
             "float64" => Ok(3),
+            "bool" => Ok(4),
             _ => Err(format!(
                 "direct backend does not support Array dtype `{ty}`"
             )),
@@ -15899,7 +15900,11 @@ impl<'a> FunctionCompiler<'a> {
                 let coordinates = self.load_operand(&args[0].value)?;
                 let line = self.load_word(args[1], int32, true)?;
                 let column = self.load_word(args[2], int32, true)?;
-                if coordinates.ty == DirectType::Scalar(ScalarKind::Int64) {
+                // A mask has no in-place read, so its elements take the
+                // runtime call.
+                if coordinates.ty == DirectType::Scalar(ScalarKind::Int64)
+                    && element_direct_ty != DirectType::Scalar(ScalarKind::Bool)
+                {
                     if let DirectType::Scalar(kind) = element_direct_ty {
                         return self.emit_array_element_read(
                             array,
@@ -16065,6 +16070,103 @@ impl<'a> FunctionCompiler<'a> {
                 self.release_opaque_handle(results[0]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
+            }
+            ArrayOp::ReduceAxis
+            | ArrayOp::MeanAxis
+            | ArrayOp::Unary
+            | ArrayOp::UnaryInt64
+            | ArrayOp::UnaryFloat64
+            | ArrayOp::MaskTest
+            | ArrayOp::MaskCount
+            | ArrayOp::CastInt32
+            | ArrayOp::CastInt64
+            | ArrayOp::CastFloat32
+            | ArrayOp::CastFloat64 => {
+                // The words before the source position: a kind, a kind and
+                // an axis, or a cast's target dtype code.
+                let leading = args.len() - 2;
+                for argument in &args[..leading] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let cast = match op {
+                    ArrayOp::CastInt32 => Some(crate::runtime_value::ArrayDType::Int32),
+                    ArrayOp::CastInt64 => Some(crate::runtime_value::ArrayDType::Int64),
+                    ArrayOp::CastFloat32 => Some(crate::runtime_value::ArrayDType::Float32),
+                    ArrayOp::CastFloat64 => Some(crate::runtime_value::ArrayDType::Float64),
+                    _ => None,
+                };
+                if let Some(dtype) = cast {
+                    words.push(self.builder.iconst(types::I64, dtype as i64));
+                }
+                words.push(self.load_word(args[leading], int32, true)?);
+                words.push(self.load_word(args[leading + 1], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                let result_ty =
+                    runtime_op
+                        .result_type(Some(&receiver_ty), &[])
+                        .ok_or_else(|| {
+                            format!("direct backend does not know the result type of `{op:?}`")
+                        })?;
+                let scalar = match op {
+                    ArrayOp::MaskTest => Some(ScalarKind::Bool),
+                    ArrayOp::MaskCount => Some(ScalarKind::Int64),
+                    _ => None,
+                };
+                let boxed = self.owned_opaque_result(results, result_ty);
+                match scalar {
+                    Some(kind) => self.coerce_value(boxed, &DirectType::Scalar(kind)),
+                    None => Ok(boxed),
+                }
+            }
+            ArrayOp::Pairwise | ArrayOp::Compare => {
+                let other = self.load_operand(&args[0].value)?;
+                let other = if direct_array_element_type(&other.ty).is_some() {
+                    other
+                } else {
+                    self.coerce_value(other, &element_direct_ty)?
+                };
+                let other = self.ensure_opaque(other)?;
+                words.push(other.values[0]);
+                words.push(self.load_word(args[1], ScalarKind::Int64, true)?);
+                words.push(self.load_word(args[2], int32, true)?);
+                words.push(self.load_word(args[3], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                let result_ty = if op == ArrayOp::Compare {
+                    Type::Named("Array".to_string(), vec![Type::named("bool")])
+                } else {
+                    array_ty
+                };
+                Ok(self.owned_opaque_result(results, result_ty))
+            }
+            ArrayOp::Choose => {
+                // The dtype word names the result's elements, which an
+                // element argument is converted to.
+                let dtype = match &args[2].value {
+                    Operand::Int(code) => crate::runtime_value::ArrayDType::from_code(*code as i64),
+                    _ => None,
+                }
+                .ok_or("direct backend expected `__choose` to carry a dtype code".to_string())?;
+                let chosen_ty = Type::named(dtype.runtime_type_name());
+                let chosen_direct_ty =
+                    ensure_direct_type(&chosen_ty, &self.classes, "Array dtype")?;
+                for argument in &args[..2] {
+                    let value = self.load_operand(&argument.value)?;
+                    let value = if direct_array_element_type(&value.ty).is_some() {
+                        value
+                    } else {
+                        self.coerce_value(value, &chosen_direct_ty)?
+                    };
+                    let value = self.ensure_opaque(value)?;
+                    words.push(value.values[0]);
+                }
+                words.push(self.builder.iconst(types::I64, dtype as i64));
+                words.push(self.load_word(args[3], int32, true)?);
+                words.push(self.load_word(args[4], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(
+                    results,
+                    Type::Named("Array".to_string(), vec![chosen_ty]),
+                ))
             }
             ArrayOp::Sum
             | ArrayOp::Min

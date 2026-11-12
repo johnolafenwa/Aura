@@ -10,8 +10,9 @@ is smaller than a general tensor framework:
   elements without copying them, and no Array sees a write made through
   another.
 
-The only dtypes, or element types, are `int32`, `int64`, `float32`, and
-`float64`.
+The dtypes, or element types, are `int32`, `int64`, `float32`, `float64`,
+and `bool`. An `Array[bool]` is a mask: the result of a comparison. It has
+no arithmetic.
 
 ```aura
 def main() -> int32:
@@ -41,12 +42,11 @@ array [ component { , component } ]
 component = expression | [ expression ] : [ expression ] [ : [ expression ] ]
 ```
 
-The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is different from list indexing.
+The supported `dtype` names are exactly `int32`, `int64`, `float32`,
+`float64`, and `bool`. Comma-separated Array indexing is different from list indexing.
 [Grammar](/manual/grammar) defines the complete syntax.
 
-Aura has no Array literal, dtype value, rank annotation, or array-shape
-broadcast syntax.
+Aura has no Array literal, dtype value, or rank annotation.
 
 ## Typing Rules
 
@@ -60,7 +60,7 @@ These are all the constructors:
 | `Array[T].full(shape: list[int64], value: T)` | `Array[T]` |
 | `Array[T].from_list(values: list[T], shape: list[int64])` | `Array[T]` |
 
-`T` must be one of the four dtypes. Shape is a runtime `list[int64]`, so rank
+`T` must be one of the five dtypes. Shape is a runtime `list[int64]`, so rank
 and dimensions are not part of the static type.
 
 `from_list` requires exactly `list[T]`. It copies the scalar elements, and the
@@ -81,13 +81,25 @@ from a mixed numeric source.
 | `get(index: list[int64])` | `T \| None`; `None` for an out-of-bounds coordinate or rank mismatch |
 | `set(index: list[int64], value: T)` | mutable receiver; `T \| None` holding the replaced value, or a coordinate/rank trap rather than `None` |
 | `fill(value: T)` | mutable receiver; returns `None` |
-| `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the four dtypes |
-| `sum()` | `T` |
-| `min()` | `T` |
-| `max()` | `T` |
-| `mean()` | `float64` for every input dtype |
+| `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the five dtypes |
+| `sum()`, `min()`, `max()` | `T`; numeric dtypes |
+| `mean()` | `float64` for every numeric dtype |
 | `fast_sum()` | `T`; the sum in the fixed reordered order |
 | `fast_mean()` | `float64`; the mean in the fixed reordered order |
+| `sum(axis: int64)`, `min(axis)`, `max(axis)`, `fast_sum(axis)` | `Array[T]`; the reduction of each lane along `axis` |
+| `mean(axis: int64)`, `fast_mean(axis)` | `Array[float64]` |
+| `abs()` | `Array[T]`; numeric dtypes |
+| `minimum(other)`, `maximum(other)` | `Array[T]`; numeric dtypes; `other` is `Array[T]` or `T` |
+| `sqrt()`, `exp()`, `log()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()` | `Array[float64]`; `float64` only |
+| `pow(exponent)` | `Array[float64]`; `float64` only; `exponent` is `Array[float64]` or `float64` |
+| `floor()`, `ceil()`, `trunc()` | `Array[int64]`; `float64` only |
+| `to_float()` | `Array[float64]`; `int32` and `int64` only |
+| `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | `Array[bool]`; numeric dtypes; `other` is `Array[T]` or `T` |
+| `any()`, `all()` | `bool`; `Array[bool]` only |
+| `count()` | `int64`; `Array[bool]` only; the number of `true` elements |
+| `logical_and(other)`, `logical_or(other)` | `Array[bool]`; `Array[bool]` only; `other` is `Array[bool]` or `bool` |
+| `logical_not()` | `Array[bool]`; `Array[bool]` only |
+| `choose(when_true, when_false)` | `Array[U]`; `Array[bool]` only; each argument is `Array[U]` or `U` |
 | `dot(other: Array[T])` | `T`; inner product of two Arrays of the same shape |
 | `matmul(other: Array[T])` | fresh `Array[T]`; matrix product |
 
@@ -98,6 +110,18 @@ Array place.
 
 `dot` and `matmul` take an Array of exactly the receiver's type. They borrow
 both operands and consume neither.
+
+A member called on a dtype it does not have is `AU2003`. An operand marked
+`Array[T]` or `T` follows the operator rules: an Array of the receiver's
+dtype whose shape broadcasts, or one element of exactly `T`. A numeric
+literal takes the dtype. `choose` takes its result dtype `U` from an Array
+argument, or from its first argument when both are elements.
+
+### Conversion
+
+`array as Array[U]` converts between the four numeric dtypes and has type
+`Array[U]`. It reads its operand and does not move it. A cast to or from
+`Array[bool]`, or between an Array and a scalar, is rejected.
 
 ### Indexing And Slicing
 
@@ -115,14 +139,18 @@ Array place and a value of type `T` or `Array[T]`. Slice bounds and steps are
 `+`, `-`, and `*` accept either of these operand pairs and return a fresh
 `Array[T]`:
 
-- two Arrays with the same dtype and exactly the same shape
+- two Arrays with the same numeric dtype, whose shapes broadcast at run time
 - one Array and one scalar of exactly `T`, in either order
 
 `/` has the same forms for floating Arrays only. Integer Array `/` is rejected
 with `AU2003`.
 
-There is no array-shape broadcasting and no mixed promotion. An
-`Array[int32]` and an `Array[int64]` do not combine. A bound scalar is never
+`array[selection] op= value` with `+=`, `-=`, `*=`, or `/=` takes the same
+operands and updates the selected elements.
+
+There is no mixed promotion. An `Array[int32]` and an `Array[int64]` do not
+combine. `Array[bool]` has no arithmetic operators, and no Array has `==`,
+`!=`, or an ordering operator: comparisons are members. A bound scalar is never
 implicitly widened or narrowed for an Array operation.
 
 ### Wrapping And Saturating Arithmetic
@@ -130,7 +158,7 @@ implicitly widened or narrowed for an Array operation.
 Every scalar integer type, plus `Array[int32]` and `Array[int64]`, provides
 `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `saturating_add`,
 `saturating_sub`, and `saturating_mul`. The Array methods accept one scalar of
-the same dtype or one Array of the same shape. Ordinary arithmetic stays
+the same dtype or one Array whose shape broadcasts. Ordinary arithmetic stays
 checked.
 
 ## Runtime Semantics
@@ -272,7 +300,15 @@ def swap_rows(grid: mut Array[float64], first: int64, second: int64) -> None:
 
 ### Arithmetic
 
-- Array/Array operations require exactly equal shapes.
+- Array/Array operations broadcast. The shapes are aligned at the last
+  axis. Two dimensions match when they are equal or one of them is one,
+  and a missing leading dimension counts as one. The result has the larger
+  dimension along each axis.
+- A fault reports the row-major index of the result element it belongs
+  to.
+- `array[selection] op= value` gives what
+  `array[selection] = array[selection] op value` gives, with the selection
+  evaluated once. Nothing is written when the operation faults.
 - Scalar forms apply the scalar to every element in row-major order.
 - Results own fresh storage.
 - Floating `/` follows the ordinary floating operator rules.
@@ -295,6 +331,85 @@ order.
 `sum` and `mean` promise no reassociation and no vectorized reduction
 order. A float `min` treats `-0.0` as below `0.0`, and `max` treats `0.0` as
 above `-0.0`.
+
+### Axis Reductions
+
+A reduction with an axis reduces each lane along that axis and returns an
+Array with the axis removed. A rank-1 Array gives an Array of shape `[1]`.
+
+- A negative axis counts from the last. An axis outside the rank is
+  `AU4007`.
+- Each result element is the reduction of one lane: `m.sum(0)[j]` equals
+  `m[:, j].sum()`, with the same bits and the same faults.
+- An empty lane follows the reduction without an axis. Its `sum` is zero,
+  and its `min`, `max`, or `mean` is `AU4007`.
+
+```aura
+def main() -> int32:
+    grid = Array[float64].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    print(grid.sum(0))
+    print(grid.mean(1))
+    print(grid.max(-1))
+    return 0
+```
+
+### Elementwise Members
+
+Each member gives what `map` with the scalar function gives, in one call.
+
+- `abs()` of an integer minimum is `AU4002`.
+- `minimum` and `maximum` order floats as `min` and `max` do: a pair with a
+  NaN gives NaN, and `-0.0` is below `0.0`.
+- `sqrt()` of a negative element is NaN, as scalar `sqrt` is.
+- `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, and `pow` follow the
+  [`math`](/manual/math) function of the same name, with its domain and
+  overflow rules.
+- `floor`, `ceil`, and `trunc` give `int64` elements. An element that does
+  not fit is `AU4002`.
+- A fault carries the scalar function's code and message, followed by
+  `at flat index N` for the first failing element in row-major order.
+
+### Conversion Semantics
+
+`array as Array[U]` converts each element as the scalar cast does:
+
+- An integer must fit the target integer type.
+- An integer to a float must be exactly representable.
+- A float to an integer must be finite and in range, and is truncated
+  toward zero.
+- `float64` to `float32` rounds to nearest.
+
+The first element that fails reports the scalar cast's diagnostic with its
+flat index. A cast to the Array's own dtype shares its buffer.
+`to_float()` rounds each integer to the nearest `float64` and never faults.
+
+### Comparisons And Masks
+
+A comparison member compares each element with the matching element of an
+Array that broadcasts, or with one element, and returns `Array[bool]`. A
+float comparison with a NaN is `false`, except `not_equal`, which is
+`true`.
+
+`Array[bool]` has the constructors, selections, shape members, slice
+assignment, `clone`, `get`, `set`, `fill`, and `map` of every Array.
+
+- `any()` and `all()` of an empty mask are `false` and `true`.
+- `count()` is the number of `true` elements.
+- `logical_and` and `logical_or` broadcast as arithmetic does.
+- `mask.choose(when_true, when_false)` broadcasts the mask and both
+  arguments to one shape. Each result element comes from `when_true` where
+  the mask is `true` and from `when_false` elsewhere. Both arguments are
+  evaluated in full.
+
+```aura
+def main() -> int32:
+    values = Array[float64].from_list([-1.5, 2.0, 0.5, -4.0], [4])
+    negative = values.less(0.0)
+    print(negative.count())
+    print(negative.choose(0.0, values))
+    print(values.abs().greater(1.0).logical_and(negative))
+    return 0
+```
 
 ### Reordered Reductions
 
@@ -336,13 +451,19 @@ each product in the element type and adds the products in the reordered
 order above. An integer `dot` is checked: the first product or running sum,
 in index order, that leaves the element type's range is `AU4002`.
 
-`left.matmul(right)` accepts three pairs of shapes:
+`left.matmul(right)` accepts three pairs of shapes. The last two
+dimensions of an operand are its matrix, and `..` stands for any leading
+batch dimensions:
 
 | Left | Right | Result |
 | --- | --- | --- |
-| `[n, k]` | `[k, m]` | `[n, m]` |
-| `[n, k]` | `[k]` | `[n]` |
-| `[k]` | `[k, m]` | `[m]` |
+| `[.., n, k]` | `[.., k, m]` | `[.., n, m]` |
+| `[.., n, k]` | `[k]` | `[.., n]` |
+| `[k]` | `[.., k, m]` | `[.., m]` |
+
+The batch dimensions of the two operands broadcast like the shapes of an
+arithmetic operation. The result holds one matrix product per batch
+position. A rank-1 operand is one vector for every position (ADR-0090).
 
 ```aura
 def main() -> int32:
@@ -359,6 +480,19 @@ Each result element starts at zero and adds its `k` products in ascending
 order of the inner index, rounding each product before it is added. That is
 the order of the plain three-loop program, so `matmul` gives that program's
 bits. An integer `matmul` is checked and reports `AU4002`.
+
+```aura
+def main() -> int32:
+    layers = Array[float64].full([3, 2, 2], 2.0)
+    inputs = Array[float64].full([2, 4], 1.0)
+    outputs = layers.matmul(inputs)
+    print(outputs.shape())
+    print(outputs.sum())
+    return 0
+```
+
+`layers` holds three matrices and `inputs` holds one, so `outputs` has
+shape `[3, 2, 4]`. Each of the three products is the plain product above.
 
 A large float product of two matrices runs on several threads. Each thread
 computes whole rows of the result, and no element is shared, so the bits
@@ -401,7 +535,7 @@ Compile-time codes:
 | --- | --- |
 | `AU2001` | Unknown Array member or constructor. |
 | `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. A slice assignment whose value is neither `T` nor `Array[T]`. A slice bound or step that is not an integer. |
-| `AU2003` | Unsupported operator, including integer Array `/`. The message keeps the ordinary checked-integer guidance. |
+| `AU2003` | Unsupported operator, including integer Array `/` and arithmetic on `Array[bool]`. A member called on a dtype it does not have. An Array cast to or from `Array[bool]`. |
 | `AU2004` | Invalid argument binding. |
 | `AU3002` | Mutation while shared access is active, or a slice assignment that moves its own target, as in `values[:] = values`. |
 | `AU3003` | `set`, `fill`, or assignment through an immutable place. |
@@ -410,7 +544,8 @@ Runtime codes:
 
 | Code | Cause |
 | --- | --- |
-| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
+| `AU4001` | A math member's domain error, such as `log` of a negative element, or a cast of a non-finite float. |
+| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. `abs` of an integer minimum, `exp` overflow, a `floor`, `ceil`, or `trunc` result outside `int64`, or a cast whose element does not fit or is not exact. |
 | `AU4003` | A coordinate is out of range, a slice bound is outside its axis, a slice range is reversed, or a slice step is zero. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
 | `AU4005` | Shape product or element count overflows, or allocation fails. A write to an Array that shares its buffer allocates the copy. |
@@ -420,16 +555,18 @@ Runtime codes:
 
 - construction with rank zero or a negative dimension
 - a `from_list` element count that does not match the shape
-- an Array/Array operation whose shapes differ
+- an Array/Array operation, comparison, or `choose` whose shapes do not
+  broadcast
+- a reduction axis outside the rank
 - a direct coordinate count that does not match the runtime rank
 - an index with more components than the runtime rank
 - a `reshape` to a shape with a different element count, or with two `-1`
   dimensions
 - a `permute` that repeats or omits an axis
 - a slice assignment whose value does not broadcast to the selected shape
-- `min`, `max`, `mean`, or `fast_mean` on an empty Array
+- `min`, `max`, `mean`, or `fast_mean` on an empty Array or an empty lane
 - a `dot` whose shapes differ
-- a `matmul` whose shapes are not one of the three accepted pairs
+- a `matmul` whose shapes are not one of the three accepted pairs, or whose batch dimensions do not broadcast
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -443,11 +580,11 @@ MIR and direct execution both implement:
 - `map` and reductions
 - `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
-- scalar forms and exact-shape elementwise operations
+- scalar forms and broadcast elementwise operations
+- axis reductions, elementwise members, conversion, comparisons, and masks
 
-Direct native execution uses kernels specialized per dtype. A view that is
-not one row-major block is copied into row-major order before a kernel reads
-it. Both
+Direct native execution uses kernels specialized per dtype. Arithmetic
+reads a strided or broadcast operand where it lies. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
 
@@ -460,9 +597,10 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
 not have:
 
-- array-shape broadcasting between two Array operands, or mixed promotion
+- mixed promotion between dtypes
 - a matrix product over more than two dimensions
-- equality or ordering
+- equality or ordering operators: use the comparison members
+- math members on `float32`: convert with `as Array[float64]` first
 - iteration with `for`
 - a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage

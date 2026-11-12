@@ -3996,7 +3996,14 @@ impl Parser {
             self.peek_kind(1),
             Some(TokenKind::Identifier(name)) if name == crate::sema::TRAIT_OBJECT_TYPE_NAME
         ) && matches!(self.peek_kind(2), Some(TokenKind::Identifier(_)));
+        // `array as Array[T]` converts an Array's elements. `Array` alone
+        // is an ordinary name.
+        let starts_array = matches!(
+            self.peek_kind(1),
+            Some(TokenKind::Identifier(name)) if name == "Array"
+        ) && matches!(self.peek_kind(2), Some(TokenKind::LBracket));
         starts_trait_object
+            || starts_array
             || matches!(self.peek_kind(1), Some(TokenKind::KwMut | TokenKind::KwOwn))
             || matches!(
                 self.peek_kind(1),

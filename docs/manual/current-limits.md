@@ -111,9 +111,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numeric Arrays
 
-- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
+- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting between two Arrays, mixed promotion, equality, a matrix product over more than two dimensions, `for` iteration, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no matrix product over more than two dimensions, `for` iteration, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
 - Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.

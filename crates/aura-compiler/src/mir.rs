@@ -21513,6 +21513,9 @@ impl<'a> Lowerer<'a> {
                 if let Some(converted) = self.lower_trait_object_cast(expr, false) {
                     return converted;
                 }
+                if let Some(converted) = self.lower_array_cast(expr) {
+                    return converted;
+                }
                 let value = self.lower_expr(value);
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
@@ -24240,6 +24243,57 @@ impl<'a> Lowerer<'a> {
         self.switch_to(done);
     }
 
+    /// Lowers `array as Array[T]` to the private cast member of the
+    /// target dtype (ADR-0089).
+    fn lower_array_cast(&mut self, expr: &Expr) -> Option<Operand> {
+        use crate::runtime_ops as ops;
+        let ExprKind::Cast { expr: value, ty } = &expr.kind else {
+            return None;
+        };
+        let source = self.infer_expr_type(value)?;
+        if !matches!(&source, Type::Named(name, _) if name == "Array") {
+            return None;
+        }
+        let target = self.lower_type_ref_with_provenance(ty);
+        let member = match crate::runtime_ops::first_type_arg(Some(&target))?
+            .to_string()
+            .as_str()
+        {
+            "int32" => ops::CAST_INT32_MEMBER,
+            "int64" => ops::CAST_INT64_MEMBER,
+            "float32" => ops::CAST_FLOAT32_MEMBER,
+            "float64" => ops::CAST_FLOAT64_MEMBER,
+            _ => return None,
+        };
+        let object = self.lower_expr_at_sequence_point(value, None);
+        let receiver_place = match &object {
+            Operand::Place(place) | Operand::MovePlace(place) => Some(place.clone()),
+            _ => None,
+        };
+        let temp = self.new_typed_temp(target);
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object,
+                    field: member.to_string(),
+                    receiver_place,
+                    dispatch: None,
+                },
+                args: [expr.span.line, expr.span.column]
+                    .into_iter()
+                    .map(|word| MirArg {
+                        name: None,
+                        value: Operand::Int(word as u128),
+                        writeback_place: None,
+                    })
+                    .collect(),
+                type_args: Default::default(),
+            },
+        });
+        Some(Operand::Place(temp))
+    }
+
     /// Lowers `value as dyn Trait`. The checker recorded the conversion
     /// for `value`; a value that already has the type is used as it is.
     fn lower_trait_object_cast(&mut self, expr: &Expr, owned: bool) -> Option<Operand> {
@@ -26422,6 +26476,16 @@ impl<'a> Lowerer<'a> {
                 };
                 let lowered_args = self.lower_member_call_args(callee.span, object, field, args);
                 let trait_name = self.bounded_trait_member_identity(object, field);
+                let (member_field, lowered_args) = match &trait_name {
+                    Some(_) => (field.clone(), lowered_args),
+                    None => self.array_private_member_call(
+                        receiver_type.as_ref(),
+                        field,
+                        lowered_args,
+                        expr,
+                        callee.span,
+                    ),
+                };
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
                     value: Rvalue::Call {
@@ -26435,7 +26499,7 @@ impl<'a> Lowerer<'a> {
                             },
                             None => CallTarget::Member {
                                 object: lowered_object,
-                                field: field.clone(),
+                                field: member_field,
                                 receiver_place,
                                 dispatch: None,
                             },
@@ -27076,6 +27140,135 @@ impl<'a> Lowerer<'a> {
             .collect()
     }
 
+    /// The private member and arguments that an elementwise, comparison,
+    /// mask, or axis member of an `Array` lowers to (ADR-0089). Each
+    /// carries an operation code, then the call's source line and column.
+    /// Any other call keeps its member and arguments.
+    fn array_private_member_call(
+        &self,
+        receiver: Option<&Type>,
+        field: &str,
+        args: Vec<MirArg>,
+        call: &Expr,
+        span: Span,
+    ) -> (String, Vec<MirArg>) {
+        use crate::runtime_ops as ops;
+        use crate::runtime_value::{
+            ArrayCompareOp, ArrayDType, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp,
+        };
+        let is_array = matches!(receiver, Some(Type::Named(name, dtype)) if name == "Array" && dtype.len() == 1);
+        let plain = |value: Operand| MirArg {
+            name: None,
+            value,
+            writeback_place: None,
+        };
+        let code = |code: i64| plain(Operand::Int(code as u128));
+        let mut values = args.iter().map(|argument| plain(argument.value.clone()));
+        let reduction = match field {
+            "sum" => Some(0),
+            "min" => Some(1),
+            "max" => Some(2),
+            "mean" => Some(3),
+            "fast_sum" => Some(4),
+            "fast_mean" => Some(5),
+            _ => None,
+        };
+        let (member, mut words) = if !is_array {
+            return (field.to_string(), args);
+        } else if let (Some(reduction), 1) = (reduction, args.len()) {
+            let member = if matches!(field, "mean" | "fast_mean") {
+                ops::MEAN_AXIS_MEMBER
+            } else {
+                ops::REDUCE_AXIS_MEMBER
+            };
+            (
+                member,
+                vec![code(reduction), values.next().expect("one axis")],
+            )
+        } else if let Some(operation) = ArrayUnaryOp::from_name(field) {
+            let member = match operation {
+                ArrayUnaryOp::Floor | ArrayUnaryOp::Ceil | ArrayUnaryOp::Trunc => {
+                    ops::UNARY_INT64_MEMBER
+                }
+                ArrayUnaryOp::ToFloat => ops::UNARY_FLOAT64_MEMBER,
+                _ => ops::UNARY_MEMBER,
+            };
+            (member, vec![code(operation as i64)])
+        } else if let (Some(operation), 1) = (ArrayPairOp::from_name(field), args.len()) {
+            (
+                ops::PAIRWISE_MEMBER,
+                vec![values.next().expect("one operand"), code(operation as i64)],
+            )
+        } else if let (Some(operation), 1) = (ArrayCompareOp::from_name(field), args.len()) {
+            (
+                ops::COMPARE_MEMBER,
+                vec![values.next().expect("one operand"), code(operation as i64)],
+            )
+        } else if let Some(operation) = ArrayMaskOp::from_name(field) {
+            let member = if operation == ArrayMaskOp::Count {
+                ops::MASK_COUNT_MEMBER
+            } else {
+                ops::MASK_TEST_MEMBER
+            };
+            (member, vec![code(operation as i64)])
+        } else if let ("choose", 2) = (field, args.len()) {
+            let dtype = self
+                .infer_expr_type(call)
+                .as_ref()
+                .and_then(|ty| crate::runtime_ops::first_type_arg(Some(ty)))
+                .and_then(|dtype| ArrayDType::from_type(&dtype));
+            let Some(dtype) = dtype else {
+                return (field.to_string(), args);
+            };
+            let mut words: Vec<MirArg> = values.collect();
+            words.push(code(dtype as i64));
+            (ops::CHOOSE_MEMBER, words)
+        } else {
+            return (field.to_string(), args);
+        };
+        words.push(code(span.line as i64));
+        words.push(code(span.column as i64));
+        (member.to_string(), words)
+    }
+
+    /// The result type of an ADR-0089 member call on an `Array` of type
+    /// `receiver`, or `None` for any other member.
+    fn array_member_call_type(
+        &self,
+        receiver: &Type,
+        field: &str,
+        args: &[Argument],
+    ) -> Option<Type> {
+        let array = |dtype: &str| Type::Named("Array".to_string(), vec![Type::named(dtype)]);
+        Some(match field {
+            "sum" | "min" | "max" | "fast_sum" if args.len() == 1 => receiver.clone(),
+            "mean" | "fast_mean" if args.len() == 1 => array("float64"),
+            "floor" | "ceil" | "trunc" => array("int64"),
+            "to_float" => array("float64"),
+            "less" | "less_equal" | "greater" | "greater_equal" | "equal" | "not_equal" => {
+                array("bool")
+            }
+            "any" | "all" => Type::named("bool"),
+            "count" => Type::named("int64"),
+            "choose" => {
+                let values = args
+                    .iter()
+                    .filter_map(|argument| self.infer_expr_type(&argument.value))
+                    .collect::<Vec<_>>();
+                let is_array = |ty: &&Type| matches!(ty, Type::Named(name, _) if name == "Array");
+                match values.iter().find(is_array) {
+                    Some(ty) => ty.clone(),
+                    None => Type::Named("Array".to_string(), vec![values.first()?.clone()]),
+                }
+            }
+            "abs" | "minimum" | "maximum" | "sqrt" | "exp" | "log" | "log2" | "log10" | "sin"
+            | "cos" | "tan" | "pow" | "logical_and" | "logical_or" | "logical_not" => {
+                receiver.clone()
+            }
+            _ => return None,
+        })
+    }
+
     fn lower_member_call_args(
         &mut self,
         span: Span,
@@ -27150,12 +27343,47 @@ impl<'a> Lowerer<'a> {
                                 Some(Type::Named("Array".to_string(), class_args.clone()))
                             }
                             (
+                                BuiltinMember::ArraySum
+                                | BuiltinMember::ArrayMin
+                                | BuiltinMember::ArrayMax
+                                | BuiltinMember::ArrayMean
+                                | BuiltinMember::ArrayFastSum
+                                | BuiltinMember::ArrayFastMean,
+                                0,
+                            ) => Some(Type::named("int64")),
+                            (BuiltinMember::ArrayChoose, _) => {
+                                // An element takes the dtype the Array
+                                // argument, or the first element, names.
+                                let own = self.infer_expr_type(&argument.value);
+                                let is_array = |ty: &Type| matches!(ty, Type::Named(name, _) if name == "Array");
+                                if own.as_ref().is_some_and(is_array) {
+                                    own
+                                } else {
+                                    self.array_member_call_type(&receiver_type, field, args)
+                                        .and_then(|ty| {
+                                            crate::runtime_ops::first_type_arg(Some(&ty))
+                                        })
+                                        .or(own)
+                                }
+                            }
+                            (
                                 BuiltinMember::ArrayWrappingAdd
                                 | BuiltinMember::ArrayWrappingSub
                                 | BuiltinMember::ArrayWrappingMul
                                 | BuiltinMember::ArraySaturatingAdd
                                 | BuiltinMember::ArraySaturatingSub
-                                | BuiltinMember::ArraySaturatingMul,
+                                | BuiltinMember::ArraySaturatingMul
+                                | BuiltinMember::ArrayMinimum
+                                | BuiltinMember::ArrayMaximum
+                                | BuiltinMember::ArrayPow
+                                | BuiltinMember::ArrayLess
+                                | BuiltinMember::ArrayLessEqual
+                                | BuiltinMember::ArrayGreater
+                                | BuiltinMember::ArrayGreaterEqual
+                                | BuiltinMember::ArrayEqual
+                                | BuiltinMember::ArrayNotEqual
+                                | BuiltinMember::ArrayLogicalAnd
+                                | BuiltinMember::ArrayLogicalOr,
                                 0,
                             ) => self
                                 .infer_expr_type(&argument.value)
@@ -29181,6 +29409,13 @@ impl<'a> Lowerer<'a> {
                                         }
                                     }
                                     _ => {}
+                                }
+                            }
+                            if name == "Array" && receiver_args.len() == 1 {
+                                if let Some(ty) =
+                                    self.array_member_call_type(&receiver_type, field, args)
+                                {
+                                    return Some(ty);
                                 }
                             }
                             if name == "Array" && receiver_args.len() == 1 && field == "map" {

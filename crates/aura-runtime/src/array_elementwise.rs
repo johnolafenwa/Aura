@@ -176,6 +176,7 @@ pub(crate) fn scalar_binary_storage(
                         binary_elements(shape, left, right, operation, mode)?.into(),
                     )
                 })*
+                ArrayStorage::Bool(_) => return Err(crate::runtime_value::mask_error("arithmetic")),
             }
         };
     }
@@ -357,6 +358,7 @@ impl ArrayValue {
                             binary_in_place(values, 0, other, self_left, operation, mode, &mut Vec::new())
                         })
                     })*
+                    (ArrayStorage::Bool(_), _) => Err(crate::runtime_value::mask_error("arithmetic")),
                 }
             };
         }

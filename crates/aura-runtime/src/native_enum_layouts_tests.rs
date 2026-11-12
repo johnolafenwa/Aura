@@ -570,7 +570,7 @@ fn the_layout_table_registers_enum_cells() {
         "Circle",
         vec![Value::Float(1.0)],
     );
-    let (access, block, index, _) = list_view_of(&typed_value);
+    let (access, block, index, _, _) = list_view_of(&typed_value);
     assert_eq!((access, index), (FIRST_TEST_ACCESS + 50, 1));
     assert_eq!(block, typed_payloads(&typed_value).data());
 }

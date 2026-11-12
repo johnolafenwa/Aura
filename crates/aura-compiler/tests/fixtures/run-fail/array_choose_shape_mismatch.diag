@@ -1,0 +1,6 @@
+error[AU4007]: array choose requires float64 values whose shapes broadcast with the mask, found [2] float64 for a mask of [2, 3]
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_choose_shape_mismatch.au:4:16
+  |
+4 |     print(mask.choose(values, 0.0))
+  |                ^
+  = note: Aura call chain (innermost first): main at 1:1

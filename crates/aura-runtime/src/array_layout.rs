@@ -14,16 +14,33 @@
 
 use std::fmt;
 use std::ops::Deref;
+use std::sync::atomic::{AtomicUsize, Ordering};
 use std::sync::Arc;
 
 use crate::diag::{Diagnostic, Result};
 use crate::runtime_value::try_array_buffer;
 
+/// A buffer and the number of windows that hold it. The count is the
+/// buffer's reference count, kept where compiled code can read it: a
+/// program writes an element in place only while the count is one
+/// (ADR-0091). `repr(C)` puts it at the start of the block.
+#[repr(C)]
+struct ArrayOwner<T> {
+    holders: AtomicUsize,
+    elements: Box<[T]>,
+}
+
 /// A window of shared, immutable element storage.
 pub struct ArrayBuf<T> {
-    owner: Arc<Box<[T]>>,
+    owner: Arc<ArrayOwner<T>>,
     start: usize,
     len: usize,
+}
+
+impl<T> Drop for ArrayBuf<T> {
+    fn drop(&mut self) {
+        self.owner.holders.fetch_sub(1, Ordering::Release);
+    }
 }
 
 impl<T> ArrayBuf<T> {
@@ -34,6 +51,7 @@ impl<T> ArrayBuf<T> {
             start <= self.len && len <= self.len - start,
             "an Array window stays inside its buffer"
         );
+        self.owner.holders.fetch_add(1, Ordering::Relaxed);
         Self {
             owner: Arc::clone(&self.owner),
             start: self.start + start,
@@ -41,14 +59,26 @@ impl<T> ArrayBuf<T> {
         }
     }
 
+    /// How many windows hold the buffer.
+    fn holders(&self) -> usize {
+        self.owner.holders.load(Ordering::Acquire)
+    }
+
     /// Whether another Array holds the same buffer.
     pub fn is_shared(&self) -> bool {
-        Arc::strong_count(&self.owner) != 1
+        self.holders() != 1
+    }
+
+    /// The address of the word that counts the buffer's holders. It is a
+    /// `usize` that reads one while this window is the only holder, and it
+    /// stays where it is for as long as the buffer lives.
+    pub fn holders_address(&self) -> usize {
+        std::ptr::from_ref(&self.owner.holders) as usize
     }
 
     /// Whether the window leaves out part of its buffer.
     pub fn is_partial(&self) -> bool {
-        self.len != self.owner.len()
+        self.len != self.owner.elements.len()
     }
 
     /// Whether `self` and `other` are windows of one buffer.
@@ -61,7 +91,7 @@ impl<T: Copy> ArrayBuf<T> {
     /// Whether this window and `other` are the only two holders of one
     /// buffer.
     pub fn is_shared_only_with(&self, other: &Self) -> bool {
-        self.shares_buffer_with(other) && Arc::strong_count(&self.owner) == 2
+        self.shares_buffer_with(other) && self.holders() == 2
     }
 
     /// Copies `source`, the one other window of this buffer, over the
@@ -81,7 +111,7 @@ impl<T: Copy> ArrayBuf<T> {
         drop(source);
         let to = self.start + at;
         let owner = Arc::get_mut(&mut self.owner).expect("the other holder was just dropped");
-        owner.copy_within(from..from + len, to);
+        owner.elements.copy_within(from..from + len, to);
         true
     }
 
@@ -95,7 +125,7 @@ impl<T: Copy> ArrayBuf<T> {
         }
         let (start, len) = (self.start, self.len);
         let owner = Arc::get_mut(&mut self.owner).expect("the buffer was just made unique");
-        Ok(&mut owner[start..start + len])
+        Ok(&mut owner.elements[start..start + len])
     }
 }
 
@@ -110,7 +140,7 @@ impl<T> Deref for ArrayBuf<T> {
 
     #[inline(always)]
     fn deref(&self) -> &[T] {
-        &self.owner[self.start..self.start + self.len]
+        &self.owner.elements[self.start..self.start + self.len]
     }
 }
 
@@ -118,7 +148,10 @@ impl<T> From<Box<[T]>> for ArrayBuf<T> {
     fn from(values: Box<[T]>) -> Self {
         let len = values.len();
         Self {
-            owner: Arc::new(values),
+            owner: Arc::new(ArrayOwner {
+                holders: AtomicUsize::new(1),
+                elements: values,
+            }),
             start: 0,
             len,
         }

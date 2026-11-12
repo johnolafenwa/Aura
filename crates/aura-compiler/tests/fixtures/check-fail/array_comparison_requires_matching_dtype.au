@@ -1,0 +1,4 @@
+def main():
+    values = Array[float64].zeros([2])
+    limit: int64 = 3
+    print(values.less(limit))

@@ -66,7 +66,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU2002]: Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`
+error[AU2002]: Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`
  --> src/main.au:2:9
   |
 2 |     a = Array[str].zeros([2])
@@ -226,13 +226,34 @@ Every one of these produces a new array and leaves `scores` alone. Arrays are
 owned values, so assigning one to another name moves it, and `.clone()` makes
 an independent copy when you need two.
 
-### The rules are strict on purpose
+### Shapes stretch, types don't
 
-NumPy will happily combine arrays of different shapes by *broadcasting*, and
-arrays of different types by promoting one of them. Those rules are
-convenient and also a common source of results that are subtly wrong: a
-column added to a row silently becomes a table. Aura has neither. Two arrays
-in one operation must have exactly the same shape:
+Two arrays in one operation don't need the same shape, as long as the
+shapes *broadcast*. Line the two shapes up at their last dimension. Each
+pair of dimensions has to be equal, or one of them has to be one. A shape
+with fewer dimensions counts as having ones in front. The smaller operand
+is then repeated along every dimension where it has one:
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    curve = Array[float64].from_list([5.0, 0.0, -2.0], [3])
+    print(scores + curve)
+    print(scores - scores.mean(0))
+```
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[2, 3], values=[77.0, 88.0, 93.0, 69.0, 80.0, 89.0])
+Array[float64](shape=[2, 3], values=[4.0, 4.0, 2.0, -4.0, -4.0, -2.0])
+```
+
+`curve` has three elements and `scores` has rows of three, so the curve is
+added to each row. `scores.mean(0)` is the mean of each column, which
+you'll meet properly later in this section, and subtracting it centers
+every column on zero. If you know NumPy, these are its rules.
+
+Shapes that don't line up are still an error:
 
 ```aura
 def main():
@@ -243,7 +264,7 @@ def main():
 
 ```console
 $ aura run src/main.au
-error[AU4007]: array operands require the same shape and dtype, found [2, 2] float64 and [2, 3] float64
+error[AU4007]: array operands require the same dtype and shapes that broadcast, found [2, 2] float64 and [2, 3] float64
  --> src/main.au:4:11
   |
 4 |     print(a + b)
@@ -251,7 +272,10 @@ error[AU4007]: array operands require the same shape and dtype, found [2, 2] flo
   = note: Aura call chain (innermost first): main at 1:1
 ```
 
-and the same dtype, which the compiler can check before the program runs,
+What Aura won't do is change a type for you. NumPy promotes an integer
+array next to a float array, and that hides a conversion that can lose
+precision. In Aura both arrays need the same dtype, which the compiler can
+check before the program runs,
 because the dtype is part of the type:
 
 ```aura check-fail:AU2002
@@ -581,6 +605,11 @@ Array[float64](shape=[2], values=[88.3, 88.3])
 has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
 into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
 
+An array with more than two dimensions is a stack of matrices. `matmul`
+uses the last two dimensions as the matrix and multiplies once per
+matrix in the stack, so a `[10, 2, 3]` array times a `[3, 4]` array is a
+`[10, 2, 4]` array. You don't need a loop over the stack.
+
 `sum` adds from left to right, which is the order you'd add by hand and the
 slowest order for a CPU. When an array is large and the last digit doesn't
 matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
@@ -647,6 +676,100 @@ There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
 back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
 [Manual](/manual/simd) has the full list.
 
+### One Number per Row
+
+`sum`, `min`, `max`, and `mean` reduce a whole array to one number. Give
+any of them an axis and it reduces along that axis only, and returns an
+array with that axis removed:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    print(scores.sum(0))
+    print(scores.mean(1))
+    print(scores.max(1))
+    print(scores / scores.sum(1).reshape([2, 1]))
+```
+
+<span class="caption">Listing 8-25: Reductions along one axis</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[3], values=[136.0, 168.0, 186.0])
+Array[float64](shape=[2], values=[85.0, 78.33333333333333])
+Array[float64](shape=[2], values=[95.0, 91.0])
+Array[float64](shape=[2, 3], values=[0.2823529411764706, 0.34509803921568627, 0.37254901960784315, 0.2723404255319149, 0.3404255319148936, 0.3872340425531915])
+```
+
+Axis 0 runs down the rows, so `scores.sum(0)` adds each column. Axis 1 runs
+along a row, so `scores.mean(1)` is one mean per student. A negative axis
+counts from the last, as a negative index does. The last line divides
+every score by its row's total. The row totals have shape `[2]`, which
+would line up with the columns, so `reshape([2, 1])` turns them into a
+column that broadcasts across each row.
+
+### Math, Comparisons, and Masks
+
+`map` calls your function once per element. For the common functions there
+are members that do the whole array in one call:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    passed = scores.greater_equal(75.0)
+    print(passed)
+    print(passed.count())
+    print(passed.all())
+    print(passed.choose(scores, 0.0))
+    print(scores.minimum(90.0))
+    print(scores.sqrt().floor())
+    print((scores as Array[int64]).sum(0))
+```
+
+<span class="caption">Listing 8-26: A mask, a choice, and elementwise math</span>
+
+```console
+$ aura run src/main.au
+Array[bool](shape=[2, 3], values=[false, true, true, false, true, true])
+4
+false
+Array[float64](shape=[2, 3], values=[0.0, 88.0, 95.0, 0.0, 80.0, 91.0])
+Array[float64](shape=[2, 3], values=[72.0, 88.0, 90.0, 64.0, 80.0, 90.0])
+Array[int64](shape=[2, 3], values=[8, 9, 9, 8, 8, 9])
+Array[int64](shape=[3], values=[136, 168, 186])
+```
+
+`greater_equal` compares every element with `75.0` and returns an
+`Array[bool]`, called a *mask*. The other comparisons are `less`,
+`less_equal`, `greater`, `equal`, and `not_equal`, and each takes one
+number or an array that broadcasts. A mask answers questions with `any`,
+`all`, and `count`, combines with other masks through `logical_and`,
+`logical_or`, and `logical_not`, and picks values with `choose`: an element
+from the first argument where the mask is `true`, and from the second
+elsewhere.
+
+`abs`, `minimum`, and `maximum` work on every numeric dtype. `sqrt`, `exp`,
+`log`, `log2`, `log10`, `sin`, `cos`, `tan`, and `pow` work on `float64`
+arrays and follow the functions of the `math` module, including their
+errors: `log` of a negative element traps and names the element's
+position. `floor`, `ceil`, and `trunc` return an `Array[int64]`, as the
+`math` functions return `int64`.
+
+`scores as Array[int64]` converts every element as `as` converts one
+number. A conversion that would lose information traps, so an integer that
+doesn't fit the smaller type is an error, not a wrapped value. Going the
+other way, `to_float()` on an integer array always succeeds and rounds to
+the nearest `float64`.
+
+Comparisons are members and not operators for a reason. `==` between two
+lists gives one `bool`, and an `==` that gave an array of them would make
+`if a == b:` mean something different for arrays. So `a == b` on arrays
+stays an error, and `a.equal(b).all()` says what you mean.
+
 ## Summary
 
 You now know the collections that most Aura programs are built from. Lists
@@ -658,7 +781,8 @@ Dictionaries map keys to values in insertion order, sets answer membership
 questions, and both make you be explicit about absence with `Lookup` or
 `in`. Comprehensions and builtins such as `sum`, `max`, and `sorted` turn
 most of the loops you'd write over these into one expression, and `Array[T]`
-handles rectangular tables of numbers with whole-array arithmetic.
+handles rectangular tables of numbers with whole-array arithmetic,
+broadcasting, and masks.
 
 Running through all of it is ownership. A collection owns its elements, so
 storing a value moves it in, reading one gives you shared access or a copy,

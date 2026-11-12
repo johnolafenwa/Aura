@@ -1,0 +1,5 @@
+error[AU2002]: `Array.less` expects `Array[float64]` or `float64`, found `int64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_comparison_requires_matching_dtype.au:4:23
+  |
+4 |     print(values.less(limit))
+  |                       ^

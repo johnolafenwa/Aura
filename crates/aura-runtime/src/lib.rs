@@ -12,6 +12,7 @@ mod array_elementwise;
 #[doc(hidden)]
 pub mod array_kernel_corpus;
 pub mod array_layout;
+mod array_members;
 mod array_reduce;
 pub mod array_simd;
 pub mod array_views;

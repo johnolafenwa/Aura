@@ -68,6 +68,8 @@ use aura_core::types::Type;
 mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
+
+pub use crate::array_members::{ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp};
 pub use generator::{
     generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
@@ -1593,6 +1595,8 @@ pub enum ArrayDType {
     Int64 = 1,
     Float32 = 2,
     Float64 = 3,
+    /// A mask: the result of a comparison (ADR-0089).
+    Bool = 4,
 }
 
 impl ArrayDType {
@@ -1602,6 +1606,7 @@ impl ArrayDType {
             1 => Some(Self::Int64),
             2 => Some(Self::Float32),
             3 => Some(Self::Float64),
+            4 => Some(Self::Bool),
             _ => None,
         }
     }
@@ -1612,7 +1617,13 @@ impl ArrayDType {
             Self::Int64 => "int64",
             Self::Float32 => "float32",
             Self::Float64 => "float64",
+            Self::Bool => "bool",
         }
+    }
+
+    /// Whether the dtype has arithmetic: every dtype but a mask.
+    pub const fn is_numeric(self) -> bool {
+        !matches!(self, Self::Bool)
     }
 }
 
@@ -1622,6 +1633,7 @@ pub enum ArrayStorage {
     Int64(ArrayBuf<i64>),
     Float32(ArrayBuf<f32>),
     Float64(ArrayBuf<f64>),
+    Bool(ArrayBuf<bool>),
 }
 
 impl PartialEq<ArrayStorage> for &ArrayStorage {
@@ -1637,6 +1649,7 @@ impl ArrayStorage {
             Self::Int64(_) => ArrayDType::Int64,
             Self::Float32(_) => ArrayDType::Float32,
             Self::Float64(_) => ArrayDType::Float64,
+            Self::Bool(_) => ArrayDType::Bool,
         }
     }
 
@@ -1646,6 +1659,7 @@ impl ArrayStorage {
             Self::Int64(values) => values.len(),
             Self::Float32(values) => values.len(),
             Self::Float64(values) => values.len(),
+            Self::Bool(values) => values.len(),
         }
     }
 
@@ -1773,6 +1787,7 @@ macro_rules! array_storage_map {
             ArrayStorage::Int64($values) => ArrayStorage::Int64($body),
             ArrayStorage::Float32($values) => ArrayStorage::Float32($body),
             ArrayStorage::Float64($values) => ArrayStorage::Float64($body),
+            ArrayStorage::Bool($values) => ArrayStorage::Bool($body),
         }
     };
 }
@@ -1787,7 +1802,125 @@ impl ArrayStorage {
             Self::Int64(values) => values.is_shared(),
             Self::Float32(values) => values.is_shared(),
             Self::Float64(values) => values.is_shared(),
+            Self::Bool(values) => values.is_shared(),
         }
+    }
+}
+
+/// How one matrix product is laid over its operands (ADR-0090): the
+/// matrix dimensions, the broadcast batch dimensions, and the result shape.
+struct MatmulPlan {
+    rows: usize,
+    inner: usize,
+    columns: usize,
+    /// The broadcast batch dimensions.
+    batch: Vec<usize>,
+    /// Each operand's batch dimensions, padded on the left with ones.
+    left_batch: Vec<usize>,
+    right_batch: Vec<usize>,
+    shape: Vec<usize>,
+}
+
+impl MatmulPlan {
+    fn new(left: &[usize], right: &[usize]) -> Option<Self> {
+        // A rank-1 left operand is one row, and a rank-1 right operand is
+        // one column. Two rank-1 operands are a `dot`, not a product.
+        let (left_lead, rows, inner, left_vector) = match left {
+            [k] => (&left[..0], 1, *k, true),
+            [lead @ .., n, k] => (lead, *n, *k, false),
+            [] => return None,
+        };
+        let (right_lead, right_inner, columns, right_vector) = match right {
+            [k] => (&right[..0], *k, 1, true),
+            [lead @ .., k, m] => (lead, *k, *m, false),
+            [] => return None,
+        };
+        if inner != right_inner || (left_vector && right_vector) {
+            return None;
+        }
+        let rank = left_lead.len().max(right_lead.len());
+        let pad = |lead: &[usize]| {
+            let mut padded = vec![1; rank - lead.len()];
+            padded.extend_from_slice(lead);
+            padded
+        };
+        let (left_batch, right_batch) = (pad(left_lead), pad(right_lead));
+        let mut batch = Vec::with_capacity(rank);
+        for (&left, &right) in left_batch.iter().zip(&right_batch) {
+            batch.push(match (left, right) {
+                _ if left == right => left,
+                (1, other) | (other, 1) => other,
+                _ => return None,
+            });
+        }
+        let mut shape = batch.clone();
+        if !left_vector {
+            shape.push(rows);
+        }
+        if !right_vector {
+            shape.push(columns);
+        }
+        Some(Self {
+            rows,
+            inner,
+            columns,
+            batch,
+            left_batch,
+            right_batch,
+            shape,
+        })
+    }
+
+    fn result_len(&self) -> Option<usize> {
+        self.shape
+            .iter()
+            .try_fold(1_usize, |len, &extent| len.checked_mul(extent))
+    }
+
+    /// Runs `product` once per batch position over that position's
+    /// matrices. A failure reports its flat index in the whole result.
+    fn each_product<T>(
+        &self,
+        left: &[T],
+        right: &[T],
+        output: &mut [T],
+        mut product: impl FnMut(&[T], &[T], &mut [T]) -> std::result::Result<(), usize>,
+    ) -> std::result::Result<(), usize> {
+        let left_size = self.rows * self.inner;
+        let right_size = self.inner * self.columns;
+        let output_size = self.rows * self.columns;
+        if output.is_empty() {
+            return Ok(());
+        }
+        if self.batch.is_empty() {
+            return product(left, right, output);
+        }
+        // The matrix an operand supplies at a batch position: a stretched
+        // dimension always reads its one entry.
+        let position = |index: &[usize], extents: &[usize]| {
+            index.iter().zip(extents).fold(0, |flat, (&at, &extent)| {
+                flat * extent + if extent == 1 { 0 } else { at }
+            })
+        };
+        let mut index = vec![0_usize; self.batch.len()];
+        for (number, output) in output.chunks_exact_mut(output_size).enumerate() {
+            let left_at = position(&index, &self.left_batch) * left_size;
+            let right_at = position(&index, &self.right_batch) * right_size;
+            product(
+                &left[left_at..left_at + left_size],
+                &right[right_at..right_at + right_size],
+                output,
+            )
+            .map_err(|flat| number * output_size + flat)?;
+            for (at, &extent) in index.iter_mut().zip(&self.batch).rev() {
+                *at += 1;
+                if *at < extent {
+                    break;
+                }
+                *at = 0;
+            }
+        }
+        Ok(())
     }
 }
 
@@ -1876,6 +2009,7 @@ impl ArrayValue {
                 ArrayStorage::Int64(values) => values.is_partial(),
                 ArrayStorage::Float32(values) => values.is_partial(),
                 ArrayStorage::Float64(values) => values.is_partial(),
+                ArrayStorage::Bool(values) => values.is_partial(),
             }
     }
 
@@ -1990,7 +2124,7 @@ impl ArrayValue {
             Diagnostic::coded(
                 "AU4007",
                 format!(
-                    "Array values require int32, int64, float32, or float64 elements, found `{}`",
+                    "Array values require int32, int64, float32, float64, or bool elements, found `{}`",
                     vector.element_type
                 ),
             )
@@ -2041,6 +2175,12 @@ impl ArrayValue {
                 })?
                 .into(),
             ),
+            ArrayDType::Bool => ArrayStorage::Bool(
+                try_collect_array_storage(vector.elements.len(), "Array.from_list", |index| {
+                    array_bool_scalar(&vector.elements.at(index), index)
+                })?
+                .into(),
+            ),
         };
         Self::new(shape, storage)
     }
@@ -2059,7 +2199,7 @@ impl ArrayValue {
             Diagnostic::coded(
                 "AU4007",
                 format!(
-                    "Array values require int32, int64, float32, or float64 elements, found `{element_type}`"
+                    "Array values require int32, int64, float32, float64, or bool elements, found `{element_type}`"
                 ),
             )
         })?;
@@ -2080,6 +2220,9 @@ impl ArrayValue {
             }
             ArrayDType::Float64 => {
                 ArrayStorage::Float64(try_filled_array_storage(len, 0.0, "Array.zeros")?.into())
+            }
+            ArrayDType::Bool => {
+                ArrayStorage::Bool(try_filled_array_storage(len, false, "Array.zeros")?.into())
             }
         };
         Self::new(shape, storage)
@@ -2167,6 +2310,7 @@ impl ArrayValue {
             ArrayStorage::Int64(values) => Value::Int(IntegerValue::from_i64(values[position])),
             ArrayStorage::Float32(values) => Value::Float(values[position] as f64),
             ArrayStorage::Float64(values) => Value::Float(values[position]),
+            ArrayStorage::Bool(values) => Value::Bool(values[position]),
         }
     }
 
@@ -2201,6 +2345,10 @@ impl ArrayValue {
             }
             ArrayStorage::Float64(values) => {
                 let value = array_float64_scalar(&value, index)?;
+                values.try_make_mut("Array element write")?[index] = value;
+            }
+            ArrayStorage::Bool(values) => {
+                let value = array_bool_scalar(&value, index)?;
                 values.try_make_mut("Array element write")?[index] = value;
             }
         }
@@ -2257,6 +2405,17 @@ impl ArrayValue {
                     None
                 }
             }
+            ArrayStorage::Bool(values) => {
+                let value = array_bool_scalar(&value, 0)?;
+                if replace || values.is_shared() {
+                    Some(ArrayStorage::Bool(
+                        try_filled_array_storage(len, value, "Array.fill")?.into(),
+                    ))
+                } else {
+                    values.try_make_mut("Array.fill")?.fill(value);
+                    None
+                }
+            }
         };
         if let Some(filled) = filled {
             self.base = filled;
@@ -2303,6 +2462,9 @@ impl ArrayValue {
         };
         if self.dtype() != other.dtype() {
             return Err(mismatch());
+        }
+        if !self.dtype().is_numeric() {
+            return Err(mask_error("arithmetic"));
         }
         if self.shape == other.shape && self.strided.is_none() && other.strided.is_none() {
             // Two blocks of one shape are one run of the kernel.
@@ -2424,6 +2586,7 @@ impl ArrayValue {
                         .into(),
                 )
             }
+            ArrayStorage::Bool(_) => return Err(mask_error("arithmetic")),
         })
     }
 
@@ -2432,6 +2595,9 @@ impl ArrayValue {
     /// in the reordered order of `array_simd`. An integer Array is checked:
     /// the first product or running sum out of range reports `AU4002`.
     pub fn dot(&self, other: &Self) -> Result<Value> {
+        if !self.dtype().is_numeric() {
+            return Err(mask_error("dot"));
+        }
         if self.shape != other.shape || self.dtype() != other.dtype() {
             return Err(Diagnostic::coded(
                 "AU4007",
@@ -2471,17 +2637,22 @@ impl ArrayValue {
         }
     }
 
-    /// The matrix product of two Arrays of one dtype (ADR-0086): a rank-2
-    /// Array by a rank-2 Array, a rank-2 Array by a rank-1 Array, or a
-    /// rank-1 Array by a rank-2 Array, where the inner dimensions agree.
-    /// Each result element adds its products in ascending order of the
-    /// inner index. An integer product is checked and reports `AU4002`.
+    /// The matrix product of two Arrays of one dtype (ADR-0086, ADR-0090).
+    /// The last two dimensions of an operand are a matrix, and a rank-1
+    /// operand is one row on the left or one column on the right. Leading
+    /// dimensions are a batch: they broadcast against each other, and the
+    /// result holds one product per batch position. Each result element
+    /// adds its products in ascending order of the inner index. An integer
+    /// product is checked and reports `AU4002`.
     pub fn matmul(&self, other: &Self) -> Result<Self> {
+        if !self.dtype().is_numeric() {
+            return Err(mask_error("matmul"));
+        }
         let mismatch = || {
             Diagnostic::coded(
                 "AU4007",
                 format!(
-                    "array matmul requires shapes [n, k] and [k, m], [n, k] and [k], or [k] and [k, m] of one dtype, found {:?} {} and {:?} {}",
+                    "array matmul requires shapes [.., n, k] and [.., k, m], [.., n, k] and [k], or [k] and [.., k, m] of one dtype with leading dimensions that broadcast, found {:?} {} and {:?} {}",
                     self.shape,
                     self.dtype().runtime_type_name(),
                     other.shape,
@@ -2492,21 +2663,11 @@ impl ArrayValue {
         if self.dtype() != other.dtype() {
             return Err(mismatch());
         }
-        // A rank-1 left operand is one row, and a rank-1 right operand is
-        // one column.
-        let (rows, inner, right_inner, columns, shape): (usize, usize, usize, usize, Vec<usize>) =
-            match (&*self.shape, &*other.shape) {
-                (&[n, k], &[k2, m]) => (n, k, k2, m, vec![n, m]),
-                (&[n, k], &[k2]) => (n, k, k2, 1, vec![n]),
-                (&[k], &[k2, m]) => (1, k, k2, m, vec![m]),
-                _ => return Err(mismatch()),
-            };
-        if inner != right_inner {
-            return Err(mismatch());
-        }
-        let len = rows
-            .checked_mul(columns)
+        let plan = MatmulPlan::new(&self.shape, &other.shape).ok_or_else(mismatch)?;
+        let len = plan
+            .result_len()
             .ok_or_else(|| array_allocation_error("array matmul result", usize::MAX))?;
+        let (rows, inner, columns) = (plan.rows, plan.inner, plan.columns);
         let matrix_vector = other.rank() == 1;
         let overflow = |index: usize| {
             Diagnostic::coded(
@@ -2517,40 +2678,53 @@ impl ArrayValue {
         let storage = match (&*self.elements()?, &*other.elements()?) {
             (ArrayStorage::Int32(left), ArrayStorage::Int32(right)) => {
                 let mut output = try_filled_array_storage(len, 0_i32, "array matmul result")?;
-                array_simd::integer_matmul(left, right, &mut output, rows, inner, columns)
-                    .map_err(overflow)?;
+                plan.each_product(left, right, &mut output, |left, right, output| {
+                    array_simd::integer_matmul(left, right, output, rows, inner, columns)
+                })
+                .map_err(overflow)?;
                 ArrayStorage::Int32(output.into())
             }
             (ArrayStorage::Int64(left), ArrayStorage::Int64(right)) => {
                 let mut output = try_filled_array_storage(len, 0_i64, "array matmul result")?;
-                array_simd::integer_matmul(left, right, &mut output, rows, inner, columns)
-                    .map_err(overflow)?;
+                plan.each_product(left, right, &mut output, |left, right, output| {
+                    array_simd::integer_matmul(left, right, output, rows, inner, columns)
+                })
+                .map_err(overflow)?;
                 ArrayStorage::Int64(output.into())
             }
             (ArrayStorage::Float32(left), ArrayStorage::Float32(right)) => {
                 let mut output = try_filled_array_storage(len, 0.0_f32, "array matmul result")?;
-                if matrix_vector {
-                    array_simd::float_matrix_vector(left, right, &mut output, rows, inner);
-                } else {
-                    array_simd::float_matmul(left, right, &mut output, rows, inner, columns);
-                }
+                let _ = plan.each_product(left, right, &mut output, |left, right, output| {
+                    if matrix_vector {
+                        array_simd::float_matrix_vector(left, right, output, rows, inner);
+                    } else {
+                        array_simd::float_matmul(left, right, output, rows, inner, columns);
+                    }
+                    Ok(())
+                });
                 ArrayStorage::Float32(output.into())
             }
             (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => {
                 let mut output = try_filled_array_storage(len, 0.0_f64, "array matmul result")?;
-                if matrix_vector {
-                    array_simd::float_matrix_vector(left, right, &mut output, rows, inner);
-                } else {
-                    array_simd::float_matmul(left, right, &mut output, rows, inner, columns);
-                }
+                let _ = plan.each_product(left, right, &mut output, |left, right, output| {
+                    if matrix_vector {
+                        array_simd::float_matrix_vector(left, right, output, rows, inner);
+                    } else {
+                        array_simd::float_matmul(left, right, output, rows, inner, columns);
+                    }
+                    Ok(())
+                });
                 ArrayStorage::Float64(output.into())
             }
             _ => unreachable!("matching array dtypes imply matching storage variants"),
         };
-        Self::new(shape.into_boxed_slice(), storage)
+        Self::new(plan.shape.into_boxed_slice(), storage)
     }
 
     pub fn reduce(&self, reduction: ArrayReduction) -> Result<Value> {
+        if !self.dtype().is_numeric() {
+            return Err(mask_error(reduction.name()));
+        }
         if self.is_empty() {
             use ArrayReduction::{FastSum, Sum};
             return match (reduction, self.dtype()) {
@@ -2588,6 +2762,7 @@ impl ArrayValue {
             ArrayStorage::Int64(values) => reduce_int64_array(values, reduction),
             ArrayStorage::Float32(values) => reduce_float32_array(values, reduction),
             ArrayStorage::Float64(values) => reduce_float64_array(values, reduction),
+            ArrayStorage::Bool(_) => Err(mask_error(reduction.name())),
         }
     }
 
@@ -2609,6 +2784,9 @@ impl ArrayValue {
             }
             ArrayStorage::Float64(values) => {
                 values.iter().map(|value| render_float(*value)).collect()
+            }
+            ArrayStorage::Bool(values) => {
+                values.iter().map(ToString::to_string).collect::<Vec<_>>()
             }
         };
         format!(
@@ -2702,10 +2880,26 @@ impl ArrayDType {
                 "int64" => Some(Self::Int64),
                 "float32" => Some(Self::Float32),
                 "float64" => Some(Self::Float64),
+                "bool" => Some(Self::Bool),
                 _ => None,
             },
             _ => None,
         }
+    }
+}
+
+/// The `AU4007` diagnostic for an operation a mask does not have.
+pub(crate) fn mask_error(operation: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4007",
+        format!("array {operation} requires numeric elements, found bool"),
+    )
+}
+
+pub(crate) fn array_bool_scalar(value: &Value, index: usize) -> Result<bool> {
+    match value {
+        Value::Bool(value) => Ok(*value),
+        _ => Err(array_dtype_error(ArrayDType::Bool, value, index)),
     }
 }
 
