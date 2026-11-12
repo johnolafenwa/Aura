@@ -1443,3 +1443,105 @@ def main():
     .expect("each call names one implementation");
     assert_eq!(output.stdout, "float32 1 int64 2\n");
 }
+
+#[test]
+fn a_tensor_operator_takes_a_number_on_either_side() {
+    let output = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, -2.0, 3.0], [3]), device)
+    k = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3], [3]), device)
+    half: float32 = 0.5
+    two: int32 = 2
+    print((x * 2.0).to_array())
+    print((x * half + 1).to_array())
+    print((2.0 * x - 1.0).to_array())
+    print((1 - x).to_array())
+    print((6 / x).to_array())
+    print((-x / two).to_array())
+    print((k * 3 + 1).to_array())
+    print((10 - k).to_array())
+    print(x.relu().to_array())
+    print(x.clamp(-1.0, 2.0).to_array())
+    print(x.powf(2.0).to_array())
+"#,
+    )
+    .expect("numbers combine with tensors");
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[3], values=[2.0, -4.0, 6.0])\n\
+         Array[float32](shape=[3], values=[1.5, 0.0, 2.5])\n\
+         Array[float32](shape=[3], values=[1.0, -5.0, 5.0])\n\
+         Array[float32](shape=[3], values=[0.0, 3.0, -2.0])\n\
+         Array[float32](shape=[3], values=[6.0, -3.0, 2.0])\n\
+         Array[float32](shape=[3], values=[-0.5, 1.0, -1.5])\n\
+         Array[int64](shape=[3], values=[4, 7, 10])\n\
+         Array[int64](shape=[3], values=[9, 8, 7])\n\
+         Array[float32](shape=[3], values=[1.0, 0.0, 3.0])\n\
+         Array[float32](shape=[3], values=[1.0, -1.0, 2.0])\n\
+         Array[float32](shape=[3], values=[1.0, 4.0, 9.0])\n"
+    );
+
+    let error = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    k = Tensor[int64].full([2], 1, Device.cpu())
+    print((k * 1.5).to_array())
+"#,
+    )
+    .expect_err("a float does not combine with an integer tensor");
+    assert_eq!(error.code, "AU4007");
+    assert!(error
+        .message
+        .contains("cannot use a float with a `Tensor[int64]`"));
+}
+
+#[test]
+fn tensors_of_two_dtypes_do_not_combine() {
+    let error = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].full([2], 1.0, device)
+    k = Tensor[int64].full([2], 1, device)
+    print((x + k).to_array())
+"#,
+    )
+    .expect_err("the dtypes differ");
+    assert!(error.message.contains("Tensor"), "{}", error.message);
+}
+
+#[test]
+fn a_generic_implementation_satisfies_a_bound_for_any_trait_argument() {
+    let output = crate::run_source(
+        r#"trait Scale[T]:
+    def factor(self) -> float64
+
+class Box[T]:
+    value: float64
+
+impl[T] Scale[T] for float64:
+    def factor(self) -> float64:
+        return self
+
+impl[T] Scale[T] for Box[T]:
+    def factor(self) -> float64:
+        return self.value
+
+impl[T, R: Scale[T]] Add[R, Box[T]] for Box[T]:
+    def add(self, rhs: R) -> Box[T]:
+        return Box[T](value=self.value + rhs.factor())
+
+def main():
+    a = Box[int32](value=1.0)
+    b = Box[int32](value=10.0)
+    print(f"{(a + 2.5).value} {(a + b).value}")
+"#,
+    )
+    .expect("float64 implements Scale[int32]");
+    assert_eq!(output.stdout, "3.5 11.0\n");
+}

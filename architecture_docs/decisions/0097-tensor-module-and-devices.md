@@ -56,6 +56,16 @@ name the dtype in their signature, `from_array`, `to_array`, `item`,
 `Elements[A, E]` for each dtype, because a type parameter cannot be the
 element type of an `Array`.
 
+An operator takes a number on either side. The right operand of each
+operator impl is a type `R: Operand[T]`, and `Operand[T]` is implemented
+for `Tensor[T]` and, for every `T`, for `float64`, `float32`, `int64` and
+`int32`. A number becomes a one-element tensor of the left tensor's
+dtype on its device, so the dtype of an expression never widens. There
+is one impl of each operator trait for `Tensor[T]`, which matters: two
+impls of one trait for one type that differ only in the trait's
+arguments type-check, but compiled code does not yet tell them apart.
+The number-on-the-left forms are impls for `float64` and `int64`.
+
 ### One meaning on every device
 
 The Array kernels define every operation. The CPU device runs them. A

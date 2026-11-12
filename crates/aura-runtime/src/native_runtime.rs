@@ -3829,6 +3829,14 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("node")],
     },
     DynamicHostAbi {
+        name: "tensor::__aura_scalar_like_f64",
+        params: &[borrowed("node"), borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_scalar_like_i64",
+        params: &[borrowed("node"), borrowed("value")],
+    },
+    DynamicHostAbi {
         name: "http::__aura_send",
         params: &[
             borrowed("method"),
@@ -15862,6 +15870,8 @@ host_builtin_entries! {
     borrowed "tensor::__aura_to_device" => aura_host_tensor_to_device(|args| direct_http("tensor::__aura_to_device", crate::runtime_value::tensor_host::host_tensor_to_device, args));
     borrowed "tensor::__aura_eval" => aura_host_tensor_eval(|args| direct_http("tensor::__aura_eval", crate::runtime_value::tensor_host::host_tensor_eval, args));
     borrowed "tensor::__aura_share" => aura_host_tensor_share(|args| direct_http("tensor::__aura_share", crate::runtime_value::tensor_host::host_tensor_share, args));
+    borrowed "tensor::__aura_scalar_like_f64" => aura_host_tensor_scalar_like_f64(|args| direct_http("tensor::__aura_scalar_like_f64", crate::runtime_value::tensor_host::host_tensor_scalar_like, args));
+    borrowed "tensor::__aura_scalar_like_i64" => aura_host_tensor_scalar_like_i64(|args| direct_http("tensor::__aura_scalar_like_i64", crate::runtime_value::tensor_host::host_tensor_scalar_like, args));
     borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));
     borrowed "http::__aura_read_chunk" => aura_host_http_read_chunk(|args| direct_http("http::__aura_read_chunk", crate::runtime_value::http_client::host_http_read_chunk, args));
     borrowed "http::__aura_read_line" => aura_host_http_read_line(|args| direct_http("http::__aura_read_line", crate::runtime_value::http_client::host_http_read_line, args));

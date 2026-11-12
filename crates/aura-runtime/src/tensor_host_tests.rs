@@ -522,6 +522,8 @@ fn host_functions_are_found_by_name() {
         "tensor::__aura_to_device",
         "tensor::__aura_eval",
         "tensor::__aura_share",
+        "tensor::__aura_scalar_like_f64",
+        "tensor::__aura_scalar_like_i64",
     ] {
         assert!(tensor_host_function(name).is_some(), "{name}");
     }

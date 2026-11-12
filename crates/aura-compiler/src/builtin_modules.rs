@@ -1888,6 +1888,16 @@ fn tensor_namespace() -> ModuleNamespace {
         ),
         on_node("__aura_eval", Vec::new(), type_ref("None", Vec::new())),
         on_node("__aura_share", Vec::new(), node()),
+        on_node(
+            "__aura_scalar_like_f64",
+            vec![borrow_param("value", type_ref("float64", Vec::new()))],
+            node(),
+        ),
+        on_node(
+            "__aura_scalar_like_i64",
+            vec![borrow_param("value", int64())],
+            node(),
+        ),
     ];
     for (suffix, dtype) in [
         ("i32", "int32"),

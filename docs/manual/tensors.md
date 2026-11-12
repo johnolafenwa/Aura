@@ -120,6 +120,9 @@ one.
 | `-a` | Each element negated. |
 | `minimum(other)`, `maximum(other)` | The smaller or larger of each pair. A NaN operand gives NaN. |
 | `pow(exponent)` | Each element raised to the matching exponent. Float tensors. |
+| `powf(exponent)` | Each element raised to one `float64` exponent. Float tensors. |
+| `relu()` | Each element, or zero where it is negative. |
+| `clamp(low, high)` | Each element kept between two `float64` bounds. Float tensors. |
 | `abs()` | The absolute value of each element. |
 | `sqrt()`, `exp()`, `log()`, `sin()`, `cos()` | The function of each element. Float tensors. |
 | `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | A `Tensor[bool]` of where the comparison holds. |
@@ -133,8 +136,14 @@ one.
 | `clone()` | Another handle to the same memory. Nothing is copied. |
 | `eval()` | Runs the work the tensor is waiting on. |
 
-Both operands of an operator are tensors of the same dtype. To use one
-number, make it a tensor with `scalar`: `x * x.scalar(2.0)`.
+An operator takes two tensors of the same dtype, or a tensor and a
+number on either side: `x * 2.0`, `1 - x`, `x / n`. The number becomes
+one element of the tensor's dtype, so `x * 2.0` on a `Tensor[float32]`
+stays `float32`. An integer tensor takes integers only: a float with it
+is error `AU4007`, because its fraction would be lost unseen. The
+elementwise members take tensors. For a number there, use `relu()`,
+`clamp(low, high)`, `powf(exponent)`, or make a tensor with `scalar`:
+`x.greater(x.scalar(12.0))`.
 
 A mistake in shapes or dtypes is reported by the call that makes it, on
 every device, with the message the same `Array` operation gives.
@@ -220,7 +229,6 @@ CI run.
 
 ## Limits
 
-- No `tensor * 2.0`. Write `x * x.scalar(2.0)`.
 - No indexing or slicing of a tensor. Convert with `to_array()`.
 - No integer division. `Array` has none either.
 - No convolution, pooling, or other neural network layers yet.

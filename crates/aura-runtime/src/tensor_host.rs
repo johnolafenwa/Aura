@@ -1118,6 +1118,54 @@ pub fn host_tensor_share(args: Vec<Value>, _: Option<&[String]>) -> Result<Value
     Ok(Value::Tensor(node_arg(&args, 0, name)?.clone()))
 }
 
+/// `tensor::__aura_scalar_like`: one number as a tensor of the node's
+/// dtype, on its device, for an operator with a number on one side. A
+/// float tensor takes any number. An integer tensor takes an integer its
+/// dtype holds, and no float, which would lose its fraction unseen.
+pub fn host_tensor_scalar_like(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_scalar_like";
+    host_expect_arity(name, &args, 2)?;
+    let like = node_arg(&args, 0, name)?;
+    let dtype = like.dtype();
+    let type_name = dtype.runtime_type_name();
+    let storage = match (&args[1], dtype) {
+        (Value::Float(value), ArrayDType::Float32) => {
+            ArrayStorage::Float32(vec![*value as f32].into())
+        }
+        (Value::Float(value), ArrayDType::Float64) => ArrayStorage::Float64(vec![*value].into()),
+        (Value::Float(_), _) => {
+            return Err(tensor_error(
+                name,
+                format!("cannot use a float with a `Tensor[{type_name}]`"),
+            ))
+        }
+        (_, ArrayDType::Bool) => {
+            return Err(tensor_error(
+                name,
+                "cannot use a number with a `Tensor[bool]`",
+            ))
+        }
+        (_, dtype) => {
+            let value = int_arg(&args, 1, name)?;
+            match dtype {
+                ArrayDType::Float32 => ArrayStorage::Float32(vec![value as f32].into()),
+                ArrayDType::Float64 => ArrayStorage::Float64(vec![value as f64].into()),
+                ArrayDType::Int64 => ArrayStorage::Int64(vec![value].into()),
+                _ => ArrayStorage::Int32(
+                    vec![i32::try_from(value).map_err(|_| {
+                        tensor_error(
+                            name,
+                            format!("was given {value}, which `int32` cannot hold"),
+                        )
+                    })?]
+                    .into(),
+                ),
+            }
+        }
+    };
+    place(like.device(), ArrayValue::new(Box::new([1]), storage)?)
+}
+
 /// The suffixes of the host functions that exist once for each dtype,
 /// because their Aura signatures name an `Array[T]` or a `T`.
 const DTYPE_SUFFIXES: [&str; 5] = ["_i32", "_i64", "_f32", "_f64", "_bool"];
@@ -1149,6 +1197,7 @@ pub fn tensor_host_function(name: &str) -> Option<HostBuiltinFn> {
         "tensor::__aura_to_device" => host_tensor_to_device,
         "tensor::__aura_eval" => host_tensor_eval,
         "tensor::__aura_share" => host_tensor_share,
+        "tensor::__aura_scalar_like" => host_tensor_scalar_like,
         _ => return None,
     })
 }

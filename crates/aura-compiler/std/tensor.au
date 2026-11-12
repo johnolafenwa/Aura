@@ -125,6 +125,20 @@ public class Tensor[T]:
     public def pow(self, exponent: Tensor[T]) -> Tensor[T]:
         return Tensor[T](node=tensor.__aura_binary(self.node, exponent.node, 18))
 
+    public def powf(self, exponent: float64) -> Tensor[T]:
+        """Each element raised to one exponent."""
+        return Tensor[T](node=tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, exponent), 18))
+
+    public def clamp(self, low: float64, high: float64) -> Tensor[T]:
+        """Each element, or `low` where it is below `low`, or `high` where
+        it is above `high`."""
+        raised = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, low), 17)
+        return Tensor[T](node=tensor.__aura_binary(raised, tensor.__aura_scalar_like_f64(self.node, high), 16))
+
+    public def relu(self) -> Tensor[T]:
+        """Each element, or zero where it is negative."""
+        return Tensor[T](node=tensor.__aura_binary(self.node, tensor.__aura_scalar_like_i64(self.node, 0), 17))
+
     public def abs(self) -> Tensor[T]:
         return Tensor[T](node=tensor.__aura_unary(self.node, 0))
 
@@ -203,24 +217,96 @@ public def choose[T](mask: Tensor[bool], when_true: Tensor[T], when_false: Tenso
     return Tensor[T](node=tensor.__aura_where(mask.node, when_true.node, when_false.node))
 
 
-impl[T] Add[Tensor[T], Tensor[T]] for Tensor[T]:
+public trait Operand[T]:
+    """What can stand on the other side of a `Tensor[T]` in an operator or
+    an elementwise member: a `Tensor[T]`, or a number, which is used as a
+    tensor of one element of the tensor's dtype."""
+    def operand(self, like: tensor.Node) -> tensor.Node
+
+
+impl[T] Operand[T] for Tensor[T]:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_share(self.node)
+
+
+impl[T] Operand[T] for float64:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_f64(like, self)
+
+
+impl[T] Operand[T] for float32:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_f64(like, self as float64)
+
+
+impl[T] Operand[T] for int64:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_i64(like, self)
+
+
+impl[T] Operand[T] for int32:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_i64(like, self as int64)
+
+
+impl[T, R: Operand[T]] Add[R, Tensor[T]] for Tensor[T]:
+    def add(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 0))
+
+
+impl[T] Add[Tensor[T], Tensor[T]] for float64:
     def add(self, rhs: Tensor[T]) -> Tensor[T]:
-        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 0))
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 0))
 
 
-impl[T] Sub[Tensor[T], Tensor[T]] for Tensor[T]:
+impl[T] Add[Tensor[T], Tensor[T]] for int64:
+    def add(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 0))
+
+
+impl[T, R: Operand[T]] Sub[R, Tensor[T]] for Tensor[T]:
+    def sub(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 1))
+
+
+impl[T] Sub[Tensor[T], Tensor[T]] for float64:
     def sub(self, rhs: Tensor[T]) -> Tensor[T]:
-        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 1))
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 1))
 
 
-impl[T] Mul[Tensor[T], Tensor[T]] for Tensor[T]:
+impl[T] Sub[Tensor[T], Tensor[T]] for int64:
+    def sub(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 1))
+
+
+impl[T, R: Operand[T]] Mul[R, Tensor[T]] for Tensor[T]:
+    def mul(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 2))
+
+
+impl[T] Mul[Tensor[T], Tensor[T]] for float64:
     def mul(self, rhs: Tensor[T]) -> Tensor[T]:
-        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 2))
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 2))
 
 
-impl[T] Div[Tensor[T], Tensor[T]] for Tensor[T]:
+impl[T] Mul[Tensor[T], Tensor[T]] for int64:
+    def mul(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 2))
+
+
+impl[T, R: Operand[T]] Div[R, Tensor[T]] for Tensor[T]:
+    def div(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 3))
+
+
+impl[T] Div[Tensor[T], Tensor[T]] for float64:
     def div(self, rhs: Tensor[T]) -> Tensor[T]:
-        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.node, 3))
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 3))
+
+
+impl[T] Div[Tensor[T], Tensor[T]] for int64:
+    def div(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 3))
 
 
 impl[T] Neg[Tensor[T]] for Tensor[T]:

@@ -20,6 +20,12 @@ in this file.
   and as one generated kernel, compiled at run time, on CUDA. Metal has
   no `float64`, which is error `AU4007` there, never a silent narrowing. A program
   that does not import `tensor` loads no GPU framework (ADR-0097).
+- Tensor operators take a number on either side: `x * 2.0`, `1 - x`. The
+  number takes the tensor's dtype. `relu`, `clamp`, and `powf` are
+  members.
+- Fixed: a generic implementation such as `impl[T] Scale[T] for float64`
+  now satisfies the bound `Scale[int32]`. A type parameter that the
+  implemented type does not fix takes the argument the bound names.
 - Fixed: an associated call through a trait on a generic class with its
   type arguments written, such as `Box[float32].make(...)`, ran the
   implementation for another type argument when the trait was implemented
