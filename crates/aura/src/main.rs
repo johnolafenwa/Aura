@@ -4800,7 +4800,7 @@ fn windows_import_library_dirs(native_link_args: &[String], cargo_home: &Path) -
         .collect::<Vec<_>>();
     let mut directories = Vec::new();
     for argument in native_link_args {
-        let Some(version) = argument
+        let Some(_version) = argument
             .strip_prefix("windows.")
             .and_then(|rest| rest.strip_suffix(".lib"))
             .filter(|version| {
@@ -4812,12 +4812,27 @@ fn windows_import_library_dirs(native_link_args: &[String], cargo_home: &Path) -
         else {
             continue;
         };
+        // A crate's version can differ from the one in its library's name.
         for registry in &registries {
-            let directory = registry
-                .join(format!("windows_x86_64_msvc-{version}"))
-                .join("lib");
-            if directory.join(argument).is_file() && !directories.contains(&directory) {
-                directories.push(directory);
+            let Ok(crates) = fs::read_dir(registry) else {
+                continue;
+            };
+            let mut found = crates
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("windows_x86_64_msvc-"))
+                })
+                .map(|entry| entry.path().join("lib"))
+                .filter(|directory| directory.join(argument).is_file())
+                .collect::<Vec<_>>();
+            found.sort();
+            for directory in found {
+                if !directories.contains(&directory) {
+                    directories.push(directory);
+                }
             }
         }
     }
@@ -6699,15 +6714,25 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         std::fs::create_dir_all(&library_dir).expect("registry directory should be created");
         std::fs::write(library_dir.join("windows.0.48.5.lib"), b"")
             .expect("import library should be written");
+        let newer_dir = library_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("registry directory")
+            .join("windows_x86_64_msvc-0.52.6")
+            .join("lib");
+        std::fs::create_dir_all(&newer_dir).expect("registry directory should be created");
+        std::fs::write(newer_dir.join("windows.0.52.0.lib"), b"")
+            .expect("import library should be written");
         let args = [
             "kernel32.lib".to_string(),
             "windows.0.48.5.lib".to_string(),
-            "windows.0.52.6.lib".to_string(),
+            "windows.0.52.0.lib".to_string(),
+            "windows.0.53.0.lib".to_string(),
             "windows.evil.lib".to_string(),
         ];
         assert_eq!(
             super::windows_import_library_dirs(&args, &root),
-            vec![library_dir]
+            vec![library_dir, newer_dir]
         );
         assert!(super::windows_import_library_dirs(&args, &root.join("missing")).is_empty());
         let _ = std::fs::remove_dir_all(&root);
