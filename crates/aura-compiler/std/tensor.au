@@ -222,10 +222,6 @@ public class Tensor[T]:
         watched tensor `of`, in the shape of `of`."""
         return Tensor[T](node=tensor.__aura_pair_op(self.node, of.node, 3, list[int64]()))
 
-    public def variable(self) -> Variable[T]:
-        """A variable that starts as this tensor. Float tensors only."""
-        return Variable[T](slot=tensor.__aura_node_op(self.node, 6, list[int64]()))
-
     public def softmax(self, axis: int64 = -1) -> Tensor[T]:
         """Each lane along `axis` as positive numbers that sum to one."""
         powers = tensor.__aura_unary(shifted(self.node, axis), 2)
@@ -290,6 +286,10 @@ public class Variable[T]:
     a weight that training changes. Every clone names the same variable,
     so an optimizer and a model see one value."""
     slot: tensor.Node
+
+    public def holding(value: Tensor[T]) -> Variable[T]:
+        """A variable that starts as `value`. Float tensors only."""
+        return Variable[T](slot=tensor.__aura_node_op(value.node, 6, list[int64]()))
 
     public def value(self) -> Tensor[T]:
         """The tensor the variable holds now. It is watched, so a result
@@ -357,8 +357,8 @@ public def save[T](path: str, names: list[str], tensors: list[Tensor[T]]) -> Res
 
 public class Linear:
     """`x.matmul(weight) + bias` over the last axis of `x`."""
-    weight: Variable[float32]
-    bias: Variable[float32]
+    public weight: Variable[float32]
+    public bias: Variable[float32]
 
     public def create(inputs: int64, outputs: int64, seed: int64, device: Device) -> Linear:
         """A layer from `inputs` features to `outputs`, with weights spread
@@ -366,7 +366,7 @@ public class Linear:
         bound = 1.0 / (inputs as float64).sqrt()
         weight = (uniform([inputs, outputs], seed, device) * 2.0 - 1.0) * bound
         bias = (uniform([outputs], seed + 1, device) * 2.0 - 1.0) * bound
-        return Linear(weight=weight.variable(), bias=bias.variable())
+        return Linear(weight=Variable[float32].holding(weight), bias=Variable[float32].holding(bias))
 
     public def apply(self, x: Tensor[float32]) -> Tensor[float32]:
         mut shape = x.shape()
@@ -382,10 +382,10 @@ public class Linear:
 
 public class Embedding:
     """A row of `weight` for each index."""
-    weight: Variable[float32]
+    public weight: Variable[float32]
 
     public def create(count: int64, width: int64, seed: int64, device: Device) -> Embedding:
-        return Embedding(weight=(normal([count, width], seed, device) * 0.02).variable())
+        return Embedding(weight=Variable[float32].holding(normal([count, width], seed, device) * 0.02))
 
     public def apply(self, indices: Tensor[int64]) -> Tensor[float32]:
         return self.weight.value().take(indices)
@@ -397,12 +397,12 @@ public class Embedding:
 public class LayerNorm:
     """Each lane along the last axis moved to mean zero and deviation
     one, then scaled by `weight` and moved by `bias`."""
-    weight: Variable[float32]
-    bias: Variable[float32]
-    epsilon: float64
+    public weight: Variable[float32]
+    public bias: Variable[float32]
+    public epsilon: float64
 
     public def create(width: int64, device: Device) -> LayerNorm:
-        return LayerNorm(weight=Tensor[float32].full([width], 1.0, device).variable(), bias=Tensor[float32].zeros([width], device).variable(), epsilon=0.00001)
+        return LayerNorm(weight=Variable[float32].holding(Tensor[float32].full([width], 1.0, device)), bias=Variable[float32].holding(Tensor[float32].zeros([width], device)), epsilon=0.00001)
 
     public def apply(self, x: Tensor[float32]) -> Tensor[float32]:
         centered = x - x.mean(-1, true)
@@ -446,11 +446,11 @@ public def attention(query: Tensor[float32], key: Tensor[float32], value: Tensor
 public class Attention:
     """Self-attention with several heads over a `[batch, length, width]`
     tensor."""
-    query: Linear
-    key: Linear
-    value: Linear
-    output: Linear
-    heads: int64
+    public query: Linear
+    public key: Linear
+    public value: Linear
+    public output: Linear
+    public heads: int64
 
     public def create(width: int64, heads: int64, seed: int64, device: Device) -> Attention:
         return Attention(query=Linear.create(width, width, seed, device), key=Linear.create(width, width, seed + 2, device), value=Linear.create(width, width, seed + 4, device), output=Linear.create(width, width, seed + 6, device), heads=heads)
@@ -474,7 +474,10 @@ public class Attention:
 public class SGD:
     """Gradient descent: each variable less `rate` times its gradient."""
     variables: list[Variable[float32]]
-    rate: float64
+    public rate: float64
+
+    public def create(variables: own list[Variable[float32]], rate: float64) -> SGD:
+        return SGD(variables=variables, rate=rate)
 
     public def step(self, loss: Tensor[float32]) -> None:
         """Moves every variable against the gradient of `loss`. The work
@@ -498,8 +501,8 @@ public class SGD:
 public class AdamW:
     """Adam with weight decay applied to the variables themselves."""
     variables: list[Variable[float32]]
-    rate: float64
-    decay: float64
+    public rate: float64
+    public decay: float64
     beta1: float64
     beta2: float64
     epsilon: float64

@@ -20,7 +20,8 @@ struct Entry {
 /// The entries of the file at `path`, in the file's order, and the offset
 /// of the first element byte.
 fn read_header(path: &str) -> std::result::Result<(std::fs::File, Vec<Entry>, u64), String> {
-    let failed = |what: &str, error: &dyn std::fmt::Display| format!("cannot {what} `{path}`: {error}");
+    let failed =
+        |what: &str, error: &dyn std::fmt::Display| format!("cannot {what} `{path}`: {error}");
     let mut file = std::fs::File::open(path).map_err(|error| failed("open", &error))?;
     let mut length = [0_u8; 8];
     file.read_exact(&mut length)
@@ -111,7 +112,11 @@ pub(super) fn load(
         "F32" | "I32" => 4,
         "F16" | "BF16" | "I16" => 2,
         "I8" | "U8" | "BOOL" => 1,
-        other => return Err(format!("tensor `{name}` has dtype {other}, which is not read")),
+        other => {
+            return Err(format!(
+                "tensor `{name}` has dtype {other}, which is not read"
+            ))
+        }
     };
     let count: usize = entry.shape.iter().product();
     if (entry.end - entry.start) as usize != count * width {
@@ -161,8 +166,9 @@ pub(super) fn load(
         _ => ArrayStorage::Int32(
             integers()
                 .map(|value| {
-                    i32::try_from(value)
-                        .map_err(|_| format!("tensor `{name}` holds {value}, which `int32` cannot hold"))
+                    i32::try_from(value).map_err(|_| {
+                        format!("tensor `{name}` holds {value}, which `int32` cannot hold")
+                    })
                 })
                 .collect::<std::result::Result<Box<[i32]>, String>>()?
                 .into(),
@@ -180,7 +186,10 @@ pub(super) fn load(
 
 /// Writes `tensors` to the file at `path` and gives the file's length.
 /// The file appears whole or not at all.
-pub(super) fn save(path: &str, tensors: &[(String, ArrayValue)]) -> std::result::Result<u64, String> {
+pub(super) fn save(
+    path: &str,
+    tensors: &[(String, ArrayValue)],
+) -> std::result::Result<u64, String> {
     let mut header = serde_json::Map::new();
     let mut data: Vec<u8> = Vec::new();
     for (name, elements) in tensors {

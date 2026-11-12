@@ -138,16 +138,26 @@ pub(crate) enum Operation {
     /// The operand repeated to a shape its own broadcasts to.
     Expand(Vec<usize>),
     /// Each lane of the first operand followed by the lane of the second.
-    Concat { axis: usize },
+    Concat {
+        axis: usize,
+    },
     /// For each index of the second operand, the entry of the first at
     /// that place along `axis`.
-    Take { axis: usize },
+    Take {
+        axis: usize,
+    },
     /// The reverse of a take: lanes of `size` entries, where entry `k` is
     /// the sum of the entries of the first operand whose index, in the
     /// second, is `k`.
-    IndexAdd { axis: usize, size: usize },
+    IndexAdd {
+        axis: usize,
+        size: usize,
+    },
     /// The place along `axis` of each lane's largest element, or smallest.
-    ArgReduce { largest: bool, axis: usize },
+    ArgReduce {
+        largest: bool,
+        axis: usize,
+    },
     /// Random floats of an [`ArrayDType`] code, by a
     /// [`tensor_kernels::Fill`] code. The operand is one `int64`, the
     /// seed, so every seed has the same plan.
@@ -270,7 +280,12 @@ impl TensorValue {
         Self::in_state(device, dtype, shape, State::Ready(storage))
     }
 
-    fn in_state(device: TensorDevice, dtype: ArrayDType, shape: Box<[usize]>, state: State) -> Self {
+    fn in_state(
+        device: TensorDevice,
+        dtype: ArrayDType,
+        shape: Box<[usize]>,
+        state: State,
+    ) -> Self {
         Self(Arc::new(TensorNode {
             device,
             dtype,
@@ -306,7 +321,10 @@ impl TensorValue {
         self.0
             .variable
             .as_ref()
-            .map(|held| held.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            .map(|held| {
+                held.lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner)
+            })
             .ok_or_else(|| tensor_error(name, "expects a variable"))
     }
 
@@ -542,7 +560,9 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
         && waiting.len() > 1
         && waiting.iter().all(|node| node.device() == device);
     if !together {
-        return waiting.iter().try_for_each(|node| node.storage().map(|_| ()));
+        return waiting
+            .iter()
+            .try_for_each(|node| node.storage().map(|_| ()));
     }
     let (plan, leaves) = Plan::collect_all(&waiting);
     let storages = plan.run(device, &leaves)?;
@@ -888,7 +908,10 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
             let (single, double): FloatFunctions = match *code {
                 TANH_OPERATION => (f32::tanh, f64::tanh),
                 SIGMOID_OPERATION => (|x| 1.0 / (1.0 + (-x).exp()), tensor_kernels::sigmoid),
-                _ => (|x| tensor_kernels::erf(x.into()) as f32, tensor_kernels::erf),
+                _ => (
+                    |x| tensor_kernels::erf(x.into()) as f32,
+                    tensor_kernels::erf,
+                ),
             };
             float_map(first, single, double)?
                 .ok_or_else(|| tensor_error("tensor", "expects a float tensor"))
@@ -976,7 +999,9 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
         Operation::IndexAdd { axis, size } => {
             tensor_kernels::index_add(first, inputs[1], *axis, *size)
         }
-        Operation::ArgReduce { largest, axis } => tensor_kernels::arg_reduce(first, *axis, *largest),
+        Operation::ArgReduce { largest, axis } => {
+            tensor_kernels::arg_reduce(first, *axis, *largest)
+        }
         Operation::Random { fill, dtype, shape } => {
             let Value::Int(seed) = first.value_at_flat(0) else {
                 return Err(unknown());
@@ -1041,7 +1066,9 @@ thread_local! {
 /// a tracked one.
 fn recorded(node: TensorValue, operation: Operation, inputs: &[&TensorValue]) -> TensorValue {
     let float = matches!(node.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
-    if float && RECORDING.with(std::cell::Cell::get) && inputs.iter().any(|input| input.is_tracked())
+    if float
+        && RECORDING.with(std::cell::Cell::get)
+        && inputs.iter().any(|input| input.is_tracked())
     {
         node.tracking(Some(History {
             operation,
@@ -1570,7 +1597,9 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                 .variable = Some(Mutex::new(watched));
             Ok(Value::Tensor(variable))
         }
-        7 => Ok(Value::Tensor(operand.held("tensor::Variable.value")?.clone())),
+        7 => Ok(Value::Tensor(
+            operand.held("tensor::Variable.value")?.clone(),
+        )),
         8 => {
             // Sets the tensor aside to be run with the others set aside.
             TOGETHER.with(|together| together.borrow_mut().push(operand.clone()));
@@ -1594,7 +1623,8 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
     host_expect_arity(name, &args, 4)?;
     let (left, right) = pair_args(&args, name)?;
     let rank = left.shape().len();
-    let integer = |node: &TensorValue| matches!(node.dtype(), ArrayDType::Int32 | ArrayDType::Int64);
+    let integer =
+        |node: &TensorValue| matches!(node.dtype(), ArrayDType::Int32 | ArrayDType::Int64);
     match int_arg(&args, 2, name)? {
         0 => {
             let name = "tensor::concat";
@@ -1688,7 +1718,10 @@ pub fn host_tensor_filled(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     let device = device_arg(&args, 4, name)?;
     let float = matches!(dtype, ArrayDType::Float32 | ArrayDType::Float64);
     if fill == tensor_kernels::Fill::Count || !float {
-        return place(device, tensor_kernels::filled(fill, shape, seed as u64, dtype)?);
+        return place(
+            device,
+            tensor_kernels::filled(fill, shape, seed as u64, dtype)?,
+        );
     }
     if !device.has_float64() && dtype == ArrayDType::Float64 {
         return Err(float64_error(device));

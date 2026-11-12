@@ -9,9 +9,17 @@ Last updated: 2026-11-12
   Pro: automatic differentiation, transformer and mixture-of-experts
   support, convolution, mixed precision, optimisers, weights on disk.
 - Done: the `tensor` module with CPU, Metal, and CUDA devices, operators
-  with a number on either side, and benchmarks beside PyTorch.
-- Remaining: the operations, automatic differentiation, layers, and
-  whole-program benchmarks listed in `2026-11-12-gpu-tensors.md`.
+  with a number on either side, benchmarks beside PyTorch, indexed
+  operations, device random numbers, automatic differentiation,
+  variables, safetensors files, and the transformer layers with SGD and
+  AdamW. A small transformer trains on the CPU device in the tests.
+- Verification: runtime and compiler library tests pass on Linux. The
+  new CUDA kernels pass the CPU emulation and are not yet run on the
+  A40. The Metal device runs the new operations in host memory.
+- Remaining: the A40 and Mac runs, batched `matmul` in one cuBLAS call,
+  Metal support for the new operations, convolution and pooling,
+  `float16`, and the whole-program benchmarks listed in
+  `2026-11-12-gpu-tensors.md`.
 
 ## Release 0.15.0-preview (in progress)
 

@@ -855,11 +855,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
     /// Runs `plan` through its generated kernels on the CPU and gives each
     /// of its outputs.
-    pub(super) fn run_all(
-        plan: &Plan,
-        leaves: &[Storage],
-        tag: usize,
-    ) -> Option<Vec<ArrayValue>> {
+    pub(super) fn run_all(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<Vec<ArrayValue>> {
         let program = tensor_codegen::generate(plan);
         let library = compile(&program.source, tag)?;
         // SAFETY: the harness defines `aura_thread` with this signature.

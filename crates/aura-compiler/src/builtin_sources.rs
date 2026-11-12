@@ -46,9 +46,9 @@ pub(crate) fn imported_source_parts(module: &crate::ast::Module) -> BTreeSet<Str
     module
         .imports
         .iter()
-        .filter_map(|import| match &import.kind {
-            ImportKind::Module { path, .. } => Some(path),
-            ImportKind::From { module_path, .. } => Some(module_path),
+        .map(|import| match &import.kind {
+            ImportKind::Module { path, .. } => path,
+            ImportKind::From { module_path, .. } => module_path,
         })
         .filter(|path| has_source_part(path))
         .map(|path| path[0].clone())

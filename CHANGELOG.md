@@ -7,6 +7,22 @@ in this file.
 
 ## Unreleased
 
+- The `tensor` module has gradients. `watch()` marks a float tensor, a
+  tensor computed from it remembers how, and `result.gradient(of)` gives
+  the gradient, built from the ordinary operations so that a GPU runs it
+  as part of a plan. `Variable[T]` is a weight that training replaces,
+  and `evaluate` runs several tensors as one piece of GPU work
+  (ADR-0098).
+- New tensor operations: `slice`, `take`, `index_add`, `concat`,
+  `broadcast_to`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
+  `softmax`, `log_softmax`, and `keep` on the reductions. `uniform`,
+  `normal` and `dropout` make random numbers on the device, the same
+  for a seed on every device.
+- The `tensor` module has the layers of a transformer, written in Aura:
+  `Linear`, `Embedding`, `LayerNorm`, `Attention`, `attention`,
+  `cross_entropy`, and the optimizers `SGD` and `AdamW`.
+- `tensor.save`, `weight_names`, `load_float32` and `load_int64` write
+  and read safetensors files.
 - New `tensor` module. `Tensor[T]` holds numbers on a device and computes
   there: `Device.cpu()` on every platform, `Device.metal()`, the GPU of a
   Mac, and `Device.cuda()`, an NVIDIA GPU on Linux. A program moves data in with `Tensor[float32].from_array(values,

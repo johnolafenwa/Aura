@@ -123,7 +123,10 @@ fn split(inner: usize, length: usize) -> (String, String, String) {
 /// The C expression for the linear index of the element at `at` on an
 /// axis of `length` elements `inner` apart, in the lane `split` names.
 fn join(inner: usize, length: usize, lane: &(String, String, String), at: &str) -> String {
-    format!("(({} * {length}LL + {at}) * {inner}LL + {})", lane.0, lane.2)
+    format!(
+        "(({} * {length}LL + {at}) * {inner}LL + {})",
+        lane.0, lane.2
+    )
 }
 
 fn inner_of(shape: &[usize], axis: usize) -> usize {

@@ -193,5 +193,3 @@ kernel body written by the user.
 - The kernel layer: its syntax, and compiling Aura to Metal and CUDA.
 - A Windows device.
 - Neural network operations: convolution, pooling, normalization.
-- `tensor * 2.0`. Two impls of one operator trait for one type are not
-  told apart at run time yet.

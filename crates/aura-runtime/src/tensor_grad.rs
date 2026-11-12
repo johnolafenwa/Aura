@@ -173,7 +173,8 @@ fn pull(
                     }
                     18 => (
                         if wants(0) {
-                            let lower = binary(18, first, &binary(1, second, &number(flow, 1.0)?)?)?;
+                            let lower =
+                                binary(18, first, &binary(1, second, &number(flow, 1.0)?)?)?;
                             mul(&mul(flow, second)?, &lower)?
                         } else {
                             flow.clone()
@@ -352,7 +353,9 @@ fn pull(
             )
         })?,
         Operation::IndexAdd { axis, .. } => {
-            give(0, &|| run(Operation::Take { axis: *axis }, &[flow, &inputs[1]]))?;
+            give(0, &|| {
+                run(Operation::Take { axis: *axis }, &[flow, &inputs[1]])
+            })?;
         }
         Operation::Compare(_) | Operation::ArgReduce { .. } | Operation::Random { .. } => {}
     }

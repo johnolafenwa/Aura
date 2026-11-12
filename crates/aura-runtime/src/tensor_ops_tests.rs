@@ -123,8 +123,12 @@ const INDEXED: &[(&str, Expression)] = &[
     ("argmax of an expression", |l| {
         node_op(&binary(&l.a, &l.b, 2)?, 2, &[-1])
     }),
-    ("uniform", |l| random(0, 7, ArrayDType::Float32, &[3, 5], &l.a)),
-    ("normal", |l| random(1, 7, ArrayDType::Float32, &[4, 2], &l.a)),
+    ("uniform", |l| {
+        random(0, 7, ArrayDType::Float32, &[3, 5], &l.a)
+    }),
+    ("normal", |l| {
+        random(1, 7, ArrayDType::Float32, &[4, 2], &l.a)
+    }),
     ("random in an expression", |l| {
         binary(&random(0, 11, ArrayDType::Float32, &[2, 3], &l.a)?, &l.a, 2)
     }),
@@ -321,7 +325,10 @@ fn a_random_tensor_depends_on_its_seed_only() {
         &filled(&[20_000], 1, 3, ArrayDType::Float64).unwrap(),
     ));
     let mean = normal.iter().sum::<f64>() / normal.len() as f64;
-    let variance = normal.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+    let variance = normal
+        .iter()
+        .map(|value| (value - mean).powi(2))
+        .sum::<f64>()
         / normal.len() as f64;
     assert!(mean.abs() < 0.03, "mean {mean}");
     assert!((variance - 1.0).abs() < 0.05, "variance {variance}");
@@ -379,7 +386,10 @@ fn check_gradients(name: &str, inputs: &[ArrayValue], function: Function) {
                     .map(|input| {
                         let made = gradient(&result, input).unwrap();
                         assert_eq!(node(&made).shape(), node(input).shape(), "{name}");
-                        assert!(!node(&made).is_tracked(), "{name}: a gradient is not tracked");
+                        assert!(
+                            !node(&made).is_tracked(),
+                            "{name}: a gradient is not tracked"
+                        );
                         floats(&array(&made))
                     })
                     .collect()
@@ -421,18 +431,24 @@ fn gradients_agree_with_differences() {
     let positive = float64(&[1.5, 0.2, 3.0, 4.5, 0.25, 6.0], &[2, 3]);
     let two = float64(&[2.0], &[1]);
     let cases: &[(&str, Vec<ArrayValue>, Function)] = &[
-        ("add", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 0)),
+        ("add", vec![a.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 0)
+        }),
         ("add broadcast", vec![a.clone(), row.clone()], |x| {
             binary(&x[0], &x[1], 0)
         }),
         ("sub broadcast", vec![row.clone(), a.clone()], |x| {
             binary(&x[0], &x[1], 1)
         }),
-        ("mul", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 2)),
+        ("mul", vec![a.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 2)
+        }),
         ("mul by one element", vec![a.clone(), two.clone()], |x| {
             binary(&x[0], &x[1], 2)
         }),
-        ("div", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 3)),
+        ("div", vec![a.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 3)
+        }),
         ("div broadcast", vec![row.clone(), b.clone()], |x| {
             binary(&x[0], &x[1], 3)
         }),
@@ -445,7 +461,9 @@ fn gradients_agree_with_differences() {
         ("pow", vec![positive.clone(), b.clone()], |x| {
             binary(&x[0], &x[1], 18)
         }),
-        ("negate", vec![a.clone()], |x| unary(&x[0], NEGATE_OPERATION)),
+        ("negate", vec![a.clone()], |x| {
+            unary(&x[0], NEGATE_OPERATION)
+        }),
         ("abs", vec![a.clone()], |x| unary(&x[0], 0)),
         ("sqrt", vec![positive.clone()], |x| unary(&x[0], 1)),
         ("exp", vec![a.clone()], |x| unary(&x[0], 2)),
@@ -497,7 +515,11 @@ fn gradients_agree_with_differences() {
             binary(&permute(&x[0], &[])?, &x[1], 2)
         }),
         ("permute", vec![a.clone(), tall.clone()], |x| {
-            let cube = binary(&reshape(&x[0], &[2, 3, 1])?, &reshape(&x[1], &[1, 3, 2])?, 2)?;
+            let cube = binary(
+                &reshape(&x[0], &[2, 3, 1])?,
+                &reshape(&x[1], &[1, 3, 2])?,
+                2,
+            )?;
             let turned = permute(&cube, &[2, 0, 1])?;
             binary(&turned, &reshape(&x[0], &[1, 2, 3])?, 2)
         }),
@@ -513,7 +535,11 @@ fn gradients_agree_with_differences() {
         }),
         ("concat", vec![a.clone(), b.clone()], |x| {
             let joined = pair_op(&x[0], &x[1], 0, &[1])?;
-            binary(&slice(&joined, 1, 1, 5, 1)?, &slice(&joined, 1, 2, 6, 1)?, 2)
+            binary(
+                &slice(&joined, 1, 1, 5, 1)?,
+                &slice(&joined, 1, 2, 6, 1)?,
+                2,
+            )
         }),
         ("take", vec![tall.clone(), a.clone()], |x| {
             let rows = pair_op(&x[0], &indices(&[2, 0, 2], &[3], &x[0]), 1, &[0])?;
@@ -637,7 +663,8 @@ fn a_variable_holds_a_watched_tensor_that_can_be_replaced() {
     assert!(message(node_op(&l.counts, 6, &[])).contains("expects a float tensor"));
     assert!(message(node_op(&l.a, 7, &[])).contains("expects a variable"));
     assert!(message(pair_op(&l.a, &l.b, 4, &[])).contains("expects a variable"));
-    assert!(message(pair_op(&variable, &l.row, 4, &[])).contains("the variable's dtype and shape [2, 3]"));
+    assert!(message(pair_op(&variable, &l.row, 4, &[]))
+        .contains("the variable's dtype and shape [2, 3]"));
 }
 
 fn text(value: &str) -> Value {
@@ -661,7 +688,8 @@ fn outcome(value: Value) -> std::result::Result<Value, String> {
 
 #[test]
 fn tensors_are_saved_and_loaded_as_safetensors() {
-    let directory = std::env::temp_dir().join(format!("aura-tensor-weights-{}", std::process::id()));
+    let directory =
+        std::env::temp_dir().join(format!("aura-tensor-weights-{}", std::process::id()));
     std::fs::create_dir_all(&directory).unwrap();
     let path = directory.join("model.safetensors");
     let path_text = text(path.to_str().unwrap());
@@ -672,7 +700,8 @@ fn tensors_are_saved_and_loaded_as_safetensors() {
     put("a", &l.a);
     put("counts", &l.counts);
     put("small", &l.small);
-    let length = outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap()).unwrap();
+    let length =
+        outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap()).unwrap();
     assert_eq!(length, int(std::fs::metadata(&path).unwrap().len() as i64));
 
     let names = outcome(host_tensor_weights_names(vec![path_text.clone()], None).unwrap()).unwrap();
@@ -743,20 +772,26 @@ fn tensors_are_saved_and_loaded_as_safetensors() {
     assert_eq!(floats(&array(&brain)), [1.5]);
 
     std::fs::write(&path, b"short").unwrap();
-    assert!(load("a", ArrayDType::Float32).unwrap_err().contains("cannot read"));
+    assert!(load("a", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("cannot read"));
     std::fs::write(&path, [255_u8; 16]).unwrap();
     assert!(load("a", ArrayDType::Float32)
         .unwrap_err()
         .contains("is not a safetensors file"));
     let missing = text(directory.join("none.safetensors").to_str().unwrap());
-    assert!(outcome(host_tensor_weights_names(vec![missing], None).unwrap())
-        .unwrap_err()
-        .contains("cannot open"));
+    assert!(
+        outcome(host_tensor_weights_names(vec![missing], None).unwrap())
+            .unwrap_err()
+            .contains("cannot open")
+    );
     put("twice", &l.a);
     put("twice", &l.b);
-    assert!(outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap())
-        .unwrap_err()
-        .contains("two tensors named `twice`"));
+    assert!(
+        outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap())
+            .unwrap_err()
+            .contains("two tensors named `twice`")
+    );
     let _ = std::fs::remove_dir_all(&directory);
 }
 
@@ -764,7 +799,14 @@ fn tensors_are_saved_and_loaded_as_safetensors() {
 fn tensors_set_aside_run_as_one_plan() {
     let l = leaves(TensorDevice::Cpu);
     let expected_sum = array(&binary(&l.a, &l.b, 0).unwrap());
-    let expected_product = array(&reduce(&binary(&expected_sum_of(&l), &l.row, 2).unwrap(), 0, Some(0)).unwrap());
+    let expected_product = array(
+        &reduce(
+            &binary(&expected_sum_of(&l), &l.row, 2).unwrap(),
+            0,
+            Some(0),
+        )
+        .unwrap(),
+    );
     deferred(|| {
         let shared = binary(&l.a, &l.b, 0).unwrap();
         let product = reduce(&binary(&shared, &l.row, 2).unwrap(), 0, Some(0)).unwrap();

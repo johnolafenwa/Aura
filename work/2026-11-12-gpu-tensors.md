@@ -41,20 +41,36 @@ later, on the same tensors (ADR-0097).
 - Hosted CI has no usable GPU. The plan path runs there on the CPU
   device, and the generated CUDA source runs there compiled as C++.
 
+## Second pass: gradients and layers
+
+- Indexed operations, the functions `tanh`, `sigmoid` and `erf`, random
+  tensors made on the device, automatic differentiation, variables,
+  plans with several outputs, safetensors files, and the transformer
+  layers with SGD and AdamW (ADR-0098).
+- Verification: 41 gradient rules agree with central differences, run at
+  once and as plans. The generated CUDA source for every new operation
+  agrees with the CPU kernels when compiled as C++. A one-block
+  transformer written in Aura trains to the right answers on the CPU
+  device, interpreted and as a native build. Not yet run on the A40 or
+  on the Mac.
+
 ## Follow-up
 
-- Operations: `argmax`, `argmin`, top-k, `tanh`, `erf`, `sigmoid`,
-  softmax, slicing, concat, gather, scatter, random numbers.
-- Automatic differentiation.
-- Layer norm, attention, embedding, dropout, AdamW, weights on disk.
+- Run the new kernels on the A40. Give the Metal shim the new
+  operations.
+- Batched `matmul` as one cuBLAS call. It is one call for each matrix
+  pair now, which is slow for attention heads.
+- Top-k.
 - Convolution, pooling, batch norm.
 - `float16`.
 - Whole programs beside PyTorch: MLP training, large-batch inference,
   k-means, conjugate gradient, Monte Carlo pricing, GPT-2 inference,
   nanoGPT training, a mixture-of-experts transformer, ResNet-18 and a
   CIFAR-10 CNN.
-- Two compiler gaps found on the way. Two impls of one trait for one
-  type that differ only in the trait's arguments type-check, but
-  compiled code does not tell them apart. A method of an imported class
-  cannot bound its own type parameter by a trait the importing module
-  did not import.
+- Compiler gaps found on the way. Two impls of one trait for one type
+  that differ only in the trait's arguments type-check, but compiled
+  code does not tell them apart. A method of an imported class cannot
+  bound its own type parameter by a trait the importing module did not
+  import. A method of a generic class that names another generic class
+  of its module fails to check in a program that does not import that
+  other class.
