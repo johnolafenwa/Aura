@@ -1,0 +1,57 @@
+# Parallel start probe. Starts one, two, then four CPU-bound children in a
+# TaskGroup and joins them, 20 rounds each. With enough idle workers, two
+# and four children should take about as long as one.
+import sys
+
+
+def work(units: int64) -> int64:
+    mut state: int64 = units + 1
+    mut i: int64 = 0
+    while i < units * 500000:
+        state = state * 48271 % 2147483647
+        i += 1
+    return state
+
+
+def one(rounds: int64) -> None:
+    mut acc: int64 = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(rounds):
+        with TaskGroup() as group:
+            first = group.start(work, 1)
+            acc += first.result_or(0, timeout=10s)
+    print(f"one {sys.monotonic_time_ms() - start} {acc}")
+
+
+def two(rounds: int64) -> None:
+    mut acc: int64 = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(rounds):
+        with TaskGroup() as group:
+            first = group.start(work, 1)
+            second = group.start(work, 1)
+            acc += first.result_or(0, timeout=10s) + second.result_or(0, timeout=10s)
+    print(f"two {sys.monotonic_time_ms() - start} {acc}")
+
+
+def four(rounds: int64) -> None:
+    mut acc: int64 = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(rounds):
+        with TaskGroup() as group:
+            first = group.start(work, 1)
+            second = group.start(work, 1)
+            third = group.start(work, 1)
+            fourth = group.start(work, 1)
+            acc += first.result_or(0, timeout=10s) + second.result_or(0, timeout=10s)
+            acc += third.result_or(0, timeout=10s) + fourth.result_or(0, timeout=10s)
+    print(f"four {sys.monotonic_time_ms() - start} {acc}")
+
+
+def main() -> None:
+    one(20)
+    two(20)
+    four(20)
+    one(20)
+    two(20)
+    four(20)
