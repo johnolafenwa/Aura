@@ -355,10 +355,32 @@ pub(crate) fn is_available() -> bool {
     runtime().is_some()
 }
 
+/// The elements of an Array as bytes.
+fn storage_bytes(storage: &ArrayStorage) -> &[u8] {
+    fn bytes_of<T>(values: &[T]) -> &[u8] {
+        // SAFETY: the element types are plain numbers and `bool`, which
+        // have no padding.
+        unsafe { std::slice::from_raw_parts(values.as_ptr().cast(), std::mem::size_of_val(values)) }
+    }
+    match storage {
+        ArrayStorage::Int32(values) => bytes_of::<i32>(values),
+        ArrayStorage::Int64(values) => bytes_of::<i64>(values),
+        ArrayStorage::Float32(values) => bytes_of::<f32>(values),
+        ArrayStorage::Float64(values) => bytes_of::<f64>(values),
+        ArrayStorage::Bool(values) => bytes_of::<bool>(values),
+    }
+}
+
+/// A leaf in host memory of at most this many bytes is copied to the
+/// device together with the other such leaves of its run, as one copy.
+const MAX_STAGED_LEAF_BYTES: usize = 256;
+
 /// CUDA device memory.
 pub(crate) struct Buffer {
     pointer: DevicePointer,
     bytes: usize,
+    /// The buffer this one is a part of, which owns the memory.
+    part_of: Option<Arc<Buffer>>,
 }
 
 impl Drop for Buffer {
@@ -370,6 +392,9 @@ impl Drop for Buffer {
         let Some(runtime) = RUNTIME.get().and_then(Option::as_ref) else {
             return;
         };
+        if self.part_of.is_some() {
+            return;
+        }
         let mut pool = runtime.pool();
         if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
             pool.bytes += self.bytes;
@@ -399,35 +424,34 @@ impl Buffer {
             pointer
         };
         if let Some(pointer) = pooled {
-            return Ok(Self { pointer, bytes });
+            return Ok(Self {
+                pointer,
+                bytes,
+                part_of: None,
+            });
         }
         runtime.enter()?;
         let mut pointer = 0;
         // SAFETY: `pointer` receives the allocation.
         let status = unsafe { (runtime.api.cuMemAlloc_v2)(&mut pointer, bytes) };
         check(status, &format!("allocate {bytes} bytes"))?;
-        Ok(Self { pointer, bytes })
+        Ok(Self {
+            pointer,
+            bytes,
+            part_of: None,
+        })
     }
 
     /// A buffer holding the elements of a non-empty Array in row-major
     /// order.
     pub(crate) fn from_array(elements: &ArrayValue) -> Result<Self> {
-        let runtime = started()?;
         let storage = elements.elements()?;
-        fn bytes_of<T>(values: &[T]) -> &[u8] {
-            // SAFETY: the element types are plain numbers and `bool`, which
-            // have no padding.
-            unsafe {
-                std::slice::from_raw_parts(values.as_ptr().cast(), std::mem::size_of_val(values))
-            }
-        }
-        let bytes = match &*storage {
-            ArrayStorage::Int32(values) => bytes_of::<i32>(values),
-            ArrayStorage::Int64(values) => bytes_of::<i64>(values),
-            ArrayStorage::Float32(values) => bytes_of::<f32>(values),
-            ArrayStorage::Float64(values) => bytes_of::<f64>(values),
-            ArrayStorage::Bool(values) => bytes_of::<bool>(values),
-        };
+        Self::from_bytes(storage_bytes(&storage))
+    }
+
+    /// A buffer holding `bytes`.
+    fn from_bytes(bytes: &[u8]) -> Result<Self> {
+        let runtime = started()?;
         let buffer = Self::new(bytes.len())?;
         runtime.enter()?;
         // SAFETY: the buffer holds `bytes.len()` bytes.
@@ -436,6 +460,15 @@ impl Buffer {
         };
         check(status, "copy elements to the device")?;
         Ok(buffer)
+    }
+
+    /// The `bytes` bytes of `whole` that start `offset` bytes in.
+    fn part(whole: &Arc<Buffer>, offset: usize, bytes: usize) -> Self {
+        Self {
+            pointer: whole.pointer + offset as DevicePointer,
+            bytes,
+            part_of: Some(Arc::clone(whole)),
+        }
     }
 
     /// An Array holding a copy of the buffer's elements.
@@ -715,20 +748,37 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let mut leaves = leaves.iter();
     let mut copied = 0_usize;
     let mut copied_elements = 0_usize;
-    for (slot, buffer) in plan.slots.iter().zip(buffers.iter_mut()) {
+    // The small leaves in host memory, such as the numbers of an
+    // expression, go to the device as one copy: their bytes one after
+    // another, each starting at a multiple of eight.
+    let mut staged: Vec<u8> = Vec::new();
+    let mut parts: Vec<(usize, usize, usize)> = Vec::new();
+    for (index, (slot, buffer)) in plan.slots.iter().zip(buffers.iter_mut()).enumerate() {
         if matches!(slot, Slot::Leaf { .. }) {
-            *buffer = Some(
-                match leaves.next().expect("a plan has memory for each leaf") {
-                    Storage::Cuda(buffer) => Arc::clone(buffer),
-                    // A leaf in host memory is copied to the device for this
-                    // run.
-                    Storage::Host(elements) => {
-                        copied += 1;
-                        copied_elements += elements.len();
-                        Arc::new(Buffer::from_array(elements)?)
+            match leaves.next().expect("a plan has memory for each leaf") {
+                Storage::Cuda(held) => *buffer = Some(Arc::clone(held)),
+                // A leaf in host memory is copied to the device for this
+                // run.
+                Storage::Host(elements) => {
+                    copied += 1;
+                    copied_elements += elements.len();
+                    let storage = elements.elements()?;
+                    let bytes = storage_bytes(&storage);
+                    if bytes.len() <= MAX_STAGED_LEAF_BYTES {
+                        staged.resize(staged.len().next_multiple_of(8), 0);
+                        parts.push((index, staged.len(), bytes.len()));
+                        staged.extend_from_slice(bytes);
+                    } else {
+                        *buffer = Some(Arc::new(Buffer::from_bytes(bytes)?));
                     }
-                },
-            );
+                }
+            }
+        }
+    }
+    if !parts.is_empty() {
+        let whole = Arc::new(Buffer::from_bytes(&staged)?);
+        for (index, offset, bytes) in parts {
+            buffers[index] = Some(Arc::new(Buffer::part(&whole, offset, bytes)));
         }
     }
     let pointer = |buffers: &[Option<Arc<Buffer>>], index: usize| {

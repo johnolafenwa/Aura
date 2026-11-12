@@ -1651,7 +1651,13 @@ pub fn host_tensor_scalar_like(args: Vec<Value>, _: Option<&[String]>) -> Result
             }
         }
     };
-    place(like.device(), ArrayValue::new(Box::new([1]), storage)?)
+    let number = ArrayValue::new(Box::new([1]), storage)?;
+    // On the CUDA device a number stays in host memory, and a run copies
+    // all the numbers of its plan to the device at once.
+    if like.device() == TensorDevice::Cuda {
+        return Ok(Value::Tensor(TensorValue::host(like.device(), number)));
+    }
+    place(like.device(), number)
 }
 
 /// The axis `axis` names in a tensor of `rank` axes. A negative axis
