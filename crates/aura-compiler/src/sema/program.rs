@@ -2389,6 +2389,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
 
             for (trait_name, trait_info) in &program.traits {
+                // An imported trait's default bodies were checked in their
+                // own module, where the names in them resolve.
+                if trait_info.module_name != program.module_name {
+                    continue;
+                }
                 let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
                 let self_placeholder = Type::TypeParam("Self".to_string());
                 for (method_name, method) in &trait_info.methods {

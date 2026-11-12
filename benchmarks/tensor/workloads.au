@@ -1,6 +1,6 @@
 import sys
 import tensor
-from tensor import AdamW, MultiheadAttention, Device, Embedding, LayerNorm, Linear, Tensor, Parameter
+from tensor import AdamW, Collector, Device, Embedding, LayerNorm, Layer, Linear, Module, MultiheadAttention, ReLU, Sequential, Tensor
 
 
 # Each workload prints `<name> <size> <milliseconds> <result> <first pass
@@ -17,17 +17,16 @@ def mlp_train(rows: int64, steps: int64, device: Device) -> None:
     labels = x.matmul(tensor.randn([784, 10], 2, device)).argmax()
     x.eval()
     labels.eval()
-    mut hidden = Linear(784, 512, 3, device)
-    mut output = Linear(512, 10, 4, device)
-    mut params = hidden.parameters()
-    params.extend(output.parameters())
-    mut optimizer = AdamW(params, lr=0.001)
+    mut model = Sequential(
+        [Linear(784, 512, 3, device) as dyn Layer, ReLU(), Linear(512, 10, 4, device)]
+    )
+    mut optimizer = AdamW(model.parameters(), lr=0.001)
     mut last: float32 = 0.0
     mut first = 0
     mut start = sys.monotonic_time_ms()
     for step in range(steps + 1):
         at = (step * batch) % (rows - batch + 1)
-        logits = output.forward(hidden.forward(x.slice(0, at, at + batch)).relu())
+        logits = model.forward(x.slice(0, at, at + batch))
         loss = tensor.cross_entropy(logits, labels.slice(0, at, at + batch))
         optimizer.zero_grad()
         loss.backward()
@@ -148,13 +147,14 @@ class Block:
             self.wide.forward(self.norm2.forward(attended)).gelu()
         )
 
-    def parameters(mut self) -> list[Parameter[float32]]:
-        mut all = self.norm1.parameters()
-        all.extend(self.mix.parameters())
-        all.extend(self.norm2.parameters())
-        all.extend(self.wide.parameters())
-        all.extend(self.narrow.parameters())
-        return all
+
+impl Module for Block:
+    def collect(self, into: mut Collector) -> None:
+        into.add("norm1", self.norm1)
+        into.add("mix", self.mix)
+        into.add("norm2", self.norm2)
+        into.add("wide", self.wide)
+        into.add("narrow", self.narrow)
 
 
 def wrapped(x: Tensor[int64], count: int64) -> Tensor[int64]:

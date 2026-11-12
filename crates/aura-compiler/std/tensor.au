@@ -375,6 +375,134 @@ public def save[T](path: str, names: list[str], tensors: list[Tensor[T]]) -> Res
     return tensor.__aura_weights_write(path)
 
 
+public class Collector:
+    """The parameters of a model, gathered by `Module.collect`. Only this
+    module reads what a collector holds."""
+    names: list[str]
+    params: list[Parameter[float32]]
+    prefix: str
+
+    public def parameter(mut self, name: str, param: Parameter[float32]) -> None:
+        """Gathers `param`, a field called `name`."""
+        if self.prefix == "":
+            self.names.append(name.clone())
+        else:
+            self.names.append(self.prefix + "." + name)
+        self.params.append(param.share())
+
+    public def add[M: Module](mut self, name: str, module: M) -> None:
+        """Gathers the parameters of `module`, a field called `name`."""
+        saved = self.prefix.clone()
+        if saved == "":
+            self.prefix = name.clone()
+        else:
+            self.prefix = saved + "." + name
+        module.collect(self)
+        self.prefix = saved
+
+    public def add_list[M: Module](mut self, name: str, modules: list[M]) -> None:
+        """Gathers the parameters of each module of a list field called
+        `name`, under `name.0`, `name.1` and so on."""
+        mut at = 0
+        while at < modules.len():
+            view module = modules[at]
+            self.add(f"{name}.{at}", module)
+            at += 1
+
+
+def held_shape(params: list[Parameter[float32]], at: int64) -> list[int64]:
+    view param = params[at]
+    return param.value().shape()
+
+
+def stored_shape(state: dict[str, Tensor[float32]], name: str) -> list[int64]:
+    view found = state[name]
+    return found.shape()
+
+
+def assign_all(into: Collector, state: dict[str, Tensor[float32]]) -> None:
+    mut at = 0
+    while at < into.names.len():
+        view name = into.names[at]
+        view param = into.params[at]
+        view found = state[name]
+        param.assign(found.detach())
+        at += 1
+
+
+def load_all(into: Collector, state: dict[str, Tensor[float32]]) -> Result[int64, str]:
+    if state.len() != into.names.len():
+        return Err(f"`load_state_dict` expects {into.names.len()} tensors, found {state.len()}")
+    mut at = 0
+    while at < into.names.len():
+        name = into.names[at].clone()
+        if not (name in state):
+            return Err(f"`load_state_dict` found no tensor called `{name}`")
+        wanted = held_shape(into.params, at)
+        found = stored_shape(state, name)
+        if found != wanted:
+            return Err(f"`load_state_dict` expects `{name}` to have the shape {wanted}, found {found}")
+        at += 1
+    assign_all(into, state)
+    return Ok(into.names.len())
+
+
+def collected[M: Module](module: M) -> Collector:
+    mut into = Collector(names=list[str](), params=list[Parameter[float32]](), prefix="")
+    module.collect(into)
+    return into
+
+
+public trait Module:
+    """A part of a model that holds parameters: a layer, or a class whose
+    fields are layers. An implementation writes `collect`, and gets the
+    rest."""
+
+    def collect(self, into: mut Collector) -> None
+
+    def parameters(mut self) -> list[Parameter[float32]]:
+        """The model's parameters, for an optimizer. The model must be
+        declared `mut`: handing out its parameters lets them change."""
+        into = collected(self)
+        return into.params
+
+    def named_parameters(mut self) -> list[(str, Parameter[float32])]:
+        """Each parameter with its name, such as `hidden.weight`."""
+        into = collected(self)
+        mut all = list[(str, Parameter[float32])]()
+        mut at = 0
+        while at < into.names.len():
+            view param = into.params[at]
+            all.append((into.names[at].clone(), param.share()))
+            at += 1
+        return all
+
+    def state_dict(self) -> dict[str, Tensor[float32]]:
+        """The tensor each parameter holds now, by name."""
+        into = collected(self)
+        mut state = dict[str, Tensor[float32]]()
+        mut at = 0
+        while at < into.names.len():
+            view param = into.params[at]
+            state[into.names[at].clone()] = param.value().detach()
+            at += 1
+        return state
+
+    def load_state_dict(mut self, state: dict[str, Tensor[float32]]) -> Result[int64, str]:
+        """Replaces every parameter with the tensor `state` holds under
+        its name. Changes nothing when a name is missing, a name is not
+        a parameter, or a shape differs."""
+        into = collected(self)
+        return load_all(into, state)
+
+
+public trait Layer: Module:
+    """A module that maps one float tensor to another, so it can be a
+    step of a `Sequential`."""
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]
+
+
 public class Linear:
     """`x.matmul(weight) + bias` over the last axis of `x`."""
     public weight: Parameter[float32]
@@ -387,18 +515,23 @@ public class Linear:
         self.weight = Parameter[float32]((rand([in_features, out_features], seed, device) * 2.0 - 1.0) * bound)
         self.bias = Parameter[float32]((rand([out_features], seed + 1, device) * 2.0 - 1.0) * bound)
 
-    public def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+
+
+
+impl Module for Linear:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+
+
+impl Layer for Linear:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         mut shape = x.shape()
         last = shape.len() - 1
         weight = self.weight.value()
         flat = x.reshape([-1, shape[last]]).matmul(weight) + self.bias.value()
         shape[last] = weight.shape()[1]
         return flat.reshape(shape)
-
-    public def parameters(mut self) -> list[Parameter[float32]]:
-        """The layer's weights, for an optimizer. The layer must be
-        declared `mut`: handing out its parameters lets them change."""
-        return [self.weight.share(), self.bias.share()]
 
 
 public class Embedding:
@@ -411,8 +544,11 @@ public class Embedding:
     public def forward(self, indices: Tensor[int64]) -> Tensor[float32]:
         return self.weight.value().index_select(0, indices)
 
-    public def parameters(mut self) -> list[Parameter[float32]]:
-        return [self.weight.share()]
+
+
+impl Module for Embedding:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
 
 
 public class LayerNorm:
@@ -427,13 +563,20 @@ public class LayerNorm:
         self.bias = Parameter[float32](Tensor[float32].zeros([normalized_shape], device))
         self.eps = 0.00001
 
-    public def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+
+
+
+impl Module for LayerNorm:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+
+
+impl Layer for LayerNorm:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         centered = x - x.mean(-1, true)
         spread = (centered * centered).mean(-1, true)
         return centered / (spread + self.eps).sqrt() * self.weight.value() + self.bias.value()
-
-    public def parameters(mut self) -> list[Parameter[float32]]:
-        return [self.weight.share(), self.bias.share()]
 
 
 public def dropout(x: Tensor[float32], p: float64, seed: int64) -> Tensor[float32]:
@@ -490,12 +633,14 @@ public class MultiheadAttention:
         mixed = scaled_dot_product_attention(self.split(self.query.forward(x)), self.split(self.key.forward(x)), self.split(self.value.forward(x)), is_causal)
         return self.output.forward(mixed.permute([0, 2, 1, 3]).reshape(x.shape()))
 
-    public def parameters(mut self) -> list[Parameter[float32]]:
-        mut all = self.query.parameters()
-        all.extend(self.key.parameters())
-        all.extend(self.value.parameters())
-        all.extend(self.output.parameters())
-        return all
+
+
+impl Module for MultiheadAttention:
+    def collect(self, into: mut Collector) -> None:
+        into.add("query", self.query)
+        into.add("key", self.key)
+        into.add("value", self.value)
+        into.add("output", self.output)
 
 
 public def one_hot(indices: Tensor[int64], num_classes: int64) -> Tensor[bool]:
@@ -568,7 +713,18 @@ public class MixtureOfExperts:
         scores = self.gate.forward(x)
         return where(top_mask(scores, self.active), scores, scores.scalar(-1.0e30)).softmax(-1)
 
-    public def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+
+
+
+impl Module for MixtureOfExperts:
+    def collect(self, into: mut Collector) -> None:
+        into.add("gate", self.gate)
+        into.add_list("wide", self.wide)
+        into.add_list("narrow", self.narrow)
+
+
+impl Layer for MixtureOfExperts:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         weights = self.weights(x)
         last = x.shape().len() - 1
         mut total = x.scalar(0.0)
@@ -580,16 +736,67 @@ public class MixtureOfExperts:
             at += 1
         return total
 
-    public def parameters(mut self) -> list[Parameter[float32]]:
-        mut all = self.gate.parameters()
+
+public class Sequential:
+    """Layers applied one after another."""
+    public layers: list[dyn Layer]
+
+    public def __init__(self, layers: own list[dyn Layer]):
+        self.layers = layers
+
+
+impl Module for Sequential:
+    def collect(self, into: mut Collector) -> None:
         mut at = 0
-        while at < self.wide.len():
-            all.append(self.wide[at].weight.share())
-            all.append(self.wide[at].bias.share())
-            all.append(self.narrow[at].weight.share())
-            all.append(self.narrow[at].bias.share())
+        while at < self.layers.len():
+            view layer = self.layers[at]
+            saved = into.prefix.clone()
+            if saved == "":
+                into.prefix = f"{at}"
+            else:
+                into.prefix = f"{saved}.{at}"
+            layer.collect(into)
+            into.prefix = saved
             at += 1
-        return all
+
+
+impl Layer for Sequential:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        mut out = x.clone()
+        mut at = 0
+        while at < self.layers.len():
+            view layer = self.layers[at]
+            out = layer.forward(out)
+            at += 1
+        return out
+
+
+public class ReLU:
+    """`relu` as a layer."""
+
+
+impl Module for ReLU:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for ReLU:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return x.relu()
+
+
+public class GELU:
+    """`gelu` as a layer."""
+
+
+impl Module for GELU:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for GELU:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return x.gelu()
 
 
 public class SGD:

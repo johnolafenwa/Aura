@@ -11412,11 +11412,22 @@ fn lower_trait_impl(
             trait_impl.for_type,
             method.decl.name
         );
+        // A default body the implementation inherits names what its
+        // trait's module sees, so it lowers in that module.
+        let inherited = !trait_impl
+            .decl
+            .methods
+            .iter()
+            .any(|written| written.name == method.decl.name);
+        let body_module = match program.traits.get(&trait_impl.trait_name) {
+            Some(trait_info) if inherited => trait_info.module_name.as_str(),
+            _ => module_name,
+        };
         if seen_function_names.insert(qualified_name.clone()) {
             functions.extend(lower_function(
                 program,
                 &qualified_name,
-                module_name,
+                body_module,
                 ClosureOwner::TraitImplMethod {
                     trait_name: trait_impl.trait_name.clone(),
                     for_type: trait_impl.for_type.to_string(),

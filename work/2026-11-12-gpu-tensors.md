@@ -87,3 +87,22 @@ later, on the same tensors (ADR-0097).
   Carlo, level on inference, and 8 to 180 times slower on conjugate
   gradient, transformer training, MLP training and k-means. The slow
   rows are open work.
+
+## Modules (2026-11-12, late evening)
+
+- The owner asked to follow PyTorch's module approach, and chose to
+  leave `model(x)` out. `Module`, `Layer`, `Collector`, `Sequential`,
+  `ReLU` and `GELU` are in the `tensor` module, with `state_dict()` and
+  `load_state_dict()`.
+- Two compiler fixes came with it: a default body of an imported trait
+  is no longer checked again in the importing module, and it is lowered
+  in the trait's module.
+- Compiler limits met and worked around in `std/tensor.au`: a generic
+  method called with a `Parameter[float32]` field inferred
+  `Parameter[Unknown]`, and a `view` of a list element before an early
+  `return` fails the loan check in a default method.
+- Next: the compiler writes `collect` from a class's fields, in a second
+  pull request. `sema/json_derive.rs` is the model for generated source.
+- Fixed since the A40 run: a tensor a program keeps is computed once
+  (k-means), and a slice's start is an operand, so batches share one
+  compiled plan (MLP training). Not yet timed on the A40.

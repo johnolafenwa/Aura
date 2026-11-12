@@ -1869,3 +1869,118 @@ def main():
     .expect("float64 implements Scale[int32]");
     assert_eq!(output.stdout, "3.5 11.0\n");
 }
+
+#[test]
+fn a_model_is_a_module_with_named_parameters_and_a_state_dict() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import AdamW, Collector, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
+
+
+class Net:
+    hidden: Linear
+    output: Linear
+
+
+impl Module for Net:
+    def collect(self, into: mut Collector) -> None:
+        into.add("hidden", self.hidden)
+        into.add("output", self.output)
+
+
+impl Layer for Net:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return self.output.forward(self.hidden.forward(x).relu())
+
+
+def main() -> int32:
+    device = Device.cpu()
+    mut net = Net(hidden=Linear(4, 8, 1, device), output=Linear(8, 2, 2, device))
+    x = tensor.randn([16, 4], 3, device)
+    labels = x.matmul(tensor.randn([4, 2], 4, device)).argmax()
+    mut optimizer = AdamW(net.parameters(), lr=0.05)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(30):
+        loss = tensor.cross_entropy(net.forward(x), labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first)
+    for name, param in net.named_parameters():
+        print(f"{name} {param.value().shape()}")
+    state = net.state_dict()
+    print(state.len())
+    mut other = Net(hidden=Linear(4, 8, 7, device), output=Linear(8, 2, 8, device))
+    match other.load_state_dict(state):
+        case Ok(_):
+            print((other.forward(x) - net.forward(x)).abs().max().item())
+        case Err(message):
+            print(message)
+    mut stack = Sequential([Linear(4, 8, 1, device) as dyn Layer, ReLU(), Linear(8, 2, 2, device)])
+    print(stack.forward(x).shape())
+    for name, param in stack.named_parameters():
+        print(name)
+    return 0
+"#,
+    )
+    .expect("a module trains, names its parameters, and loads a state dict");
+    assert_eq!(
+        output.stdout,
+        "true\nhidden.weight [4, 8]\nhidden.bias [8]\noutput.weight [8, 2]\noutput.bias [2]\n4\n0.0\n[16, 2]\n0.weight\n0.bias\n2.weight\n2.bias\n"
+    );
+}
+
+#[test]
+fn a_module_not_declared_mut_gives_out_no_parameters() {
+    let check = |collect: &str, body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Collector, Device, Linear, Module, Parameter, SGD, Tensor\n\nclass Net:\n    hidden: Linear\n    output: Linear\n\nimpl Module for Net:\n    def collect(self, into: mut Collector) -> None:\n        into.add(\"hidden\", self.hidden)\n        into.add(\"output\", self.output)\n{collect}\ndef main():\n    device = Device.cpu()\n    net = Net(hidden=Linear(2, 2, 1, device), output=Linear(2, 1, 2, device))\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    // Reading a model's weights needs no `mut`.
+    check("", "    state = net.state_dict()\n").expect("a state dict reads the model");
+    let cases = [
+        (
+            "",
+            "    optimizer = SGD(net.parameters(), lr=0.1)\n",
+            "method `parameters` requires a mutable receiver",
+        ),
+        (
+            "",
+            "    names = net.named_parameters()\n",
+            "method `named_parameters` requires a mutable receiver",
+        ),
+        (
+            "",
+            "    done = net.load_state_dict(net.state_dict())\n",
+            "method `load_state_dict` requires a mutable receiver",
+        ),
+        // `collect` runs on a model that is not `mut`, so what it gathers
+        // stays inside the `tensor` module.
+        (
+            "        stolen = into.params\n",
+            "",
+            "field `params` is private on `Collector`",
+        ),
+        (
+            "",
+            "    into = Collector(names=list[str](), params=list[Parameter[float32]](), prefix=\"\")\n",
+            "field `names` is private on `Collector`",
+        ),
+        (
+            "",
+            "    into = tensor.collected(net)\n",
+            "item `collected` is private in module `tensor`",
+        ),
+    ];
+    for (collect, body, expected) in cases {
+        assert_eq!(check(collect, body).expect_err(body), expected);
+    }
+}

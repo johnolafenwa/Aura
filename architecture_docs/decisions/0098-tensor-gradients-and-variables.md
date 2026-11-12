@@ -103,6 +103,32 @@ optimizer's state as one plan.
 Layers and optimizers are Aura source in the module. A layer is a class
 whose fields are parameters. An optimizer holds handles to them.
 
+### A model is a `Module`
+
+PyTorch models inherit from `nn.Module`, which finds a model's
+parameters by watching attribute assignment. Aura has no inheritance, so
+`Module` is a trait. An implementation writes one method,
+`collect(self, into: mut Collector)`, that names each field holding
+weights. The trait's default methods give `parameters()`,
+`named_parameters()`, `state_dict()` and `load_state_dict()`.
+
+`collect` takes `self`, not `mut self`, so that `state_dict()` can read
+a model that is not `mut`. That is safe because a `Collector` is opaque:
+its fields are private to the `tensor` module, and only the default
+methods that take `mut self` hand the gathered parameters out.
+`state_dict()` gives tensors, which are values.
+
+`Layer` extends `Module` with `forward` from one float tensor to
+another. `Sequential` holds a list of `dyn Layer`.
+
+A model is called as `model.forward(x)`. `model(x)` was considered and
+left out: PyTorch's call exists to run hooks around `forward`, Aura has
+no hooks, and a call on a class value would be a new rule for the whole
+language that could not be taken back. It can be added later.
+
+The compiler writing `collect` from a class's fields is planned and not
+part of this decision.
+
 ### Several tensors run as one plan
 
 An optimizer step needs the loss, a new value for each weight, and the

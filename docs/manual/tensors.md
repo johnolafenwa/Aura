@@ -286,7 +286,7 @@ again inside the step.
 Each layer is a class whose fields are parameters. Its constructor makes
 fresh weights from a seed, `forward` runs it, and `parameters()` lists
 its parameters for an optimizer. A model is a class of your own whose
-fields are layers, with the same two methods.
+fields are layers. See [Modules](#modules).
 
 | Class or function | What it computes |
 | --- | --- |
@@ -295,6 +295,8 @@ fields are layers, with the same two methods.
 | `LayerNorm(normalized_shape, device)` | Each lane along the last axis moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. |
 | `MultiheadAttention(embed_dim, num_heads, seed, device)` | Self-attention with several heads over a `[batch, length, width]` tensor. `forward(x, is_causal=false)`. |
 | `MixtureOfExperts(width, hidden, experts, active, seed, device)` | Several two layer networks and a gate. `forward(x)` weights the outputs of each row's `active` highest scoring experts by the softmax of their scores. `weights(x)` gives those weights. Every expert runs on every row. |
+| `Sequential(layers: list[dyn Layer])` | The layers applied one after another. |
+| `ReLU()`, `GELU()` | `relu` and `gelu` as layers, for a `Sequential`. |
 | `one_hot(indices, num_classes)` | A mask with one more axis, of length `num_classes`, that holds at the place each index names. |
 | `top_indices(x, count)` | The places of the `count` largest elements of each lane along the last axis, largest first. |
 | `top_mask(x, count)` | A mask in the shape of `x` that holds at the `count` largest elements of each lane along the last axis. |
@@ -306,16 +308,94 @@ fields are layers, with the same two methods.
 Both optimizers also have `minimize(loss)`, which is `loss.backward()`
 followed by `step()`.
 
+### Modules
+
+A model is a class whose fields are layers, and it implements the
+`Module` trait. This is Aura's form of PyTorch's `nn.Module`. Aura has
+no inheritance, so the model names its parts in one method, `collect`,
+and the trait gives it the rest:
+
+```aura
+import tensor
+from tensor import AdamW, Collector, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
+
+class Net:
+    hidden: Linear
+    output: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return self.output.forward(self.hidden.forward(x).relu())
+
+impl Module for Net:
+    def collect(self, into: mut Collector) -> None:
+        into.add("hidden", self.hidden)
+        into.add("output", self.output)
+
+def main():
+    device = Device.default()
+    x = tensor.randn([64, 4], 1, device)
+    labels = x.matmul(tensor.randn([4, 3], 2, device)).argmax()
+    mut net = Net(hidden=Linear(4, 16, 3, device), output=Linear(16, 3, 4, device))
+    mut optimizer = AdamW(net.parameters(), lr=0.01)
+    for step in range(100):
+        loss = tensor.cross_entropy(net.forward(x), labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+    for name, param in net.named_parameters():
+        print(f"{name} {param.value().shape()}")
+    # The same network as a list of layers.
+    stack = Sequential([Linear(4, 16, 3, device) as dyn Layer, ReLU(), Linear(16, 3, 4, device)])
+    print(stack.forward(x).shape())
+```
+
+| API | Result |
+| --- | --- |
+| `collect(self, into: mut Collector)` | The one method an implementation writes. It names each field that holds weights. |
+| `parameters(mut self) -> list[Parameter[float32]]` | The model's parameters, for an optimizer. |
+| `named_parameters(mut self) -> list[(str, Parameter[float32])]` | Each parameter with its name, such as `hidden.weight`. |
+| `state_dict(self) -> dict[str, Tensor[float32]]` | The tensor each parameter holds now, by name. |
+| `load_state_dict(mut self, state) -> Result[int64, str]` | Replaces every parameter with the tensor of its name, and gives how many it replaced. Changes nothing and gives an error when a name is missing or a shape differs. |
+
+Inside `collect`, a `Collector` takes three kinds of field:
+
+| Collector method | Field |
+| --- | --- |
+| `add(name, module)` | A layer or another model: anything that implements `Module`. |
+| `add_list(name, modules)` | A list of modules of one type. Its parameters are named `name.0`, `name.1`, and so on. |
+| `parameter(name, param)` | A `Parameter[float32]` of the model's own. |
+
+A weight that `collect` does not name is not given to the optimizer and
+does not train.
+
+`Module` keeps the rule in [What Can Change](#what-can-change).
+`parameters()`, `named_parameters()`, and `load_state_dict()` take
+`mut self`. `state_dict()` reads a model that is not `mut`, and the
+tensors it gives are values: changing the model later does not change
+them. A program cannot read what a `Collector` holds, so `collect`
+gives no second way to a model's weights.
+
+`Layer` is the trait of a module whose `forward` maps one
+`Tensor[float32]` to another. `Linear`, `LayerNorm`, `MixtureOfExperts`,
+`ReLU`, `GELU`, and `Sequential` implement it, and so can a model of
+your own. A `Sequential` holds a list of `dyn Layer`. `Embedding` and
+`MultiheadAttention` are modules and not layers, because their `forward`
+takes other arguments.
+
 ### Differences From PyTorch
 
 - A tensor's dtype is part of its type: `Tensor[float32]`.
 - The device and the random seed are arguments. There is no default
   device, global seed, or gradient mode to set.
-- A layer's weight has shape `[in_features, out_features]`, and
-  `forward` is called by name.
+- A layer's weight has shape `[in_features, out_features]`.
 - `dim` and `keepdim` are spelled as in PyTorch. Aura's `Array` uses
   `axis` for the same thing.
 - `step()` clears the gradients it used.
+- A model implements `Module` and writes `collect`. It does not inherit
+  from a base class, and `model.forward(x)` is called by name:
+  `model(x)` is not a call.
+- `state_dict()` gives the tensors as values, not as live references to
+  the weights.
 
 ## Saving and Loading
 

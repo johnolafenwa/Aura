@@ -16,6 +16,17 @@ in this file.
   the weights of a model not declared `mut` never change:
   `parameters()`, `step()` and `zero_grad()` take `mut self`, and a
   `Parameter` cannot be copied (ADR-0098).
+- `tensor.Module` is the trait of a model, in the place of PyTorch's
+  `nn.Module`. A model names its fields in `collect` and gets
+  `parameters()`, `named_parameters()`, `state_dict()` and
+  `load_state_dict()`. `tensor.Sequential` applies a list of layers, with
+  `ReLU` and `GELU` as layers. The `mut` rule holds through all of them.
+- A default method of an imported trait can name private items of the
+  trait's own module. It was checked and compiled in the importing
+  module before, where those names did not resolve.
+- A training loop on a CUDA device that slices a new batch each step no
+  longer compiles new kernels for each batch. `AURA_TENSOR_TRACE=1`
+  writes the time of each piece of CUDA work to standard error.
 - New tensor operations: `slice`, `index_select`, `index_add`, `cat`,
   `expand`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
   `softmax`, `log_softmax`, and `dim` and `keepdim` on the reductions.
