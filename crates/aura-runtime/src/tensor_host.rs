@@ -650,7 +650,14 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
             first.choose(&other(1), &other(2), inputs[1].dtype())
         }
         Operation::Reduce { reduction, axis } => {
-            let reduction = ArrayReduction::from_code(*reduction).ok_or_else(unknown)?;
+            let float = matches!(first.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+            // A tensor's float sum has no fixed order, so the CPU device
+            // takes the reordered sum, which is faster and loses less.
+            let reduction = match ArrayReduction::from_code(*reduction).ok_or_else(unknown)? {
+                ArrayReduction::Sum if float => ArrayReduction::FastSum,
+                ArrayReduction::Mean if float => ArrayReduction::FastMean,
+                reduction => reduction,
+            };
             let reduced = match axis {
                 Some(axis) => first.reduce_axis(reduction, *axis)?,
                 None => {
