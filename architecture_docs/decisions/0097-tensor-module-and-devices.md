@@ -65,9 +65,10 @@ GPU result is checked against them.
 - Integer arithmetic wraps on every device, because a GPU cannot trap
   and a result must not depend on the device.
 - Float maths follows IEEE 754 on every device: an overflow is an
-  infinity and a value outside a function's domain is a NaN. The Array
+  infinity, a zero divisor gives an infinity or a NaN, and a value
+  outside a function's domain is a NaN. Array division and the Array
   math members stop the program there, which a GPU cannot do, so the CPU
-  device has its own float kernels for `sqrt`, `exp`, `log`, `sin`,
+  device has its own float kernels for `/`, `sqrt`, `exp`, `log`, `sin`,
   `cos` and `pow`.
 - A GPU has no `float64`, and a tensor never narrows one. `float64` on a
   GPU device is `AU4007`.

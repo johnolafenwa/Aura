@@ -551,37 +551,42 @@ fn float_map(
     ArrayValue::new(elements.try_shape()?, storage).map(Some)
 }
 
-/// `base` raised to `exponent` for two float Arrays of one dtype whose
-/// shapes broadcast, by the IEEE rules.
-fn float_pow(base: &ArrayValue, exponent: &ArrayValue) -> Result<ArrayValue> {
+/// A float function of each pair of elements of two float Arrays of one
+/// dtype whose shapes broadcast, by the IEEE rules.
+fn float_zip(
+    left: &ArrayValue,
+    right: &ArrayValue,
+    single: fn(f32, f32) -> f32,
+    double: fn(f64, f64) -> f64,
+) -> Result<ArrayValue> {
     // Multiplying by ones of the other shape broadcasts each operand and
     // keeps every value, a NaN and a negative zero included.
     let ones =
-        |like: &ArrayValue| ArrayValue::full(base.dtype(), like.shape.clone(), &Value::Float(1.0));
+        |like: &ArrayValue| ArrayValue::full(left.dtype(), like.shape.clone(), &Value::Float(1.0));
     let mode = IntegerArithmeticMode::Checked;
-    let base = base.binary(&ones(exponent)?, ArrayBinaryOp::Mul, mode)?;
-    let exponent = exponent.binary(&ones(&base)?, ArrayBinaryOp::Mul, mode)?;
-    let (bases, exponents) = (base.elements()?, exponent.elements()?);
-    let storage = match (&*bases, &*exponents) {
-        (ArrayStorage::Float32(bases), ArrayStorage::Float32(exponents)) => ArrayStorage::Float32(
-            bases
+    let left = left.binary(&ones(right)?, ArrayBinaryOp::Mul, mode)?;
+    let right = right.binary(&ones(&left)?, ArrayBinaryOp::Mul, mode)?;
+    let (lefts, rights) = (left.elements()?, right.elements()?);
+    let storage = match (&*lefts, &*rights) {
+        (ArrayStorage::Float32(lefts), ArrayStorage::Float32(rights)) => ArrayStorage::Float32(
+            lefts
                 .iter()
-                .zip(exponents.iter())
-                .map(|(&base, &exponent)| base.powf(exponent))
+                .zip(rights.iter())
+                .map(|(&left, &right)| single(left, right))
                 .collect::<Box<[f32]>>()
                 .into(),
         ),
-        (ArrayStorage::Float64(bases), ArrayStorage::Float64(exponents)) => ArrayStorage::Float64(
-            bases
+        (ArrayStorage::Float64(lefts), ArrayStorage::Float64(rights)) => ArrayStorage::Float64(
+            lefts
                 .iter()
-                .zip(exponents.iter())
-                .map(|(&base, &exponent)| base.powf(exponent))
+                .zip(rights.iter())
+                .map(|(&left, &right)| double(left, right))
                 .collect::<Box<[f64]>>()
                 .into(),
         ),
         _ => unreachable!("both operands are floats of one dtype"),
     };
-    ArrayValue::new(base.try_shape()?, storage)
+    ArrayValue::new(left.try_shape()?, storage)
 }
 
 /// The result of `operation` by the Array kernels, which is what the
@@ -591,17 +596,22 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
     let first = inputs[0];
     let other = |index: usize| Value::Array(inputs[index].clone());
     match operation {
-        Operation::Binary(code) if *code < PAIR_OPERATION_BASE => first.binary(
-            inputs[1],
-            ArrayBinaryOp::from_code(*code).ok_or_else(unknown)?,
-            arithmetic_mode(first.dtype()),
-        ),
         Operation::Binary(code) => {
+            let floats = matches!(first.dtype(), ArrayDType::Float32 | ArrayDType::Float64)
+                && inputs[1].dtype() == first.dtype();
+            if *code < PAIR_OPERATION_BASE {
+                let operation = ArrayBinaryOp::from_code(*code).ok_or_else(unknown)?;
+                if operation == ArrayBinaryOp::Div && floats {
+                    // The Array division stops the program on a zero
+                    // divisor.
+                    return float_zip(first, inputs[1], |a, b| a / b, |a, b| a / b);
+                }
+                return first.binary(inputs[1], operation, arithmetic_mode(first.dtype()));
+            }
             let operation =
                 ArrayPairOp::from_code(code - PAIR_OPERATION_BASE).ok_or_else(unknown)?;
-            let float = matches!(first.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
-            if operation == ArrayPairOp::Pow && float && inputs[1].dtype() == first.dtype() {
-                float_pow(first, inputs[1])
+            if operation == ArrayPairOp::Pow && floats {
+                float_zip(first, inputs[1], f32::powf, f64::powf)
             } else {
                 first.pairwise(&other(1), operation)
             }

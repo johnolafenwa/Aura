@@ -291,6 +291,11 @@ fn float_maths_follows_ieee_and_never_stops_the_program() {
     assert_eq!(powers.shape.as_ref(), &[4]);
     assert_eq!(powers.value_at_flat(3), Value::Float(2.0));
     assert!(matches!(powers.value_at_flat(1), Value::Float(value) if value.is_nan()));
+    let zero = tensor(float32(&[0.0], &[1]), TensorDevice::Cpu);
+    let quotients = array(&binary(&wide, &zero, 3).unwrap());
+    assert_eq!(quotients.value_at_flat(0), Value::Float(f64::INFINITY));
+    assert_eq!(quotients.value_at_flat(1), Value::Float(f64::NEG_INFINITY));
+    assert!(matches!(quotients.value_at_flat(2), Value::Float(value) if value.is_nan()));
     let double = host_tensor_full(
         vec![ints(&[2]), Value::Float(1.0e200), int(3), int(0)],
         None,
@@ -298,6 +303,10 @@ fn float_maths_follows_ieee_and_never_stops_the_program() {
     .unwrap();
     let squared = array(&binary(&double, &double, 18).unwrap());
     assert_eq!(squared.value_at_flat(0), Value::Float(f64::INFINITY));
+    assert_eq!(
+        array(&binary(&double, &double, 3).unwrap()).value_at_flat(0),
+        Value::Float(1.0)
+    );
     assert_eq!(
         array(&unary(&double, 1).unwrap()).value_at_flat(0),
         Value::Float(1.0e100)

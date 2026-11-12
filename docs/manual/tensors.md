@@ -69,9 +69,11 @@ converting one to `float64` there, is error `AU4007`. A tensor never
 narrows a `float64` silently. Convert the `Array` first, with `values as Array[float32]`.
 
 Float operations on a tensor follow IEEE 754 on every device: an
-overflow gives an infinity, and a value outside a function's domain,
-such as `log` of a negative number, gives a NaN. The program does not
-stop. The `Array` math members stop the program in those cases.
+overflow gives an infinity, division by zero gives an infinity or a NaN,
+and a value outside a function's domain, such as `log` of a negative
+number, gives a NaN. The program does not
+stop. `Array` division and the `Array` math members stop the program in those
+cases.
 
 Integer arithmetic on a tensor wraps on every device. A GPU cannot stop a
 program on overflow, and a result must not depend on the device. This is
