@@ -2,6 +2,18 @@
 
 Last updated: 2026-11-12
 
+## More platforms: Linux on arm64 and native Windows (in progress)
+
+- Target: John's "more platforms" item. Windows has no local machine and
+  is tested on the hosted Windows runner only. Details are in
+  `2026-11-12-more-platforms.md`.
+- Done: Linux on arm64 builds, tests and ships an archive. Native
+  Windows (`x86_64-pc-windows-msvc`) builds, runs the runtime tests,
+  links native executables with the Microsoft linker, and has a release
+  archive script, an archive smoke test and a PowerShell installer.
+- Open: compiler and command integration tests on Windows, speed
+  measurements, musl Linux, cross-compilation.
+
 ## Children of one TaskGroup start late on Linux (complete)
 
 - Reported by the Array v2 work: two CPU-bound children of one
