@@ -83,8 +83,8 @@ uint8_t *aura_metal_buffer_contents(void *buffer) {
 
 void aura_metal_buffer_release(void *buffer) {
     @autoreleasepool {
-        id<MTLBuffer> released = (__bridge_transfer id<MTLBuffer>)buffer;
-        released = nil;
+        // The transfer gives the reference to a temporary, which releases it.
+        (void)(__bridge_transfer id<MTLBuffer>)buffer;
     }
 }
 
@@ -138,8 +138,7 @@ void *aura_metal_graph_new(void) {
 
 void aura_metal_graph_release(void *graph) {
     @autoreleasepool {
-        AuraGraph *released = (__bridge_transfer AuraGraph *)graph;
-        released = nil;
+        (void)(__bridge_transfer AuraGraph *)graph;
     }
 }
 
@@ -294,7 +293,7 @@ int32_t aura_metal_graph_step(void *handle, int32_t kind, int32_t code, const in
                 made = [g reshapeTensor:a withShape:result_shape name:nil];
                 break;
             case 7:
-                made = [g permuteTensor:a permutation:aura_numbers(count, numbers) name:nil];
+                made = [g transposeTensor:a permutation:aura_numbers(count, numbers) name:nil];
                 break;
             case 8:
                 made = [g castTensor:a toType:aura_data_type(dtype) name:nil];

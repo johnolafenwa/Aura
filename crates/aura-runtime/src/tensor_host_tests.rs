@@ -354,6 +354,8 @@ fn creation_and_inspection() {
     assert_ne!(l.a, l.b);
     assert_eq!(format!("{:?}", node(&l.a)), "<tensor-node>");
     assert!(!node(&l.a).is_empty());
+    let stays = host_tensor_to_device(vec![l.a.clone(), int(0)], None).unwrap();
+    assert_eq!(stays, l.a, "a tensor already on the device is the same tensor");
     let same = cast(&l.a, ArrayDType::Float32).unwrap();
     assert_eq!(same, l.a, "a cast to the same dtype is the same tensor");
     let empty = tensor(float32(&[], &[0, 3]), TensorDevice::Cpu);
@@ -437,6 +439,7 @@ fn host_functions_are_found_by_name() {
         "tensor::__aura_reshape",
         "tensor::__aura_permute",
         "tensor::__aura_cast",
+        "tensor::__aura_to_device",
         "tensor::__aura_eval",
         "tensor::__aura_share",
     ] {
@@ -561,6 +564,11 @@ fn the_metal_device_keeps_special_values() {
         close(name, &array(&gpu), &array(&host));
     }
     let (a, _) = special(TensorDevice::Metal);
+    let home = host_tensor_to_device(vec![a.clone(), int(0)], None).unwrap();
+    assert_eq!(node(&home).device(), TensorDevice::Cpu);
+    let back = host_tensor_to_device(vec![home.clone(), int(1)], None).unwrap();
+    assert_eq!(node(&back).device(), TensorDevice::Metal);
+    close("round trip", &array(&back), &array(&a));
     assert!(cast(&a, ArrayDType::Float64)
         .unwrap_err()
         .message

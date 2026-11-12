@@ -1318,3 +1318,128 @@ def main() -> int32:
             print(error)
             return 1
 "#;
+
+#[test]
+fn tensor_module_runs_its_whole_api_on_the_cpu_device() {
+    assert!(super::is_builtin_root_module("tensor"));
+    assert!(super::builtin_module_registry().contains_key("tensor"));
+    let binary = host_builtin_metadata("tensor::__aura_binary").expect("tensor binary metadata");
+    assert_eq!(binary.params.len(), 3);
+
+    let output = crate::run_source(
+        r#"from tensor import Device, Tensor, choose
+
+def main():
+    device = Device.cpu()
+    print(f"{device.name()} {device.is_gpu()} {Device.default().name() != ""}")
+    a = Array[float32].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    x = Tensor[float32].from_array(a, device)
+    y = Tensor[float32].full([2, 3], 2.0, device)
+    z = x * y + x - y / y
+    print(z.to_array())
+    print(f"{z.shape()} {z.len()} {z.device().name()}")
+    print(f"{z.sum().item()} {z.min().item()} {z.max().item()} {z.mean().item()}")
+    print(z.sum(axis=0).to_array())
+    print(x.matmul(y.transpose()).to_array())
+    print(x.minimum(y).maximum(-x).to_array())
+    print(x.pow(y).sqrt().abs().to_array())
+    print(x.exp().log().to_array())
+    print((x.sin() * x.sin() + x.cos() * x.cos()).sum().item())
+    mask = x.greater(x.scalar(3.0))
+    print(mask.to_array())
+    print(choose(mask, x, -x).to_array())
+    print(f"{x.less(y).to_array()} {x.less_equal(y).to_array()}")
+    print(f"{x.greater_equal(y).to_array()} {x.equal(y).to_array()} {x.not_equal(y).to_array()}")
+    print(x.reshape([3, 2]).flatten().permute([0]).to_array())
+    i = Tensor[int64].full([4], 7, device)
+    print((i * i.scalar(3) - i).to_array())
+    print(f"{i.to_float32().to_array()} {i.to_int32().to_array()} {i.to_float64().to_array()}")
+    print(x.to_int64().to_array())
+    zero = Tensor[int32].zeros([2], device)
+    print(f"{zero.to_array()} {Tensor[bool].zeros([2], device).to_array()}")
+    print(Tensor[float64].full([1], 0.5, device).item())
+    w = z.clone().to(device)
+    w.eval()
+    print(w.max(axis=1).to_array())
+    match Device.metal():
+        case Device as gpu:
+            print(gpu.is_gpu())
+        case None:
+            print(true)
+"#,
+    )
+    .expect("the tensor API should run");
+    assert_eq!(
+        output.stdout,
+        "cpu false true\n\
+         Array[float32](shape=[2, 3], values=[2.0, 5.0, 8.0, 11.0, 14.0, 17.0])\n\
+         [2, 3] 6 cpu\n\
+         57.0 2.0 17.0 9.5\n\
+         Array[float32](shape=[3], values=[13.0, 19.0, 25.0])\n\
+         Array[float32](shape=[2, 2], values=[12.0, 12.0, 30.0, 30.0])\n\
+         Array[float32](shape=[2, 3], values=[1.0, 2.0, 2.0, 2.0, 2.0, 2.0])\n\
+         Array[float32](shape=[2, 3], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
+         Array[float32](shape=[2, 3], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
+         6.0\n\
+         Array[bool](shape=[2, 3], values=[false, false, false, true, true, true])\n\
+         Array[float32](shape=[2, 3], values=[-1.0, -2.0, -3.0, 4.0, 5.0, 6.0])\n\
+         Array[bool](shape=[2, 3], values=[true, false, false, false, false, false]) Array[bool](shape=[2, 3], values=[true, true, false, false, false, false])\n\
+         Array[bool](shape=[2, 3], values=[false, true, true, true, true, true]) Array[bool](shape=[2, 3], values=[false, true, false, false, false, false]) Array[bool](shape=[2, 3], values=[true, false, true, true, true, true])\n\
+         Array[float32](shape=[6], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
+         Array[int64](shape=[4], values=[14, 14, 14, 14])\n\
+         Array[float32](shape=[4], values=[7.0, 7.0, 7.0, 7.0]) Array[int32](shape=[4], values=[7, 7, 7, 7]) Array[float64](shape=[4], values=[7.0, 7.0, 7.0, 7.0])\n\
+         Array[int64](shape=[2, 3], values=[1, 2, 3, 4, 5, 6])\n\
+         Array[int32](shape=[2], values=[0, 0]) Array[bool](shape=[2], values=[false, false])\n\
+         0.5\n\
+         Array[float32](shape=[2], values=[8.0, 17.0])\n\
+         true\n"
+    );
+
+    let error = crate::check_source(
+        "import tensor\n\ndef forge() -> tensor.Node:\n    return tensor.Node()\n",
+    )
+    .expect_err("only the tensor module makes a node");
+    assert!(error.message.contains("Node"), "{}", error.message);
+    let error = crate::check_source(
+        "from tensor import Device, Tensor\n\ndef bad(x: Tensor[float32], y: Tensor[int64]) -> Tensor[float32]:\n    return x + y\n",
+    )
+    .expect_err("operands have one dtype");
+    assert!(error.message.contains("Tensor"), "{}", error.message);
+    let error = crate::run_source(
+        "from tensor import Device, Tensor\n\ndef main():\n    x = Tensor[float32].zeros([2, 3], Device.cpu())\n    y = Tensor[float32].zeros([4], Device.cpu())\n    print((x + y).len())\n",
+    )
+    .expect_err("shapes must broadcast");
+    assert_eq!(error.code, "AU4007");
+}
+
+#[test]
+fn an_associated_trait_call_runs_the_implementation_for_the_written_type_arguments() {
+    let output = crate::run_source(
+        r#"trait Make[E]:
+    def make(value: E) -> Self
+    def what(self) -> str
+
+class Box[T]:
+    size: int64
+
+impl Make[float32] for Box[float32]:
+    def make(value: float32) -> Box[float32]:
+        return Box[float32](size=1)
+    def what(self) -> str:
+        return "float32"
+
+impl Make[int64] for Box[int64]:
+    def make(value: int64) -> Box[int64]:
+        return Box[int64](size=2)
+    def what(self) -> str:
+        return "int64"
+
+def main():
+    a = Box[float32].make(1.5)
+    b = Box[int64].make(3)
+    print(f"{a.what()} {a.size} {b.what()} {b.size}")
+"#,
+    )
+    .expect("each call names one implementation");
+    assert_eq!(output.stdout, "float32 1 int64 2\n");
+}

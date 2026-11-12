@@ -7,6 +7,23 @@ in this file.
 
 ## Unreleased
 
+- New `tensor` module. `Tensor[T]` holds numbers on a device and computes
+  there: `Device.cpu()` on every platform and `Device.metal()`, the GPU of
+  a Mac. A program moves data in with `Tensor[float32].from_array(values,
+  device)` and out with `to_array()`, and in between uses `+`, `-`, `*`,
+  `/`, comparisons, `choose`, `sum`, `min`, `max`, `mean`, `matmul`,
+  `reshape`, `transpose`, and the elementwise maths members, with the
+  `Array` shape rules. Every operation means the same on every device:
+  integers and masks are equal, and floats agree to a few units in the
+  last place. A GPU device runs the whole expression behind a tensor as
+  one piece of work when the program reads it. A GPU has no `float64`,
+  which is error `AU4007` there, never a silent narrowing. A program
+  that does not import `tensor` loads no GPU framework (ADR-0097).
+- Fixed: an associated call through a trait on a generic class with its
+  type arguments written, such as `Box[float32].make(...)`, ran the
+  implementation for another type argument when the trait was implemented
+  for several, and failed to build with `AU4001` when the class was
+  imported from another module.
 - Arrays: an index takes a coordinate or a slice on each axis, with steps:
   `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`, `grid[::-1]`. An index
   with a slice has type `Array[T]`. Bounds follow the list rules and never

@@ -3817,6 +3817,10 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("node"), borrowed("dtype")],
     },
     DynamicHostAbi {
+        name: "tensor::__aura_to_device",
+        params: &[borrowed("node"), borrowed("device")],
+    },
+    DynamicHostAbi {
         name: "tensor::__aura_eval",
         params: &[borrowed("node")],
     },
@@ -15855,6 +15859,7 @@ host_builtin_entries! {
     borrowed "tensor::__aura_reshape" => aura_host_tensor_reshape(|args| direct_http("tensor::__aura_reshape", crate::runtime_value::tensor_host::host_tensor_reshape, args));
     borrowed "tensor::__aura_permute" => aura_host_tensor_permute(|args| direct_http("tensor::__aura_permute", crate::runtime_value::tensor_host::host_tensor_permute, args));
     borrowed "tensor::__aura_cast" => aura_host_tensor_cast(|args| direct_http("tensor::__aura_cast", crate::runtime_value::tensor_host::host_tensor_cast, args));
+    borrowed "tensor::__aura_to_device" => aura_host_tensor_to_device(|args| direct_http("tensor::__aura_to_device", crate::runtime_value::tensor_host::host_tensor_to_device, args));
     borrowed "tensor::__aura_eval" => aura_host_tensor_eval(|args| direct_http("tensor::__aura_eval", crate::runtime_value::tensor_host::host_tensor_eval, args));
     borrowed "tensor::__aura_share" => aura_host_tensor_share(|args| direct_http("tensor::__aura_share", crate::runtime_value::tensor_host::host_tensor_share, args));
     borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));

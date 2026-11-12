@@ -1873,6 +1873,7 @@ fn tensor_namespace() -> ModuleNamespace {
         on_node("__aura_reshape", vec![borrow_param("shape", shape())], node()),
         on_node("__aura_permute", vec![borrow_param("axes", shape())], node()),
         on_node("__aura_cast", vec![borrow_param("dtype", int64())], node()),
+        on_node("__aura_to_device", vec![borrow_param("device", int64())], node()),
         on_node("__aura_eval", Vec::new(), type_ref("None", Vec::new())),
         on_node("__aura_share", Vec::new(), node()),
     ];

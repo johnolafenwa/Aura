@@ -946,6 +946,19 @@ pub fn host_tensor_cast(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
     operate(Operation::Cast(dtype), &[operand])
 }
 
+/// `tensor::__aura_to_device`: the tensor on another device, or the same
+/// tensor when it is already there.
+pub fn host_tensor_to_device(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_to_device";
+    host_expect_arity(name, &args, 2)?;
+    let operand = node_arg(&args, 0, name)?;
+    let device = device_arg(&args, 1, name)?;
+    if device == operand.device() {
+        return Ok(Value::Tensor(operand.clone()));
+    }
+    place(device, operand.elements()?)
+}
+
 /// `tensor::__aura_eval`: runs the work a tensor is waiting on. The CPU
 /// device runs each operation when it is asked for, so nothing waits.
 pub fn host_tensor_eval(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
@@ -990,6 +1003,7 @@ pub fn tensor_host_function(name: &str) -> Option<HostBuiltinFn> {
         "tensor::__aura_reshape" => host_tensor_reshape,
         "tensor::__aura_permute" => host_tensor_permute,
         "tensor::__aura_cast" => host_tensor_cast,
+        "tensor::__aura_to_device" => host_tensor_to_device,
         "tensor::__aura_eval" => host_tensor_eval,
         "tensor::__aura_share" => host_tensor_share,
         _ => return None,

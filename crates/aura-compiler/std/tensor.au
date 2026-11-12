@@ -75,6 +75,11 @@ public class Tensor[T]:
     public def device(self) -> Device:
         return Device(kind=tensor.__aura_device(self.node))
 
+    public def to(self, device: Device) -> Tensor[T]:
+        """This tensor on `device`. The elements are copied unless it is
+        already there."""
+        return Tensor[T](node=tensor.__aura_to_device(self.node, device.kind))
+
     public def clone(self) -> Tensor[T]:
         """Another handle to the same memory. Nothing is copied."""
         return Tensor[T](node=tensor.__aura_share(self.node))

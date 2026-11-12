@@ -250,6 +250,31 @@ and `E` is its element type.
 | `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
 | `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
 
+
+## Tensors
+
+[Tensor Module](/manual/tensors) covers devices, dtypes, when work runs,
+and how results compare across devices. `E` is the element type.
+
+| API | Signature |
+| --- | --- |
+| `tensor.Device.cpu` | `cpu() -> Device` |
+| `tensor.Device.metal` | `metal() -> Device \| None` |
+| `tensor.Device.default` | `default() -> Device` |
+| `tensor.Tensor[E].from_array` | `from_array(values: Array[E], device: Device) -> Tensor[E]` |
+| `tensor.Tensor[E].full` | `full(shape: list[int64], value: E, device: Device) -> Tensor[E]` |
+| `tensor.Tensor[E].zeros` | `zeros(shape: list[int64], device: Device) -> Tensor[E]` |
+| `to_array` | `to_array(self) -> Array[E]` |
+| `item` | `item(self) -> E` |
+| `scalar` | `scalar(self, value: E) -> Tensor[E]` |
+| `to` | `to(self, device: Device) -> Tensor[E]` |
+| `eval` | `eval(self) -> None` |
+| `tensor.choose` | `choose(mask: Tensor[bool], when_true: Tensor[T], when_false: Tensor[T]) -> Tensor[T]` |
+
+Operators `+`, `-`, `*`, `/`, and unary `-` take tensors of one dtype.
+The elementwise members, comparisons, reductions, `matmul`, and shape
+members have the names of the matching `Array` members.
+
 ## Gzip
 
 [Gzip Module](/manual/gzip) covers levels, multi-member streams, the output
