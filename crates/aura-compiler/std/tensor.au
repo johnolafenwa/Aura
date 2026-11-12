@@ -157,6 +157,82 @@ public class Tensor[T]:
     public def cos(self) -> Tensor[T]:
         return Tensor[T](node=tensor.__aura_unary(self.node, 7))
 
+    public def tanh(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 65))
+
+    public def sigmoid(self) -> Tensor[T]:
+        """`1 / (1 + exp(-x))` of each element."""
+        return Tensor[T](node=tensor.__aura_unary(self.node, 66))
+
+    public def erf(self) -> Tensor[T]:
+        """The error function of each element."""
+        return Tensor[T](node=tensor.__aura_unary(self.node, 67))
+
+    public def gelu(self) -> Tensor[T]:
+        """`x * (1 + erf(x / sqrt(2))) / 2` of each element."""
+        scaled = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, 0.7071067811865476), 2)
+        raised = tensor.__aura_binary(tensor.__aura_unary(scaled, 67), tensor.__aura_scalar_like_f64(self.node, 1.0), 0)
+        halved = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, 0.5), 2)
+        return Tensor[T](node=tensor.__aura_binary(halved, raised, 2))
+
+    public def slice(self, axis: int64, start: int64, stop: int64, step: int64 = 1) -> Tensor[T]:
+        """The entries `start` to `stop`, without `stop`, along `axis`,
+        `step` apart. A negative bound counts from the end."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 0, [axis, start, stop, step]))
+
+    public def broadcast_to(self, shape: list[int64]) -> Tensor[T]:
+        """This tensor repeated to `shape`, which its shape broadcasts
+        to."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 1, shape))
+
+    public def concat(self, other: Tensor[T], axis: int64 = 0) -> Tensor[T]:
+        """This tensor followed by `other` along `axis`."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, other.node, 0, [axis]))
+
+    public def take(self, indices: Tensor[int64], axis: int64 = 0) -> Tensor[T]:
+        """For each index, the entry at that place along `axis`. The
+        shape of `indices` takes the place of the axis."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, indices.node, 1, [axis]))
+
+    public def index_add(self, indices: Tensor[int64], size: int64, axis: int64 = 0) -> Tensor[T]:
+        """A tensor with `size` entries along `axis`, where entry `k` is
+        the sum of this tensor's entries whose index is `k`. The shape of
+        `indices` is this tensor's shape from `axis`."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, indices.node, 2, [axis, size]))
+
+    public def argmax(self, axis: int64 = -1) -> Tensor[int64]:
+        """The place of the largest element of each lane along `axis`."""
+        return Tensor[int64](node=tensor.__aura_node_op(self.node, 2, [axis]))
+
+    public def argmin(self, axis: int64 = -1) -> Tensor[int64]:
+        """The place of the smallest element of each lane along `axis`."""
+        return Tensor[int64](node=tensor.__aura_node_op(self.node, 3, [axis]))
+
+    public def watch(self) -> Tensor[T]:
+        """This tensor as one that gradients are taken with respect to.
+        Float tensors only."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 4, list[int64]()))
+
+    public def detach(self) -> Tensor[T]:
+        """This tensor as a constant: no gradient passes through it."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 5, list[int64]()))
+
+    public def gradient(self, of: Tensor[T]) -> Tensor[T]:
+        """The gradient of the sum of this tensor with respect to the
+        watched tensor `of`, in the shape of `of`."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, of.node, 3, list[int64]()))
+
+    public def softmax(self, axis: int64 = -1) -> Tensor[T]:
+        """Each lane along `axis` as positive numbers that sum to one."""
+        powers = tensor.__aura_unary(shifted(self.node, axis), 2)
+        return Tensor[T](node=tensor.__aura_binary(powers, reduce(powers, 0, axis, true), 3))
+
+    public def log_softmax(self, axis: int64 = -1) -> Tensor[T]:
+        """The logarithm of `softmax(axis)`, computed without overflow."""
+        moved = shifted(self.node, axis)
+        total = reduce(tensor.__aura_unary(moved, 2), 0, axis, true)
+        return Tensor[T](node=tensor.__aura_binary(moved, tensor.__aura_unary(total, 3), 1))
+
     public def less(self, other: Tensor[T]) -> Tensor[bool]:
         return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 0))
 
@@ -175,20 +251,22 @@ public class Tensor[T]:
     public def not_equal(self, other: Tensor[T]) -> Tensor[bool]:
         return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 5))
 
-    public def sum(self, axis: int64 | None = None) -> Tensor[T]:
+    public def sum(self, axis: int64 | None = None, keep: bool = false) -> Tensor[T]:
         """The sum of every element as a tensor of shape `[1]`, or of each
-        lane along `axis`. The order of the additions is not fixed."""
-        return Tensor[T](node=reduce(self.node, 0, axis))
+        lane along `axis`. The order of the additions is not fixed. With
+        `keep`, the result has the tensor's rank, with length one on each
+        axis that was summed."""
+        return Tensor[T](node=reduce(self.node, 0, axis, keep))
 
-    public def min(self, axis: int64 | None = None) -> Tensor[T]:
-        return Tensor[T](node=reduce(self.node, 1, axis))
+    public def min(self, axis: int64 | None = None, keep: bool = false) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 1, axis, keep))
 
-    public def max(self, axis: int64 | None = None) -> Tensor[T]:
-        return Tensor[T](node=reduce(self.node, 2, axis))
+    public def max(self, axis: int64 | None = None, keep: bool = false) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 2, axis, keep))
 
-    public def mean(self, axis: int64 | None = None) -> Tensor[T]:
+    public def mean(self, axis: int64 | None = None, keep: bool = false) -> Tensor[T]:
         """The mean, in the tensor's own dtype. Float tensors only."""
-        return Tensor[T](node=reduce(self.node, 3, axis))
+        return Tensor[T](node=reduce(self.node, 3, axis, keep))
 
     public def to_int32(self) -> Tensor[int32]:
         return Tensor[int32](node=tensor.__aura_cast(self.node, 0))
@@ -203,12 +281,75 @@ public class Tensor[T]:
         return Tensor[float64](node=tensor.__aura_cast(self.node, 3))
 
 
-def reduce(node: tensor.Node, reduction: int64, axis: int64 | None) -> tensor.Node:
+def reduce(node: tensor.Node, reduction: int64, axis: int64 | None, keep: bool) -> tensor.Node:
+    mut shape = tensor.__aura_shape(node)
     match axis:
         case None:
-            return tensor.__aura_reduce(node, reduction, 0, false)
+            made = tensor.__aura_reduce(node, reduction, 0, false)
+            if not keep:
+                return made
+            mut at = 0
+            while at < shape.len():
+                shape[at] = 1
+                at += 1
+            return tensor.__aura_reshape(made, shape)
         case int64 as lane:
-            return tensor.__aura_reduce(node, reduction, lane, true)
+            made = tensor.__aura_reduce(node, reduction, lane, true)
+            if not keep:
+                return made
+            if lane < 0:
+                shape[lane + shape.len()] = 1
+            else:
+                shape[lane] = 1
+            return tensor.__aura_reshape(made, shape)
+
+
+def shifted(node: tensor.Node, axis: int64) -> tensor.Node:
+    # Each lane less its largest element, which keeps `exp` from
+    # overflowing. The shift is a constant: it cancels in the gradient.
+    largest = tensor.__aura_node_op(reduce(node, 2, axis, true), 5, list[int64]())
+    return tensor.__aura_binary(node, largest, 1)
+
+
+public def concat[T](parts: list[Tensor[T]], axis: int64 = 0) -> Tensor[T]:
+    """The tensors of `parts`, one after another along `axis`."""
+    mut joined = tensor.__aura_share(parts[0].node)
+    mut at = 1
+    while at < parts.len():
+        joined = tensor.__aura_pair_op(joined, parts[at].node, 0, [axis])
+        at += 1
+    return Tensor[T](node=joined)
+
+
+public def uniform(shape: list[int64], seed: int64, device: Device) -> Tensor[float32]:
+    """Random floats spread evenly from zero up to, and not including,
+    one. A seed always gives the same tensor."""
+    return Tensor[float32](node=tensor.__aura_filled(shape, 0, seed, 2, device.kind))
+
+
+public def normal(shape: list[int64], seed: int64, device: Device) -> Tensor[float32]:
+    """Random floats of the normal distribution with mean zero and
+    deviation one. A seed always gives the same tensor."""
+    return Tensor[float32](node=tensor.__aura_filled(shape, 1, seed, 2, device.kind))
+
+
+public def arange(count: int64, device: Device) -> Tensor[int64]:
+    """The integers from zero up to, and not including, `count`."""
+    return Tensor[int64](node=tensor.__aura_filled([count], 2, 0, 1, device.kind))
+
+
+public def cross_entropy[T](logits: Tensor[T], targets: Tensor[int64]) -> Tensor[T]:
+    """The mean, over the rows of `logits`, of the negative logarithm of
+    the softmax entry that the row's target names. `logits` has one row
+    for each target and one column for each class."""
+    shape = tensor.__aura_shape(logits.node)
+    scores = logits.log_softmax(1)
+    classes = tensor.__aura_filled([shape[1]], 2, 0, 1, tensor.__aura_device(logits.node))
+    named = tensor.__aura_compare(classes, tensor.__aura_reshape(targets.node, [shape[0], 1]), 4)
+    zero = tensor.__aura_scalar_like_f64(scores.node, 0.0)
+    total = tensor.__aura_reduce(tensor.__aura_where(named, scores.node, zero), 0, 0, false)
+    scale = tensor.__aura_scalar_like_f64(scores.node, -1.0 / (shape[0] as float64))
+    return Tensor[T](node=tensor.__aura_binary(total, scale, 2))
 
 
 public def choose[T](mask: Tensor[bool], when_true: Tensor[T], when_false: Tensor[T]) -> Tensor[T]:

@@ -1898,6 +1898,32 @@ fn tensor_namespace() -> ModuleNamespace {
             vec![borrow_param("value", int64())],
             node(),
         ),
+        on_node(
+            "__aura_node_op",
+            vec![
+                borrow_param("operation", int64()),
+                borrow_param("parameters", shape()),
+            ],
+            node(),
+        ),
+        on_pair(
+            "__aura_pair_op",
+            vec![
+                borrow_param("operation", int64()),
+                borrow_param("parameters", shape()),
+            ],
+        ),
+        function(
+            "__aura_filled",
+            vec![
+                borrow_param("shape", shape()),
+                borrow_param("fill", int64()),
+                borrow_param("seed", int64()),
+                borrow_param("dtype", int64()),
+                borrow_param("device", int64()),
+            ],
+            node(),
+        ),
     ];
     for (suffix, dtype) in [
         ("i32", "int32"),

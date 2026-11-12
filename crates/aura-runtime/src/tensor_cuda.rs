@@ -30,6 +30,7 @@ struct Api {
     cuMemAlloc_v2: unsafe extern "C" fn(*mut DevicePointer, usize) -> Status,
     cuMemFree_v2: unsafe extern "C" fn(DevicePointer) -> Status,
     cuMemcpyHtoD_v2: unsafe extern "C" fn(DevicePointer, *const c_void, usize) -> Status,
+    cuMemsetD8_v2: unsafe extern "C" fn(DevicePointer, u8, usize) -> Status,
     cuMemcpyDtoH_v2: unsafe extern "C" fn(*mut c_void, DevicePointer, usize) -> Status,
     cuModuleLoadData: unsafe extern "C" fn(*mut *mut c_void, *const c_void) -> Status,
     cuModuleGetFunction:
@@ -177,6 +178,7 @@ impl Api {
             cuMemAlloc_v2: load!(driver, cuMemAlloc_v2),
             cuMemFree_v2: load!(driver, cuMemFree_v2),
             cuMemcpyHtoD_v2: load!(driver, cuMemcpyHtoD_v2),
+            cuMemsetD8_v2: load!(driver, cuMemsetD8_v2),
             cuMemcpyDtoH_v2: load!(driver, cuMemcpyDtoH_v2),
             cuModuleLoadData: load!(driver, cuModuleLoadData),
             cuModuleGetFunction: load!(driver, cuModuleGetFunction),
@@ -635,7 +637,13 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
                 bytes,
                 threads,
                 inputs,
+                clear,
             } => Buffer::new(*bytes).and_then(|made| {
+                if *clear {
+                    // SAFETY: the buffer holds `bytes` bytes.
+                    let status = unsafe { (api.cuMemsetD8_v2)(made.pointer, 0, *bytes) };
+                    check(status, "clear a buffer")?;
+                }
                 let mut arguments: Vec<DevicePointer> = vec![made.pointer];
                 arguments.extend(inputs.iter().map(|&input| pointer(&buffers, input)));
                 let mut addresses: Vec<*mut c_void> = arguments

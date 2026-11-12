@@ -1,0 +1,594 @@
+//! Tests of the tensor operations that move elements by index, of the
+//! functions `Array` lacks, of random tensors, and of gradients.
+
+use super::*;
+
+fn node_op(operand: &Value, code: i64, parameters: &[i64]) -> Result<Value> {
+    host_tensor_node_op(vec![operand.clone(), int(code), ints(parameters)], None)
+}
+
+fn pair_op(left: &Value, right: &Value, code: i64, parameters: &[i64]) -> Result<Value> {
+    host_tensor_pair_op(
+        vec![left.clone(), right.clone(), int(code), ints(parameters)],
+        None,
+    )
+}
+
+fn float64(values: &[f64], shape: &[usize]) -> ArrayValue {
+    ArrayValue::new(
+        shape.into(),
+        ArrayStorage::Float64(values.to_vec().into_boxed_slice().into()),
+    )
+    .unwrap()
+}
+
+fn floats(elements: &ArrayValue) -> Vec<f64> {
+    (0..elements.len())
+        .map(|index| match elements.value_at_flat(index) {
+            Value::Float(value) => value,
+            other => panic!("expected a float, found {other:?}"),
+        })
+        .collect()
+}
+
+fn places(elements: &ArrayValue) -> Vec<i64> {
+    match &*elements.elements().unwrap() {
+        ArrayStorage::Int64(values) => values.to_vec(),
+        _ => panic!("expected int64 elements"),
+    }
+}
+
+/// A tensor of indices on the device of `like`.
+fn indices(values: &[i64], shape: &[usize], like: &Value) -> Value {
+    tensor(int64(values, shape), node(like).device())
+}
+
+fn slice(operand: &Value, axis: i64, start: i64, stop: i64, step: i64) -> Result<Value> {
+    node_op(operand, 0, &[axis, start, stop, step])
+}
+
+fn unslice(operand: &Value, axis: usize, start: usize, step: usize, size: usize) -> Result<Value> {
+    operate(
+        Operation::Unslice {
+            axis,
+            start,
+            step,
+            size,
+        },
+        &[node(operand)],
+    )
+}
+
+/// Expressions of the indexed operations, which a GPU device with
+/// generated kernels runs as a plan.
+const INDEXED: &[(&str, Expression)] = &[
+    ("tanh", |l| unary(&l.a, TANH_OPERATION)),
+    ("sigmoid", |l| unary(&l.a, SIGMOID_OPERATION)),
+    ("erf", |l| unary(&l.a, ERF_OPERATION)),
+    ("slice", |l| slice(&l.a, 1, 1, 3, 1)),
+    ("slice with a step", |l| slice(&l.a, -1, 0, 3, 2)),
+    ("slice rows", |l| slice(&l.tall, 0, 1, -1, 1)),
+    ("slice of an expression", |l| {
+        slice(&binary(&l.a, &l.row, 0)?, 0, 1, 2, 1)
+    }),
+    ("unslice", |l| unslice(&l.a, 1, 1, 2, 6)),
+    ("unslice rows", |l| unslice(&l.tall, 0, 2, 1, 6)),
+    ("expand", |l| node_op(&l.row, 1, &[2, 3])),
+    ("expand one element", |l| node_op(&l.two, 1, &[2, 2])),
+    ("concat rows", |l| pair_op(&l.a, &l.b, 0, &[0])),
+    ("concat columns of an expression", |l| {
+        pair_op(&binary(&l.a, &l.b, 2)?, &l.a, 0, &[-1])
+    }),
+    ("take rows", |l| {
+        pair_op(&l.tall, &indices(&[2, 0, 1, 2], &[2, 2], &l.a), 1, &[0])
+    }),
+    ("take columns", |l| {
+        pair_op(&l.a, &indices(&[2, 0], &[2], &l.a), 1, &[1])
+    }),
+    ("take with int32 indices", |l| {
+        let places = tensor(int32(&[1, 2, 0, 1], &[4]), node(&l.a).device());
+        pair_op(&l.row, &places, 1, &[0])
+    }),
+    ("index add rows", |l| {
+        pair_op(&l.tall, &indices(&[1, 0, 1], &[3], &l.a), 2, &[0, 4])
+    }),
+    ("index add columns", |l| {
+        pair_op(&l.a, &indices(&[0, 0, 1], &[3], &l.a), 2, &[1, 2])
+    }),
+    ("index add of an expression", |l| {
+        pair_op(
+            &binary(&l.a, &l.b, 2)?,
+            &indices(&[1, 1], &[2], &l.a),
+            2,
+            &[0, 2],
+        )
+    }),
+    ("argmax", |l| node_op(&l.a, 2, &[1])),
+    ("argmin", |l| node_op(&l.a, 3, &[0])),
+    ("argmax of integers", |l| node_op(&l.counts, 2, &[0])),
+    ("argmax of an expression", |l| {
+        node_op(&binary(&l.a, &l.b, 2)?, 2, &[-1])
+    }),
+    ("embedding then product", |l| {
+        let rows = pair_op(&l.tall, &indices(&[2, 0, 2], &[3], &l.a), 1, &[0])?;
+        matmul(&l.a, &rows)
+    }),
+];
+
+#[test]
+fn the_indexed_operations_give_known_elements() {
+    let l = leaves(TensorDevice::Cpu);
+    let of = |name: &str| {
+        let (_, expression) = INDEXED.iter().find(|(known, _)| *known == name).unwrap();
+        array(&expression(&l).unwrap())
+    };
+    assert_eq!(of("slice"), float32(&[-2.0, 3.0, 0.25, 6.0], &[2, 2]));
+    assert_eq!(
+        of("slice with a step"),
+        float32(&[1.0, 3.0, 4.5, 6.0], &[2, 2])
+    );
+    assert_eq!(of("slice rows"), float32(&[3.0, 4.0], &[1, 2]));
+    assert_eq!(
+        of("unslice"),
+        float32(
+            &[0.0, 1.0, 0.0, -2.0, 0.0, 3.0, 0.0, 4.5, 0.0, 0.25, 0.0, 6.0],
+            &[2, 6]
+        )
+    );
+    assert_eq!(
+        of("expand"),
+        float32(&[10.0, 20.0, 30.0, 10.0, 20.0, 30.0], &[2, 3])
+    );
+    assert_eq!(
+        of("concat rows"),
+        float32(
+            &[1.0, -2.0, 3.0, 4.5, 0.25, 6.0, 2.0, 0.5, -1.0, 3.0, 8.0, 0.125],
+            &[4, 3]
+        )
+    );
+    assert_eq!(
+        of("take rows"),
+        float32(&[5.0, 6.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[2, 2, 2])
+    );
+    assert_eq!(of("take columns"), float32(&[3.0, 1.0, 6.0, 4.5], &[2, 2]));
+    assert_eq!(
+        of("index add rows"),
+        float32(&[3.0, 4.0, 6.0, 8.0, 0.0, 0.0, 0.0, 0.0], &[4, 2])
+    );
+    assert_eq!(
+        of("index add columns"),
+        float32(&[-1.0, 3.0, 4.75, 6.0], &[2, 2])
+    );
+    assert_eq!(places(&of("argmax")), [2, 2]);
+    assert_eq!(places(&of("argmin")), [0, 0, 0]);
+    assert_eq!(places(&of("argmax of integers")), [2]);
+    // An empty slice is an empty tensor.
+    assert_eq!(node(&slice(&l.a, 1, 2, 1, 1).unwrap()).shape(), [2, 0]);
+    // A NaN wins, and the first of equal elements wins.
+    let odd = tensor(
+        float32(&[1.0, f32::NAN, 9.0, 4.0, 4.0, 2.0], &[2, 3]),
+        TensorDevice::Cpu,
+    );
+    assert_eq!(places(&array(&node_op(&odd, 2, &[1]).unwrap())), [1, 0]);
+    assert_eq!(places(&array(&node_op(&odd, 3, &[1]).unwrap())), [1, 2]);
+}
+
+#[test]
+fn a_plan_of_indexed_operations_gives_what_each_gives_at_once() {
+    for (name, expression) in INDEXED {
+        let eager = expression(&leaves(TensorDevice::Cpu)).unwrap();
+        let waiting = deferred(|| expression(&leaves(TensorDevice::Cpu)).unwrap());
+        assert!(!node(&waiting).is_ready(), "{name}: the operation waits");
+        assert_eq!(node(&waiting).dtype(), node(&eager).dtype(), "{name}");
+        assert_eq!(node(&waiting).shape(), node(&eager).shape(), "{name}");
+        assert_eq!(array(&waiting), array(&eager), "{name}: elements");
+    }
+}
+
+#[test]
+fn the_generated_kernels_of_indexed_operations_agree_with_the_cpu_kernels() {
+    deferred(|| {
+        for (tag, (name, expression)) in INDEXED.iter().enumerate() {
+            let waiting = expression(&leaves(TensorDevice::Cpu)).unwrap();
+            let (plan, storage) = Plan::collect(node(&waiting));
+            let Some(generated) = generated_kernels::run(&plan, &storage, 1000 + tag) else {
+                eprintln!("SKIPPED: this machine has no C++ compiler");
+                return;
+            };
+            close(name, &generated, &array(&waiting));
+        }
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_the_indexed_operations() {
+    for device in gpus() {
+        for (name, expression) in INDEXED {
+            let host = expression(&leaves(TensorDevice::Cpu)).unwrap();
+            let gpu = expression(&leaves(device)).unwrap();
+            assert_eq!(node(&gpu).device(), device);
+            close(name, &array(&gpu), &array(&host));
+        }
+        println!(
+            "RAN: {} indexed expressions on the {} device",
+            INDEXED.len(),
+            device.name()
+        );
+    }
+}
+
+#[test]
+fn indexed_operations_check_their_arguments() {
+    let l = leaves(TensorDevice::Cpu);
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(slice(&l.a, 2, 0, 1, 1)).contains("axis 2 for a tensor of rank 2"));
+    assert!(message(slice(&l.a, 0, 0, 1, 0)).contains("a step of at least 1"));
+    assert!(message(node_op(&l.a, 0, &[0])).contains("expects 4 parameters"));
+    assert!(message(node_op(&l.a, 1, &[3, 2])).contains("cannot broadcast shape [2, 3] to [3, 2]"));
+    assert!(message(node_op(&l.a, 99, &[])).contains("unknown operation"));
+    let mask = compare(&l.a, &l.b, 0).unwrap();
+    assert!(message(node_op(&mask, 2, &[0])).contains("a tensor of numbers"));
+    assert!(message(pair_op(&l.a, &l.tall, 0, &[0])).contains("differ on axis 0 only"));
+    assert!(message(pair_op(&l.a, &l.small, 0, &[0])).contains("one dtype"));
+    assert!(message(pair_op(&l.a, &l.b, 1, &[0])).contains("integer indices"));
+    assert!(message(pair_op(&l.a, &l.b, 2, &[0, 2])).contains("integer indices"));
+    let index = indices(&[0, 5], &[2], &l.a);
+    assert!(message(pair_op(&l.a, &index, 1, &[0])).contains("index 5 for an axis of length 2"));
+    assert!(message(pair_op(&l.a, &index, 2, &[0, 3])).contains("index 5 for an axis of length 3"));
+    assert!(message(pair_op(&l.a, &index, 2, &[0, -1])).contains("not negative"));
+    assert!(message(pair_op(&l.a, &index, 2, &[1, 3])).contains("the indices' shape [2]"));
+    assert!(message(pair_op(&mask, &index, 2, &[0, 3])).contains("a tensor of numbers"));
+    assert!(message(pair_op(&l.a, &l.b, 99, &[])).contains("unknown operation"));
+    assert!(message(unary(&l.counts, TANH_OPERATION)).contains("expects a float tensor"));
+}
+
+#[test]
+fn the_error_function_matches_known_values() {
+    // Values of erf to 17 digits.
+    for (x, expected) in [
+        (0.0, 0.0),
+        (0.1, 0.112_462_916_018_284_89),
+        (0.5, 0.520_499_877_813_046_5),
+        (1.0, 0.842_700_792_949_714_9),
+        (2.0, 0.995_322_265_018_952_7),
+        (2.9, 0.999_958_902_121_900_5),
+        (3.0, 0.999_977_909_503_001_4),
+        (3.5, 0.999_999_256_901_627_7),
+        (5.0, 0.999_999_999_998_462_5),
+        (7.0, 1.0),
+    ] {
+        let found = tensor_kernels::erf(x);
+        // The kernel is within a few units in the last place.
+        assert!((found - expected).abs() < 2e-15, "erf({x}) = {found}");
+        assert_eq!(tensor_kernels::erf(-x), -found);
+    }
+    assert!(tensor_kernels::erf(f64::NAN).is_nan());
+    assert_eq!(tensor_kernels::erf(f64::INFINITY), 1.0);
+    assert_eq!(tensor_kernels::sigmoid(0.0), 0.5);
+}
+
+fn filled(shape: &[i64], fill: i64, seed: i64, dtype: ArrayDType) -> Result<Value> {
+    host_tensor_filled(
+        vec![ints(shape), int(fill), int(seed), int(dtype as i64), int(0)],
+        None,
+    )
+}
+
+#[test]
+fn a_random_tensor_depends_on_its_seed_only() {
+    let uniform = floats(&array(
+        &filled(&[100, 100], 0, 7, ArrayDType::Float32).unwrap(),
+    ));
+    assert!(uniform.iter().all(|&value| (0.0..1.0).contains(&value)));
+    let mean = uniform.iter().sum::<f64>() / uniform.len() as f64;
+    assert!((mean - 0.5).abs() < 0.01, "mean {mean}");
+    assert_eq!(
+        uniform,
+        floats(&array(
+            &filled(&[100, 100], 0, 7, ArrayDType::Float32).unwrap()
+        ))
+    );
+    assert_ne!(
+        uniform,
+        floats(&array(
+            &filled(&[100, 100], 0, 8, ArrayDType::Float32).unwrap()
+        ))
+    );
+    // A longer tensor begins with the shorter one.
+    let short = floats(&array(&filled(&[10], 0, 7, ArrayDType::Float32).unwrap()));
+    assert_eq!(short, uniform[..10]);
+
+    let normal = floats(&array(
+        &filled(&[20_000], 1, 3, ArrayDType::Float64).unwrap(),
+    ));
+    let mean = normal.iter().sum::<f64>() / normal.len() as f64;
+    let variance = normal.iter().map(|value| (value - mean).powi(2)).sum::<f64>()
+        / normal.len() as f64;
+    assert!(mean.abs() < 0.03, "mean {mean}");
+    assert!((variance - 1.0).abs() < 0.05, "variance {variance}");
+    assert!(normal.iter().all(|value| value.is_finite()));
+
+    assert_eq!(
+        places(&array(&filled(&[2, 3], 2, 0, ArrayDType::Int64).unwrap())),
+        [0, 1, 2, 3, 4, 5]
+    );
+    assert_eq!(
+        array(&filled(&[3], 2, 0, ArrayDType::Int32).unwrap()),
+        int32(&[0, 1, 2], &[3])
+    );
+    assert_eq!(
+        floats(&array(&filled(&[3], 2, 0, ArrayDType::Float32).unwrap())),
+        [0.0, 1.0, 2.0]
+    );
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(filled(&[3], 0, 0, ArrayDType::Int64)).contains("`float32` or `float64`"));
+    assert!(message(filled(&[3], 9, 0, ArrayDType::Float32)).contains("unknown fill"));
+}
+
+fn watch(operand: &Value) -> Value {
+    node_op(operand, 4, &[]).unwrap()
+}
+
+fn detach(operand: &Value) -> Value {
+    node_op(operand, 5, &[]).unwrap()
+}
+
+fn gradient(result: &Value, wrt: &Value) -> Result<Value> {
+    pair_op(result, wrt, 3, &[])
+}
+
+type Function = fn(&[Value]) -> Result<Value>;
+
+/// Checks the gradient of the sum of `function` over `inputs` against
+/// central differences, with the CPU device running at once and waiting.
+fn check_gradients(name: &str, inputs: &[ArrayValue], function: Function) {
+    let total = |values: &[Value]| -> f64 {
+        let result = reduce(&function(values).unwrap(), 0, None).unwrap();
+        floats(&array(&result))[0]
+    };
+    let plain: Vec<Value> = inputs
+        .iter()
+        .map(|input| tensor(input.clone(), TensorDevice::Cpu))
+        .collect();
+    for waits in [false, true] {
+        let gradients: Vec<Vec<f64>> = {
+            let body = || {
+                let watched: Vec<Value> = plain.iter().map(watch).collect();
+                let result = reduce(&function(&watched).unwrap(), 0, None).unwrap();
+                watched
+                    .iter()
+                    .map(|input| {
+                        let made = gradient(&result, input).unwrap();
+                        assert_eq!(node(&made).shape(), node(input).shape(), "{name}");
+                        assert!(!node(&made).is_tracked(), "{name}: a gradient is not tracked");
+                        floats(&array(&made))
+                    })
+                    .collect()
+            };
+            if waits {
+                deferred(body)
+            } else {
+                body()
+            }
+        };
+        for (position, input) in inputs.iter().enumerate() {
+            let values = floats(input);
+            for element in 0..values.len() {
+                let moved = |by: f64| {
+                    let mut values = values.clone();
+                    values[element] += by;
+                    let mut plain = plain.clone();
+                    plain[position] = tensor(float64(&values, &input.shape), TensorDevice::Cpu);
+                    total(&plain)
+                };
+                let step = 1e-6;
+                let expected = (moved(step) - moved(-step)) / (2.0 * step);
+                let found = gradients[position][element];
+                assert!(
+                    (found - expected).abs() <= 1e-6 * expected.abs().max(1.0),
+                    "{name}: input {position} element {element}: found {found}, expected {expected} (waits: {waits})"
+                );
+            }
+        }
+    }
+}
+
+#[test]
+fn gradients_agree_with_differences() {
+    let a = float64(&[1.0, -2.0, 3.0, 4.5, 0.25, 6.0], &[2, 3]);
+    let b = float64(&[2.0, 0.5, -1.0, 3.0, 8.0, 0.125], &[2, 3]);
+    let row = float64(&[0.7, 1.3, 2.1], &[3]);
+    let tall = float64(&[1.0, 2.0, 3.0, 4.0, 5.0, 6.0], &[3, 2]);
+    let positive = float64(&[1.5, 0.2, 3.0, 4.5, 0.25, 6.0], &[2, 3]);
+    let two = float64(&[2.0], &[1]);
+    let cases: &[(&str, Vec<ArrayValue>, Function)] = &[
+        ("add", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 0)),
+        ("add broadcast", vec![a.clone(), row.clone()], |x| {
+            binary(&x[0], &x[1], 0)
+        }),
+        ("sub broadcast", vec![row.clone(), a.clone()], |x| {
+            binary(&x[0], &x[1], 1)
+        }),
+        ("mul", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 2)),
+        ("mul by one element", vec![a.clone(), two.clone()], |x| {
+            binary(&x[0], &x[1], 2)
+        }),
+        ("div", vec![a.clone(), b.clone()], |x| binary(&x[0], &x[1], 3)),
+        ("div broadcast", vec![row.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 3)
+        }),
+        ("minimum", vec![a.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 16)
+        }),
+        ("maximum", vec![a.clone(), row.clone()], |x| {
+            binary(&x[0], &x[1], 17)
+        }),
+        ("pow", vec![positive.clone(), b.clone()], |x| {
+            binary(&x[0], &x[1], 18)
+        }),
+        ("negate", vec![a.clone()], |x| unary(&x[0], NEGATE_OPERATION)),
+        ("abs", vec![a.clone()], |x| unary(&x[0], 0)),
+        ("sqrt", vec![positive.clone()], |x| unary(&x[0], 1)),
+        ("exp", vec![a.clone()], |x| unary(&x[0], 2)),
+        ("log", vec![positive.clone()], |x| unary(&x[0], 3)),
+        ("sin", vec![a.clone()], |x| unary(&x[0], 6)),
+        ("cos", vec![a.clone()], |x| unary(&x[0], 7)),
+        ("tanh", vec![a.clone()], |x| unary(&x[0], TANH_OPERATION)),
+        ("sigmoid", vec![a.clone()], |x| {
+            unary(&x[0], SIGMOID_OPERATION)
+        }),
+        ("erf", vec![b.clone()], |x| unary(&x[0], ERF_OPERATION)),
+        ("choose", vec![a.clone(), row.clone()], |x| {
+            choose(&compare(&x[0], &x[1], 0)?, &x[0], &x[1])
+        }),
+        ("sum axis", vec![a.clone(), row.clone()], |x| {
+            binary(&reduce(&x[0], 0, Some(0))?, &x[1], 2)
+        }),
+        ("sum", vec![a.clone(), row.clone()], |x| {
+            binary(&reduce(&x[0], 0, None)?, &x[1], 2)
+        }),
+        ("mean axis", vec![a.clone()], |x| {
+            let mean = reduce(&x[0], 3, Some(-1))?;
+            binary(&mean, &mean, 2)
+        }),
+        ("mean", vec![a.clone()], |x| {
+            let mean = reduce(&x[0], 3, None)?;
+            binary(&mean, &mean, 2)
+        }),
+        ("max axis", vec![a.clone(), row.clone()], |x| {
+            binary(&reduce(&x[0], 2, Some(0))?, &x[1], 2)
+        }),
+        ("min", vec![a.clone()], |x| {
+            let least = reduce(&x[0], 1, None)?;
+            binary(&least, &least, 2)
+        }),
+        ("matmul", vec![a.clone(), tall.clone()], |x| {
+            matmul(&x[0], &x[1])
+        }),
+        ("batched matmul", vec![a.clone(), tall.clone()], |x| {
+            let left = reshape(&x[0], &[2, 1, 3])?;
+            let right = reshape(&x[1], &[1, 3, 2])?;
+            let stack = pair_op(&right, &binary(&right, &right, 2)?, 0, &[0])?;
+            matmul(&left, &stack)
+        }),
+        ("reshape", vec![a.clone(), tall.clone()], |x| {
+            binary(&reshape(&x[0], &[3, 2])?, &x[1], 2)
+        }),
+        ("transpose", vec![a.clone(), tall.clone()], |x| {
+            binary(&permute(&x[0], &[])?, &x[1], 2)
+        }),
+        ("permute", vec![a.clone(), tall.clone()], |x| {
+            let cube = binary(&reshape(&x[0], &[2, 3, 1])?, &reshape(&x[1], &[1, 3, 2])?, 2)?;
+            let turned = permute(&cube, &[2, 0, 1])?;
+            binary(&turned, &reshape(&x[0], &[1, 2, 3])?, 2)
+        }),
+        ("expand", vec![row.clone(), a.clone()], |x| {
+            binary(&node_op(&x[0], 1, &[2, 3])?, &x[1], 2)
+        }),
+        ("slice", vec![a.clone(), two.clone()], |x| {
+            binary(&slice(&x[0], 1, 0, 3, 2)?, &x[1], 18)
+        }),
+        ("unslice", vec![a.clone()], |x| {
+            let wide = unslice(&x[0], 1, 1, 2, 7)?;
+            binary(&wide, &wide, 2)
+        }),
+        ("concat", vec![a.clone(), b.clone()], |x| {
+            let joined = pair_op(&x[0], &x[1], 0, &[1])?;
+            binary(&slice(&joined, 1, 1, 5, 1)?, &slice(&joined, 1, 2, 6, 1)?, 2)
+        }),
+        ("take", vec![tall.clone(), a.clone()], |x| {
+            let rows = pair_op(&x[0], &indices(&[2, 0, 2], &[3], &x[0]), 1, &[0])?;
+            matmul(&x[1], &rows)
+        }),
+        ("take columns", vec![a.clone()], |x| {
+            let columns = pair_op(&x[0], &indices(&[1, 1, 0, 2], &[2, 2], &x[0]), 1, &[1])?;
+            binary(&columns, &columns, 2)
+        }),
+        ("index add", vec![tall.clone()], |x| {
+            let sums = pair_op(&x[0], &indices(&[1, 0, 1], &[3], &x[0]), 2, &[0, 4])?;
+            binary(&sums, &sums, 2)
+        }),
+        ("an operand used twice", vec![a.clone()], |x| {
+            binary(&binary(&x[0], &x[0], 2)?, &x[0], 0)
+        }),
+        ("softmax", vec![a.clone(), b.clone()], |x| {
+            let shifted = binary(&x[0], &reshape(&reduce(&x[0], 2, Some(1))?, &[2, 1])?, 1)?;
+            let powers = unary(&shifted, 2)?;
+            let total = reshape(&reduce(&powers, 0, Some(1))?, &[2, 1])?;
+            binary(&binary(&powers, &total, 3)?, &x[1], 2)
+        }),
+    ];
+    for (name, inputs, function) in cases {
+        check_gradients(name, inputs, *function);
+    }
+}
+
+#[test]
+fn a_gradient_follows_the_watched_tensors_only() {
+    let l = leaves(TensorDevice::Cpu);
+    let (a, b) = (watch(&l.a), watch(&l.b));
+    assert!(node(&a).is_tracked() && !node(&l.a).is_tracked());
+    assert_eq!(array(&a), array(&l.a));
+
+    // The gradient of a tensor of several elements is that of its sum.
+    let product = binary(&a, &l.b, 2).unwrap();
+    assert!(node(&product).is_tracked());
+    assert_eq!(array(&gradient(&product, &a).unwrap()), array(&l.b));
+    // A second request takes the kept gradients.
+    assert_eq!(array(&gradient(&product, &a).unwrap()), array(&l.b));
+    // A watched tensor the result was not computed from has a zero
+    // gradient.
+    assert_eq!(
+        array(&gradient(&product, &b).unwrap()),
+        float32(&[0.0; 6], &[2, 3])
+    );
+    // A watched tensor's gradient with respect to itself is one.
+    assert_eq!(
+        array(&gradient(&a, &a).unwrap()),
+        float32(&[1.0; 6], &[2, 3])
+    );
+
+    // A detached tensor is a constant.
+    let through = binary(&a, &detach(&binary(&a, &b, 0).unwrap()), 2).unwrap();
+    assert_eq!(
+        array(&gradient(&through, &a).unwrap()),
+        array(&binary(&l.a, &l.b, 0).unwrap())
+    );
+    assert!(!node(&detach(&a)).is_tracked());
+    let plain = detach(&l.a);
+    assert_eq!(node(&plain), node(&l.a));
+    // A detached waiting tensor still waits, and reads the same elements.
+    deferred(|| {
+        let sum = binary(&a, &b, 0).unwrap();
+        let constant = detach(&sum);
+        assert!(!node(&constant).is_ready() && !node(&constant).is_tracked());
+        assert_eq!(array(&constant), array(&sum));
+    });
+
+    // Masks and integers are not tracked.
+    assert!(!node(&compare(&a, &b, 0).unwrap()).is_tracked());
+    assert!(!node(&node_op(&a, 2, &[0]).unwrap()).is_tracked());
+
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(node_op(&l.counts, 4, &[])).contains("expects a float tensor"));
+    assert!(message(gradient(&product, &l.a)).contains("expects a watched tensor"));
+    assert!(message(gradient(&product, &product)).contains("expects a watched tensor"));
+    let vector = watch(&l.row);
+    let through_vector = matmul(&l.a, &vector).unwrap();
+    assert!(message(gradient(&through_vector, &vector)).contains("rank-one operand"));
+    let mask = compare(&l.a, &l.b, 0).unwrap();
+    assert!(message(gradient(&mask, &a)).contains("expects a float tensor"));
+}
+
+#[test]
+fn equal_extremes_share_a_gradient() {
+    let values = watch(&tensor(
+        float32(&[3.0, 3.0, 1.0, 2.0, 5.0, 5.0], &[2, 3]),
+        TensorDevice::Cpu,
+    ));
+    let largest = reduce(&values, 2, Some(1)).unwrap();
+    assert_eq!(
+        array(&gradient(&largest, &values).unwrap()),
+        float32(&[0.5, 0.5, 0.0, 0.0, 0.5, 0.5], &[2, 3])
+    );
+}

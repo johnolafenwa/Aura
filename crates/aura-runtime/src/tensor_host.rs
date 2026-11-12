@@ -33,6 +33,12 @@ pub(crate) mod tensor_codegen;
 #[path = "tensor_cuda.rs"]
 pub(crate) mod tensor_cuda;
 
+#[path = "tensor_kernels.rs"]
+pub(crate) mod tensor_kernels;
+
+#[path = "tensor_grad.rs"]
+mod tensor_grad;
+
 /// Where a tensor's memory lives. The codes are the ones `std/tensor.au`
 /// passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -110,7 +116,42 @@ pub(crate) enum Operation {
     Permute(Vec<i64>),
     /// An [`ArrayDType`] code.
     Cast(i64),
+    /// `length` elements of each lane along `axis`, from `start`, `step`
+    /// apart.
+    Slice {
+        axis: usize,
+        start: usize,
+        step: usize,
+        length: usize,
+    },
+    /// The reverse of a slice: lanes of `size` elements that hold the
+    /// operand's elements from `start`, `step` apart, and zero elsewhere.
+    Unslice {
+        axis: usize,
+        start: usize,
+        step: usize,
+        size: usize,
+    },
+    /// The operand repeated to a shape its own broadcasts to.
+    Expand(Vec<usize>),
+    /// Each lane of the first operand followed by the lane of the second.
+    Concat { axis: usize },
+    /// For each index of the second operand, the entry of the first at
+    /// that place along `axis`.
+    Take { axis: usize },
+    /// The reverse of a take: lanes of `size` entries, where entry `k` is
+    /// the sum of the entries of the first operand whose index, in the
+    /// second, is `k`.
+    IndexAdd { axis: usize, size: usize },
+    /// The place along `axis` of each lane's largest element, or smallest.
+    ArgReduce { largest: bool, axis: usize },
 }
+
+/// The codes of the functions in [`Operation::Unary`] that `Array` does
+/// not have.
+pub(crate) const TANH_OPERATION: i64 = 65;
+pub(crate) const SIGMOID_OPERATION: i64 = 66;
+pub(crate) const ERF_OPERATION: i64 = 67;
 
 /// Where a tensor's elements are.
 #[derive(Clone)]
@@ -168,6 +209,20 @@ struct TensorNode {
     dtype: ArrayDType,
     shape: Box<[usize]>,
     state: Mutex<State>,
+    /// Whether a gradient can be asked for with respect to this tensor:
+    /// it is watched, or it was computed from a tensor that is.
+    tracked: bool,
+    /// How a tracked tensor was computed. A watched tensor has none.
+    history: Option<History>,
+    /// The gradients of this tensor with respect to each watched tensor
+    /// it was computed from, once one has been asked for.
+    gradients: Mutex<Option<Vec<(TensorValue, TensorValue)>>>,
+}
+
+/// The operation that gave a tracked tensor, and its operands.
+struct History {
+    operation: Operation,
+    inputs: Vec<TensorValue>,
 }
 
 /// A `tensor.Node`: shared, immutable device memory, or the work that
@@ -198,12 +253,33 @@ impl TensorValue {
         shape: Box<[usize]>,
         storage: Storage,
     ) -> Self {
+        Self::in_state(device, dtype, shape, State::Ready(storage))
+    }
+
+    fn in_state(device: TensorDevice, dtype: ArrayDType, shape: Box<[usize]>, state: State) -> Self {
         Self(Arc::new(TensorNode {
             device,
             dtype,
             shape,
-            state: Mutex::new(State::Ready(storage)),
+            state: Mutex::new(state),
+            tracked: false,
+            history: None,
+            gradients: Mutex::new(None),
         }))
+    }
+
+    /// This new tensor as a tracked one. `history` is how it was computed,
+    /// or `None` for a watched tensor.
+    fn tracking(mut self, history: Option<History>) -> Self {
+        let node = Arc::get_mut(&mut self.0).expect("a new tensor has one holder");
+        node.tracked = true;
+        node.history = history;
+        self
+    }
+
+    /// Whether a gradient can be asked for with respect to this tensor.
+    pub fn is_tracked(&self) -> bool {
+        self.0.tracked
     }
 
     /// A tensor of the elements of `elements`, in host memory.
@@ -421,6 +497,13 @@ fn planned_result(
             })
             .map(Vec::into_boxed_slice)
     };
+    // The Metal device runs these through the Array kernels for now.
+    let indexed = inputs[0].device() != TensorDevice::Metal;
+    let resized = |axis: usize, length: usize| {
+        let mut shape = inputs[0].shape().to_vec();
+        shape[axis] = length;
+        (dtype, shape.into_boxed_slice())
+    };
     let rank = inputs[0].shape().len();
     let normalize = |axis: i64| {
         let rank = rank as i64;
@@ -442,6 +525,7 @@ fn planned_result(
             let supported = match *code {
                 NEGATE_OPERATION => number,
                 0..=3 | 6 | 7 => real,
+                TANH_OPERATION..=ERF_OPERATION => real && indexed,
                 _ => false,
             };
             supported.then(|| (dtype, inputs[0].shape().into()))
@@ -549,6 +633,32 @@ fn planned_result(
                     ));
             exact.then(|| (target, inputs[0].shape().into()))
         }
+        Operation::Slice { axis, length, .. } => indexed.then(|| resized(*axis, *length)),
+        Operation::Unslice { axis, size, .. } => indexed.then(|| resized(*axis, *size)),
+        Operation::Expand(shape) => indexed.then(|| (dtype, shape.clone().into())),
+        Operation::Concat { axis } => (indexed && same_dtype)
+            .then(|| resized(*axis, inputs[0].shape()[*axis] + inputs[1].shape()[*axis])),
+        Operation::Take { axis } => indexed.then(|| {
+            (
+                dtype,
+                tensor_kernels::take_shape(inputs[0].shape(), inputs[1].shape(), *axis),
+            )
+        }),
+        Operation::IndexAdd { axis, size } => (indexed && real).then(|| {
+            let after = *axis + inputs[1].shape().len();
+            let shape = inputs[0].shape();
+            (
+                dtype,
+                shape[..*axis]
+                    .iter()
+                    .copied()
+                    .chain([*size])
+                    .chain(shape[after..].iter().copied())
+                    .collect(),
+            )
+        }),
+        Operation::ArgReduce { axis, .. } => (indexed && number)
+            .then(|| (Int64, tensor_kernels::lane_shape(inputs[0].shape(), *axis))),
     }
 }
 
@@ -670,6 +780,15 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
         }
         Operation::Unary(NEGATE_OPERATION) => ArrayValue::zeros(first.dtype(), Box::new([1]))?
             .binary(first, ArrayBinaryOp::Sub, arithmetic_mode(first.dtype())),
+        Operation::Unary(code @ TANH_OPERATION..=ERF_OPERATION) => {
+            let (single, double): FloatFunctions = match *code {
+                TANH_OPERATION => (f32::tanh, f64::tanh),
+                SIGMOID_OPERATION => (|x| 1.0 / (1.0 + (-x).exp()), tensor_kernels::sigmoid),
+                _ => (|x| tensor_kernels::erf(x.into()) as f32, tensor_kernels::erf),
+            };
+            float_map(first, single, double)?
+                .ok_or_else(|| tensor_error("tensor", "expects a float tensor"))
+        }
         Operation::Unary(code) => {
             let operation = ArrayUnaryOp::from_code(*code).ok_or_else(unknown)?;
             let functions: Option<FloatFunctions> = match operation {
@@ -735,6 +854,25 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
         Operation::Permute(axes) if axes.is_empty() => first.transpose(),
         Operation::Permute(axes) => first.permute(axes),
         Operation::Cast(dtype) => first.cast(ArrayDType::from_code(*dtype).ok_or_else(unknown)?),
+        Operation::Slice {
+            axis,
+            start,
+            step,
+            length,
+        } => tensor_kernels::slice(first, *axis, *start, *step, *length),
+        Operation::Unslice {
+            axis,
+            start,
+            step,
+            size,
+        } => tensor_kernels::unslice(first, *axis, *start, *step, *size),
+        Operation::Expand(shape) => tensor_kernels::expand(first, shape),
+        Operation::Concat { axis } => tensor_kernels::concat(first, inputs[1], *axis),
+        Operation::Take { axis } => tensor_kernels::take(first, inputs[1], *axis),
+        Operation::IndexAdd { axis, size } => {
+            tensor_kernels::index_add(first, inputs[1], *axis, *size)
+        }
+        Operation::ArgReduce { largest, axis } => tensor_kernels::arg_reduce(first, *axis, *largest),
     }
 }
 
@@ -746,16 +884,17 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
     if defers(device) {
         if let Some((dtype, shape)) = planned_result(&operation, inputs) {
             let depth = 1 + inputs.iter().map(|input| input.depth()).max().unwrap_or(0);
-            let node = TensorValue(Arc::new(TensorNode {
+            let node = TensorValue::in_state(
                 device,
                 dtype,
                 shape,
-                state: Mutex::new(State::Pending(Pending {
-                    operation,
+                State::Pending(Pending {
+                    operation: operation.clone(),
                     inputs: inputs.iter().map(|&input| input.clone()).collect(),
                     depth,
-                })),
-            }));
+                }),
+            );
+            let node = recorded(node, operation, inputs);
             if depth > MAX_PENDING_DEPTH {
                 node.storage()?;
             }
@@ -770,7 +909,32 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
     if !device.has_float64() && result.dtype() == ArrayDType::Float64 {
         return Err(float64_error(device));
     }
-    Ok(Value::Tensor(TensorValue::host(device, result)))
+    Ok(Value::Tensor(recorded(
+        TensorValue::host(device, result),
+        operation,
+        inputs,
+    )))
+}
+
+thread_local! {
+    /// Off while a gradient is being computed, so the operations of the
+    /// gradient are not themselves recorded.
+    static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+/// The new tensor `node`, tracked when it is a float tensor computed from
+/// a tracked one.
+fn recorded(node: TensorValue, operation: Operation, inputs: &[&TensorValue]) -> TensorValue {
+    let float = matches!(node.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+    if float && RECORDING.with(std::cell::Cell::get) && inputs.iter().any(|input| input.is_tracked())
+    {
+        node.tracking(Some(History {
+            operation,
+            inputs: inputs.iter().map(|&input| input.clone()).collect(),
+        }))
+    } else {
+        node
+    }
 }
 
 /// Metal has no `float64`, and a tensor never narrows one silently.
@@ -1166,6 +1330,226 @@ pub fn host_tensor_scalar_like(args: Vec<Value>, _: Option<&[String]>) -> Result
     place(like.device(), ArrayValue::new(Box::new([1]), storage)?)
 }
 
+/// The axis `axis` names in a tensor of `rank` axes. A negative axis
+/// counts from the last.
+fn axis_arg(axis: i64, rank: usize, name: &str) -> Result<usize> {
+    let wrapped = if axis < 0 { axis + rank as i64 } else { axis };
+    usize::try_from(wrapped)
+        .ok()
+        .filter(|&axis| axis < rank)
+        .ok_or_else(|| {
+            tensor_error(
+                name,
+                format!("was given axis {axis} for a tensor of rank {rank}"),
+            )
+        })
+}
+
+fn parameters<const N: usize>(args: &[Value], index: usize, name: &str) -> Result<[i64; N]> {
+    <[i64; N]>::try_from(int_list_arg(args, index, name)?)
+        .map_err(|_| tensor_error(name, format!("expects {N} parameters")))
+}
+
+/// `tensor::__aura_node_op`: an operation on one tensor that takes
+/// integer parameters. The codes are the ones `std/tensor.au` passes.
+pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_node_op";
+    host_expect_arity(name, &args, 3)?;
+    let operand = node_arg(&args, 0, name)?;
+    let rank = operand.shape().len();
+    let float = matches!(operand.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+    match int_arg(&args, 1, name)? {
+        0 => {
+            let name = "tensor::slice";
+            let [axis, start, stop, step] = parameters(&args, 2, name)?;
+            let axis = axis_arg(axis, rank, name)?;
+            let length = operand.shape()[axis] as i64;
+            if step < 1 {
+                return Err(tensor_error(name, "expects a step of at least 1"));
+            }
+            // A negative bound counts from the end, as in a list slice.
+            let bound = |at: i64| (if at < 0 { at + length } else { at }).clamp(0, length);
+            let (start, stop) = (bound(start), bound(stop));
+            let taken = ((stop - start).max(0) + step - 1) / step;
+            operate(
+                Operation::Slice {
+                    axis,
+                    start: start as usize,
+                    step: step as usize,
+                    length: taken as usize,
+                },
+                &[operand],
+            )
+        }
+        1 => {
+            let name = "tensor::broadcast_to";
+            let shape = shape_arg(&args, 2, name)?;
+            if array_layout::broadcast_shape(operand.shape(), &shape).as_deref() != Some(&*shape) {
+                return Err(tensor_error(
+                    name,
+                    format!(
+                        "cannot broadcast shape {:?} to {:?}",
+                        operand.shape(),
+                        &*shape
+                    ),
+                ));
+            }
+            operate(Operation::Expand(shape.into_vec()), &[operand])
+        }
+        code @ (2 | 3) => {
+            let name = "tensor::argmax";
+            let [axis] = parameters(&args, 2, name)?;
+            if operand.dtype() == ArrayDType::Bool || operand.is_empty() {
+                return Err(tensor_error(
+                    name,
+                    "expects a tensor of numbers with at least one element",
+                ));
+            }
+            operate(
+                Operation::ArgReduce {
+                    largest: code == 2,
+                    axis: axis_arg(axis, rank, name)?,
+                },
+                &[operand],
+            )
+        }
+        4 => {
+            if !float {
+                return Err(tensor_error(
+                    "tensor::watch",
+                    "expects a float tensor; a gradient exists for floats only",
+                ));
+            }
+            Ok(Value::Tensor(
+                TensorValue::ready(
+                    operand.device(),
+                    operand.dtype(),
+                    operand.shape().into(),
+                    operand.storage()?,
+                )
+                .tracking(None),
+            ))
+        }
+        5 => {
+            if !operand.is_tracked() {
+                return Ok(Value::Tensor(operand.clone()));
+            }
+            let state = match &*operand.state() {
+                State::Ready(storage) => State::Ready(storage.clone()),
+                // The same waiting work, read through a reshape to the
+                // same shape, which is not recorded.
+                State::Pending(pending) => State::Pending(Pending {
+                    operation: Operation::Reshape(
+                        operand
+                            .shape()
+                            .iter()
+                            .map(|&dimension| dimension as i64)
+                            .collect(),
+                    ),
+                    inputs: vec![operand.clone()],
+                    depth: pending.depth + 1,
+                }),
+            };
+            Ok(Value::Tensor(TensorValue::in_state(
+                operand.device(),
+                operand.dtype(),
+                operand.shape().into(),
+                state,
+            )))
+        }
+        _ => Err(tensor_error(name, "was given an unknown operation")),
+    }
+}
+
+/// `tensor::__aura_pair_op`: an operation on two tensors that takes
+/// integer parameters. The codes are the ones `std/tensor.au` passes.
+pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_pair_op";
+    host_expect_arity(name, &args, 4)?;
+    let (left, right) = pair_args(&args, name)?;
+    let rank = left.shape().len();
+    let integer = |node: &TensorValue| matches!(node.dtype(), ArrayDType::Int32 | ArrayDType::Int64);
+    match int_arg(&args, 2, name)? {
+        0 => {
+            let name = "tensor::concat";
+            let [axis] = parameters(&args, 3, name)?;
+            let axis = axis_arg(axis, rank, name)?;
+            let fits = right.shape().len() == rank
+                && (0..rank).all(|at| at == axis || left.shape()[at] == right.shape()[at]);
+            if !fits || left.dtype() != right.dtype() {
+                return Err(tensor_error(
+                    name,
+                    format!(
+                        "expects tensors of one dtype whose shapes differ on axis {axis} only, found {:?} and {:?}",
+                        left.shape(),
+                        right.shape()
+                    ),
+                ));
+            }
+            operate(Operation::Concat { axis }, &[left, right])
+        }
+        1 => {
+            let name = "tensor::take";
+            let [axis] = parameters(&args, 3, name)?;
+            if !integer(right) {
+                return Err(tensor_error(name, "expects integer indices"));
+            }
+            operate(
+                Operation::Take {
+                    axis: axis_arg(axis, rank, name)?,
+                },
+                &[left, right],
+            )
+        }
+        2 => {
+            let name = "tensor::index_add";
+            let [axis, size] = parameters(&args, 3, name)?;
+            let axis = axis_arg(axis, rank, name)?;
+            let size = usize::try_from(size)
+                .map_err(|_| tensor_error(name, "expects a size that is not negative"))?;
+            if !integer(right) {
+                return Err(tensor_error(name, "expects integer indices"));
+            }
+            if left.dtype() == ArrayDType::Bool {
+                return Err(tensor_error(name, "expects a tensor of numbers"));
+            }
+            if !left.shape()[axis..].starts_with(right.shape()) {
+                return Err(tensor_error(
+                    name,
+                    format!(
+                        "expects the indices' shape {:?} to be the tensor's shape {:?} from axis {axis}",
+                        right.shape(),
+                        left.shape()
+                    ),
+                ));
+            }
+            operate(Operation::IndexAdd { axis, size }, &[left, right])
+        }
+        3 => tensor_grad::gradient(left, right).map(Value::Tensor),
+        _ => Err(tensor_error(name, "was given an unknown operation")),
+    }
+}
+
+/// `tensor::__aura_filled`: a tensor of random floats, or of the integers
+/// from zero. Element `j` of a random tensor depends on the seed and `j`
+/// only, so one seed gives the same tensor on every device.
+pub fn host_tensor_filled(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_filled";
+    host_expect_arity(name, &args, 5)?;
+    let shape = shape_arg(&args, 0, name)?;
+    let fill = match int_arg(&args, 1, name)? {
+        0 => tensor_kernels::Fill::Uniform,
+        1 => tensor_kernels::Fill::Normal,
+        2 => tensor_kernels::Fill::Count,
+        _ => return Err(tensor_error(name, "was given an unknown fill")),
+    };
+    let seed = int_arg(&args, 2, name)? as u64;
+    let dtype = ArrayDType::from_code(int_arg(&args, 3, name)?)
+        .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
+    let device = device_arg(&args, 4, name)?;
+    place(device, tensor_kernels::filled(fill, shape, seed, dtype)?)
+}
+
 /// The suffixes of the host functions that exist once for each dtype,
 /// because their Aura signatures name an `Array[T]` or a `T`.
 const DTYPE_SUFFIXES: [&str; 5] = ["_i32", "_i64", "_f32", "_f64", "_bool"];
@@ -1198,6 +1582,9 @@ pub fn tensor_host_function(name: &str) -> Option<HostBuiltinFn> {
         "tensor::__aura_eval" => host_tensor_eval,
         "tensor::__aura_share" => host_tensor_share,
         "tensor::__aura_scalar_like" => host_tensor_scalar_like,
+        "tensor::__aura_node_op" => host_tensor_node_op,
+        "tensor::__aura_pair_op" => host_tensor_pair_op,
+        "tensor::__aura_filled" => host_tensor_filled,
         _ => return None,
     })
 }

@@ -524,6 +524,9 @@ fn host_functions_are_found_by_name() {
         "tensor::__aura_share",
         "tensor::__aura_scalar_like_f64",
         "tensor::__aura_scalar_like_i64",
+        "tensor::__aura_node_op",
+        "tensor::__aura_pair_op",
+        "tensor::__aura_filled",
     ] {
         assert!(tensor_host_function(name).is_some(), "{name}");
     }
@@ -739,6 +742,7 @@ using std::copysign;
 #define __global__
 struct AuraIndex { unsigned x, y, z; };
 static AuraIndex blockIdx, blockDim, threadIdx;
+template <class T> T atomicAdd(T* address, T value) { T old = *address; *address += value; return old; }
 extern "C" void aura_thread(unsigned block, unsigned thread) {
     blockIdx.x = block;
     blockDim.x = 256;
@@ -841,7 +845,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
     }
 
     /// Runs `plan` through its generated kernels on the CPU.
-    fn run(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<ArrayValue> {
+    pub(super) fn run(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<ArrayValue> {
         let program = tensor_codegen::generate(plan);
         let library = compile(&program.source, tag)?;
         // SAFETY: the harness defines `aura_thread` with this signature.
@@ -866,8 +870,9 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     bytes,
                     threads,
                     inputs,
+                    clear,
                 } => {
-                    let mut made = vec![0xAA_u8; *bytes];
+                    let mut made = vec![if *clear { 0 } else { 0xAA_u8 }; *bytes];
                     let kernel = function(library, name);
                     let pointers: Vec<*const u8> = inputs
                         .iter()
@@ -1050,3 +1055,6 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
         });
     }
 }
+
+#[path = "tensor_ops_tests.rs"]
+mod indexed_and_gradients;

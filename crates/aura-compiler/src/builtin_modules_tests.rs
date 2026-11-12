@@ -1445,6 +1445,102 @@ def main():
 }
 
 #[test]
+fn tensors_are_indexed_joined_and_reduced_with_kept_axes() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, -2.0, 3.0, 4.5, 0.25, 6.0], [2, 3]), device)
+    rows = Tensor[int64].from_array(Array[int64].from_list([1, 1, 0], [3]), device)
+    print(x.slice(1, 1, 3).to_array())
+    print(x.slice(1, 0, -1, 2).to_array())
+    print(x.take(rows).shape())
+    print(x.take(rows, 1).to_array())
+    print(x.concat(x, 1).shape())
+    print(tensor.concat([x.clone(), x.clone(), x.clone()]).shape())
+    print(x.index_add(Tensor[int64].from_array(Array[int64].from_list([1, 1], [2]), device), 3).to_array())
+    print(x.argmax().to_array())
+    print(x.argmin(0).to_array())
+    print(x.sum(1, true).to_array())
+    print(x.max(keep=true).shape())
+    print(x.mean(-2, true).shape())
+    print(x.slice(0, 0, 1).broadcast_to([2, 2, 3]).shape())
+    print(tensor.arange(4, device).to_array())
+    print(tensor.uniform([2, 2], 7, device).shape())
+    drift = (tensor.normal([3], 7, device) - tensor.normal([3], 7, device)).abs().max().item()
+    print(drift == 0.0)
+    print(x.softmax().sum(1).to_array())
+    print(f"{x.tanh().shape()} {x.sigmoid().shape()} {x.erf().shape()} {x.gelu().shape()}")
+"#,
+    )
+    .expect("the indexed members run");
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[2, 2], values=[-2.0, 3.0, 0.25, 6.0])\n\
+         Array[float32](shape=[2, 1], values=[1.0, 4.5])\n\
+         [3, 3]\n\
+         Array[float32](shape=[2, 3], values=[-2.0, -2.0, 1.0, 0.25, 0.25, 4.5])\n\
+         [2, 6]\n\
+         [6, 3]\n\
+         Array[float32](shape=[3, 3], values=[0.0, 0.0, 0.0, 5.5, -1.75, 9.0, 0.0, 0.0, 0.0])\n\
+         Array[int64](shape=[2], values=[2, 2])\n\
+         Array[int64](shape=[3], values=[0, 0, 0])\n\
+         Array[float32](shape=[2, 1], values=[2.0, 10.75])\n\
+         [1, 1]\n\
+         [1, 3]\n\
+         [2, 2, 3]\n\
+         Array[int64](shape=[4], values=[0, 1, 2, 3])\n\
+         [2, 2]\n\
+         true\n\
+         Array[float32](shape=[2], values=[1.0, 1.0])\n\
+         [2, 3] [2, 3] [2, 3] [2, 3]\n"
+    );
+}
+
+#[test]
+fn a_tensor_program_learns_by_gradient_descent() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    # y = 2 * x0 - 3 * x1 + 1
+    inputs = Tensor[float32].from_array(Array[float32].from_list([1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, -1.0], [4, 2]), device)
+    wanted = Tensor[float32].from_array(Array[float32].from_list([3.0, -2.0, 0.0, 8.0], [4, 1]), device)
+    mut weights = Tensor[float32].zeros([2, 1], device).watch()
+    mut bias = Tensor[float32].zeros([1], device).watch()
+    mut step = 0
+    while step < 300:
+        error = inputs.matmul(weights) + bias - wanted
+        loss = (error * error).mean()
+        weights = (weights.detach() - loss.gradient(weights) * 0.1).watch()
+        bias = (bias.detach() - loss.gradient(bias) * 0.1).watch()
+        step += 1
+    first = weights.slice(0, 0, 1).sum().item()
+    second = weights.slice(0, 1, 2).sum().item()
+    offset = bias.item()
+    print(f"{first > 1.9 and first < 2.1} {second > -3.1 and second < -2.9} {offset > 0.9 and offset < 1.1}")
+
+    logits = Tensor[float32].from_array(Array[float32].from_list([2.0, 0.0, 0.0, 0.0, 0.0, 2.0], [2, 3]), device).watch()
+    targets = Tensor[int64].from_array(Array[int64].from_list([0, 1], [2]), device)
+    loss = tensor.cross_entropy(logits, targets)
+    print(f"{loss.item() > 1.2} {loss.item() < 1.3}")
+    drift = loss.gradient(logits).sum().item()
+    print(drift > -0.000001 and drift < 0.000001)
+    print(loss.gradient(logits).argmin().to_array())
+"#,
+    )
+    .expect("a tensor program learns");
+    assert_eq!(
+        output.stdout,
+        "true true true\ntrue true\ntrue\nArray[int64](shape=[2], values=[0, 1])\n"
+    );
+}
+
+#[test]
 fn a_tensor_operator_takes_a_number_on_either_side() {
     let output = crate::run_source(
         r#"from tensor import Device, Tensor

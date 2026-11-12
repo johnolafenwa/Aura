@@ -13,7 +13,10 @@
 //! Nothing here calls CUDA. `tensor_cuda.rs` compiles the source with
 //! NVRTC and runs the actions.
 
-use super::{Operation, Plan, Slot, NEGATE_OPERATION, PAIR_OPERATION_BASE};
+use super::{
+    Operation, Plan, Slot, ERF_OPERATION, NEGATE_OPERATION, PAIR_OPERATION_BASE, SIGMOID_OPERATION,
+    TANH_OPERATION,
+};
 use crate::runtime_value::ArrayDType;
 use std::fmt::Write;
 
@@ -23,13 +26,15 @@ use std::fmt::Write;
 pub(crate) enum Action {
     /// Launches kernel `name` over `threads` threads. Its first argument is
     /// a new buffer of `bytes` bytes, numbered `output`, and the rest are
-    /// the `inputs` buffers in order.
+    /// the `inputs` buffers in order. `clear` asks for the new buffer to
+    /// hold zeros, for a kernel that adds into it.
     Kernel {
         name: String,
         output: usize,
         bytes: usize,
         threads: usize,
         inputs: Vec<usize>,
+        clear: bool,
     },
     /// A row-major matrix product of `rows` by `inner` and `inner` by
     /// `columns` matrices into a new buffer numbered `output`. Each pair
@@ -74,14 +79,35 @@ AURA_MINMAX(aura_max_f, float, 1.0f, >)
 AURA_MINMAX(aura_max_d, double, 1.0, >)
 "#;
 
-/// Threads in one block of a kernel launch.
 /// The elements one thread reduces in a stage of a whole reduction.
 const STAGE_RUN: usize = 64;
 
 /// The most elements the single thread of a last stage reduces.
 const LAST_STAGE: usize = 128;
 
+/// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
+
+/// The C expressions that split the linear index `j` around an axis whose
+/// lanes have `length` elements `inner` apart: the lane number before the
+/// axis, the place on the axis, and the place after it.
+fn split(inner: usize, length: usize) -> (String, String, String) {
+    (
+        format!("(j / {}LL)", inner * length),
+        format!("((j / {inner}LL) % {length}LL)"),
+        format!("(j % {inner}LL)"),
+    )
+}
+
+/// The C expression for the linear index of the element at `at` on an
+/// axis of `length` elements `inner` apart, in the lane `split` names.
+fn join(inner: usize, length: usize, lane: &(String, String, String), at: &str) -> String {
+    format!("(({} * {length}LL + {at}) * {inner}LL + {})", lane.0, lane.2)
+}
+
+fn inner_of(shape: &[usize], axis: usize) -> usize {
+    shape[axis + 1..].iter().product()
+}
 
 fn dtype_of(code: i64) -> ArrayDType {
     ArrayDType::from_code(code).expect("a plan holds known dtypes")
@@ -154,7 +180,7 @@ fn broadcast_index(to: &[usize], from: &[usize]) -> String {
 
 /// The linear index in an operand of shape `from` of the element that
 /// broadcasts to linear index `index` of shape `to`.
-fn broadcast_offset(to: &[usize], from: &[usize], index: usize) -> usize {
+pub(crate) fn broadcast_offset(to: &[usize], from: &[usize], index: usize) -> usize {
     let (to_strides, from_strides) = (strides(to), strides(from));
     let lead = to.len() - from.len();
     (0..from.len())
@@ -187,7 +213,13 @@ fn slot_dtype(slot: &Slot) -> ArrayDType {
 /// Whether a step computes each element from the operand elements at one
 /// position, so it can be part of a larger kernel.
 fn fuses(operation: &Operation) -> bool {
-    !matches!(operation, Operation::Reduce { .. } | Operation::Matmul)
+    !matches!(
+        operation,
+        Operation::Reduce { .. }
+            | Operation::Matmul
+            | Operation::IndexAdd { .. }
+            | Operation::ArgReduce { .. }
+    )
 }
 
 impl<'a> Generator<'a> {
@@ -334,6 +366,11 @@ impl<'a> Generator<'a> {
         };
         let operand_dtype = self.dtype(inputs[0]);
         let result = c_type(self.dtype(slot));
+        // The element of operand `position` at the linear index `index`.
+        let at = |position: usize, index: &str| {
+            self.element(kernel, inputs[position], index, &arguments)
+        };
+        let source = self.shape(inputs[0]);
         let body = match operation {
             Operation::Binary(code) => binary(*code, operand_dtype, &operand(0), &operand(1)),
             Operation::Unary(code) => unary(*code, operand_dtype, &operand(0)),
@@ -342,15 +379,73 @@ impl<'a> Generator<'a> {
                 format!("(unsigned char)({} {symbol} {})", operand(0), operand(1))
             }
             Operation::Where => format!("({} ? {} : {})", operand(0), operand(1), operand(2)),
-            Operation::Reshape(_) | Operation::Permute(_) => operand(0),
+            Operation::Reshape(_) | Operation::Permute(_) | Operation::Expand(_) => operand(0),
             Operation::Cast(_) => format!("({result})({})", operand(0)),
-            Operation::Reduce { .. } | Operation::Matmul => {
-                unreachable!("a reduction and a product are never fused")
+            Operation::Slice {
+                axis, start, step, ..
+            } => {
+                let inner = inner_of(shape, *axis);
+                let lane = split(inner, shape[*axis]);
+                let place = format!("({} * {step}LL + {start}LL)", lane.1);
+                at(0, &join(inner, source[*axis], &lane, &place))
             }
+            Operation::Unslice {
+                axis, start, step, ..
+            } => {
+                let inner = inner_of(shape, *axis);
+                let lane = split(inner, shape[*axis]);
+                let length = source[*axis];
+                let element = at(0, &join(inner, length, &lane, &format!("(c / {step}LL)")));
+                format!(
+                    "0; long long c = {} - {start}LL; \
+                     if (c >= 0 && c % {step}LL == 0 && c / {step}LL < {length}LL) return {element}; \
+                     return 0",
+                    lane.1
+                )
+            }
+            Operation::Concat { axis } => {
+                let inner = inner_of(shape, *axis);
+                let lane = split(inner, shape[*axis]);
+                let (first, second) = (source[*axis], self.shape(inputs[1])[*axis]);
+                format!(
+                    "({} < {first}LL ? {} : {})",
+                    lane.1,
+                    at(0, &join(inner, first, &lane, &lane.1)),
+                    at(
+                        1,
+                        &join(inner, second, &lane, &format!("({} - {first}LL)", lane.1))
+                    ),
+                )
+            }
+            Operation::Take { axis } => {
+                // An index outside the axis reads as zero. The CPU device
+                // reports it.
+                let inner = inner_of(source, *axis);
+                let lane = split(inner, len(self.shape(inputs[1])));
+                let length = source[*axis];
+                format!(
+                    "0; long long i = (long long){}; \
+                     if (i >= 0 && i < {length}LL) return {}; \
+                     return 0",
+                    at(1, &lane.1),
+                    at(0, &join(inner, length, &lane, "i")),
+                )
+            }
+            Operation::Reduce { .. }
+            | Operation::Matmul
+            | Operation::IndexAdd { .. }
+            | Operation::ArgReduce { .. } => {
+                unreachable!("a reduction, a product and an indexed sum are never fused")
+            }
+        };
+        // A body that begins `0;` is statements that return on their own.
+        let body = match body.strip_prefix("0; ") {
+            Some(statements) => format!("{statements};"),
+            None => format!("return {body};"),
         };
         writeln!(
             self.source,
-            "AURA_INLINE {result} v{kernel}_{slot}(long long j{parameters}) {{ return {body}; }}"
+            "AURA_INLINE {result} v{kernel}_{slot}(long long j{parameters}) {{ {body} }}"
         )
         .expect("writing to a string cannot fail");
     }
@@ -391,6 +486,98 @@ impl<'a> Generator<'a> {
             bytes: count * element_bytes(self.dtype(slot)),
             threads: count,
             inputs: leaves,
+            clear: false,
+        });
+    }
+
+    /// The buffers a kernel reads to compute `operands`, after emitting
+    /// the functions of the ones that are fused into kernel `kernel`.
+    fn emit_operands(&mut self, kernel: usize, operands: &[usize]) -> Vec<usize> {
+        let mut leaves = Vec::new();
+        for &operand in operands {
+            for leaf in self.operand_leaves(operand) {
+                if !leaves.contains(&leaf) {
+                    leaves.push(leaf);
+                }
+            }
+        }
+        leaves.sort_unstable();
+        let mut done = Vec::new();
+        for &operand in operands {
+            if !self.materialized[operand] {
+                self.emit_value(kernel, operand, &leaves, &mut done);
+            }
+        }
+        leaves
+    }
+
+    /// The kernel of the indexed sum `slot`: one thread adds one element
+    /// of `updates` into a buffer of zeros.
+    fn index_add(&mut self, slot: usize, axis: usize, size: usize, updates: usize, indices: usize) {
+        let leaves = self.emit_operands(slot, &[updates, indices]);
+        let (parameters, arguments) = self.signature(&leaves);
+        let ty = c_type(self.dtype(slot));
+        let shape = self.shape(slot);
+        let inner = inner_of(shape, axis);
+        let count = len(self.shape(updates));
+        let lane = split(inner, len(self.shape(indices)));
+        let index = self.element(slot, indices, &lane.1, &arguments);
+        let value = self.element(slot, updates, "j", &arguments);
+        let target = join(inner, size, &lane, "i");
+        writeln!(
+            self.source,
+            "extern \"C\" __global__ void k{slot}({ty}* out{parameters}) {{\n    \
+             long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+             if (j >= {count}LL) return;\n    \
+             long long i = (long long){index};\n    \
+             if (i >= 0 && i < {size}LL) atomicAdd(&out[{target}], {value});\n}}"
+        )
+        .expect("writing to a string cannot fail");
+        self.actions.push(Action::Kernel {
+            name: format!("k{slot}"),
+            output: slot,
+            bytes: len(shape) * element_bytes(self.dtype(slot)),
+            threads: count,
+            inputs: leaves,
+            clear: true,
+        });
+    }
+
+    /// The kernel of `slot`, the place of each lane's largest or smallest
+    /// element: one thread reads one lane.
+    fn arg_reduce(&mut self, slot: usize, largest: bool, axis: usize, operand: usize) {
+        let leaves = self.emit_operands(slot, &[operand]);
+        let (parameters, arguments) = self.signature(&leaves);
+        let ty = c_type(self.dtype(operand));
+        let source = self.shape(operand);
+        let (length, inner) = (source[axis], inner_of(source, axis));
+        let lanes = len(source) / length;
+        let first = self.element(slot, operand, "start", &arguments);
+        let next = self.element(slot, operand, "(start + k * step)", &arguments);
+        let wins = if largest { ">" } else { "<" };
+        writeln!(
+            self.source,
+            "extern \"C\" __global__ void k{slot}(long long* out{parameters}) {{\n    \
+             long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+             if (lane >= {lanes}LL) return;\n    \
+             const long long step = {inner}LL;\n    \
+             long long start = (lane / step) * ({length}LL * step) + lane % step;\n    \
+             {ty} best = {first};\n    \
+             long long place = 0;\n    \
+             for (long long k = 1; k < {length}LL; k++) {{\n        \
+             {ty} value = {next};\n        \
+             if (value {wins} best || (value != value && best == best)) {{ best = value; place = k; }}\n    \
+             }}\n    \
+             out[lane] = place;\n}}"
+        )
+        .expect("writing to a string cannot fail");
+        self.actions.push(Action::Kernel {
+            name: format!("k{slot}"),
+            output: slot,
+            bytes: lanes * 8,
+            threads: lanes,
+            inputs: leaves,
+            clear: false,
         });
     }
 
@@ -451,6 +638,7 @@ impl<'a> Generator<'a> {
                     bytes: lanes * bytes,
                     threads: lanes,
                     inputs: leaves,
+                    clear: false,
                 });
             }
             None => {
@@ -505,6 +693,7 @@ impl<'a> Generator<'a> {
                             None => leaves.clone(),
                             Some(input) => vec![input],
                         },
+                        clear: false,
                     });
                     if last {
                         break;
@@ -566,6 +755,12 @@ impl<'a> Generator<'a> {
                     self.reduce(slot, *reduction, *axis, inputs[0]);
                 }
                 Operation::Matmul => self.matmul(slot, inputs[0], inputs[1]),
+                Operation::IndexAdd { axis, size } => {
+                    self.index_add(slot, *axis, *size, inputs[0], inputs[1]);
+                }
+                Operation::ArgReduce { largest, axis } => {
+                    self.arg_reduce(slot, *largest, *axis, inputs[0]);
+                }
                 _ => self.map(slot),
             }
         }
@@ -624,7 +819,16 @@ fn unary(code: i64, dtype: ArrayDType, operand: &str) -> String {
             _ => wrapping(dtype, "0", "-", operand),
         };
     }
+    if code == SIGMOID_OPERATION {
+        return if dtype == ArrayDType::Float64 {
+            format!("(1.0 / (1.0 + exp(-({operand}))))")
+        } else {
+            format!("(1.0f / (1.0f + expf(-({operand}))))")
+        };
+    }
     let function = match code {
+        TANH_OPERATION => "tanh",
+        ERF_OPERATION => "erf",
         0 => "fabs",
         1 => "sqrt",
         2 => "exp",

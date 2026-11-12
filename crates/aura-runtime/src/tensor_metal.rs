@@ -315,6 +315,15 @@ impl Graph {
                             (7, 0, axes)
                         }
                         Operation::Cast(_) => (8, 0, Vec::new()),
+                        Operation::Slice { .. }
+                        | Operation::Unslice { .. }
+                        | Operation::Expand(_)
+                        | Operation::Concat { .. }
+                        | Operation::Take { .. }
+                        | Operation::IndexAdd { .. }
+                        | Operation::ArgReduce { .. } => {
+                            unreachable!("the Metal device runs these in host memory")
+                        }
                     };
                     let mut operands = [-1_i32; 3];
                     for (operand, &input) in operands.iter_mut().zip(inputs) {
