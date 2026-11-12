@@ -1,0 +1,6 @@
+error[AU4003]: slice start `4` is greater than slice end `2`
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_selection_reversed_range.au:3:19
+  |
+3 |     print(values[4:2])
+  |                   ^
+  = note: Aura call chain (innermost first): main at 1:1

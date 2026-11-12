@@ -1,0 +1,6 @@
+error[AU4002]: `math.exp` overflow at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_exp_overflow.au:3:18
+  |
+3 |     print(values.exp())
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

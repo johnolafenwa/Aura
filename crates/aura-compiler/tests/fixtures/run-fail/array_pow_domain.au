@@ -1,0 +1,3 @@
+def main():
+    values = Array[float64].from_list([4.0, -8.0], [2])
+    print(values.pow(0.5))

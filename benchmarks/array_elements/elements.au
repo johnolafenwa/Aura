@@ -1,0 +1,136 @@
+import sys
+from simd import F64x4
+
+
+def matrix(n: int64) -> Array[float64]:
+    mut values: list[float64] = []
+    for i in range(n * n):
+        values.append((i % 97).to_float() * 0.25 + 1.0)
+    return Array[float64].from_list(values, [n, n])
+
+
+def element_sum(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for i in range(n):
+            for j in range(n):
+                acc += m[i, j]
+    print(f"element_sum {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def element_fill(n: int64, reps: int64) -> None:
+    mut m = Array[float64].zeros([n, n])
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for i in range(n):
+            for j in range(n):
+                m[i, j] = ((i + j + rep) % 7).to_float()
+    print(f"element_fill {n} {sys.monotonic_time_ms() - start} {m.sum()}")
+
+
+def stencil_2d(n: int64, reps: int64) -> None:
+    mut grid = Array[float64].zeros([n, n])
+    mut next = Array[float64].zeros([n, n])
+    for i in range(n):
+        grid[i, 0] = 100.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for i in range(1, n - 1):
+            for j in range(1, n - 1):
+                next[i, j] = 0.25 * (grid[i - 1, j] + grid[i + 1, j] + grid[i, j - 1] + grid[i, j + 1])
+        for i in range(1, n - 1):
+            for j in range(1, n - 1):
+                grid[i, j] = next[i, j]
+    print(f"stencil_2d {n} {sys.monotonic_time_ms() - start} {grid.sum()}")
+
+
+def center_columns(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        centered = m - m.mean(0)
+        acc += centered[n - 1, 0]
+    print(f"center_columns {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def mask_choose(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    mut count = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        large = m.greater(12.0)
+        count += large.count()
+        acc += large.choose(m, 12.0)[n - 1, n - 1]
+    print(f"mask_choose {n} {sys.monotonic_time_ms() - start} {acc + count.to_float()}")
+
+
+def sqrt_exp(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc += ((m.sqrt() * 0.125).exp()).sum()
+    print(f"sqrt_exp {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def batched_matmul(batch: int64, n: int64, reps: int64) -> None:
+    mut values: list[float64] = []
+    for i in range(batch * n * n):
+        values.append((i % 13).to_float() * 0.5 - 2.0)
+    stack = Array[float64].from_list(values, [batch, n, n])
+    weights = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        product = stack.matmul(weights)
+        acc += product[batch - 1, n - 1, n - 1]
+    print(f"batched_matmul {batch}x{n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def lane_dot(n: int64, reps: int64) -> None:
+    xs = matrix(n).flatten()
+    ys = (matrix(n) * 0.5).flatten()
+    count = n * n
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        mut lanes = F64x4.splat(0.0)
+        for i in range(0, count - 3, 4):
+            lanes = lanes + F64x4.load_array(xs, i) * F64x4.load_array(ys, i)
+        acc += lanes.sum()
+    print(f"lane_dot {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def total(values: Array[float64]) -> float64:
+    return values.fast_sum()
+
+
+def shared_tasks(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        with TaskGroup() as group:
+            first = group.start(total, m.clone())
+            second = group.start(total, m.clone())
+            third = group.start(total, m.clone())
+            fourth = group.start(total, m.clone())
+            acc += first.result_or(0.0, timeout=10s) + second.result_or(0.0, timeout=10s)
+            acc += third.result_or(0.0, timeout=10s) + fourth.result_or(0.0, timeout=10s)
+    print(f"shared_tasks {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def main() -> None:
+    element_sum(1000, 100)
+    element_fill(1000, 100)
+    stencil_2d(1000, 50)
+    center_columns(1000, 100)
+    mask_choose(1000, 100)
+    sqrt_exp(1000, 20)
+    batched_matmul(512, 32, 20)
+    lane_dot(1000, 100)
+    shared_tasks(2000, 100)

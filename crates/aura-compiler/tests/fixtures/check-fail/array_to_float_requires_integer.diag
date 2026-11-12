@@ -1,0 +1,5 @@
+error[AU2003]: `Array.to_float` is available only for integer Arrays, found `Array[float32]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_to_float_requires_integer.au:3:18
+  |
+3 |     print(values.to_float())
+  |                  ^

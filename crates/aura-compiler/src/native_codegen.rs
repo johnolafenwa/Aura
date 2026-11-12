@@ -284,6 +284,7 @@ fn direct_array_dtype_code(ty: &Type) -> std::result::Result<i64, String> {
             "int64" => Ok(1),
             "float32" => Ok(2),
             "float64" => Ok(3),
+            "bool" => Ok(4),
             _ => Err(format!(
                 "direct backend does not support Array dtype `{ty}`"
             )),
@@ -365,6 +366,33 @@ enum DirectType {
     Callable(DirectCallableType),
     Opaque(Type),
 }
+
+/// The rank-1 view code of a local whose type is a numeric `Array`.
+fn array_view_code(
+    ty: Option<&DirectType>,
+) -> Option<aura_runtime::native_runtime::DirectListAccess> {
+    use aura_runtime::native_runtime::DirectListAccess;
+    let Some(DirectType::Opaque(Type::Named(name, args))) = ty else {
+        return None;
+    };
+    let [Type::Named(dtype, _)] = args.as_slice() else {
+        return None;
+    };
+    if name != "Array" {
+        return None;
+    }
+    Some(match dtype.as_str() {
+        "int32" => DirectListAccess::ArrayInt32,
+        "int64" => DirectListAccess::ArrayInt64,
+        "float32" => DirectListAccess::ArrayFloat32,
+        "float64" => DirectListAccess::ArrayFloat64,
+        _ => return None,
+    })
+}
+
+/// The selection words an `Array` index of one or two components passes
+/// as plain arguments.
+const SELECTION_WORDS: usize = aura_runtime::array_views::ARRAY_SELECTION_INLINE_WORDS;
 
 /// The words after a callable's descriptor.
 const CALLABLE_ENVIRONMENT_WORDS: usize = 3;
@@ -2114,13 +2142,13 @@ impl<'a> NativeCodegen<'a> {
             |list| {
                 list != "self"
                     && !explicit_locals.loans.contains(list)
-                    && matches!(
+                    && (matches!(
                         variable_types.get(list),
                         Some(DirectType::Opaque(Type::Named(name, args)))
                             if name == "list"
                                 && matches!(args.as_slice(), [element]
                                     if !matches!(element, Type::Named(element, _) if element == "str"))
-                    )
+                    ) || array_view_code(variable_types.get(list)).is_some())
             },
             |list| {
                 matches!(
@@ -2135,7 +2163,35 @@ impl<'a> NativeCodegen<'a> {
             },
         )
         .into_iter()
-        .map(|region| {
+        .filter_map(|region| {
+            // An Array's loop reads its layout once when every element
+            // access in it names the same number of coordinates.
+            let array = match array_view_code(variable_types.get(&region.list)) {
+                Some(dtype) => {
+                    let rank = list_snapshots::array_region_rank(function, &region, |place| {
+                        matches!(
+                            variable_types.get(place),
+                            Some(DirectType::Scalar(ScalarKind::Int64))
+                        )
+                    })?;
+                    let extents = [0, 1, 2, 3].map(|offset| {
+                        let variable = Var(variable_index as u32 + offset);
+                        builder.declare_var(variable, types::I64);
+                        let zero = builder.iconst(types::I64, 0);
+                        builder.def_var(variable, zero);
+                        variable
+                    });
+                    variable_index += 4;
+                    Some(list_snapshots::ArraySnapshot {
+                        code: i64::from(aura_runtime::native_runtime::direct_array_access(
+                            dtype, rank,
+                        )),
+                        rank,
+                        extents,
+                    })
+                }
+                None => None,
+            };
             let [ok, access, len, elements] = [0, 1, 2, 3].map(|offset| {
                 let variable = Var(variable_index as u32 + offset);
                 builder.declare_var(variable, types::I64);
@@ -2144,15 +2200,19 @@ impl<'a> NativeCodegen<'a> {
                 variable
             });
             variable_index += 4;
-            let range = range_loops::range_proof(function, &region, |place| {
-                !place.contains(['.', '['])
-                    && matches!(
-                        variable_types.get(place),
-                        Some(DirectType::Scalar(ScalarKind::Int64))
-                    )
-            });
+            let range = match array {
+                Some(_) => None,
+                None => range_loops::range_proof(function, &region, |place| {
+                    !place.contains(['.', '['])
+                        && matches!(
+                            variable_types.get(place),
+                            Some(DirectType::Scalar(ScalarKind::Int64))
+                        )
+                }),
+            };
             let sink = mutable_param_indices.get(&region.list).copied();
-            list_snapshots::ListSnapshot {
+            Some(list_snapshots::ListSnapshot {
+                array,
                 range,
                 sink,
                 region,
@@ -2164,7 +2224,7 @@ impl<'a> NativeCodegen<'a> {
                 selects: Vec::new(),
                 entries: Vec::new(),
                 expected: Vec::new(),
-            }
+            })
         })
         .collect::<Vec<_>>();
         let mut compiler = FunctionCompiler {
@@ -2262,6 +2322,8 @@ impl<'a> NativeCodegen<'a> {
             retained_unions: HashSet::new(),
             last_runtime_type_tag: None,
             shaped_locals,
+            reusable_array_temporaries: reusable_array_temporaries(function),
+            array_binary_reuse: 0,
             shaped_boxes: HashSet::new(),
             confined_instances: classes::confined_instances(function, &self.classes),
             skip_class_check: false,
@@ -3792,6 +3854,12 @@ struct FunctionCompiler<'a> {
     /// The locals whose box always carries the tag of their type. See
     /// `shapes::shaped_locals`.
     shaped_locals: HashSet<String>,
+    /// Temporaries a binary operation moves out of their slot (see
+    /// `reusable_array_temporaries`).
+    reusable_array_temporaries: HashSet<String>,
+    /// The temporary flags of `aura_direct_array_binary` for the binary
+    /// operation being compiled: which operands are such temporaries.
+    array_binary_reuse: i64,
     /// The boxes the instruction being compiled read that carry the tag of
     /// their static type: from a shaped local, a call whose callee tags
     /// what it returns, or a variant that keeps its payloads in place.
@@ -6261,9 +6329,19 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(result);
                     }
                 }
+                // The result of nested Array arithmetic is read here and
+                // released next. The runtime may compute into its buffer.
+                let reusable = |operand: &Operand| {
+                    matches!(operand, Operand::Place(place)
+                        if self.reusable_array_temporaries.contains(place))
+                };
+                self.array_binary_reuse =
+                    i64::from(reusable(left)) << 1 | i64::from(reusable(right)) << 2;
                 let left = self.load_operand_with_integer_hint(left, left_integer_hint)?;
                 let right = self.load_operand_with_integer_hint(right, right_integer_hint)?;
-                self.compile_binary(*op, left, right, Some(*span), *trap)
+                let result = self.compile_binary(*op, left, right, Some(*span), *trap);
+                self.array_binary_reuse = 0;
+                result
             }
             Rvalue::Call {
                 callee,
@@ -7587,7 +7665,10 @@ impl<'a> FunctionCompiler<'a> {
             };
             let left = self.ensure_opaque(left)?;
             let right = self.ensure_opaque(right)?;
-            let scalar_left = self.builder.iconst(types::I64, scalar_left);
+            // An operand that is a temporary released after the call may
+            // lend its buffer to the result.
+            let flags = scalar_left | self.array_binary_reuse;
+            let scalar_left = self.builder.iconst(types::I64, flags);
             let operation = self
                 .builder
                 .iconst(types::I64, direct_array_binary_opcode(op)?);
@@ -12194,6 +12275,195 @@ impl<'a> FunctionCompiler<'a> {
         })
     }
 
+    /// Reads or writes one element of an `Array` named by `rank` integer
+    /// coordinates (ADR-0091). A confined Array laid out as one row-major
+    /// block is accessed in place from its view: each coordinate is checked
+    /// against its axis, and a write also needs the Array to hold its
+    /// buffer alone. Any other Array or coordinate takes the runtime call,
+    /// which reads a view, copies a shared buffer before the write, or
+    /// reports the rank or range diagnostic. Returns the element of a
+    /// read.
+    #[allow(clippy::too_many_arguments)]
+    fn emit_array_element_access(
+        &mut self,
+        array: Val,
+        rank: usize,
+        coordinates: &[Val],
+        kind: ScalarKind,
+        value: Option<Val>,
+        line: Val,
+        column: Val,
+    ) -> std::result::Result<Option<Val>, String> {
+        use aura_runtime::native_runtime::{direct_array_access, DirectListAccess};
+        let (size, dtype) = match kind {
+            ScalarKind::Int32 => (4, DirectListAccess::ArrayInt32),
+            ScalarKind::Int64 => (8, DirectListAccess::ArrayInt64),
+            ScalarKind::Float32 => (4, DirectListAccess::ArrayFloat32),
+            ScalarKind::Float64 => (8, DirectListAccess::ArrayFloat64),
+            other => return Err(format!("direct backend has no Array dtype `{other:?}`")),
+        };
+        let float = matches!(kind, ScalarKind::Float32 | ScalarKind::Float64);
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let slow_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(slow_block);
+        if value.is_none() {
+            self.builder
+                .append_block_param(join_block, kind.signature_type());
+        }
+
+        // A loop that reads the Array's layout once knows every word
+        // below in its copy.
+        let code = i64::from(direct_array_access(dtype, rank));
+        let snapshot = self
+            .array_snapshot(array, rank)
+            .filter(|(_, snapshot)| snapshot.code == code);
+        let kept = snapshot.as_ref().map(|(index, _)| *index);
+        // The access code names the dtype and the rank, and is `None` for
+        // a view or a value another thread can reach.
+        let mut access = self.builder.uload32(flags, array, layout.access_offset);
+        if let Some(index) = kept {
+            let known = self.builder.iconst(types::I64, code);
+            access = self.keep_in_copy(index, known, access);
+        }
+        let mut holds = self.builder.icmp_imm(IntCC::Equal, access, code);
+        if value.is_some() {
+            let holders = self
+                .builder
+                .load(types::I64, flags, array, layout.holders_offset);
+            // The address is zero where the access code is `None`.
+            let checked = self.builder.create_block();
+            self.builder.brif(holds, checked, &[], slow_block, &[]);
+            self.builder.switch_to_block(checked);
+            self.builder.seal_block(checked);
+            let mut count = self.builder.load(types::I64, flags, holders, 0);
+            if let Some(index) = kept {
+                let alone = self.builder.iconst(types::I64, 1);
+                count = self.keep_in_copy(index, alone, count);
+            }
+            holds = self.builder.icmp_imm(IntCC::Equal, count, 1);
+        }
+        let viewed = self.builder.create_block();
+        self.builder.brif(holds, viewed, &[], slow_block, &[]);
+        self.builder.switch_to_block(viewed);
+        self.builder.seal_block(viewed);
+
+        // The length word is the length of a rank-1 Array and the address
+        // of the extents otherwise.
+        let extents = self
+            .builder
+            .load(types::I64, flags, array, layout.len_offset);
+        let zero = self.builder.iconst(types::I64, 0);
+        let mut position = zero;
+        for (axis, &coordinate) in coordinates[..rank].iter().enumerate() {
+            let mut extent = match rank {
+                1 => extents,
+                _ => self
+                    .builder
+                    .load(types::I64, flags, extents, axis as i32 * 8),
+            };
+            if let Some((index, snapshot)) = &snapshot {
+                let known = self.builder.use_var(snapshot.extents[axis]);
+                extent = self.keep_in_copy(*index, known, extent);
+            }
+            // One unsigned compare passes a coordinate from zero up to
+            // the extent. Any other is counted from the end off the hot
+            // path, where the same compare rejects one out of range.
+            let inside = self.builder.create_block();
+            self.builder.append_block_param(inside, types::I64);
+            let wrap = self.builder.create_block();
+            self.builder.set_cold_block(wrap);
+            let forward = self
+                .builder
+                .icmp(IntCC::UnsignedLessThan, coordinate, extent);
+            self.builder.brif(forward, inside, &[coordinate], wrap, &[]);
+            self.builder.switch_to_block(wrap);
+            self.builder.seal_block(wrap);
+            let from_end = self.builder.iadd(extent, coordinate);
+            let counted = self.builder.icmp(IntCC::UnsignedLessThan, from_end, extent);
+            self.builder
+                .brif(counted, inside, &[from_end], slow_block, &[]);
+            self.builder.switch_to_block(inside);
+            self.builder.seal_block(inside);
+            let at = self.builder.block_params(inside)[0];
+            position = match axis {
+                0 => at,
+                _ => {
+                    let scaled = self.builder.imul(position, extent);
+                    self.builder.iadd(scaled, at)
+                }
+            };
+        }
+        let mut elements = self
+            .builder
+            .load(types::I64, flags, array, layout.elements_offset);
+        if let Some(index) = kept {
+            let known = self.snapshot_elements(index);
+            elements = self.keep_in_copy(index, known, elements);
+        }
+        let offset = self.builder.imul_imm(position, size);
+        let element = self.builder.element_address(elements, offset);
+        match value {
+            None => {
+                let read = match kind {
+                    ScalarKind::Int32 => self.builder.sload32(flags, element, 0),
+                    ScalarKind::Float32 => {
+                        let narrow = self.builder.load(types::F32, flags, element, 0);
+                        self.builder.fpromote(types::F64, narrow)
+                    }
+                    ScalarKind::Float64 => self.builder.load(types::F64, flags, element, 0),
+                    _ => self.builder.load(types::I64, flags, element, 0),
+                };
+                self.builder.jump(join_block, &[read]);
+            }
+            Some(value) => {
+                let stored = match kind {
+                    ScalarKind::Int32 => self.builder.ireduce(types::I32, value),
+                    ScalarKind::Float32 => self.builder.fdemote(types::F32, value),
+                    _ => value,
+                };
+                self.builder.store(flags, stored, element, 0);
+                self.builder.jump(join_block, &[]);
+            }
+        }
+
+        self.builder.switch_to_block(slow_block);
+        self.builder.seal_block(slow_block);
+        let mut words = vec![array, self.builder.iconst(types::I64, rank as i64)];
+        words.extend_from_slice(coordinates);
+        match value {
+            None => {
+                words.extend([line, column]);
+                let bits = self
+                    .builder
+                    .call(self.runtime[RuntimeFn::ArrayReadAt], &words)
+                    .results[0];
+                let read = match float {
+                    true => self.builder.bitcast(types::F64, bits),
+                    false => bits,
+                };
+                self.builder.jump(join_block, &[read]);
+            }
+            Some(value) => {
+                let bits = match float {
+                    true => self.builder.bitcast(types::I64, value),
+                    false => value,
+                };
+                words.extend([bits, line, column]);
+                self.builder
+                    .call(self.runtime[RuntimeFn::ArrayWriteAt], &words);
+                self.builder.jump(join_block, &[]);
+            }
+        }
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(value
+            .is_none()
+            .then(|| self.builder.block_params(join_block)[0]))
+    }
+
     /// Reads a scalar list element of `kind` as raw bits. A confined list
     /// that keeps the scalars unboxed is read in place with one bounds
     /// check, or none when the loop proves the index. Any other list, or an
@@ -16366,7 +16636,11 @@ impl<'a> FunctionCompiler<'a> {
                 let coordinates = self.load_operand(&args[0].value)?;
                 let line = self.load_word(args[1], int32, true)?;
                 let column = self.load_word(args[2], int32, true)?;
-                if coordinates.ty == DirectType::Scalar(ScalarKind::Int64) {
+                // A mask has no in-place read, so its elements take the
+                // runtime call.
+                if coordinates.ty == DirectType::Scalar(ScalarKind::Int64)
+                    && element_direct_ty != DirectType::Scalar(ScalarKind::Bool)
+                {
                     if let DirectType::Scalar(kind) = element_direct_ty {
                         return self.emit_array_element_read(
                             array,
@@ -16383,6 +16657,57 @@ impl<'a> FunctionCompiler<'a> {
                     .runtime_call_results(function, &[array, coordinates.values[0], line, column]);
                 let result = self.owned_opaque_result(results, element_ty);
                 self.coerce_value(result, &element_direct_ty)
+            }
+            ArrayOp::ReadAt | ArrayOp::WriteAt => {
+                use crate::runtime_ops::{ARRAY_COORDINATE_WORDS, WRITE_AT_VALUE};
+                let write = op == ArrayOp::WriteAt;
+                let rank = match &args[0].value {
+                    Operand::Int(rank) if (1..=ARRAY_COORDINATE_WORDS as u128).contains(rank) => {
+                        *rank as usize
+                    }
+                    other => {
+                        return Err(format!(
+                            "direct backend expected an Array coordinate count, found `{other:?}`"
+                        ))
+                    }
+                };
+                let DirectType::Scalar(kind) = element_direct_ty else {
+                    return Err(format!(
+                        "direct backend has no in-place Array element of type `{element_ty}`"
+                    ));
+                };
+                let mut coordinates = Vec::with_capacity(ARRAY_COORDINATE_WORDS);
+                for argument in &args[1..=ARRAY_COORDINATE_WORDS] {
+                    coordinates.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let value = if write {
+                    let value = self.load_operand(&args[WRITE_AT_VALUE].value)?;
+                    Some(self.coerce_value(value, &element_direct_ty)?.values[0])
+                } else {
+                    None
+                };
+                let leading = args.len() - 2;
+                let line = self.load_word(args[leading], int32, true)?;
+                let column = self.load_word(args[leading + 1], int32, true)?;
+                let result = self.emit_array_element_access(
+                    array,
+                    rank,
+                    &coordinates,
+                    kind,
+                    value,
+                    line,
+                    column,
+                )?;
+                match result {
+                    Some(element) => Ok(ValueRef {
+                        values: vec![element],
+                        ty: element_direct_ty,
+                    }),
+                    None => {
+                        self.store_receiver_back(receiver_place, &object)?;
+                        Ok(unit_value(&mut *self.builder))
+                    }
+                }
             }
             ArrayOp::SetIndex => {
                 let coordinates = self.load_operand(&args[0].value)?;
@@ -16434,6 +16759,201 @@ impl<'a> FunctionCompiler<'a> {
                 }
                 let boxed = self.owned_opaque_result(results, element_ty);
                 self.coerce_value(boxed, &element_direct_ty)
+            }
+            ArrayOp::Reshape | ArrayOp::Permute => {
+                let axes = self.load_operand(&args[0].value)?;
+                let axes = self.ensure_opaque(axes)?;
+                words.push(axes.values[0]);
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::Flatten | ArrayOp::Transpose => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::SelectWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                words.push(self.load_word(args[SELECTION_WORDS], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 1], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::AssignWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let value = self.load_operand(&args[SELECTION_WORDS].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                // The helper owns the value: a view of the receiver must
+                // die before the write.
+                words.push(self.transfer_owned_opaque_value(&value));
+                words.push(self.load_word(args[SELECTION_WORDS + 1], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 2], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ArrayOp::UpdateWords => {
+                for argument in &args[..SELECTION_WORDS] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let value = self.load_operand(&args[SELECTION_WORDS].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                // The helper owns the value, as an assignment does.
+                words.push(self.transfer_owned_opaque_value(&value));
+                words.push(self.load_word(args[SELECTION_WORDS + 1], ScalarKind::Int64, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 2], int32, true)?);
+                words.push(self.load_word(args[SELECTION_WORDS + 3], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ArrayOp::Select => {
+                let selection = self.load_operand(&args[0].value)?;
+                let selection = self.ensure_opaque(selection)?;
+                let line = self.load_word(args[1], int32, true)?;
+                let column = self.load_word(args[2], int32, true)?;
+                let results = self
+                    .runtime_call_results(function, &[array, selection.values[0], line, column]);
+                Ok(self.owned_opaque_result(results, array_ty))
+            }
+            ArrayOp::Assign => {
+                let selection = self.load_operand(&args[0].value)?;
+                let selection = self.ensure_opaque(selection)?;
+                // The value is an Array of the receiver's type, or one
+                // element.
+                let value = self.load_operand(&args[1].value)?;
+                let value = if direct_array_element_type(&value.ty).is_some() {
+                    value
+                } else {
+                    self.coerce_value(value, &element_direct_ty)?
+                };
+                let value = self.ensure_opaque(value)?;
+                // The helper owns the value: a view of the receiver must
+                // die before the write.
+                let value = self.transfer_owned_opaque_value(&value);
+                let line = self.load_word(args[2], int32, true)?;
+                let column = self.load_word(args[3], int32, true)?;
+                let results = self.runtime_call_results(
+                    function,
+                    &[array, selection.values[0], value, line, column],
+                );
+                self.release_opaque_handle(results[0]);
+                self.store_receiver_back(receiver_place, &object)?;
+                Ok(unit_value(&mut *self.builder))
+            }
+            ArrayOp::ReduceAxis
+            | ArrayOp::MeanAxis
+            | ArrayOp::Unary
+            | ArrayOp::UnaryInt64
+            | ArrayOp::UnaryFloat64
+            | ArrayOp::MaskTest
+            | ArrayOp::MaskCount
+            | ArrayOp::CastInt32
+            | ArrayOp::CastInt64
+            | ArrayOp::CastFloat32
+            | ArrayOp::CastFloat64 => {
+                // The words before the source position: a kind, a kind and
+                // an axis, or a cast's target dtype code.
+                let leading = args.len() - 2;
+                for argument in &args[..leading] {
+                    words.push(self.load_word(argument, ScalarKind::Int64, true)?);
+                }
+                let cast = match op {
+                    ArrayOp::CastInt32 => Some(crate::runtime_value::ArrayDType::Int32),
+                    ArrayOp::CastInt64 => Some(crate::runtime_value::ArrayDType::Int64),
+                    ArrayOp::CastFloat32 => Some(crate::runtime_value::ArrayDType::Float32),
+                    ArrayOp::CastFloat64 => Some(crate::runtime_value::ArrayDType::Float64),
+                    _ => None,
+                };
+                if let Some(dtype) = cast {
+                    words.push(self.builder.iconst(types::I64, dtype as i64));
+                }
+                words.push(self.load_word(args[leading], int32, true)?);
+                words.push(self.load_word(args[leading + 1], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                let result_ty =
+                    runtime_op
+                        .result_type(Some(&receiver_ty), &[])
+                        .ok_or_else(|| {
+                            format!("direct backend does not know the result type of `{op:?}`")
+                        })?;
+                let scalar = match op {
+                    ArrayOp::MaskTest => Some(ScalarKind::Bool),
+                    ArrayOp::MaskCount => Some(ScalarKind::Int64),
+                    _ => None,
+                };
+                let boxed = self.owned_opaque_result(results, result_ty);
+                match scalar {
+                    Some(kind) => self.coerce_value(boxed, &DirectType::Scalar(kind)),
+                    None => Ok(boxed),
+                }
+            }
+            ArrayOp::Pairwise | ArrayOp::Compare => {
+                let other = self.load_operand(&args[0].value)?;
+                let other = if direct_array_element_type(&other.ty).is_some() {
+                    other
+                } else {
+                    self.coerce_value(other, &element_direct_ty)?
+                };
+                let other = self.ensure_opaque(other)?;
+                words.push(other.values[0]);
+                words.push(self.load_word(args[1], ScalarKind::Int64, true)?);
+                words.push(self.load_word(args[2], int32, true)?);
+                words.push(self.load_word(args[3], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                let result_ty = if op == ArrayOp::Compare {
+                    Type::Named("Array".to_string(), vec![Type::named("bool")])
+                } else {
+                    array_ty
+                };
+                Ok(self.owned_opaque_result(results, result_ty))
+            }
+            ArrayOp::Choose => {
+                // The dtype word names the result's elements, which an
+                // element argument is converted to.
+                let dtype = match &args[2].value {
+                    Operand::Int(code) => crate::runtime_value::ArrayDType::from_code(*code as i64),
+                    _ => None,
+                }
+                .ok_or("direct backend expected `__choose` to carry a dtype code".to_string())?;
+                let chosen_ty = Type::named(dtype.runtime_type_name());
+                let chosen_direct_ty =
+                    ensure_direct_type(&chosen_ty, &self.classes, "Array dtype")?;
+                for argument in &args[..2] {
+                    let value = self.load_operand(&argument.value)?;
+                    let value = if direct_array_element_type(&value.ty).is_some() {
+                        value
+                    } else {
+                        self.coerce_value(value, &chosen_direct_ty)?
+                    };
+                    let value = self.ensure_opaque(value)?;
+                    words.push(value.values[0]);
+                }
+                words.push(self.builder.iconst(types::I64, dtype as i64));
+                words.push(self.load_word(args[3], int32, true)?);
+                words.push(self.load_word(args[4], int32, true)?);
+                let results = self.runtime_call_results(function, &words);
+                Ok(self.owned_opaque_result(
+                    results,
+                    Type::Named("Array".to_string(), vec![chosen_ty]),
+                ))
             }
             ArrayOp::Sum
             | ArrayOp::Min
@@ -18655,6 +19175,74 @@ fn str_append_root(instructions: &[Instruction]) -> Option<&str> {
             .filter_map(MirFormatPart::operand)
             .any(reads_root))
     .then_some(root.as_str())
+}
+
+/// The temporaries that hold the result of Array arithmetic and are read
+/// once, by a later binary operation of the block that computes them:
+/// `%t1` in `%t1 = a + b; %t2 = %t1 * 0.5`. Nothing else observes such a
+/// temporary before it is released, so the operation that reads it may
+/// compute into its buffer.
+fn reusable_array_temporaries(function: &MirFunction) -> HashSet<String> {
+    let arrays = function
+        .local_types
+        .iter()
+        .filter(|local| {
+            local.name.starts_with("%t")
+                && matches!(&local.ty, Type::Named(name, _) if name == "Array")
+        })
+        .map(|local| local.name.as_str())
+        .collect::<HashSet<_>>();
+    if arrays.is_empty() {
+        return HashSet::new();
+    }
+    let mut reads = HashMap::<&str, usize>::new();
+    let mut writes = HashMap::<&str, usize>::new();
+    let mut candidates = HashSet::new();
+    let mut mentions = Vec::new();
+    for block in &function.blocks {
+        let mut computed = HashSet::new();
+        for instruction in &block.instructions {
+            mentions.clear();
+            if matches!(instruction, Instruction::Release { .. }) {
+                // A release ends the temporary. It does not observe it.
+                continue;
+            }
+            crate::mir::instruction_place_mentions(instruction, &mut mentions);
+            if let Instruction::Assign { target, value } = instruction {
+                // Whether the mentions list a target or not, a write is
+                // not a read.
+                if let Some(position) = mentions.iter().position(|mention| *mention == target) {
+                    mentions.remove(position);
+                }
+                *writes.entry(target.as_str()).or_default() += 1;
+                if let Rvalue::Binary { left, right, .. } = value {
+                    for operand in [left, right] {
+                        if let Operand::Place(place) = operand {
+                            if computed.contains(place.as_str()) {
+                                candidates.insert(place.as_str());
+                            }
+                        }
+                    }
+                    if arrays.contains(target.as_str()) {
+                        computed.insert(target.as_str());
+                    }
+                }
+            }
+            for mention in &mentions {
+                let root = mention.split('.').next().unwrap_or(mention);
+                *reads.entry(root).or_default() += 1;
+            }
+        }
+        for mention in crate::mir::terminator_place_mentions(&block.terminator) {
+            let root = mention.split('.').next().unwrap_or(mention);
+            *reads.entry(root).or_default() += 1;
+        }
+    }
+    candidates
+        .into_iter()
+        .filter(|place| reads.get(place) == Some(&1) && writes.get(place) == Some(&1))
+        .map(str::to_string)
+        .collect()
 }
 
 fn validate_operand(operand: &Operand) -> std::result::Result<(), String> {

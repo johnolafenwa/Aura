@@ -1,0 +1,6 @@
+error[AU4003]: array coordinate 2 on axis 0 normalizes to 2, outside 0..2
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_element_write_out_of_range.au:4:9
+  |
+4 |         grid[row, 0] = 1.0
+  |         ^
+  = note: Aura call chain (innermost first): main at 1:1

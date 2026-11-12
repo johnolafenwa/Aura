@@ -82,8 +82,8 @@ scope, terminology, authority, and conformance language.
 - [Collections](/manual/collections): `list[T]`, `dict[K, V]`, and `set[T]`,
   with literals, eager owned comprehensions and slices, iteration, mutation,
   and eager list algorithms that take callables.
-- [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`
-  with four numeric dtypes, first-axis owned slices, reductions, native
+- [Numeric Arrays](/manual/numeric-arrays): row-major `Array[T]`
+  with four numeric dtypes, slices and reshapes that share storage, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
 - [SIMD Module](/manual/simd): lane values of two, four, or eight floats
   that native code keeps in vector registers, with loads and stores over

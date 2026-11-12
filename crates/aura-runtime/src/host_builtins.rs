@@ -11,20 +11,45 @@ use super::*;
 /// from the process.
 pub type HostBuiltinFn = fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
 
-fn host_math_rounding(name: &str, args: Vec<Value>) -> Result<Value> {
-    host_expect_arity(name, &args, 1)?;
-    let display_name = name.replace("::", ".");
-    let Value::Float(value) = args[0] else {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            format!("`{display_name}` expects `float64`"),
-        ));
-    };
-    let rounded = match name {
-        "math::floor" => value.floor(),
-        "math::ceil" => value.ceil(),
-        "math::trunc" => value.trunc(),
-        _ => unreachable!(),
+/// A `math` function of one `float64`, named for its diagnostics.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub(crate) enum MathFunction {
+    Exp,
+    Log,
+    Log2,
+    Log10,
+    Sin,
+    Cos,
+    Tan,
+    Floor,
+    Ceil,
+    Trunc,
+}
+
+impl MathFunction {
+    pub(crate) const fn name(self) -> &'static str {
+        match self {
+            Self::Exp => "math.exp",
+            Self::Log => "math.log",
+            Self::Log2 => "math.log2",
+            Self::Log10 => "math.log10",
+            Self::Sin => "math.sin",
+            Self::Cos => "math.cos",
+            Self::Tan => "math.tan",
+            Self::Floor => "math.floor",
+            Self::Ceil => "math.ceil",
+            Self::Trunc => "math.trunc",
+        }
+    }
+}
+
+/// `math.floor`, `math.ceil`, or `math.trunc` of one value.
+#[inline]
+pub(crate) fn math_rounding(function: MathFunction, value: f64) -> Result<i64> {
+    let rounded = match function {
+        MathFunction::Floor => value.floor(),
+        MathFunction::Ceil => value.ceil(),
+        _ => value.trunc(),
     };
     // `i64::MAX as f64` rounds to 2^63, so the upper bound is
     // intentionally exclusive while -2^63 remains representable.
@@ -33,24 +58,68 @@ fn host_math_rounding(name: &str, args: Vec<Value>) -> Result<Value> {
     if !rounded.is_finite() || !(I64_MIN_F64..I64_LIMIT_F64).contains(&rounded) {
         return Err(Diagnostic::coded(
             "AU4002",
-            format!("`{display_name}` result cannot be represented as `int64`"),
+            format!(
+                "`{}` result cannot be represented as `int64`",
+                function.name()
+            ),
         ));
     }
-    let integer = IntegerValue::from_typed_signed(rounded as i64 as i128, IntegerKind::Int64)
-        .expect("validated math conversion must fit int64");
-    Ok(Value::Int(integer))
+    Ok(rounded as i64)
+}
+
+/// A `math` function from `float64` to `float64` of one value.
+#[inline]
+pub(crate) fn math_unary(function: MathFunction, value: f64) -> Result<f64> {
+    use MathFunction::{Cos, Exp, Log, Log10, Log2, Sin, Tan};
+    let domain_error = || {
+        Diagnostic::coded(
+            "AU4001",
+            format!("`{}` domain error for `{value}`", function.name()),
+        )
+    };
+    if matches!(function, Log | Log2 | Log10) && value.is_finite() && value <= 0.0 {
+        return Err(domain_error());
+    }
+    if matches!(function, Sin | Cos | Tan) && value.is_infinite() {
+        return Err(domain_error());
+    }
+    let result = match function {
+        Exp => value.exp(),
+        Log => value.ln(),
+        Log2 => value.log2(),
+        Log10 => value.log10(),
+        Sin => value.sin(),
+        Cos => value.cos(),
+        _ => value.tan(),
+    };
+    if function == Exp && value.is_finite() && result.is_infinite() {
+        return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
+    }
+    Ok(result)
+}
+
+fn host_math_rounding(function: MathFunction, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&function.name().replace('.', "::"), &args, 1)?;
+    let Value::Float(value) = args[0] else {
+        return Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{}` expects `float64`", function.name()),
+        ));
+    };
+    let integer = math_rounding(function, value)?;
+    Ok(Value::Int(IntegerValue::from_i64(integer)))
 }
 
 pub fn host_math_floor(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_rounding("math::floor", args)
+    host_math_rounding(MathFunction::Floor, args)
 }
 
 pub fn host_math_ceil(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_rounding("math::ceil", args)
+    host_math_rounding(MathFunction::Ceil, args)
 }
 
 pub fn host_math_trunc(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_rounding("math::trunc", args)
+    host_math_rounding(MathFunction::Trunc, args)
 }
 
 pub fn host_math_pow(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
@@ -65,72 +134,43 @@ pub fn host_math_pow(args: Vec<Value>, _program_args: Option<&[String]>) -> Resu
     float_power(*base, *exponent, FloatPowerWidth::Float64).map(Value::Float)
 }
 
-fn host_math_unary(name: &str, args: Vec<Value>) -> Result<Value> {
-    host_expect_arity(name, &args, 1)?;
-    let display_name = name.replace("::", ".");
+fn host_math_unary(function: MathFunction, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&function.name().replace('.', "::"), &args, 1)?;
     let Value::Float(value) = args[0] else {
         return Err(Diagnostic::coded(
             "AU4001",
-            format!("`{display_name}` expects `float64`"),
+            format!("`{}` expects `float64`", function.name()),
         ));
     };
-    if matches!(name, "math::log" | "math::log2" | "math::log10")
-        && value.is_finite()
-        && value <= 0.0
-    {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            format!("`{display_name}` domain error for `{value}`"),
-        ));
-    }
-    if matches!(name, "math::sin" | "math::cos" | "math::tan") && value.is_infinite() {
-        return Err(Diagnostic::coded(
-            "AU4001",
-            format!("`{display_name}` domain error for `{value}`"),
-        ));
-    }
-    let result = match name {
-        "math::exp" => value.exp(),
-        "math::log" => value.ln(),
-        "math::log2" => value.log2(),
-        "math::log10" => value.log10(),
-        "math::sin" => value.sin(),
-        "math::cos" => value.cos(),
-        "math::tan" => value.tan(),
-        _ => unreachable!(),
-    };
-    if name == "math::exp" && value.is_finite() && result.is_infinite() {
-        return Err(Diagnostic::coded("AU4002", "`math.exp` overflow"));
-    }
-    Ok(Value::Float(result))
+    math_unary(function, value).map(Value::Float)
 }
 
 pub fn host_math_exp(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::exp", args)
+    host_math_unary(MathFunction::Exp, args)
 }
 
 pub fn host_math_log(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::log", args)
+    host_math_unary(MathFunction::Log, args)
 }
 
 pub fn host_math_log2(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::log2", args)
+    host_math_unary(MathFunction::Log2, args)
 }
 
 pub fn host_math_log10(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::log10", args)
+    host_math_unary(MathFunction::Log10, args)
 }
 
 pub fn host_math_sin(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::sin", args)
+    host_math_unary(MathFunction::Sin, args)
 }
 
 pub fn host_math_cos(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::cos", args)
+    host_math_unary(MathFunction::Cos, args)
 }
 
 pub fn host_math_tan(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    host_math_unary("math::tan", args)
+    host_math_unary(MathFunction::Tan, args)
 }
 
 pub fn host_control_retry_validate(

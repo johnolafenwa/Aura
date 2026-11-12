@@ -861,10 +861,13 @@ impl<'a> Formatter<'a> {
     fn space_between(&self, index: usize, first: usize, context: Option<&BracketContext>) -> bool {
         let left = &self.toks[index - 1];
         let right = &self.toks[index];
-        if left.class == Class::Open
-            || matches!(right.class, Class::Close | Class::Comma | Class::Colon)
-        {
+        if left.class == Class::Open || matches!(right.class, Class::Close | Class::Comma) {
             return false;
+        }
+        if right.class == Class::Colon {
+            // `values[0, :]`: a slice that follows a comma keeps the
+            // comma's space.
+            return left.class == Class::Comma && context.is_some_and(|context| context.slice);
         }
         if left.class == Class::Comma {
             return true;

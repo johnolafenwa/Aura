@@ -1,0 +1,6 @@
+error[AU4003]: array coordinate 2 on axis 0 normalizes to 2, outside 0..2
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_selection_coordinate_out_of_range.au:3:11
+  |
+3 |     print(values[2, :])
+  |           ^
+  = note: Aura call chain (innermost first): main at 1:1

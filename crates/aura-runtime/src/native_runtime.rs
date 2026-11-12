@@ -67,18 +67,19 @@ use crate::runtime_value::{
     task_result_timed_out, try_array_buffer, try_clone_array_containing_value, wait_all_cancelled,
     wait_all_error, wait_all_ready, wait_all_timed_out, wait_any_cancelled, wait_any_error,
     wait_any_ready, wait_any_timed_out, wait_for_runtime_scheduler, without_generator_drop_close,
-    yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
-    CancellationContext, ChannelValue, CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment,
-    DictEntries, EnumVariantValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorHooks,
-    GeneratorValue, HttpListenerValue, InstanceFields, InstanceValue, IntegerArithmeticMode,
-    LightweightTaskFailureSignal, MapValue, ProcessChildValue, ProcessChildWaitStatus,
-    ProcessCompletedValue, ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue,
-    RecvValueResult, RngValue, RuntimeName, RuntimeSchedulerWakeReason, SendValueError,
-    SetElements, SetValue, SharedType, TaskCancelledSignal, TaskGroupValue, TaskValue,
-    TaskWaitStatus, TcpListenerValue, TcpStreamValue, TlsListenerValue, TlsStreamValue,
-    TraitObjectValue, TupleValue, UdpSocketValue, UnixListenerValue, UnixStreamValue, Value,
-    VariantPayloads, VecValue, WebSocketListenerValue, WebSocketValue,
-    DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD, DIRECT_RUNTIME_TYPE_SEPARATOR,
+    yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayCompareOp, ArrayDType, ArrayMaskOp,
+    ArrayPairOp, ArrayReduction, ArrayUnaryOp, ArrayValue, CancellationContext, ChannelValue,
+    CleanupTrapSignal, ClosureCaptureValue, ClosureEnvironment, DictEntries, EnumVariantValue,
+    FileValue, FloatPowerWidth, FunctionValue, GeneratorHooks, GeneratorValue, HttpListenerValue,
+    InstanceFields, InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessSupervisorValue,
+    ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue, RuntimeName,
+    RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue, SharedType,
+    TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TraitObjectValue, TupleValue, UdpSocketValue,
+    UnixListenerValue, UnixStreamValue, Value, VariantPayloads, VecValue, WebSocketListenerValue,
+    WebSocketValue, DIRECT_GENERATOR_STACK_BYTES, DIRECT_RUNTIME_TYPE_FIELD,
+    DIRECT_RUNTIME_TYPE_SEPARATOR,
 };
 use crate::text_methods;
 use aura_core::ops::{BinaryOp, ReceiverKind, UnaryOp};
@@ -1415,6 +1416,12 @@ pub struct OpaqueValue {
     /// the call when the cell holds this tag (Rust-speed step 5a). Every
     /// write to the value, and every change of its type name, clears it.
     shape_tag: AtomicPtr<RuntimeTypeTag>,
+    /// For an `Array` with a list view, the address of the word that counts
+    /// the holders of its buffer, or 0 (see
+    /// [`crate::array_layout::ArrayBuf::holders_address`]). Generated code
+    /// writes an element in place only while that word reads one. It fills
+    /// what was padding, so the box keeps its size.
+    array_holders: std::cell::Cell<usize>,
     #[cfg(all(debug_assertions, not(test)))]
     owner_thread: usize,
 }
@@ -1477,7 +1484,7 @@ impl OpaqueValue {
     fn new(value: Value, runtime_type_name: Option<RuntimeName>) -> Self {
         // A new box has no room yet, so boxing a value costs no more. The
         // first write to a list gives it room.
-        let (access, elements, len, _) = list_view_of(&value);
+        let (access, elements, len, _, holders) = list_view_of(&value);
         Self {
             list_elements: std::cell::Cell::new(elements),
             list_len: std::cell::Cell::new(len),
@@ -1493,6 +1500,7 @@ impl OpaqueValue {
             value: UnsafeCell::new(value),
             runtime_type_name: UnsafeCell::new(runtime_type_name),
             shape_tag: AtomicPtr::new(std::ptr::null_mut()),
+            array_holders: std::cell::Cell::new(holders),
         }
     }
 
@@ -1510,9 +1518,10 @@ impl OpaqueValue {
         }
         // SAFETY: the caller has exclusive access, so no `&mut Value` exists.
         let value = unsafe { &*self.value.get() };
-        let (access, elements, len, capacity) = list_view_of(value);
+        let (access, elements, len, capacity, holders) = list_view_of(value);
         self.list_elements.set(elements);
         self.list_len.set(len);
+        self.array_holders.set(holders);
         self.list_capacity.store(capacity, Ordering::Relaxed);
         self.list_access.store(access, Ordering::Relaxed);
         // Generated code reads an instance's field boxes in place too, so
@@ -2829,6 +2838,8 @@ fn retag_changes(value: &Value, tag: &RuntimeTypeTag) -> bool {
             .tagged_enum_name
             .as_ref()
             .is_some_and(|tagged| std::ptr::eq(tagged.as_str(), variant.enum_name.as_str())),
+        // An Array records its dtype and shape itself.
+        (Value::Array(_), _) => false,
         _ => true,
     }
 }
@@ -2970,44 +2981,71 @@ unsafe fn value_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut Value) -> 
     result
 }
 
-/// The access code, element address, length, and room for in-place
-/// appends of a `list` value or a rank-1 `Array`, or `None` and zeros for
-/// any other value. The storage is on the heap, so the address stays valid
-/// when the box holding the value moves. Only a list that keeps unboxed
-/// scalars or typed values in storage no other list shares has room.
+/// The access code, element address, length, room for in-place appends,
+/// and holder count address of a `list` value or an `Array`, or `None` and
+/// zeros for any other value. The storage is on the heap, so the address
+/// stays valid when the box holding the value moves. Only a list that
+/// keeps unboxed scalars or typed values in storage no other list shares
+/// has room.
+///
+/// A numeric `Array` laid out as one row-major block has a view. Its
+/// access code names its dtype and its rank, from one to
+/// [`DIRECT_ARRAY_MAX_RANK`]. The length word of a rank-1 Array is its
+/// length. For a higher rank it is the address of the Array's extents,
+/// one `usize` for each axis.
 // Inlined into the write paths, where a call costs as much as the body.
 #[inline(always)]
-fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
+fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
     use crate::runtime_value::ArrayStorage;
     match value {
         Value::Vec(vector) => {
             let (form, elements, len, room) = vector.elements.view();
             let access = form.access();
             let room = u32::try_from(room).unwrap_or(u32::MAX);
-            (access, elements, len, room)
+            (access, elements, len, room, 0)
         }
-        Value::Array(array) if array.rank() == 1 => {
-            let (access, elements) = match &array.storage {
-                ArrayStorage::Int32(values) => {
-                    (DirectListAccess::ArrayInt32, values.as_ptr() as usize)
-                }
-                ArrayStorage::Int64(values) => {
-                    (DirectListAccess::ArrayInt64, values.as_ptr() as usize)
-                }
-                ArrayStorage::Float32(values) => {
-                    (DirectListAccess::ArrayFloat32, values.as_ptr() as usize)
-                }
-                ArrayStorage::Float64(values) => {
-                    (DirectListAccess::ArrayFloat64, values.as_ptr() as usize)
-                }
+        // A strided view has no element address to read in place, so it
+        // keeps the `None` access and every read calls the runtime.
+        Value::Array(array)
+            if (1..=DIRECT_ARRAY_MAX_RANK).contains(&array.rank())
+                && array.is_contiguous()
+                && array.dtype().is_numeric() =>
+        {
+            let (access, elements, holders) = match array.storage() {
+                ArrayStorage::Bool(_) => unreachable!("the guard admits numeric Arrays"),
+                ArrayStorage::Int32(values) => (
+                    DirectListAccess::ArrayInt32,
+                    values.as_ptr() as usize,
+                    values.holders_address(),
+                ),
+                ArrayStorage::Int64(values) => (
+                    DirectListAccess::ArrayInt64,
+                    values.as_ptr() as usize,
+                    values.holders_address(),
+                ),
+                ArrayStorage::Float32(values) => (
+                    DirectListAccess::ArrayFloat32,
+                    values.as_ptr() as usize,
+                    values.holders_address(),
+                ),
+                ArrayStorage::Float64(values) => (
+                    DirectListAccess::ArrayFloat64,
+                    values.as_ptr() as usize,
+                    values.holders_address(),
+                ),
             };
-            (access as u32, elements, array.shape[0], 0)
+            let rank = array.rank();
+            let len = match rank {
+                1 => array.shape[0],
+                _ => array.shape.as_ptr() as usize,
+            };
+            (direct_array_access(access, rank), elements, len, 0, holders)
         }
         // An instance kept in its class's layout: generated code reads and
         // writes its fields at their offsets in the block.
         Value::Instance(instance) => match instance.fields.typed() {
-            Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0),
-            None => (DirectListAccess::None as u32, 0, 0, 0),
+            Some(typed) => (typed.layout().access(), typed.data() as usize, 0, 0, 0),
+            None => (DirectListAccess::None as u32, 0, 0, 0, 0),
         },
         // A variant kept in its enum's layout: generated code tests the
         // variant's index and reads its payloads at their offsets in the
@@ -3016,12 +3054,12 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
         // scalar where they lie (see `crate::json_tape`).
         Value::EnumVariant(variant) => match &variant.payloads {
             VariantPayloads::Typed(typed) => {
-                (typed.layout().access(), typed.data(), typed.variant(), 0)
+                (typed.layout().access(), typed.data(), typed.variant(), 0, 0)
             }
-            VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0),
-            VariantPayloads::Values(_) => (DirectListAccess::None as u32, 0, 0, 0),
+            VariantPayloads::Json(node) => (JSON_TAPE_ACCESS, node.address(), 0, 0, 0),
+            VariantPayloads::Values(_) => (DirectListAccess::None as u32, 0, 0, 0, 0),
         },
-        _ => (DirectListAccess::None as u32, 0, 0, 0),
+        _ => (DirectListAccess::None as u32, 0, 0, 0, 0),
     }
 }
 
@@ -3033,9 +3071,19 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32) {
 pub const JSON_TAPE_ACCESS: u32 = 0xF0;
 
 const _: () = assert!(
-    JSON_TAPE_ACCESS > DirectListAccess::ArrayFloat64 as u32
+    JSON_TAPE_ACCESS > direct_array_access(DirectListAccess::ArrayFloat64, DIRECT_ARRAY_MAX_RANK)
         && JSON_TAPE_ACCESS < FIRST_PLAIN_ACCESS
 );
+
+/// The highest rank of an `Array` whose elements generated code reads and
+/// writes in place.
+pub const DIRECT_ARRAY_MAX_RANK: usize = 4;
+
+/// The access code of an `Array` of `rank` axes whose rank-1 code is
+/// `dtype`. The four dtype codes repeat for each rank.
+pub const fn direct_array_access(dtype: DirectListAccess, rank: usize) -> u32 {
+    dtype as u32 + 4 * (rank as u32 - 1)
+}
 
 /// Refreshes a value's list view when a write ends.
 struct RefreshListView<'a>(&'a OpaqueValue);
@@ -3056,7 +3104,7 @@ impl Drop for RefreshListView<'_> {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 #[repr(u32)]
 pub enum DirectListAccess {
-    /// Not a list or a rank-1 `Array`, or shared with another thread. Every
+    /// Not a list or an `Array` with a view, or shared with another thread. Every
     /// read calls the runtime.
     None = 0,
     /// A list of `Value`s. Only its length is read in place.
@@ -3269,6 +3317,9 @@ pub struct DirectListLayout {
     /// generated code may append in place while the count exceeds the
     /// length.
     pub capacity_offset: i32,
+    /// The offset of the address of an `Array` buffer's holder count in an
+    /// [`OpaqueValue`].
+    pub holders_offset: i32,
 }
 
 impl DirectListLayout {
@@ -3280,6 +3331,11 @@ impl DirectListLayout {
             i64::from(self.elements_offset),
             i64::from(self.len_offset),
             i64::from(self.capacity_offset),
+            i64::from(self.holders_offset),
+            i64::from(direct_array_access(
+                DirectListAccess::ArrayFloat64,
+                DIRECT_ARRAY_MAX_RANK,
+            )),
             DirectListAccess::Int64 as i64,
             DirectListAccess::Float64 as i64,
             DirectListAccess::Bool as i64,
@@ -3311,6 +3367,7 @@ pub fn direct_list_layout() -> DirectListLayout {
         elements_offset: std::mem::offset_of!(OpaqueValue, list_elements) as i32,
         len_offset: std::mem::offset_of!(OpaqueValue, list_len) as i32,
         capacity_offset: std::mem::offset_of!(OpaqueValue, list_capacity) as i32,
+        holders_offset: std::mem::offset_of!(OpaqueValue, array_holders) as i32,
     }
 }
 
@@ -9924,7 +9981,7 @@ pub extern "C-unwind" fn aura_direct_array_clone(
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
-        let cloned = with_array(array, ArrayValue::try_clone);
+        let cloned = with_array(array, ArrayValue::clone_member);
         boxed_value(Value::Array(direct_array_result(cloned, line, column)))
     })
 }
@@ -10029,6 +10086,94 @@ pub extern "C-unwind" fn aura_direct_array_set_index_in_place(
     })
 }
 
+/// The coordinates an element access passes as plain words: the first
+/// `rank` of the four.
+fn direct_array_coordinate_words(
+    rank: i64,
+    words: &[i64; DIRECT_ARRAY_MAX_RANK],
+) -> std::result::Result<&[i64], Diagnostic> {
+    usize::try_from(rank)
+        .ok()
+        .filter(|rank| (1..=DIRECT_ARRAY_MAX_RANK).contains(rank))
+        .map(|rank| &words[..rank])
+        .ok_or_else(|| {
+            Diagnostic::coded(
+                "AU4001",
+                format!("direct Array ABI received invalid coordinate count `{rank}`"),
+            )
+        })
+}
+
+/// `array[c0, c1, ...]` for `rank` integer coordinates (ADR-0091): the
+/// element as one word. A float is its `float64` bits, and an integer is
+/// sign-extended. Generated code reads a row-major Array in place and
+/// calls this for a view, a shared value, or a coordinate out of range.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_read_at(
+    array: *mut OpaqueValue,
+    rank: i64,
+    c0: i64,
+    c1: i64,
+    c2: i64,
+    c3: i64,
+    line: i64,
+    column: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let words = [c0, c1, c2, c3];
+        let coordinates =
+            direct_array_result(direct_array_coordinate_words(rank, &words), line, column);
+        let value = with_array(array, |array| array.get(coordinates));
+        match direct_array_result(value, line, column) {
+            Value::Float(value) => value.to_bits() as i64,
+            Value::Bool(value) => i64::from(value),
+            Value::Int(value) => value
+                .as_i128()
+                .and_then(|value| i64::try_from(value).ok())
+                .expect("an Array integer element fits in int64"),
+            other => runtime_error(format!(
+                "direct Array ABI read an element of type `{}`",
+                value_type_name(&other)
+            )),
+        }
+    })
+}
+
+/// `array[c0, c1, ...] = value` for `rank` integer coordinates
+/// (ADR-0091). `bits` is the element as [`aura_direct_array_read_at`]
+/// returns one. Generated code writes a row-major Array that holds its
+/// buffer alone in place and calls this otherwise.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_write_at(
+    array: *mut OpaqueValue,
+    rank: i64,
+    c0: i64,
+    c1: i64,
+    c2: i64,
+    c3: i64,
+    bits: i64,
+    line: i64,
+    column: i64,
+) {
+    task_runtime_boundary(|| {
+        let words = [c0, c1, c2, c3];
+        let coordinates =
+            direct_array_result(direct_array_coordinate_words(rank, &words), line, column);
+        let result = with_array_mut(array, |array| {
+            let value = match array.dtype() {
+                ArrayDType::Int32 => Value::Int(IntegerValue::from_i32(bits as i32)),
+                ArrayDType::Int64 => Value::Int(IntegerValue::from_i64(bits)),
+                ArrayDType::Float32 | ArrayDType::Float64 => {
+                    Value::Float(f64::from_bits(bits as u64))
+                }
+                ArrayDType::Bool => Value::Bool(bits != 0),
+            };
+            array.set(coordinates, value)
+        });
+        let _ = direct_array_result(result, line, column);
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_array_slice(
     array: *mut OpaqueValue,
@@ -10050,20 +10195,418 @@ pub extern "C-unwind" fn aura_direct_array_slice(
     })
 }
 
+/// `array[selection]` for an index with a slice among its components. The
+/// result is a view that shares the Array's buffer (ADR-0088).
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_select(
+    array: *mut OpaqueValue,
+    selection: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let selection = direct_array_result(direct_array_selection(selection), line, column);
+        let view = with_array(array, |array| array.select(&selection));
+        boxed_value(Value::Array(direct_array_result(view, line, column)))
+    })
+}
+
+/// `array[selection] = value`, where `value` is a scalar or an Array that
+/// broadcasts to the selected shape.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_assign_in_place(
+    array: *mut OpaqueValue,
+    selection: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let selection = direct_array_result(direct_array_selection(selection), line, column);
+        // The assignment owns the value, so a view of the target dies
+        // before the write and leaves the target's buffer unshared.
+        let value = unsafe { consume_owned_value(value) };
+        let result = with_array_mut(array, |array| array.assign_owned(&selection, value));
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+/// `array[selection]` for one or two components, whose selection words
+/// arrive as plain arguments.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_select_words(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        let view = crate::array_views::ArrayAxisSelection::decode_inline(words).and_then(
+            |(selection, count)| with_array(array, |array| array.select(&selection[..count])),
+        );
+        boxed_value(Value::Array(direct_array_result(view, line, column)))
+    })
+}
+
+/// `array[selection] = value` for one or two components.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_assign_words_in_place(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    value: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        // The assignment owns the value, as in
+        // `aura_direct_array_assign_in_place`.
+        let value = unsafe { consume_owned_value(value) };
+        let result = crate::array_views::ArrayAxisSelection::decode_inline(words).and_then(
+            |(selection, count)| {
+                with_array_mut(array, |array| {
+                    array.assign_owned(&selection[..count], value)
+                })
+            },
+        );
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+/// `array.sum(axis)` and the other reductions along one axis.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_reduce_axis(
+    array: *mut OpaqueValue,
+    reduction: i64,
+    axis: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_reduction(reduction)
+            .and_then(|reduction| with_array(array, |array| array.reduce_axis(reduction, axis)));
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// The operation `code` names, or the diagnostic for a code generated
+/// code never passes.
+fn direct_array_member<T>(
+    code: i64,
+    decode: impl Fn(i64) -> Option<T>,
+) -> std::result::Result<T, Diagnostic> {
+    decode(code)
+        .ok_or_else(|| Diagnostic::coded("AU4007", format!("unknown array member code {code}")))
+}
+
+/// Reads every value of `pointers` at once. A value named twice is
+/// locked once.
+unsafe fn with_values<T>(pointers: &[*mut OpaqueValue], read: impl FnOnce(&[&Value]) -> T) -> T {
+    unsafe fn lock<T>(
+        pointers: &[*mut OpaqueValue],
+        held: &mut Vec<*const Value>,
+        read: impl FnOnce(&[&Value]) -> T,
+    ) -> T {
+        let at = held.len();
+        let Some(pointer) = pointers.get(at) else {
+            // SAFETY: every pointer in `held` is read under an access
+            // guard that an enclosing frame still holds.
+            let values: Vec<&Value> = held.iter().map(|value| unsafe { &**value }).collect();
+            return read(&values);
+        };
+        if let Some(earlier) = pointers[..at].iter().position(|other| other == pointer) {
+            held.push(held[earlier]);
+            return unsafe { lock(pointers, held, read) };
+        }
+        unsafe {
+            with_value(*pointer, |value| {
+                held.push(value);
+                lock(pointers, held, read)
+            })
+        }
+    }
+    unsafe { lock(pointers, &mut Vec::with_capacity(pointers.len()), read) }
+}
+
+/// Reads the Array `pointers[0]` and the operand values after it.
+fn with_array_operands<T>(
+    pointers: &[*mut OpaqueValue],
+    read: impl FnOnce(&ArrayValue, &[&Value]) -> T,
+) -> T {
+    unsafe {
+        with_values(pointers, |values| match values[0] {
+            Value::Array(array) => read(array, &values[1..]),
+            other => runtime_error(format!(
+                "expected `Array`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// `array.abs()`, the math members, `to_float()`, and `logical_not()`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_unary(
+    array: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_member(operation, ArrayUnaryOp::from_code)
+            .and_then(|operation| with_array(array, |array| array.unary(operation)));
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array.minimum(other)`, `maximum`, `pow`, `logical_and`, and
+/// `logical_or`. `other` is an Array or one element, and is borrowed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_pairwise(
+    array: *mut OpaqueValue,
+    other: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_member(operation, ArrayPairOp::from_code).and_then(|operation| {
+            with_array_operands(&[array, other], |array, operands| {
+                array.pairwise(operands[0], operation)
+            })
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array.less(other)` and the other comparison members.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_compare(
+    array: *mut OpaqueValue,
+    other: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result =
+            direct_array_member(operation, ArrayCompareOp::from_code).and_then(|operation| {
+                with_array_operands(&[array, other], |array, operands| {
+                    array.compare(operands[0], operation)
+                })
+            });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `mask.any()`, `mask.all()`, and `mask.count()`, as a boxed scalar.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_mask_reduce(
+    array: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_member(operation, ArrayMaskOp::from_code)
+            .and_then(|operation| with_array(array, |array| array.mask_reduce(operation)));
+        boxed_value(direct_array_result(result, line, column))
+    })
+}
+
+/// `mask.choose(when_true, when_false)` for a result of dtype `dtype`.
+/// Both values are borrowed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_choose(
+    mask: *mut OpaqueValue,
+    when_true: *mut OpaqueValue,
+    when_false: *mut OpaqueValue,
+    dtype: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_member(dtype, ArrayDType::from_code).and_then(|dtype| {
+            with_array_operands(&[mask, when_true, when_false], |mask, operands| {
+                mask.choose(operands[0], operands[1], dtype)
+            })
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array as Array[T]` for the dtype code `dtype`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_cast(
+    array: *mut OpaqueValue,
+    dtype: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = direct_array_member(dtype, ArrayDType::from_code)
+            .and_then(|dtype| with_array(array, |array| array.cast(dtype)));
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array[selection] op= value` for one or two components. The update
+/// owns the value, as an assignment does.
+#[allow(clippy::too_many_arguments)]
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_update_words_in_place(
+    array: *mut OpaqueValue,
+    kind0: i64,
+    start0: i64,
+    end0: i64,
+    step0: i64,
+    kind1: i64,
+    start1: i64,
+    end1: i64,
+    step1: i64,
+    value: *mut OpaqueValue,
+    operation: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let words = [kind0, start0, end0, step0, kind1, start1, end1, step1];
+        let value = unsafe { consume_owned_value(value) };
+        let result = direct_array_operation(operation).and_then(|operation| {
+            let (selection, count) = crate::array_views::ArrayAxisSelection::decode_inline(words)?;
+            with_array_mut(array, |array| {
+                array.update(
+                    &selection[..count],
+                    value,
+                    operation,
+                    IntegerArithmeticMode::Checked,
+                )
+            })
+        });
+        direct_array_result(result, line, column);
+        boxed_value(Value::Unit)
+    })
+}
+
+fn direct_array_selection(
+    selection: *mut OpaqueValue,
+) -> std::result::Result<Vec<crate::array_views::ArrayAxisSelection>, Diagnostic> {
+    let words = direct_array_coordinates(selection)?;
+    crate::array_views::ArrayAxisSelection::decode(&words)
+}
+
+/// `array.reshape(shape)` for a zero `kind`, and `array.permute(axes)`
+/// for a one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_reshape(
+    array: *mut OpaqueValue,
+    axes: *mut OpaqueValue,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let axes = direct_array_result(direct_array_coordinates(axes), line, column);
+        let result = with_array(array, |array| match kind {
+            0 => array.reshape(&axes),
+            _ => array.permute(&axes),
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// `array.flatten()` for a zero `kind`, and `array.transpose()` for a one.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_relayout(
+    array: *mut OpaqueValue,
+    kind: i64,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let result = with_array(array, |array| match kind {
+            0 => array.reshape(&[-1]),
+            _ => array.transpose(),
+        });
+        boxed_value(Value::Array(direct_array_result(result, line, column)))
+    })
+}
+
+/// Set in the flags of `aura_direct_array_binary` when the left operand is
+/// a scalar.
+pub const ARRAY_BINARY_SCALAR_LEFT: i64 = 1;
+/// Set when the left operand is a temporary the caller releases next.
+pub const ARRAY_BINARY_LEFT_TEMPORARY: i64 = 2;
+/// Set when the right operand is a temporary the caller releases next.
+pub const ARRAY_BINARY_RIGHT_TEMPORARY: i64 = 4;
+
+/// Whether the caller's reference to `value` is the only one.
+unsafe fn is_sole_reference(value: *mut OpaqueValue) -> bool {
+    value
+        .as_ref()
+        .is_some_and(|value| value.ref_count.load(Ordering::Relaxed) == 1)
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_array_binary(
     left: *mut OpaqueValue,
     right: *mut OpaqueValue,
-    scalar_left: i64,
+    flags: i64,
     operation: i64,
     arithmetic_mode: i64,
     line: i64,
     column: i64,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| {
+        let scalar_left = flags;
         let operation = direct_array_result(direct_array_operation(operation), line, column);
         let arithmetic_mode =
             direct_array_result(direct_array_arithmetic_mode(arithmetic_mode), line, column);
+        // Generated code marks an operand that is a temporary it is about
+        // to release. A temporary no other reference reaches lends its
+        // buffer to the result.
+        let reusable = [
+            (ARRAY_BINARY_LEFT_TEMPORARY, left, right, true),
+            (ARRAY_BINARY_RIGHT_TEMPORARY, right, left, false),
+        ];
+        let scalar_left = scalar_left & ARRAY_BINARY_SCALAR_LEFT;
+        for (flag, temporary, other, temporary_left) in reusable {
+            if flags & flag == 0 || left == right || !unsafe { is_sole_reference(temporary) } {
+                continue;
+            }
+            let reused = unsafe {
+                with_value(other, |other| {
+                    value_mut(temporary, |temporary| match temporary {
+                        Value::Array(array) => {
+                            array.binary_reusing(other, temporary_left, operation, arithmetic_mode)
+                        }
+                        _ => None,
+                    })
+                })
+            };
+            if let Some(result) = reused {
+                return boxed_value(Value::Array(direct_array_result(result, line, column)));
+            }
+        }
         let evaluate = |left_value: &Value, right_value: &Value| {
             match (left_value, right_value) {
                 (Value::Array(left), Value::Array(right)) if scalar_left == 0 => {

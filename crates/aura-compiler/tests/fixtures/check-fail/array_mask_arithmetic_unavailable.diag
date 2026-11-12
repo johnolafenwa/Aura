@@ -1,0 +1,6 @@
+error[AU2003]: Array arithmetic is not supported for `Array[bool]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_mask_arithmetic_unavailable.au:3:11
+  |
+3 |     print(flags + flags)
+  |           ^
+  = help: combine masks with `logical_and`, `logical_or`, and `logical_not`

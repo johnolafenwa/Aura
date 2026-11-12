@@ -1,0 +1,5 @@
+error[AU2002]: `Array.sum` expects an `int64` axis, found `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_axis_requires_int64.au:3:22
+  |
+3 |     print(values.sum(1.5))
+  |                      ^

@@ -1,0 +1,5 @@
+error[AU2002]: Array indices must have type `int64` or a losslessly narrower integer type, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_selection_str_coordinate.au:3:18
+  |
+3 |     print(values["a", :])
+  |                  ^

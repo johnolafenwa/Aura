@@ -53,6 +53,18 @@ public copy class F64x2:
         values[at] = self.l0
         values[at + 1] = self.l1
 
+    public def load_array(values: Array[float64], at: int64) -> F64x2:
+        """The 2 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return F64x2(l0=values[at], l1=values[at + 1])
+
+    public def store_array(self, values: mut Array[float64], at: int64):
+        """Writes the lanes over the 2 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+
     public def min(self, other: F64x2) -> F64x2:
         """In each lane, `self` where it is less than `other`, else
         `other`."""
@@ -135,6 +147,20 @@ public copy class F64x4:
         values[at + 2] = self.l2
         values[at + 3] = self.l3
 
+    public def load_array(values: Array[float64], at: int64) -> F64x4:
+        """The 4 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return F64x4(l0=values[at], l1=values[at + 1], l2=values[at + 2], l3=values[at + 3])
+
+    public def store_array(self, values: mut Array[float64], at: int64):
+        """Writes the lanes over the 4 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+        values[at + 2] = self.l2
+        values[at + 3] = self.l3
+
     public def min(self, other: F64x4) -> F64x4:
         """In each lane, `self` where it is less than `other`, else
         `other`."""
@@ -212,6 +238,20 @@ public copy class F32x4:
     public def store(self, values: mut list[float32], at: int64):
         """Writes the lanes over the 4 elements of `values` from index
         `at`. Each index must be inside the list."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+        values[at + 2] = self.l2
+        values[at + 3] = self.l3
+
+    public def load_array(values: Array[float32], at: int64) -> F32x4:
+        """The 4 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return F32x4(l0=values[at], l1=values[at + 1], l2=values[at + 2], l3=values[at + 3])
+
+    public def store_array(self, values: mut Array[float32], at: int64):
+        """Writes the lanes over the 4 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
         values[at] = self.l0
         values[at + 1] = self.l1
         values[at + 2] = self.l2
@@ -307,6 +347,24 @@ public copy class F32x8:
         values[at + 6] = self.l6
         values[at + 7] = self.l7
 
+    public def load_array(values: Array[float32], at: int64) -> F32x8:
+        """The 8 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return F32x8(l0=values[at], l1=values[at + 1], l2=values[at + 2], l3=values[at + 3], l4=values[at + 4], l5=values[at + 5], l6=values[at + 6], l7=values[at + 7])
+
+    public def store_array(self, values: mut Array[float32], at: int64):
+        """Writes the lanes over the 8 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+        values[at + 2] = self.l2
+        values[at + 3] = self.l3
+        values[at + 4] = self.l4
+        values[at + 5] = self.l5
+        values[at + 6] = self.l6
+        values[at + 7] = self.l7
+
     public def min(self, other: F32x8) -> F32x8:
         """In each lane, `self` where it is less than `other`, else
         `other`."""
@@ -385,6 +443,18 @@ public copy class I64x2:
         values[at] = self.l0
         values[at + 1] = self.l1
 
+    public def load_array(values: Array[int64], at: int64) -> I64x2:
+        """The 2 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return I64x2(l0=values[at], l1=values[at + 1])
+
+    public def store_array(self, values: mut Array[int64], at: int64):
+        """Writes the lanes over the 2 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+
     public def min(self, other: I64x2) -> I64x2:
         """In each lane, `self` where it is less than `other`, else
         `other`."""
@@ -450,6 +520,20 @@ public copy class I64x4:
     public def store(self, values: mut list[int64], at: int64):
         """Writes the lanes over the 4 elements of `values` from index
         `at`. Each index must be inside the list."""
+        values[at] = self.l0
+        values[at + 1] = self.l1
+        values[at + 2] = self.l2
+        values[at + 3] = self.l3
+
+    public def load_array(values: Array[int64], at: int64) -> I64x4:
+        """The 4 elements of the rank-1 Array `values` from index
+        `at`. Each index follows the Array index rules and must be
+        inside the Array."""
+        return I64x4(l0=values[at], l1=values[at + 1], l2=values[at + 2], l3=values[at + 3])
+
+    public def store_array(self, values: mut Array[int64], at: int64):
+        """Writes the lanes over the 4 elements of the rank-1 Array
+        `values` from index `at`. Each index must be inside the Array."""
         values[at] = self.l0
         values[at + 1] = self.l1
         values[at + 2] = self.l2

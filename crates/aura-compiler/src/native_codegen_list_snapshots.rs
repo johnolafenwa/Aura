@@ -26,6 +26,14 @@
 //!   shared list has no form generated code reads. Neither reads its view
 //!   once.
 //!
+//! An `Array` local is read once the same way (ADR-0091). Its loop holds
+//! only element reads and writes by integer coordinates, which leave the
+//! Array's layout as it is. The loop's copy runs when the view names the
+//! dtype and rank the accesses expect and, for a loop that writes, when
+//! the Array is the only holder of its buffer. The copy then knows the
+//! access code, the elements address, each extent, and that every write
+//! lands in place.
+//!
 //! Nothing outside these instructions reaches the list while the loop
 //! runs: a callee reaches a local list only when it is passed in, and a
 //! list a closure, a task, or a loan of the whole list can reach is never
@@ -44,7 +52,7 @@ use crate::mir::{
     instruction_place_mentions, terminator_place_mentions, CallTarget, Instruction, MirFunction,
     Operand, Rvalue,
 };
-use crate::runtime_ops::{ListOp, RuntimeOp};
+use crate::runtime_ops::{ArrayOp, ListOp, RuntimeOp};
 
 /// One loop that reads the view of `list` once.
 #[derive(Clone, Debug, Eq, PartialEq)]
@@ -138,8 +146,96 @@ fn view_use(instruction: &Instruction, list: &str, pure_index: bool) -> Option<V
                 _ => None,
             }
         }
+        // An element read or write of an `Array` by integer coordinates
+        // keeps the Array's layout. A write keeps the buffer too while
+        // the Array is its only holder, which the loop's entry checks.
+        Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Array(op),
+                            receiver: Some(Operand::Place(receiver)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        } if receiver == list
+            && root(target) != list
+            && args.iter().all(|arg| {
+                !matches!(&arg.value, Operand::Place(place) | Operand::MovePlace(place) if root(place) == list)
+                    && arg.writeback_place.as_deref().is_none_or(|place| root(place) != list)
+            }) =>
+        {
+            match op {
+                ArrayOp::ReadAt => Some(ViewUse::Reads),
+                ArrayOp::WriteAt => Some(ViewUse::Writes),
+                // A read by one coordinate, or by a tuple of them, which
+                // `array_region_rank` turns away.
+                ArrayOp::Index => Some(ViewUse::Reads),
+                // The element count is a runtime call that changes nothing.
+                ArrayOp::Len => Some(ViewUse::Reads),
+                _ => None,
+            }
+        }
         _ => None,
     }
+}
+
+/// The number of coordinates every element access of the Array `list` in
+/// `region` names, when they all name the same number. `is_word` says
+/// whether a local is one `int64`.
+pub(super) fn array_region_rank(
+    function: &MirFunction,
+    region: &ListSnapshotRegion,
+    is_word: impl Fn(&str) -> bool,
+) -> Option<usize> {
+    let mut rank = None;
+    for block in &function.blocks {
+        if !region.blocks.contains(&block.label) {
+            continue;
+        }
+        for instruction in &block.instructions {
+            let Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Array(op),
+                                receiver: Some(Operand::Place(receiver)),
+                                ..
+                            },
+                        args,
+                        ..
+                    },
+                ..
+            } = instruction
+            else {
+                continue;
+            };
+            if *receiver != region.list {
+                continue;
+            }
+            let found = match (op, args.first().map(|arg| &arg.value)) {
+                (ArrayOp::Len, _) => continue,
+                (ArrayOp::ReadAt | ArrayOp::WriteAt, Some(Operand::Int(rank))) => *rank as usize,
+                (ArrayOp::Index, Some(Operand::Int(_))) => 1,
+                (ArrayOp::Index, Some(Operand::Place(place) | Operand::MovePlace(place)))
+                    if is_word(place) =>
+                {
+                    1
+                }
+                _ => return None,
+            };
+            if rank.is_some_and(|rank| rank != found) {
+                return None;
+            }
+            rank = Some(found);
+        }
+    }
+    rank
 }
 
 /// Whether `instruction` lets something other than this function's own
@@ -180,7 +276,7 @@ pub(super) fn list_snapshot_regions(
                         Rvalue::Call {
                             callee:
                                 CallTarget::Runtime {
-                                    op: RuntimeOp::List(_),
+                                    op: RuntimeOp::List(_) | RuntimeOp::Array(_),
                                     receiver: Some(Operand::Place(receiver)),
                                     ..
                                 },
@@ -407,6 +503,21 @@ pub(super) struct ListSnapshot {
     /// The call slot of the mutable parameter that holds the list, whose
     /// write-through sink must be absent for the loop's copy to run.
     pub(super) sink: Option<usize>,
+    /// Set when the local is an `Array`: what the loop's copy knows about
+    /// its layout.
+    pub(super) array: Option<ArraySnapshot>,
+}
+
+/// The layout of an `Array` a loop reads once (ADR-0091). The loop's copy
+/// runs only while the Array's view has `code`, and for a loop that writes
+/// elements, while the Array holds its buffer alone.
+#[derive(Clone, Debug)]
+pub(super) struct ArraySnapshot {
+    /// The view's access code, which names the dtype and `rank`.
+    pub(super) code: i64,
+    pub(super) rank: usize,
+    /// The extent of each of the first `rank` axes.
+    pub(super) extents: [Var; aura_runtime::native_runtime::DIRECT_ARRAY_MAX_RANK],
 }
 
 impl FunctionCompiler<'_> {
@@ -510,6 +621,122 @@ impl FunctionCompiler<'_> {
         Ok(())
     }
 
+    /// Copies the view of snapshot `index`'s Array into its variables,
+    /// with whether the loop's copy may run: the view has the access code
+    /// the loop's accesses expect, and a loop that writes elements finds
+    /// the Array the only holder of its buffer. Nothing in such a loop
+    /// names the Array but element accesses, so the layout, the buffer,
+    /// and the holder count stay as they are while it runs.
+    fn emit_array_snapshot(
+        &mut self,
+        index: usize,
+        array: &ArraySnapshot,
+    ) -> std::result::Result<(Val, Val), String> {
+        let snapshot = self.list_snapshots[index].clone();
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let flags = MemFlags::trusted();
+        let vars = self.local_vars(&snapshot.region.list)?;
+        let [var] = vars.as_slice() else {
+            return Err(format!(
+                "direct backend read the view of `{}`, which is not one box",
+                snapshot.region.list
+            ));
+        };
+        let handle = self.builder.use_var(*var);
+        let read_block = self.builder.create_block();
+        let layout_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        // The flag, the access code, the elements, the length word, and
+        // each extent.
+        let words = 4 + array.extents.len();
+        for _ in 0..words {
+            self.builder.append_block_param(join_block, types::I64);
+        }
+        let zero = self.builder.iconst(types::I64, 0);
+        let none = vec![zero; words];
+        self.builder
+            .brif(handle, read_block, &[], join_block, &none);
+
+        self.builder.switch_to_block(read_block);
+        self.builder.seal_block(read_block);
+        let access = self.builder.uload32(flags, handle, layout.access_offset);
+        let exact = self.builder.icmp_imm(IntCC::Equal, access, array.code);
+        let mut other = none.clone();
+        other[1] = access;
+        self.builder
+            .brif(exact, layout_block, &[], join_block, &other);
+
+        self.builder.switch_to_block(layout_block);
+        self.builder.seal_block(layout_block);
+        let elements = self
+            .builder
+            .load(types::I64, flags, handle, layout.elements_offset);
+        // The length word is the length of a rank-1 Array and the address
+        // of the extents otherwise.
+        let length = self
+            .builder
+            .load(types::I64, flags, handle, layout.len_offset);
+        let mut extents = vec![zero; array.extents.len()];
+        for (axis, extent) in extents.iter_mut().enumerate().take(array.rank) {
+            *extent = match array.rank {
+                1 => length,
+                _ => self
+                    .builder
+                    .load(types::I64, flags, length, axis as i32 * 8),
+            };
+        }
+        let mut qualifies = self.builder.iconst(types::I64, 1);
+        if snapshot.region.writes {
+            let holders = self
+                .builder
+                .load(types::I64, flags, handle, layout.holders_offset);
+            let count = self.builder.load(types::I64, flags, holders, 0);
+            let alone = self.builder.icmp_imm(IntCC::Equal, count, 1);
+            let alone = self.builder.uextend(types::I64, alone);
+            qualifies = self.builder.band(qualifies, alone);
+        }
+        if let Some(slot) = snapshot.sink {
+            let sink = self.current_mutable_sink(slot);
+            let direct = self.builder.icmp_imm(IntCC::Equal, sink, 0);
+            let direct = self.builder.uextend(types::I64, direct);
+            qualifies = self.builder.band(qualifies, direct);
+        }
+        let mut found = vec![qualifies, access, elements, length];
+        found.extend(extents);
+        self.builder.jump(join_block, &found);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        let params = self.builder.block_params(join_block).to_vec();
+        for (variable, value) in [
+            snapshot.ok,
+            snapshot.access,
+            snapshot.elements,
+            snapshot.len,
+        ]
+        .into_iter()
+        .chain(array.extents)
+        .zip(params.iter().copied())
+        {
+            self.builder.def_var(variable, value);
+        }
+        Ok((params[0], params[1]))
+    }
+
+    /// What the loop's copy knows about the Array `array`, when the access
+    /// being compiled is in a loop that reads its layout once: the loop's
+    /// index and the layout.
+    pub(super) fn array_snapshot(&self, array: Val, rank: usize) -> Option<(usize, ArraySnapshot)> {
+        let index = *self.snapshot_vals.get(&array)?;
+        let snapshot = self.list_snapshots[index].array.clone()?;
+        (snapshot.rank == rank).then_some((index, snapshot))
+    }
+
+    /// The elements address of loop `index`'s Array as its entry read it.
+    pub(super) fn snapshot_elements(&mut self, index: usize) -> Val {
+        self.builder.use_var(self.list_snapshots[index].elements)
+    }
+
     /// Copies the view of snapshot `index`'s list into its variables, with
     /// whether the view qualifies (see the module documentation).
     fn emit_list_snapshot(&mut self, index: usize) -> std::result::Result<(Val, Val), String> {
@@ -517,6 +744,9 @@ impl FunctionCompiler<'_> {
             DirectListAccess, FIRST_CLASS_ACCESS, FIRST_PLAIN_ACCESS,
         };
         let snapshot = self.list_snapshots[index].clone();
+        if let Some(array) = &snapshot.array {
+            return self.emit_array_snapshot(index, array);
+        }
         let layout = aura_runtime::native_runtime::direct_list_layout();
         let flags = MemFlags::trusted();
         let vars = self.local_vars(&snapshot.region.list)?;

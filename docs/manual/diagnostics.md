@@ -76,7 +76,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -467,7 +467,7 @@ owner's region.
 | `AU4004` | zero divisor | Division by zero. | Check the divisor before dividing. |
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
-| `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
+| `AU4007` | numeric Array shape or reduction violation | Array shapes that do not broadcast, an axis outside the rank, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
 | `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
 
 Each runtime code's precise causes are listed under
@@ -477,12 +477,16 @@ Each runtime code's precise causes are listed under
 
 - rank-zero or negative-dimension construction
 - a `from_list` count mismatch
-- an exact-shape operator mismatch
+- an operator, comparison, or `choose` whose shapes do not broadcast
+- a reduction axis outside the rank
 - a direct coordinate-count or runtime-rank mismatch
-- empty `min`, `max`, or `mean`
+- an index with more components than the runtime rank
+- a `reshape` or `permute` the Array's shape does not allow
+- a slice assignment whose value does not broadcast to the selection
+- `min`, `max`, or `mean` of an empty Array or an empty lane
 
 Shape-product or element-count overflow and allocation failure stay `AU4005`.
-Out-of-range coordinates and invalid first-axis slice bounds stay `AU4003`.
+Out-of-range coordinates and invalid slice bounds or steps stay `AU4003`.
 Absence from the optional `get` is ordinary `None`. Method `set` traps on an
 invalid coordinate or rank.
 
@@ -760,13 +764,15 @@ items for Queue.
 ### Slices
 
 Owned list and str slicing, with or without a step, is implemented. Slice
-assignment is reserved. It reports `AU2005` with this exact message:
+assignment to a list or `str` reports `AU2005` with this exact message:
 
     slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
 
-A stepped slice of an `Array` reports `AU2003`. A zero step, or a
-negative-step slice whose start is outside the value or whose end exceeds
-its start, stops the program with `AU4003`.
+An `Array` accepts slice assignment. A slice among several index
+components, as in `values[0, 1:]`, is an Array form, and reports `AU2003`
+on any other type. A zero step, or a negative-step slice whose start is
+outside the value or whose end exceeds its start, stops the program with
+`AU4003`.
 
 Other slice rules:
 

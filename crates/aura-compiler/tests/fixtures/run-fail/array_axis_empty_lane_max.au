@@ -1,0 +1,4 @@
+def main():
+    grid = Array[int64].zeros([0, 3])
+    print(grid.sum(0))
+    print(grid.max(0))

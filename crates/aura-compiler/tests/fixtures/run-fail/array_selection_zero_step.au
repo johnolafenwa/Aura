@@ -1,0 +1,4 @@
+def main():
+    values = Array[int32].zeros([4])
+    step = 0
+    print(values[::step])

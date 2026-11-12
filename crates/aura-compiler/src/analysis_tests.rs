@@ -11427,3 +11427,39 @@ fn analysis_completes_and_resolves_members_of_trait_objects() {
     // A type arm binds the held value with its own type.
     assert!(occurrence(31, 18).hover.contains("Echo"));
 }
+
+#[test]
+fn array_selection_results_complete_as_arrays() {
+    let source = concat!(
+        "def main():\n",
+        "    grid = Array[int32].zeros([3, 4])\n",
+        "    row = grid[1, :]\n",
+        "    item = grid[1, 2]\n",
+        "    row.\n",
+    );
+    let completions = complete_source(source, 4, 8, Some('.'))
+        .expect("a selection result should complete during an incomplete edit");
+    for member in ["reshape", "flatten", "transpose", "permute", "sum"] {
+        assert!(
+            completions.iter().any(|item| item.name == member),
+            "an Array view offers `{member}`"
+        );
+    }
+    let direct = concat!(
+        "def main():\n",
+        "    grid = Array[int32].zeros([3, 4])\n",
+        "    grid[::2, 0].\n",
+    );
+    let completions = complete_source(direct, 2, 17, Some('.'))
+        .expect("a selection receiver should complete during an incomplete edit");
+    assert!(completions.iter().any(|item| item.name == "transpose"));
+    let element = concat!(
+        "def main():\n",
+        "    grid = Array[int32].zeros([3, 4])\n",
+        "    grid[1, 2].\n",
+    );
+    let completions = complete_source(element, 2, 15, Some('.'))
+        .expect("an element receiver should complete during an incomplete edit");
+    assert!(completions.iter().any(|item| item.name == "wrapping_add"));
+    assert!(!completions.iter().any(|item| item.name == "transpose"));
+}

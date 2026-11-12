@@ -1,0 +1,6 @@
+error[AU4002]: integer value `9007199254740993` cannot be represented exactly as `float64` at flat index 0
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_cast_inexact_float.au:3:12
+  |
+3 |     print((values as Array[float64]))
+  |            ^
+  = note: Aura call chain (innermost first): main at 1:1

@@ -1,0 +1,5 @@
+error[AU2003]: `Array.sum` is available only for numeric Arrays, found `Array[bool]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_reduction_unavailable_for_masks.au:3:17
+  |
+3 |     print(flags.sum())
+  |                 ^

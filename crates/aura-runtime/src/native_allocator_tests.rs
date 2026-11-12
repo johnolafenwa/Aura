@@ -126,17 +126,20 @@ fn a_thread_that_ends_hands_its_blocks_and_chunk_to_the_shared_lists() {
     .unwrap();
     let mut shared = Vec::new();
     let mut batch = take_shared_batch(class);
+    // Each batch is taken off the list before its blocks are walked. A
+    // batch that is only reached through the link of the one before it is
+    // still on the list, and sharing its blocks again would list them
+    // twice.
     while !batch.is_null() {
         let mut block = batch;
         // SAFETY: the batches taken off the list are the test's now.
         unsafe {
-            let next_batch = (*batch).next_batch;
             while !block.is_null() {
                 shared.push(block as usize);
                 block = (*block).next;
             }
-            batch = next_batch;
         }
+        batch = take_shared_batch(class);
     }
     assert!(
         shared.contains(&freed),

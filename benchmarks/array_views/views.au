@@ -1,0 +1,90 @@
+import sys
+
+
+def matrix(n: int64) -> Array[float64]:
+    mut values: list[float64] = []
+    for i in range(n * n):
+        values.append((i % 97).to_float() * 0.25 + 1.0)
+    return Array[float64].from_list(values, [n, n])
+
+
+def row_sums(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for i in range(n):
+            acc += m[i, :].fast_sum()
+    print(f"row_sums {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def column_sums(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for j in range(n):
+            acc += m[:, j].fast_sum()
+    print(f"column_sums {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def transposed_sum(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        t = m.transpose()
+        acc += (t + m)[n - 1, 0]
+    print(f"transposed_add {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def stencil(n: int64, reps: int64) -> None:
+    mut values: list[float64] = []
+    for i in range(n):
+        values.append((i % 1000).to_float())
+    mut u = Array[float64].from_list(values, [n])
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        u[1:n - 1] = (u[0:n - 2] + u[2:n]) * 0.5
+    print(f"stencil {n} {sys.monotonic_time_ms() - start} {u[n // 2]}")
+
+
+def row_swaps(n: int64, reps: int64) -> None:
+    mut m = matrix(n)
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for i in range(n // 2):
+            upper = m[i, :].clone()
+            m[i, :] = m[n - 1 - i, :]
+            m[n - 1 - i, :] = upper
+    print(f"row_swaps {n} {sys.monotonic_time_ms() - start} {m[0, 1] + m[n - 1, 2]}")
+
+
+def column_scale(n: int64, reps: int64) -> None:
+    mut m = matrix(n)
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for j in range(n):
+            m[:, j] *= 1.0001
+    print(f"column_scale {n} {sys.monotonic_time_ms() - start} {m[n - 1, n - 1]}")
+
+
+def reshape_reverse(n: int64, reps: int64) -> None:
+    m = matrix(n)
+    mut acc = 0.0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        flat = m.reshape([n * n])
+        acc += flat[::-1][rep % n] + flat[::2].fast_sum()
+    print(f"reshape_reverse {n} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def main() -> int32:
+    row_sums(512, 200)
+    column_sums(512, 200)
+    transposed_sum(512, 200)
+    stencil(1000000, 200)
+    row_swaps(512, 400)
+    column_scale(512, 100)
+    reshape_reverse(512, 400)
+    return 0

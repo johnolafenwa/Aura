@@ -1,0 +1,6 @@
+error[AU4001]: cannot cast non-finite float to `int64` at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_cast_non_finite.au:3:19
+  |
+3 |     print((values.sqrt() as Array[int64]))
+  |                   ^
+  = note: Aura call chain (innermost first): main at 1:1

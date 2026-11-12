@@ -29,7 +29,8 @@ use crate::mir::{
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_ops::{
     builtin_function_for_name, builtin_member_for_receiver, ArgDefault, FunctionOp, RuntimeOp,
-    StrOp, INDEX_MEMBER, PERMUTE_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER,
+    StrOp, ASSIGN_MEMBER, ASSIGN_WORDS_MEMBER, INDEX_MEMBER, PERMUTE_MEMBER, SELECT_MEMBER,
+    SELECT_WORDS_MEMBER, SLICE_STEP_MEMBER, SORT_BY_KEYS_MEMBER, SORT_MEMBER, UPDATE_WORDS_MEMBER,
 };
 use crate::runtime_value::{
     append_string_checked, cast_numeric_value, catch_lightweight_task_failure,
@@ -76,6 +77,7 @@ use crate::runtime_value::{
 };
 use crate::sema::{substitute_type, Type};
 use crate::text_methods;
+use aura_runtime::array_views::{ArrayAxisSelection, ARRAY_SELECTION_INLINE_WORDS};
 
 const MIR_FLOOR_DIVISION_OPERANDS_ERROR: &str =
     "MIR floor division requires matching numeric operands";
@@ -6566,9 +6568,10 @@ impl MirRuntime {
             }
             let written = match ffi_value {
                 FfiValue::Bytes(bytes) => bytes_runtime_value(&bytes),
-                FfiValue::Elements(scalar, words) => {
-                    elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?
-                }
+                FfiValue::Elements(scalar, words) => match &argument.value {
+                    Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
+                    _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
+                },
                 FfiValue::Struct(layout, bytes) => {
                     struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
@@ -7355,7 +7358,7 @@ impl MirRuntime {
             "clone" => {
                 debug_assert!(args.is_empty());
                 array_place_ref(env, object_place)?
-                    .try_clone()
+                    .clone_member()
                     .map(Value::Array)
             }
             "get" => {
@@ -7410,6 +7413,239 @@ impl MirRuntime {
                         error
                     })?;
                 Ok(Value::Unit)
+            }
+            crate::runtime_ops::READ_AT_MEMBER | crate::runtime_ops::WRITE_AT_MEMBER => {
+                use crate::runtime_ops as ops;
+                let values = evaluate_named_args(args, env)?;
+                let write = field == ops::WRITE_AT_MEMBER;
+                debug_assert_eq!(
+                    values.len(),
+                    3 + ops::ARRAY_COORDINATE_WORDS + usize::from(write)
+                );
+                let mut words = [0_i64; ops::ARRAY_COORDINATE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values[1..]) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let rank = usize::try_from(array_selection_word(&values[0].value)?)
+                    .ok()
+                    .filter(|rank| (1..=words.len()).contains(rank))
+                    .ok_or_else(|| Diagnostic::coded("AU4001", "invalid Array coordinate count"))?;
+                let coordinates = &words[..rank];
+                let leading = values.len() - 2;
+                let line = self.mir_index_from_value(values[leading].value.clone())?;
+                let column = self.mir_index_from_value(values[leading + 1].value.clone())?;
+                let result = if write {
+                    array_place_mut(env, object_place)?
+                        .set(coordinates, values[ops::WRITE_AT_VALUE].value.clone())
+                        .map(|_| Value::Unit)
+                } else {
+                    array_place_ref(env, object_place)?.get(coordinates)
+                };
+                result.map_err(|mut error| {
+                    error.span = Some(Span::new(line, column));
+                    error
+                })
+            }
+            SELECT_MEMBER => {
+                let values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), 3);
+                let words = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[1].value.clone())?;
+                let column = self.mir_index_from_value(values[2].value.clone())?;
+                ArrayAxisSelection::decode(&words)
+                    .and_then(|selection| array_place_ref(env, object_place)?.select(&selection))
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })
+            }
+            SELECT_WORDS_MEMBER => {
+                let values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 2);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let line =
+                    self.mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 1].value.clone())?;
+                ArrayAxisSelection::decode_inline(words)
+                    .and_then(|(selection, count)| {
+                        array_place_ref(env, object_place)?.select(&selection[..count])
+                    })
+                    .map(Value::Array)
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })
+            }
+            ASSIGN_WORDS_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 3);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let line = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 1].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 2].value.clone())?;
+                let value =
+                    std::mem::replace(&mut values[ARRAY_SELECTION_INLINE_WORDS].value, Value::Unit);
+                ArrayAxisSelection::decode_inline(words)
+                    .and_then(|(selection, count)| {
+                        array_place_mut(env, object_place)?.assign_owned(&selection[..count], value)
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            crate::runtime_ops::REDUCE_AXIS_MEMBER
+            | crate::runtime_ops::MEAN_AXIS_MEMBER
+            | crate::runtime_ops::UNARY_MEMBER
+            | crate::runtime_ops::UNARY_INT64_MEMBER
+            | crate::runtime_ops::UNARY_FLOAT64_MEMBER
+            | crate::runtime_ops::PAIRWISE_MEMBER
+            | crate::runtime_ops::COMPARE_MEMBER
+            | crate::runtime_ops::MASK_TEST_MEMBER
+            | crate::runtime_ops::MASK_COUNT_MEMBER
+            | crate::runtime_ops::CHOOSE_MEMBER
+            | crate::runtime_ops::CAST_INT32_MEMBER
+            | crate::runtime_ops::CAST_INT64_MEMBER
+            | crate::runtime_ops::CAST_FLOAT32_MEMBER
+            | crate::runtime_ops::CAST_FLOAT64_MEMBER => {
+                use crate::runtime_ops as ops;
+                use crate::runtime_value::{
+                    ArrayCompareOp, ArrayMaskOp, ArrayPairOp, ArrayUnaryOp,
+                };
+                let values = evaluate_named_args(args, env)?;
+                // Every member ends with its source line and column.
+                let leading = values.len() - 2;
+                let line = self.mir_index_from_value(values[leading].value.clone())?;
+                let column = self.mir_index_from_value(values[leading + 1].value.clone())?;
+                let word = |index: usize| array_selection_word(&values[index].value);
+                let unknown = || Diagnostic::coded("AU4001", "invalid Array member code");
+                let array = array_place_ref(env, object_place)?;
+                let result = match field {
+                    ops::REDUCE_AXIS_MEMBER | ops::MEAN_AXIS_MEMBER => {
+                        let axis = word(1)?;
+                        ArrayReduction::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|reduction| array.reduce_axis(reduction, axis))
+                            .map(Value::Array)
+                    }
+                    ops::UNARY_MEMBER | ops::UNARY_INT64_MEMBER | ops::UNARY_FLOAT64_MEMBER => {
+                        ArrayUnaryOp::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|operation| array.unary(operation))
+                            .map(Value::Array)
+                    }
+                    ops::PAIRWISE_MEMBER => ArrayPairOp::from_code(word(1)?)
+                        .ok_or_else(unknown)
+                        .and_then(|operation| array.pairwise(&values[0].value, operation))
+                        .map(Value::Array),
+                    ops::COMPARE_MEMBER => ArrayCompareOp::from_code(word(1)?)
+                        .ok_or_else(unknown)
+                        .and_then(|operation| array.compare(&values[0].value, operation))
+                        .map(Value::Array),
+                    ops::MASK_TEST_MEMBER | ops::MASK_COUNT_MEMBER => {
+                        ArrayMaskOp::from_code(word(0)?)
+                            .ok_or_else(unknown)
+                            .and_then(|operation| array.mask_reduce(operation))
+                    }
+                    ops::CHOOSE_MEMBER => ArrayDType::from_code(word(2)?)
+                        .ok_or_else(unknown)
+                        .and_then(|dtype| array.choose(&values[0].value, &values[1].value, dtype))
+                        .map(Value::Array),
+                    ops::CAST_INT32_MEMBER => array.cast(ArrayDType::Int32).map(Value::Array),
+                    ops::CAST_INT64_MEMBER => array.cast(ArrayDType::Int64).map(Value::Array),
+                    ops::CAST_FLOAT32_MEMBER => array.cast(ArrayDType::Float32).map(Value::Array),
+                    _ => array.cast(ArrayDType::Float64).map(Value::Array),
+                };
+                result.map_err(|mut error| {
+                    error.span = Some(Span::new(line, column));
+                    error
+                })
+            }
+            UPDATE_WORDS_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), ARRAY_SELECTION_INLINE_WORDS + 4);
+                let mut words = [0_i64; ARRAY_SELECTION_INLINE_WORDS];
+                for (word, value) in words.iter_mut().zip(&values) {
+                    *word = array_selection_word(&value.value)?;
+                }
+                let operation =
+                    array_selection_word(&values[ARRAY_SELECTION_INLINE_WORDS + 1].value)?;
+                let line = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 2].value.clone())?;
+                let column = self
+                    .mir_index_from_value(values[ARRAY_SELECTION_INLINE_WORDS + 3].value.clone())?;
+                let value =
+                    std::mem::replace(&mut values[ARRAY_SELECTION_INLINE_WORDS].value, Value::Unit);
+                ArrayBinaryOp::from_code(operation)
+                    .ok_or_else(|| {
+                        Diagnostic::coded("AU4001", "invalid Array binary operation code")
+                    })
+                    .and_then(|operation| {
+                        let (selection, count) = ArrayAxisSelection::decode_inline(words)?;
+                        array_place_mut(env, object_place)?.update(
+                            &selection[..count],
+                            value,
+                            operation,
+                            IntegerArithmeticMode::Checked,
+                        )
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            ASSIGN_MEMBER => {
+                let mut values = evaluate_named_args(args, env)?;
+                debug_assert_eq!(values.len(), 4);
+                let words = array_coordinates_from_runtime(&values[0].value)?;
+                let line = self.mir_index_from_value(values[2].value.clone())?;
+                let column = self.mir_index_from_value(values[3].value.clone())?;
+                let value = std::mem::replace(&mut values[1].value, Value::Unit);
+                ArrayAxisSelection::decode(&words)
+                    .and_then(|selection| {
+                        array_place_mut(env, object_place)?.assign_owned(&selection, value)
+                    })
+                    .map_err(|mut error| {
+                        error.span = Some(Span::new(line, column));
+                        error
+                    })?;
+                Ok(Value::Unit)
+            }
+            "reshape" | "permute" => {
+                let values = evaluate_named_args(args, env)?;
+                let name = if field == "reshape" { "shape" } else { "axes" };
+                let bound = bind_builtin_args(&[name], values)?;
+                let axes = array_coordinates_from_runtime(&bound[0].value)?;
+                let array = array_place_ref(env, object_place)?;
+                if field == "reshape" {
+                    array.reshape(&axes)
+                } else {
+                    array.permute(&axes)
+                }
+                .map(Value::Array)
+            }
+            "flatten" => {
+                debug_assert!(args.is_empty());
+                array_place_ref(env, object_place)?
+                    .reshape(&[-1])
+                    .map(Value::Array)
+            }
+            "transpose" => {
+                debug_assert!(args.is_empty());
+                array_place_ref(env, object_place)?
+                    .transpose()
+                    .map(Value::Array)
             }
             "fill" => {
                 let values = evaluate_named_args(args, env)?;
@@ -11366,6 +11602,29 @@ fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
             ),
         )
     };
+    // An `Array[T]` parameter passes its elements in row-major order.
+    if let Value::Array(array) = value {
+        use crate::ffi::FfiScalar;
+        use aura_runtime::runtime_value::ArrayStorage;
+        let words = match (&*array.elements()?, scalar) {
+            (ArrayStorage::Int32(values), FfiScalar::I32) => values
+                .iter()
+                .map(|value| u64::from(*value as u32))
+                .collect(),
+            (ArrayStorage::Int64(values), FfiScalar::I64) => {
+                values.iter().map(|value| *value as u64).collect()
+            }
+            (ArrayStorage::Float32(values), FfiScalar::F32) => values
+                .iter()
+                .map(|value| u64::from(value.to_bits()))
+                .collect(),
+            (ArrayStorage::Float64(values), FfiScalar::F64) => {
+                values.iter().map(|value| value.to_bits()).collect()
+            }
+            _ => return Err(mismatch()),
+        };
+        return Ok(FfiValue::Elements(scalar, words));
+    }
     let Value::Vec(vector) = value else {
         return Err(mismatch());
     };
@@ -11378,6 +11637,37 @@ fn ffi_elements_from_runtime(value: &Value, ty: &Type) -> Result<FfiValue> {
         })
         .collect::<Result<Vec<_>>>()?;
     Ok(FfiValue::Elements(scalar, words))
+}
+
+/// The Array a `mut Array[T]` argument holds after the call: the shape of
+/// `passed` with the elements the function left in `words`.
+fn array_elements_runtime_value(
+    scalar: crate::ffi::FfiScalar,
+    words: &[u64],
+    passed: &ArrayValue,
+) -> Result<Value> {
+    use crate::ffi::FfiScalar;
+    use aura_runtime::runtime_value::ArrayStorage;
+    let storage = match scalar {
+        FfiScalar::I32 => ArrayStorage::Int32(words.iter().map(|word| *word as i32).collect()),
+        FfiScalar::I64 => ArrayStorage::Int64(words.iter().map(|word| *word as i64).collect()),
+        FfiScalar::F32 => ArrayStorage::Float32(
+            words
+                .iter()
+                .map(|word| f32::from_bits(*word as u32))
+                .collect(),
+        ),
+        FfiScalar::F64 => {
+            ArrayStorage::Float64(words.iter().map(|word| f64::from_bits(*word)).collect())
+        }
+        other => {
+            return Err(Diagnostic::coded(
+                "AU4005",
+                format!("an Array cannot hold FFI scalar `{}`", other.ffi_type()),
+            ))
+        }
+    };
+    ArrayValue::new(passed.shape.clone(), storage).map(Value::Array)
 }
 
 /// The list a `mut ptr[T]` argument of type `ty` holds after the call.
@@ -11642,6 +11932,20 @@ fn array_shape_from_runtime(value: &Value) -> Result<Box<[usize]>> {
         })
         .collect::<Result<Vec<_>>>()
         .map(Vec::into_boxed_slice)
+}
+
+/// One word of an `Array` selection that travels as plain arguments.
+fn array_selection_word(value: &Value) -> Result<i64> {
+    match value {
+        Value::Int(word) => word
+            .as_i128()
+            .and_then(|word| i64::try_from(word).ok())
+            .ok_or_else(|| Diagnostic::coded("AU4001", "malformed Array selection words")),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            "malformed Array selection words",
+        )),
+    }
 }
 
 fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {

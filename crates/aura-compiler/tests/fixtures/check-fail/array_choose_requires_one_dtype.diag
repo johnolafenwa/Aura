@@ -1,0 +1,5 @@
+error[AU2002]: `Array.choose` expects `Array[float64]` or `float64`, found `Array[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_choose_requires_one_dtype.au:5:31
+  |
+5 |     print(mask.choose(floats, ints))
+  |                               ^

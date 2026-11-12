@@ -225,7 +225,7 @@ Array failures use these codes:
 | --- | --- |
 | `AU4007` | Rank-zero or negative-dimension construction, `from_list` count mismatch, exact-shape or rank mismatch, and empty reductions. |
 | `AU4005` | Shape-product or element-count overflow, and allocation failure. |
-| `AU4003` | Direct coordinate and first-axis-slice bounds failures. |
+| `AU4003` | Direct coordinate and slice bounds failures. |
 
 ### Trait-Backed Operators
 

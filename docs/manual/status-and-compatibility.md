@@ -95,15 +95,15 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, steps, slice assignment, and indexed slice views are not available.
+- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
 
-- `Array[T]` is a global contiguous array type. The four dtypes are `int32`, `int64`, `float32`, and `float64`.
+- `Array[T]` is a global contiguous array type. The dtypes are `int32`, `int64`, `float32`, `float64`, and `bool`.
 - Every value owns a rank-at-least-one row-major CPU buffer.
 - The surface includes three constructors, multidimensional scalar indexing, first-axis owned slices, mutation, mapping, reductions, exact-shape and scalar kernels, and explicit wrapping and saturating integer arithmetic.
-- There is no array-shape broadcasting, mixed promotion, views, shape transformations, equality, autograd, or accelerator placement.
+- Arrays of one dtype broadcast, slices and shape members are views, and comparison members give `Array[bool]` masks. There is no mixed promotion, equality operator, autograd, or accelerator placement.
 - `mean()` returns `float64` for every dtype. Integer Array `/` is rejected, following the integer-division rule.
 
 ### Integer And Math Operations

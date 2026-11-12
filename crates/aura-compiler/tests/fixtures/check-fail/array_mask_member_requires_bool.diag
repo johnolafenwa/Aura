@@ -1,0 +1,5 @@
+error[AU2003]: `Array.any` is available only for `Array[bool]`, found `Array[float64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_mask_member_requires_bool.au:3:18
+  |
+3 |     print(values.any())
+  |                  ^

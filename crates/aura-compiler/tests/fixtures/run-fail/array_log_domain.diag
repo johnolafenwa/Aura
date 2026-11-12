@@ -1,0 +1,6 @@
+error[AU4001]: `math.log` domain error for `-1` at flat index 2
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_log_domain.au:3:18
+  |
+3 |     print(values.log())
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1
