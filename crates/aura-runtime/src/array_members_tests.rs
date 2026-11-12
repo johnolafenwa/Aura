@@ -839,7 +839,7 @@ fn make_writable_gives_one_unshared_row_major_block_for_every_dtype() {
         mask(&[3], &[true, false, true]),
     ] {
         // A clone shares the buffer until it is made writable.
-        let mut copy = array.try_clone().unwrap();
+        let mut copy = array.clone();
         assert!(copy.shares_buffer_with(&array));
         copy.make_writable().unwrap();
         assert!(!copy.shares_buffer_with(&array));

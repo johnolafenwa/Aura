@@ -2007,6 +2007,7 @@ impl ArrayValue {
             (ArrayStorage::Float64(left), ArrayStorage::Float64(right)) => {
                 left.shares_buffer_with(right)
             }
+            (ArrayStorage::Bool(left), ArrayStorage::Bool(right)) => left.shares_buffer_with(right),
             _ => false,
         }
     }
