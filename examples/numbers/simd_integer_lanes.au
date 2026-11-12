@@ -1,0 +1,31 @@
+# Checked `int64` arithmetic four elements at a time with the `simd`
+# module's `I64x4`. Every lane reports overflow as a plain `+` does.
+from simd import I64x4
+
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    mut sum = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        sum += xs[i]
+    return sum
+
+
+def shift(xs: mut list[int64], by: int64):
+    step = I64x4.splat(by)
+    for i in range(0, len(xs) - 3, 4):
+        (I64x4.load(xs, i) + step).store(xs, i)
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        xs[i] += by
+
+
+def main():
+    mut xs: list[int64] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    print(total(xs))
+    shift(xs, 100)
+    print(xs)
+    lanes = I64x4(l0=-3, l1=4, l2=-5, l3=6)
+    print((-lanes).to_list())
+    print(lanes.abs().max(I64x4.splat(5)).to_list())

@@ -1191,6 +1191,9 @@ scope, terminology, authority, and conformance language.
 - [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`
   with four numeric dtypes, first-axis owned slices, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
+- [SIMD Module](/manual/simd): lane values of two, four, or eight floats
+  that native code keeps in vector registers, with loads and stores over
+  lists and results that are the same on every machine.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1402,6 +1405,10 @@ ownership, diagnostics, and backend behavior.
 | `Array.min` | `min() -> T` | Smallest element. An empty Array is `AU4007`. |
 | `Array.max` | `max() -> T` | Largest element. An empty Array is `AU4007`. |
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
+| `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
+| `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
+| `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 
@@ -1485,6 +1492,25 @@ Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
 cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
+
+## SIMD
+
+[SIMD Module](/manual/simd) covers the lane classes, exact results, and how
+loads and stores work in a counted loop. `V` is one of `simd.F64x2`,
+`simd.F64x4`, `simd.F32x4`, `simd.F32x8`, `simd.I64x2`, and `simd.I64x4`,
+and `E` is its element type.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | Reads one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V.store` | `store(self, values: mut list[E], at: int64)` | Writes one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V` operators | `+`, `-`, `*`, unary `-`, and `/` on float lanes | The operation in each lane. Division by a zero lane traps with `AU4004`. An `int64` lane that overflows traps with `AU4002`. |
+| `V.min`, `V.max` | `min(self, other: V) -> V` | The lesser or greater lane, `other` when the comparison is false. |
+| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. `sqrt` is on float lanes only. |
+| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. Float lanes only. |
+| `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
+| `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
 
 ## Gzip
 
@@ -2996,6 +3022,7 @@ aura check app.au
 | `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
 | `aura ast-json file.au` | Print syntax tree JSON. |
@@ -3131,6 +3158,42 @@ A debug build runs slower than a normal one. A union, a callable, and a
 class with a field that is itself more than one word are not shown yet. A
 value whose last use has passed has already been released, so it reads
 `<unset>` or null.
+
+### Target CPU
+
+`aura build` and `aura run` compile for a generic CPU of the host
+architecture, so a built binary runs on every machine of that architecture.
+`--target-cpu <name>` picks another instruction set for the program's
+compiled code:
+
+| Name | Instruction set |
+| --- | --- |
+| `generic` | The baseline of the architecture. This is the default. |
+| `native` | Everything the CPU of the build machine has. |
+| `x86-64-v2` | x86-64 only: SSE4.2 and POPCNT. |
+| `x86-64-v3` | x86-64 only: AVX2, FMA, and BMI2. |
+| `x86-64-v4` | x86-64 only: AVX-512. |
+
+```bash
+aura build --target-cpu native -o app app.au
+```
+
+- `AURA_TARGET_CPU` names the CPU when the option is absent. The option
+  wins.
+- A name the host does not accept ends the command with exit status 2 and
+  lists the accepted names.
+- A binary built for a CPU runs only on a CPU with those instructions. On
+  an older CPU it stops with an illegal-instruction signal. A `native`
+  build is for the machine that builds it.
+- The choice does not change a result. Aura never fuses a multiply and an
+  add, so a `native` build prints the same floats as a `generic` one.
+- The name is part of the native cache key. For `native` the key holds the
+  CPU and feature list that LLVM detects.
+- The MIR backend ignores the option.
+
+The Array kernels in the runtime do not need the option. They pick the widest
+copy the CPU has when the program starts. See
+[Kernel Width](/manual/numeric-arrays#kernel-width).
 
 ### Keeping Native Symbols For Profiling
 
@@ -7237,10 +7300,19 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, matrix multiplication, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
+- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, a matrix product over more than two dimensions, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
 - First-axis slices are fresh owned copies.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
+
+### SIMD Lane Values
+
+- The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
+- `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
+- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
+- A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
+- The interpreter backend computes each lane as a separate float.
 
 ### Foreign Functions
 
@@ -18392,11 +18464,18 @@ from a mixed numeric source.
 | `min()` | `T` |
 | `max()` | `T` |
 | `mean()` | `float64` for every input dtype |
+| `fast_sum()` | `T`; the sum in the fixed reordered order |
+| `fast_mean()` | `float64`; the mean in the fixed reordered order |
+| `dot(other: Array[T])` | `T`; inner product of two Arrays of the same shape |
+| `matmul(other: Array[T])` | fresh `Array[T]`; matrix product |
 
 `map` requires a repeatable callable whose bare parameter type and return
 type match exactly. The checker rejects a consuming closure, a `mut` or `own`
 parameter, and an unsupported result dtype. `set` and `fill` require a mutable
 Array place.
+
+`dot` and `matmul` take an Array of exactly the receiver's type. They borrow
+both operands and consume neither.
 
 ### Indexing And Slicing
 
@@ -18479,7 +18558,81 @@ order.
 - `mean()` accumulates and returns a `float64` result for every source
   dtype.
 
-The contract promises no reassociation and no vectorized reduction order.
+`sum` and `mean` promise no reassociation and no vectorized reduction
+order. A float `min` treats `-0.0` as below `0.0`, and `max` treats `0.0` as
+above `-0.0`.
+
+### Reordered Reductions
+
+A left-to-right float sum is a chain in which each addition waits for the one
+before it, so it adds one element at a time on any CPU. `fast_sum()` and
+`fast_mean()` add in another order that a CPU can run many elements wide:
+
+```aura
+def main() -> int32:
+    values = Array[float64].full([1000000], 0.1)
+    print(values.sum())
+    print(values.fast_sum())
+    return 0
+```
+
+The order is fixed, so the result is the same on every CPU and in both
+backends. For `n` elements, let `w` be the largest multiple of 32 that is at
+most `n`:
+
+1. Element `i < w` is added to partial sum `i % 32`, in index order. Each
+   partial sum starts at zero.
+2. The 32 partial sums are added in halves. Sum `s` takes sum `s + 16`, then
+   `s + 8`, `s + 4`, `s + 2`, and `s + 1`.
+3. Elements `w` to `n - 1` are added to that total in index order.
+
+- `fast_sum()` adds in the element type. `fast_mean()` widens each element
+  to `float64`, adds in that order, and divides by the count.
+- The result can differ from `sum()` and `mean()` in the last digits. Both
+  propagate NaN.
+- On an integer Array `fast_sum()` is `sum()`: exact and checked.
+- `fast_sum()` of an empty Array is zero, and `fast_mean()` requires at
+  least one element.
+
+### Dot And Matrix Products
+
+`left.dot(right)` requires two Arrays of the same shape, of any rank, and
+returns the sum of the products of matching elements. A float `dot` rounds
+each product in the element type and adds the products in the reordered
+order above. An integer `dot` is checked: the first product or running sum,
+in index order, that leaves the element type's range is `AU4002`.
+
+`left.matmul(right)` accepts three pairs of shapes:
+
+| Left | Right | Result |
+| --- | --- | --- |
+| `[n, k]` | `[k, m]` | `[n, m]` |
+| `[n, k]` | `[k]` | `[n]` |
+| `[k]` | `[k, m]` | `[m]` |
+
+```aura
+def main() -> int32:
+    left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    right = Array[float64].from_list([5.0, 6.0, 7.0, 8.0], [2, 2])
+    product = left.matmul(right)
+    print(product[0, 0])
+    print(product[1, 1])
+    print(left.dot(right))
+    return 0
+```
+
+Each result element starts at zero and adds its `k` products in ascending
+order of the inner index, rounding each product before it is added. That is
+the order of the plain three-loop program, so `matmul` gives that program's
+bits. An integer `matmul` is checked and reports `AU4002`.
+
+A large float product of two matrices runs on several threads. Each thread
+computes whole rows of the result, and no element is shared, so the bits
+are the same on any number of threads. A product whose `n * k * m` is under
+about two million runs on the calling thread. `AURA_ARRAY_THREADS` sets the
+most threads one product may use. The default is the number of CPUs the
+process may run on, a product never uses more than 16, and
+`AURA_ARRAY_THREADS=1` keeps every product on the calling thread.
 
 ## Ownership And Evaluation Order
 
@@ -18524,7 +18677,7 @@ Runtime codes:
 
 | Code | Cause |
 | --- | --- |
-| `AU4002` | Checked integer Array arithmetic overflows. |
+| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
 | `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
 | `AU4005` | Shape product or element count overflows, or allocation fails. |
@@ -18536,7 +18689,9 @@ Runtime codes:
 - a `from_list` element count that does not match the shape
 - an Array/Array operation whose shapes differ
 - a direct coordinate count that does not match the runtime rank
-- `min`, `max`, or `mean` on an empty Array
+- `min`, `max`, `mean`, or `fast_mean` on an empty Array
+- a `dot` whose shapes differ
+- a `matmul` whose shapes are not one of the three accepted pairs
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -18548,6 +18703,7 @@ MIR and direct execution both implement:
 - constructors, indexing, and mutation
 - first-axis copies
 - `map` and reductions
+- `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
 - scalar forms and exact-shape elementwise operations
 
@@ -18566,7 +18722,7 @@ more. They do not have:
 
 - array-shape broadcasting or mixed promotion
 - views, reshape, or transpose
-- matrix multiplication
+- a matrix product over more than two dimensions
 - equality or ordering
 - multidimensional slicing, step slices, or slice assignment
 - autograd, device placement, or distributed storage
@@ -18653,8 +18809,30 @@ builds. The cases cover:
 - NaN payloads, infinities, and signed zero
 - arithmetic modes and first-trap indices
 
-The kernels do not reassociate, do not approximate division, and add no new
-numeric policy.
+The elementwise kernels do not reassociate, do not approximate division, and
+add no new numeric policy.
+
+### Kernel Width
+
+On x86-64 the runtime holds two copies of each kernel: one for the baseline
+instruction set, with 128-bit registers, and one for AVX2, with 256-bit
+registers. The first Array operation of a process asks the CPU which it has,
+so a program built for any x86-64 machine runs the wide copies where they
+exist. On arm64 there is one copy, which uses NEON.
+
+The copies give the same bits. No kernel uses fused multiply-add, and no
+kernel lets the register width decide the order of its floating-point
+operations.
+
+With AVX2 a float `matmul` of two matrices copies a block of the right
+operand into a packed buffer and computes two rows by sixteen `float64`
+columns of the result at a time, which keeps the running sums in
+registers. The additions for each element stay in the same order.
+
+Set `AURA_ARRAY_KERNELS=baseline` to make a process use the baseline copies,
+to compare the two or to rule the wide ones out. `--target-cpu` in
+[CLI and Tooling](/manual/cli-and-tooling) is the matching choice for the
+program's own compiled code.
 
 ## Status
 
@@ -18664,7 +18842,9 @@ It does not include tensor placement, views, shape transformations, or
 distributed execution.
 
 Design records:
-[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
+[ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md),
+[ADR-0085: Target CPU and kernel dispatch](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0085-target-cpu-and-kernel-dispatch.md),
+[ADR-0086: Array products and reordered reductions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0086-array-products-and-reordered-reductions.md),
 and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).
 
 ## Source: docs/manual/ownership-and-borrowing.md
@@ -21484,6 +21664,59 @@ now counts as having its type from the start, and appending an `int64` to a
 passes it on, as `regex_match` does for every byte, no longer pays a
 runtime type check for each pass.
 
+### Counted Loops Over Number Lists
+
+A loop that walks a list of numbers by index runs without a bounds check
+on each element, and LLVM turns it into vector instructions when the
+arithmetic allows it:
+
+```aura
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = a * xs[i] + y
+```
+
+Native code checks once, where the loop starts, that every index the loop
+will use is inside its list. When the check holds, the loop runs a copy
+with no per-element check. When it does not, the loop runs as written and
+stops with `AU4003` at the access that leaves the list, so the result is
+the same either way.
+
+The loop qualifies when:
+
+- **The list** is a `list` of one fixed-width number type or `bool`, and
+  the loop does not resize it.
+- **The counter** is an `int64` that only moves up by a constant: a
+  `for i in range(...)`, with or without a positive literal step such as
+  `range(0, n, 4)`, or a `while i < n:` loop with `i += 2`.
+- **The bound** is `len(xs)`, a constant, or a variable the loop does not
+  assign.
+- **Each index** is the counter plus or minus a constant, such as
+  `xs[i - 1]` and `xs[i + 1]`.
+
+These loops stay scalar:
+
+- **A float sum** such as `total += xs[i]`. Aura adds in source order.
+  Use `Array.fast_sum()` or `Array.dot()` for a reordered sum, or keep the
+  sum in a lane value from the [SIMD module](/manual/simd).
+- **Checked integer arithmetic** on the elements. Each operation can
+  report overflow. For `int64`, the lane values `I64x2` and `I64x4` of
+  the [SIMD module](/manual/simd#integer-lanes) check a whole operation
+  with one test on a build for AVX2.
+- **A loop in a program that starts tasks.** Each iteration checks
+  whether to yield.
+
+On `benchmarks/simd`, five such loops over `float64` lists run at the
+speed of the same loops in Rust, and 40 to 400 times faster than in
+Python. `aura build --target-cpu native` lets the loops use the host's
+widest registers.
+
+A `for` over `range(start, stop, step)` whose step is a positive integer
+literal counts on plain integers, as a range without a step does. Any
+other step, such as a variable or a negative number, makes a `Range` value
+and asks it for each element, which is far slower.
+
 ## Performance Direction
 
 Performance work will address task creation and scheduling, native loop and
@@ -22551,6 +22784,247 @@ so results match. A program that does not import `regex` does not link it.
 - A search always starts at the beginning of the text.
 
 Design record: [ADR-0078: Regular expressions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0078-regular-expressions.md).
+
+## Source: docs/manual/simd.md
+
+# SIMD Module
+
+The `simd` module has values that hold two, four, or eight numbers and do
+arithmetic on all of them at once. Native code keeps such a value in vector
+registers, so one `+` adds every lane with one or two instructions.
+
+```aura
+import simd
+```
+
+Use it when a loop over a list of numbers does not turn into vector
+instructions on its own. The usual case is a float sum, which Aura adds in
+source order: with lane values you choose the order yourself, and it is the
+same on every machine. The other case is checked `int64` arithmetic, which
+a plain loop does one element at a time.
+
+## Lane Classes
+
+| Class | Lanes | Element type |
+| --- | --- | --- |
+| `simd.F64x2` | 2 | `float64` |
+| `simd.F64x4` | 4 | `float64` |
+| `simd.F32x4` | 4 | `float32` |
+| `simd.F32x8` | 8 | `float32` |
+| `simd.I64x2` | 2 | `int64` |
+| `simd.I64x4` | 4 | `int64` |
+
+Each class is an ordinary Copy class whose public fields `l0`, `l1`, and so
+on are the lanes. You can construct one by naming its fields, read a lane
+with `value.l2`, pass it to a function, return it, and store it in a class
+field. Assigning one copies it.
+
+There are no lane classes for `int32` or the other narrow integers. See
+[Integer Lanes](#integer-lanes) for why.
+
+## Public API
+
+`V` stands for the lane class and `E` for its element type.
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
+| `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
+| `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
+| `/` | `V` with `V`, float classes only | The division in each lane. |
+| unary `-` | `V` | Each lane negated. |
+| `min` | `min(self, other: V) -> V` | In each lane, `self` where it is less than `other`, else `other`. |
+| `max` | `max(self, other: V) -> V` | In each lane, `self` where it is greater than `other`, else `other`. |
+| `abs` | `abs(self) -> V` | The absolute value of each lane. |
+| `sqrt` | `sqrt(self) -> V`, float classes only | The square root of each lane. |
+| `mul_add` | `mul_add(self, factor: V, addend: V) -> V`, float classes only | `self * factor + addend` in each lane. |
+| `sum` | `sum(self) -> E` | The sum of the lanes, added in pairs. |
+| `to_list` | `to_list(self) -> list[E]` | The lanes as a new list, `l0` first. |
+
+Both operands of an operator must be the same lane class. To scale by one
+number, make it a lane value first with `splat`.
+
+## Example
+
+```aura
+from simd import F64x4
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+```
+
+```text
+29.0
+```
+
+The first loop takes four elements at a time and stops while four are still
+left. The second loop finishes the last one to three elements.
+`examples/numbers/simd_lanes.au` also clamps a `float32` list with
+`F32x8`.
+
+## Exact Results
+
+Every operation is defined lane by lane in terms of the scalar operation, so
+a result never depends on the CPU, on `--target-cpu`, or on whether the
+program runs under `aura run` or as a native binary.
+
+- **`sum`** adds neighbors first: `(l0 + l1) + (l2 + l3)` for four lanes,
+  and `((l0 + l1) + (l2 + l3)) + ((l4 + l5) + (l6 + l7))` for eight.
+- **`mul_add`** rounds after the product and again after the sum. It is not
+  a fused multiply-add.
+- **`min` and `max`** return `other` when the comparison is false. So a NaN
+  in `self` gives `other`, and a NaN in `other` gives the NaN.
+- **`sqrt`** of a negative lane is NaN.
+- **`/`** by a lane that holds zero traps with `AU4004`, as scalar float
+  division does.
+- **`float32` lanes** round each result to `float32`, as scalar `float32`
+  arithmetic does.
+
+A loop that keeps a lane value as its running sum adds in a different order
+than a loop that keeps one float. The two can differ in their last bits.
+
+## Integer Lanes
+
+`I64x2` and `I64x4` hold `int64` lanes. Each operation is the checked
+scalar operation in each lane: a sum, difference, product, or negation
+that does not fit `int64`, and `abs` of the least `int64`, stops the
+program with `AU4002`. `sum` checks each of its additions.
+
+```aura
+from simd import I64x4
+
+def total(xs: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + I64x4.load(xs, i)
+    mut sum = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        sum += xs[i]
+    return sum
+
+def main():
+    print(total([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+```
+
+```text
+45
+```
+
+A lane that overflows is reported as the scalar operation would be, with
+the value that does not fit. The position is the lane's line in the
+module's source, and the call chain names your function:
+
+```text
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> <std>/simd.au:486:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+```
+
+How much faster the lanes are depends on the target CPU:
+
+- **With `--target-cpu x86-64-v3`, `x86-64-v4`, or `native` on a machine
+  with AVX2**, `+`, `-`, and unary `-` test all lanes of an operation
+  with one branch, and the lanes share a 256-bit register. On
+  `benchmarks/simd` an `I64x4` sum takes under half the time of the plain
+  loop.
+- **On the default build and on Apple Silicon**, each lane keeps its own
+  overflow branch. The lanes are about 1.2 times as fast as the plain
+  loop.
+- **`*`** checks one lane at a time on every CPU.
+- **`min` and `max`** are no faster than the scalar comparison before
+  AVX-512.
+
+The results and the reports are the same on every target.
+
+There are no `int32` lanes. Aura computes an `int32` in a 64-bit word and
+checks its range after each operation, so eight `int32` lanes ran no
+faster than the plain loop when measured.
+
+## Loads And Stores
+
+`load` and `store` read and write one element for each lane, at `at`,
+`at + 1`, and so on. Each index follows the list index rules: it must be
+inside the list, or the program traps with `AU4003`, and a negative index
+counts from the end.
+
+```aura
+from simd import F32x4
+
+def main():
+    mut out: list[float32] = [0.0, 0.0, 0.0, 0.0, 0.0]
+    F32x4.splat(2.5).store(out, 1)
+    print(out)
+```
+
+```text
+[0.0, 2.5, 2.5, 2.5, 2.5]
+```
+
+A `store` at index 2 of that list would trap, because the fourth lane has no
+element to go to.
+
+When the list is a local variable or a parameter and the arguments are
+positional, the compiler treats the call as the element reads or writes it
+stands for. A [counted loop](/manual/performance#counted-loops-over-number-lists)
+then checks the range of every load and store once, before the loop starts,
+and a trap reports the line of the call. Any other call, such as
+`F64x4.load(self.samples, i)`, runs the method and checks each element.
+Bind the list to a local first to get the fast form.
+
+A value read from a list and written back to the same list needs no
+temporary:
+
+```aura
+from simd import F64x4
+
+def clamp(xs: mut list[float64], low: float64, high: float64):
+    lo = F64x4.splat(low)
+    hi = F64x4.splat(high)
+    for i in range(0, len(xs) - 3, 4):
+        F64x4.load(xs, i).max(lo).min(hi).store(xs, i)
+
+def main():
+    mut xs = [-5.0, 0.5, 12.0, 3.0, 99.0]
+    clamp(xs, 0.0, 10.0)
+    print(xs)
+```
+
+```text
+[0.0, 0.5, 10.0, 3.0, 99.0]
+```
+
+## Performance
+
+A native build copies each lane method into its caller and keeps the lanes
+in registers. On a baseline x86-64 build an `F64x4` is two 128-bit
+registers. With `--target-cpu x86-64-v3` or `native` on a machine with AVX2
+it is one 256-bit register. On Apple Silicon it is two 128-bit registers.
+The results are the same in every case.
+
+On `benchmarks/simd`, a dot product over 1,024 `float64` elements with
+`F64x4` runs about three times as fast as the scalar loop, which has to add
+in source order.
+
+These limits apply:
+
+- **A program that starts tasks** checks whether to yield once in each loop
+  iteration. The lane arithmetic inside an iteration is still vector code.
+- **`Array` elements** are not loaded directly. Use the `Array` kernels, or
+  copy into a list.
+- **`aura run` on the interpreter backend** computes each lane as a
+  separate float. The results are the same and there is no speedup.
 
 ## Source: docs/manual/statements.md
 
@@ -36447,7 +36921,8 @@ Array[float64](shape=[2, 2], values=[0.72, 0.88, 0.95, 0.64])
 
 `scores + 5.0` adds five to every element and returns a new array.
 `scores * weights` multiplies the two arrays element by element, which is
-*not* matrix multiplication; Aura arrays don't have that. `+`, `-`, `*`, and,
+*not* matrix multiplication; that's the `matmul` method you'll meet later in
+this section. `+`, `-`, `*`, and,
 for floating-point arrays, `/` all work this way, with either two arrays or
 an array and a single number. `map` applies a function to every element and
 returns a new array of the results. `sum`, `min`, and `max` reduce the whole
@@ -36657,11 +37132,104 @@ and for column operations you sometimes write the loop. The last two lines
 subtract the class mean from every score in one step and report how far the
 lowest and highest scores sit from it.
 
+### Products and Faster Sums
+
+Two arrays of the same shape have a *dot product*, the sum of their
+matching elements multiplied together, and two tables whose inner sizes
+agree have a *matrix product*. Both are methods:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0],
+        [2, 3],
+    )
+    weights = Array[float64].from_list([0.2, 0.3, 0.5], [3])
+    final = scores.matmul(weights)
+    print(final)
+    print(weights.dot(weights))
+```
+
+<span class="caption">Listing 8-22: A weighted grade with `matmul`</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[2], values=[88.3, 88.3])
+0.38
+```
+
+`scores` has shape `[2, 3]` and `weights` has shape `[3]`, so the product
+has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
+into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
+
+`sum` adds from left to right, which is the order you'd add by hand and the
+slowest order for a CPU. When an array is large and the last digit doesn't
+matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
+times faster. The order is the same on every machine, so the answer is
+still reproducible. It just isn't always the same last digit as `sum`.
+
 Arrays have a few more limits worth knowing before you plan a program around
 them. They live in ordinary memory on the CPU. They have no equality, so `a
 == b` is an `AU2003` error, no views, and no reshaping. The
 [Manual](/manual/numeric-arrays) lists exactly what's there, along with
 measured performance against NumPy and Rust.
+
+### Several Floats at Once
+
+Sometimes the kernel you need isn't one of the Array methods, and you write
+a loop over a list of floats. Most such loops are fast already. A running
+float sum is the exception: Aura adds in the order you wrote, one element
+at a time, because any other order can change the last digit.
+
+The `simd` module lets you pick a faster order yourself. Its *lane values*
+hold a few floats side by side, and one `+` or `*` works on all of them.
+`F64x4` holds four `float64` lanes:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def dot(xs: list[float64], ys: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(xs) - 3, 4):
+        acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+    mut total = acc.sum()
+    for i in range(len(xs) - len(xs) % 4, len(xs)):
+        total += xs[i] * ys[i]
+    return total
+
+def main():
+    xs = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    ys = [0.5, 0.25, 2.0, 1.0, 3.0, 0.5]
+    print(dot(xs, ys))
+```
+
+<span class="caption">Listing 8-23: A dot product four elements at a time</span>
+
+```console
+$ aura run src/main.au
+29.0
+```
+
+`splat` fills every lane with one number, and `load(xs, i)` reads the four
+elements starting at `i`. The first loop steps by four and stops while
+four elements are still left, so `acc` ends up holding four separate
+running sums. `acc.sum()` adds them together, and the second loop picks up
+the one to three elements at the end.
+
+In a native build each lane value lives in the CPU's vector registers, and
+this loop runs about three times as fast as the one-at-a-time version. The
+answer is the same on every machine and in `aura run`, because every
+operation is defined lane by lane. It can differ in the last digit from a
+plain left-to-right sum, since the additions happen in a different order.
+
+There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
+[Manual](/manual/simd) has the full list.
 
 ## Summary
 

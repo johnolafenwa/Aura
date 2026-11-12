@@ -136,6 +136,10 @@ ownership, diagnostics, and backend behavior.
 | `Array.min` | `min() -> T` | Smallest element. An empty Array is `AU4007`. |
 | `Array.max` | `max() -> T` | Largest element. An empty Array is `AU4007`. |
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
+| `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
+| `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
+| `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
 
@@ -219,6 +223,25 @@ Every input above uses shared access and stays usable after the call. An
 `encoding` argument is reserved but not implemented. Expanded output that
 cannot be represented or allocated traps with `AU4005`. Malformed data returns
 `bytes.Error`.
+
+## SIMD
+
+[SIMD Module](/manual/simd) covers the lane classes, exact results, and how
+loads and stores work in a counted loop. `V` is one of `simd.F64x2`,
+`simd.F64x4`, `simd.F32x4`, `simd.F32x8`, `simd.I64x2`, and `simd.I64x4`,
+and `E` is its element type.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
+| `V.load` | `load(values: list[E], at: int64) -> V` | Reads one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V.store` | `store(self, values: mut list[E], at: int64)` | Writes one element for each lane from index `at`. An index outside the list traps with `AU4003`. |
+| `V` operators | `+`, `-`, `*`, unary `-`, and `/` on float lanes | The operation in each lane. Division by a zero lane traps with `AU4004`. An `int64` lane that overflows traps with `AU4002`. |
+| `V.min`, `V.max` | `min(self, other: V) -> V` | The lesser or greater lane, `other` when the comparison is false. |
+| `V.abs`, `V.sqrt` | `abs(self) -> V` | The absolute value or square root of each lane. `sqrt` is on float lanes only. |
+| `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. Float lanes only. |
+| `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
+| `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
 
 ## Gzip
 

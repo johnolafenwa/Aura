@@ -1,0 +1,8 @@
+def fill(xs: mut list[int64], n: int64):
+    for i in range(n):
+        xs[i] = i
+
+def main():
+    mut xs: list[int64] = [0, 0, 0]
+    fill(xs, 5)
+    print(xs)

@@ -76,6 +76,11 @@ const MEMORY_NONE: u64 = 0;
 /// edge, as Clang weighs `__builtin_expect`.
 const COLD_BRANCH_WEIGHTS: (u64, u64) = (1, 2000);
 
+/// The `branch_weights` of the branch into a loop's versioned copy against
+/// the loop as written. The register allocator keeps the values of the
+/// likelier loop in registers when the two share them.
+const VERSIONED_LOOP_WEIGHTS: (u64, u64) = (2000, 1);
+
 /// The stack of a thread that writes one unit, as large as a main
 /// thread's.
 const UNIT_THREAD_STACK: usize = 8 << 20;
@@ -530,6 +535,9 @@ impl LlvmModule {
             }
         }
         place_functions_in_own_sections(&module, &machine.get_triple());
+        if let Some(prefix) = std::env::var_os("AURA_DUMP_LLVM_IR") {
+            dump_unit_ir(&module, prefix, unit)?;
+        }
         match machine.write_to_memory_buffer(&module, FileType::Object) {
             Ok(buffer) => Ok(buffer.as_slice().to_vec()),
             Err(error) => Err(format!("LLVM failed to write the object: {error}")),
@@ -596,6 +604,38 @@ fn target_machine(triple: &TargetTriple) -> Result<TargetMachine, String> {
     target_machine_at(triple, OptimizationLevel::Default)
 }
 
+/// Writes the optimized IR of unit `unit` to `<prefix>.<unit>.ll`, where a
+/// compiler developer reads it (`AURA_DUMP_LLVM_IR=<prefix>`).
+fn dump_unit_ir(
+    module: &Module<'_>,
+    prefix: std::ffi::OsString,
+    unit: usize,
+) -> Result<(), String> {
+    let mut path = prefix;
+    path.push(format!(".{unit}.ll"));
+    module
+        .print_to_file(&path)
+        .map_err(|error| format!("failed to write LLVM IR: {error}"))
+}
+
+/// The build machine's CPU name and feature string, as LLVM detects them.
+fn host_cpu() -> (String, String) {
+    (
+        TargetMachine::get_host_cpu_name()
+            .to_string_lossy()
+            .into_owned(),
+        TargetMachine::get_host_cpu_features()
+            .to_string_lossy()
+            .into_owned(),
+    )
+}
+
+/// The build machine's CPU and features in one string.
+pub(super) fn host_cpu_identity() -> String {
+    let (cpu, features) = host_cpu();
+    format!("native:{cpu}:{features}")
+}
+
 /// A machine for `triple` that optimizes at `level`, whose target must
 /// already be initialized.
 fn target_machine_at(
@@ -604,12 +644,17 @@ fn target_machine_at(
 ) -> Result<TargetMachine, String> {
     let target = Target::from_triple(triple)
         .map_err(|error| format!("LLVM has no target for {triple}: {error}"))?;
-    // A generic CPU keeps objects the same on every host of one target.
+    // The default, a generic CPU, keeps objects the same on every host of
+    // one target. `native` names the build machine's CPU and its features.
+    let (cpu, features) = match super::target_cpu() {
+        "native" => host_cpu(),
+        name => (name.to_string(), String::new()),
+    };
     target
         .create_target_machine(
             triple,
-            "generic",
-            "",
+            &cpu,
+            &features,
             level,
             RelocMode::PIC,
             CodeModel::Default,
@@ -660,6 +705,7 @@ impl Op {
 enum UnaryOp {
     Ineg,
     Fneg,
+    Fsqrt,
     Uextend,
     Ireduce,
     Bitcast,
@@ -674,6 +720,8 @@ enum UnaryOp {
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 enum BinaryOp {
     Iadd,
+    /// `Iadd` of an address and a byte offset (see `element_address`).
+    ElementAddress,
     Isub,
     Imul,
     /// `+`, `-`, and `*` that do not wrap as signed (`Nsw`) or unsigned
@@ -749,6 +797,8 @@ struct BlockIr {
     insts: Vec<u32>,
     sealed: bool,
     cold: bool,
+    /// A copy of a loop that runs while its checks hold at entry.
+    versioned: bool,
     in_layout: bool,
     predecessors: Vec<u32>,
     /// The value each variable last got in this block.
@@ -991,13 +1041,17 @@ impl FunctionIr {
         selects: &[(Val, Option<i64>)],
         entries: &[crate::native_backend::VersionEntry],
     ) -> bool {
-        let mut members = blocks
+        // The copies keep the order of the layout, where each value is
+        // defined before the blocks that use it. A block may be created
+        // long before it gets its first instruction, so the order of the
+        // block numbers is not that order.
+        let set = blocks.iter().map(|block| block.0).collect::<HashSet<_>>();
+        let members = self
+            .layout
             .iter()
-            .map(|block| block.0)
-            .filter(|block| self.blocks[*block as usize].in_layout)
+            .copied()
+            .filter(|block| set.contains(block))
             .collect::<Vec<_>>();
-        members.sort_unstable();
-        members.dedup();
         let set = members.iter().copied().collect::<HashSet<_>>();
         let mut defined = HashSet::new();
         for block in &members {
@@ -1048,6 +1102,7 @@ impl FunctionIr {
             let mut entry = BlockIr {
                 sealed: true,
                 cold: original.cold,
+                versioned: true,
                 in_layout: true,
                 ..BlockIr::default()
             };
@@ -1491,6 +1546,10 @@ impl FunctionBackend for LlvmFunction<'_> {
         self.binary(BinaryOp::Iadd, left, right)
     }
 
+    fn element_address(&mut self, base: Val, offset: Val) -> Val {
+        self.binary(BinaryOp::ElementAddress, base, offset)
+    }
+
     fn iadd_imm(&mut self, value: Val, imm: i64) -> Val {
         self.binary_imm(BinaryOp::Iadd, value, imm)
     }
@@ -1676,6 +1735,11 @@ impl FunctionBackend for LlvmFunction<'_> {
     fn fneg(&mut self, value: Val) -> Val {
         let ty = self.ir.ty(value);
         self.unary(UnaryOp::Fneg, ty, value)
+    }
+
+    fn fsqrt(&mut self, value: Val) -> Val {
+        let ty = self.ir.ty(value);
+        self.unary(UnaryOp::Fsqrt, ty, value)
     }
 
     fn fcmp(&mut self, cond: FloatCC, left: Val, right: Val) -> Val {
@@ -2633,11 +2697,35 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     }
 
     fn address(&self, address: Val, offset: i32) -> Result<PointerValue<'ctx>, String> {
-        let pointer = built(self.builder.build_int_to_ptr(
-            self.int(address)?,
-            self.context.ptr_type(AddressSpace::default()),
-            "",
-        ))?;
+        let element = self.ir.value_defs[address.0 as usize]
+            .map(|inst| &self.ir.insts[inst as usize].op)
+            .and_then(|op| match op {
+                Op::Binary(BinaryOp::ElementAddress, base, index) => Some((*base, *index)),
+                _ => None,
+            });
+        let pointer = match element {
+            // An element's address is a GEP from the storage's address,
+            // which scalar evolution follows through a loop. An integer
+            // sum turned into a pointer is opaque to it.
+            Some((base, index)) => {
+                let base = built(self.builder.build_int_to_ptr(
+                    self.int(base)?,
+                    self.context.ptr_type(AddressSpace::default()),
+                    "",
+                ))?;
+                // SAFETY: a byte offset from an integer address needs no
+                // bounds; the GEP is not `inbounds`.
+                built(unsafe {
+                    self.builder
+                        .build_gep(self.context.i8_type(), base, &[self.int(index)?], "")
+                })?
+            }
+            None => built(self.builder.build_int_to_ptr(
+                self.int(address)?,
+                self.context.ptr_type(AddressSpace::default()),
+                "",
+            ))?,
+        };
         if offset == 0 {
             return Ok(pointer);
         }
@@ -3054,10 +3142,13 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
     /// edges are both cold, or neither, keeps LLVM's own estimate.
     fn weigh_cold_edges(&self, branch: InstructionValue<'ctx>, then_block: Blk, else_block: Blk) {
         let cold = |block: Blk| self.ir.blocks[block.0 as usize].cold;
+        let versioned = |block: Blk| self.ir.blocks[block.0 as usize].versioned;
         let (rare, common) = COLD_BRANCH_WEIGHTS;
         let (then_weight, else_weight) = match (cold(then_block), cold(else_block)) {
             (true, false) => (rare, common),
             (false, true) => (common, rare),
+            // The loop as written stays warm: lists in other forms run it.
+            _ if versioned(then_block) && !versioned(else_block) => VERSIONED_LOOP_WEIGHTS,
             _ => return,
         };
         let weight = |value: u64| self.context.i32_type().const_int(value, false).into();
@@ -3096,6 +3187,18 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
             UnaryOp::Ineg => built(self.builder.build_int_neg(value.into_int_value(), ""))?.into(),
             UnaryOp::Fneg => {
                 built(self.builder.build_float_neg(value.into_float_value(), ""))?.into()
+            }
+            UnaryOp::Fsqrt => {
+                let value = value.into_float_value();
+                let intrinsic = Intrinsic::find("llvm.sqrt")
+                    .and_then(|intrinsic| {
+                        intrinsic.get_declaration(self.object.module, &[value.get_type().into()])
+                    })
+                    .ok_or_else(|| "LLVM has no `llvm.sqrt` intrinsic".to_string())?;
+                built(self.builder.build_call(intrinsic, &[value.into()], ""))?
+                    .try_as_basic_value()
+                    .basic()
+                    .ok_or_else(|| "`llvm.sqrt` returned no value".to_string())?
             }
             UnaryOp::Uextend => built(self.builder.build_int_z_extend(
                 value.into_int_value(),
@@ -3176,7 +3279,9 @@ impl<'ctx, 'm, 'o> FunctionLowerer<'ctx, 'm, 'o> {
         };
         let ty = left.get_type();
         let value = match op {
-            BinaryOp::Iadd => self.builder.build_int_add(left, right, ""),
+            BinaryOp::Iadd | BinaryOp::ElementAddress => {
+                self.builder.build_int_add(left, right, "")
+            }
             BinaryOp::Isub => self.builder.build_int_sub(left, right, ""),
             BinaryOp::Imul => self.builder.build_int_mul(left, right, ""),
             BinaryOp::IaddNsw => self.builder.build_int_nsw_add(left, right, ""),

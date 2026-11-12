@@ -7,6 +7,62 @@ in this file.
 
 ## Unreleased
 
+- New `simd` module with lane values that hold several floats and work on
+  all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
+  `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,
+  `abs`, `sqrt`, `mul_add`, `sum`, and `to_list`. Native code keeps the
+  lanes in vector registers. Every result is defined lane by lane, so it
+  is the same on every CPU and under `aura run`. A dot product with
+  `F64x4` runs about three times as fast as the scalar loop.
+- `for i in range(start, stop, step)` with a positive integer literal
+  step now counts on plain integers in both backends and qualifies for
+  the counted loop check below. It was about a thousand times slower.
+- A float `sqrt` is one instruction in native code instead of a call.
+- Fixed: `public copy class Name:` at the top of a module was a syntax
+  error, because `public copy` was read as the start of a constant.
+- Native code runs a counted loop over a list of numbers, such as
+  `for i in range(len(xs)): ys[i] = a * xs[i] + ys[i]`, with one range
+  check where the loop starts instead of one per element, and LLVM
+  vectorizes it. Indexes a constant away from the counter, `while` loops
+  with a constant step, and `mut` list parameters qualify. Five such loops
+  in `benchmarks/simd` now run at the speed of the same loops in Rust. An
+  index out of range still stops at the access that reaches it.
+- A float `matmul` of two matrices is faster and gives the same bits as
+  before. On a CPU with AVX2 it keeps its running sums in registers, and a
+  large product runs on several threads. 2,000 products of 64 by 64
+  matrices take 41 ms where they took 108, and a 512 by 512 product takes
+  a seventh of the time on four cores. `AURA_ARRAY_THREADS` sets the most
+  threads a product may use.
+- Arrays: `left.dot(right)` is the inner product of two Arrays of the same
+  shape, and `left.matmul(right)` is the matrix product of `[n, k]` with
+  `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Integer products are
+  checked and report `AU4002`. `matmul` gives the bits of the plain
+  three-loop program.
+- Arrays: `fast_sum()` and `fast_mean()` add in a fixed order built for
+  wide registers, about four times faster than `sum()` on one million
+  `float64` elements. The order is the same on every CPU, so the result is
+  reproducible. It can differ from `sum()` in the last digits.
+- Array kernels use 256-bit AVX2 instructions on an x86-64 CPU that has
+  them, chosen when the program starts, with no build option. Results are
+  the same at every width. `AURA_ARRAY_KERNELS=baseline` turns the wide
+  copies off. A float `min` and `max` now compare many elements at once,
+  and order `-0.0` below `0.0`.
+- The `simd` module has `int64` lane values `I64x2` and `I64x4`, with
+  `splat`, `load`, `store`, `+`, `-`, `*`, unary `-`, `min`, `max`, `abs`,
+  `sum`, and `to_list`. Every lane is checked: an overflow stops the
+  program with `AU4002` and names the value, as the scalar operation
+  does. On a build for AVX2 (`--target-cpu x86-64-v3` or `native`) one
+  test covers all lanes of a sum or difference, and an `I64x4` sum takes
+  under half the time of the plain loop.
+- A `for` loop over `range(start, stop, step)` with a literal step tests
+  its bound once in each iteration, and a lane load or store adds two
+  conditions to the loop's entry whatever its lane count. The lane
+  kernels of `benchmarks/simd` run up to twice as fast as before on a
+  baseline build.
+- `aura build --target-cpu <name>` and `aura run --target-cpu <name>`
+  compile the program for `generic` (the default), `native`, or on x86-64
+  `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
+  when the option is absent.
 - A call of a small method that changes its receiver is now inlined. A
   method with a `mut self` receiver or a `mut` parameter that calls
   nothing and works on numbers, such as `def bump(mut self, by: int64):

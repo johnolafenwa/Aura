@@ -1,0 +1,8 @@
+from simd import F32x4
+
+
+def main() -> int32:
+    xs = [1.0, 2.0, 3.0, 4.0]
+    lanes = F32x4.load(xs, 0)
+    print(lanes.sum())
+    return 0

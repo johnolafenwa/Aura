@@ -1,0 +1,52 @@
+def main() -> int32:
+    left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    right = Array[float64].from_list([7.0, 8.0, 9.0, 10.0, 11.0, 12.0], [3, 2])
+    print(left.matmul(right))
+    print(left.matmul(other=right).shape())
+    vector = Array[float64].from_list([1.0, 0.5, -1.0], [3])
+    print(left.matmul(vector))
+    weights = Array[float64].from_list([1.0, -1.0], [2])
+    print(weights.matmul(left))
+    print(vector.dot(vector))
+    print(left.dot(other=left))
+    print(left.fast_sum())
+    print(left.fast_mean())
+
+    # Sixty-five elements cross the 32 partial sums and leave a remainder.
+    mut values: list[float64] = []
+    for i in range(65):
+        values.append(i.to_float() + 0.5)
+    long = Array[float64].from_list(values, [65])
+    print(long.fast_sum())
+    print(long.sum())
+    print(long.fast_mean())
+    print(long.dot(long))
+    print(long.min())
+    print(long.max())
+
+    singles = Array[float32].from_list([1.5, 2.5, -4.0], [3])
+    print(singles.fast_sum())
+    print(singles.fast_mean())
+    print(singles.dot(singles))
+    square = Array[float32].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
+    print(square.matmul(square))
+
+    counts = Array[int64].from_list([1, 2, 3, 4], [2, 2])
+    print(counts.matmul(counts))
+    print(counts.dot(counts))
+    print(counts.fast_sum())
+    print(counts.fast_mean())
+    small = Array[int32].from_list([1, 2, 3, 4], [2, 2])
+    print(small.matmul(small))
+    print(small.dot(small))
+    print(small.fast_sum())
+    print(small.fast_mean())
+
+    zeros = Array[float64].from_list([0.0, -0.0], [2])
+    print(zeros.min())
+    print(zeros.max())
+    empty = Array[float64].zeros([0])
+    print(empty.fast_sum())
+    print(empty.dot(empty))
+    print(Array[float64].zeros([0, 3]).matmul(right).shape())
+    return 0

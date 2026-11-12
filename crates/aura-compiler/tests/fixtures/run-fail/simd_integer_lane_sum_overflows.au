@@ -1,0 +1,9 @@
+from simd import I64x4
+
+
+def main() -> int32:
+    big: int64 = 9223372036854775807
+    values = I64x4(l0=1, l1=2, l2=big, l3=big)
+    print((values + I64x4.splat(0)).to_list())
+    print((values + I64x4.splat(1)).to_list())
+    return 0

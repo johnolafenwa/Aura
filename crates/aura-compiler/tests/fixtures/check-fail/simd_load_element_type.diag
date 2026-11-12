@@ -1,0 +1,5 @@
+error[AU2002]: argument type mismatch for method `load`: expected `float32`, found `float64`
+ --> crates/aura-compiler/tests/fixtures/check-fail/simd_load_element_type.au:6:24
+  |
+6 |     lanes = F32x4.load(xs, 0)
+  |                        ^

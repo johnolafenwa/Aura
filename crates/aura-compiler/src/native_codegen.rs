@@ -943,6 +943,12 @@ impl<'a> NativeCodegen<'a> {
             {
                 object.mark_inline(func_id);
             }
+            // A lane method is a few scalar instructions per lane (see
+            // `std/simd.au`). Inlined, LLVM joins the lanes of a whole
+            // expression into vector instructions.
+            if function.module_name == SIMD_MODULE && frameless_leaf(function, &classes) {
+                object.mark_inline(func_id);
+            }
             functions.insert(function.name.clone(), func_id);
             if leaf_variant(function, &classes) {
                 let leaf_id = try_or_string_error!(
@@ -2030,10 +2036,6 @@ impl<'a> NativeCodegen<'a> {
             |list| {
                 list != "self"
                     && !explicit_locals.loans.contains(list)
-                    && !writeback_locals.iter().any(|(writeback, _)| writeback == list)
-                    && !function.params.iter().any(|param| {
-                        param.name == list && param.passing == MirReceiverKind::BorrowMut
-                    })
                     && matches!(
                         variable_types.get(list),
                         Some(DirectType::Opaque(Type::Named(name, args)))
@@ -2064,7 +2066,17 @@ impl<'a> NativeCodegen<'a> {
                 variable
             });
             variable_index += 4;
+            let range = range_loops::range_proof(function, &region, |place| {
+                !place.contains(['.', '['])
+                    && matches!(
+                        variable_types.get(place),
+                        Some(DirectType::Scalar(ScalarKind::Int64))
+                    )
+            });
+            let sink = mutable_param_indices.get(&region.list).copied();
             list_snapshots::ListSnapshot {
+                range,
+                sink,
                 region,
                 ok,
                 access,
@@ -2094,6 +2106,10 @@ impl<'a> NativeCodegen<'a> {
             current_function_name,
             current_function_path,
             frameless_descriptor: frameless.then_some(descriptor),
+            deferred_traps: (frameless
+                && defers_lane_traps(function)
+                && crate::native_backend::joins_lane_checks())
+            .then(Vec::new),
             writeback_locals,
             mutable_param_indices,
             mutable_sink_vars,
@@ -2172,6 +2188,7 @@ impl<'a> NativeCodegen<'a> {
             list_snapshots,
             snapshot_vals: HashMap::new(),
             current_snapshot_label: String::new(),
+            current_snapshot_instruction: 0,
             pending_snapshot_pads: Vec::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
@@ -3471,6 +3488,9 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The overflow checks of a lane method that wait for its return (see
+    /// `defers_lane_traps`), or `None` in any other function.
+    deferred_traps: Option<Vec<DeferredTrap>>,
     writeback_locals: Vec<(String, DirectType)>,
     mutable_param_indices: HashMap<String, usize>,
     /// The variable that holds each mutable parameter's write-through sink,
@@ -3499,6 +3519,8 @@ struct FunctionCompiler<'a> {
     snapshot_vals: HashMap<Val, usize>,
     /// The MIR block being compiled.
     current_snapshot_label: String,
+    /// The position in its block of the instruction being compiled.
+    current_snapshot_instruction: usize,
     /// The blocks the terminator being compiled jumps through to enter
     /// loops, with each one's target and snapshots, filled once it is done.
     pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
@@ -4550,6 +4572,7 @@ impl<'a> FunctionCompiler<'a> {
             if matches!(instruction, Instruction::IndexInRange { .. }) {
                 continue;
             }
+            self.current_snapshot_instruction = instruction_index;
             if let Some(fused) =
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
@@ -4580,6 +4603,8 @@ impl<'a> FunctionCompiler<'a> {
             self.str_append_root = None;
             compiled?;
         }
+        // No range proof names the terminator.
+        self.current_snapshot_instruction = usize::MAX;
         // A retain before the terminator pays for the value a `Return`
         // hands back.
         self.layout_scratch.consumers =
@@ -5469,6 +5494,7 @@ impl<'a> FunctionCompiler<'a> {
         self.fresh_str_copies.clear();
         match terminator {
             Terminator::Return(operand) => {
+                self.flush_deferred_traps();
                 let value = self.load_operand_for_target(operand, return_ty)?;
                 self.release_unconsumed_retains();
                 let coerced = self.coerce_value(value, return_ty)?;
@@ -6739,6 +6765,14 @@ impl<'a> FunctionCompiler<'a> {
                 WideOverflowOp::Mul | WideOverflowOp::Div => self.builder.imul(left, right),
             });
         }
+        if self.deferred_traps.is_some() {
+            if kind.is_signed() && matches!(op, WideOverflowOp::Add | WideOverflowOp::Sub) {
+                return Ok(self.compile_deferred_wide_overflow(op, left, right, span));
+            }
+            // A product's check is a flag LLVM keeps for each lane, so it
+            // branches here, after the checks that wait.
+            self.flush_deferred_traps();
+        }
         let (result, overflow) = match (op, kind.is_signed()) {
             (WideOverflowOp::Add, true) => self.builder.sadd_overflow(left, right),
             (WideOverflowOp::Add, false) => self.builder.uadd_overflow(left, right),
@@ -6751,8 +6785,102 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.umul_overflow(left, right)
             }
         };
+        let mut overflow = overflow;
+        if let Some(snapshot) = self.range_exact().filter(|_| kind.is_signed()) {
+            // The loop's copy for a qualifying view bounded the operands
+            // where it was entered.
+            let none = self.builder.iconst(types::I64, 0);
+            let wide = self.builder.uextend(types::I64, overflow);
+            let wide = self.keep_in_copy(snapshot, none, wide);
+            overflow = self.builder.icmp_imm(IntCC::NotEqual, wide, 0);
+        }
         self.emit_integer_overflow_failure_branch(overflow, kind, op, left, right, span)?;
         Ok(result)
+    }
+
+    /// The signed sum or difference `left op right` in a lane method (see
+    /// `defers_lane_traps`): the wrapped result now, and the overflow check
+    /// where the method returns.
+    fn compile_deferred_wide_overflow(
+        &mut self,
+        op: WideOverflowOp,
+        left: Val,
+        right: Val,
+        span: Option<Span>,
+    ) -> Val {
+        // A signed sum overflows when both operands differ in sign from
+        // it, and a difference when the operands differ in sign and the
+        // result differs from the left one. Each is the sign of a word
+        // LLVM computes on every lane at once, which it does not do for
+        // the overflow flag of an add.
+        let (result, word) = if op == WideOverflowOp::Add {
+            let sum = self.builder.iadd(left, right);
+            let from_left = self.builder.bxor(left, sum);
+            let from_right = self.builder.bxor(right, sum);
+            (sum, self.builder.band(from_left, from_right))
+        } else {
+            let difference = self.builder.isub(left, right);
+            let apart = self.builder.bxor(left, right);
+            let moved = self.builder.bxor(left, difference);
+            (difference, self.builder.band(apart, moved))
+        };
+        self.deferred_traps
+            .as_mut()
+            .expect("only a lane method defers its overflow checks")
+            .push(DeferredTrap {
+                word,
+                op,
+                left,
+                right,
+                span,
+            });
+        result
+    }
+
+    /// Tests the overflow checks a lane method deferred, where it returns.
+    /// One branch covers them all. Its rare side tests each in the order
+    /// the method computed them and reports the first that failed.
+    fn flush_deferred_traps(&mut self) {
+        let Some(traps) = self.deferred_traps.as_mut().map(std::mem::take) else {
+            return;
+        };
+        if traps.is_empty() {
+            return;
+        }
+        let joined = traps
+            .iter()
+            .map(|trap| trap.word)
+            .reduce(|left, right| self.builder.bor(left, right))
+            .expect("at least one check waits");
+        let failed = self.builder.icmp_imm(IntCC::SignedLessThan, joined, 0);
+        let rare_block = self.builder.create_block();
+        let continue_block = self.builder.create_block();
+        self.builder
+            .brif(failed, rare_block, &[], continue_block, &[]);
+        self.builder.switch_to_block(rare_block);
+        self.builder.set_cold_block(rare_block);
+        self.builder.seal_block(rare_block);
+        for trap in traps {
+            let this = self.builder.icmp_imm(IntCC::SignedLessThan, trap.word, 0);
+            let fail_block = self.builder.create_block();
+            let next_block = self.builder.create_block();
+            self.builder.brif(this, fail_block, &[], next_block, &[]);
+            self.builder.switch_to_block(fail_block);
+            self.builder.seal_block(fail_block);
+            self.emit_integer_overflow_failure(
+                WideIntegerKind::Int64,
+                trap.op,
+                trap.left,
+                trap.right,
+                trap.span,
+            );
+            self.builder.switch_to_block(next_block);
+            self.builder.seal_block(next_block);
+        }
+        // One of the checks failed, so the last test does not fall through.
+        self.builder.trap(TrapCode::IntegerOverflow);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
     }
 
     fn compile_cast(
@@ -7922,6 +8050,22 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .brif(overflow, fail_block, &[], continue_block, &[]);
         self.builder.switch_to_block(fail_block);
+        self.emit_integer_overflow_failure(kind, op, left, right, span);
+        self.builder.seal_block(fail_block);
+        self.builder.switch_to_block(continue_block);
+        self.builder.seal_block(continue_block);
+        Ok(())
+    }
+
+    /// Reports that `left op right` overflowed, and ends the block.
+    fn emit_integer_overflow_failure(
+        &mut self,
+        kind: WideIntegerKind,
+        op: WideOverflowOp,
+        left: Val,
+        right: Val,
+        span: Option<Span>,
+    ) {
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         self.push_frameless_frame();
@@ -7933,10 +8077,6 @@ impl<'a> FunctionCompiler<'a> {
             &[kind_code, op_code, left, right, line, column],
         );
         self.builder.trap(TrapCode::IntegerOverflow);
-        self.builder.seal_block(fail_block);
-        self.builder.switch_to_block(continue_block);
-        self.builder.seal_block(continue_block);
-        Ok(())
     }
 
     fn emit_float_division_guard(
@@ -11882,7 +12022,7 @@ impl<'a> FunctionCompiler<'a> {
         let position =
             self.emit_list_view_bounds_check(array, coordinate.values[0], &layout, slow_block);
         let offset = self.builder.imul_imm(position, size);
-        let element = self.builder.iadd(elements, offset);
+        let element = self.builder.element_address(elements, offset);
         let value = match kind {
             ScalarKind::Int32 => self.builder.sload32(flags, element, 0),
             ScalarKind::Float32 => {
@@ -12164,22 +12304,34 @@ impl<'a> FunctionCompiler<'a> {
         self.emit_list_access_check(list, access, &layout, slow_block, fast_block);
         self.builder.switch_to_block(fast_block);
         self.builder.seal_block(fast_block);
-        let flags = MemFlags::trusted();
         let position = self.emit_list_view_bounds_check(list, index, &layout, slow_block);
         // Room covers every element of unshared storage, and a list with
         // shared storage has none.
-        let capacity = self.builder.uload32(flags, list, layout.capacity_offset);
-        let unshared = self
+        let capacity = self
+            .builder
+            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let mut unshared = self
             .builder
             .icmp(IntCC::UnsignedLessThan, position, capacity);
+        if let Some(snapshot) = self
+            .snapshot_vals
+            .get(&list)
+            .copied()
+            .filter(|index| self.list_snapshots[*index].region.writes)
+        {
+            // A loop that writes the list runs its copy only while the
+            // storage is unshared, and a position in range has room there.
+            let one = self.builder.iconst(types::I64, 1);
+            let room = self.builder.uextend(types::I64, unshared);
+            let room = self.keep_in_copy(snapshot, one, room);
+            unshared = self.builder.icmp_imm(IntCC::NotEqual, room, 0);
+        }
         self.builder
             .brif(unshared, store_block, &[], slow_block, &[]);
 
         self.builder.switch_to_block(store_block);
         self.builder.seal_block(store_block);
-        let elements = self
-            .builder
-            .load(types::I64, flags, list, layout.elements_offset);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
         let element = self.scalar_list_element(elements, position, stride);
         self.store_scalar_list_element(kind, bits, element);
         self.builder.jump(join_block, &[]);
@@ -12201,7 +12353,7 @@ impl<'a> FunctionCompiler<'a> {
         } else {
             self.builder.imul_imm(position, stride)
         };
-        self.builder.iadd(elements, offset)
+        self.builder.element_address(elements, offset)
     }
 
     /// The bits of the unboxed `kind` element at `element`: an integer
@@ -12263,11 +12415,20 @@ impl<'a> FunctionCompiler<'a> {
         let zero = self.builder.iconst(types::I64, 0);
         let negative = self.builder.icmp(IntCC::SignedLessThan, index, zero);
         let from_end = self.builder.iadd(len, index);
-        let position = self.builder.select(negative, from_end, index);
+        let mut position = self.builder.select(negative, from_end, index);
         // One unsigned compare also rejects a position below zero.
-        let out_of_range = self
+        let mut out_of_range = self
             .builder
             .icmp(IntCC::UnsignedGreaterThanOrEqual, position, len);
+        if let Some(snapshot) = self.range_covered(list) {
+            // The loop's copy for a qualifying view checked the whole
+            // range where it was entered, so the index is the position
+            // there.
+            let outside = self.builder.uextend(types::I64, out_of_range);
+            let outside = self.keep_in_copy(snapshot, zero, outside);
+            out_of_range = self.builder.icmp_imm(IntCC::NotEqual, outside, 0);
+            position = self.keep_in_copy(snapshot, index, position);
+        }
         let in_range = self.builder.create_block();
         self.builder.brif(out_of_range, slow, &[], in_range, &[]);
         self.builder.switch_to_block(in_range);
@@ -14274,7 +14435,13 @@ impl<'a> FunctionCompiler<'a> {
         let Some(index) = self.mutable_param_indices.get(root).copied() else {
             return Ok(());
         };
-        let sink = self.current_mutable_sink(index);
+        let mut sink = self.current_mutable_sink(index);
+        if let Some(snapshot) = self.snapshot_of_root(root) {
+            // The loop's copy for a qualifying view runs only with no
+            // sink.
+            let none = self.builder.iconst(types::I64, 0);
+            sink = self.keep_in_copy(snapshot, none, sink);
+        }
         let active = self.builder.icmp_imm(IntCC::NotEqual, sink, 0);
         let publish = self.builder.create_block();
         let done = self.builder.create_block();
@@ -15186,14 +15353,10 @@ impl<'a> FunctionCompiler<'a> {
             ));
         }
         match op {
-            ScalarOp::Sqrt => {
-                let results =
-                    self.runtime_call_results(self.runtime[call.function], &[object.values[0]]);
-                Ok(ValueRef {
-                    values: results,
-                    ty: object.ty,
-                })
-            }
+            ScalarOp::Sqrt => Ok(ValueRef {
+                values: vec![self.builder.fsqrt(object.values[0])],
+                ty: object.ty,
+            }),
             ScalarOp::DurationToMilliseconds | ScalarOp::DurationToSeconds => {
                 let mut words = vec![object.values[0]];
                 self.push_runtime_call_words(call, &mut words);
@@ -16121,10 +16284,27 @@ impl<'a> FunctionCompiler<'a> {
                     Type::Named("Array".to_string(), vec![result_type]),
                 ))
             }
-            ArrayOp::Sum | ArrayOp::Min | ArrayOp::Max | ArrayOp::Mean => {
+            ArrayOp::Dot | ArrayOp::Matmul => {
+                let other = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(other)?;
+                words.push(other.values[0]);
                 self.push_runtime_call_words(call, &mut words);
                 let results = self.runtime_call_results(function, &words);
-                let target = if op == ArrayOp::Mean {
+                if op == ArrayOp::Matmul {
+                    return Ok(self.owned_opaque_result(results, array_ty));
+                }
+                let boxed = self.owned_opaque_result(results, element_ty);
+                self.coerce_value(boxed, &element_direct_ty)
+            }
+            ArrayOp::Sum
+            | ArrayOp::Min
+            | ArrayOp::Max
+            | ArrayOp::Mean
+            | ArrayOp::FastSum
+            | ArrayOp::FastMean => {
+                self.push_runtime_call_words(call, &mut words);
+                let results = self.runtime_call_results(function, &words);
+                let target = if matches!(op, ArrayOp::Mean | ArrayOp::FastMean) {
                     DirectType::Scalar(ScalarKind::Float64)
                 } else {
                     element_direct_ty
@@ -16924,8 +17104,56 @@ fn declare_runtime_helper(
 /// safepoint or a debugger mark, so a `--debug` build keeps every frame.
 /// MIR names a method `Class.method`.
 const FAST_ADVANCE_SUFFIX: &str = ".__aura_advance";
+
+/// The builtin module of lane classes (ADR-0087).
+const SIMD_MODULE: &str = "simd";
 /// The largest advance method inlined into each loop that calls it.
 const FAST_ADVANCE_INLINE_BLOCKS: usize = 64;
+
+/// The overflow check of a signed 64-bit sum or difference that waits for
+/// the end of a lane method.
+struct DeferredTrap {
+    /// The word that is negative when the operation overflowed.
+    word: Val,
+    op: WideOverflowOp,
+    left: Val,
+    right: Val,
+    span: Option<Span>,
+}
+
+/// Whether `function` is a method of the `simd` module whose integer
+/// overflow checks wait for its return.
+///
+/// A lane method such as `I64x4 + I64x4` adds each lane with its own check.
+/// A branch after each lane keeps LLVM from joining the lanes into vector
+/// instructions. Such a method is one block that only computes sums,
+/// differences, and products, builds its result, and returns, so nothing it
+/// does can be seen before it returns. Its checks are computed without a
+/// branch and tested together where it returns. When one failed, the
+/// checks are tested again in source order, so the report is the one the
+/// method would give lane by lane.
+fn defers_lane_traps(function: &MirFunction) -> bool {
+    let [block] = function.blocks.as_slice() else {
+        return false;
+    };
+    function.module_name == SIMD_MODULE
+        && matches!(block.terminator, Terminator::Return(_))
+        && block.instructions.iter().all(|instruction| {
+            matches!(
+                instruction,
+                Instruction::Assign {
+                    value: Rvalue::Use(_)
+                        | Rvalue::Construct { .. }
+                        | Rvalue::Unary { .. }
+                        | Rvalue::Binary {
+                            op: BinaryOp::Add | BinaryOp::Sub | BinaryOp::Mul,
+                            ..
+                        },
+                    ..
+                }
+            )
+        })
+}
 
 fn frameless_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
     // A call the runtime enters, such as one through a function value,
@@ -17089,6 +17317,22 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
             return false;
         }
     }
+    // A float local or literal: float division and the float forms of
+    // `abs` and `sqrt` are instructions that cannot fail.
+    let float_operand = |operand: &Operand| match operand {
+        Operand::Float(_) => true,
+        Operand::Place(place) | Operand::MovePlace(place) => function
+            .local_types
+            .iter()
+            .map(|local| (&local.name, &local.ty))
+            .chain(function.params.iter().map(|param| (&param.name, &param.ty)))
+            .any(|(name, ty)| {
+                name == place
+                    && matches!(ty, Type::Named(name, args)
+                        if args.is_empty() && matches!(name.as_str(), "float32" | "float64"))
+            }),
+        _ => false,
+    };
     function.blocks.iter().all(|block| {
         let instructions = block
             .instructions
@@ -17105,12 +17349,23 @@ fn leaf_body(function: &MirFunction, classes: &HashMap<String, MirClass>) -> boo
                     Rvalue::Binary {
                         op, left, right, ..
                     } => {
-                        !matches!(
-                            op,
-                            BinaryOp::Div | BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow
-                        ) && plain_operand(left)
-                            && plain_operand(right)
+                        let total = match op {
+                            BinaryOp::Div => float_operand(left) && float_operand(right),
+                            BinaryOp::FloorDiv | BinaryOp::Mod | BinaryOp::Pow => false,
+                            _ => true,
+                        };
+                        total && plain_operand(left) && plain_operand(right)
                     }
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Function(FunctionOp::Abs | FunctionOp::Sqrt),
+                                receiver: None,
+                                ..
+                            },
+                        args,
+                        ..
+                    } => matches!(args.as_slice(), [argument] if float_operand(&argument.value)),
                     Rvalue::Unary { value, .. } => plain_operand(value),
                     Rvalue::UnionTagTest { .. } => true,
                     Rvalue::UnionTakePayload { .. } => true,
@@ -19497,6 +19752,8 @@ mod list_snapshots;
 mod lookups;
 #[path = "native_codegen_math.rs"]
 mod math;
+#[path = "native_codegen_range_loops.rs"]
+mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 

@@ -1,0 +1,14 @@
+from simd import F32x4
+
+
+def fill(out: mut list[float32], at: int64):
+    F32x4.splat(2.5).store(out, at)
+
+
+def main() -> int32:
+    mut out: list[float32] = [0.0, 0.0, 0.0, 0.0, 0.0]
+    fill(out, 1)
+    print(out)
+    fill(out, 2)
+    print(out)
+    return 0

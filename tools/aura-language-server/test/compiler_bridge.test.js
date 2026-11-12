@@ -4648,6 +4648,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
       "gzip",
       "regex",
       "time",
+      "simd",
     ];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
@@ -4677,6 +4678,10 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const gzipNames = await completionNames("gzip");
     for (const expected of ["compress", "decompress", "Error"]) {
       assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
+    }
+    const simdNames = await completionNames("simd");
+    for (const expected of ["F64x2", "F64x4", "F32x4", "F32x8", "I64x2", "I64x4"]) {
+      assert.ok(simdNames.has(expected), `simd completion should include ${expected}`);
     }
 
     const regexNames = await completionNames("regex");
@@ -6398,6 +6403,10 @@ test("compiler bridge exposes the global numeric Array surface and result types"
       "min",
       "max",
       "mean",
+      "fast_sum",
+      "fast_mean",
+      "dot",
+      "matmul",
       "wrapping_add",
       "wrapping_sub",
       "wrapping_mul",

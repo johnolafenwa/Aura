@@ -1,0 +1,119 @@
+def saxpy(a: float64, xs: list[float64], ys: mut list[float64]):
+    for i in range(len(xs)):
+        y = ys[i]
+        ys[i] = a * xs[i] + y
+
+def scale(xs: mut list[float64], factor: float64):
+    for i in range(len(xs)):
+        xs[i] *= factor
+
+def stencil(xs: list[float64], out: mut list[float64]):
+    for i in range(1, len(xs) - 1):
+        out[i] = xs[i - 1] + xs[i + 1]
+
+def every_other(xs: list[int64], n: int64) -> int64:
+    mut total: int64 = 0
+    mut i: int64 = 0
+    while i < n:
+        total += xs[i]
+        i += 2
+    return total
+
+def from_the_end(xs: list[int64]) -> int64:
+    mut total: int64 = 0
+    for i in range(-3, 0):
+        total += xs[i]
+    return total
+
+def stops_early(xs: list[int64], n: int64) -> int64:
+    mut total: int64 = 0
+    for i in range(n):
+        if i == len(xs):
+            break
+        total += xs[i]
+    return total
+
+def rounds(xs: list[float64], count: int64) -> float64:
+    mut total = 0.0
+    for round in range(count):
+        for j in range(len(xs)):
+            total += xs[j]
+    return total
+
+def widen(small: list[int8], wide: mut list[int64]):
+    for i in range(len(small)):
+        wide[i] = (small[i] as int64) * 2
+
+def flip(flags: mut list[bool]):
+    for i in range(len(flags)):
+        flag = flags[i]
+        flags[i] = not flag
+
+def halve(xs: mut list[float32]):
+    for i in range(len(xs)):
+        x = xs[i]
+        xs[i] = x / 2.0
+
+def shift_left(xs: mut list[int64]):
+    for i in range(len(xs) - 1):
+        next = xs[i + 1]
+        xs[i] = next
+
+def apply(change: def(mut list[float64], float64) -> None, xs: mut list[float64]):
+    change(xs, 4.0)
+
+def main():
+    mut xs: list[float64] = []
+    mut ys: list[float64] = []
+    for i in range(37):
+        xs.append(i.to_float() * 0.5)
+        ys.append(i.to_float() * 0.25 + 1.0)
+    saxpy(2.0, xs, ys)
+    scale(ys, 1.5)
+    print(ys)
+    mut out = [0.0] * 37
+    stencil(xs, out)
+    print(out)
+
+    empty: list[float64] = []
+    mut none: list[float64] = []
+    saxpy(2.0, empty, none)
+    scale(none, 2.0)
+    stencil(empty, none)
+    print(none)
+
+    ints: list[int64] = [1, 2, 3, 4, 5, 6, 7, 8, 9]
+    print(every_other(ints, 9))
+    print(every_other(ints, 0))
+    print(from_the_end(ints))
+    print(stops_early(ints, 100))
+    print(rounds(xs, 3))
+
+    small: list[int8] = [1, -2, 3, -4, 5]
+    mut wide: list[int64] = [0, 0, 0, 0, 0, 9]
+    widen(small, wide)
+    print(wide)
+
+    mut flags = [true, false, true, true]
+    flip(flags)
+    print(flags)
+
+    mut halves: list[float32] = [1.0, 3.0, 5.0]
+    halve(halves)
+    print(halves)
+
+    mut shifted: list[int64] = [1, 2, 3, 4, 5]
+    shift_left(shifted)
+    print(shifted)
+
+    shared = shifted.copy()
+    shift_left(shifted)
+    print(shifted)
+    print(shared)
+
+    mut through = [1.0, 2.0, 3.0]
+    apply(scale, through)
+    changes = [scale]
+    for change in changes:
+        change(through, 0.5)
+    print(through)

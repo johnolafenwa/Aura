@@ -10151,6 +10151,74 @@ pub extern "C-unwind" fn aura_direct_array_reduce(
     })
 }
 
+/// Runs `product` on the Arrays `left` and `right`, which may be one
+/// value.
+fn direct_array_product<T>(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    product: impl Fn(&ArrayValue, &ArrayValue) -> std::result::Result<T, Diagnostic>,
+) -> T {
+    let evaluate = |left_value: &Value, right_value: &Value| match (left_value, right_value) {
+        (Value::Array(left), Value::Array(right)) => product(left, right),
+        (left, right) => Err(Diagnostic::coded(
+            "AU4001",
+            format!(
+                "direct Array ABI received operands `{}` and `{}` for an Array product",
+                value_type_name(left),
+                value_type_name(right)
+            ),
+        )),
+    };
+    let result = unsafe {
+        if left == right {
+            with_value(left, |value| evaluate(value, value))
+        } else {
+            with_value(left, |left_value| {
+                with_value(right, |right_value| evaluate(left_value, right_value))
+            })
+        }
+    };
+    direct_array_result(result, line, column)
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_dot(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(direct_array_product(
+            left,
+            right,
+            line,
+            column,
+            ArrayValue::dot,
+        ))
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_array_matmul(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        boxed_value(Value::Array(direct_array_product(
+            left,
+            right,
+            line,
+            column,
+            ArrayValue::matmul,
+        )))
+    })
+}
+
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_map_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {

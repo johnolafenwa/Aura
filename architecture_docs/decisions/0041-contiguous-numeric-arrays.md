@@ -5,6 +5,8 @@
 - Roadmap decision: Batch 6, Phase 7.3
 - Builds on: ADR-0002, ADR-0016, ADR-0022, and ADR-0040
 - Distinct from: ADR-0038
+- Amended by: ADR-0086 (`dot`, `matmul`, `fast_sum`, `fast_mean`, and the
+  order of zeros in `min` and `max`)
 
 ## Context
 

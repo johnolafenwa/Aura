@@ -337,6 +337,107 @@ store the element without a runtime call or a box.
   its first use, and caches it in a variable. A write on a call without a
   sink then costs one compare.
 
+### Counted Loops Over Scalar Lists
+
+A loop that walks a list of numbers by index compiles to a second copy
+with no bounds check, no storage reload, and no slow path. LLVM
+vectorizes that copy when the arithmetic allows it.
+
+```aura fragment
+for i in range(len(xs)):
+    ys[i] = a * xs[i] + ys[i]
+```
+
+- **Views read once.** `native_codegen_list_snapshots.rs` finds each loop
+  that reads or writes scalar elements of a list it does not resize. The
+  block that enters the loop reads the list's form, length, and element
+  address into variables. `version_blocks` copies the loop. The copy
+  reads the variables, and the loop as written reads the list each time.
+- **Range proofs.** `native_codegen_range_loops.rs` finds the loop's
+  counters: an `int64` local the loop only advances by a positive
+  constant, compared `counter < bound` in a block that branches into the
+  loop. The bound is a local the loop does not assign, a constant, or the
+  list's own length. A dataflow pass follows the counter through copies
+  and constant offsets, so `xs[i - 1]` and `xs[i + 1]` are known too.
+- **Entry guards.** An access at distance `d` from the counter is in
+  range on every iteration when the counter starts at `-d` or more and
+  `bound + d` is at most the length. The entry block checks both once,
+  with the form, the element type, and, for a `mut` parameter, that the
+  caller registered no write-through sink. The copy runs only when all
+  hold. Otherwise the loop runs as written and reports an index out of
+  range at the access that reaches it.
+- **What the copy drops.** A covered access keeps no bounds check, no
+  check for room, and no sink test. A checked sum of a place in range and
+  a constant, such as the counter's advance, keeps no overflow check: the
+  guards bound it by the list's length.
+- **Addresses.** An element address is `element_address(base, offset)`,
+  which LLVM sees as a `getelementptr` from one pointer. A sum of two
+  words converted to a pointer hides the stride from the loop vectorizer.
+- **Branch weight.** The branch into the copy carries a 2000 to 1 weight.
+  The register allocator then keeps the copy's values in registers when
+  both loops feed one result.
+
+Limits: a float reduction such as `total += xs[i]` keeps its order, so
+it stays scalar unless it is kept in a `simd` lane value. Checked integer arithmetic on the elements stays scalar.
+A function in a program that starts tasks polls for a yield on every
+loop iteration, which also keeps the loop scalar. `Array` element loops
+are not covered.
+
+A `for` over `range(start, stop, step)` with a positive literal step
+lowers to the same counted shape. The header tests `cursor < stop`. The
+block after the body tests `last <= cursor`, where `last` is
+`stop - step` for a `stop` that is not negative, and adds the step only
+when the test fails. The addition therefore cannot overflow, the loop is
+exact at the limits of `int64`, and the range proof drops its overflow
+check like any other advance.
+
+### SIMD Lane Values
+
+The `simd` module (ADR-0087) is Aura source in `std/simd.au`: Copy
+classes such as `F64x4` with one float field for each lane, and methods
+that compute lane by lane. The interpreter runs them as written. Native
+code reaches vector instructions in three steps.
+
+```aura fragment
+acc = acc + F64x4.load(xs, i) * F64x4.load(ys, i)
+```
+
+- **Loads and stores become element accesses.** `mir_simd.rs` lowers a
+  direct positional call of `load` or `store` on a local list as the
+  constructor over `xs[i]`, `xs[i + 1]`, and so on, or as the element
+  writes, with the index and the stored value in temporaries. The range
+  proof above then covers every lane with one entry guard, and a trap
+  reports the call. Other calls run the method.
+- **Lane methods are inlined.** `mark_inline` marks each `simd` function
+  that is a frameless leaf, so LLVM copies it into its caller across
+  codegen units. Float division, `abs`, and `sqrt` no longer need a
+  frame, and `sqrt` is `llvm.sqrt` in place of a runtime call.
+- **SLP joins the lanes.** After inlining, a lane value is a handful of
+  unboxed floats. LLVM's SLP vectorizer turns four matching float
+  operations into one vector operation, at the width `--target-cpu`
+  allows. A `float32` lane is widened to `float64` in generated code and
+  narrowed after each operation, which LLVM folds to `float32` vector
+  arithmetic where the result is the same.
+
+A trap inside a lane method that was called, such as a division by a
+zero lane, carries `<std>/simd.au` as its file, so the report does not
+point at an unrelated line of the program.
+
+`I64x2` and `I64x4` (ADR-0092) are the same kind of class over `int64`
+fields, and every lane operation is checked.
+
+- **A lane method defers its overflow checks** when it is one block of
+  sums, differences, products, and a constructor (`defers_lane_traps`)
+  and the target CPU has AVX2 (`joins_lane_checks`). A signed sum or
+  difference then emits the wrapped result and a word whose sign says
+  whether it overflowed, with no branch.
+- **The return tests the joined words once** (`flush_deferred_traps`).
+  Its rare side tests each word in order and calls the same failure the
+  scalar check calls, so the report is the first lane's.
+- **Every other target, and every product, keeps the branch after each
+  lane.** The joined form is slower on the x86-64 baseline, where the
+  rare side's use of each lane keeps SLP from vectorizing at all.
+
 ### Integer Widths, Casts, And Constants
 
 Every fixed-width scalar runs in machine words, so code over bytes, hashes,
@@ -508,7 +609,11 @@ constants. `finish` then lowers the whole object to LLVM IR in one context:
   `willreturn`. A branch to a cold block gets `branch_weights` of 1 to
   2000.
 - The target machine uses the host triple, the generic CPU, and PIC, and
-  the module runs `default<O3>`.
+  the module runs `default<O3>`. `--target-cpu` names another CPU
+  (ADR-0085): `native` passes the host's CPU name and feature list, and
+  an x86-64 level passes its name.
+- `AURA_DUMP_LLVM_IR=<prefix>` writes each unit's IR after the passes to
+  `<prefix>.<unit>.ll`, for a compiler developer.
 - On ELF every defined function gets its own `.text.<symbol>` section after
   the passes run, so `--gc-sections` drops the ones nothing calls. LLVM
   marks Mach-O objects `MH_SUBSECTIONS_VIA_SYMBOLS`, so `-dead_strip` works

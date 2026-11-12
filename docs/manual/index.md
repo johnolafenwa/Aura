@@ -85,6 +85,9 @@ scope, terminology, authority, and conformance language.
 - [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`
   with four numeric dtypes, first-axis owned slices, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
+- [SIMD Module](/manual/simd): lane values of two, four, or eight floats
+  that native code keeps in vector registers, with loads and stores over
+  lists and results that are the same on every machine.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.

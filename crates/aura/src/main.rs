@@ -96,6 +96,7 @@ fn main() {
                 None => (remaining.as_slice(), &[][..]),
             };
             let (diagnostic_format, input_args) = parse_diagnostic_format(input_args.to_vec());
+            let input_args = apply_target_cpu(input_args);
             let (run_backend, input_args) = parse_run_backend(input_args);
             let input = read_input(&mut input_args.into_iter());
             let mut json_native_fallback = None;
@@ -217,6 +218,7 @@ fn main() {
                 .into_iter()
                 .filter(|arg| arg != "--remove-proved-checks")
                 .collect();
+            let remaining = apply_target_cpu(remaining);
             let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
             // A debug build keeps every check.
@@ -2090,6 +2092,51 @@ impl VerifiedNativeLaunchError {
 /// verification and is not a current guarantee.
 const DEFAULT_RUN_BACKEND: RunBackend = RunBackend::Mir;
 
+/// The target CPU `args` or the environment asks for, and `args` without
+/// the option: `--target-cpu <name>`, `--target-cpu=<name>`, or else the
+/// `AURA_TARGET_CPU` environment variable. `Err` holds the option's usage
+/// when it has no name.
+fn take_target_cpu(
+    args: Vec<String>,
+    environment: Option<String>,
+) -> std::result::Result<(Option<String>, Vec<String>), String> {
+    let mut requested = environment.filter(|name| !name.is_empty());
+    let mut rest = Vec::with_capacity(args.len());
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        if argument == "--target-cpu" {
+            let name = args
+                .next()
+                .ok_or_else(|| "`--target-cpu` needs a CPU name".to_string())?;
+            requested = Some(name);
+        } else if let Some(name) = argument.strip_prefix("--target-cpu=") {
+            requested = Some(name.to_string());
+        } else {
+            rest.push(argument);
+        }
+    }
+    Ok((requested, rest))
+}
+
+/// Compiles this process's native code for the CPU that `args` or
+/// `AURA_TARGET_CPU` names (ADR-0085), and returns `args` without the
+/// option. An unknown name ends the process.
+fn apply_target_cpu(args: Vec<String>) -> Vec<String> {
+    let requested = take_target_cpu(args, std::env::var("AURA_TARGET_CPU").ok()).and_then(
+        |(requested, rest)| match requested {
+            Some(name) => aura_compiler::set_native_target_cpu(&name).map(|()| rest),
+            None => Ok(rest),
+        },
+    );
+    match requested {
+        Ok(rest) => rest,
+        Err(error) => {
+            eprintln!("aura: {error}");
+            process::exit(2);
+        }
+    }
+}
+
 fn parse_run_backend(args: Vec<String>) -> (RunBackend, Vec<String>) {
     let mut backend = DEFAULT_RUN_BACKEND;
     let mut rest = Vec::new();
@@ -3147,6 +3194,7 @@ fn native_cache_key_for_semantic_schema(
     let runtime = native_runtime_identity_material(runtime_identity)?;
     let semantic_schema = semantic_schema_version.to_le_bytes();
     let keep_symbols = [u8::from(native_keep_symbols())];
+    let target_cpu = aura_compiler::native_target_cpu_identity();
     let mut material = Vec::with_capacity(lowered.len() + 256);
     for part in [
         NATIVE_CACHE_FORMAT.as_bytes(),
@@ -3157,6 +3205,7 @@ fn native_cache_key_for_semantic_schema(
         b"direct",
         b"llvm",
         keep_symbols.as_slice(),
+        target_cpu.as_bytes(),
         runtime.as_slice(),
     ] {
         material.extend_from_slice(part);
@@ -5176,9 +5225,9 @@ fn usage_text() -> &'static str {
     "usage: aura <check|run> [--offline] [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
-       or: aura run [--backend mir|direct|auto] [--offline] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--offline] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--offline] [--format human|json] --stdin <virtual-path>\n\
+       or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -6368,6 +6417,49 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 );
             }
         }
+    }
+
+    #[test]
+    fn target_cpu_comes_from_the_option_then_the_environment() {
+        use super::take_target_cpu;
+        let args = |items: &[&str]| {
+            items
+                .iter()
+                .map(|item| item.to_string())
+                .collect::<Vec<_>>()
+        };
+
+        assert_eq!(
+            take_target_cpu(args(&["-o", "app", "app.au"]), None),
+            Ok((None, args(&["-o", "app", "app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(args(&["--target-cpu", "native", "app.au"]), None),
+            Ok((Some("native".to_string()), args(&["app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(args(&["app.au", "--target-cpu=x86-64-v3"]), None),
+            Ok((Some("x86-64-v3".to_string()), args(&["app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(args(&["app.au"]), Some("native".to_string())),
+            Ok((Some("native".to_string()), args(&["app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(args(&["app.au"]), Some(String::new())),
+            Ok((None, args(&["app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(
+                args(&["--target-cpu", "generic", "app.au"]),
+                Some("native".to_string())
+            ),
+            Ok((Some("generic".to_string()), args(&["app.au"])))
+        );
+        assert_eq!(
+            take_target_cpu(args(&["app.au", "--target-cpu"]), None),
+            Err("`--target-cpu` needs a CPU name".to_string())
+        );
     }
 
     #[test]
