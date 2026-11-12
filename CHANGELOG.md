@@ -19,6 +19,14 @@ in this file.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.
+- Children started together in a `TaskGroup` reach idle workers sooner
+  on Linux. An idle worker waits 20 microseconds for a new child to
+  become available to it, and the Linux poller rounded that wait up to a
+  millisecond, so the second child of a pair started about a millisecond
+  late. The worker now spins through waits shorter than half a
+  millisecond. Twenty rounds of two 3 ms children take 63 ms where they
+  took 81 ms, against 56 ms for one child. Twenty rounds of four 0.6 ms
+  children take 20 ms where they took 36 ms.
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
   `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,

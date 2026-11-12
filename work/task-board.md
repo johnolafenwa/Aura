@@ -16,6 +16,19 @@ Last updated: 2026-11-12
   chapter.
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
+## Children of one TaskGroup start late on Linux (complete)
+
+- Reported by the Array v2 work: two CPU-bound children of one
+  `TaskGroup` took twice as long as one.
+- The children did run in parallel. The second one started about a
+  millisecond late, because an idle worker's 20 microsecond wait was
+  rounded up to a millisecond by `epoll_wait`. For a child of about a
+  millisecond that looks like running one after the other.
+- The reactor spins through a caller's wait shorter than 500
+  microseconds. Details are in `2026-11-12-task-start-delay.md`.
+- Open: an older child still waits 250 microseconds before another
+  worker may take it, by design. Two children cost about 0.3 to 0.5 ms
+  more per round than one.
 
 ## SIMD (complete)
 
