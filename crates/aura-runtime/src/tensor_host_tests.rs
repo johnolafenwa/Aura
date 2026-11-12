@@ -527,6 +527,10 @@ fn host_functions_are_found_by_name() {
         "tensor::__aura_node_op",
         "tensor::__aura_pair_op",
         "tensor::__aura_filled",
+        "tensor::__aura_weights_names",
+        "tensor::__aura_weights_load",
+        "tensor::__aura_weights_put",
+        "tensor::__aura_weights_write",
     ] {
         assert!(tensor_host_function(name).is_some(), "{name}");
     }
@@ -846,6 +850,16 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
 
     /// Runs `plan` through its generated kernels on the CPU.
     pub(super) fn run(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<ArrayValue> {
+        run_all(plan, leaves, tag).and_then(|mut outputs| outputs.pop())
+    }
+
+    /// Runs `plan` through its generated kernels on the CPU and gives each
+    /// of its outputs.
+    pub(super) fn run_all(
+        plan: &Plan,
+        leaves: &[Storage],
+        tag: usize,
+    ) -> Option<Vec<ArrayValue>> {
         let program = tensor_codegen::generate(plan);
         let library = compile(&program.source, tag)?;
         // SAFETY: the harness defines `aura_thread` with this signature.
@@ -946,14 +960,23 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                 }
             }
         }
-        let (dtype, shape) = match plan.slots.last().unwrap() {
-            Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
-        };
-        Some(from_bytes(
-            ArrayDType::from_code(dtype).unwrap(),
-            shape,
-            &buffers[plan.slots.len() - 1],
-        ))
+        Some(
+            plan.outputs
+                .iter()
+                .map(|&output| {
+                    let (dtype, shape) = match &plan.slots[output] {
+                        Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => {
+                            (*dtype, shape)
+                        }
+                    };
+                    from_bytes(
+                        ArrayDType::from_code(dtype).unwrap(),
+                        shape,
+                        &buffers[output],
+                    )
+                })
+                .collect(),
+        )
     }
 
     #[test]

@@ -354,7 +354,7 @@ fn pull(
         Operation::IndexAdd { axis, .. } => {
             give(0, &|| run(Operation::Take { axis: *axis }, &[flow, &inputs[1]]))?;
         }
-        Operation::Compare(_) | Operation::ArgReduce { .. } => {}
+        Operation::Compare(_) | Operation::ArgReduce { .. } | Operation::Random { .. } => {}
     }
     Ok(pulled)
 }

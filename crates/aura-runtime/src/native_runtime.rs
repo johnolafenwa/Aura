@@ -3854,6 +3854,27 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         ],
     },
     DynamicHostAbi {
+        name: "tensor::__aura_weights_names",
+        params: &[borrowed("path")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_load",
+        params: &[
+            borrowed("path"),
+            borrowed("name"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_put",
+        params: &[borrowed("path"), borrowed("name"), borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_write",
+        params: &[borrowed("path")],
+    },
+    DynamicHostAbi {
         name: "tensor::__aura_filled",
         params: &[
             borrowed("shape"),
@@ -15902,6 +15923,10 @@ host_builtin_entries! {
     borrowed "tensor::__aura_node_op" => aura_host_tensor_node_op(|args| direct_http("tensor::__aura_node_op", crate::runtime_value::tensor_host::host_tensor_node_op, args));
     borrowed "tensor::__aura_pair_op" => aura_host_tensor_pair_op(|args| direct_http("tensor::__aura_pair_op", crate::runtime_value::tensor_host::host_tensor_pair_op, args));
     borrowed "tensor::__aura_filled" => aura_host_tensor_filled(|args| direct_http("tensor::__aura_filled", crate::runtime_value::tensor_host::host_tensor_filled, args));
+    borrowed "tensor::__aura_weights_names" => aura_host_tensor_weights_names(|args| direct_http("tensor::__aura_weights_names", crate::runtime_value::tensor_host::host_tensor_weights_names, args));
+    borrowed "tensor::__aura_weights_load" => aura_host_tensor_weights_load(|args| direct_http("tensor::__aura_weights_load", crate::runtime_value::tensor_host::host_tensor_weights_load, args));
+    borrowed "tensor::__aura_weights_put" => aura_host_tensor_weights_put(|args| direct_http("tensor::__aura_weights_put", crate::runtime_value::tensor_host::host_tensor_weights_put, args));
+    borrowed "tensor::__aura_weights_write" => aura_host_tensor_weights_write(|args| direct_http("tensor::__aura_weights_write", crate::runtime_value::tensor_host::host_tensor_weights_write, args));
     borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));
     borrowed "http::__aura_read_chunk" => aura_host_http_read_chunk(|args| direct_http("http::__aura_read_chunk", crate::runtime_value::http_client::host_http_read_chunk, args));
     borrowed "http::__aura_read_line" => aura_host_http_read_line(|args| direct_http("http::__aura_read_line", crate::runtime_value::http_client::host_http_read_line, args));

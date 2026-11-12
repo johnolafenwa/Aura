@@ -77,6 +77,27 @@ AURA_MINMAX(aura_min_f, float, 1.0f, <)
 AURA_MINMAX(aura_min_d, double, 1.0, <)
 AURA_MINMAX(aura_max_f, float, 1.0f, >)
 AURA_MINMAX(aura_max_d, double, 1.0, >)
+AURA_INLINE unsigned long long aura_bits(long long seed, unsigned long long index) {
+    unsigned long long bits = (unsigned long long)seed * 0x9E3779B97F4A7C15ULL
+        + index * 0xD1B54A32D192ED03ULL + 0x9E3779B97F4A7C15ULL;
+    bits = (bits ^ (bits >> 30)) * 0xBF58476D1CE4E5B9ULL;
+    bits = (bits ^ (bits >> 27)) * 0x94D049BB133111EBULL;
+    return bits ^ (bits >> 31);
+}
+AURA_INLINE float aura_unit_f(long long seed, unsigned long long index) {
+    return (float)(aura_bits(seed, index) >> 40) * 5.9604644775390625e-8f;
+}
+AURA_INLINE double aura_unit_d(long long seed, unsigned long long index) {
+    return (double)(aura_bits(seed, index) >> 11) * 1.1102230246251565e-16;
+}
+AURA_INLINE float aura_normal_f(long long seed, unsigned long long index) {
+    float first = aura_unit_f(seed, 2 * index), second = aura_unit_f(seed, 2 * index + 1);
+    return sqrtf(-2.0f * logf(1.0f - first)) * cosf(6.283185307179586f * second);
+}
+AURA_INLINE double aura_normal_d(long long seed, unsigned long long index) {
+    double first = aura_unit_d(seed, 2 * index), second = aura_unit_d(seed, 2 * index + 1);
+    return sqrt(-2.0 * log(1.0 - first)) * cos(6.283185307179586 * second);
+}
 "#;
 
 /// The elements one thread reduces in a stage of a whole reduction.
@@ -247,7 +268,7 @@ impl<'a> Generator<'a> {
                 // A step read more than once is computed once.
                 Slot::Step { operation, .. } => {
                     !fuses(operation)
-                        || index + 1 == count
+                        || plan.outputs.contains(&index)
                         || uses[index] > 1
                         || feeds_matmul[index]
                 }
@@ -431,6 +452,16 @@ impl<'a> Generator<'a> {
                     at(0, &join(inner, length, &lane, "i")),
                 )
             }
+            Operation::Random { fill, dtype, .. } => format!(
+                "aura_{}_{}({}, (unsigned long long)j)",
+                if *fill == 0 { "unit" } else { "normal" },
+                if dtype_of(*dtype) == ArrayDType::Float64 {
+                    "d"
+                } else {
+                    "f"
+                },
+                at(0, "0"),
+            ),
             Operation::Reduce { .. }
             | Operation::Matmul
             | Operation::IndexAdd { .. }

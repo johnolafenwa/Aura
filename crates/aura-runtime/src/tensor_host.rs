@@ -39,6 +39,9 @@ pub(crate) mod tensor_kernels;
 #[path = "tensor_grad.rs"]
 mod tensor_grad;
 
+#[path = "tensor_weights.rs"]
+mod tensor_weights;
+
 /// Where a tensor's memory lives. The codes are the ones `std/tensor.au`
 /// passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -145,6 +148,14 @@ pub(crate) enum Operation {
     IndexAdd { axis: usize, size: usize },
     /// The place along `axis` of each lane's largest element, or smallest.
     ArgReduce { largest: bool, axis: usize },
+    /// Random floats of an [`ArrayDType`] code, by a
+    /// [`tensor_kernels::Fill`] code. The operand is one `int64`, the
+    /// seed, so every seed has the same plan.
+    Random {
+        fill: i64,
+        dtype: i64,
+        shape: Vec<usize>,
+    },
 }
 
 /// The codes of the functions in [`Operation::Unary`] that `Array` does
@@ -217,6 +228,9 @@ struct TensorNode {
     /// The gradients of this tensor with respect to each watched tensor
     /// it was computed from, once one has been asked for.
     gradients: Mutex<Option<Vec<(TensorValue, TensorValue)>>>,
+    /// The watched tensor a variable holds now. Only the node behind a
+    /// `Variable[T]` has one.
+    variable: Option<Mutex<TensorValue>>,
 }
 
 /// The operation that gave a tracked tensor, and its operands.
@@ -265,7 +279,35 @@ impl TensorValue {
             tracked: false,
             history: None,
             gradients: Mutex::new(None),
+            variable: None,
         }))
+    }
+
+    /// A watched tensor of the elements of this float tensor, after
+    /// running the work it waits on.
+    fn watched(&self, name: &str) -> Result<Self> {
+        if !matches!(self.dtype(), ArrayDType::Float32 | ArrayDType::Float64) {
+            return Err(tensor_error(
+                name,
+                "expects a float tensor; a gradient exists for floats only",
+            ));
+        }
+        Ok(Self::ready(
+            self.device(),
+            self.dtype(),
+            self.shape().into(),
+            self.storage()?,
+        )
+        .tracking(None))
+    }
+
+    /// The watched tensor this variable holds now.
+    fn held(&self, name: &str) -> Result<std::sync::MutexGuard<'_, TensorValue>> {
+        self.0
+            .variable
+            .as_ref()
+            .map(|held| held.lock().unwrap_or_else(std::sync::PoisonError::into_inner))
+            .ok_or_else(|| tensor_error(name, "expects a variable"))
     }
 
     /// This new tensor as a tracked one. `history` is how it was computed,
@@ -338,7 +380,10 @@ impl TensorValue {
             return Ok(storage.clone());
         }
         let (plan, leaves) = Plan::collect(self);
-        let storage = plan.run(self.device(), &leaves)?;
+        let storage = plan
+            .run(self.device(), &leaves)?
+            .pop()
+            .expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
         Ok(storage)
     }
@@ -372,11 +417,19 @@ pub(crate) enum Slot {
 #[derive(Clone, Debug, Eq, Hash, PartialEq)]
 pub(crate) struct Plan {
     pub(crate) slots: Vec<Slot>,
+    /// The slots whose values the run gives back, in the order they were
+    /// asked for. The plan of one tensor has its last slot here.
+    pub(crate) outputs: Vec<usize>,
 }
 
 impl Plan {
     /// The plan for `root` and the memory of its leaves, in slot order.
     fn collect(root: &TensorValue) -> (Self, Vec<Storage>) {
+        Self::collect_all(&[root])
+    }
+
+    /// One plan for all of `roots`, so work they share runs once.
+    fn collect_all(roots: &[&TensorValue]) -> (Self, Vec<Storage>) {
         fn visit(
             node: &TensorValue,
             slots: &mut Vec<Slot>,
@@ -416,26 +469,36 @@ impl Plan {
         }
         let mut slots = Vec::new();
         let mut leaves = Vec::new();
-        visit(root, &mut slots, &mut leaves, &mut HashMap::new());
-        (Self { slots }, leaves)
+        let mut seen = HashMap::new();
+        let outputs = roots
+            .iter()
+            .map(|root| visit(root, &mut slots, &mut leaves, &mut seen))
+            .collect();
+        (Self { slots, outputs }, leaves)
     }
 
-    fn run(&self, device: TensorDevice, leaves: &[Storage]) -> Result<Storage> {
+    /// The memory of each output, in order.
+    fn run(&self, device: TensorDevice, leaves: &[Storage]) -> Result<Vec<Storage>> {
+        // The Metal device runs the plan of one tensor.
         #[cfg(target_os = "macos")]
         if device == TensorDevice::Metal {
-            return tensor_metal::run(self, leaves);
+            return tensor_metal::run(self, leaves).map(|storage| vec![storage]);
         }
         #[cfg(target_os = "linux")]
         if device == TensorDevice::Cuda {
             return tensor_cuda::run(self, leaves);
         }
         let _ = device;
-        self.run_on_host(leaves).map(Storage::Host)
+        Ok(self
+            .run_on_host(leaves)?
+            .into_iter()
+            .map(Storage::Host)
+            .collect())
     }
 
     /// Runs every step through the Array kernels. This is what a plan
     /// means: a device's result is checked against it.
-    pub(crate) fn run_on_host(&self, leaves: &[Storage]) -> Result<ArrayValue> {
+    pub(crate) fn run_on_host(&self, leaves: &[Storage]) -> Result<Vec<ArrayValue>> {
         let mut leaves = leaves.iter();
         let mut values: Vec<ArrayValue> = Vec::with_capacity(self.slots.len());
         for slot in &self.slots {
@@ -454,8 +517,44 @@ impl Plan {
             };
             values.push(value);
         }
-        Ok(values.pop().expect("a plan has a last slot"))
+        Ok(self
+            .outputs
+            .iter()
+            .map(|&output| values[output].clone())
+            .collect())
     }
+}
+
+/// Runs the work `nodes` wait on. Tensors on one GPU device run as one
+/// plan, so an expression several of them share is computed once.
+fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
+    let mut waiting: Vec<&TensorValue> = Vec::new();
+    for node in nodes {
+        if !node.is_ready() && !waiting.contains(&node) {
+            waiting.push(node);
+        }
+    }
+    let Some(first) = waiting.first() else {
+        return Ok(());
+    };
+    let device = first.device();
+    let together = device != TensorDevice::Metal
+        && waiting.len() > 1
+        && waiting.iter().all(|node| node.device() == device);
+    if !together {
+        return waiting.iter().try_for_each(|node| node.storage().map(|_| ()));
+    }
+    let (plan, leaves) = Plan::collect_all(&waiting);
+    let storages = plan.run(device, &leaves)?;
+    for (node, storage) in waiting.iter().zip(storages) {
+        *node.state() = State::Ready(storage);
+    }
+    Ok(())
+}
+
+thread_local! {
+    /// The tensors set aside to be run together.
+    static TOGETHER: std::cell::RefCell<Vec<TensorValue>> = const { std::cell::RefCell::new(Vec::new()) };
 }
 
 thread_local! {
@@ -659,6 +758,11 @@ fn planned_result(
         }),
         Operation::ArgReduce { axis, .. } => (indexed && number)
             .then(|| (Int64, tensor_kernels::lane_shape(inputs[0].shape(), *axis))),
+        Operation::Random { dtype, shape, .. } => {
+            let dtype = ArrayDType::from_code(*dtype)?;
+            (indexed && !shape.contains(&0) && (dtype == Float32 || double))
+                .then(|| (dtype, shape.clone().into()))
+        }
     }
 }
 
@@ -873,6 +977,17 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
             tensor_kernels::index_add(first, inputs[1], *axis, *size)
         }
         Operation::ArgReduce { largest, axis } => tensor_kernels::arg_reduce(first, *axis, *largest),
+        Operation::Random { fill, dtype, shape } => {
+            let Value::Int(seed) = first.value_at_flat(0) else {
+                return Err(unknown());
+            };
+            tensor_kernels::filled(
+                tensor_kernels::Fill::from_code(*fill).ok_or_else(unknown)?,
+                shape.clone().into(),
+                seed.as_i128().unwrap_or(0) as u64,
+                ArrayDType::from_code(*dtype).ok_or_else(unknown)?,
+            )
+        }
     }
 }
 
@@ -1357,7 +1472,6 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
     host_expect_arity(name, &args, 3)?;
     let operand = node_arg(&args, 0, name)?;
     let rank = operand.shape().len();
-    let float = matches!(operand.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
     match int_arg(&args, 1, name)? {
         0 => {
             let name = "tensor::slice";
@@ -1413,23 +1527,7 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                 &[operand],
             )
         }
-        4 => {
-            if !float {
-                return Err(tensor_error(
-                    "tensor::watch",
-                    "expects a float tensor; a gradient exists for floats only",
-                ));
-            }
-            Ok(Value::Tensor(
-                TensorValue::ready(
-                    operand.device(),
-                    operand.dtype(),
-                    operand.shape().into(),
-                    operand.storage()?,
-                )
-                .tracking(None),
-            ))
-        }
+        4 => operand.watched("tensor::watch").map(Value::Tensor),
         5 => {
             if !operand.is_tracked() {
                 return Ok(Value::Tensor(operand.clone()));
@@ -1456,6 +1554,34 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                 operand.shape().into(),
                 state,
             )))
+        }
+        6 => {
+            // A variable: a node that holds a watched tensor and can be
+            // given another.
+            let watched = operand.watched("tensor::Variable")?;
+            let mut variable = TensorValue::ready(
+                operand.device(),
+                operand.dtype(),
+                operand.shape().into(),
+                Storage::Host(ArrayValue::zeros(operand.dtype(), Box::new([0]))?),
+            );
+            Arc::get_mut(&mut variable.0)
+                .expect("a new tensor has one holder")
+                .variable = Some(Mutex::new(watched));
+            Ok(Value::Tensor(variable))
+        }
+        7 => Ok(Value::Tensor(operand.held("tensor::Variable.value")?.clone())),
+        8 => {
+            // Sets the tensor aside to be run with the others set aside.
+            TOGETHER.with(|together| together.borrow_mut().push(operand.clone()));
+            Ok(Value::Tensor(operand.clone()))
+        }
+        9 => {
+            // Runs the tensors set aside, and this one, together.
+            let mut nodes = TOGETHER.with(|together| std::mem::take(&mut *together.borrow_mut()));
+            nodes.push(operand.clone());
+            evaluate_together(&nodes)?;
+            Ok(Value::Tensor(operand.clone()))
         }
         _ => Err(tensor_error(name, "was given an unknown operation")),
     }
@@ -1526,6 +1652,22 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             operate(Operation::IndexAdd { axis, size }, &[left, right])
         }
         3 => tensor_grad::gradient(left, right).map(Value::Tensor),
+        4 => {
+            let name = "tensor::Variable.assign";
+            let mut held = left.held(name)?;
+            if right.dtype() != left.dtype() || right.shape() != left.shape() {
+                return Err(tensor_error(
+                    name,
+                    format!(
+                        "expects a tensor of the variable's dtype and shape {:?}, found shape {:?}",
+                        left.shape(),
+                        right.shape()
+                    ),
+                ));
+            }
+            *held = right.watched(name)?;
+            Ok(Value::Tensor(left.clone()))
+        }
         _ => Err(tensor_error(name, "was given an unknown operation")),
     }
 }
@@ -1537,17 +1679,121 @@ pub fn host_tensor_filled(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     let name = "tensor::__aura_filled";
     host_expect_arity(name, &args, 5)?;
     let shape = shape_arg(&args, 0, name)?;
-    let fill = match int_arg(&args, 1, name)? {
-        0 => tensor_kernels::Fill::Uniform,
-        1 => tensor_kernels::Fill::Normal,
-        2 => tensor_kernels::Fill::Count,
-        _ => return Err(tensor_error(name, "was given an unknown fill")),
-    };
-    let seed = int_arg(&args, 2, name)? as u64;
+    let code = int_arg(&args, 1, name)?;
+    let fill = tensor_kernels::Fill::from_code(code)
+        .ok_or_else(|| tensor_error(name, "was given an unknown fill"))?;
+    let seed = int_arg(&args, 2, name)?;
     let dtype = ArrayDType::from_code(int_arg(&args, 3, name)?)
         .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
     let device = device_arg(&args, 4, name)?;
-    place(device, tensor_kernels::filled(fill, shape, seed, dtype)?)
+    let float = matches!(dtype, ArrayDType::Float32 | ArrayDType::Float64);
+    if fill == tensor_kernels::Fill::Count || !float {
+        return place(device, tensor_kernels::filled(fill, shape, seed as u64, dtype)?);
+    }
+    if !device.has_float64() && dtype == ArrayDType::Float64 {
+        return Err(float64_error(device));
+    }
+    // The seed is a tensor, so a GPU makes the floats in its own memory.
+    let seed = place(
+        device,
+        ArrayValue::new(Box::new([1]), ArrayStorage::Int64(vec![seed].into()))?,
+    )?;
+    let Value::Tensor(seed) = &seed else {
+        unreachable!("placing elements gives a tensor")
+    };
+    operate(
+        Operation::Random {
+            fill: code,
+            dtype: dtype as i64,
+            shape: shape.into_vec(),
+        },
+        &[seed],
+    )
+}
+
+fn string_arg<'a>(args: &'a [Value], index: usize, name: &str) -> Result<&'a str> {
+    host_string_ref_arg(args, index, name)
+}
+
+fn result_of(outcome: std::result::Result<Value, String>) -> Value {
+    match outcome {
+        Ok(value) => result_ok(value),
+        Err(message) => result_err(Value::string(message)),
+    }
+}
+
+/// `tensor::__aura_weights_names`: the names of the tensors in a
+/// safetensors file.
+pub fn host_tensor_weights_names(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_weights_names";
+    host_expect_arity(name, &args, 1)?;
+    Ok(result_of(
+        tensor_weights::names(string_arg(&args, 0, name)?).map(|names| {
+            Value::Vec(VecValue {
+                element_type: SharedType::named("str"),
+                elements: names.into_iter().map(Value::string).collect(),
+                str_view: Default::default(),
+            })
+        }),
+    ))
+}
+
+/// `tensor::__aura_weights_load`: one tensor of a safetensors file, as
+/// elements of the dtype asked for, on a device.
+pub fn host_tensor_weights_load(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_weights_load";
+    host_expect_arity(name, &args, 4)?;
+    let dtype = ArrayDType::from_code(int_arg(&args, 2, name)?)
+        .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
+    let device = device_arg(&args, 3, name)?;
+    let loaded = tensor_weights::load(
+        string_arg(&args, 0, name)?,
+        string_arg(&args, 1, name)?,
+        dtype,
+    );
+    Ok(result_of(match loaded {
+        Ok(elements) => place(device, elements).map_err(|error| error.message),
+        Err(message) => Err(message),
+    }))
+}
+
+thread_local! {
+    /// The tensors put aside for the file of each path, until the file is
+    /// written.
+    static WEIGHTS_TO_SAVE: std::cell::RefCell<HashMap<String, Vec<(String, ArrayValue)>>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// `tensor::__aura_weights_put`: puts a tensor aside under a name, for
+/// the file of a path.
+pub fn host_tensor_weights_put(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_weights_put";
+    host_expect_arity(name, &args, 3)?;
+    let path = string_arg(&args, 0, name)?.to_string();
+    let tensor_name = string_arg(&args, 1, name)?.to_string();
+    let elements = node_arg(&args, 2, name)?.elements()?;
+    WEIGHTS_TO_SAVE.with(|pending| {
+        pending
+            .borrow_mut()
+            .entry(path)
+            .or_default()
+            .push((tensor_name, elements));
+    });
+    Ok(Value::Unit)
+}
+
+/// `tensor::__aura_weights_write`: writes the tensors put aside for a
+/// path as a safetensors file, and gives the file's length.
+pub fn host_tensor_weights_write(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "tensor::__aura_weights_write";
+    host_expect_arity(name, &args, 1)?;
+    let path = string_arg(&args, 0, name)?;
+    let tensors = WEIGHTS_TO_SAVE
+        .with(|pending| pending.borrow_mut().remove(path))
+        .unwrap_or_default();
+    Ok(result_of(
+        tensor_weights::save(path, &tensors).map(|length| int_value(length as i64)),
+    ))
 }
 
 /// The suffixes of the host functions that exist once for each dtype,
@@ -1585,6 +1831,10 @@ pub fn tensor_host_function(name: &str) -> Option<HostBuiltinFn> {
         "tensor::__aura_node_op" => host_tensor_node_op,
         "tensor::__aura_pair_op" => host_tensor_pair_op,
         "tensor::__aura_filled" => host_tensor_filled,
+        "tensor::__aura_weights_names" => host_tensor_weights_names,
+        "tensor::__aura_weights_load" => host_tensor_weights_load,
+        "tensor::__aura_weights_put" => host_tensor_weights_put,
+        "tensor::__aura_weights_write" => host_tensor_weights_write,
         _ => return None,
     })
 }

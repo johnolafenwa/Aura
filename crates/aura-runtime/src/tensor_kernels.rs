@@ -352,9 +352,14 @@ pub(crate) fn random_bits(seed: u64, index: u64) -> u64 {
     bits ^ (bits >> 31)
 }
 
-/// A float in `[0, 1)` from the top 53 bits of `bits`.
+/// A `float64` in `[0, 1)` from the top 53 bits of `bits`.
 fn unit(bits: u64) -> f64 {
     (bits >> 11) as f64 / (1_u64 << 53) as f64
+}
+
+/// A `float32` in `[0, 1)` from the top 24 bits of `bits`.
+fn unit_single(bits: u64) -> f32 {
+    (bits >> 40) as f32 / (1_u32 << 24) as f32
 }
 
 /// What [`filled`] fills a tensor with.
@@ -368,8 +373,21 @@ pub(crate) enum Fill {
     Count,
 }
 
+impl Fill {
+    pub(crate) const fn from_code(code: i64) -> Option<Self> {
+        match code {
+            0 => Some(Self::Uniform),
+            1 => Some(Self::Normal),
+            2 => Some(Self::Count),
+            _ => None,
+        }
+    }
+}
+
 /// An Array of `shape` filled as `fill` says. Element `j` of a random
-/// fill depends on `seed` and `j` only.
+/// fill depends on `seed` and `j` only. A normal float is made from two
+/// uniform ones by the method of Box and Muller, in the dtype's own
+/// arithmetic.
 pub(crate) fn filled(
     fill: Fill,
     shape: Box<[usize]>,
@@ -377,43 +395,52 @@ pub(crate) fn filled(
     dtype: ArrayDType,
 ) -> Result<ArrayValue> {
     let count = checked_array_element_count(&shape)?;
-    let value = |index: usize| -> f64 {
-        let index = index as u64;
-        match fill {
-            Fill::Uniform => unit(random_bits(seed, index)),
-            Fill::Normal => {
-                // Box and Muller: two uniform floats give one normal one.
-                let first = unit(random_bits(seed, 2 * index));
-                let second = unit(random_bits(seed, 2 * index + 1));
-                (-2.0 * (1.0 - first).ln()).sqrt() * (std::f64::consts::TAU * second).cos()
-            }
-            Fill::Count => index as f64,
-        }
-    };
-    let storage = match dtype {
-        ArrayDType::Float32 => ArrayStorage::Float32(
+    let storage = match (dtype, fill) {
+        (ArrayDType::Float32, Fill::Count) => ArrayStorage::Float32(
             (0..count)
+                .map(|index| index as f32)
+                .collect::<Box<[f32]>>()
+                .into(),
+        ),
+        (ArrayDType::Float32, _) => ArrayStorage::Float32(
+            (0..count as u64)
                 .map(|index| {
-                    // A uniform float32 stays below one.
-                    (value(index) as f32).min(if fill == Fill::Uniform {
-                        1.0 - f32::EPSILON / 2.0
-                    } else {
-                        f32::INFINITY
-                    })
+                    if fill == Fill::Uniform {
+                        return unit_single(random_bits(seed, index));
+                    }
+                    let first = unit_single(random_bits(seed, 2 * index));
+                    let second = unit_single(random_bits(seed, 2 * index + 1));
+                    (-2.0 * (1.0 - first).ln()).sqrt() * (std::f32::consts::TAU * second).cos()
                 })
                 .collect::<Box<[f32]>>()
                 .into(),
         ),
-        ArrayDType::Float64 => {
-            ArrayStorage::Float64((0..count).map(value).collect::<Box<[f64]>>().into())
-        }
-        ArrayDType::Int64 if fill == Fill::Count => ArrayStorage::Int64(
+        (ArrayDType::Float64, Fill::Count) => ArrayStorage::Float64(
+            (0..count)
+                .map(|index| index as f64)
+                .collect::<Box<[f64]>>()
+                .into(),
+        ),
+        (ArrayDType::Float64, _) => ArrayStorage::Float64(
+            (0..count as u64)
+                .map(|index| {
+                    if fill == Fill::Uniform {
+                        return unit(random_bits(seed, index));
+                    }
+                    let first = unit(random_bits(seed, 2 * index));
+                    let second = unit(random_bits(seed, 2 * index + 1));
+                    (-2.0 * (1.0 - first).ln()).sqrt() * (std::f64::consts::TAU * second).cos()
+                })
+                .collect::<Box<[f64]>>()
+                .into(),
+        ),
+        (ArrayDType::Int64, Fill::Count) => ArrayStorage::Int64(
             (0..count)
                 .map(|index| index as i64)
                 .collect::<Box<[i64]>>()
                 .into(),
         ),
-        ArrayDType::Int32 if fill == Fill::Count => ArrayStorage::Int32(
+        (ArrayDType::Int32, Fill::Count) => ArrayStorage::Int32(
             (0..count)
                 .map(|index| index as i32)
                 .collect::<Box<[i32]>>()

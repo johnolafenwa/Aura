@@ -43,6 +43,20 @@ fn indices(values: &[i64], shape: &[usize], like: &Value) -> Value {
     tensor(int64(values, shape), node(like).device())
 }
 
+/// Random floats on the device of `like`.
+fn random(fill: i64, seed: i64, dtype: ArrayDType, shape: &[i64], like: &Value) -> Result<Value> {
+    host_tensor_filled(
+        vec![
+            ints(shape),
+            int(fill),
+            int(seed),
+            int(dtype as i64),
+            int(node(like).device() as i64),
+        ],
+        None,
+    )
+}
+
 fn slice(operand: &Value, axis: i64, start: i64, stop: i64, step: i64) -> Result<Value> {
     node_op(operand, 0, &[axis, start, stop, step])
 }
@@ -108,6 +122,11 @@ const INDEXED: &[(&str, Expression)] = &[
     ("argmax of integers", |l| node_op(&l.counts, 2, &[0])),
     ("argmax of an expression", |l| {
         node_op(&binary(&l.a, &l.b, 2)?, 2, &[-1])
+    }),
+    ("uniform", |l| random(0, 7, ArrayDType::Float32, &[3, 5], &l.a)),
+    ("normal", |l| random(1, 7, ArrayDType::Float32, &[4, 2], &l.a)),
+    ("random in an expression", |l| {
+        binary(&random(0, 11, ArrayDType::Float32, &[2, 3], &l.a)?, &l.a, 2)
     }),
     ("embedding then product", |l| {
         let rows = pair_op(&l.tall, &indices(&[2, 0, 2], &[3], &l.a), 1, &[0])?;
@@ -591,4 +610,185 @@ fn equal_extremes_share_a_gradient() {
         array(&gradient(&largest, &values).unwrap()),
         float32(&[0.5, 0.5, 0.0, 0.0, 0.5, 0.5], &[2, 3])
     );
+}
+
+#[test]
+fn a_variable_holds_a_watched_tensor_that_can_be_replaced() {
+    let l = leaves(TensorDevice::Cpu);
+    let variable = node_op(&l.a, 6, &[]).unwrap();
+    let value = node_op(&variable, 7, &[]).unwrap();
+    assert!(node(&value).is_tracked());
+    assert_eq!(array(&value), array(&l.a));
+    // Reading twice gives the same tensor, so a gradient finds it.
+    assert_eq!(node(&value), node(&node_op(&variable, 7, &[]).unwrap()));
+    let doubled = binary(&value, &l.two, 2).unwrap();
+    assert_eq!(
+        array(&gradient(&doubled, &value).unwrap()),
+        float32(&[2.0; 6], &[2, 3])
+    );
+    // Another handle to the variable sees an assignment.
+    let shared = host_tensor_share(vec![variable.clone()], None).unwrap();
+    pair_op(&variable, &doubled, 4, &[]).unwrap();
+    let replaced = node_op(&shared, 7, &[]).unwrap();
+    assert_eq!(array(&replaced), array(&doubled));
+    assert!(node(&replaced).is_tracked() && node(&replaced) != node(&doubled));
+
+    let message = |result: Result<Value>| result.unwrap_err().message;
+    assert!(message(node_op(&l.counts, 6, &[])).contains("expects a float tensor"));
+    assert!(message(node_op(&l.a, 7, &[])).contains("expects a variable"));
+    assert!(message(pair_op(&l.a, &l.b, 4, &[])).contains("expects a variable"));
+    assert!(message(pair_op(&variable, &l.row, 4, &[])).contains("the variable's dtype and shape [2, 3]"));
+}
+
+fn text(value: &str) -> Value {
+    Value::string(value)
+}
+
+fn outcome(value: Value) -> std::result::Result<Value, String> {
+    let Value::EnumVariant(variant) = value else {
+        panic!("expected a Result");
+    };
+    let payload = variant.payloads[0].clone();
+    if variant.variant_name.as_str() == "Ok" {
+        Ok(payload)
+    } else {
+        match payload {
+            Value::String(message) => Err(message.to_string()),
+            other => panic!("expected a message, found {other:?}"),
+        }
+    }
+}
+
+#[test]
+fn tensors_are_saved_and_loaded_as_safetensors() {
+    let directory = std::env::temp_dir().join(format!("aura-tensor-weights-{}", std::process::id()));
+    std::fs::create_dir_all(&directory).unwrap();
+    let path = directory.join("model.safetensors");
+    let path_text = text(path.to_str().unwrap());
+    let l = leaves(TensorDevice::Cpu);
+    let put = |name: &str, tensor: &Value| {
+        host_tensor_weights_put(vec![path_text.clone(), text(name), tensor.clone()], None).unwrap();
+    };
+    put("a", &l.a);
+    put("counts", &l.counts);
+    put("small", &l.small);
+    let length = outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap()).unwrap();
+    assert_eq!(length, int(std::fs::metadata(&path).unwrap().len() as i64));
+
+    let names = outcome(host_tensor_weights_names(vec![path_text.clone()], None).unwrap()).unwrap();
+    let Value::Vec(names) = names else {
+        panic!("expected a list")
+    };
+    let names: Vec<String> = names
+        .elements
+        .iter()
+        .map(|name| match &*name {
+            Value::String(name) => name.to_string(),
+            _ => panic!("expected a name"),
+        })
+        .collect();
+    assert_eq!(names, ["a", "counts", "small"]);
+
+    let load = |name: &str, dtype: ArrayDType| {
+        outcome(
+            host_tensor_weights_load(
+                vec![path_text.clone(), text(name), int(dtype as i64), int(0)],
+                None,
+            )
+            .unwrap(),
+        )
+    };
+    assert_eq!(array(&load("a", ArrayDType::Float32).unwrap()), array(&l.a));
+    assert_eq!(
+        floats(&array(&load("a", ArrayDType::Float64).unwrap())),
+        floats(&array(&l.a))
+    );
+    assert_eq!(
+        array(&load("counts", ArrayDType::Int64).unwrap()),
+        array(&l.counts)
+    );
+    assert_eq!(
+        array(&load("small", ArrayDType::Int32).unwrap()),
+        array(&l.small)
+    );
+    assert_eq!(
+        places(&array(&load("small", ArrayDType::Int64).unwrap())),
+        [1, -2, 3, 40]
+    );
+    assert!(load("missing", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("has no tensor `missing`"));
+    assert!(load("a", ArrayDType::Int64)
+        .unwrap_err()
+        .contains("has dtype F32, which does not load as `int64`"));
+    assert!(load("counts", ArrayDType::Int32)
+        .unwrap_err()
+        .contains("which `int32` cannot hold"));
+
+    // Half and brain floats widen, and a rank-zero tensor is one element.
+    let header = br#"{"h":{"dtype":"F16","shape":[4],"data_offsets":[0,8]},"b":{"dtype":"BF16","shape":[],"data_offsets":[8,10]},"__metadata__":{"format":"pt"}}"#;
+    let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+    bytes.extend_from_slice(header);
+    for half in [0x3C00_u16, 0xC000, 0x0001, 0x7C00] {
+        bytes.extend(half.to_le_bytes());
+    }
+    bytes.extend(0x3FC0_u16.to_le_bytes());
+    std::fs::write(&path, &bytes).unwrap();
+    assert_eq!(
+        floats(&array(&load("h", ArrayDType::Float32).unwrap())),
+        [1.0, -2.0, f64::from(2.0_f32.powi(-24)), f64::INFINITY]
+    );
+    let brain = load("b", ArrayDType::Float32).unwrap();
+    assert_eq!(node(&brain).shape(), [1]);
+    assert_eq!(floats(&array(&brain)), [1.5]);
+
+    std::fs::write(&path, b"short").unwrap();
+    assert!(load("a", ArrayDType::Float32).unwrap_err().contains("cannot read"));
+    std::fs::write(&path, [255_u8; 16]).unwrap();
+    assert!(load("a", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("is not a safetensors file"));
+    let missing = text(directory.join("none.safetensors").to_str().unwrap());
+    assert!(outcome(host_tensor_weights_names(vec![missing], None).unwrap())
+        .unwrap_err()
+        .contains("cannot open"));
+    put("twice", &l.a);
+    put("twice", &l.b);
+    assert!(outcome(host_tensor_weights_write(vec![path_text.clone()], None).unwrap())
+        .unwrap_err()
+        .contains("two tensors named `twice`"));
+    let _ = std::fs::remove_dir_all(&directory);
+}
+
+#[test]
+fn tensors_set_aside_run_as_one_plan() {
+    let l = leaves(TensorDevice::Cpu);
+    let expected_sum = array(&binary(&l.a, &l.b, 0).unwrap());
+    let expected_product = array(&reduce(&binary(&expected_sum_of(&l), &l.row, 2).unwrap(), 0, Some(0)).unwrap());
+    deferred(|| {
+        let shared = binary(&l.a, &l.b, 0).unwrap();
+        let product = reduce(&binary(&shared, &l.row, 2).unwrap(), 0, Some(0)).unwrap();
+        let (plan, storage) = Plan::collect_all(&[node(&shared), node(&product)]);
+        assert_eq!(plan.outputs.len(), 2);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2000) {
+            close("shared", &generated[0], &expected_sum);
+            close("product", &generated[1], &expected_product);
+        }
+        node_op(&shared, 8, &[]).unwrap();
+        node_op(&shared, 8, &[]).unwrap();
+        node_op(&product, 9, &[]).unwrap();
+        assert!(node(&shared).is_ready() && node(&product).is_ready());
+        assert_eq!(array(&shared), expected_sum);
+        assert_eq!(array(&product), expected_product);
+        // Nothing waits, so there is nothing to run.
+        node_op(&product, 9, &[]).unwrap();
+        // One waiting tensor runs by itself.
+        let alone = binary(&l.a, &l.b, 2).unwrap();
+        node_op(&alone, 9, &[]).unwrap();
+        assert!(node(&alone).is_ready());
+    });
+}
+
+fn expected_sum_of(l: &Leaves) -> Value {
+    binary(&l.a, &l.b, 0).unwrap()
 }

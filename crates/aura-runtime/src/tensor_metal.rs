@@ -321,7 +321,8 @@ impl Graph {
                         | Operation::Concat { .. }
                         | Operation::Take { .. }
                         | Operation::IndexAdd { .. }
-                        | Operation::ArgReduce { .. } => {
+                        | Operation::ArgReduce { .. }
+                        | Operation::Random { .. } => {
                             unreachable!("the Metal device runs these in host memory")
                         }
                     };

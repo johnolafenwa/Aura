@@ -222,6 +222,10 @@ public class Tensor[T]:
         watched tensor `of`, in the shape of `of`."""
         return Tensor[T](node=tensor.__aura_pair_op(self.node, of.node, 3, list[int64]()))
 
+    public def variable(self) -> Variable[T]:
+        """A variable that starts as this tensor. Float tensors only."""
+        return Variable[T](slot=tensor.__aura_node_op(self.node, 6, list[int64]()))
+
     public def softmax(self, axis: int64 = -1) -> Tensor[T]:
         """Each lane along `axis` as positive numbers that sum to one."""
         powers = tensor.__aura_unary(shifted(self.node, axis), 2)
@@ -279,6 +283,283 @@ public class Tensor[T]:
 
     public def to_float64(self) -> Tensor[float64]:
         return Tensor[float64](node=tensor.__aura_cast(self.node, 3))
+
+
+public class Variable[T]:
+    """A float tensor that can be replaced by another of the same shape:
+    a weight that training changes. Every clone names the same variable,
+    so an optimizer and a model see one value."""
+    slot: tensor.Node
+
+    public def value(self) -> Tensor[T]:
+        """The tensor the variable holds now. It is watched, so a result
+        computed from it has a gradient with respect to it."""
+        return Tensor[T](node=tensor.__aura_node_op(self.slot, 7, list[int64]()))
+
+    public def assign(self, value: Tensor[T]) -> None:
+        """Replaces the tensor the variable holds. Any work `value` waits
+        on runs now."""
+        tensor.__aura_pair_op(self.slot, value.node, 4, list[int64]())
+
+    public def clone(self) -> Variable[T]:
+        """Another handle to the same variable."""
+        return Variable[T](slot=tensor.__aura_share(self.slot))
+
+
+public def evaluate[T](tensors: list[Tensor[T]]) -> None:
+    """Runs the work the tensors wait on, as one piece of work, so an
+    expression several of them share is computed once."""
+    if tensors.len() == 0:
+        return
+    mut at = 0
+    while at + 1 < tensors.len():
+        tensor.__aura_node_op(tensors[at].node, 8, list[int64]())
+        at += 1
+    tensor.__aura_node_op(tensors[at].node, 9, list[int64]())
+
+
+public def weight_names(path: str) -> Result[list[str], str]:
+    """The names of the tensors in the safetensors file at `path`, in the
+    file's order."""
+    return tensor.__aura_weights_names(path)
+
+
+public def load_float32(path: str, name: str, device: Device) -> Result[Tensor[float32], str]:
+    """The float tensor `name` of the safetensors file at `path`. A
+    tensor stored as `float16`, `bfloat16` or `float64` is converted."""
+    match own tensor.__aura_weights_load(path, name, 2, device.kind):
+        case Ok(node):
+            return Ok(Tensor[float32](node=node))
+        case Err(message):
+            return Err(message)
+
+
+public def load_int64(path: str, name: str, device: Device) -> Result[Tensor[int64], str]:
+    """The integer tensor `name` of the safetensors file at `path`."""
+    match own tensor.__aura_weights_load(path, name, 1, device.kind):
+        case Ok(node):
+            return Ok(Tensor[int64](node=node))
+        case Err(message):
+            return Err(message)
+
+
+public def save[T](path: str, names: list[str], tensors: list[Tensor[T]]) -> Result[int64, str]:
+    """Writes `tensors` under `names` as a safetensors file at `path`, and
+    gives the file's length in bytes."""
+    if names.len() != tensors.len():
+        return Err("`tensor.save` expects one name for each tensor")
+    mut at = 0
+    while at < names.len():
+        tensor.__aura_weights_put(path, names[at], tensors[at].node)
+        at += 1
+    return tensor.__aura_weights_write(path)
+
+
+public class Linear:
+    """`x.matmul(weight) + bias` over the last axis of `x`."""
+    weight: Variable[float32]
+    bias: Variable[float32]
+
+    public def create(inputs: int64, outputs: int64, seed: int64, device: Device) -> Linear:
+        """A layer from `inputs` features to `outputs`, with weights spread
+        evenly between plus and minus `1 / sqrt(inputs)`."""
+        bound = 1.0 / (inputs as float64).sqrt()
+        weight = (uniform([inputs, outputs], seed, device) * 2.0 - 1.0) * bound
+        bias = (uniform([outputs], seed + 1, device) * 2.0 - 1.0) * bound
+        return Linear(weight=weight.variable(), bias=bias.variable())
+
+    public def apply(self, x: Tensor[float32]) -> Tensor[float32]:
+        mut shape = x.shape()
+        last = shape.len() - 1
+        weight = self.weight.value()
+        flat = x.reshape([-1, shape[last]]).matmul(weight) + self.bias.value()
+        shape[last] = weight.shape()[1]
+        return flat.reshape(shape)
+
+    public def variables(self) -> list[Variable[float32]]:
+        return [self.weight.clone(), self.bias.clone()]
+
+
+public class Embedding:
+    """A row of `weight` for each index."""
+    weight: Variable[float32]
+
+    public def create(count: int64, width: int64, seed: int64, device: Device) -> Embedding:
+        return Embedding(weight=(normal([count, width], seed, device) * 0.02).variable())
+
+    public def apply(self, indices: Tensor[int64]) -> Tensor[float32]:
+        return self.weight.value().take(indices)
+
+    public def variables(self) -> list[Variable[float32]]:
+        return [self.weight.clone()]
+
+
+public class LayerNorm:
+    """Each lane along the last axis moved to mean zero and deviation
+    one, then scaled by `weight` and moved by `bias`."""
+    weight: Variable[float32]
+    bias: Variable[float32]
+    epsilon: float64
+
+    public def create(width: int64, device: Device) -> LayerNorm:
+        return LayerNorm(weight=Tensor[float32].full([width], 1.0, device).variable(), bias=Tensor[float32].zeros([width], device).variable(), epsilon=0.00001)
+
+    public def apply(self, x: Tensor[float32]) -> Tensor[float32]:
+        centered = x - x.mean(-1, true)
+        spread = (centered * centered).mean(-1, true)
+        return centered / (spread + self.epsilon).sqrt() * self.weight.value() + self.bias.value()
+
+    public def variables(self) -> list[Variable[float32]]:
+        return [self.weight.clone(), self.bias.clone()]
+
+
+public def dropout(x: Tensor[float32], rate: float64, seed: int64) -> Tensor[float32]:
+    """`x` with a share `rate` of its elements, chosen by `seed`, set to
+    zero, and the others scaled up so the mean stays."""
+    kept = uniform(x.shape(), seed, x.device()).greater_equal(x.scalar(rate as float32))
+    return choose(kept, x / (1.0 - rate), x.scalar(0.0))
+
+
+public def attention(query: Tensor[float32], key: Tensor[float32], value: Tensor[float32], causal: bool = false) -> Tensor[float32]:
+    """Scaled dot-product attention over the last two axes: for each
+    query row, the rows of `value` weighted by the softmax of the query's
+    products with the rows of `key`. With `causal`, row `i` attends to
+    rows `0` to `i` only."""
+    shape = query.shape()
+    rank = shape.len()
+    mut axes = list[int64]()
+    mut axis = 0
+    while axis < rank:
+        axes.append(axis)
+        axis += 1
+    axes[rank - 1] = rank - 2
+    axes[rank - 2] = rank - 1
+    mut scores = query.matmul(key.permute(axes)) * (1.0 / (shape[rank - 1] as float64).sqrt())
+    if causal:
+        rows = arange(shape[rank - 2], query.device())
+        columns = arange(key.shape()[rank - 2], query.device())
+        seen = rows.reshape([-1, 1]).greater_equal(columns.reshape([1, -1]))
+        scores = choose(seen, scores, scores.scalar(-1.0e30))
+    return scores.softmax(-1).matmul(value)
+
+
+public class Attention:
+    """Self-attention with several heads over a `[batch, length, width]`
+    tensor."""
+    query: Linear
+    key: Linear
+    value: Linear
+    output: Linear
+    heads: int64
+
+    public def create(width: int64, heads: int64, seed: int64, device: Device) -> Attention:
+        return Attention(query=Linear.create(width, width, seed, device), key=Linear.create(width, width, seed + 2, device), value=Linear.create(width, width, seed + 4, device), output=Linear.create(width, width, seed + 6, device), heads=heads)
+
+    def split(self, x: Tensor[float32]) -> Tensor[float32]:
+        shape = x.shape()
+        return x.reshape([shape[0], shape[1], self.heads, shape[2] // self.heads]).permute([0, 2, 1, 3])
+
+    public def apply(self, x: Tensor[float32], causal: bool = false) -> Tensor[float32]:
+        mixed = attention(self.split(self.query.apply(x)), self.split(self.key.apply(x)), self.split(self.value.apply(x)), causal)
+        return self.output.apply(mixed.permute([0, 2, 1, 3]).reshape(x.shape()))
+
+    public def variables(self) -> list[Variable[float32]]:
+        mut all = self.query.variables()
+        all.extend(self.key.variables())
+        all.extend(self.value.variables())
+        all.extend(self.output.variables())
+        return all
+
+
+public class SGD:
+    """Gradient descent: each variable less `rate` times its gradient."""
+    variables: list[Variable[float32]]
+    rate: float64
+
+    public def step(self, loss: Tensor[float32]) -> None:
+        """Moves every variable against the gradient of `loss`. The work
+        of the loss and of every update runs as one piece."""
+        mut updates: list[Tensor[float32]] = [loss.clone()]
+        mut at = 0
+        while at < self.variables.len():
+            view variable = self.variables[at]
+            current = variable.value()
+            updates.append(current.detach() - loss.gradient(current) * self.rate)
+            at += 1
+        evaluate(updates)
+        at = 0
+        while at < self.variables.len():
+            view variable = self.variables[at]
+            view update = updates[at + 1]
+            variable.assign(update)
+            at += 1
+
+
+public class AdamW:
+    """Adam with weight decay applied to the variables themselves."""
+    variables: list[Variable[float32]]
+    rate: float64
+    decay: float64
+    beta1: float64
+    beta2: float64
+    epsilon: float64
+    first: list[Tensor[float32]]
+    second: list[Tensor[float32]]
+    power1: float64
+    power2: float64
+
+    public def create(variables: own list[Variable[float32]], rate: float64, decay: float64 = 0.01) -> AdamW:
+        mut first = list[Tensor[float32]]()
+        mut second = list[Tensor[float32]]()
+        mut at = 0
+        while at < variables.len():
+            view variable = variables[at]
+            current = variable.value()
+            first.append(Tensor[float32].zeros(current.shape(), current.device()))
+            second.append(Tensor[float32].zeros(current.shape(), current.device()))
+            at += 1
+        return AdamW(variables=variables, rate=rate, decay=decay, beta1=0.9, beta2=0.999, epsilon=0.00000001, first=first, second=second, power1=1.0, power2=1.0)
+
+    public def step(mut self, loss: Tensor[float32]) -> None:
+        """Moves every variable by one Adam step against the gradient of
+        `loss`. The work of the loss and of every update runs as one
+        piece."""
+        self.power1 = self.power1 * self.beta1
+        self.power2 = self.power2 * self.beta2
+        count = self.variables.len()
+        mut work: list[Tensor[float32]] = [loss.clone()]
+        mut first = list[Tensor[float32]]()
+        mut second = list[Tensor[float32]]()
+        mut at = 0
+        while at < count:
+            view variable = self.variables[at]
+            view mean = self.first[at]
+            view square = self.second[at]
+            current = variable.value()
+            slope = loss.gradient(current)
+            moved = mean * self.beta1 + slope * (1.0 - self.beta1)
+            spread = square * self.beta2 + slope * slope * (1.0 - self.beta2)
+            size = (spread / (1.0 - self.power2)).sqrt() + self.epsilon
+            work.append(current.detach() * (1.0 - self.rate * self.decay) - moved / size * (self.rate / (1.0 - self.power1)))
+            first.append(moved)
+            second.append(spread)
+            at += 1
+        at = 0
+        while at < count:
+            view moved = first[at]
+            view spread = second[at]
+            work.append(moved.clone())
+            work.append(spread.clone())
+            at += 1
+        evaluate(work)
+        at = 0
+        while at < count:
+            view variable = self.variables[at]
+            view update = work[at + 1]
+            variable.assign(update)
+            at += 1
+        self.first = first
+        self.second = second
 
 
 def reduce(node: tensor.Node, reduction: int64, axis: int64 | None, keep: bool) -> tensor.Node:

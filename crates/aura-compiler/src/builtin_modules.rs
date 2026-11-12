@@ -1822,6 +1822,8 @@ fn tensor_namespace() -> ModuleNamespace {
     let boolean = || type_ref("bool", Vec::new());
     let node = || type_ref("tensor.Node", Vec::new());
     let shape = || type_ref("list", vec![int64()]);
+    let text = || type_ref("str", Vec::new());
+    let outcome = |value: TypeRef| type_ref("Result", vec![value, type_ref("str", Vec::new())]);
     let function = |name: &str, params: Vec<Param>, result: TypeRef| {
         function_info("tensor", name, params, result)
     };
@@ -1912,6 +1914,35 @@ fn tensor_namespace() -> ModuleNamespace {
                 borrow_param("operation", int64()),
                 borrow_param("parameters", shape()),
             ],
+        ),
+        function(
+            "__aura_weights_names",
+            vec![borrow_param("path", text())],
+            outcome(type_ref("list", vec![text()])),
+        ),
+        function(
+            "__aura_weights_load",
+            vec![
+                borrow_param("path", text()),
+                borrow_param("name", text()),
+                borrow_param("dtype", int64()),
+                borrow_param("device", int64()),
+            ],
+            outcome(node()),
+        ),
+        function(
+            "__aura_weights_put",
+            vec![
+                borrow_param("path", text()),
+                borrow_param("name", text()),
+                borrow_param("node", node()),
+            ],
+            type_ref("None", Vec::new()),
+        ),
+        function(
+            "__aura_weights_write",
+            vec![borrow_param("path", text())],
+            outcome(int64()),
         ),
         function(
             "__aura_filled",

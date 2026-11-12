@@ -1541,6 +1541,70 @@ def main():
 }
 
 #[test]
+fn a_small_transformer_learns_with_the_tensor_layers() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Variable, LayerNorm, Attention, Linear, Embedding, AdamW
+
+class Block:
+    norm1: LayerNorm
+    mix: Attention
+    norm2: LayerNorm
+    wide: Linear
+    narrow: Linear
+
+    def apply(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.apply(self.norm1.apply(x), true)
+        return attended + self.narrow.apply(self.wide.apply(self.norm2.apply(attended)).gelu())
+
+    def variables(self) -> list[Variable[float32]]:
+        mut all = self.norm1.variables()
+        all.extend(self.mix.variables())
+        all.extend(self.norm2.variables())
+        all.extend(self.wide.variables())
+        all.extend(self.narrow.variables())
+        return all
+
+
+def main():
+    device = Device.cpu()
+    width = 16
+    tokens = tensor.Embedding.create(5, width, 1, device)
+    places = tensor.Embedding.create(8, width, 2, device)
+    block = Block(norm1=tensor.LayerNorm.create(width, device), mix=tensor.Attention.create(width, 2, 10, device), norm2=tensor.LayerNorm.create(width, device), wide=tensor.Linear.create(width, 32, 20, device), narrow=tensor.Linear.create(32, width, 30, device))
+    head = tensor.Linear.create(width, 5, 40, device)
+    mut variables = tokens.variables()
+    variables.extend(places.variables())
+    variables.extend(block.variables())
+    variables.extend(head.variables())
+    mut optimizer = tensor.AdamW.create(variables, 0.01)
+    # Each row counts up by one, modulo five. The model learns the next token.
+    inputs = Tensor[int64].from_array(Array[int64].from_list([0, 1, 2, 3, 4, 0, 1, 2, 2, 3, 4, 0, 1, 2, 3, 4], [2, 8]), device)
+    wanted = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3, 4, 0, 1, 2, 3, 3, 4, 0, 1, 2, 3, 4, 0], [16]), device)
+    where = tensor.arange(8, device)
+    mut step = 0
+    while step < 40:
+        hidden = block.apply(tokens.apply(inputs) + places.apply(where))
+        logits = head.apply(hidden).reshape([16, 5])
+        loss = tensor.cross_entropy(logits, wanted)
+        optimizer.step(loss)
+        if step == 0 or step == 39:
+            print(loss.item() < 0.01)
+        step += 1
+    hidden = block.apply(tokens.apply(inputs) + places.apply(where))
+    print(head.apply(hidden).reshape([16, 5]).argmax().to_array())
+    kept = tensor.dropout(Tensor[float32].full([1000], 1.0, device), 0.25, 3).sum().item()
+    print(kept > 900.0 and kept < 1100.0)
+"#,
+    )
+    .expect("a transformer trains");
+    assert_eq!(
+        output.stdout,
+        "false\ntrue\nArray[int64](shape=[16], values=[1, 2, 3, 4, 0, 1, 2, 3, 3, 4, 0, 1, 2, 3, 4, 0])\ntrue\n"
+    );
+}
+
+#[test]
 fn a_tensor_operator_takes_a_number_on_either_side() {
     let output = crate::run_source(
         r#"from tensor import Device, Tensor

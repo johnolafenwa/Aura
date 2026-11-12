@@ -593,7 +593,7 @@ impl Compiled {
 const MAX_COMPILED_PLANS: usize = 256;
 
 /// Runs `plan` over `leaves` and gives the buffer holding its result.
-pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
+pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     let runtime = started()?;
     runtime.enter()?;
     let api = &runtime.api;
@@ -752,10 +752,17 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
     let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
     outcome?;
     finished?;
-    let result = buffers[plan.slots.len() - 1]
-        .take()
-        .expect("a plan's last slot is written by its last action");
-    Ok(Storage::Cuda(result))
+    Ok(plan
+        .outputs
+        .iter()
+        .map(|&output| {
+            Storage::Cuda(Arc::clone(
+                buffers[output]
+                    .as_ref()
+                    .expect("an action writes each output of a plan"),
+            ))
+        })
+        .collect())
 }
 
 #[cfg(test)]
