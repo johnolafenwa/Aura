@@ -38,7 +38,8 @@ A probe on an Apple M2 Pro measured what Metal's MPSGraph allows:
 
 `Tensor[T]` is a new type in a builtin module `tensor`, separate from
 `Array[T]`. A tensor has a device, which is a property of the value at
-run time and not of its type: `Device.cpu()`, `Device.metal()`. Moving
+run time and not of its type: `Device.cpu()`, `Device.metal()`,
+`Device.cuda()`. Moving
 between an Array and a tensor is always written, with `from_array` and
 `to_array`. Both operands of an operation are on one device.
 
@@ -70,8 +71,8 @@ GPU result is checked against them.
   math members stop the program there, which a GPU cannot do, so the CPU
   device has its own float kernels for `/`, `sqrt`, `exp`, `log`, `sin`,
   `cos` and `pow`.
-- A GPU has no `float64`, and a tensor never narrows one. `float64` on a
-  GPU device is `AU4007`.
+- Metal has no `float64`, and a tensor never narrows one. `float64` on
+  the Metal device is `AU4007`. CUDA has it.
 - An operation the GPU library lacks, or gives a different meaning, runs
   through the Array kernels in host memory and gives a tensor on the same
   device. These are the checked ones: integer reductions and `abs`, a
@@ -114,6 +115,43 @@ program asks for the device, so a program that does not use tensors
 links and loads neither. The only link-time addition is the Objective-C
 runtime, which every macOS process already holds.
 
+### The CUDA device compiles each plan
+
+cuBLAS and cuDNN have no general elementwise operations, so the CUDA
+device cannot hand a plan to a library. It writes the plan as CUDA C and
+compiles it with NVRTC at run time, once for each distinct plan.
+
+- Elementwise steps fuse, with reshapes and permutes, which are index
+  maps. A chain of them is one kernel that reads the leaves and writes
+  one result. Each step is an inline function of a linear index, and the
+  shapes are constants in the source, so a broadcast is index arithmetic
+  the compiler folds.
+- A reduction fuses the expression it reduces. Along an axis, one thread
+  reduces one lane. Over every element, each thread reduces one run of
+  about the square root of the count, and a second kernel reduces the
+  runs.
+- `matmul` is a cuBLAS `gemm` for each matrix pair of the batch. cuBLAS
+  is column-major, so the row-major product A B is asked for as the
+  product of B and A as stored.
+- A step read more than once, or read by `matmul`, gets a buffer.
+- Integer arithmetic is done on the unsigned type, because signed
+  overflow is undefined in C. `--fmad=false` keeps a multiply and an add
+  from fusing, which would round differently from the CPU device.
+
+A tensor is plain CUDA device memory from `cuMemAlloc`, in the primary
+context, which cuBLAS and a later kernel layer share. The driver, NVRTC
+and cuBLAS are opened with `dlopen` at the first use of the device, so
+Aura builds with no CUDA toolkit present.
+
+The generator is separate from the driver and calls no CUDA. Its tests
+compile the generated source as C++ for the CPU and run every kernel one
+thread index at a time against the Array kernels, in CI on every
+platform. The driver is tested on a machine with an NVIDIA GPU.
+
+This generator is the first piece of the kernel layer: that layer needs
+the same source generation, compile cache and launch path, with the
+kernel body written by the user.
+
 ## Consequences
 
 - A program written against `Tensor` runs unchanged on a machine with no
@@ -121,8 +159,9 @@ runtime, which every macOS process already holds.
 - A GPU result can differ from the CPU in the last places of a `sum`,
   `mean`, `matmul`, `exp`, `log`, `sin`, `cos` or `pow`. Everything else
   is equal.
-- The hosted CI machines have no usable Metal device. The Metal tests
-  report that they were skipped there and run on a developer Mac. The
+- The hosted CI machines have no usable GPU. The GPU tests report that
+  they were skipped there and run on a developer Mac and an NVIDIA
+  machine. The two driver files are left out of the coverage floors. The
   plan code is covered everywhere through the CPU device.
 - An intermediate tensor that the program keeps and reads after reading
   a result made from it is computed twice. `eval()` on it first avoids
@@ -133,9 +172,6 @@ runtime, which every macOS process already holds.
 ## Not decided here
 
 - The kernel layer: its syntax, and compiling Aura to Metal and CUDA.
-- A CUDA device. cuBLAS and cuDNN have no general elementwise
-  operations, so a complete CUDA device needs generated kernels and
-  comes after the kernel layer. It also needs NVIDIA hardware to test.
 - A Windows device.
 - Neural network operations: convolution, pooling, normalization.
 - `tensor * 2.0`. Two impls of one operator trait for one type are not

@@ -8,16 +8,17 @@ in this file.
 ## Unreleased
 
 - New `tensor` module. `Tensor[T]` holds numbers on a device and computes
-  there: `Device.cpu()` on every platform and `Device.metal()`, the GPU of
-  a Mac. A program moves data in with `Tensor[float32].from_array(values,
+  there: `Device.cpu()` on every platform, `Device.metal()`, the GPU of a
+  Mac, and `Device.cuda()`, an NVIDIA GPU on Linux. A program moves data in with `Tensor[float32].from_array(values,
   device)` and out with `to_array()`, and in between uses `+`, `-`, `*`,
   `/`, comparisons, `choose`, `sum`, `min`, `max`, `mean`, `matmul`,
   `reshape`, `transpose`, and the elementwise maths members, with the
   `Array` shape rules. Every operation means the same on every device:
   integers and masks are equal, and floats agree to a few units in the
   last place. A GPU device runs the whole expression behind a tensor as
-  one piece of work when the program reads it. A GPU has no `float64`,
-  which is error `AU4007` there, never a silent narrowing. A program
+  one piece of work when the program reads it: through MPSGraph on Metal,
+  and as one generated kernel, compiled at run time, on CUDA. Metal has
+  no `float64`, which is error `AU4007` there, never a silent narrowing. A program
   that does not import `tensor` loads no GPU framework (ADR-0097).
 - Fixed: an associated call through a trait on a generic class with its
   type arguments written, such as `Box[float32].make(...)`, ran the

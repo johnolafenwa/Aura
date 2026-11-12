@@ -1,7 +1,8 @@
 # Tensor Module
 
 The `tensor` module has `Tensor[T]`: numbers of one dtype that live on a
-device and are computed there. The device is the CPU or a GPU. The same
+device and are computed there. The device is the CPU, the Metal GPU of a
+Mac, or an NVIDIA GPU through CUDA. The same
 program runs on either, and gives the same integers and masks and the
 same floats to within a few units in the last place.
 
@@ -15,8 +16,9 @@ long expression over big operands. Small work is faster on the CPU,
 because each run on a GPU has a fixed cost of about a fifth of a
 millisecond.
 
-This release has the CPU device on every platform and the Metal device on
-a Mac. See [Devices](#devices) for what is not there yet.
+This release has the CPU device on every platform, the Metal device on a
+Mac, and the CUDA device on Linux. See [Devices](#devices) for what each
+needs.
 
 ## Example
 
@@ -48,23 +50,30 @@ Array[float32](shape=[4], values=[10.0, 12.0, 9.0, 12.0])
 | --- | --- |
 | `Device.cpu()` | The CPU device. Every machine has it. |
 | `Device.metal()` | The Metal GPU of this Mac as `Device \| None`. `None` on other systems and on a Mac whose GPU cannot be used, such as a virtual machine. |
+| `Device.cuda()` | The NVIDIA GPU of this machine as `Device \| None`. `None` when there is no NVIDIA driver or the CUDA libraries are missing. |
 | `Device.default()` | The GPU when this machine has one Aura can use, else the CPU. |
-| `name(self) -> str` | `"cpu"` or `"metal"`. |
+| `name(self) -> str` | `"cpu"`, `"metal"`, or `"cuda"`. |
 | `is_gpu(self) -> bool` | Whether the device is a GPU. |
 
 A tensor stays on the device it was made on. Both operands of an operation
 must be on one device. `to(device)` copies a tensor to another device.
 
-There is no NVIDIA device and no Windows device yet. The CPU device runs
-every program on those machines.
+The CUDA device needs an NVIDIA driver and two libraries of the CUDA
+toolkit at run time: NVRTC, which compiles kernels, and cuBLAS. Aura
+looks for them in the loader's path and under `CUDA_HOME`, `CUDA_PATH`,
+and `/usr/local/cuda`. Building Aura or an Aura program needs no CUDA
+toolkit. The device uses the first GPU.
+
+There is no Windows GPU device yet. The CPU device runs every program
+there.
 
 ## Dtypes
 
 `T` is `float32`, `int32`, `int64`, or `bool` on every device, and also
-`float64` on the CPU device. A mask, the result of a comparison, is a
-`Tensor[bool]`.
+`float64` on the CPU and CUDA devices. A mask, the result of a
+comparison, is a `Tensor[bool]`.
 
-A GPU has no `float64`. Making a `Tensor[float64]` on a GPU device, or
+Metal has no `float64`. Making a `Tensor[float64]` on the Metal device, or
 converting one to `float64` there, is error `AU4007`. A tensor never
 narrows a `float64` silently. Convert the `Array` first, with `values as Array[float32]`.
 
@@ -156,15 +165,18 @@ The results do not depend on when the work runs.
 
 ## What Runs on the GPU
 
-On the Metal device these run on the GPU:
+On a GPU device these run on the GPU:
 
 - `+`, `-`, `*`, `minimum`, `maximum`, negation, and comparisons, for
-  `float32`, `int32`, and `int64`
+  float and integer tensors
 - `/`, `pow`, `abs`, `sqrt`, `exp`, `log`, `sin`, `cos`, the four
-  reductions, and `matmul` of operands of rank two or more, for `float32`
+  reductions, and `matmul` of operands of rank two or more, for float
+  tensors
 - `choose`, `reshape`, `flatten`, `transpose`, `permute`
-- conversions from an integer dtype to `float32`, and from `int32` to
+- conversions from an integer dtype to a float dtype, and from `int32` to
   `int64`
+
+A float tensor is `float32` on Metal and `float32` or `float64` on CUDA.
 
 Every other operation on a GPU tensor runs on the CPU and gives a tensor
 on the same device: integer reductions and `abs`, which are checked for
@@ -172,6 +184,15 @@ overflow, conversions from a float to an integer, which are checked for
 range, integer `matmul`, and `matmul` with a rank-one operand. So every
 operation exists on every device and means the same thing. An empty
 tensor is always computed on the CPU.
+
+The two GPU devices do the work differently. Metal hands the expression
+to Apple's MPSGraph. CUDA has no library of elementwise operations, so
+Aura writes the expression as one CUDA kernel, compiles it the first time
+the expression is evaluated, and keeps the compiled kernel. A chain of
+elementwise operations is a single pass over the data with no temporary
+tensors in between. `matmul` is a cuBLAS call. The first evaluation of
+each distinct expression on CUDA therefore takes some tens of
+milliseconds, and later ones take none of that.
 
 ## Results Across Devices
 
@@ -183,14 +204,16 @@ tensor is always computed on the CPU.
 | `exp`, `log`, `sin`, `cos`, `pow` | Within a few units in the last place. |
 
 The test suite checks these on a machine with a GPU. The hosted CI
-machines have no usable GPU, so the Metal checks run on a developer Mac
-and report that they were skipped elsewhere.
+machines have no usable GPU, so the GPU checks run on a developer Mac and
+on an NVIDIA machine and report that they were skipped elsewhere. The
+generated CUDA kernels are also compiled for the CPU and checked on every
+CI run.
 
 ## Errors
 
 | Code | When |
 | --- | --- |
-| `AU4007` | Shapes that do not broadcast, operands of different dtypes or devices, an axis outside the rank, `item()` on a tensor with more than one element, `float64` on a GPU device, a device this machine does not have, or a GPU failure. |
+| `AU4007` | Shapes that do not broadcast, operands of different dtypes or devices, an axis outside the rank, `item()` on a tensor with more than one element, `float64` on the Metal device, a device this machine does not have, or a GPU failure. |
 
 ## Limits
 
