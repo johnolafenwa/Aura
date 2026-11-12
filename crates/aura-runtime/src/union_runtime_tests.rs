@@ -308,10 +308,9 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
         Some(Type::Named("list".to_string(), vec![Type::named("str")]))
     );
     assert_eq!(
-        runtime_member_type(&Value::Array(ArrayValue {
-            shape: Box::new([2]),
-            storage: ArrayStorage::Int64(Box::new([1, 2])),
-        })),
+        runtime_member_type(&Value::Array(
+            ArrayValue::new(Box::new([2]), ArrayStorage::Int64([1, 2].into())).unwrap()
+        )),
         Some(Type::Named("Array".to_string(), vec![Type::named("int64")]))
     );
     assert_eq!(

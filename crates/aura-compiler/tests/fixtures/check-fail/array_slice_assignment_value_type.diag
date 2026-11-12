@@ -1,0 +1,5 @@
+error[AU2002]: cannot assign value of type `float64` through a slice of `Array[int32]`; assign `Array[int32]` or `int32`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_slice_assignment_value_type.au:3:5
+  |
+3 |     values[0, :] = 1.5
+  |     ^

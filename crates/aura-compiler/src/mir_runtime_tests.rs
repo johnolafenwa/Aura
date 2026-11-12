@@ -2472,7 +2472,7 @@ def main():
         Value::Array(
             ArrayValue::new(
                 vec![4].into_boxed_slice(),
-                ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+                ArrayStorage::Int32(vec![1, 2, 3, 4].into()),
             )
             .unwrap(),
         ),
@@ -2536,7 +2536,7 @@ def main():
         Value::Array(
             ArrayValue::new(
                 vec![4].into_boxed_slice(),
-                ArrayStorage::Int32(vec![1, 2, 3, 4].into_boxed_slice()),
+                ArrayStorage::Int32(vec![1, 2, 3, 4].into()),
             )
             .unwrap()
         )
@@ -2606,10 +2606,7 @@ def main():
     }
 
     let source_allocation = match env.place_borrow("values").unwrap() {
-        Value::Array(ArrayValue {
-            storage: ArrayStorage::Int32(values),
-            ..
-        }) => values.as_ptr(),
+        Value::Array(array) => int32_array_pointer(array),
         other => panic!("expected int32 Array, found {other:?}"),
     };
     for (field, args) in [
@@ -2641,11 +2638,8 @@ def main():
             "mutable Array.{field} must not clone its receiver before writeback"
         );
         match env.place_borrow("values").unwrap() {
-            Value::Array(ArrayValue {
-                storage: ArrayStorage::Int32(values),
-                ..
-            }) => assert_eq!(
-                values.as_ptr(),
+            Value::Array(array) => assert_eq!(
+                int32_array_pointer(array),
                 source_allocation,
                 "Array.{field} must mutate the existing storage allocation"
             ),
@@ -2727,7 +2721,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
             elements: vec![Value::Array(
                 ArrayValue::new(
                     vec![2].into_boxed_slice(),
-                    ArrayStorage::Int32(vec![1, 2].into_boxed_slice()),
+                    ArrayStorage::Int32(vec![1, 2].into()),
                 )
                 .unwrap(),
             )]
@@ -2737,10 +2731,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
     );
     let source_storage = match env.place_borrow("nested").unwrap() {
         Value::Vec(vector) => match &*vector.elements.get(0).unwrap() {
-            Value::Array(ArrayValue {
-                storage: ArrayStorage::Int32(values),
-                ..
-            }) => values.as_ptr(),
+            Value::Array(array) => int32_array_pointer(array),
             other => panic!("expected nested Array, found {other:?}"),
         },
         other => panic!("expected list[Array[int32]], found {other:?}"),
@@ -2762,10 +2753,7 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
     assert_eq!(error.code, "AU4005");
     match env.place_borrow("nested").unwrap() {
         Value::Vec(vector) => match &*vector.elements.get(0).unwrap() {
-            Value::Array(ArrayValue {
-                storage: ArrayStorage::Int32(values),
-                ..
-            }) => assert_eq!(values.as_ptr(), source_storage),
+            Value::Array(array) => assert_eq!(int32_array_pointer(array), source_storage),
             other => panic!("expected nested Array, found {other:?}"),
         },
         other => panic!("expected list[Array[int32]], found {other:?}"),
@@ -24975,6 +24963,13 @@ def main() -> int32:
     assert_eq!(released(), 1);
     // A place that held `None` decides nothing.
     assert!(super::stored_handle(&Value::Unit, &written(first)).is_none());
+}
+
+fn int32_array_pointer(array: &ArrayValue) -> *const i32 {
+    match array.storage() {
+        ArrayStorage::Int32(values) => values.as_ptr(),
+        other => panic!("expected int32 Array storage, found {other:?}"),
+    }
 }
 
 #[test]

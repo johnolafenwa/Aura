@@ -98,7 +98,7 @@ At those positions, values of type `int8`, `int16`, `int32`, `uint8`, `uint16`, 
 
 Literal lexing first requires a finite binary64 value. Contextual `float32` conversion may then round or overflow, as recorded in [Current Limits](/manual/current-limits).
 
-Runtime operations may produce NaN. In Aura 0.14, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
+Runtime operations may produce NaN. In Aura 0.15, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
 
 ### Duration And Range
 
@@ -547,7 +547,7 @@ Arbitrary stored and parameter `def` types describe capture-free code pointers. 
 
 **Numeric widths.** `intsize` and `uintsize` follow the target pointer width. Host process exit transport may narrow an `int32` after Aura returns it. Other numeric widths and overflow behavior are language-defined, not implementation-defined.
 
-**FFI.** FFI v0 opaque handles are nominal wrappers for one non-null foreign pointer. They are non-Copy, non-cloneable, and non-Transfer. Extern functions are direct-call-only declarations, not `def(...) -> ...` values.
+**FFI.** FFI opaque handles are nominal wrappers for one non-null foreign pointer. They are non-Copy, non-cloneable, and non-Transfer. Extern functions are direct-call-only declarations, not `def(...) -> ...` values.
 
 **Union layout.** Every normalized union has one explicit-tag layout plan, shared by both execution paths:
 
@@ -566,7 +566,7 @@ These types, as this Manual describes them, are implemented: scalar, collection,
 
 Ordinary `-> T` return values are owned. An explicit `-> view [mut] T from origin` declaration returns non-owning access instead. A view descriptor is not an owned or structural `def(...) -> R` type, and it cannot be stored in fields or collections.
 
-Capture-free function types and by-value expression closures are implemented. FFI v0 fixed-width declarations, byte and string views, and opaque handle types are implemented. Extern functions do not become first-class function values.
+Capture-free function types and by-value expression closures are implemented. FFI fixed-width declarations, byte and string views, and opaque handle types are implemented. Extern functions do not become first-class function values.
 
 `str` is the owned UTF-8 text type. A distinct borrowed text-view type is unavailable. Current syntax does not imply any of the unavailable types.
 

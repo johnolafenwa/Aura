@@ -1,0 +1,35 @@
+def standardize(samples: Array[float64]) -> Array[float64]:
+    # Each column minus its mean, over its spread.
+    centered = samples - samples.mean(0)
+    spread = (centered * centered).mean(0).sqrt()
+    return centered / spread
+
+
+def main() -> int32:
+    samples = Array[float64].from_list(
+        [1.0, 10.0, 100.0, 3.0, 30.0, 300.0, 5.0, 50.0, 500.0, 7.0, 70.0, 700.0],
+        [4, 3],
+    )
+    print(samples.sum(0))
+    print(samples.max(1))
+    scaled = standardize(samples)
+    print(scaled[:, 0])
+    print(scaled.maximum(0.0).sum(0))
+
+    # A mask picks the elements to keep.
+    large = samples.greater(40.0)
+    print(large.count())
+    print(large.choose(samples, 0.0).sum(1))
+    print(large.logical_and(samples.less(400.0)).any())
+
+    # Conversion checks every element.
+    whole = samples.log10().floor()
+    print(whole)
+    print((whole as Array[int32]).sum(0))
+
+    # An update through a selection changes the elements in place.
+    mut grid = samples.clone()
+    grid[:, 1] *= 0.1
+    grid[0, :] -= grid[1, :]
+    print(grid[:2, :])
+    return 0

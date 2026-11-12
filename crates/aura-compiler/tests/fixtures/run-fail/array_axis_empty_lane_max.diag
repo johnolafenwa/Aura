@@ -1,0 +1,6 @@
+error[AU4007]: cannot compute array max over an empty array
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_axis_empty_lane_max.au:4:16
+  |
+4 |     print(grid.max(0))
+  |                ^
+  = note: Aura call chain (innermost first): main at 1:1

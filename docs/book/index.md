@@ -9,7 +9,7 @@ checks that every failure your code can meet is handled somewhere. Then it
 either runs the program straight away or compiles it to a native executable
 with no runtime to install alongside it.
 
-The book follows Aura 0.14, a technical preview. Most of the language is in
+The book follows Aura 0.15, a technical preview. Most of the language is in
 place and stable enough to learn from, and the places where it is still
 moving are called out where we meet them.
 

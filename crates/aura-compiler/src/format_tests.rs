@@ -143,6 +143,14 @@ fn spacing_distinguishes_slices_type_parameters_and_keyword_names() {
 }
 
 #[test]
+fn spacing_keeps_a_slice_after_a_comma_apart_from_it() {
+    assert_formats(
+        "def main() -> None:\n    mut grid = Array[int32].zeros([3, 4])\n    print(grid[1,:])\n    print(grid[ : : 2 , 1 : 3])\n    grid[0 ,  ::-1]=grid[1, : ]\n    pair = {'k' : grid[:,0]}\n",
+        "def main() -> None:\n    mut grid = Array[int32].zeros([3, 4])\n    print(grid[1, :])\n    print(grid[::2, 1:3])\n    grid[0, ::-1] = grid[1, :]\n    pair = {'k': grid[:, 0]}\n",
+    );
+}
+
+#[test]
 fn spacing_keeps_function_types_lambdas_and_captures_readable() {
     assert_formats(
         "def main() -> None:\n    factor: int32 = 2\n    scale: def (int32)->int32 = lambda [own factor] value : value*factor\n    print(scale (3) if true else 0)\n",

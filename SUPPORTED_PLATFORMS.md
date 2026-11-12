@@ -1,6 +1,6 @@
 # Supported Platforms
 
-Aura 0.14 is a technical preview. It supports these hosts:
+Aura 0.15 is a technical preview. It supports these hosts:
 
 | Host | Architecture | CI | Release archive | Native `aura build` |
 | --- | --- | --- | --- | --- |
@@ -22,12 +22,12 @@ glibc distribution installs. On macOS it loads only system libraries.
 The native Windows target is `x86_64-pc-windows-msvc`. `aura build` and
 `aura run` link with the Microsoft linker from the Visual Studio C++ build
 tools, and `aura.exe` links the C runtime statically, so it loads only
-system DLLs. The 0.14 release has no native Windows archive. On 0.14, run
+system DLLs. The 0.15 release has no native Windows archive. On 0.15, run
 the Linux x86-64 archive inside WSL 2.
 
 ## Unsupported Hosts
 
-The 0.14 preview archives do not support:
+The 0.15 preview archives do not support:
 
 - Windows on ARM
 - musl Linux

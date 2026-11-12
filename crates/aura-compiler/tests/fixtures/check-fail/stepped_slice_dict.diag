@@ -1,0 +1,6 @@
+error[AU2003]: stepped slicing is available only for `Array[T]`, `list[T]`, `Span[T]`, and `str`, found `dict[int64, int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/stepped_slice_dict.au:3:11
+  |
+3 |     print(values[::2])
+  |           ^
+  = help: drop the step, or convert the value to an Array, list, or str before slicing

@@ -904,7 +904,7 @@ pub(super) fn lower_type_with_self(
                 "AU2002",
                 type_ref.span,
                 format!(
-                    "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `{}`",
+                    "Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `{}`",
                     args[0]
                 ),
             ));

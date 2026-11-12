@@ -3,7 +3,7 @@ $ErrorActionPreference = 'Stop'
 # Everything runs from Install-Aura, called on the last line, so a download
 # cut off partway through `irm ... | iex` defines code but runs none of it.
 function Install-Aura {
-    $releaseTag = if ($env:AURA_INSTALL_RELEASE_TAG) { $env:AURA_INSTALL_RELEASE_TAG } else { 'v0.14.0-preview' }
+    $releaseTag = if ($env:AURA_INSTALL_RELEASE_TAG) { $env:AURA_INSTALL_RELEASE_TAG } else { 'v0.15.0-preview' }
     $prefix = if ($env:AURA_INSTALL_PREFIX) { $env:AURA_INSTALL_PREFIX } else { Join-Path $env:LOCALAPPDATA 'Programs\Aura' }
     $baseUrl = if ($env:AURA_INSTALL_BASE_URL) { $env:AURA_INSTALL_BASE_URL } else { "https://github.com/johnolafenwa/Aura/releases/download/$releaseTag" }
 

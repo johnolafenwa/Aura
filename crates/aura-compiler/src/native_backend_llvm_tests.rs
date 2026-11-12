@@ -1297,6 +1297,80 @@ fn versioned_blocks_get_a_copy_that_keeps_the_true_side_of_their_selects() {
 }
 
 #[test]
+fn a_select_of_blocks_already_copied_keeps_its_false_side_in_the_copy_too() {
+    // Two loops share their blocks, as a loop and the loop around it do.
+    // The first gets a copy. The second cannot, so its select must read
+    // memory in the first loop's copy as well, with no test left there.
+    let mut module = module();
+    let sig = signature(
+        CallConv::C,
+        &[types::I64, types::I64, types::I64, types::I64],
+        &[types::I64],
+    );
+    let copied = std::rc::Rc::new(std::cell::Cell::new((false, true)));
+    let result = std::rc::Rc::clone(&copied);
+    define(
+        &mut module,
+        "shared",
+        Linkage::Export,
+        &sig,
+        move |builder| {
+            let entry = builder.create_block();
+            builder.append_block_params_for_function_params(entry);
+            builder.switch_to_block(entry);
+            builder.seal_block(entry);
+            let [count, flag, other_flag, address] = builder.block_params(entry)[..] else {
+                unreachable!("four parameters")
+            };
+            let total = Var(0);
+            builder.declare_var(total, types::I64);
+            let header = builder.create_block();
+            let index = builder.append_block_param(header, types::I64);
+            let body = builder.create_block();
+            let exit = builder.create_block();
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(total, zero);
+            builder.jump(header, &[zero]);
+
+            builder.switch_to_block(header);
+            let more = builder.icmp(IntCC::SignedLessThan, index, count);
+            builder.brif(more, body, &[], exit, &[]);
+
+            builder.switch_to_block(body);
+            builder.seal_block(body);
+            let seven = builder.iconst(types::I64, 7);
+            let nine = builder.iconst(types::I64, 9);
+            let loaded = builder.load(types::I64, MemFlags::trusted(), address, 0);
+            let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+            let first = builder.select(holds, seven, loaded);
+            let other_holds = builder.icmp_imm(IntCC::NotEqual, other_flag, 0);
+            let second = builder.select(other_holds, nine, loaded);
+            let sum = builder.use_var(total);
+            let added = builder.iadd(sum, first);
+            let added = builder.iadd(added, second);
+            builder.def_var(total, added);
+            let next = builder.iadd_imm(index, 1);
+            builder.jump(header, &[next]);
+            builder.seal_block(header);
+
+            builder.switch_to_block(exit);
+            builder.seal_block(exit);
+            let returned = builder.use_var(total);
+            builder.return_(&[returned]);
+            let outer =
+                builder.version_blocks(&[header, body], &[(first, None)], &[(entry, flag, None)]);
+            let inner = builder.version_blocks(&[header, body], &[(second, None)], &[]);
+            result.set((outer, inner));
+        },
+    );
+    let ir = ir(&module);
+    assert_eq!(copied.get(), (true, false), "{ir}");
+    assert!(!ir.contains("select"), "{ir}");
+    assert!(!ir.contains(", 9\n"), "{ir}");
+    assert!(ir.contains(", 7\n"), "{ir}");
+}
+
+#[test]
 fn versioned_blocks_keep_the_order_their_instructions_were_built_in() {
     // The latch is created before the body and built after it, and it uses
     // a value of the body. Its copy must follow the body's copy.

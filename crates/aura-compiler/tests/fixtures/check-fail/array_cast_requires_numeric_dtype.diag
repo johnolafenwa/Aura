@@ -1,0 +1,5 @@
+error[AU2003]: Array casts are only supported between numeric dtypes, found `Array[bool]` and `Array[int64]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/array_cast_requires_numeric_dtype.au:3:12
+  |
+3 |     print((flags as Array[int64]))
+  |            ^

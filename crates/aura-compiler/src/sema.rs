@@ -154,7 +154,7 @@ use properties::{
     rng_clone_obligation_params_in_context_with_modules, rng_clone_safety_in_context_with_modules,
     set_element_type, type_contains_closure_value, type_contains_loan_closure, type_contains_named,
     type_is_copy_in_context_with_modules, type_reaches_class_through_non_indirect_fields,
-    vec_element_type, RngCloneSafety, TaskObservationSummary,
+    vec_element_type, ArrayDtypeClass, RngCloneSafety, TaskObservationSummary,
 };
 
 use std::cell::RefCell;
@@ -680,6 +680,24 @@ fn validate_ffi_parameter(
     opaque_handles: &BTreeMap<String, OpaqueHandleInfo>,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
+    // An `Array[T]` crosses as a pointer to its first element, as a
+    // `ptr[T]` list does (ADR-0091). A mask has no C layout to promise.
+    let array = matches!(ty, Type::Named(name, _) if name == "Array");
+    if array
+        && !matches!(ty, Type::Named(_, elements) if elements.iter().all(|element| {
+            matches!(element, Type::Named(dtype, _) if matches!(dtype.as_str(), "int32" | "int64" | "float32" | "float64"))
+        }))
+    {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            span,
+            format!(
+                "Array parameter `{param_name}` must hold `int32`, `int64`, `float32`, or `float64` elements, found `{ty}`"
+            ),
+        )
+        .with_help("convert a mask with `as Array[int32]` before the call"));
+    }
+    let pointer = pointer || array;
     // The parser writes `ptr[T]` as `list[T]`, so the type has one argument.
     if let (true, Type::Named(_, elements)) = (pointer, ty) {
         if !elements.iter().all(ffi_scalar_type) {
@@ -1548,19 +1566,71 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    /// Checks the components of an `Array` index, in source order: each
+    /// coordinate, and each part of a slice `start:end:step`. Returns
+    /// whether a component is a slice, which makes the index select an
+    /// Array and not one element.
     fn check_array_index_type(
         &self,
         index: &Expr,
         locals: &mut HashMap<String, LocalBinding>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let coordinates = match &index.kind {
             ExprKind::Tuple(elements) => elements.as_slice(),
             _ => std::slice::from_ref(index),
         };
+        let mut selects = false;
         for coordinate in coordinates {
-            self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
+            let Some(slice) = crate::parser::array_axis_slice_parts(coordinate) else {
+                self.check_index_domain_type(coordinate, coordinate.span, "Array indices", locals)?;
+                continue;
+            };
+            selects = true;
+            for part in [slice.start, slice.end, slice.step].into_iter().flatten() {
+                self.check_index_domain_type(part, part.span, "slice endpoints and steps", locals)?;
+            }
         }
-        Ok(())
+        Ok(selects)
+    }
+
+    /// Rejects a slice among the components of an index into anything but
+    /// an `Array`. `assigned` names an assignment target, which keeps the
+    /// guidance a slice assignment to a list or `str` has always had.
+    fn reject_slice_index_outside_array(
+        &self,
+        index: &Expr,
+        object_ty: &Type,
+        assigned: bool,
+    ) -> Result<()> {
+        let components = match &index.kind {
+            ExprKind::Tuple(elements) => elements.as_slice(),
+            _ => std::slice::from_ref(index),
+        };
+        let Some(slice) = components
+            .iter()
+            .find_map(crate::parser::array_axis_slice_parts)
+        else {
+            return Ok(());
+        };
+        if array_element_type(object_ty).is_some() {
+            return Ok(());
+        }
+        if assigned {
+            return Err(Diagnostic::coded_at(
+                "AU2005",
+                slice.colon_span,
+                "slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value",
+            )
+            .with_help("an `Array[T]` accepts slice assignment: `values[1:3] = 0.0`"));
+        }
+        Err(Diagnostic::coded_at(
+            "AU2003",
+            slice.colon_span,
+            format!(
+                "a slice among the components of an index is available only for `Array[T]`, found `{object_ty}`"
+            ),
+        )
+        .with_help("slice a list or `str` with one slice, such as `values[1:3]`"))
     }
 
     /// The closed member set of a `Span[T]` view (ADR-0061, B2). The
@@ -5803,6 +5873,10 @@ impl<'a> FunctionChecker<'a> {
                 )?;
                 self.invalidate_narrowing(&place, assign.span, "indexed assignment", locals);
             }
+            // A slice assignment to a list or `str` is refused for what it
+            // is, whether or not the place is mutable.
+            let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
+            self.reject_slice_index_outside_array(index, &object_ty, true)?;
             if !self.is_mutable_place(object, locals)? {
                 if self.is_shared_self_place(object, locals) {
                     return Err(self.shared_self_mutation_diagnostic(assign.span, locals));
@@ -5816,12 +5890,18 @@ impl<'a> FunctionChecker<'a> {
                 ));
             }
 
-            let object_ty = span_as_list_type(self.type_of_expr(object, locals)?);
             let locals_before_index = locals.clone();
             self.reject_mutable_returned_view_value(index, locals, false)?;
+            // `values[1:3] = ...` assigns an Array of the target's type, or
+            // one element that fills the selection.
+            let mut selection_element = None;
             let target_ty = if let Some(target_ty) = array_element_type(&object_ty).cloned() {
-                self.check_array_index_type(index, locals)?;
-                target_ty
+                if self.check_array_index_type(index, locals)? {
+                    selection_element = Some(target_ty);
+                    object_ty.clone()
+                } else {
+                    target_ty
+                }
             } else if let Some(target_ty) = vec_element_type(&object_ty).cloned() {
                 self.check_vec_index_type(index, index.span, locals)?;
                 if assign.op.is_some() && !self.is_copy_type(&target_ty) {
@@ -5881,7 +5961,10 @@ impl<'a> FunctionChecker<'a> {
             self.reject_retained_access_overlap(&retained_target, &index_borrowed_places)?;
             // `counts[name] += 1` reads an existing entry, so it only borrows a
             // `str` or `bytes` key; lowering clones it for the write back.
-            if !(assign.op.is_some() && compound_index_borrows_key(&object_ty)) {
+            // The parts of a selection are integers, which a read copies.
+            if selection_element.is_none()
+                && !(assign.op.is_some() && compound_index_borrows_key(&object_ty))
+            {
                 self.consume_direct_read_expr(index, locals)?;
             }
             let index_moved_accesses = self.newly_moved_place_accesses(
@@ -5892,7 +5975,13 @@ impl<'a> FunctionChecker<'a> {
             );
             self.reject_retained_access_overlap(&retained_target, &index_moved_accesses)?;
             let locals_before_value = locals.clone();
-            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(&target_ty))?;
+            // A numeric literal assigned through a selection takes the
+            // Array's dtype, as it does next to an Array operand.
+            let value_hint = match &selection_element {
+                Some(element) if Self::is_numeric_literal_expr(&assign.value) => element,
+                _ => &target_ty,
+            };
+            let value_ty = self.type_of_expr_hint(&assign.value, locals, Some(value_hint))?;
             self.reject_mutable_returned_view_value(&assign.value, locals, false)?;
             if assign.op.is_none() {
                 self.reject_owned_view_value(
@@ -5918,22 +6007,38 @@ impl<'a> FunctionChecker<'a> {
             } else {
                 ReceiverKind::Value
             };
-            self.reject_retained_expr_overlap(
-                &retained_target,
-                &assign.value,
-                &value_ty,
-                Some(rhs_passing),
-                &locals_before_value,
-                locals,
-                "indexed assignment value",
-            )?;
+            // The value of a selection assignment is complete before the
+            // write starts, so it may read the Array it is assigned into:
+            // `values[1:] = values[:-1]`. Only moving that Array is refused,
+            // once the value is consumed below.
+            if selection_element.is_none() {
+                self.reject_retained_expr_overlap(
+                    &retained_target,
+                    &assign.value,
+                    &value_ty,
+                    Some(rhs_passing),
+                    &locals_before_value,
+                    locals,
+                    "indexed assignment value",
+                )?;
+            }
             let final_value_ty = if let Some(op) = assign.op {
                 self.type_of_binary(assign.span, op, target_ty.clone(), value_ty.clone())?
             } else {
                 value_ty
             };
 
-            if final_value_ty != target_ty {
+            if let Some(element) = &selection_element {
+                if final_value_ty != target_ty && final_value_ty != *element {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        assign.span,
+                        format!(
+                            "cannot assign value of type `{final_value_ty}` through a slice of `{target_ty}`; assign `{target_ty}` or `{element}`"
+                        ),
+                    ));
+                }
+            } else if final_value_ty != target_ty {
                 return Err(Diagnostic::at(
                     assign.span,
                     format!(
@@ -5952,6 +6057,15 @@ impl<'a> FunctionChecker<'a> {
                     "operator right operand",
                     locals,
                 )?;
+            }
+            if selection_element.is_some() {
+                let value_moved_accesses = self.newly_moved_place_accesses(
+                    &locals_before_value,
+                    locals,
+                    "indexed assignment value",
+                    assign.value.span,
+                );
+                self.reject_retained_access_overlap(&retained_target, &value_moved_accesses)?;
             }
             return Ok(());
         }
@@ -6628,7 +6742,10 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Group(inner) => self.type_expr_consuming_result(inner, locals, expected),
             ExprKind::Cast { expr: inner, .. } => {
                 let ty = self.type_of_expr_hint(expr, locals, expected)?;
-                self.consume_direct_read_expr(inner, locals)?;
+                // An Array cast reads its operand and gives a new Array.
+                if array_element_type(&ty).is_none() {
+                    self.consume_direct_read_expr(inner, locals)?;
+                }
                 Ok(ty)
             }
             ExprKind::Try(inner) => {
@@ -8519,6 +8636,25 @@ impl<'a> FunctionChecker<'a> {
                     // conditional keeps its own type and the cast converts it.
                     self.type_of_expr(value, locals)?
                 };
+                if let (Some(source_dtype), Some(target_dtype)) = (
+                    array_element_type(&source_ty),
+                    array_element_type(&target_ty),
+                ) {
+                    // `array as Array[T]` converts each element as the
+                    // scalar cast does (ADR-0089).
+                    if !ArrayDtypeClass::Numeric.admits(source_dtype)
+                        || !ArrayDtypeClass::Numeric.admits(target_dtype)
+                    {
+                        return Err(Diagnostic::coded_at(
+                            "AU2003",
+                            expr.span,
+                            format!(
+                                "Array casts are only supported between numeric dtypes, found `{source_ty}` and `{target_ty}`"
+                            ),
+                        ));
+                    }
+                    return Ok(target_ty);
+                }
                 if !is_numeric_type(&source_ty) || !is_numeric_type(&target_ty) {
                     return Err(Diagnostic::at(
                         expr.span,
@@ -9384,6 +9520,7 @@ impl<'a> FunctionChecker<'a> {
                     }
                 }
                 let locals_before_index = locals.clone();
+                self.reject_slice_index_outside_array(index, &object_ty, false)?;
                 if let Type::Tuple(element_types) = &object_ty {
                     let tuple_index = match &index.kind {
                         ExprKind::Int(value) => usize::try_from(*value).ok(),
@@ -9437,7 +9574,7 @@ impl<'a> FunctionChecker<'a> {
                     return Ok(element_ty);
                 }
                 if let Some(element_ty) = array_element_type(&object_ty).cloned() {
-                    self.check_array_index_type(index, locals)?;
+                    let selects = self.check_array_index_type(index, locals)?;
                     let retained_base = self
                         .retained_place_access(
                             object,
@@ -9454,7 +9591,9 @@ impl<'a> FunctionChecker<'a> {
                         &mut index_borrowed_places,
                     )?;
                     self.reject_retained_access_overlap(&retained_base, &index_borrowed_places)?;
-                    return Ok(element_ty);
+                    // An index with a slice among its components selects
+                    // an Array that shares the source's elements.
+                    return Ok(if selects { object_ty } else { element_ty });
                 }
                 if let Some(element_ty) = vec_element_type(&object_ty).cloned() {
                     self.check_vec_index_type(index, index.span, locals)?;
@@ -9668,6 +9807,55 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Rejects an Array member on a dtype it is not available for.
+    fn require_array_dtype(
+        &self,
+        field: &str,
+        dtype: &Type,
+        class: ArrayDtypeClass,
+        span: crate::diag::Span,
+    ) -> Result<()> {
+        if class.admits(dtype) {
+            return Ok(());
+        }
+        Err(Diagnostic::coded_at(
+            "AU2003",
+            span,
+            format!(
+                "`Array.{field}` is available only for {}, found `Array[{dtype}]`",
+                class.describe()
+            ),
+        ))
+    }
+
+    /// Checks the operand of an elementwise Array member: an Array of the
+    /// receiver's type, or one element. A numeric literal takes the dtype.
+    fn check_array_operand(
+        &self,
+        field: &str,
+        receiver_ty: &Type,
+        dtype: &Type,
+        operand: Option<&Argument>,
+        locals: &mut HashMap<String, LocalBinding>,
+    ) -> Result<()> {
+        let operand = operand.expect("Array member binding should retain its operand");
+        let operand_ty = if Self::is_numeric_literal_expr(&operand.value) {
+            self.type_of_expr_hint(&operand.value, locals, Some(dtype))?
+        } else {
+            self.type_of_expr(&operand.value, locals)?
+        };
+        if operand_ty != *receiver_ty && operand_ty != *dtype {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                operand.span,
+                format!(
+                    "`Array.{field}` expects `{receiver_ty}` or `{dtype}`, found `{operand_ty}`"
+                ),
+            ));
+        }
+        Ok(())
+    }
+
     fn is_numeric_literal_expr(expr: &Expr) -> bool {
         Self::is_integer_literal_expr(expr) || matches!(expr.kind, ExprKind::Float(_))
     }
@@ -9821,6 +10009,14 @@ impl<'a> FunctionChecker<'a> {
                 }
                 (None, None) => unreachable!("Array operand guard should retain one dtype"),
             };
+            if !ArrayDtypeClass::Numeric.admits(dtype) {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    span,
+                    format!("Array arithmetic is not supported for `Array[{dtype}]`"),
+                )
+                .with_help("combine masks with `logical_and`, `logical_or`, and `logical_not`"));
+            }
             if op == BinaryOp::Div
                 && matches!(
                     dtype,
@@ -11504,19 +11700,31 @@ impl<'a> FunctionChecker<'a> {
                             span,
                             "internal error: a stepped slice should bind its object",
                         )?;
+                        if matches!(values_arg.value.kind, ExprKind::BuiltinOmitted) {
+                            // A slice component outside an index: the
+                            // parser writes one only between brackets.
+                            return Err(Diagnostic::coded_at(
+                                "AU2003",
+                                span,
+                                "a slice among the components of an index is available only for `Array[T]`",
+                            ));
+                        }
                         let object_ty =
                             span_as_list_type(self.type_of_expr(&values_arg.value, locals)?);
                         let element_ty = vec_element_type(&object_ty).cloned();
-                        if element_ty.is_none() && object_ty != Type::named("str") {
+                        if element_ty.is_none()
+                            && object_ty != Type::named("str")
+                            && array_element_type(&object_ty).is_none()
+                        {
                             return Err(Diagnostic::coded_at(
                                 "AU2003",
                                 values_arg.span,
                                 format!(
-                                    "stepped slicing is available only for `list[T]`, `Span[T]`, and `str`, found `{object_ty}`"
+                                    "stepped slicing is available only for `Array[T]`, `list[T]`, `Span[T]`, and `str`, found `{object_ty}`"
                                 ),
                             )
                             .with_help(
-                                "drop the step, or convert the value to a list or str before slicing",
+                                "drop the step, or convert the value to an Array, list, or str before slicing",
                             ));
                         }
                         self.apply_builtin_function_argument_passing(
@@ -12286,7 +12494,7 @@ impl<'a> FunctionChecker<'a> {
                                 "AU2002",
                                 object.span,
                                 format!(
-                                    "Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `{dtype}`"
+                                    "Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `{dtype}`"
                                 ),
                             ));
                             }
@@ -12981,7 +13189,7 @@ impl<'a> FunctionChecker<'a> {
                                             "AU2002",
                                             callback.span,
                                             format!(
-                                                "Array.map callback must return `int32`, `int64`, `float32`, or `float64`, found `{output_ty}`"
+                                                "Array.map callback must return `int32`, `int64`, `float32`, `float64`, or `bool`, found `{output_ty}`"
                                             ),
                                         ));
                                     }
@@ -13004,7 +13212,7 @@ impl<'a> FunctionChecker<'a> {
                                                 "AU2002",
                                                 span,
                                                 format!(
-                                                    "Array.map output dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `{explicit_output}`"
+                                                    "Array.map output dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `{explicit_output}`"
                                                 ),
                                             ));
                                         }
@@ -13022,14 +13230,268 @@ impl<'a> FunctionChecker<'a> {
                                 }
                                 BuiltinMember::ArraySum
                                 | BuiltinMember::ArrayMin
-                                | BuiltinMember::ArrayMax => Ok(dtype.clone()),
-                                BuiltinMember::ArrayFastSum => Ok(dtype.clone()),
-                                BuiltinMember::ArrayMean | BuiltinMember::ArrayFastMean => {
-                                    Ok(Type::named("float64"))
+                                | BuiltinMember::ArrayMax
+                                | BuiltinMember::ArrayFastSum
+                                | BuiltinMember::ArrayMean
+                                | BuiltinMember::ArrayFastMean => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Numeric,
+                                        span,
+                                    )?;
+                                    let scalar = if matches!(
+                                        builtin_member,
+                                        BuiltinMember::ArrayMean | BuiltinMember::ArrayFastMean
+                                    ) {
+                                        Type::named("float64")
+                                    } else {
+                                        dtype.clone()
+                                    };
+                                    let Some(axis) = ordered_args[0] else {
+                                        return Ok(scalar);
+                                    };
+                                    let expected = Type::named("int64");
+                                    let actual = self.type_of_expr_hint(
+                                        &axis.value,
+                                        locals,
+                                        Some(&expected),
+                                    )?;
+                                    if actual != expected {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            axis.span,
+                                            format!(
+                                                "`Array.{field}` expects an `int64` axis, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    Ok(Type::Named("Array".to_string(), vec![scalar]))
+                                }
+                                BuiltinMember::ArrayAbs => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Numeric,
+                                        span,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayMinimum | BuiltinMember::ArrayMaximum => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Numeric,
+                                        span,
+                                    )?;
+                                    self.check_array_operand(
+                                        field,
+                                        &receiver_ty,
+                                        dtype,
+                                        ordered_args[0],
+                                        locals,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArraySqrt
+                                | BuiltinMember::ArrayExp
+                                | BuiltinMember::ArrayLog
+                                | BuiltinMember::ArrayLog2
+                                | BuiltinMember::ArrayLog10
+                                | BuiltinMember::ArraySin
+                                | BuiltinMember::ArrayCos
+                                | BuiltinMember::ArrayTan => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Float64,
+                                        span,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayPow => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Float64,
+                                        span,
+                                    )?;
+                                    self.check_array_operand(
+                                        field,
+                                        &receiver_ty,
+                                        dtype,
+                                        ordered_args[0],
+                                        locals,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayFloor
+                                | BuiltinMember::ArrayCeil
+                                | BuiltinMember::ArrayTrunc => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Float64,
+                                        span,
+                                    )?;
+                                    Ok(Type::Named("Array".to_string(), vec![Type::named("int64")]))
+                                }
+                                BuiltinMember::ArrayToFloat => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Integer,
+                                        span,
+                                    )?;
+                                    Ok(Type::Named(
+                                        "Array".to_string(),
+                                        vec![Type::named("float64")],
+                                    ))
+                                }
+                                BuiltinMember::ArrayLess
+                                | BuiltinMember::ArrayLessEqual
+                                | BuiltinMember::ArrayGreater
+                                | BuiltinMember::ArrayGreaterEqual
+                                | BuiltinMember::ArrayEqual
+                                | BuiltinMember::ArrayNotEqual => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Numeric,
+                                        span,
+                                    )?;
+                                    self.check_array_operand(
+                                        field,
+                                        &receiver_ty,
+                                        dtype,
+                                        ordered_args[0],
+                                        locals,
+                                    )?;
+                                    Ok(Type::Named("Array".to_string(), vec![Type::named("bool")]))
+                                }
+                                BuiltinMember::ArrayAny | BuiltinMember::ArrayAll => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Bool,
+                                        span,
+                                    )?;
+                                    Ok(Type::named("bool"))
+                                }
+                                BuiltinMember::ArrayCount => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Bool,
+                                        span,
+                                    )?;
+                                    Ok(Type::named("int64"))
+                                }
+                                BuiltinMember::ArrayLogicalNot => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Bool,
+                                        span,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayLogicalAnd | BuiltinMember::ArrayLogicalOr => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Bool,
+                                        span,
+                                    )?;
+                                    self.check_array_operand(
+                                        field,
+                                        &receiver_ty,
+                                        dtype,
+                                        ordered_args[0],
+                                        locals,
+                                    )?;
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayChoose => {
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Bool,
+                                        span,
+                                    )?;
+                                    let when_true = ordered_args[0]
+                                        .expect("Array.choose binding should retain its values");
+                                    let when_false = ordered_args[1]
+                                        .expect("Array.choose binding should retain its values");
+                                    // An Array argument names the result
+                                    // dtype, and a literal beside it takes it.
+                                    let first = self.type_of_expr(&when_true.value, locals)?;
+                                    let second = self.type_of_expr(&when_false.value, locals)?;
+                                    let chosen = array_element_type(&first)
+                                        .or_else(|| array_element_type(&second))
+                                        .unwrap_or(&first)
+                                        .clone();
+                                    if !is_array_dtype(&chosen) {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            when_true.span,
+                                            format!(
+                                                "`Array.choose` expects Array values or elements of one dtype, found `{first}`"
+                                            ),
+                                        ));
+                                    }
+                                    let chosen_array =
+                                        Type::Named("Array".to_string(), vec![chosen.clone()]);
+                                    self.check_array_operand(
+                                        field,
+                                        &chosen_array,
+                                        &chosen,
+                                        Some(when_true),
+                                        locals,
+                                    )?;
+                                    self.check_array_operand(
+                                        field,
+                                        &chosen_array,
+                                        &chosen,
+                                        Some(when_false),
+                                        locals,
+                                    )?;
+                                    Ok(chosen_array)
+                                }
+                                BuiltinMember::ArrayFlatten | BuiltinMember::ArrayTranspose => {
+                                    Ok(receiver_ty.clone())
+                                }
+                                BuiltinMember::ArrayReshape | BuiltinMember::ArrayPermute => {
+                                    let axes = ordered_args[0].expect(
+                                        "Array shape operation binding should retain its argument",
+                                    );
+                                    let expected =
+                                        Type::Named("list".to_string(), vec![Type::named("int64")]);
+                                    let actual = self.type_of_expr_hint(
+                                        &axes.value,
+                                        locals,
+                                        Some(&expected),
+                                    )?;
+                                    if actual != expected {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            axes.span,
+                                            format!(
+                                                "`Array.{field}` expects `list[int64]`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    Ok(receiver_ty.clone())
                                 }
                                 BuiltinMember::ArrayDot | BuiltinMember::ArrayMatmul => {
                                     let other = ordered_args[0]
                                         .expect("Array product binding should retain its operand");
+                                    self.require_array_dtype(
+                                        field,
+                                        dtype,
+                                        ArrayDtypeClass::Numeric,
+                                        span,
+                                    )?;
                                     let other_ty = self.type_of_expr(&other.value, locals)?;
                                     if other_ty != receiver_ty {
                                         return Err(Diagnostic::coded_at(

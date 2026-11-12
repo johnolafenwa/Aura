@@ -703,7 +703,7 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice assignment
+- slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
@@ -713,6 +713,6 @@ resources and the runtime's size caps.
 
 ## Status
 
-The collection contract on this page is the Aura 0.14 surface.
+The collection contract on this page is the Aura 0.15 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).

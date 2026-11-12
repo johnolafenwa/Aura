@@ -1,0 +1,40 @@
+def swap_rows(grid: mut Array[float64], first: int64, second: int64) -> None:
+    saved = grid[first, :].clone()
+    grid[first, :] = grid[second, :]
+    grid[second, :] = saved
+
+
+def main() -> int32:
+    mut grid = Array[float64].from_list(
+        [0.0, 1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0, 10.0, 11.0],
+        [3, 4],
+    )
+
+    # One component per axis: a coordinate picks a position, a slice a range.
+    print(grid[1, :])
+    print(grid[:, 2])
+    print(grid[::2, 1:3])
+    print(grid[::-1, 0])
+
+    # The same elements under another shape.
+    print(grid.transpose().shape())
+    print(grid.reshape([2, -1]))
+    print(grid.transpose().flatten())
+    print(grid.reshape([2, 3, 2]).permute([2, 0, 1])[1, 0, :])
+
+    # A view keeps the elements it was taken from.
+    first_row = grid[0, :]
+    grid[0, :] = 1
+    grid[:, 3] = Array[float64].from_list([70.0, 80.0, 90.0], [3])
+    grid[1:, :2] += 0.5
+    print(grid)
+    print(first_row)
+
+    # An assignment may read the Array it writes.
+    mut ramp = Array[int64].from_list([1, 2, 3, 4, 5], [5])
+    ramp[1:] = ramp[:-1]
+    print(ramp)
+
+    swap_rows(grid, 0, 2)
+    print(grid[0, :])
+    return 0

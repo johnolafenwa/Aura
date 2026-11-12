@@ -36,7 +36,7 @@ reads. The compiler enforces both.
 
 ## Install
 
-Install the Aura 0.14 technical preview on Linux x64, macOS x64, or macOS arm64:
+Install the Aura 0.15 technical preview on Linux x64, macOS x64, or macOS arm64:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -59,7 +59,7 @@ pinned tools.
 
 ## What Aura Is For
 
-Aura 0.14 targets applications for agents, ML infrastructure, and the control
+Aura 0.15 targets applications for agents, ML infrastructure, and the control
 planes around models. Before a program runs, the compiler checks types,
 access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
@@ -207,7 +207,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.14 lays the foundation: static typing, deterministic ownership, native
+Aura 0.15 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. Later releases will add freestanding compilation, low-level memory
 access, hardware interfaces, portable layout controls, cross-compilation, and
@@ -232,7 +232,7 @@ limits.
 
 # Why Aura
 
-Aura 0.14.0 is a technical preview of a compiled, statically typed language for
+Aura 0.15.0 is a technical preview of a compiled, statically typed language for
 reliable software. It combines Python-inspired syntax, deterministic
 ownership, structured concurrency, typed failure, and native executables.
 
@@ -292,7 +292,7 @@ Aura aims to become a general-purpose systems language that can build every
 type of software. The intended scope spans applications, services, databases,
 language runtimes, embedded software, operating systems, and device drivers.
 
-Aura 0.14 lays the foundation: static typing, deterministic ownership, native
+Aura 0.15 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
 tooling. Later releases will add freestanding compilation, low-level memory
 access, hardware interfaces, portable layout controls, cross-compilation, and
@@ -324,7 +324,7 @@ compiler-tracked ownership. Its roadmap centers on
 Its ownership documentation gives each value one owner and defines
 [default immutable, `mut`, and `var` argument conventions](https://mojolang.org/docs/manual/values/ownership/).
 
-Aura 0.14 centers on the application control plane around models and agents.
+Aura 0.15 centers on the application control plane around models and agents.
 That covers scoped child tasks, transferable messages, typed I/O and process
 failures, timeouts, retries, and supervision. GPU programming, heterogeneous
 hardware, and interoperability with Python libraries are future areas for
@@ -378,7 +378,7 @@ The [Performance](/manual/performance) chapter records current measurements,
 known gaps, the evidence to reproduce them, and the optimization direction for
 later releases.
 
-Aura 0.14 is an executable technical preview. It includes the language, the
+Aura 0.15 is an executable technical preview. It includes the language, the
 native compiler, the ownership model, the structured task runtime, numeric
 arrays, control-plane modules, package tooling, the Manual, and the editor
 extension. The [Current Limits](/manual/current-limits) chapter lists the
@@ -388,7 +388,7 @@ exact boundaries of that surface.
 
 # Downloads
 
-Aura 0.14.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.15.0 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source all ship from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
@@ -413,7 +413,7 @@ For step-by-step instructions, pick a platform guide:
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 
 To install by hand, download the archive for your platform from the
-[v0.14.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.14.0-preview).
+[v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).
 Each release includes Linux x64, macOS x64, and macOS arm64 archives and a
 `SHA256SUMS` manifest.
 
@@ -432,7 +432,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 Both registries carry the same package, with the plain extension version
-`0.14.0`. The extension needs the `aura` executable on `PATH`. Its semantic
+`0.15.0`. The extension needs the `aura` executable on `PATH`. Its semantic
 editor features run through the `aura lsp` server that the compiler provides.
 
 To install from a terminal:
@@ -442,7 +442,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 To install by hand, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.14.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.15.0-preview/aura-language.vsix)
 from the GitHub Release. Then run **Extensions: Install from VSIX...** in
 VS Code.
 
@@ -461,7 +461,7 @@ the complete source is in the
 
 # Install Aura
 
-Aura 0.14 ships as a self-contained command-line tool with its own private
+Aura 0.15 ships as a self-contained command-line tool with its own private
 native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |
@@ -469,7 +469,7 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | macOS 15, Apple silicon | `aarch64-apple-darwin` | [Install on macOS](/install/macos) |
 | macOS 15, Intel | `x86_64-apple-darwin` | [Install on macOS](/install/macos) |
 | Ubuntu 24.04 or compatible glibc Linux, x86-64 | `x86_64-unknown-linux-gnu` | [Install on Linux](/install/linux) |
-| Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.14 | [Install on Windows](/install/windows) |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.15 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
 Every guide follows the same three steps.
@@ -489,7 +489,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.14.0-preview`. The rest of the line is the
+The output begins with `aura 0.15.0-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed
@@ -544,7 +544,7 @@ write a program, run it, and build a native executable.
 
 # Install Aura On Linux
 
-The Aura 0.14 preview supports x86-64 Ubuntu 24.04 and compatible Linux
+The Aura 0.15 preview supports x86-64 Ubuntu 24.04 and compatible Linux
 distributions that use glibc. The release has no Linux ARM64 or musl
 archives.
 
@@ -599,7 +599,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.14.0-preview`.
+The version begins with `aura 0.15.0-preview`.
 
 ## 6. Run A Program
 
@@ -710,7 +710,7 @@ The installer uses `curl`, `tar`, and `shasum`, which macOS already includes:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-The script downloads the matching `v0.14.0-preview` archive. It checks the
+The script downloads the matching `v0.15.0-preview` archive. It checks the
 archive against the release's `SHA256SUMS` file before it copies anything
 into the installation prefix.
 
@@ -738,7 +738,7 @@ aura --version
 The command path ends in `.local/bin/aura`. The version begins with:
 
 ```text
-aura 0.14.0-preview
+aura 0.15.0-preview
 ```
 
 ## 5. Run A Program
@@ -862,7 +862,7 @@ codium --install-extension JohnOlafenwa.vscode-aura-lang
 A VSIX file is a packaged VS Code extension.
 
 1. Download `aura-language.vsix` from the
-   [v0.14.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.14.0-preview).
+   [v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).
 2. Open the Command Palette and choose **Extensions: Install from VSIX...**.
 
 To install from a terminal instead:
@@ -951,7 +951,7 @@ request failures appear there. You do not need a separate server package.
 
 # Install Aura On Windows With WSL
 
-The 0.14 release has no native Windows executable, and the
+The 0.15 release has no native Windows executable, and the
 [native Windows install](/install/windows) starts with the release after
 it. On an x86-64 Windows 11 machine, you can install and run the Linux
 release inside Windows Subsystem for Linux 2
@@ -1112,7 +1112,7 @@ are not supported in this preview.
 # Install Aura On Windows
 
 Aura runs natively on x86-64 Windows 11. The native Windows archive ships
-from the release after 0.14. On 0.14, or on a machine without the Microsoft
+from the release after 0.15. On 0.15, or on a machine without the Microsoft
 C++ build tools, use [Windows with WSL](/install/windows-wsl).
 
 ## 1. Install The Microsoft Linker
@@ -1204,7 +1204,7 @@ runtime. It covers the complete syntax, name and type rules, ownership,
 execution, module APIs, diagnostics, limits, and tool contracts, in enough
 detail to reconstruct the language accurately.
 
-This Manual documents **Aura 0.14.0 (technical preview)**. The release stamp
+This Manual documents **Aura 0.15.0 (technical preview)**. The release stamp
 below records the implementation baseline commit the Manual was rendered from.
 
 The stamp uses the first commit source that applies:
@@ -1279,8 +1279,8 @@ scope, terminology, authority, and conformance language.
 - [Collections](/manual/collections): `list[T]`, `dict[K, V]`, and `set[T]`,
   with literals, eager owned comprehensions and slices, iteration, mutation,
   and eager list algorithms that take callables.
-- [Numeric Arrays](/manual/numeric-arrays): contiguous row-major `Array[T]`
-  with four numeric dtypes, first-axis owned slices, reductions, native
+- [Numeric Arrays](/manual/numeric-arrays): row-major `Array[T]`
+  with four numeric dtypes, slices and reshapes that share storage, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
 - [SIMD Module](/manual/simd): lane values of two, four, or eight floats
   that native code keeps in vector registers, with loads and stores over
@@ -1498,10 +1498,17 @@ ownership, diagnostics, and backend behavior.
 | `Array.mean` | `mean() -> float64` | Accumulates in and returns `float64`. An empty Array is `AU4007`. |
 | `Array.fast_sum` | `fast_sum() -> T` | Sum in the fixed reordered order, the same on every CPU. May differ from `sum()` in the last digits of a float result. |
 | `Array.fast_mean` | `fast_mean() -> float64` | Mean in the fixed reordered order. An empty Array is `AU4007`. |
+| Array axis reductions | `sum(axis)`, `min(axis)`, `max(axis)`, `mean(axis)`, `fast_sum(axis)`, `fast_mean(axis)` | Reduces each lane along `axis: int64` and returns an Array with that axis removed. A negative axis counts from the last. An axis outside the rank is `AU4007`. |
+| Array elementwise members | `abs()`, `minimum(other)`, `maximum(other)` | Every numeric dtype. `other` is an Array that broadcasts or one element. `abs` of an integer minimum is `AU4002`. |
+| Array math members | `sqrt()`, `exp()`, `log()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()`, `pow(exponent)` | `Array[float64]` only. Each follows the `math` function, and a fault names the element's flat index. |
+| Array rounding members | `floor()`, `ceil()`, `trunc()` | `Array[float64]` to `Array[int64]`. An element outside `int64` is `AU4002`. |
+| Array conversion | `array as Array[U]`, `to_float()` | The cast converts each element as the scalar cast does and reports the first that fails. `to_float()` converts an integer Array to `Array[float64]`. |
+| Array comparison members | `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | Numeric dtypes. Returns `Array[bool]`. |
+| Mask members | `any()`, `all()`, `count()`, `logical_and(other)`, `logical_or(other)`, `logical_not()`, `choose(when_true, when_false)` | `Array[bool]` only. `choose` takes each element from `when_true` where the mask is `true`. |
 | `Array.dot` | `dot(other: Array[T]) -> T` | Inner product of two Arrays of the same shape. Different shapes are `AU4007`, and integer overflow is `AU4002`. |
 | `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
-| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
-| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array of the same shape or a scalar of the same element type. Returns a fresh Array. |
+| integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
+| integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 
 ## Math
 
@@ -2195,9 +2202,9 @@ Assertion failure ends the current Aura execution path. It is not a catchable ex
 
 ## Status
 
-Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.14 includes the bounded two-operand diagnostic.
+Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.15 includes the bounded two-operand diagnostic.
 
-Aura 0.14 has no exception statements, no `raise`, and no catchable assertion failures.
+Aura 0.15 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.
 
@@ -2239,7 +2246,7 @@ list or str is a fresh owned value.
 `str.from_bytes` is an associated method, so you call it on the type:
 `str.from_bytes(payload)`. It is not a `str(...)` constructor.
 
-The parameter name `encoding` is reserved. Aura 0.14 accepts no encoding
+The parameter name `encoding` is reserved. Aura 0.15 accepts no encoding
 argument on either conversion.
 
 ## Example
@@ -2427,7 +2434,7 @@ those uses.
 
 This surface adds no grammar. `list[uint8]`, `import bytes`, associated calls,
 method calls, module calls, named arguments, and `Result` patterns use the
-ordinary forms defined elsewhere in this Manual. Aura 0.14 has no byte-string
+ordinary forms defined elsewhere in this Manual. Aura 0.15 has no byte-string
 literal.
 
 ## Typing Rules
@@ -2451,7 +2458,7 @@ for the call, so you can reuse an input after `to_bytes`, `from_bytes`, an
 encoder, a decoder, or a hash. These signatures neither require nor imply
 `own`.
 
-An `encoding` argument, positional or named, is not part of the 0.14
+An `encoding` argument, positional or named, is not part of the 0.15
 signature. Ordinary argument checking rejects it.
 
 A source module you write whose last path component is `bytes` does not get
@@ -2541,7 +2548,7 @@ Whether an allocation within the ceiling succeeds depends on the host. SHA-256
 output is always 32 bytes. Codec output, errors, and offsets do not depend on
 the host.
 
-Aura 0.14 does not provide:
+Aura 0.15 does not provide:
 
 - other text encodings
 - URL-safe or unpadded base64
@@ -2555,7 +2562,7 @@ The reserved `encoding` parameter is not implemented.
 
 ## Status
 
-`list[uint8]` is the Aura 0.14 bytes type, and the conversion, codec, error,
+`list[uint8]` is the Aura 0.15 bytes type, and the conversion, codec, error,
 and hash behavior on this page is implemented. The bytes module derives no
 codecs for classes and enums. For JSON codecs and schemas, see
 [Typed Codecs](/manual/json#typed-codecs).
@@ -3048,7 +3055,7 @@ MIR execution and direct native generation both implement nominal classes, gener
 
 ## Limits And Implementation-Defined Behavior
 
-- Aura 0.14 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
+- Aura 0.15 has no class inheritance, overloads, property setters, or general destructor hook. A class has at most one initializer.
 - An initializer cannot move a field out of `self` or return a `Result`.
 - A class field default cannot call a user-defined function in the current compiler. Compute the value before construction and pass it as an explicit field argument.
 - `indirect` is only a recursive field-layout marker. Its storage representation is not an observable language contract.
@@ -3130,7 +3137,7 @@ aura check app.au
 | `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
-| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.14.0-preview (0123456789ab)`. Source builds print `aura 0.14.0-dev (0123456789ab)`. |
+| `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.15.0-preview (0123456789ab)`. Source builds print `aura 0.15.0-dev (0123456789ab)`. |
 
 MIR is Aura's mid-level intermediate representation. The editor query
 commands `signature-help`, `references`, `prepare-rename`, and `rename` are
@@ -3310,7 +3317,7 @@ build.
 
 ## Native Executable Profile
 
-Workspace release builds of Aura 0.14.0 use `opt-level=3`, fat LTO, one codegen
+Workspace release builds of Aura 0.15.0 use `opt-level=3`, fat LTO, one codegen
 unit, `debug=false`, and `strip="symbols"`. Panic unwinding stays enabled for
 the runtime's `extern "C-unwind"` boundaries. This profile reduces shipped
 compiler metadata. It does not strip the runtime archive's linkable symbols or
@@ -4058,7 +4065,7 @@ repository-gate tests cover them. `analyze`, `complete`, and diagnostic schema
 version `1` are maintained tooling contracts. Internal AST and MIR layouts are
 deliberately unstable.
 
-Aura 0.14 has no package registry, no publishing and installation workflow, no
+Aura 0.15 has no package registry, no publishing and installation workflow, no
 Windows support, no configurable formatter, and no annotation-based test
 discovery. Its maintained execution engines are the MIR runtime and the direct
 native backend.
@@ -5204,7 +5211,7 @@ These are not available:
 - mutable set iteration and direct dictionary iteration
 - set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
-- slice assignment
+- slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
 - integer indexing of `str`
@@ -5214,7 +5221,7 @@ resources and the runtime's size caps.
 
 ## Status
 
-The collection contract on this page is the Aura 0.14 surface.
+The collection contract on this page is the Aura 0.15 surface.
 
 Design record: [ADR-0044: Canonical collection surface](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0044-canonical-collection-surface.md).
 
@@ -5249,7 +5256,7 @@ migrates. MIR execution
 and direct native execution share this contract. MIR is the compiler's
 mid-level intermediate representation, which `aura run` executes.
 
-Aura 0.14 task scheduling is cooperative across pinned workers:
+Aura 0.15 task scheduling is cooperative across pinned workers:
 
 - The compiler inserts a scheduling check on every loop backedge. This
   includes the ordinary end of the loop body and `continue`. A tight loop
@@ -6049,7 +6056,7 @@ One bounded, nonblocking service step at a time owns the protocol state. The
 state is returned before the coroutine observes cancellation or resumes
 reactor waiting. The process-global pool starts lazily, is shared by all
 lightweight schedulers, and lives until process exit. It intentionally has no
-0.14 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
+0.15 runtime shutdown or join API. The non-Unix WebSocket fallback keeps its
 compatibility path.
 
 Plain socket and reactor operations stay on the scheduler side. Resolver,
@@ -6119,7 +6126,7 @@ A **conforming Aura implementation**:
 - preserves the observable evaluation and cleanup behavior defined by the Manual
 - produces the specified typed outcomes or runtime failures
 - provides the maintained public API surface
-- does not expose proposal-only constructs as accepted 0.14 language features
+- does not expose proposal-only constructs as accepted 0.15 language features
 
 Exact diagnostic prose is normative only where a fixture or this Manual explicitly requires it. Otherwise, a conforming implementation needs a clear diagnostic with an accurate source location and the same stable `AU####` code. The message wording may differ, as long as the code keeps its documented meaning.
 
@@ -6173,8 +6180,8 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Expression closures: contextual bare/`mut`/`own` parameters, expression-only bodies, implicit Copy snapshots, non-Copy move-at-creation, repeatable reads, consuming single-use calls, structural Transfer, cleanup, and MIR/direct parity | lambda parser/check/run/failure fixture families; focused semantic, MIR, runtime, native-codegen, analysis, completion, language-server, and extension tests; `examples/basics/closures.au`; and the forced MIR/direct parity matrix |
 | Place-based loans and views: root/field/fixed-tuple identity, shared/mutable local views, inferred final-use regions, returned receiver/parameter views, reborrowing, exhaustive loan capture lists, mutable-repeatable closures, non-Transfer escape rejection, exit cleanup, `AU3010`, analysis/editor exposure, and MIR/direct write-through parity | focused view parser, semantic, analysis, MIR, MIR-runtime, native-codegen, and native-runtime tests; `place_views.au`; `examples/basics/views.au`; language-server/compiler-bridge and extension protocol tests; and the forced MIR/direct parity matrix |
 | Eager owned comprehensions: list/set/dictionary forms, exact-Boolean filters, progressive non-leaking target scope, nested outer-major order, left-to-right filters, dictionary key-before-value replacement, every bare iterable including Queue receive ownership, explicit clone/move behavior, closure capture interaction, generator/modifier teaching diagnostics, cleanup, and MIR/direct parity | comprehension parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/comprehensions.au`; and the forced MIR/direct parity matrix |
-| Owned list/str slices under the unified `int64` index domain: all omitted endpoint forms, `int64` endpoints with scoped lossless widening, once-only negative normalization, no clamping, invalid/reversed `AU4003`, Unicode-scalar str O(n) behavior, list clone-safety and task-repeatability, retained evaluate-once order, source/result independence, stepped slices (ADR-0066), reserved slice assignment `AU2005`, str integer-index rejection, and MIR/direct parity | slice parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/slices.au`; and the forced MIR/direct parity matrix |
-| Contiguous numeric Arrays and explicit integer modes: four exact dtypes, rank-at-least-one row-major owned storage, zero dimensions, constructor/count checks, multidimensional indexing, first-axis copy slices, exact-shape/scalar kernels, float-only division, deterministic row-major map/reductions, `float64` mean, checked/wrapping/saturating integer behavior, `AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures, `AU4003` coordinate/slice bounds, `AU4005` allocation/element-count failures, `AU4007` shape/rank/count/empty-reduction failures, and no array-shape broadcasting/views/promotion/accelerator | numeric-array semantic/MIR/runtime/native/parity fixture families, including synchronized checked-overflow and floating-zero-divisor diagnostics; compiler analysis, language-server, and extension protocol tests; `examples/numbers/numeric_arrays.au`; the tested `bench-numeric-arrays.py` raw/summary evidence protocol; and the forced MIR/direct parity matrix |
+| Owned list/str slices under the unified `int64` index domain: all omitted endpoint forms, `int64` endpoints with scoped lossless widening, once-only negative normalization, no clamping, invalid/reversed `AU4003`, Unicode-scalar str O(n) behavior, list clone-safety and task-repeatability, retained evaluate-once order, source/result independence, stepped slices (ADR-0066), list/str slice assignment `AU2005`, str integer-index rejection, and MIR/direct parity | slice parser/check/run/failure fixture families; focused semantic, MIR, runtime, analysis, completion, language-server, and extension tests; `examples/collections/slices.au`; and the forced MIR/direct parity matrix |
+| Contiguous numeric Arrays and explicit integer modes: four exact dtypes, rank-at-least-one row-major owned storage, zero dimensions, constructor/count checks, multidimensional indexing, per-axis and stepped selections that share storage, `reshape`/`flatten`/`transpose`/`permute`, slice assignment with copy on write, exact-shape/scalar kernels, float-only division, deterministic row-major map/reductions, `float64` mean, checked/wrapping/saturating integer behavior, `AU4002` checked Array overflow and `AU4004` floating Array zero-divisor failures, `AU4003` coordinate/slice bounds, `AU4005` allocation/element-count failures, `AU4007` shape/rank/count/empty-reduction failures, and no array-shape broadcasting/promotion/accelerator | numeric-array semantic/MIR/runtime/native/parity fixture families, including synchronized checked-overflow and floating-zero-divisor diagnostics; compiler analysis, language-server, and extension protocol tests; `examples/numbers/numeric_arrays.au`; the tested `bench-numeric-arrays.py` raw/summary evidence protocol; and the forced MIR/direct parity matrix |
 | recursive JSON parse/dump semantics, exact numeric classification, typed parse errors, deterministic formatting, accessors, ownership, and resource limits | JSON codec/runtime-value unit tests, including exact materialized-node boundaries and deterministic allocation-failure injection; `json_dynamic_values`, JSON ownership and run-fail fixtures; `examples/json/dynamic_values.au`; language-server tests; and the MIR/direct parity matrix |
 | dict duplicate-key replacement, key-before-value effects, indexed-read/simple-write ownership, and missing-key traps | `dict_literal_duplicate_keys`, `dict_index_non_copy_requires_explicit_clone`, `dict_index_assignment_consumes_noncopy_key`, and `dict_index_missing_key` fixtures plus the MIR/native parity matrix |
 | Supplied/default order and named enum-argument source order with declaration-slot binding | `explicit_and_default_argument_order` plus the MIR/native parity matrix |
@@ -6217,7 +6224,7 @@ Regression tests supplement fixtures when a case needs multiple files, temporary
 
 ## Backend Equivalence
 
-Aura 0.14 has two maintained semantic runtime representations:
+Aura 0.15 has two maintained semantic runtime representations:
 
 - `aura run` lowers checked source to MIR and executes it in the MIR runtime.
 - `aura build` lowers checked source to native code through the direct backend and links the native runtime.
@@ -6895,7 +6902,7 @@ These forms report `AU2048`:
 
 # Control-Plane Modules
 
-This page covers Aura 0.14's small, typed host and control-plane modules:
+This page covers Aura 0.15's small, typed host and control-plane modules:
 `sys`, `path`, `json`, `toml`, `log`, `trace`, `metrics`, and `control`, plus
 a summary of the HTTP client. They are meant for service launchers, workers,
 evaluation harnesses, and agent infrastructure. They behave the same through
@@ -6996,7 +7003,7 @@ process share.
 - Incrementing past either `int64` bound is a runtime diagnostic and leaves
   the checked operation incomplete.
 
-The counters suit worker and test instrumentation. Aura 0.14 has no metrics
+The counters suit worker and test instrumentation. Aura 0.15 has no metrics
 exporter, export protocol, or scoped trace span API.
 
 ## Network Boundary
@@ -7006,7 +7013,7 @@ URLs. Validation uses the platform-independent Web PKI root set.
 
 - Request and response bodies support content length, connection-close
   framing, and chunked transfer encoding.
-- The 0.14 parser keeps a 16 MiB limit on an incoming wire message.
+- The 0.15 parser keeps a 16 MiB limit on an incoming wire message.
 - It accepts at most 64 headers and rejects conflicting framing headers.
 - Its `dict[str, str]` header boundary cannot represent repeated equal header
   names losslessly.
@@ -7374,7 +7381,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
-- Slice steps and slice assignment are reserved `AU2005` forms.
+- Slice assignment to a list or `str` is a reserved `AU2005` form.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
@@ -7389,10 +7396,10 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numeric Arrays
 
-- Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
+- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, a matrix product over more than two dimensions, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
-- First-axis slices are fresh owned copies.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
+- Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
 
@@ -7400,7 +7407,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
 - `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
-- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- `load` and `store` take a `list`, and `load_array` and `store_array` take a rank-1 `Array`. None reads a `Span` or `list[uint8]` bytes as floats.
 - A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
 - A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
 - The interpreter backend computes each lane as a separate float.
@@ -7481,7 +7488,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a separate protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
 - Each submitted protocol job is a bounded, nonblocking step. It returns owned protocol state before cancellation or reactor waiting resumes.
 - The non-Unix WebSocket fallback does not use the protocol-step pool.
-- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.14 runtime shutdown or join API.
+- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.15 runtime shutdown or join API.
 - File reads, resolver work, and listener binding run on the generic blocking-I/O pool. TLS asset bytes are read there, and then PEM parsing and rustls construction run on protocol workers.
 - The process-wide blocking-I/O pool defaults from host parallelism, with fallback `4` and a derived `2..=8` clamp. `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact count without clamping.
 - `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds pending accepted jobs only. Running jobs and admission waiters do not consume it. Without it, the queue is unbounded.
@@ -7510,7 +7517,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
-- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.14 contract.
+- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.15 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
@@ -7527,7 +7534,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Dynamic `json.parse` uses a separate process-global service with two 2 MiB-stack workers and a total in-flight capacity of two.
 - The service reserves capacity before the fallible source copy. Lightweight tasks that find it saturated park through the scheduler. Once admitted, a synchronous parse defers cancellation until the codec completes.
 - Runtime materialization, JSON-aware clone and render, and dumping use iterative traversals.
-- The parse service lives for the whole process and has no 0.14 sizing or shutdown API.
+- The parse service lives for the whole process and has no 0.15 sizing or shutdown API.
 - The bounded `json.is_valid` and `json.parse_string_map` helpers keep their bounded caller-side paths and do not use that service.
 - JSON flat-dictionary and TOML helpers are restricted to typed `dict[str, str]`.
 - JSON has no arbitrary-precision number, streaming codec, or schema validation. A derived `json.Codec` for a generic class or enum is not implemented.
@@ -7675,7 +7682,7 @@ String and format-specification diagnostics are described under
 | `AU2002` | type mismatch | A value of the wrong type, a callback with the wrong contract, a type without the ordering an operation needs, or a format specification that does not fit its value. | Make the value's type match the type the position requires. |
 | `AU2003` | unsupported operator | An operator the operand types do not define, including ordering or arithmetic on a union. | Use an operator the operand types define. |
 | `AU2004` | argument binding | Arguments that do not bind to the callee's parameters. | Match the call to the callee's parameter list. |
-| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
+| `AU2005` | unsupported syntax or feature | Python-shaped source, a generator expression, slice assignment to a list or `str`, a decorator in a function or class body other than `@property`, or a reserved FFI contract. | Use the Aura form the message names. |
 | `AU2006` | builtin method collision | A trait method whose name shadows a builtin member of its target. | Rename the trait method. |
 | `AU2007` | builtin function redefinition | A module-level function named after a builtin function. | Rename the function. |
 | `AU2008` | equality unavailable | `==`, `!=`, or an equality-based collection operation on a type without equality. | Use a type that defines equality, or avoid the equality-based operation. |
@@ -7894,7 +7901,7 @@ Foreign function interface (FFI) failures use these codes:
 | Code | FFI failure |
 | --- | --- |
 | `AU1101` | Malformed extern bodies, defaults, type parameters, variadics, and raw-pointer syntax, each with dedicated parser guidance. |
-| `AU2002` | A type outside the FFI v0 scalar/view/opaque table. |
+| `AU2002` | A type outside the FFI type table. |
 | `AU2005` | A reserved raw-pointer contract, a callback argument that is not a named top-level function, or opaque construction. |
 | `AU2999` | Package authorization, root dependency reports, and the direct-call-only policy. |
 | `AU3004` | An invalid FFI capability. |
@@ -8065,7 +8072,7 @@ owner's region.
 | `AU4004` | zero divisor | Division by zero. | Check the divisor before dividing. |
 | `AU4005` | resource, allocation, or I/O failure | An exceeded size limit, allocation failure, or stack exhaustion. | Stay within the documented limit, or request more stack. |
 | `AU4006` | invalid runtime configuration | An invalid `AURA_WORKERS`, `AURA_BLOCKING_WORKERS`, or `AURA_BLOCKING_QUEUE_CAPACITY` value. | Set the variable to a positive decimal integer, or unset it. |
-| `AU4007` | numeric Array shape or reduction violation | Mismatched Array shapes, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
+| `AU4007` | numeric Array shape or reduction violation | Array shapes that do not broadcast, an axis outside the rank, or `min`, `max`, or `mean` of an empty Array. | Match the shapes, or check that the Array is not empty. |
 | `AU4009` | contract violated | A `requires` condition was false when the function was called, an `ensures` condition was false when it returned, a loop or class `invariant` was false, or a `decreases` measure went below 0 or did not get smaller. | Fix the caller for `requires`, or the function or loop body for the others. The message names the clause. |
 
 Each runtime code's precise causes are listed under
@@ -8075,12 +8082,16 @@ Each runtime code's precise causes are listed under
 
 - rank-zero or negative-dimension construction
 - a `from_list` count mismatch
-- an exact-shape operator mismatch
+- an operator, comparison, or `choose` whose shapes do not broadcast
+- a reduction axis outside the rank
 - a direct coordinate-count or runtime-rank mismatch
-- empty `min`, `max`, or `mean`
+- an index with more components than the runtime rank
+- a `reshape` or `permute` the Array's shape does not allow
+- a slice assignment whose value does not broadcast to the selection
+- `min`, `max`, or `mean` of an empty Array or an empty lane
 
 Shape-product or element-count overflow and allocation failure stay `AU4005`.
-Out-of-range coordinates and invalid first-axis slice bounds stay `AU4003`.
+Out-of-range coordinates and invalid slice bounds or steps stay `AU4003`.
 Absence from the optional `get` is ordinary `None`. Method `set` traps on an
 invalid coordinate or rank.
 
@@ -8358,13 +8369,15 @@ items for Queue.
 ### Slices
 
 Owned list and str slicing, with or without a step, is implemented. Slice
-assignment is reserved. It reports `AU2005` with this exact message:
+assignment to a list or `str` reports `AU2005` with this exact message:
 
     slice assignment is unavailable because slices are owned copies; mutate the source by index or build a new value
 
-A stepped slice of an `Array` reports `AU2003`. A zero step, or a
-negative-step slice whose start is outside the value or whose end exceeds
-its start, stops the program with `AU4003`.
+An `Array` accepts slice assignment. A slice among several index
+components, as in `values[0, 1:]`, is an Array form, and reports `AU2003`
+on any other type. A zero step, or a negative-step slice whose start is
+outside the value or whose end exceeds its start, stops the program with
+`AU4003`.
 
 Other slice rules:
 
@@ -9038,7 +9051,7 @@ Bare builtin constructor names such as `Found(...)`, `Missing`, `Ok(...)`, and `
 
 A user enum is copyable when every payload type of every variant is statically copyable. Otherwise the enum is a move type. The classification is structural across all variants. It does not depend on the variant held at runtime.
 
-`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.14, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
+`Lookup[T]`, `Poll[T]`, `Result[T, E]`, `SendError[T]`, and `QueueReceive[T]` follow the same payload-copy rule. `TaskResult[T]`, `SelectOutcome[Q, T]`, `WaitAny[T]`, and `WaitAll[T]` are move outcome types in Aura 0.15, even with copy payloads. An unconstrained generic payload is not assumed copyable. See [Types](/manual/types#copy-and-move-categories).
 
 ## Statement Matches
 
@@ -9092,7 +9105,7 @@ Expression arms may also use the inline form `case Pattern: expression`. Stateme
 
 ## Pattern Forms
 
-At the top level of a match arm, Aura 0.14 supports:
+At the top level of a match arm, Aura 0.15 supports:
 
 - an enum variant pattern for an enum scrutinee
 - a recursively nested tuple pattern for a tuple scrutinee, with at most one rest element
@@ -9509,7 +9522,7 @@ This chapter defines the runtime behavior that `aura run` and built programs sha
 
 ## Maintained Execution Paths
 
-Aura 0.14 has one checked source language and two runtime representations:
+Aura 0.15 has one checked source language and two runtime representations:
 
 - `aura run` lowers the entry package to MIR, Aura's mid-level intermediate representation, and executes it in the MIR runtime.
 - A native direct build lowers MIR-compatible program structure to native code linked with the direct runtime.
@@ -9527,7 +9540,7 @@ After checking succeeds, an entry module runs in one of two modes:
 1. If it has executable top-level statements, those statements execute in their stored source order. The file cannot also declare a local `main`.
 2. Otherwise, a local `main()` is called when present. It returns `None` or `int32`.
 
-An imported function named `main` is not an entrypoint. In Aura 0.14, importing a module does not execute its top-level statements as a side effect.
+An imported function named `main` is not an entrypoint. In Aura 0.15, importing a module does not execute its top-level statements as a side effect.
 
 For `aura run`, a returned `int32` is passed to the host process as the requested exit status. `None` means success. A built native program follows the same entry result contract.
 
@@ -9730,7 +9743,7 @@ Array failures use these codes:
 | --- | --- |
 | `AU4007` | Rank-zero or negative-dimension construction, `from_list` count mismatch, exact-shape or rank mismatch, and empty reductions. |
 | `AU4005` | Shape-product or element-count overflow, and allocation failure. |
-| `AU4003` | Direct coordinate and first-axis-slice bounds failures. |
+| `AU4003` | Direct coordinate and slice bounds failures. |
 
 ### Trait-Backed Operators
 
@@ -10032,7 +10045,7 @@ The runtime has three process-global service pools besides the scheduler workers
 
 A job owns its protocol state for one bounded, nonblocking library step. The coroutine waits for the state to return before it observes cancellation or waits for descriptor readiness again. So a protocol state is never abandoned with two owners, and no resource mutex stays held across the worker wait. Reactor readiness, absolute deadlines, and cancellation stay scheduler-side concerns.
 
-The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.14 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
+The protocol-step pool is lazily initialized and shared by every lightweight scheduler. Its workers intentionally live until process exit. Aura 0.15 has no protocol-pool shutdown or join surface. The non-Unix WebSocket fallback keeps its compatibility path.
 
 **Generic blocking-I/O pool.** Resolver, listener-bind, and file reads use this pool. A TCP connect to a literal socket address such as `127.0.0.1:8080` skips it: the connect starts nonblocking and the task waits on the reactor. TLS asset bytes are read here before PEM parsing and rustls construction run on protocol workers. PEM is the text encoding used for certificates and keys.
 
@@ -10049,7 +10062,7 @@ A task reserves capacity before it makes the fallible owned copy of its parse so
 
 The dependency-owned recursive parser runs on the service stack. Runtime materialization, JSON-aware cloning and rendering, and dump conversion and emission use iterative traversals. The direct backend waits for admission without value-table access. It then holds read access only long enough to copy the source, and releases it before submission and completion waiting.
 
-The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.14 has no shutdown or configuration surface for them.
+The bounded `json.is_valid` and `json.parse_string_map` operations stay caller-side and do not use this service. Codec workers are process-lifetime. Aura 0.15 has no shutdown or configuration surface for them.
 
 ## Task Groups And Failure Observation
 
@@ -10118,7 +10131,7 @@ Pure expression evaluation, ordinary control flow, and collection operations are
 - operating-system secure random output
 - the exact wording of host operating-system errors
 
-An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, and 0.14.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
+An explicitly seeded `random.Rng` is deterministic. Its xoshiro256** sequence, integer and float mapping, and shuffle order are fixed for Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, 0.14.x, and 0.15.x. [Randomness Module](/manual/randomness) specifies them. Secure random calls are external effects and never draw from that stream.
 
 Aura converts host effects into typed values and ordering primitives where practical. It does not pretend the host environment is deterministic.
 
@@ -10545,11 +10558,12 @@ need a negative value. Negative values are not valid host waits.
 
 ### Array Operators
 
-`Array[T]` adds exact-shape elementwise `+`, `-`, and `*` for its four
-supported numeric dtypes. A same-dtype scalar may appear on either side.
-Floating Arrays also support `/`. Integer Array `/` is the same `AU2003`
-static error as scalar integer `/`. Every result is a fresh Array. There is
-no array-shape broadcasting and no mixed promotion. See
+`Array[T]` adds elementwise `+`, `-`, and `*` for its four numeric dtypes.
+Two Arrays of one dtype broadcast, and a same-dtype scalar may appear on
+either side. Floating Arrays also support `/`. Integer Array `/` is the
+same `AU2003` static error as scalar integer `/`. Every result is a fresh
+Array. There is no mixed promotion, and `Array[bool]` has no arithmetic.
+`array as Array[U]` converts between the numeric dtypes. See
 [Numeric Arrays](/manual/numeric-arrays).
 
 ### Equality
@@ -10953,16 +10967,19 @@ UTF-8 str. Integer `string[index]` is unavailable.
 
 ### Array Slices
 
-An Array slice applies the range only to axis zero. It copies complete rows
-and keeps all later dimensions. Its first result dimension is `end - start`.
-It follows the same rules as other slices: the `int64` domain, one-time
-negative normalization, no clamping, `AU4003`, an owned copy, no step, and no
-assignment. It is not a multidimensional slice or a view.
+An Array index takes one component per axis, and each component is a
+coordinate or a slice: `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`. A slice
+keeps its axis and a coordinate removes it. Each slice follows the same
+rules as other slices: the `int64` domain, one-time negative normalization,
+no clamping, and `AU4003`. The result shares the source's elements instead
+of copying them, and an Array index with a slice can be assigned to.
+[Numeric Arrays](/manual/numeric-arrays#selections) has the details.
 
 ### Steps And Assignment
 
 `value[start:end:step]` selects every `step`-th element of a `list`, `Span`,
-or `str` into a fresh owned value (ADR-0066). The step is in the `int64`
+or `str` into a fresh owned value (ADR-0066). An `Array` takes the same
+form on each axis. The step is in the `int64`
 index domain and may be negative. An empty step, as in `value[::]`, is a
 one-colon slice.
 
@@ -10976,11 +10993,10 @@ one-colon slice.
   otherwise the slice stops the program with `AU4003`.
 - A zero step stops the program with `AU4003`.
 - A `str` step counts Unicode scalar values.
-- `Array` values have no stepped slice; the checker reports `AU2003`.
 
-Slice assignment and compound assignment report `AU2005` with `slice
-assignment is unavailable because slices are owned copies; mutate the source
-by index or build a new value`.
+Slice assignment and compound assignment to a list or `str` report `AU2005`
+with `slice assignment is unavailable because slices are owned copies;
+mutate the source by index or build a new value`. An `Array` accepts both.
 
 ## Collection Literals
 
@@ -11295,7 +11311,7 @@ one value per line.
 
 ## Forms Not Implemented
 
-Aura 0.14 expressions do not include:
+Aura 0.15 expressions do not include:
 
 - generator expressions
 - assignment expressions
@@ -11391,7 +11407,7 @@ Compile-time codes:
 | `AU2002` | A type, constructor-payload, match-result, or index-type mismatch. |
 | `AU2003` | An unsupported unary, binary, compound, membership, or cast operator. |
 | `AU2004` | Call or constructor argument binding failed. |
-| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment. |
+| `AU2005` | An unsupported syntax or expression feature, including generator expressions and slice assignment to a list or `str`. |
 | `AU2008` | Equality on a union that has a member without equality. |
 | `AU2010` | A value is not a direct member of its expected union. |
 | `AU2011` | A literal that more than one union member could accept. |
@@ -11788,6 +11804,43 @@ when the list keeps its elements unboxed. Lists of scalars do. The checker
 rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
 with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
 form for bytes with a length.
+
+### Arrays
+
+A parameter of type `Array[T]` is also a pointer to the first of a run of
+scalars. The argument is an Array, and its elements cross in row-major
+order (ADR-0091).
+
+```aura fragment
+extern "C" def cblas_ddot(
+    n: int32, x: Array[float64], incx: int32, y: Array[float64], incy: int32
+) -> float64
+
+def main() -> int32:
+    x = Array[float64].full([4], 2.0)
+    y = Array[float64].full([4], 0.5)
+    print(cblas_ddot(4, x, 1, y, 1))
+    return 0
+```
+
+| Declaration | C type | Contract |
+| --- | --- | --- |
+| `values: Array[T]` | `const T *` | the function reads the elements |
+| `values: mut Array[T]` | `T *` | the function reads and writes the elements |
+
+`T` is `int32`, `int64`, `float32`, or `float64`. The rules for a `ptr[T]`
+apply: no length crosses, the pointer is valid only during the call, and an
+empty Array passes a null pointer.
+
+A built program passes the address of the Array's own elements when the
+Array is one row-major block. A strided view, such as a transposed matrix
+or a stepped slice, is packed into a temporary block for a read. A `mut
+Array[T]` argument first becomes one row-major block that no other Array
+shares, so the function writes that Array only and a clone keeps its
+elements. `aura run` on the interpreter copies the elements in and out.
+
+`Array[bool]` is `AU2002`: convert a mask with `as Array[int32]` first.
+`own Array[T]` is `AU3004`, and an Array cannot be a result.
 
 ### Structs
 
@@ -12450,7 +12503,7 @@ Host filesystem results can differ by operating system and environment. Those di
 
 Each one-shot read, and each whole-file read on `fs.File`, is capped at 256 MiB of remaining content. One `read_chunk` call returns at most 256 MiB, one `read_lines` call at most 1,048,576 lines, and one line is at most 64 MiB.
 
-Aura 0.14 has none of these:
+Aura 0.15 has none of these:
 
 - seeking to a position in a file
 - recursive directory operations
@@ -12468,9 +12521,9 @@ After a directory is open, an entry that fails during enumeration is skipped. On
 
 ## Status
 
-Aura 0.14 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
+Aura 0.15 implements the one-shot functions, the `fs.File` methods, typed errors, deterministic cleanup, the strict split between text and bytes, and the limits on this page. The fixed 256 MiB whole-read limit is an accepted design decision.
 
-The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.14 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
+The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.15 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0073: Streaming reads, gzip, and HMAC](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0073-streaming-reads-gzip-and-hmac.md).
 
@@ -13476,7 +13529,7 @@ The qualified name and a `from shapes import Make` name the same trait. A module
 
 An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
 
-Aura 0.14 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
+Aura 0.15 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
 ### Trait Methods On Unions
 
@@ -13540,7 +13593,7 @@ The checker rejects the following before any body runs:
 - signature mismatches
 - default ordinary arguments added by an implementation method
 
-An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.14 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
+An explicit implementation MUST NOT strengthen its trait method's clone-safety contract. Its body can rely on obligations that the trait method already inferred. It cannot add a requirement that bound-based callers cannot see. Aura 0.15 has no explicit clone-safety annotation, so generic clone-producing behavior belongs in a trait default body. An implementation that adds such a requirement is rejected with `AU3007`.
 
 An `impl` targeting any builtin type MUST NOT explicitly define or inherit a trait method whose name is a builtin member of that target. This covers:
 
@@ -14399,7 +14452,7 @@ The checker gives lowering, analysis, and the language server one resolved speci
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 has none of the following:
+Aura 0.15 has none of the following:
 
 - associated constants
 - higher-kinded parameters
@@ -14588,7 +14641,7 @@ as follows:
 
 - Two opening braces insert one literal opening brace.
 - Two closing braces insert one literal closing brace.
-- In Aura 0.14, a lone closing brace outside an interpolation is also literal.
+- In Aura 0.15, a lone closing brace outside an interpolation is also literal.
 
 Interpolations may contain nested braces and ordinary single- or
 double-quoted strings. Braces inside those strings do not change the
@@ -15132,7 +15185,7 @@ view-statement
 
 assignment-target
     = identifier,
-      { ".", identifier | "[", expression, "]" } ;
+      { ".", identifier | index-suffix } ;
 
 unpack-target
     = binding-target, ",", binding-target,
@@ -15439,8 +15492,10 @@ postfix-expression
       | trait-object-cast-suffix } ;
 
 index-suffix
-    = "[", expression, { ",", expression }, "]"
-    | "[", [ expression ], ":", [ expression ], "]" ;
+    = "[", index-component, { ",", index-component }, "]" ;
+index-component
+    = expression
+    | [ expression ], ":", [ expression ], [ ":", [ expression ] ] ;
 member-suffix = ".", identifier ;
 call-suffix   = "(", [ argument, { ",", argument } ], ")" ;
 argument      = [ identifier, "=" ], expression ;
@@ -15485,18 +15540,18 @@ not chains.
 
 ### Indexing And Slicing
 
-Comma-separated index expressions are accepted only for `Array[T]`, which
-requires one `int64` coordinate per runtime axis. Other indexable types take
-one index expression.
+Comma-separated index components are accepted only for `Array[T]`, which
+takes one component per runtime axis. A component is an expression or a
+slice, so `grid[1, :]` and `grid[::2, 1:3]` are Array indexes. Other
+indexable types take one index expression or one slice.
 
-The one-colon bracket forms are owned slices. Each endpoint is optional, so
-`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` all use the
-second `index-suffix` alternative. On `Array[T]`, the range copies the first
-axis.
+The bracket forms with a colon are slices. Each endpoint is optional, so
+`value[start:end]`, `value[:end]`, `value[start:]`, and `value[:]` are all
+slices. A second colon adds a step: `value[start:end:step]`.
 
-A second colon is reserved step syntax. It is rejected with `AU2005` and is
-not part of the accepted grammar. A slice suffix is an expression only and
-cannot be an assignment target.
+An index with a slice among its components is an assignment target only on
+an `Array[T]`. [Numeric Arrays](/manual/numeric-arrays) defines selections
+and slice assignment.
 
 ## Primary Expressions And Literals
 
@@ -15680,7 +15735,7 @@ instead of risking host stack exhaustion:
 These are observable implementation limits of Aura 0.3. Inputs that exceed
 them must be rejected cleanly.
 
-## Syntax Not In Aura 0.14
+## Syntax Not In Aura 0.15
 
 The grammar intentionally excludes:
 
@@ -16160,7 +16215,7 @@ The host process supplies the actual standard streams. A backend may buffer them
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 offers line-oriented text input only. It has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language.
+Aura 0.15 offers line-oriented text input only. It has no standard-input byte API, terminal mode API, stream replacement API, asynchronous console API, or built-in formatted-output language.
 
 `io.read_line` has no Aura line-length cap of its own. It allocates for the incoming line, up to host memory limits.
 
@@ -16175,9 +16230,9 @@ For stable control flow, match the specific variants that carry no message where
 
 ## Status
 
-Aura 0.14 implements the standard-stream functions, `print` behavior, the `io.Error` enum, the strict UTF-8 policy, the EOF distinction, and shortest round-trip float rendering. None of the I/O semantics on this page is provisional.
+Aura 0.15 implements the standard-stream functions, `print` behavior, the `io.Error` enum, the strict UTF-8 policy, the EOF distinction, and shortest round-trip float rendering. None of the I/O semantics on this page is provisional.
 
-Aura 0.14 has no binary standard input, async stream handles, terminal control, configurable formatting, or user-defined error derivation.
+Aura 0.15 has no binary standard input, async stream handles, terminal control, configurable formatting, or user-defined error derivation.
 
 ## Source: docs/manual/json.md
 
@@ -16749,7 +16804,7 @@ The fixed limits are:
 The codec service for `json.parse` admits two operations across the process.
 Its two 2 MiB-stack workers start lazily and live until the process exits.
 Sources of at most 16 KiB and 8 levels of nesting do not use it.
-Aura 0.14 has no API to shut down, join, size, or configure the service. The
+Aura 0.15 has no API to shut down, join, size, or configure the service. The
 service capacity does not apply to `json.is_valid`, `json.parse_string_map`,
 or `json.stringify_map`.
 
@@ -16765,14 +16820,14 @@ language does not claim that every host out-of-memory condition can be caught.
 ## Status
 
 The value and error model, parse and dump, accessors, ordering, formatting,
-and resource limits are implemented Aura 0.14 behavior.
+and resource limits are implemented Aura 0.15 behavior.
 
 The `json.Codec` trait, `json.DecodeError`, derived codecs for classes and
 enums, and the generic `encode`, `decode`, `decode_text`, and `schema` functions are
 implemented on both backends.
 
 `is_valid`, `stringify_map`, and `parse_string_map` are bounded
-flat-dictionary operations. Aura 0.14 has no streaming JSON codec.
+flat-dictionary operations. Aura 0.15 has no streaming JSON codec.
 
 Design record: [ADR-0021: JSON value model and codec policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0021-json-value-model-and-codec-policy.md).
 
@@ -16780,7 +16835,7 @@ Design record: [ADR-0021: JSON value model and codec policy](https://github.com/
 
 # Language Specification
 
-This Manual is the normative specification of the implemented Aura 0.14
+This Manual is the normative specification of the implemented Aura 0.15
 development language. It defines what a conforming implementation must
 provide:
 
@@ -16834,7 +16889,7 @@ the contract only when the surrounding paragraph says so.
 
 ## Specification Version
 
-This reference describes Aura 0.14 as implemented by the repository that
+This reference describes Aura 0.15 as implemented by the repository that
 contains it. Aura is an advanced technical preview, so source and API
 contracts may change before a tagged stable release.
 
@@ -16847,7 +16902,7 @@ Any behavior change MUST update these in the same pass:
 - the work record
 
 The repository commit identifies the precise revision of the specification.
-The rendered Manual is stamped with source version 0.14.0 (technical preview)
+The rendered Manual is stamped with source version 0.15.0 (technical preview)
 and its implementation baseline commit. Release builds supply that commit
 without writing a self-referential hash into this source page. The
 [Manual overview](/manual/) gives the exact precedence and the local fallback.
@@ -16910,7 +16965,7 @@ enum instead.
 | **Copy type** | A type whose values are duplicated, not consumed, by assignment and by-value use. |
 | **Move type** | A type whose by-value use transfers ownership. The source place is then unavailable until it is reinitialized. |
 | **Clone-producing operation** | An operation that creates a second owned structural value and keeps the original. Examples are explicit collection copies, cloned collection reads, and task-result observations. |
-| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.14 protects `random.Rng` state and live file, process, and network resources under this contract. |
+| **Clone-safety obligation** | An inferred callable requirement: a substituted type must not duplicate non-cloneable state through a clone-producing operation. Aura 0.15 protects `random.Rng` state and live file, process, and network resources under this contract. |
 | **Borrow** | Temporary access to an existing place without transferring ownership. A shared borrow permits reading. A mutable borrow permits exclusive mutation. |
 | **Owned position** | A source position that consumes a non-copy value. These include an explicit `own` parameter or collection loop, a class field or enum payload constructor, assignment, return, and maintained storing APIs. |
 | **Default parameter mode** | The unmodified `value: T` spelling. Its source contract is shared access for every type. An implementation may pass copy bits directly without changing that contract. The shared mode stays the same after generic specialization. |
@@ -17077,7 +17132,7 @@ physical line.
 print("ready") # A trailing comment.
 ```
 
-Aura 0.14 has no block comments.
+Aura 0.15 has no block comments.
 
 ## Spaces, Tabs, And Indentation
 
@@ -17172,7 +17227,7 @@ interpolation cannot cross a physical newline.
 
 ## Punctuation And Operators
 
-Aura 0.14 recognizes these punctuation and operator tokens:
+Aura 0.15 recognizes these punctuation and operator tokens:
 
 ```text
 ( ) [ ] { } : , . ?
@@ -17377,7 +17432,7 @@ To write a literal brace:
 
 - Two consecutive opening braces produce one literal opening brace.
 - Two consecutive closing braces produce one literal closing brace.
-- Aura 0.14 also treats a lone closing brace outside an interpolation as
+- Aura 0.15 also treats a lone closing brace outside an interpolation as
   literal text.
 
 ```aura fragment
@@ -17719,7 +17774,7 @@ follows the general runtime diagnostic rules.
 
 ## Status
 
-Everything on this page is implemented in Aura 0.14 on both the MIR and direct
+Everything on this page is implemented in Aura 0.15 on both the MIR and direct
 backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
@@ -17865,7 +17920,7 @@ A function body starts with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.14 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
+Aura 0.15 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
 
 ## Local Bindings
 
@@ -18261,7 +18316,7 @@ The listener rejects malformed HTTP requests. A malformed request does not leave
 
 An incoming HTTP request is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
 
-Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.14 high-level HTTP API.
+Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.15 high-level HTTP API.
 
 ## HTTP Client
 
@@ -18462,7 +18517,7 @@ These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs.
 
 ## Status
 
-Aura 0.14 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
+Aura 0.15 implements the constructors, protocols, resources, typed errors, timeouts, cancellation behavior, scheduler integration, cleanup rules, and caps on this page.
 
 Nonblocking descriptors stay registered with the runtime's persistent reactor, the event loop that watches for socket readiness, across scheduler turns. Timeout deadlines share the reactor's timer heap. An idle scheduler blocks until a descriptor is ready, another runtime event arrives, or the next deadline passes. It uses no periodic tick.
 
@@ -18476,26 +18531,30 @@ Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnol
 
 # Numeric Arrays
 
-`Array[T]` is Aura's owned, contiguous numeric container for the CPU. Use it
-for local preprocessing, postprocessing, evaluation, and batch-shaped numeric
-work. It is smaller than a general tensor framework:
+`Array[T]` is Aura's owned numeric container for the CPU. Use it for local
+preprocessing, postprocessing, evaluation, and batch-shaped numeric work. It
+is smaller than a general tensor framework:
 
 - Shape is runtime metadata.
 - Storage is row-major and lives on the host.
-- Every result owns its buffer.
+- An Array is a value. Slices, transposes, and reshapes read the same
+  elements without copying them, and no Array sees a write made through
+  another.
 
-The only dtypes, or element types, are `int32`, `int64`, `float32`, and
-`float64`.
+The dtypes, or element types, are `int32`, `int64`, `float32`, `float64`,
+and `bool`. An `Array[bool]` is a mask: the result of a comparison. It has
+no arithmetic.
 
 ```aura
 def main() -> int32:
     left = Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2])
     right = Array[float64].full([2, 2], 0.5)
     combined = left + right
-    first_row = combined[0:1]
+    first_row = combined[0, :]
     print(combined.shape())
     print(combined[1, 0])
     print(first_row.sum())
+    print(combined.transpose()[0, :])
     print(combined.mean())
     return 0
 ```
@@ -18503,23 +18562,22 @@ def main() -> int32:
 ## Grammar
 
 `Array` is a global builtin generic type, not a module. It uses the ordinary
-grammar for specialization, calls, member calls, indexing, indexed assignment,
-and one-colon slices:
+grammar for specialization, calls, member calls, indexing, and indexed
+assignment. An Array index takes one component per axis, and a component is
+a coordinate or a slice:
 
 ```text
 Array [ dtype ]
 Array [ dtype ] . constructor ( arguments )
-array [ expression { , expression } ]
-array [ [ expression ] : [ expression ] ]
+array [ component { , component } ]
+component = expression | [ expression ] : [ expression ] [ : [ expression ] ]
 ```
 
-The supported `dtype` names are exactly `int32`, `int64`, `float32`, and
-`float64`. Comma-separated Array indexing is different from list indexing. A
-one-colon slice selects a range along the first axis. [Grammar](/manual/grammar)
-defines the complete syntax.
+The supported `dtype` names are exactly `int32`, `int64`, `float32`,
+`float64`, and `bool`. Comma-separated Array indexing is different from list indexing.
+[Grammar](/manual/grammar) defines the complete syntax.
 
-Aura has no Array literal, dtype value, rank annotation, array-shape
-broadcast syntax, view syntax, step slice, or multidimensional slice tuple.
+Aura has no Array literal, dtype value, or rank annotation.
 
 ## Typing Rules
 
@@ -18533,7 +18591,7 @@ These are all the constructors:
 | `Array[T].full(shape: list[int64], value: T)` | `Array[T]` |
 | `Array[T].from_list(values: list[T], shape: list[int64])` | `Array[T]` |
 
-`T` must be one of the four dtypes. Shape is a runtime `list[int64]`, so rank
+`T` must be one of the five dtypes. Shape is a runtime `list[int64]`, so rank
 and dimensions are not part of the static type.
 
 `from_list` requires exactly `list[T]`. It copies the scalar elements, and the
@@ -18546,17 +18604,33 @@ from a mixed numeric source.
 | --- | --- |
 | `shape()` | `list[int64]`; owned shape snapshot |
 | `len()` | `int64`; total element count |
-| `clone()` | fresh `Array[T]` |
+| `clone()` | `Array[T]`; an independent copy |
+| `reshape(shape: list[int64])` | `Array[T]`; the same elements under another shape |
+| `flatten()` | `Array[T]`; the elements as one axis |
+| `transpose()` | `Array[T]`; the axes in reverse order |
+| `permute(axes: list[int64])` | `Array[T]`; the axes in the order given |
 | `get(index: list[int64])` | `T \| None`; `None` for an out-of-bounds coordinate or rank mismatch |
 | `set(index: list[int64], value: T)` | mutable receiver; `T \| None` holding the replaced value, or a coordinate/rank trap rather than `None` |
 | `fill(value: T)` | mutable receiver; returns `None` |
-| `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the four dtypes |
-| `sum()` | `T` |
-| `min()` | `T` |
-| `max()` | `T` |
-| `mean()` | `float64` for every input dtype |
+| `map[U](f: def(T) -> U)` | `Array[U]`; `U` is one of the five dtypes |
+| `sum()`, `min()`, `max()` | `T`; numeric dtypes |
+| `mean()` | `float64` for every numeric dtype |
 | `fast_sum()` | `T`; the sum in the fixed reordered order |
 | `fast_mean()` | `float64`; the mean in the fixed reordered order |
+| `sum(axis: int64)`, `min(axis)`, `max(axis)`, `fast_sum(axis)` | `Array[T]`; the reduction of each lane along `axis` |
+| `mean(axis: int64)`, `fast_mean(axis)` | `Array[float64]` |
+| `abs()` | `Array[T]`; numeric dtypes |
+| `minimum(other)`, `maximum(other)` | `Array[T]`; numeric dtypes; `other` is `Array[T]` or `T` |
+| `sqrt()`, `exp()`, `log()`, `log2()`, `log10()`, `sin()`, `cos()`, `tan()` | `Array[float64]`; `float64` only |
+| `pow(exponent)` | `Array[float64]`; `float64` only; `exponent` is `Array[float64]` or `float64` |
+| `floor()`, `ceil()`, `trunc()` | `Array[int64]`; `float64` only |
+| `to_float()` | `Array[float64]`; `int32` and `int64` only |
+| `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | `Array[bool]`; numeric dtypes; `other` is `Array[T]` or `T` |
+| `any()`, `all()` | `bool`; `Array[bool]` only |
+| `count()` | `int64`; `Array[bool]` only; the number of `true` elements |
+| `logical_and(other)`, `logical_or(other)` | `Array[bool]`; `Array[bool]` only; `other` is `Array[bool]` or `bool` |
+| `logical_not()` | `Array[bool]`; `Array[bool]` only |
+| `choose(when_true, when_false)` | `Array[U]`; `Array[bool]` only; each argument is `Array[U]` or `U` |
 | `dot(other: Array[T])` | `T`; inner product of two Arrays of the same shape |
 | `matmul(other: Array[T])` | fresh `Array[T]`; matrix product |
 
@@ -18568,25 +18642,46 @@ Array place.
 `dot` and `matmul` take an Array of exactly the receiver's type. They borrow
 both operands and consume neither.
 
+A member called on a dtype it does not have is `AU2003`. An operand marked
+`Array[T]` or `T` follows the operator rules: an Array of the receiver's
+dtype whose shape broadcasts, or one element of exactly `T`. A numeric
+literal takes the dtype. `choose` takes its result dtype `U` from an Array
+argument, or from its first argument when both are elements.
+
+### Conversion
+
+`array as Array[U]` converts between the four numeric dtypes and has type
+`Array[U]`. It reads its operand and does not move it. A cast to or from
+`Array[bool]`, or between an Array and a scalar, is rejected.
+
 ### Indexing And Slicing
 
-Direct indexing takes exactly one `int64` coordinate per runtime axis.
-`array[i, j]` has type `T`. Indexed assignment requires a mutable Array place
-and a value of exactly `T`. `array[start:end]` returns `Array[T]`.
+An index of coordinates only, such as `array[i, j]`, has type `T`. It takes
+exactly one `int64` coordinate per runtime axis. Assignment through it
+requires a mutable Array place and a value of exactly `T`.
+
+An index with a slice among its components, such as `array[i, :]` or
+`array[::2]`, has type `Array[T]`. Assignment through it requires a mutable
+Array place and a value of type `T` or `Array[T]`. Slice bounds and steps are
+`int64` or a losslessly narrower integer type.
 
 ### Operators
 
 `+`, `-`, and `*` accept either of these operand pairs and return a fresh
 `Array[T]`:
 
-- two Arrays with the same dtype and exactly the same shape
+- two Arrays with the same numeric dtype, whose shapes broadcast at run time
 - one Array and one scalar of exactly `T`, in either order
 
 `/` has the same forms for floating Arrays only. Integer Array `/` is rejected
 with `AU2003`.
 
-There is no array-shape broadcasting and no mixed promotion. An
-`Array[int32]` and an `Array[int64]` do not combine. A bound scalar is never
+`array[selection] op= value` with `+=`, `-=`, `*=`, or `/=` takes the same
+operands and updates the selected elements.
+
+There is no mixed promotion. An `Array[int32]` and an `Array[int64]` do not
+combine. `Array[bool]` has no arithmetic operators, and no Array has `==`,
+`!=`, or an ordering operator: comparisons are members. A bound scalar is never
 implicitly widened or narrowed for an Array operation.
 
 ### Wrapping And Saturating Arithmetic
@@ -18594,14 +18689,14 @@ implicitly widened or narrowed for an Array operation.
 Every scalar integer type, plus `Array[int32]` and `Array[int64]`, provides
 `wrapping_add`, `wrapping_sub`, `wrapping_mul`, `saturating_add`,
 `saturating_sub`, and `saturating_mul`. The Array methods accept one scalar of
-the same dtype or one Array of the same shape. Ordinary arithmetic stays
+the same dtype or one Array whose shape broadcasts. Ordinary arithmetic stays
 checked.
 
 ## Runtime Semantics
 
 ### Shape And Layout
 
-An Array has rank one or more and owns one contiguous row-major buffer.
+An Array has rank one or more and reads its elements in row-major order.
 Dimensions are `int64`. They can be zero but not negative. `len()` is the
 checked product of all dimensions, so a zero dimension makes the Array empty
 while keeping its full shape.
@@ -18619,19 +18714,134 @@ coordinate:
 
 A valid `set` returns the previous scalar as its `T | None` result.
 
-### First-Axis Slices
+### Selections
 
-`array[start:end]` selects complete rows along axis zero. Written endpoints
-have exact type `int32`. Omitted bounds and one-time negative normalization
-follow the owned-slice rules for lists. Endpoints never clamp. The result has
-shape `[end - start]` followed by the source's remaining dimensions. It is
-fresh storage that never aliases the source.
+Each component of an index applies to one axis, in order. A coordinate picks
+one position and removes the axis. A slice keeps the axis. Axes after the
+last component are taken whole.
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11], [3, 4])
+    print(grid[1, :])
+    print(grid[:, 2])
+    print(grid[::2, 1:3])
+    print(grid[::-1])
+    print(grid[1:2, :].shape())
+    return 0
+```
+
+It prints the second row, the third column, a two by two block, the rows in
+reverse order, and `[1, 4]`.
+
+A slice follows the rules of a list slice. Omitted bounds take the whole
+axis, a negative bound counts from the end once, and a step may be negative.
+Bounds never clamp. A bound outside the axis, a reversed range, or a zero
+step is `AU4003`. More components than the Array has axes is `AU4007`.
+
+A selection does not copy elements. See [Shared Storage](#shared-storage).
+
+### Shape Members
+
+| Member | Result |
+| --- | --- |
+| `reshape(shape)` | The same elements in row-major order under `shape`. One dimension may be `-1`, which takes the length the others leave. |
+| `flatten()` | `reshape([-1])`. |
+| `transpose()` | The axes in reverse order. A rank-1 Array is unchanged. |
+| `permute(axes)` | The axes in the order `axes` names them. Each axis appears once, and a negative axis counts from the last. |
+
+```aura
+def main() -> int32:
+    grid = Array[int64].from_list([0, 1, 2, 3, 4, 5], [2, 3])
+    print(grid.transpose())
+    print(grid.reshape([3, -1]))
+    print(grid.transpose().flatten())
+    return 0
+```
+
+A `reshape` whose shape holds a different number of elements, and a
+`permute` that repeats or omits an axis, are `AU4007`.
+
+### Slice Assignment
+
+`array[selection] = value` writes every selected element. The value is one
+element, which fills the selection, or an Array whose shape broadcasts to
+the selected shape: each dimension is equal or one, aligned at the last
+axis.
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    grid[0, :] = 1
+    grid[:, 3] = Array[float64].from_list([7.0, 8.0, 9.0], [3])
+    grid[1:, :2] += 0.5
+    grid[2, :] = grid[0, :]
+    print(grid)
+    return 0
+```
+
+- A numeric literal takes the Array's dtype.
+- `array[selection] op= value` reads the selection once, applies the
+  operator, and writes the result back.
+- The value is complete before the write starts, so it may read the Array it
+  is assigned into. `values[1:] = values[:-1]` shifts the elements as they
+  were.
+- The selection and the value's shape are checked before anything is
+  written. A value of another shape is `AU4007`.
+
+### Shared Storage
+
+`clone()`, a selection, `reshape`, `flatten`, `transpose`, and `permute`
+return an Array that reads the same element buffer as the source. They cost
+the same for any element count. Two exceptions copy elements:
+
+- `reshape` and `flatten` of a view that is not one row-major block, such as
+  a transposed matrix or a stepped slice.
+- `clone()` of an Array that reads part of a larger buffer. The copy holds
+  only its own elements.
+
+A write never shows through another Array. `set`, `fill`, and assignment
+write in place when the Array is the only one reading its buffer. Otherwise
+the Array first copies its own elements, and the other Arrays keep the old
+buffer:
+
+```aura
+def main() -> int32:
+    mut grid = Array[int64].zeros([2, 2])
+    row = grid[0, :]
+    grid[0, 0] = 5
+    print(row)
+    print(grid[0, :])
+    return 0
+```
+
+It prints `[0, 0]` for `row` and `[5, 0]` for the row read after the write.
+
+That copy is the one cost to plan for. A loop that keeps a view of an Array
+alive while it writes the Array copies the Array on the first write after
+each view is taken. Call `clone()` on the view to keep its elements without
+the buffer:
+
+```aura
+def swap_rows(grid: mut Array[float64], first: int64, second: int64) -> None:
+    saved = grid[first, :].clone()
+    grid[first, :] = grid[second, :]
+    grid[second, :] = saved
+```
 
 ### Arithmetic
 
-- Array/Array operations require exactly equal shapes.
+- Array/Array operations broadcast. The shapes are aligned at the last
+  axis. Two dimensions match when they are equal or one of them is one,
+  and a missing leading dimension counts as one. The result has the larger
+  dimension along each axis.
+- A fault reports the row-major index of the result element it belongs
+  to.
+- `array[selection] op= value` gives what
+  `array[selection] = array[selection] op value` gives, with the selection
+  evaluated once. Nothing is written when the operation faults.
 - Scalar forms apply the scalar to every element in row-major order.
-- Results own fresh contiguous storage.
+- Results own fresh storage.
 - Floating `/` follows the ordinary floating operator rules.
 - Integer `+`, `-`, `*`, and `sum` keep checked overflow.
 - Wrapping operations use fixed-width two's-complement modular arithmetic.
@@ -18652,6 +18862,85 @@ order.
 `sum` and `mean` promise no reassociation and no vectorized reduction
 order. A float `min` treats `-0.0` as below `0.0`, and `max` treats `0.0` as
 above `-0.0`.
+
+### Axis Reductions
+
+A reduction with an axis reduces each lane along that axis and returns an
+Array with the axis removed. A rank-1 Array gives an Array of shape `[1]`.
+
+- A negative axis counts from the last. An axis outside the rank is
+  `AU4007`.
+- Each result element is the reduction of one lane: `m.sum(0)[j]` equals
+  `m[:, j].sum()`, with the same bits and the same faults.
+- An empty lane follows the reduction without an axis. Its `sum` is zero,
+  and its `min`, `max`, or `mean` is `AU4007`.
+
+```aura
+def main() -> int32:
+    grid = Array[float64].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    print(grid.sum(0))
+    print(grid.mean(1))
+    print(grid.max(-1))
+    return 0
+```
+
+### Elementwise Members
+
+Each member gives what `map` with the scalar function gives, in one call.
+
+- `abs()` of an integer minimum is `AU4002`.
+- `minimum` and `maximum` order floats as `min` and `max` do: a pair with a
+  NaN gives NaN, and `-0.0` is below `0.0`.
+- `sqrt()` of a negative element is NaN, as scalar `sqrt` is.
+- `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`, and `pow` follow the
+  [`math`](/manual/math) function of the same name, with its domain and
+  overflow rules.
+- `floor`, `ceil`, and `trunc` give `int64` elements. An element that does
+  not fit is `AU4002`.
+- A fault carries the scalar function's code and message, followed by
+  `at flat index N` for the first failing element in row-major order.
+
+### Conversion Semantics
+
+`array as Array[U]` converts each element as the scalar cast does:
+
+- An integer must fit the target integer type.
+- An integer to a float must be exactly representable.
+- A float to an integer must be finite and in range, and is truncated
+  toward zero.
+- `float64` to `float32` rounds to nearest.
+
+The first element that fails reports the scalar cast's diagnostic with its
+flat index. A cast to the Array's own dtype shares its buffer.
+`to_float()` rounds each integer to the nearest `float64` and never faults.
+
+### Comparisons And Masks
+
+A comparison member compares each element with the matching element of an
+Array that broadcasts, or with one element, and returns `Array[bool]`. A
+float comparison with a NaN is `false`, except `not_equal`, which is
+`true`.
+
+`Array[bool]` has the constructors, selections, shape members, slice
+assignment, `clone`, `get`, `set`, `fill`, and `map` of every Array.
+
+- `any()` and `all()` of an empty mask are `false` and `true`.
+- `count()` is the number of `true` elements.
+- `logical_and` and `logical_or` broadcast as arithmetic does.
+- `mask.choose(when_true, when_false)` broadcasts the mask and both
+  arguments to one shape. Each result element comes from `when_true` where
+  the mask is `true` and from `when_false` elsewhere. Both arguments are
+  evaluated in full.
+
+```aura
+def main() -> int32:
+    values = Array[float64].from_list([-1.5, 2.0, 0.5, -4.0], [4])
+    negative = values.less(0.0)
+    print(negative.count())
+    print(negative.choose(0.0, values))
+    print(values.abs().greater(1.0).logical_and(negative))
+    return 0
+```
 
 ### Reordered Reductions
 
@@ -18693,13 +18982,19 @@ each product in the element type and adds the products in the reordered
 order above. An integer `dot` is checked: the first product or running sum,
 in index order, that leaves the element type's range is `AU4002`.
 
-`left.matmul(right)` accepts three pairs of shapes:
+`left.matmul(right)` accepts three pairs of shapes. The last two
+dimensions of an operand are its matrix, and `..` stands for any leading
+batch dimensions:
 
 | Left | Right | Result |
 | --- | --- | --- |
-| `[n, k]` | `[k, m]` | `[n, m]` |
-| `[n, k]` | `[k]` | `[n]` |
-| `[k]` | `[k, m]` | `[m]` |
+| `[.., n, k]` | `[.., k, m]` | `[.., n, m]` |
+| `[.., n, k]` | `[k]` | `[.., n]` |
+| `[k]` | `[.., k, m]` | `[.., m]` |
+
+The batch dimensions of the two operands broadcast like the shapes of an
+arithmetic operation. The result holds one matrix product per batch
+position. A rank-1 operand is one vector for every position (ADR-0090).
 
 ```aura
 def main() -> int32:
@@ -18717,6 +19012,19 @@ order of the inner index, rounding each product before it is added. That is
 the order of the plain three-loop program, so `matmul` gives that program's
 bits. An integer `matmul` is checked and reports `AU4002`.
 
+```aura
+def main() -> int32:
+    layers = Array[float64].full([3, 2, 2], 2.0)
+    inputs = Array[float64].full([2, 4], 1.0)
+    outputs = layers.matmul(inputs)
+    print(outputs.shape())
+    print(outputs.sum())
+    return 0
+```
+
+`layers` holds three matrices and `inputs` holds one, so `outputs` has
+shape `[3, 2, 4]`. Each of the three products is the plain product above.
+
 A large float product of two matrices runs on several threads. Each thread
 computes whole rows of the result, and no element is shared, so the bits
 are the same on any number of threads. A product whose `n * k * m` is under
@@ -18728,7 +19036,7 @@ process may run on, a product never uses more than 16, and
 ## Ownership And Evaluation Order
 
 `Array[T]` is non-Copy and cloneable. Assignment and owned argument passing
-move the buffer. `.clone()` is the explicit way to duplicate the whole buffer.
+move the Array. `.clone()` is the explicit way to duplicate it.
 
 An Array is always structurally `Transfer`, because every dtype is a
 `Transfer` scalar. A Task result that holds an Array still has the ordinary
@@ -18742,13 +19050,13 @@ Evaluation order:
   Arrays for the kernel and consumes neither shared operand.
 - Coordinates evaluate from left to right.
 - A direct indexed assignment captures its coordinate before it evaluates the
-  new value.
+  new value. A slice assignment evaluates its bounds and steps from left to
+  right, then its value.
 
-Elementwise operations, `map`, and first-axis slices allocate a fresh result.
-`map` calls its repeatable callback once per element in row-major order, and
-moves or copies each scalar result into the output. If a trap occurs, any
-partial output is cleaned up. Shape snapshots and first-axis slices are owned
-copies, not views.
+Elementwise operations and `map` allocate a fresh result. `map` calls its
+repeatable callback once per element in row-major order, and moves or copies
+each scalar result into the output. If a trap occurs, any partial output is
+cleaned up. A shape snapshot is an owned copy.
 
 ## Diagnostics
 
@@ -18757,32 +19065,39 @@ Compile-time codes:
 | Code | Cause |
 | --- | --- |
 | `AU2001` | Unknown Array member or constructor. |
-| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. |
-| `AU2003` | Unsupported operator, including integer Array `/`. The message keeps the ordinary checked-integer guidance. |
+| `AU2002` | Unsupported dtype, mismatched argument, callback, or result type, or mixed dtypes. A slice assignment whose value is neither `T` nor `Array[T]`. A slice bound or step that is not an integer. |
+| `AU2003` | Unsupported operator, including integer Array `/` and arithmetic on `Array[bool]`. A member called on a dtype it does not have. An Array cast to or from `Array[bool]`. |
 | `AU2004` | Invalid argument binding. |
-| `AU2005` | Slice steps and slice assignment, which are reserved. The message gives the same owned-copy guidance as for list and str slices. |
-| `AU3002` | Mutation while shared access is active. |
-| `AU3003` | `set`, `fill`, or indexed assignment through an immutable place. |
+| `AU3002` | Mutation while shared access is active, or a slice assignment that moves its own target, as in `values[:] = values`. |
+| `AU3003` | `set`, `fill`, or assignment through an immutable place. |
 
 Runtime codes:
 
 | Code | Cause |
 | --- | --- |
-| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. |
-| `AU4003` | A direct coordinate is out of range, or a first-axis slice is invalid or reversed. `get` returns `None` instead, but method `set` traps. |
+| `AU4001` | A math member's domain error, such as `log` of a negative element, or a cast of a non-finite float. |
+| `AU4002` | Checked integer Array arithmetic, `dot`, or `matmul` overflows. `abs` of an integer minimum, `exp` overflow, a `floor`, `ceil`, or `trunc` result outside `int64`, or a cast whose element does not fit or is not exact. |
+| `AU4003` | A coordinate is out of range, a slice bound is outside its axis, a slice range is reversed, or a slice step is zero. `get` returns `None` instead, but method `set` traps. |
 | `AU4004` | Floating Array division with any zero divisor. |
-| `AU4005` | Shape product or element count overflows, or allocation fails. |
+| `AU4005` | Shape product or element count overflows, or allocation fails. A write to an Array that shares its buffer allocates the copy. |
 | `AU4007` | Numeric array shape or reduction violation. See below. |
 
 `AU4007` (`numeric array shape or reduction violation`) covers:
 
 - construction with rank zero or a negative dimension
 - a `from_list` element count that does not match the shape
-- an Array/Array operation whose shapes differ
+- an Array/Array operation, comparison, or `choose` whose shapes do not
+  broadcast
+- a reduction axis outside the rank
 - a direct coordinate count that does not match the runtime rank
-- `min`, `max`, `mean`, or `fast_mean` on an empty Array
+- an index with more components than the runtime rank
+- a `reshape` to a shape with a different element count, or with two `-1`
+  dimensions
+- a `permute` that repeats or omits an axis
+- a slice assignment whose value does not broadcast to the selected shape
+- `min`, `max`, `mean`, or `fast_mean` on an empty Array or an empty lane
 - a `dot` whose shapes differ
-- a `matmul` whose shapes are not one of the three accepted pairs
+- a `matmul` whose shapes are not one of the three accepted pairs, or whose batch dimensions do not broadcast
 
 These traps are defined language behavior. A backend must not panic in their
 place.
@@ -18792,15 +19107,68 @@ place.
 MIR and direct execution both implement:
 
 - constructors, indexing, and mutation
-- first-axis copies
+- selections, shape members, and slice assignment
 - `map` and reductions
 - `dot` and `matmul`
 - checked, wrapping, and saturating arithmetic
-- scalar forms and exact-shape elementwise operations
+- scalar forms and broadcast elementwise operations
+- axis reductions, elementwise members, conversion, comparisons, and masks
 
-Direct native execution uses contiguous kernels specialized per dtype. Both
+Direct native execution uses kernels specialized per dtype. Arithmetic
+reads a strided or broadcast operand where it lies. Both
 backends share checked types, evaluation order, row-major results, cleanup,
 and exact `AU4003` and `AU4007` behavior.
+
+## Element Access, Foreign Calls, And Tasks
+
+A built program reads `grid[i, j]` where the element lies, with one range
+check per coordinate and no runtime call. This holds for an index of one to
+four integer coordinates on an `int32`, `int64`, `float32`, or `float64`
+Array that is one row-major block. An element write, `grid[i, j] = value`
+or `grid[i, j] += value`, also runs in place when no other Array shares the
+buffer. Any other access gives the same result through the runtime: a
+strided view such as a transposed matrix, a mask element, an index of five
+or more coordinates, and the first write after a `clone()` or a slice, which
+copies the buffer (ADR-0091).
+
+```aura
+def main() -> int32:
+    mut grid = Array[float64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            grid[row, column] = (row * 4 + column) as float64
+    grid[1, 1] += 0.5
+    print(grid[1, 1])
+    print(grid[-1, -1])
+    return 0
+```
+
+A loop whose only uses of an Array are element reads and writes checks the
+Array once at its entry and then reaches each element by address. Keep other
+members out of the loop to get that form, apart from `len()`: read
+`grid.shape` or a reduction before the loop, not inside it.
+
+An `extern "C"` function takes an Array as a pointer to its first element.
+See [FFI](ffi.md#arrays). The `simd` lane classes load from a rank-1 Array
+with `load_array` and write with `store_array`. See [SIMD](simd.md).
+
+An Array moved into a task or sent through a queue takes its buffer along.
+`clone()` shares the buffer, so tasks that each receive a clone read the
+same elements, and no elements are copied. A task that writes its clone
+gets a private copy at the first write.
+
+```aura
+def total(values: Array[float64]) -> float64:
+    return values.sum()
+
+def main() -> int32:
+    values = Array[float64].full([1000], 0.5)
+    with TaskGroup() as group:
+        first = group.start(total, values.clone())
+        second = group.start(total, values.clone())
+        print(first.result_or(0.0, timeout=1s) + second.result_or(0.0, timeout=1s))
+    return 0
+```
 
 The compiler's analysis and the language server expose the same constructors,
 member signatures, result types, hover, definitions, completions, and
@@ -18808,16 +19176,16 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 Arrays are CPU-only, contiguous, row-major, and have rank one or
-more. They do not have:
+Aura 0.15 Arrays are CPU-only, row-major, and have rank one or more. They do
+not have:
 
-- array-shape broadcasting or mixed promotion
-- views, reshape, or transpose
-- a matrix product over more than two dimensions
-- equality or ordering
-- multidimensional slicing, step slices, or slice assignment
+- mixed promotion between dtypes
+- equality or ordering operators: use the comparison members
+- math members on `float32`: convert with `as Array[float64]` first
+- iteration with `for`
+- a row selected by one coordinate: write `grid[0, :]`, not `grid[0]`
 - autograd, device placement, or distributed storage
-- aliasing of foreign buffers
+- a foreign function that keeps an Array's pointer after its call
 
 Shape metadata is dynamic, and the checker does not prove that shapes are
 compatible. Allocation is limited by host memory and the element-count checks.
@@ -18936,6 +19304,7 @@ Design records:
 [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md),
 [ADR-0085: Target CPU and kernel dispatch](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0085-target-cpu-and-kernel-dispatch.md),
 [ADR-0086: Array products and reordered reductions](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0086-array-products-and-reordered-reductions.md),
+[ADR-0088: Array views share storage and copy on write](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0088-array-views-share-storage.md),
 and [ADR-0002: Integer division and modulo](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0002-integer-division-and-modulo.md).
 
 ## Source: docs/manual/ownership-and-borrowing.md
@@ -19407,7 +19776,7 @@ Every used outer local must be listed exactly once, and every listed local must 
 
 ## FFI Views And Opaque Handles
 
-FFI is the foreign function interface. FFI v0 views are temporary call-boundary capabilities, not first-class Aura references.
+FFI is the foreign function interface. FFI views are temporary call-boundary capabilities, not first-class Aura references.
 
 - Bare `str` and `list[uint8]` retain their owner while exposing a const pointer and byte length for one synchronous foreign call.
 - `mut list[uint8]` requires an exclusive mutable list place. It copies the initial bytes into a same-length scratch buffer, and writes exactly that length back after the foreign function returns.
@@ -19753,7 +20122,7 @@ Each dependency entry chooses exactly one source:
 
 Registry forms are not implemented. These include string-valued version
 dependencies such as `util = "1.2.0"` and detailed `version =` dependencies.
-Aura 0.14 has no registry resolution, publish, or install flow.
+Aura 0.15 has no registry resolution, publish, or install flow.
 
 The dependency key is not a free alias. It must exactly match the resolved
 dependency's `[package].name`, so the manifest name and the import root are
@@ -19782,7 +20151,7 @@ rules:
 - every package has a readable `src/` directory and a valid package manifest
 
 Two different paths cannot claim the same package name. The graph limits are
-observable Aura 0.14 limits. Raising them requires matching reference and
+observable Aura 0.15 limits. Raising them requires matching reference and
 conformance changes.
 
 ## Workspaces
@@ -20105,7 +20474,7 @@ No package semantics on this page are provisional.
 
 Registry resolution, publishing, installation, alternative source roots,
 workspace globs, wildcard or relative imports, implicit re-exports, and
-import-time initialization are outside the Aura 0.14 language contract.
+import-time initialization are outside the Aura 0.15 language contract.
 
 ## Source: docs/manual/performance.md
 
@@ -20667,6 +21036,27 @@ median of ten runs, on a busier container than on 8 November:
 1.8 and 1.6). `csv_aggregate` is level with Python, and Aura is still
 slower on `file_io` and `template_render`. Fifteen programs run 2 to 6%
 more instructions than with 0.13.0 while their times are level or lower.
+
+Aura 0.15.0 adds counted loops over lists of numbers, method calls on
+list elements that run in place, and the fixes for the instruction counts
+that rose in 0.14.0. Both compilers measured in the same four passes on
+12 November 2026, median of twenty runs, on a busy container:
+
+| Measure | Aura 0.14.0 | Aura 0.15.0 |
+| --- | ---: | ---: |
+| All 30 programs, wall time | 12.7 s | 12.3 s |
+| Median Aura / Rust, wall time | 3.1x | 2.9x |
+| Median Aura / Python 3.13, wall time | 0.35x | 0.35x |
+| Programs faster than Python | 28 | 28 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 30 programs | 79.6 billion | 76.3 billion |
+
+`nbody` takes 34 ms instead of 84, and `regex_match`, `spreadsheet`, and
+`sql_engine` are 11 to 18% faster. Aura is still slower than Python on
+`file_io` and `template_render`. The suite has four more programs,
+`stream_io`, `regex_scan`, `date_time`, and `http_stream`. Aura is faster
+than Python on all four and takes 1.5 to 3.3 times Rust's time. All 34
+take 15.6 seconds, against 56.1 for Python and 10.8 for Rust.
 
 ### Per-Call Attribution
 
@@ -22422,7 +22812,7 @@ The host determines executable discovery, path syntax, the inherited environment
 
 ## Status
 
-Aura 0.14 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
+Aura 0.15 implements one-shot execution, live children, standard-I/O configuration, pipes, completed output, status checking, supervisor restarts and events, typed failures, and Unix process-group cleanup. The fixed stream cap is an accepted design decision. So is the policy for omitted timeouts and invalid host timers.
 
 These are not available: shell evaluation, pipelines, pseudo-terminals, Windows process groups, portable signal control, sandboxing, and operating-system service management. The current API does not provide any of them implicitly.
 
@@ -22669,13 +23059,13 @@ The secure byte count is an `int64`, but each request is capped at `2147483647`.
 
 The operating system chooses the secure entropy implementation and the actual values returned. Secure calls have no deterministic ordering across calls, tasks, backends, processes, or hosts.
 
-The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, and 0.14.x series. They are unsuitable for cryptography even when the seed is secret.
+The deterministic algorithm and seeded results are not implementation-defined. They stay fixed, as specified above, throughout the Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, 0.14.x, and 0.15.x series. They are unsuitable for cryptography even when the seed is secret.
 
 ## Status
 
-The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.14 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
+The constructor, deterministic methods, secure functions, move-only ownership, backend parity, and the diagnostics on this page are maintained Aura 0.15 API. The exact algorithm, mapping, compatibility window, identity and rendering policy, and secure-failure boundary are accepted design decisions.
 
-Aura 0.14 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
+Aura 0.15 has no other random distributions, no secure float function, no global generator, no derived sampling trait, and no `random.Error` type.
 
 Design records: [ADR-0020: Randomness algorithm and security boundary](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0020-randomness-algorithm-and-security-boundary.md) and [ADR-0033: Structural Transfer and task-result consumption](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0033-structural-transfer-and-task-results.md).
 
@@ -22922,6 +23312,8 @@ There are no lane classes for `int32` or the other narrow integers. See
 | `V.splat` | `splat(value: E) -> V` | Every lane holds `value`. |
 | `V.load` | `load(values: list[E], at: int64) -> V` | The elements of `values` from index `at`, one for each lane. |
 | `store` | `store(self, values: mut list[E], at: int64)` | Writes the lanes over the elements of `values` from index `at`. |
+| `V.load_array` | `load_array(values: Array[E], at: int64) -> V` | The elements of the rank-1 Array `values` from index `at`, one for each lane. |
+| `store_array` | `store_array(self, values: mut Array[E], at: int64)` | Writes the lanes over the elements of the rank-1 Array `values` from index `at`. |
 | `+`, `-`, `*` | `V` with `V` | The operation in each lane. |
 | `/` | `V` with `V`, float classes only | The division in each lane. |
 | unary `-` | `V` | Each lane negated. |
@@ -23019,8 +23411,8 @@ module's source, and the call chain names your function:
 
 ```text
 error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
- --> <std>/simd.au:486:72
-  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 485:5 -> main at 4:1
+ --> <std>/simd.au:570:72
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 569:5 -> main at 4:1
 ```
 
 How much faster the lanes are depends on the target CPU:
@@ -23112,8 +23504,10 @@ These limits apply:
 
 - **A program that starts tasks** checks whether to yield once in each loop
   iteration. The lane arithmetic inside an iteration is still vector code.
-- **`Array` elements** are not loaded directly. Use the `Array` kernels, or
-  copy into a list.
+- **`Array` elements** load with `load_array` and store with
+  `store_array`, from a rank-1 Array. Call `flatten()` on a matrix first,
+  which shares its elements. A range check runs for each element, where a
+  counted loop over a list checks its range once.
 - **`aura run` on the interpreter backend** computes each lane as a
   separate float. The results are the same and there is no speedup.
 
@@ -23125,7 +23519,7 @@ Statements introduce and update bindings, control execution, or evaluate an expr
 
 ## Statements, Items, And Suites
 
-Aura 0.14 has these statements:
+Aura 0.15 has these statements:
 
 - binding and assignment
 - local `view` bindings
@@ -23360,7 +23754,7 @@ def main():
         attempts += 1
 ```
 
-The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.14 has no loop `else` clause.
+The condition must have type `bool`. If the condition is false the first time, the body runs zero times. Aura 0.15 has no loop `else` clause.
 
 A `while` condition that tests a union place with `is None` or `is not None` narrows the place inside the body. A `continue` in the body after such a test narrows the rest of that iteration. The condition runs before every iteration, so its narrowing holds in the body on every pass. This is true even when the body assigns the place later.
 
@@ -24001,9 +24395,9 @@ This page states the rules that cut across the language. The chapters on individ
 
 ## Types And Type Equality
 
-Aura 0.14 has no general subtype relation and no implicit numeric widening. Types match by these rules:
+Aura 0.15 has no general subtype relation and no implicit numeric widening. Types match by these rules:
 
-- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.14 primarily uses nominal types, and generic arguments are invariant.
+- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.15 primarily uses nominal types, and generic arguments are invariant.
 - **Tuple types** are structural. Two tuple types match exactly when they have the same arity and every corresponding element type matches, recursively.
 
 Examples:
@@ -24120,7 +24514,7 @@ An extern declaration joins the module namespace but has no Aura body. Its rules
 
 - The ABI must be `"C"`.
 - Its package must be authorized.
-- Its complete signature must belong to the fixed FFI v0 scalar/view/opaque-handle table. FFI is the foreign function interface.
+- Its complete signature must use only the types of the FFI type table. FFI is the foreign function interface.
 - Extern functions are direct-call-only. Referencing one without immediately calling it is rejected. It does not produce a function value.
 
 An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI](/manual/ffi).
@@ -24180,7 +24574,7 @@ integer `/` is not supported; use `//` for floor division, or call `.to_float()`
 
 Operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand. It may also match a `float32` or `float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values need an explicit numeric cast or an integer `.to_float()` conversion.
 
-**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.14, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
+**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.15, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
 
 **Integer power** requires a non-negative exponent. A negative exponent visible in source is `AU2003`. A negative value discovered only during execution is a runtime failure.
 
@@ -24251,18 +24645,19 @@ A shared read of an element whose type cannot be cloned, such as `random.Rng`, a
 - An omitted endpoint contributes no expression.
 - Each negative written endpoint is normalized once as `len + i`. Then both effective endpoints must lie in `0..=len`, and start must not exceed end. Invalid or reversed bounds are runtime `AU4003`.
 - String slicing counts Unicode scalar values and returns `str`.
-- A slice is not a place. It cannot be the target of assignment or mutable access.
-- Step syntax and slice assignment are reported as unsupported forms with `AU2005`.
+- A list or `str` slice is not a place. It cannot be the target of assignment or mutable access, and slice assignment to one reports `AU2005`.
 
 List slicing creates a clone-producing obligation for `T`. Copy elements are copied, and non-Copy elements must be clone-safe. A concrete or transitive `random.Rng` element is rejected with `AU3007`. A non-repeatable Task observation right is rejected with `AU3009`. An unresolved generic `T` carries the inferred obligation to specialization.
 
 **Arrays.** `Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
 
 - Its constructors require exact `list[int64]` shape metadata.
-- Array slicing uses the same one-colon grammar and endpoint rules. It copies only a first-axis range and keeps the remaining runtime dimensions.
-- Array/Array arithmetic requires identical `T`. Runtime shape equality is checked with `AU4007`.
-- Scalar arithmetic requires exactly `T`, with no mixed promotion or broadcasting. Integer Array `/` is `AU2003`.
-- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the four Array dtypes.
+- An Array index takes one component per axis. With a slice among its components it has type `Array[T]`; with coordinates only it has type `T`. Slices use the list endpoint and step rules.
+- Assignment through an Array index with a slice takes a value of type `T` or `Array[T]`. The value may read the target Array, and may not move it.
+- Array/Array arithmetic requires identical numeric `T`. Whether the shapes broadcast is checked at run time with `AU4007`.
+- Scalar arithmetic requires exactly `T`, with no mixed promotion. Integer Array `/` and arithmetic on `Array[bool]` are `AU2003`.
+- An Array member called on a dtype it does not have is `AU2003`. A comparison member has type `Array[bool]`, and `array as Array[U]` has type `Array[U]` for numeric `T` and `U`.
+- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the five Array dtypes.
 - `sum`, `min`, and `max` return `T`. `mean` returns `float64` for all dtypes.
 - Mutable `set`, `fill`, and indexed assignment require a mutable Array place.
 - Array `get` converts an invalid coordinate or a runtime-rank mismatch to `None`. `set` traps for either failure, and returns the replaced scalar in `Some` only after a valid update.
@@ -24488,7 +24883,7 @@ The local `main` takes no parameters and returns `None` or `int32`. An imported 
 
 # Status And Compatibility
 
-Aura 0.14.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.15.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -24561,12 +24956,13 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Foreign Functions
 
-- Explicitly authorized packages may use FFI v0, the version 0 foreign function interface.
-- Bodyless `extern "C"` functions call process-global symbols synchronously through fixed-width scalars, pointer-length str and byte views, or non-null opaque handles.
+- Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
+- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list or an Array, C structs of scalars, pointer-length str and byte views, NUL-terminated `cstr` text, opaque handles, and callbacks that name a top-level function over scalars.
+- Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
-- An extern result may be exactly `Handle | None`, marshalled as one nullable C pointer.
-- Callbacks, raw pointers, variadics, returned views, other nullable shapes, and explicit library loading are not available.
+- An extern parameter or result may be `Handle | None` or `cstr | None`, marshalled as one nullable C pointer.
+- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, C unions, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
 - FFI is an unsafe native boundary. It is not a memory safety promise for a false declaration or a misbehaving C implementation.
 
 ### Comprehensions
@@ -24583,15 +24979,15 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, steps, slice assignment, and indexed slice views are not available.
+- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
 
-- `Array[T]` is a global contiguous array type. The four dtypes are `int32`, `int64`, `float32`, and `float64`.
+- `Array[T]` is a global contiguous array type. The dtypes are `int32`, `int64`, `float32`, `float64`, and `bool`.
 - Every value owns a rank-at-least-one row-major CPU buffer.
 - The surface includes three constructors, multidimensional scalar indexing, first-axis owned slices, mutation, mapping, reductions, exact-shape and scalar kernels, and explicit wrapping and saturating integer arithmetic.
-- There is no array-shape broadcasting, mixed promotion, views, shape transformations, equality, autograd, or accelerator placement.
+- Arrays of one dtype broadcast, slices and shape members are views, and comparison members give `Array[bool]` masks. There is no mixed promotion, equality operator, autograd, or accelerator placement.
 - `mean()` returns `float64` for every dtype. Integer Array `/` is rejected, following the integer-division rule.
 
 ### Integer And Math Operations
@@ -24613,11 +25009,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, and 0.14.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, 0.14.x, and 0.15.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.14 uses structured concurrency:
+Aura 0.15 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.
@@ -25119,7 +25515,7 @@ Maintained parity fixtures require both backends to produce the same output and 
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 does not have these tuple features:
+Aura 0.15 does not have these tuple features:
 
 - an empty tuple
 - tuple iteration
@@ -25265,7 +25661,7 @@ At those positions, values of type `int8`, `int16`, `int32`, `uint8`, `uint16`, 
 
 Literal lexing first requires a finite binary64 value. Contextual `float32` conversion may then round or overflow, as recorded in [Current Limits](/manual/current-limits).
 
-Runtime operations may produce NaN. In Aura 0.14, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
+Runtime operations may produce NaN. In Aura 0.15, `/`, `//`, or `%` by a floating zero is an explicit runtime failure. Those operators never produce infinity or NaN.
 
 ### Duration And Range
 
@@ -25714,7 +26110,7 @@ Arbitrary stored and parameter `def` types describe capture-free code pointers. 
 
 **Numeric widths.** `intsize` and `uintsize` follow the target pointer width. Host process exit transport may narrow an `int32` after Aura returns it. Other numeric widths and overflow behavior are language-defined, not implementation-defined.
 
-**FFI.** FFI v0 opaque handles are nominal wrappers for one non-null foreign pointer. They are non-Copy, non-cloneable, and non-Transfer. Extern functions are direct-call-only declarations, not `def(...) -> ...` values.
+**FFI.** FFI opaque handles are nominal wrappers for one non-null foreign pointer. They are non-Copy, non-cloneable, and non-Transfer. Extern functions are direct-call-only declarations, not `def(...) -> ...` values.
 
 **Union layout.** Every normalized union has one explicit-tag layout plan, shared by both execution paths:
 
@@ -25733,7 +26129,7 @@ These types, as this Manual describes them, are implemented: scalar, collection,
 
 Ordinary `-> T` return values are owned. An explicit `-> view [mut] T from origin` declaration returns non-owning access instead. A view descriptor is not an owned or structural `def(...) -> R` type, and it cannot be stored in fields or collections.
 
-Capture-free function types and by-value expression closures are implemented. FFI v0 fixed-width declarations, byte and string views, and opaque handle types are implemented. Extern functions do not become first-class function values.
+Capture-free function types and by-value expression closures are implemented. FFI fixed-width declarations, byte and string views, and opaque handle types are implemented. Extern functions do not become first-class function values.
 
 `str` is the owned UTF-8 text type. A distinct borrowed text-view type is unavailable. Current syntax does not imply any of the unavailable types.
 
@@ -26123,7 +26519,7 @@ checks that every failure your code can meet is handled somewhere. Then it
 either runs the program straight away or compiles it to a native executable
 with no runtime to install alongside it.
 
-The book follows Aura 0.14, a technical preview. Most of the language is in
+The book follows Aura 0.15, a technical preview. Most of the language is in
 place and stable enough to learn from, and the places where it is still
 moving are called out where we meet them.
 
@@ -26328,7 +26724,7 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.14 is a technical preview, and the set of platforms it ships for is
+Aura 0.15 is a technical preview, and the set of platforms it ships for is
 small. Release archives exist for these hosts:
 
 | Platform | Release archive |
@@ -26434,9 +26830,9 @@ Open a new terminal and ask `aura` for its version:
 $ aura --version
 ```
 
-A release build prints a line that starts with `aura 0.14.0-preview`,
+A release build prints a line that starts with `aura 0.15.0-preview`,
 followed by the source commit it was built from in parentheses. If you built
-Aura yourself, the line starts with `aura 0.14.0-dev` instead. Either way, if
+Aura yourself, the line starts with `aura 0.15.0-dev` instead. Either way, if
 you see a version, you are ready to go. `aura help` lists every command the
 tool understands; we will meet the important ones over the next two sections.
 
@@ -36865,7 +37261,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU2002]: Array dtype must be one of `int32`, `int64`, `float32`, or `float64`, found `str`
+error[AU2002]: Array dtype must be one of `int32`, `int64`, `float32`, `float64`, or `bool`, found `str`
  --> src/main.au:2:9
   |
 2 |     a = Array[str].zeros([2])
@@ -36969,9 +37365,38 @@ error[AU3003]: cannot assign through immutable place `a[..]`
   |     ^
 ```
 
-An array can't grow or shrink. Its shape is fixed when it's made, and there's
-no `append`, `reshape`, or `transpose`. To get a different shape, build a new
-array.
+An array can't grow or shrink, so there's no `append`. You can look at the
+same elements under another shape, though, and write to whole rows and
+columns at once. Both come up later in this section.
+
+A loop over the elements is a fine way to fill or read an array when no
+whole-array method says what you mean:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    mut table = Array[int64].zeros([3, 4])
+    for row in range(3):
+        for column in range(4):
+            table[row, column] = (row + 1) * (column + 1)
+    mut diagonal = 0
+    for i in range(3):
+        diagonal += table[i, i]
+    print(table)
+    print(diagonal)
+```
+
+```console
+$ aura run src/main.au
+Array[int64](shape=[3, 4], values=[1, 2, 3, 4, 2, 4, 6, 8, 3, 6, 9, 12])
+14
+```
+
+In a native build, a read or a write like `table[row, column]` goes straight
+to the element after a range check on each coordinate. A loop that touches
+the array only through its elements runs about as fast as the same loop over
+a list.
 
 ## Arithmetic on whole arrays
 
@@ -37025,13 +37450,34 @@ Every one of these produces a new array and leaves `scores` alone. Arrays are
 owned values, so assigning one to another name moves it, and `.clone()` makes
 an independent copy when you need two.
 
-### The rules are strict on purpose
+### Shapes stretch, types don't
 
-NumPy will happily combine arrays of different shapes by *broadcasting*, and
-arrays of different types by promoting one of them. Those rules are
-convenient and also a common source of results that are subtly wrong: a
-column added to a row silently becomes a table. Aura has neither. Two arrays
-in one operation must have exactly the same shape:
+Two arrays in one operation don't need the same shape, as long as the
+shapes *broadcast*. Line the two shapes up at their last dimension. Each
+pair of dimensions has to be equal, or one of them has to be one. A shape
+with fewer dimensions counts as having ones in front. The smaller operand
+is then repeated along every dimension where it has one:
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    curve = Array[float64].from_list([5.0, 0.0, -2.0], [3])
+    print(scores + curve)
+    print(scores - scores.mean(0))
+```
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[2, 3], values=[77.0, 88.0, 93.0, 69.0, 80.0, 89.0])
+Array[float64](shape=[2, 3], values=[4.0, 4.0, 2.0, -4.0, -4.0, -2.0])
+```
+
+`curve` has three elements and `scores` has rows of three, so the curve is
+added to each row. `scores.mean(0)` is the mean of each column, which
+you'll meet properly later in this section, and subtracting it centers
+every column on zero. If you know NumPy, these are its rules.
+
+Shapes that don't line up are still an error:
 
 ```aura
 def main():
@@ -37042,7 +37488,7 @@ def main():
 
 ```console
 $ aura run src/main.au
-error[AU4007]: array operands require the same shape and dtype, found [2, 2] float64 and [2, 3] float64
+error[AU4007]: array operands require the same dtype and shapes that broadcast, found [2, 2] float64 and [2, 3] float64
  --> src/main.au:4:11
   |
 4 |     print(a + b)
@@ -37050,7 +37496,10 @@ error[AU4007]: array operands require the same shape and dtype, found [2, 2] flo
   = note: Aura call chain (innermost first): main at 1:1
 ```
 
-and the same dtype, which the compiler can check before the program runs,
+What Aura won't do is change a type for you. NumPy promotes an integer
+array next to a float array, and that hides a conversion that can lose
+precision. In Aura both arrays need the same dtype, which the compiler can
+check before the program runs,
 because the dtype is part of the type:
 
 ```aura check-fail:AU2002
@@ -37160,25 +37609,61 @@ error[AU4007]: cannot compute array mean over an empty array
 `min` and `max` behave the same way. A dimension of zero is allowed, so a
 2-by-0 array exists; it has no elements.
 
-## Slicing rows
+## Rows, columns, and blocks
 
-A slice of an array selects whole rows: `scores[1:3]` is a new array with
-rows 1 and 2 and every column. It works only on the first axis, and it's a
-copy, not a view, so changing the slice doesn't change the original. There's
-no step, either; `a[::2]` is refused with `AU2003` and a suggestion to
-convert to a list first. That's enough for our gradebook, which needs one
-student's row at a time:
+An array index takes one piece per dimension, and each piece can be a
+coordinate or a slice. A coordinate picks one position. A slice, written
+with a colon as for lists, keeps a range, and a bare `:` keeps everything
+along that dimension:
 
 *Filename: src/main.au*
 
 ```aura
-def column_mean(table: Array[float64], column: int64) -> float64:
-    rows = table.shape()[0]
-    mut total = 0.0
-    for row in range(rows):
-        total += table[row, column]
-    return total / rows.to_float()
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0,
+         64.0, 58.0, 77.0],
+        [3, 3],
+    )
+    print(scores[1, :])
+    print(scores[:, 0])
+    print(scores[::2, 1:])
+    print(scores[::-1, 0])
+    print(scores[0:2].shape())
+    print(scores[0:1, :].shape())
+```
 
+```console
+$ aura run src/main.au
+Array[float64](shape=[3], values=[95.0, 91.0, 84.0])
+Array[float64](shape=[3], values=[72.0, 95.0, 64.0])
+Array[float64](shape=[2, 2], values=[88.0, 95.0, 58.0, 77.0])
+Array[float64](shape=[3], values=[64.0, 95.0, 72.0])
+[2, 3]
+[1, 3]
+```
+
+`scores[1, :]` is row 1 and `scores[:, 0]` is column 0. `scores[::2, 1:]`
+takes every second row and drops the first column, and a negative step
+walks backwards, so `scores[::-1, 0]` is the first column from the bottom
+up. Dimensions you don't mention are kept whole, which is why `scores[0:2]`
+is two full rows.
+
+Notice the last two lines. A coordinate removes its dimension and a slice
+keeps it, even a slice one element long. `scores[0, :]` has shape `[3]`,
+and `scores[0:1, :]` has shape `[1, 3]`.
+
+Slices follow the list rules you already know: negative bounds count from
+the end, and a bound past the end is an `AU4003` trap, never a quietly
+shorter result.
+
+That's what our gradebook needs. One student is a row, and one assignment is
+a column:
+
+*Filename: src/main.au*
+
+```aura
 def main():
     names = ["ada", "grace", "alan", "kathy"]
     scores = Array[float64].from_list(
@@ -37189,12 +37674,12 @@ def main():
         [4, 3],
     )
     for i, name in enumerate(names):
-        row = scores[i:i + 1]
+        row = scores[i, :]
         print(f"{name:<6} mean {row.mean():.1f}, best {row.max():.0f}")
 
     assignments = scores.shape()[1]
     for column in range(assignments):
-        print(f"assignment {column + 1}: {column_mean(scores, column):.1f}")
+        print(f"assignment {column + 1}: {scores[:, column].mean():.1f}")
 
     overall = scores.mean()
     spread = scores - overall
@@ -37215,13 +37700,101 @@ assignment 3: 86.5
 class mean 81.17, from -23.17 to +13.83
 ```
 
-The per-student numbers come from row slices, so they need no loop of our
-own. The per-assignment averages are columns, and since slices only cut
-rows, `column_mean` walks down a column with a loop. That's the honest cost
-of a deliberately small array type: you get exact, predictable arithmetic,
-and for column operations you sometimes write the loop. The last two lines
-subtract the class mean from every score in one step and report how far the
-lowest and highest scores sit from it.
+Neither loop touches an element by hand. The last two lines subtract the
+class mean from every score in one step and report how far the lowest and
+highest scores sit from it.
+
+### A slice doesn't copy, and a write doesn't leak
+
+Taking `scores[i, :]` doesn't copy the row. The new array reads the same
+block of memory as `scores`, so a slice of a huge table costs the same as a
+slice of a small one.
+
+If you've used NumPy, that might worry you. There, a slice is a second name
+for the same memory, and writing through one name changes what you see
+through the other. Aura doesn't allow that. An array is a value, like a
+list, and nothing you do to one array changes another:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    mut scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0,
+         64.0, 58.0, 77.0],
+        [3, 3],
+    )
+    before = scores[2, :]
+    scores[:, 1] += 5.0
+    scores[2, :] = 70
+    scores[0, 1:] = scores[1, 1:]
+    print(scores)
+    print(before)
+```
+
+<span class="caption">Listing 8-22: Writing to rows and columns</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[3, 3], values=[72.0, 96.0, 84.0, 95.0, 96.0, 84.0, 70.0, 70.0, 70.0])
+Array[float64](shape=[3], values=[64.0, 58.0, 77.0])
+```
+
+A slice on the left of `=` writes to every element it selects. The value
+can be one number, which fills the selection, or an array of the right
+shape. `scores[:, 1] += 5.0` gives everyone five points on the second
+assignment, `scores[2, :] = 70` overwrites a whole row, and the last
+assignment copies part of one row over another.
+
+`before` still holds the old third row. Aura got there by sharing memory
+until the first write: when `scores[:, 1] += 5.0` ran, `before` was still
+reading the same block, so `scores` copied its elements once and wrote to
+its own copy. After that, `scores` is alone in its block and the later
+writes happen in place.
+
+So the rule to remember is small. Slices are free, and a write to an array
+that something else is still reading costs one copy. If you keep a slice
+around while you update the table in a loop, call `.clone()` on the slice.
+That gives it a small block of its own and leaves the table free to change
+in place.
+
+### Another shape for the same numbers
+
+`transpose` swaps rows and columns, and `reshape` lays the same elements
+out under a new shape. Like slices, they share memory with the original:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list(
+        [72.0, 88.0, 95.0,
+         95.0, 91.0, 84.0],
+        [2, 3],
+    )
+    by_assignment = scores.transpose()
+    print(by_assignment.shape())
+    print(by_assignment[0, :])
+    print(scores.reshape([3, 2]))
+    print(scores.reshape([-1, 2]).shape())
+    print(by_assignment.flatten())
+```
+
+```console
+$ aura run src/main.au
+[3, 2]
+Array[float64](shape=[2], values=[72.0, 95.0])
+Array[float64](shape=[3, 2], values=[72.0, 88.0, 95.0, 95.0, 91.0, 84.0])
+[3, 2]
+Array[float64](shape=[6], values=[72.0, 95.0, 88.0, 91.0, 95.0, 84.0])
+```
+
+`reshape` reads the elements row by row and deals them out again, so the
+new shape has to hold the same number of elements. Write `-1` for one
+dimension and Aura works it out from the others. `flatten` is the reshape
+to a single dimension. For arrays with more than two dimensions,
+`permute([2, 0, 1])` puts the axes in any order you name.
 
 ### Products and Faster Sums
 
@@ -37244,7 +37817,7 @@ def main():
     print(weights.dot(weights))
 ```
 
-<span class="caption">Listing 8-22: A weighted grade with `matmul`</span>
+<span class="caption">Listing 8-23: A weighted grade with `matmul`</span>
 
 ```console
 $ aura run src/main.au
@@ -37256,6 +37829,11 @@ Array[float64](shape=[2], values=[88.3, 88.3])
 has one number per student. `matmul` also multiplies `[n, k]` by `[k, m]`
 into `[n, m]`. Shapes that don't line up stop the program with `AU4007`.
 
+An array with more than two dimensions is a stack of matrices. `matmul`
+uses the last two dimensions as the matrix and multiplies once per
+matrix in the stack, so a `[10, 2, 3]` array times a `[3, 4]` array is a
+`[10, 2, 4]` array. You don't need a loop over the stack.
+
 `sum` adds from left to right, which is the order you'd add by hand and the
 slowest order for a CPU. When an array is large and the last digit doesn't
 matter, `fast_sum` and `fast_mean` add in a fixed order that runs several
@@ -37263,8 +37841,8 @@ times faster. The order is the same on every machine, so the answer is
 still reproducible. It just isn't always the same last digit as `sum`.
 
 Arrays have a few more limits worth knowing before you plan a program around
-them. They live in ordinary memory on the CPU. They have no equality, so `a
-== b` is an `AU2003` error, no views, and no reshaping. The
+them. They live in ordinary memory on the CPU, they have no equality, so `a
+== b` is an `AU2003` error, and you can't loop over one with `for`. The
 [Manual](/manual/numeric-arrays) lists exactly what's there, along with
 measured performance against NumPy and Rust.
 
@@ -37299,7 +37877,7 @@ def main():
     print(dot(xs, ys))
 ```
 
-<span class="caption">Listing 8-23: A dot product four elements at a time</span>
+<span class="caption">Listing 8-24: A dot product four elements at a time</span>
 
 ```console
 $ aura run src/main.au
@@ -37319,8 +37897,104 @@ operation is defined lane by lane. It can differ in the last digit from a
 plain left-to-right sum, since the additions happen in a different order.
 
 There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
-back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. The
-[Manual](/manual/simd) has the full list.
+back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. When
+the numbers live in a one-dimensional array, `load_array` and `store_array`
+do the same job: `F64x4.load_array(xs, i)` reads four elements of an
+`Array[float64]`. The [Manual](/manual/simd) has the full list.
+
+### One Number per Row
+
+`sum`, `min`, `max`, and `mean` reduce a whole array to one number. Give
+any of them an axis and it reduces along that axis only, and returns an
+array with that axis removed:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    print(scores.sum(0))
+    print(scores.mean(1))
+    print(scores.max(1))
+    print(scores / scores.sum(1).reshape([2, 1]))
+```
+
+<span class="caption">Listing 8-25: Reductions along one axis</span>
+
+```console
+$ aura run src/main.au
+Array[float64](shape=[3], values=[136.0, 168.0, 186.0])
+Array[float64](shape=[2], values=[85.0, 78.33333333333333])
+Array[float64](shape=[2], values=[95.0, 91.0])
+Array[float64](shape=[2, 3], values=[0.2823529411764706, 0.34509803921568627, 0.37254901960784315, 0.2723404255319149, 0.3404255319148936, 0.3872340425531915])
+```
+
+Axis 0 runs down the rows, so `scores.sum(0)` adds each column. Axis 1 runs
+along a row, so `scores.mean(1)` is one mean per student. A negative axis
+counts from the last, as a negative index does. The last line divides
+every score by its row's total. The row totals have shape `[2]`, which
+would line up with the columns, so `reshape([2, 1])` turns them into a
+column that broadcasts across each row.
+
+### Math, Comparisons, and Masks
+
+`map` calls your function once per element. For the common functions there
+are members that do the whole array in one call:
+
+*Filename: src/main.au*
+
+```aura
+def main():
+    scores = Array[float64].from_list([72.0, 88.0, 95.0, 64.0, 80.0, 91.0], [2, 3])
+    passed = scores.greater_equal(75.0)
+    print(passed)
+    print(passed.count())
+    print(passed.all())
+    print(passed.choose(scores, 0.0))
+    print(scores.minimum(90.0))
+    print(scores.sqrt().floor())
+    print((scores as Array[int64]).sum(0))
+```
+
+<span class="caption">Listing 8-26: A mask, a choice, and elementwise math</span>
+
+```console
+$ aura run src/main.au
+Array[bool](shape=[2, 3], values=[false, true, true, false, true, true])
+4
+false
+Array[float64](shape=[2, 3], values=[0.0, 88.0, 95.0, 0.0, 80.0, 91.0])
+Array[float64](shape=[2, 3], values=[72.0, 88.0, 90.0, 64.0, 80.0, 90.0])
+Array[int64](shape=[2, 3], values=[8, 9, 9, 8, 8, 9])
+Array[int64](shape=[3], values=[136, 168, 186])
+```
+
+`greater_equal` compares every element with `75.0` and returns an
+`Array[bool]`, called a *mask*. The other comparisons are `less`,
+`less_equal`, `greater`, `equal`, and `not_equal`, and each takes one
+number or an array that broadcasts. A mask answers questions with `any`,
+`all`, and `count`, combines with other masks through `logical_and`,
+`logical_or`, and `logical_not`, and picks values with `choose`: an element
+from the first argument where the mask is `true`, and from the second
+elsewhere.
+
+`abs`, `minimum`, and `maximum` work on every numeric dtype. `sqrt`, `exp`,
+`log`, `log2`, `log10`, `sin`, `cos`, `tan`, and `pow` work on `float64`
+arrays and follow the functions of the `math` module, including their
+errors: `log` of a negative element traps and names the element's
+position. `floor`, `ceil`, and `trunc` return an `Array[int64]`, as the
+`math` functions return `int64`.
+
+`scores as Array[int64]` converts every element as `as` converts one
+number. A conversion that would lose information traps, so an integer that
+doesn't fit the smaller type is an error, not a wrapped value. Going the
+other way, `to_float()` on an integer array always succeeds and rounds to
+the nearest `float64`.
+
+Comparisons are members and not operators for a reason. `==` between two
+lists gives one `bool`, and an `==` that gave an array of them would make
+`if a == b:` mean something different for arrays. So `a == b` on arrays
+stays an error, and `a.equal(b).all()` says what you mean.
 
 ## Summary
 
@@ -37333,7 +38007,8 @@ Dictionaries map keys to values in insertion order, sets answer membership
 questions, and both make you be explicit about absence with `Lookup` or
 `in`. Comprehensions and builtins such as `sum`, `max`, and `sorted` turn
 most of the loops you'd write over these into one expression, and `Array[T]`
-handles rectangular tables of numbers with whole-array arithmetic.
+handles rectangular tables of numbers with whole-array arithmetic,
+broadcasting, and masks.
 
 Running through all of it is ownership. A collection owns its elements, so
 storing a value moves it in, reading one gives you shared access or a copy,
@@ -48773,7 +49448,7 @@ keep nothing, so the caller still owns them afterwards. The same is true of
 The rename is atomic only within one filesystem. If *report.txt* were on a
 different disk from its temporary file, `fs.rename` would fail with an
 `io.Error`, which is one reason the temporary file sits right next to the
-target. Aura 0.14 also has no call to sync the directory itself, which some
+target. Aura 0.15 also has no call to sync the directory itself, which some
 filesystems need before the rename survives a crash. For a health report that
 is regenerated on every run, this recipe is more than enough.
 
@@ -49012,7 +49687,7 @@ flag turns a byte read into a text read. When you need to convert, use
 because the bytes may not be valid UTF-8.
 
 The Manual's [Filesystem Module](/manual/filesystem) page lists every
-function and its exact contract, including what Aura 0.14 does not have yet:
+function and its exact contract, including what Aura 0.15 does not have yet:
 recursive directory operations, file metadata, permissions, and watchers.
 
 ## Standard input and output
@@ -49905,7 +50580,7 @@ matter.
 
 ## What the HTTP helpers do not do
 
-The HTTP client in Aura 0.14 is deliberately small. Each call makes one
+The HTTP client in Aura 0.15 is deliberately small. Each call makes one
 request on a fresh connection. It does not follow redirects, pool
 connections, speak HTTP/2, use a proxy, or decompress bodies. `https://` URLs
 work and verify the server's certificate against the standard public root
@@ -51000,7 +51675,7 @@ that setting it looks for Xcode's copy through `xcrun` on macOS, and then on
 
 ## What the debugger cannot show yet
 
-Debug support is still young in Aura 0.14, and some values are not described
+Debug support is still young in Aura 0.15, and some values are not described
 yet. Unions (such as `str | None`), callables, and instances of a class with
 a field that is itself more than one machine word do not show their contents.
 lldb's expression evaluator speaks C, not Aura. Arithmetic on simple numbers
@@ -54632,7 +55307,7 @@ they divide the work:
 
 ```console
 $ aura version
-aura 0.14.0-dev (9e279b31f356)
+aura 0.15.0-dev (9e279b31f356)
 ```
 
 `aura check` and `aura run` also accept `--format json`, which prints

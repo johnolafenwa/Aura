@@ -17,6 +17,61 @@ in this file.
   workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
   publishes an `aarch64-unknown-linux-gnu` archive, and the installer
   selects it.
+
+## VS Code extension 0.15.0 — 2026-11-12
+
+- Bundles language server 0.15.0. The semantic interface version stays 20.
+- Completion, hover, go to definition, references, and signature help
+  work on a method call on a trait object, and `dyn` is highlighted
+  before a trait name.
+- Completion no longer offers the private fields and methods of a class
+  from another module.
+- Commands run as structured tasks, PowerShell arguments are quoted
+  literally, a bare `aura` is never run from the workspace directory, and
+  a newer save cancels a running `aura verify`.
+
+## 0.15.0 — 2026-11-12 (technical preview)
+
+Aura 0.15.0 finishes trait objects and FFI v1, adds streaming I/O with
+four standard library modules, and makes numeric code fast with SIMD and
+a larger `Array`. Trait objects gain `value as dyn Trait`, `match` on the
+held type, and `Transfer` traits for tasks and queues, and a call on one
+costs 34 instructions against 12 for Rust's `Box<dyn Trait>`, down from
+about 4,600. The three known trait object issues of 0.14.0 are fixed. FFI
+passes C strings, out-parameters, arrays, structs by value, and
+callbacks, and releases opaque handles with a `drop` function, so
+`examples/packages/sqlite_notes` binds the system SQLite library. Files
+are read in lines and chunks in constant memory. The new `http` module is
+a streaming HTTP client, and `regex`, `time`, and `gzip` join it, with a
+reference streaming agent in `examples/agents/streaming_agent`. The new
+`simd` module has float and checked `int64` lane values, counted loops
+over lists of numbers run at the speed of the same loops in Rust, Array
+kernels use AVX2 where the CPU has it, and `--target-cpu` compiles a
+program for a named CPU. Arrays gain slices with steps on every axis,
+`reshape`, `transpose`, slice assignment, broadcasting, axis reductions,
+masks, elementwise math, batched `matmul`, and element access in place,
+and views share storage instead of copying. A method call on a list
+element costs 26 to 92 instructions instead of about 2,800.
+`aura verify` reads the contracts of imported modules and checks
+contracts on `extern "C"` functions at run time, and the findings of the
+2026-11-10 security review are fixed. Measured against 0.14.0 on the Linux measurement host, the 30
+programs of the [cross-language suite](benchmarks/cross_language/README.md)
+that both build run 4.2% fewer instructions and take 12.3 seconds instead
+of 12.7, `nbody` takes 34 ms instead of 84, and the median program takes
+2.9 times Rust's time, down from 3.1. The four new programs are all
+faster than Python, and all 34 take 15.6 seconds against Python's 56.1. Breaking:
+`net.http_request_text`, `net.http_request_bytes`, their `_timeout`
+forms, and `net.HttpResponse` are removed in favour of the `http` module.
+`array[start:end]` shares the source's elements instead of copying them,
+and two Array operands whose shapes broadcast give a result instead of
+`AU4007`; programs print the same results. A `for` invariant that does
+not read the loop target is also checked when the loop runs out, so a
+program whose invariant fails only then now stops with `AU4009`. Git
+dependencies accept only `https://`, `ssh://`, `git@host:path`, and local
+paths. Linux hello world shrinks from 1,162,576 to 1,117,088
+bytes. The semantic interface stays 20, and the native cache
+format stays `v10`.
+
 - Children started together in a `TaskGroup` reach idle workers sooner
   on Linux. An idle worker waits 20 microseconds for a new child to
   become available to it, and the Linux poller rounded that wait up to a
@@ -25,6 +80,66 @@ in this file.
   millisecond. Twenty rounds of two 3 ms children take 63 ms where they
   took 81 ms, against 56 ms for one child. Twenty rounds of four 0.6 ms
   children take 20 ms where they took 36 ms.
+- Arrays: an index takes a coordinate or a slice on each axis, with steps:
+  `grid[1, :]`, `grid[:, 2]`, `grid[::2, 1:3]`, `grid[::-1]`. An index
+  with a slice has type `Array[T]`. Bounds follow the list rules and never
+  clamp.
+- Arrays: `reshape(shape)`, `flatten()`, `transpose()`, and
+  `permute(axes)`. One `reshape` dimension may be `-1`.
+- Arrays: slice assignment. `grid[0, :] = 1`, `grid[:, 3] = column`, and
+  `grid[1:, :2] += 0.5` write every selected element. The value may read
+  the Array it is assigned into, so `values[1:] = values[:-1]` shifts the
+  elements. Slice assignment to a list or `str` is still `AU2005`.
+- Arrays share storage. `clone()`, slices, `reshape`, `transpose`, and
+  `permute` no longer copy elements, and cost the same for any element
+  count. An Array is still a value: a write to an Array that shares its
+  elements copies them first, so no Array sees a write made through
+  another. `clone()` of a slice copies only the slice (ADR-0088).
+- Changed: `array[start:end]` shares the source's elements instead of
+  copying the rows. Programs print the same results. A stepped slice of
+  an Array, `array[::2]`, is accepted instead of `AU2003`.
+- `aura fmt` keeps the space after a comma before a slice colon:
+  `grid[1, :]`.
+- Arrays: a built program reads and writes `grid[i, j]` in place. An
+  index of one to four integer coordinates on a numeric Array checks each
+  coordinate and touches the element where it lies. A write runs in place
+  while no other Array shares the buffer. These accesses called the
+  runtime before, and now run about as fast as list element access
+  (ADR-0091). A loop whose only uses of an Array are element accesses
+  and `len()` checks the Array once at its entry.
+- Arrays: `choose` and a mask's `count` run several elements at a time.
+- FFI: an `extern "C"` parameter of type `Array[T]` or `mut Array[T]`
+  passes a pointer to the Array's elements, with no copy for a row-major
+  Array.
+- `simd`: each lane class has `load_array` and `store_array` for a rank-1
+  Array.
+- Arrays: `matmul` multiplies stacks of matrices. The last two dimensions
+  are the matrix and the leading dimensions are a batch that broadcasts:
+  `[.., n, k]` by `[.., k, m]` gives `[.., n, m]`. Each product gives the
+  bits of the two-dimensional `matmul` (ADR-0090).
+- Arrays broadcast. Two Arrays of one dtype combine when their shapes,
+  aligned at the last axis, are equal or one along each axis:
+  `grid + row`, `grid - grid.mean(0)`, `column * row`. Shapes that do not
+  broadcast are still `AU4007`. Dtypes are never promoted (ADR-0089).
+- Arrays: `sum`, `min`, `max`, `mean`, `fast_sum`, and `fast_mean` take an
+  axis and return an Array with that axis removed: `grid.sum(0)`,
+  `grid.mean(-1)`.
+- Arrays: elementwise members `abs`, `minimum`, `maximum`, and for
+  `float64` `sqrt`, `exp`, `log`, `log2`, `log10`, `sin`, `cos`, `tan`,
+  `pow`, `floor`, `ceil`, and `trunc`. Each follows the scalar function,
+  and a fault names the flat index of the element.
+- Arrays: `array as Array[T]` converts every element as the scalar cast
+  does, and `to_float()` converts an integer Array to `float64`.
+- Arrays: `Array[bool]` is a dtype. `less`, `less_equal`, `greater`,
+  `greater_equal`, `equal`, and `not_equal` return a mask. A mask has
+  `any`, `all`, `count`, `logical_and`, `logical_or`, `logical_not`, and
+  `choose(when_true, when_false)`. `==` on Arrays is still an error.
+- Arrays: arithmetic reads views where they lie, `grid[:, j] *= 2.0`
+  updates the selected elements in place, and `(a + b) * 0.5` reuses the
+  buffer of its temporary.
+- Changed: two Array operands whose shapes broadcast give a result
+  instead of `AU4007`.
+
 - New `simd` module with lane values that hold several floats and work on
   all of them at once: `F64x2`, `F64x4`, `F32x4`, and `F32x8`, with
   `splat`, `load`, `store`, `+`, `-`, `*`, `/`, unary `-`, `min`, `max`,

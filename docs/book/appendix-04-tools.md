@@ -25,7 +25,7 @@ they divide the work:
 
 ```console
 $ aura version
-aura 0.14.0-dev (9e279b31f356)
+aura 0.15.0-dev (9e279b31f356)
 ```
 
 `aura check` and `aura run` also accept `--format json`, which prints

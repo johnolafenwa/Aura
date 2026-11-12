@@ -118,7 +118,7 @@ fn fingerprint(result: Result<Value, Diagnostic>) -> String {
             for dim in &array.shape {
                 digest.update((*dim as u64).to_le_bytes());
             }
-            let bytes: Vec<u8> = match array.storage {
+            let bytes: Vec<u8> = match array.storage() {
                 ArrayStorage::Int32(values) => {
                     values.iter().flat_map(|v| v.to_le_bytes()).collect()
                 }
@@ -133,6 +133,7 @@ fn fingerprint(result: Result<Value, Diagnostic>) -> String {
                     .iter()
                     .flat_map(|v| v.to_bits().to_le_bytes())
                     .collect(),
+                ArrayStorage::Bool(values) => values.iter().map(|v| u8::from(*v)).collect(),
             };
             digest.update(bytes);
         }

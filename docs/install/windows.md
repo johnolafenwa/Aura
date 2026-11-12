@@ -1,7 +1,7 @@
 # Install Aura On Windows
 
 Aura runs natively on x86-64 Windows 11. The native Windows archive ships
-from the release after 0.14. On 0.14, or on a machine without the Microsoft
+from the release after 0.15. On 0.15, or on a machine without the Microsoft
 C++ build tools, use [Windows with WSL](/install/windows-wsl).
 
 ## 1. Install The Microsoft Linker

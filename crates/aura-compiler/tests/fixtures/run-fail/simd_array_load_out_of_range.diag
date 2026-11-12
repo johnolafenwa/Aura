@@ -1,0 +1,6 @@
+error[AU4003]: array coordinate 6 on axis 0 normalizes to 6, outside 0..6
+ --> crates/aura-compiler/tests/fixtures/run-fail/simd_array_load_out_of_range.au:5:22
+  |
+5 |     print(simd.F64x4.load_array(values, 4).l3)
+  |                      ^
+  = note: Aura call chain (innermost first): main at 3:1

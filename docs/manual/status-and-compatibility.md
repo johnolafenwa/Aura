@@ -1,6 +1,6 @@
 # Status And Compatibility
 
-Aura 0.14.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
+Aura 0.15.0 is a technical preview. It is suitable for compiler and runtime evaluation, examples, and controlled experiments. It is not a production systems-language release, and it is not a security boundary for untrusted programs.
 
 This page states what the maintained language contract is, which surface it currently covers, and how that surface may change.
 
@@ -73,12 +73,13 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 
 ### Foreign Functions
 
-- Explicitly authorized packages may use FFI v0, the version 0 foreign function interface.
-- Bodyless `extern "C"` functions call process-global symbols synchronously through fixed-width scalars, pointer-length str and byte views, or non-null opaque handles.
+- Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
+- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list or an Array, C structs of scalars, pointer-length str and byte views, NUL-terminated `cstr` text, opaque handles, and callbacks that name a top-level function over scalars.
+- Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
-- An extern result may be exactly `Handle | None`, marshalled as one nullable C pointer.
-- Callbacks, raw pointers, variadics, returned views, other nullable shapes, and explicit library loading are not available.
+- An extern parameter or result may be `Handle | None` or `cstr | None`, marshalled as one nullable C pointer.
+- Closures as callbacks, variadics, raw-pointer arithmetic, returned views, C unions, and static libraries are not available. [Current Limits](/manual/current-limits) lists the rest.
 - FFI is an unsafe native boundary. It is not a memory safety promise for a false declaration or a misbehaving C implementation.
 
 ### Comprehensions
@@ -95,15 +96,15 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Written endpoints use the `int64` position domain. Negatives normalize once. An invalid or reversed range traps with `AU4003`. Endpoints are not clamped.
 - String positions count Unicode scalar values and require an O(n) scan.
 - Every result owns independent storage. List elements copy or clone under the clone-safety and task-repeatability rules. A str slice produces a fresh valid UTF-8 value.
-- String integer indexing, steps, slice assignment, and indexed slice views are not available.
+- String integer indexing, slice assignment to a list or `str`, and indexed slice views are not available.
 - The `view` forms do not reinterpret owned slice syntax.
 
 ### Numeric Arrays
 
-- `Array[T]` is a global contiguous array type. The four dtypes are `int32`, `int64`, `float32`, and `float64`.
+- `Array[T]` is a global contiguous array type. The dtypes are `int32`, `int64`, `float32`, `float64`, and `bool`.
 - Every value owns a rank-at-least-one row-major CPU buffer.
 - The surface includes three constructors, multidimensional scalar indexing, first-axis owned slices, mutation, mapping, reductions, exact-shape and scalar kernels, and explicit wrapping and saturating integer arithmetic.
-- There is no array-shape broadcasting, mixed promotion, views, shape transformations, equality, autograd, or accelerator placement.
+- Arrays of one dtype broadcast, slices and shape members are views, and comparison members give `Array[bool]` masks. There is no mixed promotion, equality operator, autograd, or accelerator placement.
 - `mean()` returns `float64` for every dtype. Integer Array `/` is rejected, following the integer-division rule.
 
 ### Integer And Math Operations
@@ -125,11 +126,11 @@ The Manual is reference-frozen. Every semantic change, including any extension, 
 
 Compiler coverage is held at the current non-regression floor, not pushed to 100%. New behavior still requires focused tests. The freeze only ends marginal coverage work that does not reduce product risk.
 
-Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, and 0.14.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
+Seeded randomness has an extra observable-data promise. The algorithm, seed mapping, integer and floating mappings, and shuffle order documented in [Randomness Module](/manual/randomness) stay stable throughout Aura 0.3.x, 0.4.x, 0.5.x, 0.6.x, 0.7.x, 0.8.x, 0.9.x, 0.10.x, 0.11.x, 0.12.x, 0.13.x, 0.14.x, and 0.15.x. A later release may change them only with an explicit decision and new conformance vectors. OS-secure outputs are intentionally not stable.
 
 ## Maintained Concurrency Surface
 
-Aura 0.14 uses structured concurrency:
+Aura 0.15 uses structured concurrency:
 
 - `TaskGroup()` owns child tasks inside `with`.
 - `TaskGroup.start(...)` returns a `Task[T]`.

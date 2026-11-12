@@ -1,0 +1,6 @@
+error[AU4002]: integer value `4294967296` does not fit in `int32` at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_cast_does_not_fit.au:3:12
+  |
+3 |     print((values as Array[int32]))
+  |            ^
+  = note: Aura call chain (innermost first): main at 1:1

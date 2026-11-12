@@ -1,0 +1,6 @@
+error[AU4002]: `math.floor` result cannot be represented as `int64` at flat index 1
+ --> crates/aura-compiler/tests/fixtures/run-fail/array_floor_out_of_range.au:3:18
+  |
+3 |     print(values.floor())
+  |                  ^
+  = note: Aura call chain (innermost first): main at 1:1

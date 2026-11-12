@@ -612,7 +612,7 @@ fn array_call_metadata_pins_constructors_members_and_integer_modes() {
             BuiltinMember::ArrayMean,
             "Array",
             "mean",
-            "mean() -> float64",
+            "mean(axis: int64 = whole Array) -> float64 | Array[float64]",
         ),
         (
             BuiltinMember::IntegerWrappingAdd,

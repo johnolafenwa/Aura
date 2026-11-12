@@ -1,6 +1,6 @@
 # Install Aura
 
-Aura 0.14 ships as a self-contained command-line tool with its own private
+Aura 0.15 ships as a self-contained command-line tool with its own private
 native runtime. Pick the guide for the operating system where `aura` will run:
 
 | Platform | Release archive | Guide |
@@ -8,7 +8,7 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | macOS 15, Apple silicon | `aarch64-apple-darwin` | [Install on macOS](/install/macos) |
 | macOS 15, Intel | `x86_64-apple-darwin` | [Install on macOS](/install/macos) |
 | Ubuntu 24.04 or compatible glibc Linux, x86-64 | `x86_64-unknown-linux-gnu` | [Install on Linux](/install/linux) |
-| Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.14 | [Install on Windows](/install/windows) |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.15 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
 Every guide follows the same three steps.
@@ -28,7 +28,7 @@ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 aura --version
 ```
 
-The output begins with `aura 0.14.0-preview`. The rest of the line is the
+The output begins with `aura 0.15.0-preview`. The rest of the line is the
 source commit the binary was built from.
 
 ## What Gets Installed

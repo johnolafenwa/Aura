@@ -1,6 +1,6 @@
 # Install Aura On Windows With WSL
 
-The 0.14 release has no native Windows executable, and the
+The 0.15 release has no native Windows executable, and the
 [native Windows install](/install/windows) starts with the release after
 it. On an x86-64 Windows 11 machine, you can install and run the Linux
 release inside Windows Subsystem for Linux 2

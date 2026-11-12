@@ -96,7 +96,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - List and str slices accept one contiguous half-open range. A value slice returns a fresh owned copy. `view part = values[a:b]` lends a list range as a `Span[T]`.
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
-- Slice steps and slice assignment are reserved `AU2005` forms.
+- Slice assignment to a list or `str` is a reserved `AU2005` form.
 - Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
@@ -111,10 +111,10 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numeric Arrays
 
-- Numeric `Array[T]` is CPU-only, contiguous, and row-major. It is specialized only by `int32`, `int64`, `float32`, or `float64`.
+- Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Same-dtype scalar broadcast is implemented. There is no array-shape broadcasting, mixed promotion, equality, views, reshape, transpose, a matrix product over more than two dimensions, multidimensional or step slicing, slice assignment, autograd, accelerator placement, distributed storage, or foreign-buffer aliasing.
-- First-axis slices are fresh owned copies.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
+- Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
 
@@ -122,7 +122,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - The `simd` module has float lanes `F64x2`, `F64x4`, `F32x4`, and `F32x8`, and `int64` lanes `I64x2` and `I64x4`. There are no lanes for `int32` or other narrow integers, and no lane comparisons, masks, shuffles, or fused multiply-add.
 - `int64` lanes join the overflow checks of an operation into one test only on x86-64 builds for AVX2 (`--target-cpu x86-64-v3`, `x86-64-v4`, or `native`). Other builds, including Apple Silicon, check each lane with its own branch and run close to the speed of a plain loop.
-- `load` and `store` take a `list`. They do not read an `Array`, a `Span`, or `list[uint8]` bytes as floats.
+- `load` and `store` take a `list`, and `load_array` and `store_array` take a rank-1 `Array`. None reads a `Span` or `list[uint8]` bytes as floats.
 - A load or store checks its range once for a whole counted loop only when the list is a local or a parameter and the arguments are positional. Other calls check each element.
 - A loop in a program that starts tasks checks for a yield in each iteration, so lane loops are not unrolled there.
 - The interpreter backend computes each lane as a separate float.
@@ -203,7 +203,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Deep HTTP, TLS, and maintained Unix WebSocket library frames run on a separate protocol-step pool with two 2 MiB-stack workers and a 64-job queue.
 - Each submitted protocol job is a bounded, nonblocking step. It returns owned protocol state before cancellation or reactor waiting resumes.
 - The non-Unix WebSocket fallback does not use the protocol-step pool.
-- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.14 runtime shutdown or join API.
+- The protocol-step pool is process-global, lazily initialized, shared by all lightweight schedulers, and lives for the whole process. It has no 0.15 runtime shutdown or join API.
 - File reads, resolver work, and listener binding run on the generic blocking-I/O pool. TLS asset bytes are read there, and then PEM parsing and rustls construction run on protocol workers.
 - The process-wide blocking-I/O pool defaults from host parallelism, with fallback `4` and a derived `2..=8` clamp. `AURA_BLOCKING_WORKERS=<positive integer>` requests that exact count without clamping.
 - `AURA_BLOCKING_QUEUE_CAPACITY=<positive integer>` bounds pending accepted jobs only. Running jobs and admission waiters do not consume it. Without it, the queue is unbounded.
@@ -232,7 +232,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
-- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.14 contract.
+- The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.15 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
@@ -249,7 +249,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Dynamic `json.parse` uses a separate process-global service with two 2 MiB-stack workers and a total in-flight capacity of two.
 - The service reserves capacity before the fallible source copy. Lightweight tasks that find it saturated park through the scheduler. Once admitted, a synchronous parse defers cancellation until the codec completes.
 - Runtime materialization, JSON-aware clone and render, and dumping use iterative traversals.
-- The parse service lives for the whole process and has no 0.14 sizing or shutdown API.
+- The parse service lives for the whole process and has no 0.15 sizing or shutdown API.
 - The bounded `json.is_valid` and `json.parse_string_map` helpers keep their bounded caller-side paths and do not use that service.
 - JSON flat-dictionary and TOML helpers are restricted to typed `dict[str, str]`.
 - JSON has no arbitrary-precision number, streaming codec, or schema validation. A derived `json.Codec` for a generic class or enum is not implemented.

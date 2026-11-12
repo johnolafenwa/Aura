@@ -6,9 +6,9 @@ This page states the rules that cut across the language. The chapters on individ
 
 ## Types And Type Equality
 
-Aura 0.14 has no general subtype relation and no implicit numeric widening. Types match by these rules:
+Aura 0.15 has no general subtype relation and no implicit numeric widening. Types match by these rules:
 
-- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.14 primarily uses nominal types, and generic arguments are invariant.
+- **Nominal types** match when their canonical names are equal and all type arguments are equal, recursively. Aura 0.15 primarily uses nominal types, and generic arguments are invariant.
 - **Tuple types** are structural. Two tuple types match exactly when they have the same arity and every corresponding element type matches, recursively.
 
 Examples:
@@ -125,7 +125,7 @@ An extern declaration joins the module namespace but has no Aura body. Its rules
 
 - The ABI must be `"C"`.
 - Its package must be authorized.
-- Its complete signature must belong to the fixed FFI v0 scalar/view/opaque-handle table. FFI is the foreign function interface.
+- Its complete signature must use only the types of the FFI type table. FFI is the foreign function interface.
 - Extern functions are direct-call-only. Referencing one without immediately calling it is rejected. It does not produce a function value.
 
 An opaque declaration contributes a nominal type but no constructor, fields, methods, or Aura-visible layout. See [FFI](/manual/ffi).
@@ -185,7 +185,7 @@ integer `/` is not supported; use `//` for floor division, or call `.to_float()`
 
 Operands are not implicitly widened. An integer literal may be contextually typed to match an integer operand. It may also match a `float32` or `float64` operand when the literal is exactly representable in that floating type. A floating literal may adopt the other operand's floating type. Non-literal values need an explicit numeric cast or an integer `.to_float()` conversion.
 
-**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.14, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
+**Operator traits.** Arithmetic and ordering operators may otherwise resolve through the corresponding `Add`, `Sub`, `Mul`, `Div`, `FloorDiv`, `Mod`, or `Ord` trait method. The builtin numeric and Duration rules take precedence over operator-trait dispatch. In Aura 0.15, builtin equality does not dispatch through an operator trait. Bitwise operations, shifts, and power are builtin numeric operations and do not dispatch through operator traits either.
 
 **Integer power** requires a non-negative exponent. A negative exponent visible in source is `AU2003`. A negative value discovered only during execution is a runtime failure.
 
@@ -256,18 +256,19 @@ A shared read of an element whose type cannot be cloned, such as `random.Rng`, a
 - An omitted endpoint contributes no expression.
 - Each negative written endpoint is normalized once as `len + i`. Then both effective endpoints must lie in `0..=len`, and start must not exceed end. Invalid or reversed bounds are runtime `AU4003`.
 - String slicing counts Unicode scalar values and returns `str`.
-- A slice is not a place. It cannot be the target of assignment or mutable access.
-- Step syntax and slice assignment are reported as unsupported forms with `AU2005`.
+- A list or `str` slice is not a place. It cannot be the target of assignment or mutable access, and slice assignment to one reports `AU2005`.
 
 List slicing creates a clone-producing obligation for `T`. Copy elements are copied, and non-Copy elements must be clone-safe. A concrete or transitive `random.Rng` element is rejected with `AU3007`. A non-repeatable Task observation right is rejected with `AU3009`. An unresolved generic `T` carries the inferred obligation to specialization.
 
 **Arrays.** `Array[T]` is specialized only by `int32`, `int64`, `float32`, or `float64`.
 
 - Its constructors require exact `list[int64]` shape metadata.
-- Array slicing uses the same one-colon grammar and endpoint rules. It copies only a first-axis range and keeps the remaining runtime dimensions.
-- Array/Array arithmetic requires identical `T`. Runtime shape equality is checked with `AU4007`.
-- Scalar arithmetic requires exactly `T`, with no mixed promotion or broadcasting. Integer Array `/` is `AU2003`.
-- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the four Array dtypes.
+- An Array index takes one component per axis. With a slice among its components it has type `Array[T]`; with coordinates only it has type `T`. Slices use the list endpoint and step rules.
+- Assignment through an Array index with a slice takes a value of type `T` or `Array[T]`. The value may read the target Array, and may not move it.
+- Array/Array arithmetic requires identical numeric `T`. Whether the shapes broadcast is checked at run time with `AU4007`.
+- Scalar arithmetic requires exactly `T`, with no mixed promotion. Integer Array `/` and arithmetic on `Array[bool]` are `AU2003`.
+- An Array member called on a dtype it does not have is `AU2003`. A comparison member has type `Array[bool]`, and `array as Array[U]` has type `Array[U]` for numeric `T` and `U`.
+- Array `map[U]` requires exact repeatable `def(T) -> U` and restricts `U` to the five Array dtypes.
 - `sum`, `min`, and `max` return `T`. `mean` returns `float64` for all dtypes.
 - Mutable `set`, `fill`, and indexed assignment require a mutable Array place.
 - Array `get` converts an invalid coordinate or a runtime-rank mismatch to `None`. `set` traps for either failure, and returns the replaced scalar in `Some` only after a valid update.
