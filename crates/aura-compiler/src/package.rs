@@ -1681,15 +1681,19 @@ fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Comman
     command.env("GIT_ALLOW_PROTOCOL", git_allow_protocol_for_args(args));
     command.env("GIT_CONFIG_KEY_0", "core.symlinks");
     command.env("GIT_CONFIG_VALUE_0", "false");
+    // A checkout holds the bytes the repository holds on every platform:
+    // Git for Windows turns line endings into CRLF by default.
+    command.env("GIT_CONFIG_KEY_1", "core.autocrlf");
+    command.env("GIT_CONFIG_VALUE_1", "false");
     if cfg!(windows) {
         // A checkout in the cache sits below two hash-named directories, so
         // its paths pass the 260 characters Git for Windows allows unless
         // long paths are on.
-        command.env("GIT_CONFIG_COUNT", "2");
-        command.env("GIT_CONFIG_KEY_1", "core.longpaths");
-        command.env("GIT_CONFIG_VALUE_1", "true");
+        command.env("GIT_CONFIG_COUNT", "3");
+        command.env("GIT_CONFIG_KEY_2", "core.longpaths");
+        command.env("GIT_CONFIG_VALUE_2", "true");
     } else {
-        command.env("GIT_CONFIG_COUNT", "1");
+        command.env("GIT_CONFIG_COUNT", "2");
     }
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
