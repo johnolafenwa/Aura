@@ -1,0 +1,132 @@
+# The Aura-source part of the builtin `regex` module. The compiler checks
+# this file as module `regex` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. A `Regex` holds the number
+# the runtime gave its pattern, so a `Regex` is one integer that tasks can
+# share and a call passes without reading text out of an object.
+import regex
+
+
+public enum Error:
+    """Why a pattern could not be compiled."""
+    Invalid(message: str)
+
+
+public class Match:
+    """One match: its text, and where it lies in the searched text, counted
+    in Unicode scalar values as `str` indexes are. `end` is one past the last
+    character."""
+    public text: str
+    public start: int64
+    public end: int64
+
+
+public class Captures:
+    """The groups of one match. Group 0 is the whole match."""
+    groups: list[str]
+    # Whether each group took part in the match.
+    matched: list[bool]
+    pattern: int64
+
+    public def len(self) -> int64:
+        """The number of groups, the whole match included."""
+        return self.groups.len()
+
+    public def get(self, index: int64) -> str | None:
+        """The text group `index` matched, or `None` when the group took no
+        part in the match or the pattern has no such group."""
+        if index < 0 or index >= self.groups.len():
+            return None
+        if not self.matched[index]:
+            return None
+        return self.groups[index].clone()
+
+    public def name(self, name: str) -> str | None:
+        """The text the group named `name` matched, or `None` when it took
+        no part in the match or the pattern has no group of that name."""
+        if name == "":
+            return None
+        return self.get(regex.__aura_group_index(self.pattern, name))
+
+
+public copy class Regex:
+    """A compiled regular expression. Build one with `regex.compile`."""
+    number: int64
+
+    public def pattern(self) -> str:
+        """The pattern text this was compiled from."""
+        return regex.__aura_pattern(self.number)
+
+    public def is_match(self, text: str) -> bool:
+        """Whether the pattern matches anywhere in `text`."""
+        return regex.__aura_is_match(self.number, text)
+
+    public def count(self, text: str) -> int64:
+        """The number of non-overlapping matches in `text`."""
+        return regex.__aura_count(self.number, text)
+
+    public def find(self, text: str) -> Match | None:
+        """The leftmost match in `text`, or `None`."""
+        match own regex.__aura_find(self.number, text):
+            case (str, int64, int64) as found:
+                (matched, start, end) = found
+                return Match(text=matched, start=start, end=end)
+            case None:
+                return None
+
+    public def find_all(self, text: str) -> list[str]:
+        """The text of every non-overlapping match in `text`, in order."""
+        return regex.__aura_find_all(self.number, text)
+
+    public def matches(self, text: str) -> list[Match]:
+        """Every non-overlapping match in `text`, in order, with its
+        position."""
+        # The host returns each match's start and end.
+        spans = regex.__aura_matches(self.number, text)
+        mut found: list[Match] = []
+        mut index = 0
+        while index < spans.len():
+            start = spans[index]
+            end = spans[index + 1]
+            found.append(Match(text=text[start:end], start=start, end=end))
+            index += 2
+        return found
+
+    public def captures(self, text: str) -> Captures | None:
+        """The groups of the leftmost match in `text`, or `None`."""
+        (groups, matched) = regex.__aura_captures(self.number, text)
+        if groups.len() == 0:
+            return None
+        return Captures(groups=groups, matched=matched, pattern=self.number)
+
+    public def replace(self, text: str, replacement: str) -> str:
+        """`text` with the leftmost match replaced. In `replacement`, `$1`
+        or `${name}` stands for a group and `$$` for a dollar sign."""
+        return regex.__aura_replace(self.number, text, replacement)
+
+    public def replace_all(self, text: str, replacement: str) -> str:
+        """`text` with every match replaced. In `replacement`, `$1` or
+        `${name}` stands for a group and `$$` for a dollar sign."""
+        return regex.__aura_replace_all(self.number, text, replacement)
+
+    public def split(self, text: str) -> list[str]:
+        """The pieces of `text` between the matches."""
+        return regex.__aura_split(self.number, text)
+
+
+impl Display for Regex:
+    def display(self) -> str:
+        return self.pattern()
+
+
+public def compile(pattern: str) -> Result[Regex, Error]:
+    """Compiles `pattern`, or says why it is not a valid pattern."""
+    (number, message) = regex.__aura_compile(pattern.clone())
+    if number < 0:
+        return Result.Err(Error.Invalid(message=message))
+    return Result.Ok(Regex(number=number))
+
+
+public def escape(text: str) -> str:
+    """`text` with every pattern metacharacter escaped, so that as a pattern
+    it matches exactly `text`."""
+    return regex.__aura_escape(text.clone())

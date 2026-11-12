@@ -1967,12 +1967,12 @@ impl<'a> FunctionChecker<'a> {
 
     /// A live host resource such as `fs.File` stored in `ty`. A resource has
     /// one owner and no clone, so a clone-producing operation must not copy
-    /// it. `net.HttpResponse` and `net.UdpDatagram` are owned data snapshots.
+    /// it. `net.UdpDatagram` is an owned data snapshot.
     fn host_resource_in_type(&self, ty: &Type) -> Option<Type> {
         let is_resource = |_: &Self, ty: &Type| {
             matches!(ty, Type::Named(name, args)
                 if is_builtin_io_resource_type(name, args)
-                    && !matches!(name.as_str(), "net.HttpResponse" | "net.UdpDatagram"))
+                    && name != "net.UdpDatagram")
         };
         self.stored_type_in(ty, is_resource, &mut BTreeSet::new())
     }
@@ -12937,7 +12937,7 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "UdpDatagram")
                                 | ("net", "HttpListener")
                                 | ("net", "HttpExchange")
-                                | ("net", "HttpResponse")
+                                | ("http", "Stream")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")
@@ -16244,32 +16244,6 @@ impl<'a> FunctionChecker<'a> {
                                     ))
                                 }
                                 _ => unreachable!("unexpected http exchange builtin member"),
-                            };
-                        }
-                    }
-
-                    if receiver_name == "net.HttpResponse" && receiver_args.is_empty() {
-                        if let Some(builtin_member) = BuiltinMember::resolve(receiver_name, field) {
-                            builtin_member.bind_args(args, span)?;
-                            let bytes_ty =
-                                Type::Named("list".to_string(), vec![Type::named("uint8")]);
-                            let headers_ty = Type::Named(
-                                "dict".to_string(),
-                                vec![Type::named("str"), Type::named("str")],
-                            );
-                            return match builtin_member {
-                                BuiltinMember::HttpResponseStatus => Ok(Type::named("int32")),
-                                BuiltinMember::HttpResponseReason => Ok(Type::named("str")),
-                                BuiltinMember::HttpResponseHeaders => Ok(headers_ty),
-                                BuiltinMember::HttpResponseText => Ok(Type::Named(
-                                    "Result".to_string(),
-                                    vec![
-                                        Type::named("str"),
-                                        crate::builtin_modules::io_error_type(),
-                                    ],
-                                )),
-                                BuiltinMember::HttpResponseBytes => Ok(bytes_ty),
-                                _ => unreachable!("unexpected http response builtin member"),
                             };
                         }
                     }

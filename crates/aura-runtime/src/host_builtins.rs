@@ -696,14 +696,25 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "bytes::constant_time_eq" => host_bytes_constant_time_eq,
         "gzip::compress" => host_gzip_compress,
         "gzip::decompress" => host_gzip_decompress,
-        _ => return None,
+        "regex::__aura_compile" => regex_host::host_regex_compile,
+        "regex::__aura_pattern" => regex_host::host_regex_pattern,
+        "regex::__aura_escape" => regex_host::host_regex_escape,
+        other => {
+            return regex_host::regex_host_function(other)
+                .or_else(|| time_host::time_host_function(other))
+                .or_else(|| http_client::http_host_function(other))
+        }
     };
     Some(function)
 }
 
 /// The bytes of a `list[uint8]` argument, borrowed when the list keeps
 /// them unboxed.
-fn host_bytes_arg<'a>(args: &'a [Value], index: usize, call: &str) -> Result<Cow<'a, [u8]>> {
+pub(crate) fn host_bytes_arg<'a>(
+    args: &'a [Value],
+    index: usize,
+    call: &str,
+) -> Result<Cow<'a, [u8]>> {
     let elements = runtime_uint8_elements(&args[index], &call.replace("::", "."))?;
     match elements.as_uint8() {
         Some(bytes) => Ok(Cow::Borrowed(bytes)),

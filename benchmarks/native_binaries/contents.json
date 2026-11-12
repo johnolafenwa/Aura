@@ -63,6 +63,11 @@
     "gzip": [
       "flate2::",
       "zlib_rs::"
+    ],
+    "regex": [
+      "regex::",
+      "regex_automata::",
+      "regex_syntax::"
     ]
   },
   "subjects": {
@@ -80,7 +85,8 @@
         "httparse",
         "url",
         "serde_json",
-        "gzip"
+        "gzip",
+        "regex"
       ],
       "known_present": [
         "libffi",
@@ -101,7 +107,8 @@
         "toml",
         "http",
         "httparse",
-        "gzip"
+        "gzip",
+        "regex"
       ],
       "present": [
         "serde_json"
@@ -122,7 +129,8 @@
         "builtin_registry",
         "mir_interpreter",
         "toml",
-        "gzip"
+        "gzip",
+        "regex"
       ],
       "present": [
         "serde_json"
@@ -140,7 +148,8 @@
         "http",
         "httparse",
         "serde_json",
-        "gzip"
+        "gzip",
+        "regex"
       ],
       "present": [
         "rustls",
@@ -157,7 +166,8 @@
         "builtin_registry",
         "mir_interpreter",
         "serde_json",
-        "gzip"
+        "gzip",
+        "regex"
       ],
       "present": [
         "tungstenite",

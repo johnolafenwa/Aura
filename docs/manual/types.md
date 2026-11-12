@@ -220,7 +220,7 @@ Queue construction, `put`, and `try_put` separately require the payload `T` to b
 
 An individual host type can join the Transfer set only through a later design decision that proves its thread safety.
 
-Owned data returned from a host operation is classified by the data it stores, not by where it came from. Examples are completed output and structural error values. `process.Completed`, `net.HttpResponse`, and `net.UdpDatagram` are explicitly Transfer owned snapshots. Their live sources, `process.Child`, `net.HttpExchange`, and `net.UdpSocket`, are not.
+Owned data returned from a host operation is classified by the data it stores, not by where it came from. Examples are completed output and structural error values. `process.Completed` and `net.UdpDatagram` are explicitly Transfer owned snapshots. Their live sources, `process.Child` and `net.UdpSocket`, are not.
 
 **Copy snapshots.** Reading a Copy value through shared or mutable access produces an independent owned snapshot. It does not transport the capability. That snapshot may cross when its type is `Transfer`. Non-copy access cannot use this exception, because value capture would require ownership.
 
@@ -273,7 +273,8 @@ Builtin modules provide these types. Their names are reserved.
 | `fs` | `fs.File` |
 | `json` | `json.Value`, `json.Error` |
 | `random` | `random.Rng` |
-| `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.HttpResponse`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
+| `http` | `http.Client`, `http.Response`, `http.Event` |
+| `net` | `net.TcpListener`, `net.TcpStream`, `net.UdpSocket`, `net.UdpDatagram`, `net.HttpListener`, `net.HttpExchange`, `net.WebSocketListener`, `net.WebSocket`, `net.UnixListener`, `net.UnixStream`, `net.TlsListener`, `net.TlsStream` |
 | `process` | `process.Child`, `process.Pipe`, `process.Completed`, `process.Supervisor`, `process.ExitStatus`, `process.Wait`, `process.Stdio`, `process.Error`, `process.RestartPolicy`, `process.SupervisorEvent`, `process.SupervisorWait` |
 
 Scope a resource with `with` or close it explicitly.

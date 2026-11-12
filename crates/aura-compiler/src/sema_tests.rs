@@ -11519,7 +11519,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ("udp_datagram", Type::named("net.UdpDatagram")),
         ("http_listener", Type::named("net.HttpListener")),
         ("http_exchange", Type::named("net.HttpExchange")),
-        ("http_response", Type::named("net.HttpResponse")),
         ("websocket_listener", Type::named("net.WebSocketListener")),
         ("websocket", Type::named("net.WebSocket")),
         ("unix_listener", Type::named("net.UnixListener")),
@@ -12614,46 +12613,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(headers_expr()),
             ],
             result_ty(Type::Unit),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "status".to_string(),
-            }),
-            Vec::new(),
-            int_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "reason".to_string(),
-            }),
-            Vec::new(),
-            string_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "headers".to_string(),
-            }),
-            Vec::new(),
-            headers_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "text".to_string(),
-            }),
-            Vec::new(),
-            result_ty(string_ty.clone()),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "bytes".to_string(),
-            }),
-            Vec::new(),
-            bytes_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -17570,8 +17529,8 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "builtin resource `net.HttpExchange` must be created through its module functions",
             ),
             (
-                "import net\n\ndef main() -> int32:\n    response = net.HttpResponse()\n    return 0\n",
-                "builtin resource `net.HttpResponse` must be created through its module functions",
+                "import http\n\ndef main() -> int32:\n    stream = http.Stream()\n    return 0\n",
+                "builtin resource `http.Stream` must be created through its module functions",
             ),
             (
                 "import net\n\ndef main() -> int32:\n    listener = net.WebSocketListener()\n    return 0\n",
@@ -23039,13 +22998,14 @@ def close_only(queue: Queue[random.Rng]):
 fn owned_builtin_snapshots_are_transfer_but_live_authority_is_not() {
     crate::check_source(
         r#"
+import http
 import net
 import process
 
 def completed(value: own process.Completed) -> process.Completed:
     return value
 
-def response(value: own net.HttpResponse) -> net.HttpResponse:
+def response(value: own http.Response) -> http.Response:
     return value
 
 def datagram(value: own net.UdpDatagram) -> net.UdpDatagram:
@@ -23053,7 +23013,7 @@ def datagram(value: own net.UdpDatagram) -> net.UdpDatagram:
 
 def launch(
     completed_value: own process.Completed,
-    response_value: own net.HttpResponse,
+    response_value: own http.Response,
     datagram_value: own net.UdpDatagram
 ):
     with group = TaskGroup():
@@ -23062,7 +23022,7 @@ def launch(
         group.start(datagram, datagram_value)
 "#,
     )
-    .expect("completed process, HTTP, and UDP snapshots contain only owned Transfer data");
+    .expect("completed process and UDP snapshots and HTTP responses are Transfer");
 
     let live = crate::check_source(
         r#"

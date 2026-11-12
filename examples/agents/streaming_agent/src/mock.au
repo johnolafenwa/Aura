@@ -1,0 +1,208 @@
+"""A local stand-in for the Messages API. It streams a scripted reply so the
+agent runs the same way with no network and no key."""
+
+import io
+import json
+import net
+
+
+def hex(value: int64) -> str:
+    digits = [
+        "0",
+        "1",
+        "2",
+        "3",
+        "4",
+        "5",
+        "6",
+        "7",
+        "8",
+        "9",
+        "a",
+        "b",
+        "c",
+        "d",
+        "e",
+        "f",
+    ]
+    mut rest = value
+    mut text = ""
+    while rest > 0:
+        text = digits[rest % 16] + text
+        rest = rest // 16
+    return text
+
+
+def event(name: str, data: str) -> str:
+    """One server-sent event as one chunk of a chunked body."""
+    piece = f"event: {name}\ndata: {data}\n\n"
+    return hex(piece.byte_len()) + "\r\n" + piece + "\r\n"
+
+
+def text_delta(index: int64, kind: str, field: str, text: str) -> str:
+    quoted = json.dumps(json.Value.String(text.clone()))
+    return event(
+        "content_block_delta",
+        "{" + f"\"type\":\"content_block_delta\",\"index\":{index},\"delta\":" + "{" + f"\"type\":\"{kind}\",\"{field}\":{quoted}" + "}}",
+    )
+
+
+def block_start(index: int64, block: str) -> str:
+    return event(
+        "content_block_start",
+        "{" + f"\"type\":\"content_block_start\",\"index\":{index},\"content_block\":{block}" + "}",
+    )
+
+
+def block_stop(index: int64) -> str:
+    return event(
+        "content_block_stop",
+        "{" + f"\"type\":\"content_block_stop\",\"index\":{index}" + "}",
+    )
+
+
+def message_start(id: str) -> str:
+    return event(
+        "message_start",
+        "{\"type\":\"message_start\",\"message\":{\"id\":\"" + id + "\",\"type\":\"message\",\"role\":\"assistant\",\"model\":\"mock\",\"content\":[],\"stop_reason\":null,\"usage\":{\"input_tokens\":40,\"output_tokens\":1}}}",
+    )
+
+
+def message_end(stop_reason: str) -> str:
+    done = event(
+        "message_delta",
+        "{\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"" + stop_reason + "\",\"stop_sequence\":null},\"usage\":{\"output_tokens\":38}}",
+    )
+    return done + event("message_stop", "{\"type\":\"message_stop\"}")
+
+
+def tool_turn(conn: mut net.TcpStream) -> Result[None, io.Error]:
+    """The first reply: some thinking, a sentence, and a tool call whose
+    input arrives in fragments."""
+    try conn.write_all(
+        message_start("msg_mock_1") + event("ping", "{\"type\":\"ping\"}")
+    )
+    try conn.write_all(
+        block_start(0, "{\"type\":\"thinking\",\"thinking\":\"\",\"signature\":\"\"}")
+    )
+    try conn.write_all(
+        text_delta(0, "thinking_delta", "thinking", "Counting is the tool's job.")
+    )
+    try conn.write_all(
+        text_delta(0, "signature_delta", "signature", "sig-7f3a") + block_stop(0)
+    )
+    try conn.write_all(block_start(1, "{\"type\":\"text\",\"text\":\"\"}"))
+    for piece in ["I'll ", "count ", "the words."]:
+        try conn.write_all(text_delta(1, "text_delta", "text", piece))
+    try conn.write_all(block_stop(1))
+    try conn.write_all(
+        block_start(
+            2,
+            "{\"type\":\"tool_use\",\"id\":\"toolu_mock_1\",\"name\":\"word_count\",\"input\":{}}",
+        )
+    )
+    for piece in ["{\"te", "xt\": \"the quick", " brown fox\"}"]:
+        try conn.write_all(text_delta(2, "input_json_delta", "partial_json", piece))
+    try conn.write_all(block_stop(2) + message_end("tool_use") + "0\r\n\r\n")
+    return Result.Ok(None)
+
+
+def answer_turn(conn: mut net.TcpStream) -> Result[None, io.Error]:
+    """The second reply: the answer, a few words at a time."""
+    try conn.write_all(message_start("msg_mock_2"))
+    try conn.write_all(block_start(0, "{\"type\":\"text\",\"text\":\"\"}"))
+    for piece in ["The sentence ", "has 4 ", "words."]:
+        try conn.write_all(text_delta(0, "text_delta", "text", piece))
+    try conn.write_all(block_stop(0) + message_end("end_turn") + "0\r\n\r\n")
+    return Result.Ok(None)
+
+
+def refuse(conn: mut net.TcpStream, reason: str) -> Result[None, io.Error]:
+    body = "{\"type\":\"error\",\"error\":{\"type\":\"invalid_request_error\",\"message\":" + json.dumps(
+        json.Value.String(reason.clone())
+    ) + "}}"
+    try conn.write_all(
+        f"HTTP/1.1 400 Bad Request\r\nContent-Type: application/json\r\nContent-Length: {body.byte_len()}\r\n\r\n{body}"
+    )
+    return Result.Ok(None)
+
+
+def problem(key: str, version: str, body: str) -> str:
+    """What is wrong with a request, or "" when it is acceptable."""
+    if key == "":
+        return "x-api-key header is required"
+    if version == "":
+        return "anthropic-version header is required"
+    if not json.is_valid(body):
+        return "the body is not JSON"
+    if body.find("\"stream\":true") is None:
+        return "this server only streams"
+    # A turn that returns a tool result must also return the thinking
+    # block that came before the call, unchanged.
+    if body.find("\"tool_result\"") is not None and body.find(
+        "\"signature\":\"sig-7f3a\""
+    ) is None:
+        return "the thinking block was not sent back"
+    return ""
+
+
+public def serve(addresses: Queue[str], requests: int64) -> Result[int64, io.Error]:
+    """Answers `requests` requests and returns how many connections they
+    arrived on."""
+    mut accepted = 0
+    mut served = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        _ = addresses.put(try listener.local_addr())
+        while served < requests:
+            with conn = try listener.accept():
+                accepted += 1
+                while served < requests:
+                    match own try conn.read_line():
+                        case str as _start:
+                            pass
+                        case None:
+                            break
+                    mut length = 0
+                    mut key = ""
+                    mut version = ""
+                    while true:
+                        match own try conn.read_line():
+                            case str as header:
+                                match own header.split_once(":"):
+                                    case (str, str) as pair:
+                                        (name, value) = pair
+                                        lowered = name.to_lower()
+                                        if lowered == "content-length":
+                                            match parse_int64(value.trim()):
+                                                case Result.Ok(count):
+                                                    length = count
+                                                case Result.Err(_):
+                                                    pass
+                                        elif lowered == "x-api-key":
+                                            key = value.trim()
+                                        elif lowered == "anthropic-version":
+                                            version = value.trim()
+                                    case None:
+                                        break
+                            case None:
+                                break
+                    mut body = ""
+                    if length > 0:
+                        match own str.from_bytes(try conn.read_exact(length as int32)):
+                            case Result.Ok(text):
+                                body = text
+                            case Result.Err(_):
+                                pass
+                    served += 1
+                    reason = problem(key, version, body)
+                    if reason != "":
+                        try refuse(conn, reason)
+                        continue
+                    try conn.write_all(
+                        "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+                    )
+                    if body.find("\"tool_result\"") is None:
+                        try tool_turn(conn)
+                    else:
+                        try answer_turn(conn)
+    return Result.Ok(accepted)

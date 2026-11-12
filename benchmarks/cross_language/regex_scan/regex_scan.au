@@ -1,0 +1,120 @@
+# Regular expressions over generated log lines.
+#
+# Builds N log lines, then runs the searches a log tool runs on each: a
+# test for a level, named and numbered groups, every match with its
+# position, a replacement that reorders groups, and a split. Takes the line
+# count.
+import regex
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+class Patterns:
+    level: regex.Regex
+    pair: regex.Regex
+    number: regex.Regex
+    address: regex.Regex
+    separator: regex.Regex
+
+
+class Totals:
+    flagged: int64 = 0
+    pairs: int64 = 0
+    pair_sum: int64 = 0
+    numbers: int64 = 0
+    spans: int64 = 0
+    rewritten: int64 = 0
+    pieces: int64 = 0
+    checksum: int64 = 0
+
+
+def main() -> int32:
+    args = sys.args()
+    match parse_int64(args[0]):
+        case Result.Ok(n):
+            match compile_all():
+                case Result.Ok(patterns):
+                    print(run(n, patterns))
+                    return 0
+                case Result.Err(regex.Error.Invalid(message)):
+                    print(message)
+                    return 1
+        case Result.Err(_):
+            print("usage: regex_scan <lines>")
+            return 2
+
+
+def compile_all() -> Result[Patterns, regex.Error]:
+    return Result.Ok(
+        Patterns(
+            level=try regex.compile(r"\b(?:ERROR|WARN)\b"),
+            pair=try regex.compile(r"(?P<key>[a-z]+)=(\d+)"),
+            number=try regex.compile(r"\d+"),
+            address=try regex.compile(r"([a-z]+)@([a-z]+)\.example"),
+            separator=try regex.compile(r"[,;]\s*"),
+        )
+    )
+
+
+def run(n: int64, patterns: Patterns) -> str:
+    mut rng = Rng(state=97)
+    levels = ["INFO", "DEBUG", "WARN", "INFO", "ERROR", "INFO", "TRACE", "INFO"]
+    names = ["ada", "grace", "linus", "barbara", "ken", "margaret", "dennis", "frances"]
+    hosts = ["mail", "corp", "lab", "dev"]
+    mut totals = Totals()
+    for i in range(n):
+        view level = levels[rng.next() % 8]
+        view name = names[rng.next() % 8]
+        view host = hosts[rng.next() % 4]
+        line = (
+            f"{i} {level} user={rng.next() % 5000} took={rng.next() % 900}ms " + f"from {name}@{host}.example; tags a{rng.next() % 10}, b{rng.next() % 10};c"
+        )
+        scan(line, patterns, totals)
+    return (
+        f"regex_scan lines={n} flagged={totals.flagged} pairs={totals.pairs} " + f"pair_sum={totals.pair_sum} numbers={totals.numbers} spans={totals.spans} " + f"rewritten={totals.rewritten} pieces={totals.pieces} checksum={totals.checksum}"
+    )
+
+
+def scan(line: str, patterns: Patterns, totals: mut Totals):
+    if patterns.level.is_match(line):
+        totals.flagged += 1
+
+    match patterns.pair.captures(line):
+        case regex.Captures as groups:
+            totals.pairs += 1
+            match groups.get(2):
+                case str as digits:
+                    match parse_int64(digits):
+                        case Result.Ok(value):
+                            totals.pair_sum += value
+                        case Result.Err(_):
+                            pass
+                case None:
+                    pass
+            match groups.name("key"):
+                case str as key:
+                    totals.checksum = (totals.checksum * 31 + key.len()) % 1000000007
+                case None:
+                    pass
+        case None:
+            pass
+
+    for found in patterns.number.matches(line):
+        totals.numbers += 1
+        totals.spans += found.end - found.start
+        totals.checksum = (totals.checksum * 31 + found.start) % 1000000007
+
+    rewritten = patterns.address.replace_all(line, "$2/$1")
+    totals.rewritten += rewritten.len()
+
+    pieces = patterns.separator.split(line)
+    totals.pieces += pieces.len()
+    view last = pieces[pieces.len() - 1]
+    totals.checksum = (totals.checksum * 31 + last.len()) % 1000000007

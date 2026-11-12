@@ -244,6 +244,44 @@ fn host_builtin_metadata_covers_module_functions_and_associated_string_codecs() 
         "bytes::constant_time_eq",
         "gzip::compress",
         "gzip::decompress",
+        "regex::__aura_compile",
+        "regex::__aura_pattern",
+        "regex::__aura_escape",
+        "regex::__aura_is_match",
+        "regex::__aura_count",
+        "regex::__aura_find",
+        "regex::__aura_matches",
+        "regex::__aura_find_all",
+        "regex::__aura_captures",
+        "regex::__aura_group_index",
+        "regex::__aura_split",
+        "regex::__aura_replace",
+        "regex::__aura_replace_all",
+        "time::__aura_now",
+        "time::__aura_monotonic",
+        "time::__aura_local_offset_minutes",
+        "time::__aura_duration_seconds",
+        "time::__aura_duration_nanos",
+        "time::__aura_duration",
+        "time::__aura_rfc3339",
+        "time::__aura_format",
+        "time::__aura_parse_rfc3339",
+        "time::__aura_parse",
+        "time::__aura_failed",
+        "time::__aura_error",
+        "time::__aura_parsed_seconds",
+        "time::__aura_parsed_nanos",
+        "time::__aura_parsed_offset",
+        "http::__aura_send",
+        "http::__aura_read_chunk",
+        "http::__aura_read_line",
+        "http::__aura_read_lines",
+        "http::__aura_read_event",
+        "http::__aura_read_all",
+        "http::__aura_read_text",
+        "http::__aura_close",
+        "http::__aura_idle_connections",
+        "http::__aura_close_idle",
     ] {
         assert!(
             host_builtin_metadata(name).is_some(),
@@ -975,3 +1013,308 @@ def unpack(data: list[uint8]) -> str:
     .expect_err("gzip.compress takes bytes, not text");
     assert!(error.message.contains("list[uint8]"), "{}", error.message);
 }
+
+#[test]
+fn regex_module_type_checks_its_whole_api_and_keeps_regex_construction_private() {
+    assert!(super::is_builtin_root_module("regex"));
+    assert!(super::builtin_module_registry().contains_key("regex"));
+    let find = host_builtin_metadata("regex::__aura_find").expect("regex find metadata");
+    assert_eq!(find.params.len(), 2);
+
+    crate::check_source(
+        r#"import regex
+
+def scan(pattern: regex.Regex, line: str) -> int64:
+    mut total = pattern.count(line)
+    if pattern.is_match(line):
+        total += 1
+    match pattern.find(line):
+        case regex.Match as found:
+            total += found.end - found.start + found.text.len()
+        case None:
+            pass
+    for found in pattern.matches(line):
+        total += found.start
+    match pattern.captures(line):
+        case regex.Captures as groups:
+            total += groups.len()
+            match groups.get(1):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+            match groups.name("key"):
+                case str as text:
+                    total += text.len()
+                case None:
+                    pass
+        case None:
+            pass
+    total += pattern.find_all(line).len() + pattern.split(line).len()
+    total += pattern.replace(line, "$1").len() + pattern.replace_all(line, "").len()
+    other = pattern
+    total += pattern.count(line)
+    return total + other.pattern().len() + regex.escape(line).len()
+
+def build(text: str) -> Result[regex.Regex, regex.Error]:
+    return regex.compile(text)
+
+def reason(error: regex.Error) -> str:
+    match error:
+        case regex.Error.Invalid(message):
+            return message.clone()
+"#,
+    )
+    .expect("the regex API should type-check");
+
+    let error = crate::check_source(
+        "import regex\n\ndef forge() -> regex.Regex:\n    return regex.Regex(number=0)\n",
+    )
+    .expect_err("only regex.compile builds a Regex");
+    assert!(error.message.contains("number"), "{}", error.message);
+    let error = crate::check_source(
+        "import regex\n\ndef bad(pattern: regex.Regex) -> bool:\n    return pattern.is_match(3)\n",
+    )
+    .expect_err("a search takes text");
+    assert!(error.message.contains("str"), "{}", error.message);
+}
+
+#[test]
+fn time_module_type_checks_its_whole_api_and_keeps_date_time_fields_private() {
+    assert!(super::is_builtin_root_module("time"));
+    assert!(super::builtin_module_registry().contains_key("time"));
+    let format = host_builtin_metadata("time::__aura_format").expect("time format metadata");
+    assert_eq!(format.params.len(), 4);
+
+    crate::check_source(
+        r#"import time
+
+def describe(moment: time.DateTime) -> Result[str, time.Error]:
+    (year, month, day) = moment.date()
+    total = (
+        year + month + day + moment.year() + moment.month() + moment.day()
+        + moment.hour() + moment.minute() + moment.second() + moment.nanosecond()
+        + moment.weekday() + moment.day_of_year() + moment.offset_minutes()
+        + moment.unix() + moment.unix_ms()
+    )
+    shifted = try moment.to_offset(60)
+    later = shifted.to_utc().to_local().add(Duration.seconds(5)).sub(Duration.ms(1))
+    elapsed: Duration = later.since(moment)
+    copy = later
+    if later.is_before(moment) or copy.is_after(moment) or later.same_instant(moment):
+        return Result.Ok(f"{total} {elapsed.to_ms()} {later}")
+    text = try later.format("%Y-%m-%d")
+    return Result.Ok(text + later.to_rfc3339())
+
+def build(text: str) -> Result[time.DateTime, time.Error]:
+    first = try time.utc(2026, 1, 2)
+    second = try time.utc(2026, 1, 2, 3, 4, 5, 6)
+    third = try time.from_unix(0)
+    fourth = try time.from_unix(0, 5)
+    fifth = try time.from_unix_ms(1)
+    sixth = try time.parse(text, "%Y")
+    seventh = try time.parse_rfc3339(text)
+    waited: Duration = time.monotonic() - time.monotonic()
+    if first.is_before(second) and third.is_before(fourth) and fifth.is_before(sixth):
+        return Result.Ok(time.now())
+    if waited.to_ms() > 0.0:
+        return Result.Ok(time.now_local())
+    return Result.Ok(seventh)
+
+def reason(error: time.Error) -> str:
+    match error:
+        case time.Error.Invalid(message):
+            return message.clone()
+"#,
+    )
+    .expect("the time API should type-check");
+
+    let error = crate::check_source(
+        "import time\n\ndef forge() -> time.DateTime:\n    return time.DateTime(unix_seconds=0, subsecond_nanos=0, utc_offset_minutes=0)\n",
+    )
+    .expect_err("only the time functions build a DateTime");
+    assert!(error.message.contains("unix_seconds"), "{}", error.message);
+    let error = crate::check_source(
+        "import time\n\ndef bad(moment: time.DateTime) -> time.DateTime:\n    return moment.add(5)\n",
+    )
+    .expect_err("arithmetic takes a Duration");
+    assert!(error.message.contains("Duration"), "{}", error.message);
+}
+
+#[test]
+fn http_module_type_checks_its_api_and_keeps_the_stream_private() {
+    assert!(super::is_builtin_root_module("http"));
+    assert!(super::builtin_module_registry().contains_key("http"));
+    let send = host_builtin_metadata("http::__aura_send").expect("http send metadata");
+    assert_eq!(send.params.len(), 10);
+
+    crate::check_source(
+        r#"import http
+import io
+
+def settings() -> http.Client:
+    return http.Client(timeout=2s, read_timeout=None, max_redirects=3, decompress=false, keep_alive=false, ca_file="ca.pem")
+
+def first_line(url: str) -> Result[str | None, io.Error]:
+    with response = try settings().get(url):
+        if not response.ok():
+            return Result.Ok(None)
+        return response.read_line()
+
+def retry_delay(event: http.Event) -> Duration | None:
+    return event.retry
+"#,
+    )
+    .expect("the http API should type-check");
+
+    let error = crate::check_source(
+        "import http\n\ndef peek(response: http.Response) -> int64:\n    return response.fields.len()\n",
+    )
+    .expect_err("the header list is private");
+    assert!(error.message.contains("fields"), "{}", error.message);
+    let error = crate::check_source(
+        "import http\n\ndef read(response: http.Response) -> None:\n    _ = response.read_line()\n",
+    )
+    .expect_err("reading a body needs mutable access");
+    assert!(error.message.contains("mut"), "{}", error.message);
+    let error = crate::check_source(
+        "import net\n\ndef old() -> None:\n    _ = net.http_request_text(\"GET\", \"http://h/\", \"\", {})\n",
+    )
+    .expect_err("the old request functions are gone");
+    assert!(
+        error.message.contains("http_request_text"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
+fn http_module_runs_requests_streams_redirects_and_events_on_the_interpreter() {
+    let output = crate::run_source(HTTP_PROGRAM).expect("the http program should run");
+    assert_eq!(
+        output.stdout,
+        "200 OK true true\na, b\nNone\n[a, b]\na, b\nalpha\n[98, 101]\n[ta]\ngamma\nNone\n1\n\
+         200 true\nalpha\nbeta\r\ngamma\n302 /text\n0\ndelta|one\ntwo|7|None\nmessage|three|7|250ms\n\
+         404 false\nnone\n17\n17\n17\n1\n0\n"
+    );
+}
+
+/// A loopback server written on `net.listen` and a client that uses every
+/// public member of the `http` module against it.
+const HTTP_PROGRAM: &str = r#"import http
+import io
+import net
+
+def chunk(piece: str) -> str:
+    digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    size = piece.byte_len()
+    return digits[size // 16] + digits[size % 16] + "\r\n" + piece + "\r\n"
+
+def reply(target: str) -> str:
+    if target == "/moved":
+        return "HTTP/1.1 302 Found\r\nLocation: /text\r\nContent-Length: 0\r\n\r\n"
+    if target == "/events":
+        head = "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n"
+        first = chunk(": hello\n\nevent: delta\nid: 7\ndata: one\ndata: two\n\n")
+        second = chunk("retry: 250\ndata: three\n\n")
+        return head + first + second + "0\r\n\r\n"
+    if target == "/missing":
+        return "HTTP/1.1 404 Not Found\r\nContent-Length: 4\r\n\r\nnone"
+    body = "alpha\nbeta\r\ngamma"
+    return f"HTTP/1.1 200 OK\r\nX-Tag: a\r\nx-tag: b\r\nContent-Length: {body.byte_len()}\r\n\r\n" + body
+
+def serve(addresses: Queue[str], requests: int64) -> Result[int64, io.Error]:
+    mut accepted = 0
+    mut served = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        _ = addresses.put(try listener.local_addr())
+        while served < requests:
+            with conn = try listener.accept():
+                accepted += 1
+                while served < requests:
+                    mut target = ""
+                    match own try conn.read_line():
+                        case str as start:
+                            target = start.split(" ")[1].clone()
+                        case None:
+                            break
+                    while true:
+                        match own try conn.read_line():
+                            case str as header:
+                                if header == "" or header == "\r":
+                                    break
+                            case None:
+                                break
+                    try conn.write_all(reply(target))
+                    served += 1
+    return Result.Ok(accepted)
+
+def run() -> Result[None, io.Error]:
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses, 9)
+        mut base = ""
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                base = "http://" + address
+            case _:
+                return Result.Err(io.Error.TimedOut)
+
+        mut text = try http.get(base + "/text")
+        print(f"{text.status} {text.reason} {text.ok()} {text.url == base + "/text"}")
+        print(text.header("X-TAG"))
+        print(text.header("absent"))
+        print(text.header_values("x-tag"))
+        print(text.headers()["x-tag"])
+        print(try text.read_line())
+        print(try text.read_chunk(2))
+        print(try text.read_lines(8))
+        print(try text.read_line())
+        print(try text.read_chunk(2))
+        text.close()
+        print(http.idle_connections())
+
+        with moved = try http.get(base + "/moved"):
+            print(f"{moved.status} {moved.url == base + "/text"}")
+            print(try moved.text_up_to(64))
+
+        client = http.Client(timeout=5s, read_timeout=5s, max_redirects=0, decompress=false)
+        with held = try client.get(base + "/moved"):
+            print(f"{held.status} {held.header("location")}")
+            print((try held.bytes_up_to(8)).len())
+
+        with events = try http.request("GET", base + "/events", "", {"Accept": "text/event-stream"}):
+            while true:
+                event = try events.read_event()
+                if event is None:
+                    break
+                print(f"{event.event}|{event.data}|{event.id}|{event.retry}")
+
+        with missing = try client.post(base + "/missing", "body", {}):
+            print(f"{missing.status} {missing.ok()}")
+            print(try missing.text())
+
+        with raw = try client.request_bytes("PUT", base + "/text", [1 as uint8], {}):
+            print((try raw.bytes()).len())
+        with posted = try http.post(base + "/text", "x", {}):
+            print((try posted.text_up_to(64)).len())
+        with again = try http.request_bytes("PUT", base + "/text", [1 as uint8], {}):
+            print((try again.text()).len())
+
+        match own server.result():
+            case TaskResult.Ready(result):
+                print(try result)
+            case _:
+                print("server failed")
+        http.close_idle_connections()
+        print(http.idle_connections())
+    return Result.Ok(None)
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(error)
+            return 1
+"#;
