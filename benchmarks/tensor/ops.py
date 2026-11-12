@@ -3,6 +3,7 @@
     python3 ops.py numpy
     python3 ops.py torch-cpu
     python3 ops.py torch-mps
+    python3 ops.py torch-cuda
     python3 ops.py mlx
 
 Each row prints `<name> <size> <milliseconds> <checksum>`. A side whose
@@ -37,10 +38,14 @@ def main():
         elif side_name.startswith("torch"):
             import torch
 
-            device = torch.device("mps" if side_name == "torch-mps" else "cpu")
-            if side_name == "torch-mps" and not torch.backends.mps.is_available():
+            kind = side_name.split("-")[1]
+            if kind == "mps" and not torch.backends.mps.is_available():
                 print("torch has no mps device here")
                 return
+            if kind == "cuda" and not torch.cuda.is_available():
+                print("torch has no cuda device here")
+                return
+            device = torch.device(kind)
 
             def make(values):
                 return torch.tensor(values, dtype=torch.float32, device=device)
@@ -48,6 +53,8 @@ def main():
             def done(value):
                 if device.type == "mps":
                     torch.mps.synchronize()
+                if device.type == "cuda":
+                    torch.cuda.synchronize()
                 return value
 
             def item(value):

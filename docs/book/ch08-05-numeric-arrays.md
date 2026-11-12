@@ -801,6 +801,41 @@ lists gives one `bool`, and an `==` that gave an array of them would make
 `if a == b:` mean something different for arrays. So `a == b` on arrays
 stays an error, and `a.equal(b).all()` says what you mean.
 
+## Computing on a GPU
+
+An `Array` lives in the computer's ordinary memory and the CPU does its
+arithmetic. For very large arrays a graphics processor can be much
+faster. The `tensor` module gives you `Tensor[T]`, which holds numbers on
+a *device*: the CPU, or the GPU of a Mac.
+
+```aura
+from tensor import Device, Tensor
+
+def main():
+    device = Device.default()
+    prices = Array[float32].from_list([10.0, 12.5, 9.0, 14.0], [4])
+    counts = Array[float32].from_list([3.0, 1.0, 4.0, 2.0], [4])
+    x = Tensor[float32].from_array(prices, device)
+    y = Tensor[float32].from_array(counts, device)
+    print((x * y).sum().item())
+```
+
+```text
+106.5
+```
+
+`Device.default()` picks the GPU when the machine has one Aura can use
+and the CPU otherwise, so this program runs everywhere. You move numbers
+in with `from_array` and out with `to_array` or `item`, and in between a
+tensor has the operators and most of the members you just learned for
+arrays, with the same shape rules.
+
+Two things differ from an array. A tensor is never changed in place:
+every operation gives a new one. And a GPU does not compute anything
+until you read a result, so that it can run a whole expression in one
+trip. The [Manual](/manual/tensors) explains when that matters and which
+dtypes a GPU has.
+
 ## Summary
 
 You now know the collections that most Aura programs are built from. Lists

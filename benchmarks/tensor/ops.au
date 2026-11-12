@@ -63,13 +63,11 @@ def products(side: int64, reps: int64, device: Device) -> None:
 def main() -> int32:
     args = sys.args()
     mut device = Device.cpu()
-    if args.len() > 0 and args[0] == "metal":
-        match Device.metal():
-            case Device as gpu:
-                device = gpu
-            case None:
-                print("this machine has no Metal device")
-                return 1
+    if args.len() > 0 and args[0] == "gpu":
+        device = Device.default()
+        if not device.is_gpu():
+            print("this machine has no GPU device")
+            return 1
     print(f"device {device.name()}")
     elementwise(32, 2000, device)
     elementwise(4096, 20, device)

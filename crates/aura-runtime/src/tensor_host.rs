@@ -25,12 +25,21 @@ use std::sync::Mutex;
 #[path = "tensor_metal.rs"]
 pub(crate) mod tensor_metal;
 
+#[cfg_attr(not(target_os = "linux"), allow(dead_code))]
+#[path = "tensor_codegen.rs"]
+pub(crate) mod tensor_codegen;
+
+#[cfg(target_os = "linux")]
+#[path = "tensor_cuda.rs"]
+pub(crate) mod tensor_cuda;
+
 /// Where a tensor's memory lives. The codes are the ones `std/tensor.au`
 /// passes.
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
 pub enum TensorDevice {
     Cpu = 0,
     Metal = 1,
+    Cuda = 2,
 }
 
 impl TensorDevice {
@@ -38,6 +47,7 @@ impl TensorDevice {
         match code {
             0 => Some(Self::Cpu),
             1 => Some(Self::Metal),
+            2 => Some(Self::Cuda),
             _ => None,
         }
     }
@@ -46,6 +56,7 @@ impl TensorDevice {
         match self {
             Self::Cpu => "cpu",
             Self::Metal => "metal",
+            Self::Cuda => "cuda",
         }
     }
 
@@ -57,7 +68,21 @@ impl TensorDevice {
             Self::Metal => tensor_metal::is_available(),
             #[cfg(not(target_os = "macos"))]
             Self::Metal => false,
+            #[cfg(target_os = "linux")]
+            Self::Cuda => tensor_cuda::is_available(),
+            #[cfg(not(target_os = "linux"))]
+            Self::Cuda => false,
         }
+    }
+
+    /// Whether the device has `float64` elements. Metal has none.
+    pub const fn has_float64(self) -> bool {
+        !matches!(self, Self::Metal)
+    }
+
+    /// Whether an operation on the device waits until its result is read.
+    const fn is_gpu(self) -> bool {
+        !matches!(self, Self::Cpu)
     }
 }
 
@@ -97,16 +122,27 @@ pub(crate) enum Storage {
     /// A buffer the Metal device owns.
     #[cfg(target_os = "macos")]
     Metal(Arc<tensor_metal::Buffer>),
+    /// Memory the CUDA device owns.
+    #[cfg(target_os = "linux")]
+    Cuda(Arc<tensor_cuda::Buffer>),
 }
 
 impl Storage {
     /// The elements in host memory, for memory of `dtype` and `shape`.
-    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    #[cfg_attr(
+        not(any(target_os = "macos", target_os = "linux")),
+        allow(unused_variables)
+    )]
     fn to_host(&self, dtype: i64, shape: &[usize]) -> Result<ArrayValue> {
         match self {
             Self::Host(elements) => Ok(elements.clone()),
             #[cfg(target_os = "macos")]
             Self::Metal(buffer) => buffer.to_array(
+                ArrayDType::from_code(dtype).expect("a plan holds known dtypes"),
+                shape,
+            ),
+            #[cfg(target_os = "linux")]
+            Self::Cuda(buffer) => buffer.to_array(
                 ArrayDType::from_code(dtype).expect("a plan holds known dtypes"),
                 shape,
             ),
@@ -313,6 +349,10 @@ impl Plan {
         if device == TensorDevice::Metal {
             return tensor_metal::run(self, leaves);
         }
+        #[cfg(target_os = "linux")]
+        if device == TensorDevice::Cuda {
+            return tensor_cuda::run(self, leaves);
+        }
         let _ = device;
         self.run_on_host(leaves).map(Storage::Host)
     }
@@ -350,7 +390,7 @@ thread_local! {
 
 /// Whether an operation on `device` waits until its result is read.
 fn defers(device: TensorDevice) -> bool {
-    device == TensorDevice::Metal || DEFER_ON_CPU.with(std::cell::Cell::get)
+    device.is_gpu() || DEFER_ON_CPU.with(std::cell::Cell::get)
 }
 
 /// The dtype and shape of an operation a GPU library runs, or `None` for
@@ -368,7 +408,11 @@ fn planned_result(
     }
     let dtype = inputs[0].dtype();
     let same_dtype = inputs.iter().all(|input| input.dtype() == dtype);
-    let number = matches!(dtype, Float32 | Int32 | Int64);
+    // CUDA has `float64`. Metal does not.
+    let double = inputs[0].device() == TensorDevice::Cuda;
+    let is_real = |dtype: ArrayDType| dtype == Float32 || (double && dtype == ArrayDType::Float64);
+    let real = is_real(dtype);
+    let number = real || matches!(dtype, Int32 | Int64);
     let broadcast = || {
         inputs[1..]
             .iter()
@@ -387,7 +431,7 @@ fn planned_result(
         Operation::Binary(code) => {
             let supported = match *code {
                 0..=2 | 16 | 17 => number,
-                3 | 18 => dtype == Float32,
+                3 | 18 => real,
                 _ => false,
             };
             (supported && same_dtype)
@@ -397,7 +441,7 @@ fn planned_result(
         Operation::Unary(code) => {
             let supported = match *code {
                 NEGATE_OPERATION => number,
-                0..=3 | 6 | 7 => dtype == Float32,
+                0..=3 | 6 | 7 => real,
                 _ => false,
             };
             supported.then(|| (dtype, inputs[0].shape().into()))
@@ -409,12 +453,12 @@ fn planned_result(
             let value = inputs[1].dtype();
             (dtype == Bool
                 && inputs[2].dtype() == value
-                && matches!(value, Float32 | Int32 | Int64))
+                && (is_real(value) || matches!(value, Int32 | Int64)))
             .then(broadcast)?
             .map(|shape| (value, shape))
         }
         Operation::Reduce { reduction, axis } => {
-            if dtype != Float32 || !(0..=3).contains(reduction) {
+            if !real || !(0..=3).contains(reduction) {
                 return None;
             }
             let shape: Vec<usize> = match axis {
@@ -433,7 +477,7 @@ fn planned_result(
         }
         Operation::Matmul => {
             let (left, right) = (inputs[0].shape(), inputs[1].shape());
-            if dtype != Float32 || !same_dtype || left.len() < 2 || right.len() < 2 {
+            if !real || !same_dtype || left.len() < 2 || right.len() < 2 {
                 return None;
             }
             let (left_lead, left_matrix) = left.split_at(left.len() - 2);
@@ -497,8 +541,13 @@ fn planned_result(
             let target = ArrayDType::from_code(*target)?;
             // A float to integer cast traps on a value out of range, which
             // a GPU cannot do, so it runs on the host.
-            matches!((dtype, target), (Int32 | Int64, Float32) | (Int32, Int64))
-                .then(|| (target, inputs[0].shape().into()))
+            let exact = matches!((dtype, target), (Int32 | Int64, Float32) | (Int32, Int64))
+                || (double
+                    && matches!(
+                        (dtype, target),
+                        (Int32 | Int64 | Float32, ArrayDType::Float64)
+                    ));
+            exact.then(|| (target, inputs[0].shape().into()))
         }
     }
 }
@@ -520,6 +569,9 @@ pub(crate) const PAIR_OPERATION_BASE: i64 = 16;
 /// The code of negation in [`Operation::Unary`]. The codes below it are
 /// [`ArrayUnaryOp`]'s.
 pub(crate) const NEGATE_OPERATION: i64 = 64;
+
+/// One function for `float32` elements and the same one for `float64`.
+type FloatFunctions = (fn(f32) -> f32, fn(f64) -> f64);
 
 /// A float function of every element, or `None` for an Array that is not
 /// float. A tensor's float maths follows IEEE 754 on every device: an
@@ -620,7 +672,7 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
             .binary(first, ArrayBinaryOp::Sub, arithmetic_mode(first.dtype())),
         Operation::Unary(code) => {
             let operation = ArrayUnaryOp::from_code(*code).ok_or_else(unknown)?;
-            let functions: Option<(fn(f32) -> f32, fn(f64) -> f64)> = match operation {
+            let functions: Option<FloatFunctions> = match operation {
                 ArrayUnaryOp::Sqrt => Some((f32::sqrt, f64::sqrt)),
                 ArrayUnaryOp::Exp => Some((f32::exp, f64::exp)),
                 ArrayUnaryOp::Log => Some((f32::ln, f64::ln)),
@@ -715,13 +767,13 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
         .map(|input| input.elements())
         .collect::<Result<Vec<_>>>()?;
     let result = apply(&operation, &arrays.iter().collect::<Vec<_>>())?;
-    if device != TensorDevice::Cpu && result.dtype() == ArrayDType::Float64 {
+    if !device.has_float64() && result.dtype() == ArrayDType::Float64 {
         return Err(float64_error(device));
     }
     Ok(Value::Tensor(TensorValue::host(device, result)))
 }
 
-/// A GPU has no `float64`, and a tensor never narrows one silently.
+/// Metal has no `float64`, and a tensor never narrows one silently.
 fn float64_error(device: TensorDevice) -> Diagnostic {
     Diagnostic::coded(
         "AU4007",
@@ -735,8 +787,18 @@ fn float64_error(device: TensorDevice) -> Diagnostic {
 /// A tensor of `elements` on `device`, in the device's own memory when it
 /// has one.
 fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
-    if device != TensorDevice::Cpu && elements.dtype() == ArrayDType::Float64 {
+    if !device.has_float64() && elements.dtype() == ArrayDType::Float64 {
         return Err(float64_error(device));
+    }
+    #[cfg(target_os = "linux")]
+    if device == TensorDevice::Cuda && !elements.is_empty() {
+        let buffer = tensor_cuda::Buffer::from_array(&elements)?;
+        return Ok(Value::Tensor(TensorValue::ready(
+            device,
+            elements.dtype(),
+            elements.shape.clone(),
+            Storage::Cuda(Arc::new(buffer)),
+        )));
     }
     #[cfg(target_os = "macos")]
     if device == TensorDevice::Metal && !elements.is_empty() {
@@ -1021,7 +1083,7 @@ pub fn host_tensor_cast(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
     if dtype == operand.dtype() as i64 {
         return Ok(Value::Tensor(operand.clone()));
     }
-    if operand.device() != TensorDevice::Cpu && dtype == ArrayDType::Float64 as i64 {
+    if !operand.device().has_float64() && dtype == ArrayDType::Float64 as i64 {
         return Err(float64_error(operand.device()));
     }
     operate(Operation::Cast(dtype), &[operand])

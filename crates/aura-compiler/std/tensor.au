@@ -44,16 +44,27 @@ public copy class Device:
             return Device(kind=1)
         return None
 
+    public def cuda() -> Device | None:
+        """The NVIDIA GPU of this machine, or `None` when there is none
+        with a driver and the CUDA libraries."""
+        if tensor.__aura_device_available(2):
+            return Device(kind=2)
+        return None
+
     public def default() -> Device:
         """The GPU when this machine has one Aura can use, else the CPU."""
         if tensor.__aura_device_available(1):
             return Device(kind=1)
+        if tensor.__aura_device_available(2):
+            return Device(kind=2)
         return Device(kind=0)
 
     public def name(self) -> str:
-        """`"cpu"` or `"metal"`."""
+        """`"cpu"`, `"metal"`, or `"cuda"`."""
         if self.kind == 1:
             return "metal"
+        if self.kind == 2:
+            return "cuda"
         return "cpu"
 
     public def is_gpu(self) -> bool:

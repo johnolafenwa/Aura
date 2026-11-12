@@ -183,6 +183,41 @@ const PLANNED: &[(&str, Expression)] = &[
         let shifted = binary(&scaled, &l.row, 1)?;
         reduce(&matmul(&shifted, &l.tall)?, 0, Some(0))
     }),
+    ("reduce an expression", |l| {
+        reduce(&binary(&l.a, &l.row, 2)?, 2, Some(0))
+    }),
+    ("mean of a transpose", |l| {
+        reduce(&permute(&l.a, &[])?, 3, Some(1))
+    }),
+    ("batched matmul", |l| {
+        let stack = reshape(
+            &binary(&l.a, &l.tall, 18).or_else(|_| binary(&l.a, &l.b, 0))?,
+            &[1, 2, 3],
+        )?;
+        let pair = binary(
+            &reshape(&l.tall, &[1, 3, 2])?,
+            &reshape(&l.two, &[1, 1, 1])?,
+            2,
+        )?;
+        matmul(&stack, &pair)
+    }),
+    ("broadcast batched matmul", |l| {
+        let left = reshape(&binary(&l.a, &l.b, 0)?, &[2, 1, 3])?;
+        let right = reshape(&l.tall, &[1, 3, 2])?;
+        let wide = binary(&left, &reshape(&l.row, &[1, 1, 3])?, 0)?;
+        matmul(&binary(&wide, &reshape(&l.a, &[2, 1, 3])?, 1)?, &right)
+    }),
+    ("permute three axes", |l| {
+        let cube = binary(
+            &reshape(&l.a, &[2, 3, 1])?,
+            &reshape(&l.tall, &[1, 3, 2])?,
+            2,
+        )?;
+        permute(&cube, &[2, 0, 1])
+    }),
+    ("choose broadcasts", |l| {
+        choose(&compare(&l.a, &l.row, 0)?, &l.row, &l.two)
+    }),
     ("shared operand", |l| {
         let sum = binary(&l.a, &l.b, 0)?;
         binary(&sum, &sum, 2)
@@ -520,7 +555,6 @@ fn the_metal_device_exists_only_on_macos() {
 /// integers, masks, and operations that round once; a few units in the
 /// last place for a sum, whose order differs, and for the library's
 /// `exp`, `log`, `sin`, `cos` and `pow`.
-#[cfg(target_os = "macos")]
 fn differences(name: &str, gpu: &ArrayValue, host: &ArrayValue) -> Vec<String> {
     if gpu.dtype() != host.dtype() || gpu.shape != host.shape {
         return vec![format!(
@@ -550,50 +584,64 @@ fn differences(name: &str, gpu: &ArrayValue, host: &ArrayValue) -> Vec<String> {
         .collect()
 }
 
-#[cfg(target_os = "macos")]
 fn close(name: &str, gpu: &ArrayValue, host: &ArrayValue) {
     let found = differences(name, gpu, host);
     assert!(found.is_empty(), "{}", found.join("\n"));
 }
 
-#[cfg(target_os = "macos")]
-#[test]
-fn the_metal_device_agrees_with_the_array_kernels() {
-    if !TensorDevice::Metal.is_available() {
-        eprintln!("SKIPPED: this machine has no usable Metal device");
-        return;
+/// The GPU devices this machine can run.
+fn gpus() -> Vec<TensorDevice> {
+    let found: Vec<TensorDevice> = [TensorDevice::Metal, TensorDevice::Cuda]
+        .into_iter()
+        .filter(|device| device.is_available())
+        .collect();
+    if found.is_empty() {
+        eprintln!("SKIPPED: this machine has no usable GPU device");
     }
+    found
+}
+
+#[test]
+fn a_gpu_device_agrees_with_the_array_kernels() {
+    for device in gpus() {
+        agrees_with_the_array_kernels(device);
+    }
+}
+
+fn agrees_with_the_array_kernels(gpu_device: TensorDevice) {
     for (name, expression) in PLANNED.iter().chain(ON_HOST) {
         let host = expression(&leaves(TensorDevice::Cpu)).unwrap();
-        let gpu = expression(&leaves(TensorDevice::Metal)).unwrap();
-        assert_eq!(node(&gpu).device(), TensorDevice::Metal);
+        let gpu = expression(&leaves(gpu_device)).unwrap();
+        assert_eq!(node(&gpu).device(), gpu_device);
         close(name, &array(&gpu), &array(&host));
         // A second run takes the compiled graph.
-        let again = expression(&leaves(TensorDevice::Metal)).unwrap();
+        let again = expression(&leaves(gpu_device)).unwrap();
         close(name, &array(&again), &array(&host));
     }
     for (name, expression) in PLANNED {
-        let gpu = expression(&leaves(TensorDevice::Metal)).unwrap();
+        let gpu = expression(&leaves(gpu_device)).unwrap();
         assert!(!node(&gpu).is_ready(), "{name}: waits on the gpu");
         host_tensor_eval(vec![gpu.clone()], None).unwrap();
         assert!(
-            matches!(node(&gpu).storage().unwrap(), Storage::Metal(_)),
+            !matches!(node(&gpu).storage().unwrap(), Storage::Host(_)),
             "{name}: the result is in a device buffer"
         );
     }
     println!(
-        "RAN: {} expressions on the Metal device",
-        PLANNED.len() + ON_HOST.len()
+        "RAN: {} expressions on the {} device",
+        PLANNED.len() + ON_HOST.len(),
+        gpu_device.name()
     );
 }
 
-#[cfg(target_os = "macos")]
 #[test]
-fn the_metal_device_keeps_special_values() {
-    if !TensorDevice::Metal.is_available() {
-        eprintln!("SKIPPED: this machine has no usable Metal device");
-        return;
+fn a_gpu_device_keeps_special_values() {
+    for device in gpus() {
+        keeps_special_values(device);
     }
+}
+
+fn keeps_special_values(gpu_device: TensorDevice) {
     let special = |device| {
         (
             tensor(
@@ -606,7 +654,8 @@ fn the_metal_device_keeps_special_values() {
             ),
         )
     };
-    let cases: &[(&str, fn(&Value, &Value) -> Result<Value>)] = &[
+    type Pair = fn(&Value, &Value) -> Result<Value>;
+    let cases: &[(&str, Pair)] = &[
         ("minimum", |a, b| binary(a, b, 16)),
         ("maximum", |a, b| binary(a, b, 17)),
         ("div", |a, b| binary(a, b, 3)),
@@ -623,39 +672,351 @@ fn the_metal_device_keeps_special_values() {
     for (name, expression) in cases {
         let (a, b) = special(TensorDevice::Cpu);
         let host = expression(&a, &b).unwrap();
-        let (a, b) = special(TensorDevice::Metal);
+        let (a, b) = special(gpu_device);
         let gpu = expression(&a, &b).unwrap();
         found.extend(differences(name, &array(&gpu), &array(&host)));
     }
     assert!(found.is_empty(), "{}", found.join("\n"));
-    let (a, _) = special(TensorDevice::Metal);
+    let (a, _) = special(gpu_device);
     let home = host_tensor_to_device(vec![a.clone(), int(0)], None).unwrap();
     assert_eq!(node(&home).device(), TensorDevice::Cpu);
-    let back = host_tensor_to_device(vec![home.clone(), int(1)], None).unwrap();
-    assert_eq!(node(&back).device(), TensorDevice::Metal);
+    let back = host_tensor_to_device(vec![home.clone(), int(gpu_device as i64)], None).unwrap();
+    assert_eq!(node(&back).device(), gpu_device);
     close("round trip", &array(&back), &array(&a));
-    assert!(cast(&a, ArrayDType::Float64)
-        .unwrap_err()
-        .message
-        .contains("no float64"));
-    let error = host_tensor_from_array(
-        vec![
-            Value::Array(
-                ArrayValue::new(
-                    Box::new([1]),
-                    ArrayStorage::Float64(vec![1.0].into_boxed_slice().into()),
-                )
-                .unwrap(),
-            ),
-            int(1),
-        ],
-        None,
+    let double = ArrayValue::new(
+        Box::new([2]),
+        ArrayStorage::Float64(vec![1.5, -2.0].into_boxed_slice().into()),
     )
-    .unwrap_err();
-    assert!(error.message.contains("no float64"));
-    let empty = tensor(float32(&[], &[0, 3]), TensorDevice::Metal);
+    .unwrap();
+    let placed = host_tensor_from_array(
+        vec![Value::Array(double.clone()), int(gpu_device as i64)],
+        None,
+    );
+    if gpu_device.has_float64() {
+        let placed = placed.unwrap();
+        let widened = cast(&a, ArrayDType::Float64).unwrap();
+        assert_eq!(node(&widened).dtype(), ArrayDType::Float64);
+        let doubled = binary(&placed, &placed, 0).unwrap();
+        assert!(
+            !node(&doubled).is_ready(),
+            "float64 arithmetic waits on the gpu"
+        );
+        let host = binary(
+            &tensor(double.clone(), TensorDevice::Cpu),
+            &tensor(double, TensorDevice::Cpu),
+            0,
+        )
+        .unwrap();
+        close("float64 add", &array(&doubled), &array(&host));
+    } else {
+        assert!(placed.unwrap_err().message.contains("no float64"));
+        assert!(cast(&a, ArrayDType::Float64)
+            .unwrap_err()
+            .message
+            .contains("no float64"));
+    }
+    let empty = tensor(float32(&[], &[0, 3]), gpu_device);
     assert_eq!(
         array(&binary(&empty, &empty, 0).unwrap()).shape.as_ref(),
         &[0, 3]
     );
+}
+
+/// The generated CUDA C, compiled for the CPU and run one thread index at
+/// a time. This checks what the kernels compute on a machine with no GPU.
+mod generated_kernels {
+    use super::*;
+    use tensor_codegen::{Action, BLOCK_THREADS};
+
+    const HARNESS: &str = r#"
+#include <cmath>
+#include <math.h>
+using std::copysign;
+#define __device__
+#define __forceinline__ inline
+#define __global__
+struct AuraIndex { unsigned x, y, z; };
+static AuraIndex blockIdx, blockDim, threadIdx;
+extern "C" void aura_thread(unsigned block, unsigned thread) {
+    blockIdx.x = block;
+    blockDim.x = 256;
+    threadIdx.x = thread;
+}
+"#;
+
+    fn to_bytes(elements: &ArrayValue) -> Vec<u8> {
+        let storage = elements.elements().unwrap();
+        match &*storage {
+            ArrayStorage::Int32(values) => values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            ArrayStorage::Int64(values) => values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            ArrayStorage::Float32(values) => values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            ArrayStorage::Float64(values) => values.iter().flat_map(|v| v.to_ne_bytes()).collect(),
+            ArrayStorage::Bool(values) => values.iter().map(|&v| u8::from(v)).collect(),
+        }
+    }
+
+    fn from_bytes(dtype: ArrayDType, shape: &[usize], bytes: &[u8]) -> ArrayValue {
+        let storage = match dtype {
+            ArrayDType::Int32 => ArrayStorage::Int32(
+                bytes
+                    .chunks_exact(4)
+                    .map(|chunk| i32::from_ne_bytes(chunk.try_into().unwrap()))
+                    .collect::<Box<[i32]>>()
+                    .into(),
+            ),
+            ArrayDType::Int64 => ArrayStorage::Int64(
+                bytes
+                    .chunks_exact(8)
+                    .map(|chunk| i64::from_ne_bytes(chunk.try_into().unwrap()))
+                    .collect::<Box<[i64]>>()
+                    .into(),
+            ),
+            ArrayDType::Float32 => ArrayStorage::Float32(
+                bytes
+                    .chunks_exact(4)
+                    .map(|chunk| f32::from_ne_bytes(chunk.try_into().unwrap()))
+                    .collect::<Box<[f32]>>()
+                    .into(),
+            ),
+            ArrayDType::Float64 => ArrayStorage::Float64(
+                bytes
+                    .chunks_exact(8)
+                    .map(|chunk| f64::from_ne_bytes(chunk.try_into().unwrap()))
+                    .collect::<Box<[f64]>>()
+                    .into(),
+            ),
+            ArrayDType::Bool => ArrayStorage::Bool(
+                bytes
+                    .iter()
+                    .map(|&byte| byte != 0)
+                    .collect::<Box<[bool]>>()
+                    .into(),
+            ),
+        };
+        ArrayValue::new(shape.into(), storage).unwrap()
+    }
+
+    /// Compiles `source` for the CPU, or `None` on a machine with no C++
+    /// compiler.
+    fn compile(source: &str, tag: usize) -> Option<*mut std::ffi::c_void> {
+        let directory =
+            std::env::temp_dir().join(format!("aura-tensor-kernels-{}-{tag}", std::process::id()));
+        std::fs::create_dir_all(&directory).unwrap();
+        let (input, output) = (directory.join("plan.cpp"), directory.join("plan.so"));
+        std::fs::write(&input, format!("{HARNESS}{source}")).unwrap();
+        let status = std::process::Command::new("c++")
+            .args([
+                "-std=c++14",
+                "-O1",
+                "-shared",
+                "-fPIC",
+                "-ffp-contract=off",
+                "-o",
+            ])
+            .arg(&output)
+            .arg(&input)
+            .output()
+            .ok()?;
+        assert!(
+            status.status.success(),
+            "the generated kernels do not compile:\n{}\n{source}",
+            String::from_utf8_lossy(&status.stderr)
+        );
+        let path = std::ffi::CString::new(output.to_str().unwrap()).unwrap();
+        // SAFETY: `path` names the library just built.
+        let library = unsafe { libc::dlopen(path.as_ptr(), libc::RTLD_NOW) };
+        assert!(!library.is_null(), "the built kernels load");
+        let _ = std::fs::remove_dir_all(&directory);
+        Some(library)
+    }
+
+    fn function(library: *mut std::ffi::c_void, name: &str) -> *mut std::ffi::c_void {
+        let name = std::ffi::CString::new(name).unwrap();
+        // SAFETY: `library` is open and `name` is NUL-terminated.
+        let address = unsafe { libc::dlsym(library, name.as_ptr()) };
+        assert!(!address.is_null(), "kernel {name:?} exists");
+        address
+    }
+
+    /// Runs `plan` through its generated kernels on the CPU.
+    fn run(plan: &Plan, leaves: &[Storage], tag: usize) -> Option<ArrayValue> {
+        let program = tensor_codegen::generate(plan);
+        let library = compile(&program.source, tag)?;
+        // SAFETY: the harness defines `aura_thread` with this signature.
+        let set_thread = unsafe {
+            std::mem::transmute::<*mut std::ffi::c_void, unsafe extern "C" fn(u32, u32)>(function(
+                library,
+                "aura_thread",
+            ))
+        };
+        let mut buffers: Vec<Vec<u8>> = vec![Vec::new(); program.buffers];
+        let mut leaves = leaves.iter();
+        for (slot, buffer) in plan.slots.iter().zip(buffers.iter_mut()) {
+            if let Slot::Leaf { dtype, shape } = slot {
+                *buffer = to_bytes(&leaves.next().unwrap().to_host(*dtype, shape).unwrap());
+            }
+        }
+        for action in &program.actions {
+            match action {
+                Action::Kernel {
+                    name,
+                    output,
+                    bytes,
+                    threads,
+                    inputs,
+                } => {
+                    let mut made = vec![0xAA_u8; *bytes];
+                    let kernel = function(library, name);
+                    let pointers: Vec<*const u8> = inputs
+                        .iter()
+                        .map(|&input| buffers[input].as_ptr())
+                        .collect();
+                    for thread in 0..threads.div_ceil(BLOCK_THREADS).max(1) * BLOCK_THREADS {
+                        // SAFETY: the kernel takes the output and one
+                        // pointer for each input, and checks its index.
+                        unsafe {
+                            set_thread(
+                                (thread / BLOCK_THREADS) as u32,
+                                (thread % BLOCK_THREADS) as u32,
+                            );
+                            let out = made.as_mut_ptr();
+                            type P = *const u8;
+                            match pointers[..] {
+                                [a] => std::mem::transmute::<
+                                    *mut std::ffi::c_void,
+                                    unsafe extern "C" fn(*mut u8, P),
+                                >(kernel)(out, a),
+                                [a, b] => std::mem::transmute::<
+                                    *mut std::ffi::c_void,
+                                    unsafe extern "C" fn(*mut u8, P, P),
+                                >(kernel)(out, a, b),
+                                [a, b, c] => std::mem::transmute::<
+                                    *mut std::ffi::c_void,
+                                    unsafe extern "C" fn(*mut u8, P, P, P),
+                                >(kernel)(out, a, b, c),
+                                [a, b, c, d] => {
+                                    std::mem::transmute::<
+                                        *mut std::ffi::c_void,
+                                        unsafe extern "C" fn(*mut u8, P, P, P, P),
+                                    >(kernel)(out, a, b, c, d)
+                                }
+                                _ => panic!("a test kernel has one to four inputs"),
+                            }
+                        }
+                    }
+                    buffers[*output] = made;
+                }
+                Action::Matmul {
+                    left,
+                    right,
+                    output,
+                    bytes,
+                    double,
+                    rows,
+                    inner,
+                    columns,
+                    pairs,
+                } => {
+                    assert!(!double, "the test products are float32");
+                    let read = |buffer: &[u8], index: usize| {
+                        f32::from_ne_bytes(buffer[index * 4..index * 4 + 4].try_into().unwrap())
+                    };
+                    let mut made = vec![0_u8; *bytes];
+                    for (product, (left_at, right_at)) in pairs.iter().enumerate() {
+                        for row in 0..*rows {
+                            for column in 0..*columns {
+                                let mut sum = 0.0_f32;
+                                for k in 0..*inner {
+                                    sum += read(&buffers[*left], left_at + row * inner + k)
+                                        * read(&buffers[*right], right_at + k * columns + column);
+                                }
+                                let at = (product * rows * columns + row * columns + column) * 4;
+                                made[at..at + 4].copy_from_slice(&sum.to_ne_bytes());
+                            }
+                        }
+                    }
+                    buffers[*output] = made;
+                }
+            }
+        }
+        let (dtype, shape) = match plan.slots.last().unwrap() {
+            Slot::Leaf { dtype, shape } | Slot::Step { dtype, shape, .. } => (*dtype, shape),
+        };
+        Some(from_bytes(
+            ArrayDType::from_code(dtype).unwrap(),
+            shape,
+            &buffers[plan.slots.len() - 1],
+        ))
+    }
+
+    #[test]
+    fn the_generated_kernels_compute_what_the_array_kernels_compute() {
+        deferred(|| {
+            for (tag, (name, expression)) in PLANNED.iter().enumerate() {
+                let waiting = expression(&leaves(TensorDevice::Cpu)).unwrap();
+                let (plan, storage) = Plan::collect(node(&waiting));
+                let Some(generated) = run(&plan, &storage, tag) else {
+                    eprintln!("SKIPPED: this machine has no C++ compiler");
+                    return;
+                };
+                close(name, &generated, &array(&waiting));
+            }
+        });
+    }
+
+    #[test]
+    fn elementwise_steps_fuse_into_one_kernel() {
+        deferred(|| {
+            let l = leaves(TensorDevice::Cpu);
+            let chain = unary(
+                &binary(&binary(&l.a, &l.b, 2).unwrap(), &l.row, 0).unwrap(),
+                1,
+            )
+            .unwrap();
+            let (plan, _) = Plan::collect(node(&chain));
+            let program = tensor_codegen::generate(&plan);
+            assert_eq!(program.actions.len(), 1, "three steps are one kernel");
+            assert_eq!(program.buffers, plan.slots.len(), "no scratch buffer");
+            let Action::Kernel {
+                inputs,
+                threads,
+                bytes,
+                ..
+            } = &program.actions[0]
+            else {
+                panic!("an elementwise chain is a kernel");
+            };
+            assert_eq!((inputs.len(), *threads, *bytes), (3, 6, 24));
+
+            let total = reduce(&chain, 0, None).unwrap();
+            let (plan, _) = Plan::collect(node(&total));
+            let program = tensor_codegen::generate(&plan);
+            assert_eq!(
+                program.actions.len(),
+                2,
+                "a whole sum is two kernels over the fused chain"
+            );
+            assert_eq!(
+                program.buffers,
+                plan.slots.len() + 1,
+                "one scratch buffer of runs"
+            );
+
+            let product = matmul(&chain, &l.tall).unwrap();
+            let (plan, _) = Plan::collect(node(&product));
+            let program = tensor_codegen::generate(&plan);
+            assert!(matches!(
+                program.actions[..],
+                [
+                    Action::Kernel { .. },
+                    Action::Matmul {
+                        rows: 2,
+                        inner: 3,
+                        columns: 2,
+                        ..
+                    }
+                ]
+            ));
+        });
+    }
 }

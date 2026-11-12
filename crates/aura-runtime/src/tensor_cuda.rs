@@ -1,0 +1,658 @@
+//! The CUDA device of the `tensor` module.
+//!
+//! A tensor on this device is CUDA device memory Aura allocates and owns.
+//! A plan becomes CUDA C (`tensor_codegen.rs`), which NVRTC compiles once
+//! for each distinct plan, and `matmul` is a cuBLAS call on the same
+//! memory. The three libraries, the driver, NVRTC and cuBLAS, are opened
+//! with `dlopen` the first time a program asks for the device, so Aura
+//! needs no CUDA toolkit to build and a program that never asks pays
+//! nothing.
+
+use super::tensor_codegen::{self, Action, Program, BLOCK_THREADS};
+use super::{Plan, Slot, Storage};
+use crate::runtime_value::*;
+use std::collections::HashMap;
+use std::ffi::{c_char, c_int, c_uint, c_void, CStr, CString};
+use std::sync::{Arc, Mutex, OnceLock};
+
+type Status = c_int;
+type DevicePointer = u64;
+
+/// The functions Aura calls, by their exported names.
+#[allow(non_snake_case)]
+struct Api {
+    cuInit: unsafe extern "C" fn(c_uint) -> Status,
+    cuDeviceGetCount: unsafe extern "C" fn(*mut c_int) -> Status,
+    cuDeviceGet: unsafe extern "C" fn(*mut c_int, c_int) -> Status,
+    cuDevicePrimaryCtxRetain: unsafe extern "C" fn(*mut *mut c_void, c_int) -> Status,
+    cuCtxSetCurrent: unsafe extern "C" fn(*mut c_void) -> Status,
+    cuCtxSynchronize: unsafe extern "C" fn() -> Status,
+    cuMemAlloc_v2: unsafe extern "C" fn(*mut DevicePointer, usize) -> Status,
+    cuMemFree_v2: unsafe extern "C" fn(DevicePointer) -> Status,
+    cuMemcpyHtoD_v2: unsafe extern "C" fn(DevicePointer, *const c_void, usize) -> Status,
+    cuMemcpyDtoH_v2: unsafe extern "C" fn(*mut c_void, DevicePointer, usize) -> Status,
+    cuModuleLoadData: unsafe extern "C" fn(*mut *mut c_void, *const c_void) -> Status,
+    cuModuleGetFunction:
+        unsafe extern "C" fn(*mut *mut c_void, *mut c_void, *const c_char) -> Status,
+    #[allow(clippy::type_complexity)]
+    cuLaunchKernel: unsafe extern "C" fn(
+        *mut c_void,
+        c_uint,
+        c_uint,
+        c_uint,
+        c_uint,
+        c_uint,
+        c_uint,
+        c_uint,
+        *mut c_void,
+        *mut *mut c_void,
+        *mut *mut c_void,
+    ) -> Status,
+    nvrtcCreateProgram: unsafe extern "C" fn(
+        *mut *mut c_void,
+        *const c_char,
+        *const c_char,
+        c_int,
+        *const *const c_char,
+        *const *const c_char,
+    ) -> Status,
+    nvrtcCompileProgram: unsafe extern "C" fn(*mut c_void, c_int, *const *const c_char) -> Status,
+    nvrtcGetPTXSize: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    nvrtcGetPTX: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+    nvrtcGetProgramLogSize: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
+    nvrtcGetProgramLog: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
+    nvrtcDestroyProgram: unsafe extern "C" fn(*mut *mut c_void) -> Status,
+    cublasCreate_v2: unsafe extern "C" fn(*mut *mut c_void) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasSgemm_v2: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasDgemm_v2: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+    ) -> Status,
+}
+
+/// Opens the first of `names` the loader finds.
+fn open(names: &[&str]) -> Option<*mut c_void> {
+    names.iter().find_map(|name| {
+        let name = CString::new(*name).ok()?;
+        // SAFETY: `name` is a NUL-terminated path or library name.
+        let handle = unsafe { libc::dlopen(name.as_ptr(), libc::RTLD_NOW | libc::RTLD_GLOBAL) };
+        (!handle.is_null()).then_some(handle)
+    })
+}
+
+/// The address of `name` in `library`.
+fn symbol(library: *mut c_void, name: &str) -> Option<*mut c_void> {
+    let name = CString::new(name).ok()?;
+    // SAFETY: `library` is an open library and `name` is NUL-terminated.
+    let address = unsafe { libc::dlsym(library, name.as_ptr()) };
+    (!address.is_null()).then_some(address)
+}
+
+macro_rules! load {
+    ($library:expr, $name:ident) => {{
+        let address = symbol($library, stringify!($name))?;
+        // SAFETY: the symbol is the CUDA function of this name, whose C
+        // signature is the field's type.
+        #[allow(clippy::missing_transmute_annotations)]
+        unsafe {
+            std::mem::transmute(address)
+        }
+    }};
+}
+
+impl Api {
+    fn load() -> Option<Self> {
+        // The driver library that matches the kernel driver is the system
+        // one. A toolkit can carry a newer copy that the driver refuses.
+        let driver = open(&[
+            "/usr/lib/x86_64-linux-gnu/libcuda.so.1",
+            "/usr/lib/aarch64-linux-gnu/libcuda.so.1",
+            "/usr/lib64/libcuda.so.1",
+            "libcuda.so.1",
+            "libcuda.so",
+        ])?;
+        let versions = ["", ".13", ".12", ".11.2", ".11"];
+        let candidates = |stem: &str| -> Vec<String> {
+            let mut names = Vec::new();
+            for version in versions {
+                names.push(format!("{stem}.so{version}"));
+            }
+            for root in [
+                std::env::var("CUDA_HOME").ok(),
+                std::env::var("CUDA_PATH").ok(),
+                Some("/usr/local/cuda".to_string()),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                for version in versions {
+                    names.push(format!("{root}/lib64/{stem}.so{version}"));
+                }
+            }
+            names
+        };
+        let open_library = |stem: &str| {
+            let names = candidates(stem);
+            open(&names.iter().map(String::as_str).collect::<Vec<_>>())
+        };
+        let nvrtc = open_library("libnvrtc")?;
+        let cublas = open_library("libcublas")?;
+        Some(Self {
+            cuInit: load!(driver, cuInit),
+            cuDeviceGetCount: load!(driver, cuDeviceGetCount),
+            cuDeviceGet: load!(driver, cuDeviceGet),
+            cuDevicePrimaryCtxRetain: load!(driver, cuDevicePrimaryCtxRetain),
+            cuCtxSetCurrent: load!(driver, cuCtxSetCurrent),
+            cuCtxSynchronize: load!(driver, cuCtxSynchronize),
+            cuMemAlloc_v2: load!(driver, cuMemAlloc_v2),
+            cuMemFree_v2: load!(driver, cuMemFree_v2),
+            cuMemcpyHtoD_v2: load!(driver, cuMemcpyHtoD_v2),
+            cuMemcpyDtoH_v2: load!(driver, cuMemcpyDtoH_v2),
+            cuModuleLoadData: load!(driver, cuModuleLoadData),
+            cuModuleGetFunction: load!(driver, cuModuleGetFunction),
+            cuLaunchKernel: load!(driver, cuLaunchKernel),
+            nvrtcCreateProgram: load!(nvrtc, nvrtcCreateProgram),
+            nvrtcCompileProgram: load!(nvrtc, nvrtcCompileProgram),
+            nvrtcGetPTXSize: load!(nvrtc, nvrtcGetPTXSize),
+            nvrtcGetPTX: load!(nvrtc, nvrtcGetPTX),
+            nvrtcGetProgramLogSize: load!(nvrtc, nvrtcGetProgramLogSize),
+            nvrtcGetProgramLog: load!(nvrtc, nvrtcGetProgramLog),
+            nvrtcDestroyProgram: load!(nvrtc, nvrtcDestroyProgram),
+            cublasCreate_v2: load!(cublas, cublasCreate_v2),
+            cublasSgemm_v2: load!(cublas, cublasSgemm_v2),
+            cublasDgemm_v2: load!(cublas, cublasDgemm_v2),
+        })
+    }
+}
+
+/// Buffers no tensor holds any more, by size, for the next tensor of that
+/// size.
+#[derive(Default)]
+struct Pool {
+    free: HashMap<usize, Vec<DevicePointer>>,
+    bytes: usize,
+}
+
+/// The most memory the pool keeps. A buffer dropped beyond it is freed.
+const MAX_POOLED_BYTES: usize = 1 << 30;
+
+/// A compiled plan: the kernels by name and the actions that run them.
+struct Compiled {
+    program: Program,
+    functions: HashMap<String, usize>,
+}
+
+struct Runtime {
+    api: Api,
+    context: *mut c_void,
+    cublas: *mut c_void,
+    pool: Mutex<Pool>,
+    /// Held for a whole run: the cuBLAS handle serves one thread at a
+    /// time.
+    compiled: Mutex<HashMap<Plan, Compiled>>,
+}
+
+// SAFETY: the driver API and the context may be used from any thread, and
+// the cuBLAS handle is used only under the `compiled` lock.
+unsafe impl Send for Runtime {}
+// SAFETY: as above.
+unsafe impl Sync for Runtime {}
+
+fn cuda_error(message: impl std::fmt::Display) -> Diagnostic {
+    Diagnostic::coded("AU4007", format!("the cuda device {message}"))
+}
+
+fn check(status: Status, what: &str) -> Result<()> {
+    if status == 0 {
+        Ok(())
+    } else {
+        Err(cuda_error(format!("could not {what} (status {status})")))
+    }
+}
+
+impl Runtime {
+    fn start() -> Option<Self> {
+        let api = Api::load()?;
+        let mut count = 0;
+        let mut device = 0;
+        let mut context = std::ptr::null_mut();
+        let mut cublas = std::ptr::null_mut();
+        // SAFETY: each call follows the driver API: initialize, pick the
+        // first device, and take its primary context, which cuBLAS shares.
+        unsafe {
+            if (api.cuInit)(0) != 0
+                || (api.cuDeviceGetCount)(&mut count) != 0
+                || count < 1
+                || (api.cuDeviceGet)(&mut device, 0) != 0
+                || (api.cuDevicePrimaryCtxRetain)(&mut context, device) != 0
+                || (api.cuCtxSetCurrent)(context) != 0
+                || (api.cublasCreate_v2)(&mut cublas) != 0
+            {
+                return None;
+            }
+        }
+        Some(Self {
+            api,
+            context,
+            cublas,
+            pool: Mutex::default(),
+            compiled: Mutex::default(),
+        })
+    }
+
+    /// Makes the context current on the calling thread. Every entry does
+    /// this first, because a context is current for one thread.
+    fn enter(&self) -> Result<()> {
+        // SAFETY: `context` is the retained primary context.
+        check(
+            unsafe { (self.api.cuCtxSetCurrent)(self.context) },
+            "use its context",
+        )
+    }
+
+    fn pool(&self) -> std::sync::MutexGuard<'_, Pool> {
+        self.pool
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+}
+
+fn runtime() -> Option<&'static Runtime> {
+    static RUNTIME: OnceLock<Option<Runtime>> = OnceLock::new();
+    RUNTIME.get_or_init(Runtime::start).as_ref()
+}
+
+fn started() -> Result<&'static Runtime> {
+    runtime().ok_or_else(|| cuda_error("is not available on this machine"))
+}
+
+/// Whether this machine has an NVIDIA GPU with a driver, NVRTC and cuBLAS.
+pub(crate) fn is_available() -> bool {
+    runtime().is_some()
+}
+
+/// CUDA device memory.
+pub(crate) struct Buffer {
+    pointer: DevicePointer,
+    bytes: usize,
+}
+
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        let Some(runtime) = runtime() else { return };
+        let mut pool = runtime.pool();
+        if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
+            pool.bytes += self.bytes;
+            pool.free.entry(self.bytes).or_default().push(self.pointer);
+            return;
+        }
+        drop(pool);
+        if runtime.enter().is_ok() {
+            // SAFETY: `pointer` is an allocation this value owns, and no
+            // kernel is running on it: a run waits for its kernels before
+            // it drops a buffer.
+            unsafe { (runtime.api.cuMemFree_v2)(self.pointer) };
+        }
+    }
+}
+
+impl Buffer {
+    /// A buffer of `bytes` bytes whose contents are not set.
+    fn new(bytes: usize) -> Result<Self> {
+        let runtime = started()?;
+        let pooled = {
+            let mut pool = runtime.pool();
+            let pointer = pool.free.get_mut(&bytes).and_then(Vec::pop);
+            if pointer.is_some() {
+                pool.bytes -= bytes;
+            }
+            pointer
+        };
+        if let Some(pointer) = pooled {
+            return Ok(Self { pointer, bytes });
+        }
+        runtime.enter()?;
+        let mut pointer = 0;
+        // SAFETY: `pointer` receives the allocation.
+        let status = unsafe { (runtime.api.cuMemAlloc_v2)(&mut pointer, bytes) };
+        check(status, &format!("allocate {bytes} bytes"))?;
+        Ok(Self { pointer, bytes })
+    }
+
+    /// A buffer holding the elements of a non-empty Array in row-major
+    /// order.
+    pub(crate) fn from_array(elements: &ArrayValue) -> Result<Self> {
+        let runtime = started()?;
+        let storage = elements.elements()?;
+        fn bytes_of<T>(values: &[T]) -> &[u8] {
+            // SAFETY: the element types are plain numbers and `bool`, which
+            // have no padding.
+            unsafe {
+                std::slice::from_raw_parts(values.as_ptr().cast(), std::mem::size_of_val(values))
+            }
+        }
+        let bytes = match &*storage {
+            ArrayStorage::Int32(values) => bytes_of::<i32>(values),
+            ArrayStorage::Int64(values) => bytes_of::<i64>(values),
+            ArrayStorage::Float32(values) => bytes_of::<f32>(values),
+            ArrayStorage::Float64(values) => bytes_of::<f64>(values),
+            ArrayStorage::Bool(values) => bytes_of::<bool>(values),
+        };
+        let buffer = Self::new(bytes.len())?;
+        runtime.enter()?;
+        // SAFETY: the buffer holds `bytes.len()` bytes.
+        let status = unsafe {
+            (runtime.api.cuMemcpyHtoD_v2)(buffer.pointer, bytes.as_ptr().cast(), bytes.len())
+        };
+        check(status, "copy elements to the device")?;
+        Ok(buffer)
+    }
+
+    /// An Array holding a copy of the buffer's elements.
+    pub(crate) fn to_array(&self, dtype: ArrayDType, shape: &[usize]) -> Result<ArrayValue> {
+        let runtime = started()?;
+        let len: usize = shape.iter().product();
+        assert_eq!(
+            len * tensor_codegen::element_bytes(dtype),
+            self.bytes,
+            "a tensor's buffer holds its shape"
+        );
+        runtime.enter()?;
+        fn read<T: Copy + Default>(
+            runtime: &Runtime,
+            buffer: &Buffer,
+            len: usize,
+        ) -> Result<Box<[T]>> {
+            let mut values = vec![T::default(); len];
+            // SAFETY: the buffer holds `len` elements of `T`, and `values`
+            // has room for them.
+            let status = unsafe {
+                (runtime.api.cuMemcpyDtoH_v2)(
+                    values.as_mut_ptr().cast(),
+                    buffer.pointer,
+                    len * std::mem::size_of::<T>(),
+                )
+            };
+            check(status, "copy elements from the device")?;
+            Ok(values.into())
+        }
+        let storage = match dtype {
+            ArrayDType::Int32 => ArrayStorage::Int32(read::<i32>(runtime, self, len)?.into()),
+            ArrayDType::Int64 => ArrayStorage::Int64(read::<i64>(runtime, self, len)?.into()),
+            ArrayDType::Float32 => ArrayStorage::Float32(read::<f32>(runtime, self, len)?.into()),
+            ArrayDType::Float64 => ArrayStorage::Float64(read::<f64>(runtime, self, len)?.into()),
+            ArrayDType::Bool => {
+                let flags: Box<[bool]> = read::<u8>(runtime, self, len)?
+                    .iter()
+                    .map(|&byte| byte != 0)
+                    .collect();
+                ArrayStorage::Bool(flags.into())
+            }
+        };
+        ArrayValue::new(shape.into(), storage)
+    }
+}
+
+impl Compiled {
+    fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
+        let program = tensor_codegen::generate(plan);
+        let source = CString::new(program.source.as_str())
+            .map_err(|_| cuda_error("made a kernel source with a NUL byte"))?;
+        let api = &runtime.api;
+        let mut handle = std::ptr::null_mut();
+        // SAFETY: `source` and the name are NUL-terminated and there are
+        // no headers.
+        let status = unsafe {
+            (api.nvrtcCreateProgram)(
+                &mut handle,
+                source.as_ptr(),
+                c"aura_plan.cu".as_ptr(),
+                0,
+                std::ptr::null(),
+                std::ptr::null(),
+            )
+        };
+        check(status, "start a kernel compile")?;
+        // A fused multiply-add would round differently from the CPU
+        // device, whose `a * b + c` rounds twice.
+        let options = [c"--fmad=false".as_ptr()];
+        // SAFETY: `handle` is the program just created.
+        let status = unsafe { (api.nvrtcCompileProgram)(handle, 1, options.as_ptr()) };
+        let image = if status == 0 {
+            let mut size = 0;
+            // SAFETY: `image` has the size NVRTC reports.
+            unsafe {
+                (api.nvrtcGetPTXSize)(handle, &mut size);
+                let mut image = vec![0_u8; size.max(1)];
+                (api.nvrtcGetPTX)(handle, image.as_mut_ptr().cast());
+                Ok(image)
+            }
+        } else {
+            let mut size = 0;
+            // SAFETY: `log` has the size NVRTC reports.
+            let log = unsafe {
+                (api.nvrtcGetProgramLogSize)(handle, &mut size);
+                let mut log = vec![0_u8; size.max(1)];
+                (api.nvrtcGetProgramLog)(handle, log.as_mut_ptr().cast());
+                CStr::from_bytes_until_nul(&log)
+                    .map(|log| log.to_string_lossy().into_owned())
+                    .unwrap_or_default()
+            };
+            Err(cuda_error(format!(
+                "could not compile a kernel (status {status}): {log}"
+            )))
+        };
+        // SAFETY: `handle` is a live program.
+        unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
+        let image = image?;
+        let mut module = std::ptr::null_mut();
+        // SAFETY: `image` is NUL-terminated PTX.
+        let status = unsafe { (api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
+        check(status, "load a compiled kernel")?;
+        let mut functions = HashMap::new();
+        for action in &program.actions {
+            if let Action::Kernel { name, .. } = action {
+                let symbol = CString::new(name.as_str()).expect("a kernel name has no NUL byte");
+                let mut function = std::ptr::null_mut();
+                // SAFETY: `module` is loaded and `symbol` is NUL-terminated.
+                let status =
+                    unsafe { (api.cuModuleGetFunction)(&mut function, module, symbol.as_ptr()) };
+                check(status, "find a compiled kernel")?;
+                functions.insert(name.clone(), function as usize);
+            }
+        }
+        Ok(Self { program, functions })
+    }
+}
+
+/// The most compiled plans kept.
+const MAX_COMPILED_PLANS: usize = 256;
+
+/// Runs `plan` over `leaves` and gives the buffer holding its result.
+pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
+    let runtime = started()?;
+    runtime.enter()?;
+    let api = &runtime.api;
+    let mut compiled = runtime
+        .compiled
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if !compiled.contains_key(plan) {
+        if compiled.len() >= MAX_COMPILED_PLANS {
+            compiled.clear();
+        }
+        compiled.insert(plan.clone(), Compiled::new(runtime, plan)?);
+    }
+    let compiled = &compiled[plan];
+    let mut buffers: Vec<Option<Arc<Buffer>>> = vec![None; compiled.program.buffers];
+    let mut leaves = leaves.iter();
+    for (slot, buffer) in plan.slots.iter().zip(buffers.iter_mut()) {
+        if matches!(slot, Slot::Leaf { .. }) {
+            *buffer = Some(
+                match leaves.next().expect("a plan has memory for each leaf") {
+                    Storage::Cuda(buffer) => Arc::clone(buffer),
+                    // A leaf in host memory is copied to the device for this
+                    // run.
+                    Storage::Host(elements) => Arc::new(Buffer::from_array(elements)?),
+                },
+            );
+        }
+    }
+    let pointer = |buffers: &[Option<Arc<Buffer>>], index: usize| {
+        buffers[index]
+            .as_ref()
+            .expect("an action reads buffers made before it")
+            .pointer
+    };
+    let mut outcome = Ok(());
+    for action in &compiled.program.actions {
+        outcome = match action {
+            Action::Kernel {
+                name,
+                output,
+                bytes,
+                threads,
+                inputs,
+            } => Buffer::new(*bytes).and_then(|made| {
+                let mut arguments: Vec<DevicePointer> = vec![made.pointer];
+                arguments.extend(inputs.iter().map(|&input| pointer(&buffers, input)));
+                let mut addresses: Vec<*mut c_void> = arguments
+                    .iter_mut()
+                    .map(|argument| std::ptr::from_mut(argument).cast())
+                    .collect();
+                let blocks = threads.div_ceil(BLOCK_THREADS).max(1) as c_uint;
+                buffers[*output] = Some(Arc::new(made));
+                // SAFETY: the kernel takes one pointer for each entry of
+                // `addresses`, and every buffer is alive and large enough
+                // for the shapes the plan compiled in.
+                let status = unsafe {
+                    (api.cuLaunchKernel)(
+                        compiled.functions[name] as *mut c_void,
+                        blocks,
+                        1,
+                        1,
+                        BLOCK_THREADS as c_uint,
+                        1,
+                        1,
+                        0,
+                        std::ptr::null_mut(),
+                        addresses.as_mut_ptr(),
+                        std::ptr::null_mut(),
+                    )
+                };
+                check(status, "launch a kernel")
+            }),
+            Action::Matmul {
+                left,
+                right,
+                output,
+                bytes,
+                double,
+                rows,
+                inner,
+                columns,
+                pairs,
+            } => Buffer::new(*bytes).and_then(|made| {
+                let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
+                let element = if *double { 8 } else { 4 };
+                let (rows, inner, columns) = (*rows as c_int, *inner as c_int, *columns as c_int);
+                let product = (rows as usize) * (columns as usize) * element;
+                let mut status = 0;
+                for (index, (left_offset, right_offset)) in pairs.iter().enumerate() {
+                    // cuBLAS matrices are column-major. A row-major product
+                    // A B is the column-major product of B and A as stored,
+                    // which is the transpose of the same result.
+                    let a = right + (right_offset * element) as u64;
+                    let b = left + (left_offset * element) as u64;
+                    let c = made.pointer + (index * product) as u64;
+                    // SAFETY: each pointer addresses a whole matrix of the
+                    // given size inside its buffer.
+                    status = unsafe {
+                        if *double {
+                            (api.cublasDgemm_v2)(
+                                runtime.cublas,
+                                0,
+                                0,
+                                columns,
+                                rows,
+                                inner,
+                                &1.0,
+                                a,
+                                columns,
+                                b,
+                                inner,
+                                &0.0,
+                                c,
+                                columns,
+                            )
+                        } else {
+                            (api.cublasSgemm_v2)(
+                                runtime.cublas,
+                                0,
+                                0,
+                                columns,
+                                rows,
+                                inner,
+                                &1.0,
+                                a,
+                                columns,
+                                b,
+                                inner,
+                                &0.0,
+                                c,
+                                columns,
+                            )
+                        }
+                    };
+                    if status != 0 {
+                        break;
+                    }
+                }
+                buffers[*output] = Some(Arc::new(made));
+                check(status, "multiply matrices")
+            }),
+        };
+        if outcome.is_err() {
+            break;
+        }
+    }
+    // The kernels run after the launch returns. Wait for them before any
+    // buffer of this run is dropped or read.
+    // SAFETY: the context is current on this thread.
+    let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
+    outcome?;
+    finished?;
+    let result = buffers[plan.slots.len() - 1]
+        .take()
+        .expect("a plan's last slot is written by its last action");
+    Ok(Storage::Cuda(result))
+}
