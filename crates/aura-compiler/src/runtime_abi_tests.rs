@@ -83,7 +83,34 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
         .filter(|(name, _)| crate::runtime_ops::FunctionOp::from_name(name).is_some())
         .map(|(name, _)| *name)
         .collect::<Vec<_>>();
-    assert_eq!(replaced, ["sys::monotonic_time_ms"]);
+    assert_eq!(
+        replaced,
+        [
+            "sys::monotonic_time_ms",
+            "time::__aura_local_offset_minutes",
+            "time::__aura_duration_seconds",
+            "time::__aura_duration_nanos",
+            "time::__aura_duration",
+            "time::__aura_rfc3339",
+            "time::__aura_format",
+            "time::__aura_parse_rfc3339",
+            "time::__aura_parse",
+            "time::__aura_failed",
+            "time::__aura_parsed_seconds",
+            "time::__aura_parsed_nanos",
+            "time::__aura_parsed_offset",
+            "regex::__aura_is_match",
+            "regex::__aura_count",
+            "regex::__aura_find",
+            "regex::__aura_matches",
+            "regex::__aura_find_all",
+            "regex::__aura_captures",
+            "regex::__aura_group_index",
+            "regex::__aura_split",
+            "regex::__aura_replace",
+            "regex::__aura_replace_all",
+        ]
+    );
     assert_eq!(
         host_symbols.len() + replaced.len(),
         crate::native_runtime::HOST_BUILTIN_SYMBOLS.len()

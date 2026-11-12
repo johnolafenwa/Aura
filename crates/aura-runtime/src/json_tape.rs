@@ -336,6 +336,71 @@ impl PartialEq for JsonNode {
     }
 }
 
+/// A tape value's payload as the pieces that render it (see
+/// [`JsonNode::payload_parts`]).
+pub enum JsonPayloadParts<'a> {
+    Text(&'a str),
+    Scalar(Value),
+    Elements(JsonElementIter<'a>),
+    Entries(JsonEntryIter<'a>),
+}
+
+/// The elements of an array node, each a tape value.
+pub struct JsonElementIter<'a> {
+    node: &'a JsonNode,
+    index: u32,
+    left: u32,
+}
+
+impl Iterator for JsonElementIter<'_> {
+    type Item = Value;
+
+    fn next(&mut self) -> Option<Value> {
+        if self.left == 0 {
+            return None;
+        }
+        self.left -= 1;
+        let element = self.node.child(self.index);
+        self.index = self.node.tape.next(self.index);
+        Some(element)
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left as usize, Some(self.left as usize))
+    }
+}
+
+impl ExactSizeIterator for JsonElementIter<'_> {}
+
+/// The entries of an object node, each a key and a tape value.
+pub struct JsonEntryIter<'a> {
+    node: &'a JsonNode,
+    index: u32,
+    left: u32,
+}
+
+impl<'a> Iterator for JsonEntryIter<'a> {
+    type Item = (&'a str, Value);
+
+    fn next(&mut self) -> Option<Self::Item> {
+        if self.left == 0 {
+            return None;
+        }
+        self.left -= 1;
+        let tape = &self.node.tape;
+        let key = tape.str_at(tape.node(self.index));
+        let value = self.node.child(self.index + 1);
+        self.index = tape.next(self.index + 1);
+        Some((key, value))
+    }
+
+    fn size_hint(&self) -> (usize, Option<usize>) {
+        (self.left as usize, Some(self.left as usize))
+    }
+}
+
+impl ExactSizeIterator for JsonEntryIter<'_> {}
+
 fn json_value_type() -> SharedType {
     static TYPE: OnceLock<SharedType> = OnceLock::new();
     TYPE.get_or_init(|| SharedType::named("json.Value")).clone()
@@ -444,6 +509,36 @@ impl JsonNode {
             }),
             _ => return self.scalar(),
         })
+    }
+
+    /// The variant's one payload in the pieces `print` renders, read from
+    /// the tape. Unlike [`Self::payload`] it builds no list or dict value,
+    /// so rendering links neither into a program that parses no JSON. A
+    /// `Null` node, which carries no payload, gives an empty array's parts
+    /// and is never asked.
+    pub fn payload_parts(&self) -> JsonPayloadParts<'_> {
+        let node = self.tape.node(self.index);
+        match node.tag {
+            JsonTag::String => JsonPayloadParts::Text(self.tape.str_at(node)),
+            JsonTag::Object => JsonPayloadParts::Entries(JsonEntryIter {
+                node: self,
+                index: self.index + 1,
+                left: node.a,
+            }),
+            JsonTag::Array => JsonPayloadParts::Elements(JsonElementIter {
+                node: self,
+                index: self.index + 1,
+                left: node.a,
+            }),
+            _ => match self.scalar() {
+                Some(value) => JsonPayloadParts::Scalar(value),
+                None => JsonPayloadParts::Elements(JsonElementIter {
+                    node: self,
+                    index: self.index + 1,
+                    left: 0,
+                }),
+            },
+        }
     }
 
     /// The entries of an object node as values: each key a `str` and each

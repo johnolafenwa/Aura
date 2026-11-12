@@ -6360,12 +6360,7 @@ fn validated_transfer_failure(
             .iter()
             .find_map(|member| validated_transfer_failure(member, context, visiting)),
         Type::Named(name, args) => {
-            if args.is_empty()
-                && matches!(
-                    name.as_str(),
-                    "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
-                )
-            {
+            if args.is_empty() && matches!(name.as_str(), "process.Completed" | "net.UdpDatagram") {
                 return None;
             }
             if crate::sema::is_builtin_io_resource_type(name, args)
@@ -21255,9 +21250,34 @@ impl<'a> Lowerer<'a> {
                     _ => None,
                 };
                 let tested = match (&declared, none_index) {
-                    (Some(union_type @ Type::Union(_)), Some(index)) => self
-                        .narrowed_base_place(value)
-                        .map(|place| (place, union_type.clone(), index)),
+                    (Some(union_type @ Type::Union(_)), Some(index)) => {
+                        let union_type = union_type.clone();
+                        // A tested value that is not a place, such as a
+                        // call result, is held in a temporary so its tag
+                        // can be read.
+                        let place = match self.narrowed_base_place(value) {
+                            Some(place) => place,
+                            None => {
+                                let contextual_before = self.contextual_element_loans.clone();
+                                let held = self.new_typed_temp(union_type.clone());
+                                let operand =
+                                    self.lower_expr_for_owned_value(value, Some(&union_type));
+                                let is_view = self.operand_is_view(&operand);
+                                self.emit(Instruction::Assign {
+                                    target: held.clone(),
+                                    value: Rvalue::Use(operand),
+                                });
+                                // An element lent to the call ends here, as
+                                // it does for any other condition, so each
+                                // branch starts without the loan.
+                                if !is_view {
+                                    self.end_contextual_element_loans_since(&contextual_before);
+                                }
+                                held
+                            }
+                        };
+                        Some((place, union_type, index))
+                    }
                     _ => None,
                 };
                 let (true_label, false_label) = if *negated {
@@ -29697,9 +29717,7 @@ impl<'a> Lowerer<'a> {
             ("list", "filter") => Some(Type::Named("list".to_string(), args.clone())),
             // `with` cleanup closes these handles with no runtime call, so
             // they have no resolved operation.
-            ("net.HttpExchange", "close")
-            | ("net.HttpResponse", "close")
-            | ("net.WebSocketListener", "close") => Some(Type::Unit),
+            ("net.HttpExchange", "close") | ("net.WebSocketListener", "close") => Some(Type::Unit),
             ("TaskGroup", "start") | ("TaskGroup", "start_with_stack") => Some(Type::Named(
                 "Task".to_string(),
                 vec![Type::named("Unknown")],

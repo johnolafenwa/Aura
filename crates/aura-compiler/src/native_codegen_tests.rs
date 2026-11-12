@@ -5423,12 +5423,6 @@ fn direct_backend_resource_member_argument_errors_cover_network_and_process_path
             "runtime has no member `net.HttpExchange.unknown`",
         ),
         (
-            named("net.HttpResponse"),
-            "unknown",
-            Vec::new(),
-            "runtime has no member `net.HttpResponse.unknown`",
-        ),
-        (
             named("net.WebSocketListener"),
             "unknown",
             Vec::new(),
@@ -6220,22 +6214,6 @@ fn direct_backend_resource_member_success_paths_cover_remaining_network_surfaces
             ],
             result(Type::Unit),
         ),
-        (
-            named("net.HttpResponse"),
-            "reason",
-            Vec::new(),
-            Type::named("str"),
-        ),
-        (
-            named("net.HttpResponse"),
-            "headers",
-            Vec::new(),
-            Type::Named(
-                "dict".to_string(),
-                vec![Type::named("str"), Type::named("str")],
-            ),
-        ),
-        (named("net.HttpResponse"), "bytes", Vec::new(), vec_uint8()),
         (
             named("net.WebSocket"),
             "send_bytes",
@@ -8318,6 +8296,7 @@ fn direct_backend_builtin_call_surface_compiles_across_success_and_error_matrix(
     let success_source = r#"
 import fs
 import io
+import http
 import net
 
 def main() -> int32:
@@ -8350,7 +8329,7 @@ def main() -> int32:
     parsedf = parse_float64("7.0")
     headers: dict[str, str] = {"X-Test": "ok"}
     body: list[uint8] = [1 as uint8, 2 as uint8]
-    http_bytes = net.http_request_bytes_timeout("POST", "http://127.0.0.1/", body, headers, 5ms)
+    http_bytes = http.request_bytes("POST", "http://127.0.0.1/", body, headers)
     values: list[int32] = list[int32]()
     names: set[str] = set[str]()
     counts: dict[str, int32] = dict[str, int32]()
@@ -15029,6 +15008,74 @@ fn direct_lookup_matches_keep_the_found_value_without_a_lookup() {
     }
 }
 
+const TRY_READ_LINE_SOURCE: &str = r#"
+import fs
+import io
+
+def count(path: str) -> Result[int64, io.Error]:
+    mut lines = 0
+    with file = try fs.open(path):
+        while true:
+            match try file.read_line():
+                case str as line:
+                    lines += 1
+                case None:
+                    break
+    return Result.Ok(lines)
+
+def main() -> int32:
+    match count("missing.txt"):
+        case Result.Ok(lines):
+            print(lines)
+        case Result.Err(error):
+            print(error)
+    return 0
+"#;
+
+#[test]
+fn direct_try_of_a_file_line_read_builds_no_result() {
+    let mir = lower_source_to_mir(TRY_READ_LINE_SOURCE).expect("the line loop should lower");
+    let object = emit_host_object(&mir).expect("the line loop should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_file_read_line_try"),
+        "`try file.read_line()` reads through the fused helper: {referenced:?}"
+    );
+    assert!(
+        !referenced.contains("aura_direct_file_read_line"),
+        "`try file.read_line()` builds no `Result`: {referenced:?}"
+    );
+}
+
+#[test]
+fn direct_file_line_read_kept_as_a_result_uses_the_plain_helper() {
+    let source = r#"
+import fs
+import io
+
+def first(path: str) -> Result[str | None, io.Error]:
+    with file = try fs.open(path):
+        line = file.read_line()
+        return line
+
+def main() -> int32:
+    match first("missing.txt"):
+        case Result.Ok(_):
+            print("ok")
+        case Result.Err(error):
+            print(error)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the line read should lower");
+    let object = emit_host_object(&mir).expect("the line read should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_file_read_line")
+            && !referenced.contains("aura_direct_file_read_line_try"),
+        "a read whose `Result` is kept is not fused: {referenced:?}"
+    );
+}
+
 #[test]
 fn direct_scalar_variant_payloads_read_without_a_box() {
     let source = r#"
@@ -17285,6 +17332,88 @@ def main():
     assert_eq!(unlent.len(), 1);
 
     emit_host_object(&mir).expect("the trait object loop should compile directly");
+}
+
+#[test]
+fn direct_time_and_regex_module_calls_use_their_scalar_helpers() {
+    let source = r#"
+import regex
+import time
+
+def main() -> int32:
+    match time.parse_rfc3339("2026-11-10T20:14:38Z"):
+        case Result.Ok(at):
+            later = at.add(Duration.seconds(90)).to_local()
+            print(later.to_rfc3339())
+            print(later.since(at))
+            match later.format("%Y-%m-%d"):
+                case Result.Ok(text):
+                    print(text)
+                case Result.Err(time.Error.Invalid(message)):
+                    print(message)
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+    match time.parse("2026", "%Y"):
+        case Result.Ok(at):
+            print(at.year())
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+    match regex.compile("(?<word>[a-z]+)"):
+        case Result.Ok(pattern):
+            print(pattern.is_match("abc"))
+            print(pattern.count("abc def"))
+            print(pattern.find_all("abc def").len())
+            print(pattern.matches("abc def").len())
+            print(pattern.split("1abc2").len())
+            print(pattern.replace("abc def", "x"))
+            print(pattern.replace_all("abc def", "x"))
+            match pattern.find("abc"):
+                case regex.Match as found:
+                    print(found.text)
+                case None:
+                    pass
+            match pattern.captures("abc"):
+                case regex.Captures as groups:
+                    match groups.name("word"):
+                        case str as word:
+                            print(word)
+                        case None:
+                            pass
+                case None:
+                    pass
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+    return 0
+"#;
+    let mir = lower_source_to_mir(source).expect("the module calls should lower");
+    let object = emit_host_object(&mir).expect("the module calls should compile directly");
+    let referenced = exact_referenced_symbols(&object);
+    for helper in [
+        "aura_direct_time_rfc3339",
+        "aura_direct_time_format",
+        "aura_direct_time_failed",
+        "aura_direct_time_parse_rfc3339",
+        "aura_direct_time_parse",
+        "aura_direct_time_parsed_part",
+        "aura_direct_time_duration_seconds",
+        "aura_direct_time_duration_nanos",
+        "aura_direct_time_duration",
+        "aura_direct_time_local_offset_minutes",
+        "aura_direct_regex_scalar",
+        "aura_direct_regex_search",
+        "aura_direct_regex_replace",
+    ] {
+        assert!(
+            referenced.contains(helper),
+            "expected a call to `{helper}`: {referenced:?}"
+        );
+    }
+    for generic in ["aura_host_time_rfc3339", "aura_host_regex_is_match"] {
+        assert!(
+            !referenced.contains(generic),
+            "`{generic}` goes through the argument buffer: {referenced:?}"
+        );
+    }
 }
 
 #[test]

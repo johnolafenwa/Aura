@@ -253,6 +253,78 @@ limit, and the error variants.
 | `gzip.compress` | `compress(data: list[uint8], level: int64 = 6) -> list[uint8]` | One gzip member at `level` 0 to 9. A level out of range traps with `AU4001`. |
 | `gzip.decompress` | `decompress(data: list[uint8], max_bytes: int64 = 268435456) -> Result[list[uint8], gzip.Error]` | Decompresses every member and checks each trailer. Returns `gzip.Error.OutputTooLarge` when the data would pass `max_bytes`, and `gzip.Error.InvalidData` for malformed input. |
 
+## Regex
+
+[Regex Module](/manual/regex) covers the pattern syntax, positions, groups,
+replacement text, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `regex.compile` | `compile(pattern: str) -> Result[regex.Regex, regex.Error]` | Compiles a pattern. An invalid pattern returns `regex.Error.Invalid(message)`. |
+| `regex.escape` | `escape(text: str) -> str` | Escapes every pattern metacharacter in `text`. |
+| `Regex.is_match` | `is_match(self, text: str) -> bool` | Whether the pattern matches anywhere in `text`. |
+| `Regex.count` | `count(self, text: str) -> int64` | The number of non-overlapping matches. |
+| `Regex.find` | `find(self, text: str) -> regex.Match \| None` | The leftmost match, with `text`, `start`, and `end` in Unicode scalar values. |
+| `Regex.find_all` | `find_all(self, text: str) -> list[str]` | The text of every match. |
+| `Regex.matches` | `matches(self, text: str) -> list[regex.Match]` | Every match with its position. |
+| `Regex.captures` | `captures(self, text: str) -> regex.Captures \| None` | The groups of the leftmost match, read with `get(index)`, `name(name)`, and `len()`. |
+| `Regex.replace` | `replace(self, text: str, replacement: str) -> str` | Replaces the leftmost match. `$1`, `${name}`, and `$$` are expanded. |
+| `Regex.replace_all` | `replace_all(self, text: str, replacement: str) -> str` | Replaces every match. |
+| `Regex.split` | `split(self, text: str) -> list[str]` | The pieces of `text` between matches. |
+| `Regex.pattern` | `pattern(self) -> str` | The pattern text. |
+
+
+## HTTP Client
+
+[HTTP Module](/manual/http) covers settings, body reading, server-sent
+events, kept connections, redirects, compression, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `http.get` | `get(url: str) -> Result[http.Response, io.Error]` | Sends a GET request. |
+| `http.post` | `post(url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a POST request with a text body. |
+| `http.request` | `request(method: str, url: str, body: str, headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a text body. |
+| `http.request_bytes` | `request_bytes(method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[http.Response, io.Error]` | Sends a request with a byte body. |
+| `http.Client` | `Client(timeout=None, read_timeout=None, max_redirects=10, decompress=true, keep_alive=true, ca_file="")` | Request settings, with the methods `get`, `post`, `request`, and `request_bytes`. |
+| `http.idle_connections` | `idle_connections() -> int64` | The finished connections kept for reuse. |
+| `http.close_idle_connections` | `close_idle_connections() -> None` | Closes every kept connection. |
+| `Response.status` | `status: int64` | The status code. `reason` and `url` are the other public fields. |
+| `Response.ok` | `ok(self) -> bool` | Whether the status is from 200 to 299. |
+| `Response.header` | `header(self, name: str) -> str \| None` | A header value, found without regard to case. |
+| `Response.header_values` | `header_values(self, name: str) -> list[str]` | Every value of a header. |
+| `Response.headers` | `headers(self) -> dict[str, str]` | All headers, names in lower case. |
+| `Response.text` | `text(mut self) -> Result[str, io.Error]` | The rest of the body as text, up to 64 MiB. `text_up_to(max_bytes)` takes another limit. |
+| `Response.bytes` | `bytes(mut self) -> Result[list[uint8], io.Error]` | The rest of the body, up to 64 MiB. `bytes_up_to(max_bytes)` takes another limit. |
+| `Response.read_chunk` | `read_chunk(mut self, max_bytes: int64) -> Result[list[uint8] \| None, io.Error]` | The next bytes, or `None` at the end. |
+| `Response.read_line` | `read_line(mut self) -> Result[str \| None, io.Error]` | The next line, or `None` at the end. |
+| `Response.read_lines` | `read_lines(mut self, max_lines: int64) -> Result[list[str], io.Error]` | The next lines. An empty list is the end. |
+| `Response.read_event` | `read_event(mut self) -> Result[http.Event \| None, io.Error]` | The next server-sent event, with `event`, `data`, `id`, and `retry`. |
+| `Response.close` | `close(mut self) -> None` | Releases the connection. |
+
+## Time
+
+[Time Module](/manual/time) covers instants and offsets, the system time
+zone, RFC 3339 text, the pattern directives, and limits.
+
+| API | Signature | Behavior |
+| --- | --- | --- |
+| `time.now` | `now() -> time.DateTime` | The current instant, read at UTC. |
+| `time.now_local` | `now_local() -> time.DateTime` | The current instant, read at the system time zone's current offset. |
+| `time.monotonic` | `monotonic() -> Duration` | A reading of a clock that never goes backward. Subtract two readings. |
+| `time.utc` | `utc(year: int64, month: int64, day: int64, hour: int64 = 0, minute: int64 = 0, second: int64 = 0, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from calendar fields at UTC. A field out of range or a date that does not exist returns `time.Error.Invalid`. |
+| `time.from_unix` | `from_unix(seconds: int64, nanosecond: int64 = 0) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix seconds. |
+| `time.from_unix_ms` | `from_unix_ms(milliseconds: int64) -> Result[time.DateTime, time.Error]` | Builds an instant from Unix milliseconds. |
+| `time.parse_rfc3339` | `parse_rfc3339(text: str) -> Result[time.DateTime, time.Error]` | Parses RFC 3339 text and keeps its offset. |
+| `time.parse` | `parse(text: str, pattern: str) -> Result[time.DateTime, time.Error]` | Parses text laid out by `%` directives. |
+| `DateTime` fields | `year()`, `month()`, `day()`, `date()`, `hour()`, `minute()`, `second()`, `nanosecond()`, `weekday()`, `day_of_year()`, `offset_minutes()` | Calendar fields at the value's offset. `weekday()` is 1 for Monday to 7 for Sunday. |
+| `DateTime.unix` | `unix(self) -> int64`, `unix_ms(self) -> int64` | Seconds or milliseconds since 1970-01-01T00:00:00Z, rounded down. |
+| `DateTime.to_utc` | `to_utc(self) -> time.DateTime` | The same instant at UTC. `to_offset(minutes)` and `to_local()` read it at another offset. |
+| `DateTime.add` | `add(self, amount: Duration) -> time.DateTime`, `sub(self, amount: Duration) -> time.DateTime` | Exact arithmetic. Traps when the result leaves the years 1 to 9999. |
+| `DateTime.since` | `since(self, earlier: time.DateTime) -> Duration` | The time between two instants. |
+| `DateTime.is_before` | `is_before(self, other) -> bool`, `is_after(self, other) -> bool`, `same_instant(self, other) -> bool` | Compare instants, whatever their offsets. |
+| `DateTime.to_rfc3339` | `to_rfc3339(self) -> str` | RFC 3339 text. `print` and f-strings show the same text. |
+| `DateTime.format` | `format(self, pattern: str) -> Result[str, time.Error]` | Text laid out by `%` directives. |
+
 ## Collections
 
 [Collections](/manual/collections) covers ownership and iteration.
@@ -479,10 +551,6 @@ propagate.
 | `net.tls_listen` | `tls_listen(address: str, cert_pem_path: str, key_pem_path: str) -> Result[net.TlsListener, io.Error]` |
 | `net.tls_connect` | `tls_connect(address: str, server_name: str, ca_pem_path: str) -> Result[net.TlsStream, io.Error]` |
 | `net.tls_connect_timeout` | `tls_connect_timeout(address: str, server_name: str, ca_pem_path: str, timeout: Duration) -> Result[net.TlsStream, io.Error]` |
-| `net.http_request_text` | `http_request_text(method: str, url: str, body: str, headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_text_timeout` | `http_request_text_timeout(method: str, url: str, body: str, headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes` | `http_request_bytes(method: str, url: str, bytes: list[uint8], headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` |
-| `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: str, url: str, bytes: list[uint8], headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` |
 
 ## Network Resource Methods
 
@@ -535,11 +603,6 @@ and repeated headers.
 | `net.HttpExchange` | `body_bytes` | `body_bytes() -> list[uint8]` |
 | `net.HttpExchange` | `respond_text` | `respond_text(status: int32, text: own str, headers: own dict[str, str]) -> Result[None, io.Error]` |
 | `net.HttpExchange` | `respond_bytes` | `respond_bytes(status: int32, bytes: own list[uint8], headers: own dict[str, str]) -> Result[None, io.Error]` |
-| `net.HttpResponse` | `status` | `status() -> int32` |
-| `net.HttpResponse` | `reason` | `reason() -> str` |
-| `net.HttpResponse` | `headers` | `headers() -> dict[str, str]` |
-| `net.HttpResponse` | `text` | `text() -> Result[str, io.Error]` |
-| `net.HttpResponse` | `bytes` | `bytes() -> list[uint8]` |
 | `net.WebSocketListener` | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` |
 | `net.WebSocketListener` | `local_addr` | `local_addr() -> Result[str, io.Error]` |
 | `net.WebSocket` | `send_text` | `send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]` |

@@ -218,9 +218,9 @@ gate a CI job or a deploy script.
 
 ```aura
 import fs
+import http
 import io
 import json
-import net
 import process
 import sys
 
@@ -293,10 +293,9 @@ def run_command(argv: list[str], timeout: Duration) -> str:
             return f"error ({error})"
 
 def fetch(url: str, timeout: Duration) -> str:
-    headers: dict[str, str] = {}
-    match own net.http_request_text_timeout("GET", url, "", headers, timeout):
+    match own http.Client(timeout=timeout).get(url):
         case Result.Ok(response):
-            status = response.status()
+            status = response.status
             if status >= 200 and status < 400:
                 return "ok"
             return f"failed (HTTP {status})"

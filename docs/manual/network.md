@@ -4,7 +4,7 @@ The `net` module provides networking resources that cooperate with Aura's task s
 
 - TCP listeners and streams
 - UDP sockets and datagrams
-- HTTP listeners, exchanges, and client responses
+- HTTP listeners and exchanges
 - WebSocket listeners and sockets
 - Unix domain sockets on Unix hosts
 - TLS listeners and streams
@@ -160,34 +160,15 @@ UDP preserves datagram boundaries.
 
 The listener rejects malformed HTTP requests. A malformed request does not leave the listener permanently broken. Request bodies can use content-length or chunked framing.
 
-An incoming parsed HTTP message is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
+An incoming HTTP request is limited to 16 MiB of wire data and 64 headers. The listener reports an oversized or invalid request as an HTTP error where the protocol allows it.
 
 Headers are exposed as `dict[str, str]`. That type cannot faithfully hold repeated fields, such as several `set-Cookie` lines. The current conversion can also produce duplicate equal keys internally, despite the normal `dict` rule that keys are unique. If an application needs lossless or canonical handling of repeated headers, it must not use this 0.14 high-level HTTP API.
 
 ## HTTP Client
 
-| API | Signature | Contract |
-| --- | --- | --- |
-| `net.http_request_text` | `http_request_text(method: str, url: str, body: str, headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` | Sends an HTTP request with a text body. |
-| `net.http_request_text_timeout` | `http_request_text_timeout(method: str, url: str, body: str, headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` | Sends a text request with a deadline. |
-| `net.http_request_bytes` | `http_request_bytes(method: str, url: str, bytes: list[uint8], headers: dict[str, str]) -> Result[net.HttpResponse, io.Error]` | Sends an HTTP request with a byte body. |
-| `net.http_request_bytes_timeout` | `http_request_bytes_timeout(method: str, url: str, bytes: list[uint8], headers: dict[str, str], timeout: Duration) -> Result[net.HttpResponse, io.Error]` | Sends a byte request with a deadline. |
-
-`net.HttpResponse`:
-
-| API | Signature | Contract |
-| --- | --- | --- |
-| `status` | `status() -> int32` | Returns the numeric status code. |
-| `reason` | `reason() -> str` | Returns the reason phrase. |
-| `headers` | `headers() -> dict[str, str]` | Returns the response headers. |
-| `text` | `text() -> Result[str, io.Error]` | Decodes the body as UTF-8. |
-| `bytes` | `bytes() -> list[uint8]` | Returns the raw response body. |
-
-Use the byte request and response APIs for binary payloads or an unknown encoding.
-
-Client URLs can use `http://` or `https://`. HTTPS validates the server certificate. Responses can use content-length, chunked transfer encoding, or connection-close framing. The same limits of 16 MiB per incoming message and 64 headers apply.
-
-The high-level HTTP helpers in 0.14 do not follow redirects, pool connections, speak HTTP/2, use proxies, decompress bodies, or take a custom-CA argument.
+The HTTP client is the [`http` module](/manual/http). It streams response
+bodies, follows redirects, keeps connections for reuse, and decodes gzip
+and deflate bodies.
 
 ## WebSocket
 
@@ -367,7 +348,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 | TCP whole text reads, TCP line reads, and single byte-count reads | 64 MiB |
 | TCP, Unix, and TLS exact counts | `1..=67108864` |
 | UDP receive counts | `1..=65535` |
-| Incoming parsed HTTP message | 16 MiB of wire data and 64 headers |
+| Incoming HTTP request | 16 MiB of wire data and 64 headers |
 | WebSocket message | 64 MiB |
 | WebSocket frame and write buffer | 16 MiB |
 | TLS handshake | hard 10-second cap, plus any shorter caller deadline |
@@ -378,7 +359,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 - WebSocket listeners cannot be closed. WebSocket cancellation coverage is incomplete. WebSocket close discards host close errors.
 - Unix sockets are unavailable on non-Unix hosts. `unix_listen` does not replace a path that is not a socket.
 
-These are absent: redirects, connection pooling, HTTP/2, proxies, decompression, custom-CA arguments on the high-level helpers, and lossless repeated-header APIs.
+These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs. The limits of the HTTP client are in the [`http` module](/manual/http#limits).
 
 ## Status
 

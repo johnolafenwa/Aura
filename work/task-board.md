@@ -25,6 +25,20 @@ Last updated: 2026-11-11
 - Possible follow-ups: `int32` lanes, the joined integer check and
   `matmul` tiles on AArch64, lane loads from an `Array`, and counted
   loops over `Array` elements.
+## The two 0.14.0 regressions (complete)
+
+- Hello world grew 82 KB in 0.14.0 because `print` linked the code that
+  turns a parsed `json.Value` into list and dict values. It renders from
+  the tape now: 1,167,304 bytes down to 1,098,640 on `main`.
+- Fifteen cross-language programs executed 2 to 6% more instructions.
+  Four causes are fixed: a type lookup by name for every new list, a
+  second storage test on every dict read, a value free that called two
+  functions, and loop copies that stopped LLVM inlining a function with
+  one call. The 30 programs execute 76,843M instructions, against 79,828M
+  on 0.14.0 and 79,994M on 0.13.0. Details are in
+  `2026-11-11-0.14-regressions.md`.
+- Open: four programs stay 1 to 2% above 0.13.0, which is the cost of the
+  smaller value header and the JSON tape.
 
 ## Six older compiler bugs (complete)
 
@@ -49,8 +63,17 @@ Last updated: 2026-11-11
   Rust. Details are in `2026-11-10-streaming-io-and-stdlib.md`.
 - Done: `fs.File.read_line`, `read_lines`, and `read_chunk`, the `gzip`
   module, `bytes.hmac_sha256`, and `bytes.constant_time_eq` (ADR-0073).
-- Remaining: `regex` and `time` modules, the `http` client module, and
-  the streaming reference agent.
+- Done: the `regex` module (ADR-0078) and the `time` module (ADR-0079).
+- Done: the `http` client module (ADR-0082), which replaces
+  `net.http_request_*`.
+- Done: the reference streaming agent, `examples/agents/streaming_agent`.
+  Its run against the live API is not exercised by the tests, which use
+  the package's loopback stand-in.
+- Done: `try file.read_line()` in a loop is faster than Python (155 ms
+  against 250 ms for 2 million lines; Rust takes 90 ms).
+- Done: the final benchmark pass, and direct runtime calls for `time` and
+  `regex`. All four programs beat Python; against Rust `stream_io` is 2.0
+  times, `http_stream` 1.5, `date_time` 1.9, and `regex_scan` 3.0.
 
 ## Release 0.14.0-preview (complete)
 

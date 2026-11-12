@@ -12,12 +12,16 @@ serde_json = { version = "=1.0.149", optional = true }
 flate2 = { version = "=1.1.11", default-features = false, features = ["zlib-rs"], optional = true }
 hmac = { version = "=0.12.1", optional = true }
 sha2 = { version = "=0.10.9", optional = true }
+# `regex_scan` uses the regex engine Aura's runtime links.
+regex = { version = "=1.13.1", optional = true }
+# `date_time` uses the date and time crate most Rust programs use.
+chrono = { version = "=0.4.42", default-features = false, features = ["std"], optional = true }
 
 [features]
 # The cross-language programs in ../cross_language and the operation probes
 # in ../operation_probes. Off by default, so the release-performance
 # references build exactly as before.
-cross-language = ["dep:serde_json", "dep:flate2", "dep:hmac", "dep:sha2", "tokio/sync"]
+cross-language = ["dep:serde_json", "dep:flate2", "dep:hmac", "dep:sha2", "dep:regex", "dep:chrono", "tokio/sync"]
 
 [profile.release]
 opt-level = 3
@@ -56,6 +60,11 @@ path = "../cross_language/csv_aggregate/csv_aggregate.rs"
 required-features = ["cross-language"]
 
 [[bin]]
+name = "date_time"
+path = "../cross_language/date_time/date_time.rs"
+required-features = ["cross-language"]
+
+[[bin]]
 name = "docdb"
 path = "../cross_language/docdb/docdb.rs"
 required-features = ["cross-language"]
@@ -78,6 +87,11 @@ required-features = ["cross-language"]
 [[bin]]
 name = "http_api"
 path = "../cross_language/http_api/http_api.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "http_stream"
+path = "../cross_language/http_stream/http_stream.rs"
 required-features = ["cross-language"]
 
 [[bin]]
@@ -158,6 +172,11 @@ required-features = ["cross-language"]
 [[bin]]
 name = "sql_engine"
 path = "../cross_language/sql_engine/sql_engine.rs"
+required-features = ["cross-language"]
+
+[[bin]]
+name = "regex_scan"
+path = "../cross_language/regex_scan/regex_scan.rs"
 required-features = ["cross-language"]
 
 [[bin]]

@@ -1351,11 +1351,6 @@ pub enum BuiltinMember {
     HttpExchangeBodyBytes,
     HttpExchangeRespondText,
     HttpExchangeRespondBytes,
-    HttpResponseStatus,
-    HttpResponseReason,
-    HttpResponseHeaders,
-    HttpResponseText,
-    HttpResponseBytes,
     WebSocketListenerAccept,
     WebSocketListenerLocalAddr,
     WebSocketSendText,
@@ -1704,11 +1699,6 @@ impl BuiltinMember {
             ("net.HttpExchange", "body_bytes") => Some(Self::HttpExchangeBodyBytes),
             ("net.HttpExchange", "respond_text") => Some(Self::HttpExchangeRespondText),
             ("net.HttpExchange", "respond_bytes") => Some(Self::HttpExchangeRespondBytes),
-            ("net.HttpResponse", "status") => Some(Self::HttpResponseStatus),
-            ("net.HttpResponse", "reason") => Some(Self::HttpResponseReason),
-            ("net.HttpResponse", "headers") => Some(Self::HttpResponseHeaders),
-            ("net.HttpResponse", "text") => Some(Self::HttpResponseText),
-            ("net.HttpResponse", "bytes") => Some(Self::HttpResponseBytes),
             ("net.WebSocketListener", "accept") => Some(Self::WebSocketListenerAccept),
             ("net.WebSocketListener", "local_addr") => Some(Self::WebSocketListenerLocalAddr),
             ("net.WebSocket", "send_text") => Some(Self::WebSocketSendText),
@@ -1923,11 +1913,6 @@ impl BuiltinMember {
             Self::HttpExchangeBodyBytes => "body_bytes",
             Self::HttpExchangeRespondText => "respond_text",
             Self::HttpExchangeRespondBytes => "respond_bytes",
-            Self::HttpResponseStatus => "status",
-            Self::HttpResponseReason => "reason",
-            Self::HttpResponseHeaders => "headers",
-            Self::HttpResponseText => "text",
-            Self::HttpResponseBytes => "bytes",
             Self::WebSocketListenerAccept => "accept",
             Self::WebSocketListenerLocalAddr => "local_addr",
             Self::WebSocketSendText => "send_text",
@@ -2168,11 +2153,6 @@ impl BuiltinMember {
             Self::HttpExchangeBodyBytes => "body_bytes() -> list[uint8]",
             Self::HttpExchangeRespondText => "respond_text(status: int32, text: own str, headers: own dict[str, str]) -> Result[None, io.Error]",
             Self::HttpExchangeRespondBytes => "respond_bytes(status: int32, bytes: own list[uint8], headers: own dict[str, str]) -> Result[None, io.Error]",
-            Self::HttpResponseStatus => "status() -> int32",
-            Self::HttpResponseReason => "reason() -> str",
-            Self::HttpResponseHeaders => "headers() -> dict[str, str]",
-            Self::HttpResponseText => "text() -> Result[str, io.Error]",
-            Self::HttpResponseBytes => "bytes() -> list[uint8]",
             Self::WebSocketListenerAccept => "accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]",
             Self::WebSocketListenerLocalAddr => "local_addr() -> Result[str, io.Error]",
             Self::WebSocketSendText => "send_text(text: str, timeout: Duration = ...) -> Result[None, io.Error]",
@@ -2535,11 +2515,6 @@ impl BuiltinMember {
             Self::HttpExchangeBodyBytes => "Returns the HTTP request body as raw bytes.",
             Self::HttpExchangeRespondText => "Sends a text HTTP response for the current request.",
             Self::HttpExchangeRespondBytes => "Sends a binary HTTP response for the current request.",
-            Self::HttpResponseStatus => "Returns the HTTP response status code.",
-            Self::HttpResponseReason => "Returns the HTTP response reason phrase.",
-            Self::HttpResponseHeaders => "Returns the HTTP response headers as a map.",
-            Self::HttpResponseText => "Returns the HTTP response body decoded as UTF-8.",
-            Self::HttpResponseBytes => "Returns the HTTP response body as raw bytes.",
             Self::WebSocketListenerAccept => "Accepts the next incoming WebSocket connection.",
             Self::WebSocketListenerLocalAddr => "Returns the bound local address for the WebSocket listener.",
             Self::WebSocketSendText => "Sends a text WebSocket frame.",
@@ -2683,11 +2658,6 @@ impl BuiltinMember {
             | Self::HttpExchangeHeaders
             | Self::HttpExchangeBodyText
             | Self::HttpExchangeBodyBytes
-            | Self::HttpResponseStatus
-            | Self::HttpResponseReason
-            | Self::HttpResponseHeaders
-            | Self::HttpResponseText
-            | Self::HttpResponseBytes
             | Self::WebSocketListenerLocalAddr
             | Self::WebSocketClose
             | Self::UnixListenerClose

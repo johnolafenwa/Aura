@@ -211,6 +211,7 @@ fn advanced_io_and_network_surface_type_checks_from_path_context() {
     let entry = temp.path().join("main.au");
     let source = r#"import io
 import fs
+import http
 import net
 
 def touch_bytes(path: str) -> Result[list[uint8], io.Error]:
@@ -247,18 +248,21 @@ def inspect_http(listener: own net.HttpListener) -> Result[None, io.Error]:
             try request.respond_bytes(201, body_bytes, headers)
             return Result.Ok(None)
 
-def inspect_http_response(response: own net.HttpResponse) -> Result[str, io.Error]:
+def inspect_http_response(response: own http.Response) -> Result[str, io.Error]:
     with received = response:
-        print(received.status())
-        print(received.reason())
+        print(received.status)
+        print(received.reason)
         headers = received.headers()
-        match own headers.get("Content-Type"):
+        match own headers.get("content-type"):
             case Lookup.Found(content_type):
                 print(content_type)
             case Lookup.Missing:
                 pass
+        print(received.header("Content-Type"))
+        chunk = try received.read_chunk(1)
+        print(chunk)
         text = try received.text()
-        bytes = received.bytes()
+        bytes = try received.bytes()
         print(bytes.len())
         return Result.Ok(text)
 
@@ -313,10 +317,12 @@ def inspect_tls(listener: own net.TlsListener, stream: own net.TlsStream) -> Res
 
 def main() -> int32:
     headers: dict[str, str] = {"Content-Type": "text/plain"}
-    print(net.http_request_text("GET", "http://127.0.0.1:1", "", headers.copy()))
-    print(net.http_request_text_timeout("GET", "http://127.0.0.1:1", "", headers.copy(), 1s))
-    print(net.http_request_bytes("POST", "http://127.0.0.1:1", [1 as uint8], headers.copy()))
-    print(net.http_request_bytes_timeout("POST", "http://127.0.0.1:1", [1 as uint8], headers, 1s))
+    print(http.request("GET", "http://127.0.0.1:1", "", headers.copy()).is_ok())
+    print(http.Client(timeout=1s).request("GET", "http://127.0.0.1:1", "", headers.copy()).is_ok())
+    print(http.request_bytes("POST", "http://127.0.0.1:1", [1 as uint8], headers.copy()).is_ok())
+    print(http.Client(timeout=1s).request_bytes("POST", "http://127.0.0.1:1", [1 as uint8], headers).is_ok())
+    print(http.get("http://127.0.0.1:1").is_ok())
+    print(http.post("http://127.0.0.1:1", "", {}).is_ok())
     print(net.connect_timeout("127.0.0.1:1", 1s))
     print(net.udp_bind("127.0.0.1:0"))
     print(net.http_listen("127.0.0.1:0"))
@@ -344,6 +350,7 @@ fn advanced_io_and_network_modules_run_through_public_api() {
     let source = format!(
         r#"import io
 import fs
+import http
 import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -443,9 +450,8 @@ def run() -> Result[None, io.Error]:
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
         headers: dict[str, str] = {{"X-Test": "ok"}}
-        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.copy())
-        with http_response = response:
-            print(http_response.status())
+        with http_response = try http.request("POST", "http://" + http_addr + "/hello", "body", headers.copy()):
+            print(http_response.status)
             print(try http_response.text())
         match own http_task.result():
             case TaskResult.Ready(result):
@@ -463,10 +469,9 @@ def run() -> Result[None, io.Error]:
         http_bytes_addresses = Queue[str](capacity=1)
         http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
         http_bytes_addr = try receive_address(http_bytes_addresses)
-        bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
-        with received_bytes = bytes_response:
-            print(received_bytes.status())
-            print(received_bytes.bytes().len())
+        with received_bytes = try http.request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers):
+            print(received_bytes.status)
+            print((try received_bytes.bytes()).len())
         match own http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result

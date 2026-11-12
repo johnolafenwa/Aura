@@ -1,0 +1,162 @@
+"""Reference streaming agent: a model reply read as it arrives, with a tool."""
+
+import claude
+import http
+import io
+import json
+import mock
+import sys
+from claude import Block, Failure
+
+
+class WordCountArgs:
+    """Counts the words in a text."""
+
+    text: str
+
+
+impl json.Codec for WordCountArgs
+
+
+class WordCount:
+    words: int64
+
+
+impl json.Codec for WordCount
+
+
+def tools() -> str:
+    """The tool list a request carries. `eager_input_streaming` sends a
+    call's input as it is written, so `run_tool` checks it before use."""
+    return json.dumps(
+        json.Value.Array(
+            [
+                json.Value.Object(
+                    {
+                        "name": json.Value.String("word_count"),
+                        "description": json.Value.String("Counts the words in a text."),
+                        "eager_input_streaming": json.Value.Bool(true),
+                        "input_schema": json.schema[WordCountArgs](),
+                    }
+                )
+            ]
+        )
+    )
+
+
+def run_tool(call: Block) -> json.Value:
+    """Runs one tool call and returns its `tool_result` block. An input
+    that does not decode is reported to the model, not run."""
+    mut content = ""
+    mut failed = false
+    if call.name == "word_count":
+        match own json.decode_text[WordCountArgs](call.input):
+            case Result.Ok(args):
+                content = json.dumps(
+                    json.encode(WordCount(words=args.text.split_whitespace().len()))
+                )
+            case Result.Err(error):
+                content = json.dumps(
+                    json.Value.Object(
+                        {
+                            "INVALID_JSON": json.Value.String(call.input.clone()),
+                            "error": json.Value.String(f"{error}"),
+                        }
+                    )
+                )
+                failed = true
+    else:
+        content = f"unknown tool {call.name}"
+        failed = true
+    print(f"[tool {call.name} {call.input} -> {content}]")
+    return json.Value.Object(
+        {
+            "type": json.Value.String("tool_result"),
+            "tool_use_id": json.Value.String(call.id.clone()),
+            "content": json.Value.String(content),
+            "is_error": json.Value.Bool(failed),
+        }
+    )
+
+
+def converse(model: claude.Client, question: str) -> Result[int64, Failure]:
+    """Runs the conversation to its end and returns the requests it took."""
+    system = "You answer briefly. Use the tools for counting."
+    mut messages = ["{\"role\":\"user\",\"content\":" + claude.quote(question) + "}"]
+    print(f"> {question}")
+    for request in range(1, 9):
+        reply = try model.send(system, tools(), messages)
+        messages.append(reply.message())
+        if reply.stop_reason == "pause_turn":
+            continue
+        if reply.stop_reason != "tool_use":
+            print(f"[stopped: {reply.stop_reason}]")
+            return Result.Ok(request)
+        mut results = list[json.Value]()
+        for block in reply.blocks:
+            if block.kind == "tool_use":
+                results.append(run_tool(block))
+        messages.append(
+            json.dumps(
+                json.Value.Object(
+                    {
+                        "role": json.Value.String("user"),
+                        "content": json.Value.Array(results),
+                    }
+                )
+            )
+        )
+    print("[stopped: too many requests]")
+    return Result.Ok(8)
+
+
+def run() -> Result[None, Failure]:
+    question = "How many words are in \"the quick brown fox\"?"
+    key = sys.env("ANTHROPIC_API_KEY")
+    if key is not None and key != "":
+        print("[model claude-opus-5-5]")
+        _ = try converse(claude.Client(api_key=key), question)
+        return Result.Ok(None)
+
+    print("[model mock]")
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(mock.serve, addresses, 2)
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                requests = try converse(
+                    claude.Client(base_url="http://" + address, api_key="mock-key"),
+                    question,
+                )
+                match own server.result():
+                    case TaskResult.Ready(result):
+                        match own result:
+                            case Result.Ok(connections):
+                                print(
+                                    f"[{requests} requests on {connections} connection]"
+                                )
+                            case Result.Err(error):
+                                return Result.Err(Failure.Transport(error=error))
+                    case _:
+                        return Result.Err(
+                            Failure.Stream(reason="the mock server failed")
+                        )
+            case _:
+                return Result.Err(Failure.Transport(error=io.Error.TimedOut))
+    http.close_idle_connections()
+    return Result.Ok(None)
+
+
+def main() -> int32:
+    match run():
+        case Result.Ok(_):
+            return 0
+        case Result.Err(Failure.Api(status, body)):
+            print(f"the API answered {status}: {body}")
+            return 1
+        case Result.Err(Failure.Transport(error)):
+            print(f"the request failed: {error}")
+            return 1
+        case Result.Err(Failure.Stream(reason)):
+            print(f"the stream failed: {reason}")
+            return 1

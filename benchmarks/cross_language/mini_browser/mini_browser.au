@@ -8,6 +8,7 @@
 # and lays the visible text out into lines with word wrapping, indents, margins,
 # and numbered link markers, like a text-mode browser. Links to missing pages get
 # 404 replies. Reports crawl counts and a checksum over every rendered line.
+import http
 import io
 import net
 import sys
@@ -581,10 +582,8 @@ class Reply:
 
 
 def fetch(address: str, path: str) -> Result[Reply, io.Error]:
-    headers: dict[str, str] = {}
-    response = try net.http_request_text("GET", "http://" + address + path, "", headers)
-    with reply = response:
-        return Result.Ok(Reply(status=reply.status(), body=try reply.text()))
+    with reply = try http.get("http://" + address + path):
+        return Result.Ok(Reply(status=reply.status as int32, body=try reply.text()))
 
 
 def run(total: int64) -> Result[str, io.Error]:

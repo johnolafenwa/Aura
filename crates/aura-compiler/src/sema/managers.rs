@@ -210,7 +210,7 @@ impl FunctionChecker<'_> {
         span: crate::diag::Span,
     ) -> Result<ManagerShape> {
         let class_info = match value_ty {
-            Type::Named(name, _) => self.classes.get(name),
+            Type::Named(name, _) => self.resolve_class_info(name),
             _ => None,
         };
         let shape = classify_manager(value_ty, class_info)

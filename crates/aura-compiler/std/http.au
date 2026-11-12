@@ -1,0 +1,205 @@
+# The Aura-source part of the builtin `http` module. The compiler checks
+# this file as module `http` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. A `Response` keeps its body
+# as an `http.Stream`, the connection the runtime reads in pieces, so
+# dropping a response closes its connection.
+import http
+import io
+
+
+public class Event:
+    """One server-sent event."""
+    # The `event` field, or "message" when the event has none.
+    public event: str
+    # The `data` lines, joined with newlines.
+    public data: str
+    # The last `id` the stream has sent, or "" when it has sent none.
+    public id: str
+    # The reconnection delay the server asked for, when the event has one.
+    public retry: Duration | None
+
+
+public class Response:
+    """An HTTP response. The status and headers have arrived; the body is
+    read from the connection as the program asks for it."""
+    public status: int64
+    public reason: str
+    # The URL the response came from, after any redirects.
+    public url: str
+    # Header names in lower case and their values, in the order sent.
+    fields: list[str]
+    stream: http.Stream
+
+    public def ok(self) -> bool:
+        """Whether the status is from 200 to 299."""
+        return self.status >= 200 and self.status < 300
+
+    public def header(self, name: str) -> str | None:
+        """The value of header `name`, compared without regard to case.
+        A header sent more than once has its values joined with ", "."""
+        values = self.header_values(name)
+        if values.is_empty():
+            return None
+        return ", ".join(values)
+
+    public def header_values(self, name: str) -> list[str]:
+        """Every value of header `name`, in the order sent."""
+        wanted = name.to_lower()
+        mut values = list[str]()
+        mut index = 0
+        while index < self.fields.len():
+            if self.fields[index] == wanted:
+                values.append(self.fields[index + 1].clone())
+            index += 2
+        return values
+
+    public def headers(self) -> dict[str, str]:
+        """All headers, names in lower case. A header sent more than once
+        has its values joined with ", "."""
+        mut headers = dict[str, str]()
+        mut index = 0
+        while index < self.fields.len():
+            name = self.fields[index].clone()
+            mut value = self.fields[index + 1].clone()
+            if name in headers:
+                value = headers[name.clone()] + ", " + value
+            headers[name] = value
+            index += 2
+        return headers
+
+    public def text(mut self) -> Result[str, io.Error]:
+        """The rest of the body as text. Fails with `io.Error.InvalidData`
+        when it is not UTF-8 or is larger than 64 MiB."""
+        return http.__aura_read_text(self.stream, 67108864)
+
+    public def text_up_to(mut self, max_bytes: int64) -> Result[str, io.Error]:
+        """The rest of the body as text, when it is at most `max_bytes`
+        long."""
+        return http.__aura_read_text(self.stream, max_bytes)
+
+    public def bytes(mut self) -> Result[list[uint8], io.Error]:
+        """The rest of the body. Fails with `io.Error.InvalidData` when it
+        is larger than 64 MiB."""
+        return http.__aura_read_all(self.stream, 67108864)
+
+    public def bytes_up_to(mut self, max_bytes: int64) -> Result[list[uint8], io.Error]:
+        """The rest of the body, when it is at most `max_bytes` long."""
+        return http.__aura_read_all(self.stream, max_bytes)
+
+    public def read_chunk(mut self, max_bytes: int64) -> Result[list[uint8] | None, io.Error]:
+        """The next bytes of the body, at most `max_bytes` of them, or
+        `None` at its end. Returns what has arrived without waiting for
+        `max_bytes`."""
+        return http.__aura_read_chunk(self.stream, max_bytes)
+
+    public def read_line(mut self) -> Result[str | None, io.Error]:
+        """The next line of the body without its line ending, or `None` at
+        the end."""
+        return http.__aura_read_line(self.stream)
+
+    public def read_lines(mut self, max_lines: int64) -> Result[list[str], io.Error]:
+        """The next lines of the body, at most `max_lines` of them. Waits
+        for one line and returns it with the lines that have already
+        arrived. An empty list is the end of the body."""
+        return http.__aura_read_lines(self.stream, max_lines)
+
+    public def read_event(mut self) -> Result[Event | None, io.Error]:
+        """The next server-sent event of a `text/event-stream` body, or
+        `None` at the end."""
+        (found, event, data, id, retry_ms) = try http.__aura_read_event(self.stream)
+        if not found:
+            return Result.Ok(None)
+        if retry_ms < 0:
+            return Result.Ok(Event(event=event, data=data, id=id, retry=None))
+        return Result.Ok(Event(event=event, data=data, id=id, retry=Duration.ms(retry_ms)))
+
+    public def close(mut self) -> None:
+        """Releases the connection. A body read to its end has already
+        returned its connection for reuse; closing earlier closes the
+        connection."""
+        http.__aura_close(self.stream)
+
+
+public class Client:
+    """How requests are made. Every field has a default, so
+    `http.Client()` behaves as the module functions do."""
+    # The limit from the start of a request to the arrival of the response
+    # head, redirects included. `None` waits without limit.
+    public timeout: Duration | None = None
+    # The limit of each read of a response body.
+    public read_timeout: Duration | None = None
+    # Redirects followed before the request fails. Zero returns each
+    # redirect response to the caller.
+    public max_redirects: int64 = 10
+    # Ask for gzip and deflate bodies and decode them.
+    public decompress: bool = true
+    # Keep finished connections and use them for later requests.
+    public keep_alive: bool = true
+    # A PEM file of certificate authorities to trust instead of the
+    # built-in roots.
+    public ca_file: str = ""
+
+    def send(self, method: str, url: str, headers: dict[str, str], text: str, body: list[uint8]) -> Result[Response, io.Error]:
+        mut flags = 0
+        if self.decompress:
+            flags += 1
+        if self.keep_alive:
+            flags += 2
+        mut timeout = 0ms
+        limit = self.timeout
+        if limit is not None:
+            timeout = limit
+            flags += 4
+        mut read_timeout = 0ms
+        read_limit = self.read_timeout
+        if read_limit is not None:
+            read_timeout = read_limit
+            flags += 8
+        (stream, status, reason, fields, final_url) = try http.__aura_send(method, url, headers, text, body, timeout, read_timeout, self.max_redirects, flags, self.ca_file)
+        return Result.Ok(Response(status=status, reason=reason, url=final_url, fields=fields, stream=stream))
+
+    public def request(self, method: str, url: str, body: str, headers: dict[str, str]) -> Result[Response, io.Error]:
+        """Sends a request with a text body."""
+        return self.send(method, url, headers, body, list[uint8]())
+
+    public def request_bytes(self, method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[Response, io.Error]:
+        """Sends a request with a byte body."""
+        return self.send(method, url, headers, "", body)
+
+    public def get(self, url: str) -> Result[Response, io.Error]:
+        """Sends a GET request."""
+        return self.send("GET", url, dict[str, str](), "", list[uint8]())
+
+    public def post(self, url: str, body: str, headers: dict[str, str]) -> Result[Response, io.Error]:
+        """Sends a POST request with a text body."""
+        return self.send("POST", url, headers, body, list[uint8]())
+
+
+public def request(method: str, url: str, body: str, headers: dict[str, str]) -> Result[Response, io.Error]:
+    """Sends a request with a text body and the default settings."""
+    return Client().request(method, url, body, headers)
+
+
+public def request_bytes(method: str, url: str, body: list[uint8], headers: dict[str, str]) -> Result[Response, io.Error]:
+    """Sends a request with a byte body and the default settings."""
+    return Client().request_bytes(method, url, body, headers)
+
+
+public def get(url: str) -> Result[Response, io.Error]:
+    """Sends a GET request with the default settings."""
+    return Client().get(url)
+
+
+public def post(url: str, body: str, headers: dict[str, str]) -> Result[Response, io.Error]:
+    """Sends a POST request with a text body and the default settings."""
+    return Client().post(url, body, headers)
+
+
+public def idle_connections() -> int64:
+    """The finished connections kept for reuse."""
+    return http.__aura_idle_connections()
+
+
+public def close_idle_connections() -> None:
+    """Closes every kept connection."""
+    http.__aura_close_idle()
