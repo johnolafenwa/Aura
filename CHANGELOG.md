@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- Children started together in a `TaskGroup` reach idle workers sooner
+  on Linux. An idle worker waits 20 microseconds for a new child to
+  become available to it, and the Linux poller rounded that wait up to a
+  millisecond, so the second child of a pair started about a millisecond
+  late. The worker now spins through waits shorter than half a
+  millisecond. Twenty rounds of two 3 ms children take 63 ms where they
+  took 81 ms, against 56 ms for one child. Twenty rounds of four 0.6 ms
+  children take 20 ms where they took 36 ms.
 - The `time` and `regex` modules call the runtime with integer arguments
   as plain words and get a `bool` or an integer back as one word, instead
   of boxing each integer into an argument buffer. `date_time` goes from
