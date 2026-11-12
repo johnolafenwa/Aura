@@ -127,6 +127,7 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.95.0
+          components: clippy, llvm-tools-preview, rustfmt
 
       - name: Install LLVM's system libraries
         if: runner.os == 'Linux'
@@ -154,11 +155,12 @@ jobs:
       - name: Compare the interpreter with native executables
         run: cargo test --locked -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture
 
-  windows-runtime:
-    # Native Windows is being brought up in steps. This step builds the
-    # runtime and runs its tests; the compiler and `aura build` follow.
+  windows:
+    # Native Windows is being brought up in steps. The runtime's tests run
+    # in full; the compiler and the `aura` command are built, and their
+    # tests and `aura build` follow.
     runs-on: windows-2025
-    timeout-minutes: 60
+    timeout-minutes: 120
     defaults:
       run:
         shell: bash
@@ -171,6 +173,7 @@ jobs:
         uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
         with:
           toolchain: 1.95.0
+          components: clippy, llvm-tools-preview, rustfmt
 
       - name: Put the POSIX commands the tests spawn on PATH
         # Git for Windows carries `sh`, `echo`, `true` and the rest.
@@ -180,6 +183,21 @@ jobs:
         env:
           RUST_MIN_STACK: 33554432
         run: cargo test --locked -p aura-core -p aura-runtime
+
+      - name: Cache LLVM
+        if: ${{ !cancelled() }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        if: ${{ !cancelled() }}
+        run: bash scripts/install-llvm.sh
+
+      - name: Build the compiler and the aura command
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p aura
 
   native-binaries:
     strategy:

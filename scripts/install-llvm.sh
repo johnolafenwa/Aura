@@ -6,6 +6,10 @@
 # llvm-config, the LLVM and LLVM-C headers, and the static libLLVM and
 # libPolly archives.
 #
+# On Windows x86-64, under Git Bash, downloads the official MSVC archive
+# the same way and keeps llvm-config.exe, the headers and the static LLVM
+# .lib files.
+#
 # On macOS, arm64 or x86-64, installs Homebrew's llvm@22 instead. The
 # official macOS archive's static libraries hold LLVM bitcode, which Apple's
 # linker cannot read, and Homebrew's bottle holds machine code. Homebrew
@@ -43,7 +47,16 @@ if not any(tag in files for tag in usable):
 '
 }
 
+exe=""
+libraries=("lib/libLLVM*.a" "lib/libPolly*.a")
+
 case "$(uname -s)-$(uname -m)" in
+  MINGW*-x86_64 | MSYS*-x86_64)
+    archive="clang+llvm-${version}-x86_64-pc-windows-msvc.tar.xz"
+    sha256=6550bcc308bf972f7f956001b73f6478da3d22f1ebd4b01653c978a6c7ff3698
+    exe=".exe"
+    libraries=("lib/LLVM*.lib")
+    ;;
   Linux-x86_64)
     archive="LLVM-${version}-Linux-X64.tar.xz"
     sha256=ff32497b6801267ee427bc69cdaeecfb2d19578af8c2a942e864c45215f9a2ac
@@ -100,7 +113,7 @@ sha256_of() {
   fi
 }
 
-if [ -x "$prefix/bin/llvm-config" ] && [ "$("$prefix/bin/llvm-config" --version)" = "$version" ]; then
+if [ -x "$prefix/bin/llvm-config$exe" ] && [ "$("$prefix/bin/llvm-config$exe" --version)" = "$version" ]; then
   echo "LLVM ${version} is already installed in ${prefix}"
 else
   work=$(mktemp -d)
@@ -120,12 +133,11 @@ else
     wildcards=(--wildcards)
   fi
   mkdir "$work/extract"
-  tar -xJf "$work/$archive" -C "$work/extract" ${wildcards[@]+"${wildcards[@]}"} \
-    "$top/bin/llvm-config" \
-    "$top/include/llvm" \
-    "$top/include/llvm-c" \
-    "$top/lib/libLLVM*.a" \
-    "$top/lib/libPolly*.a"
+  members=("$top/bin/llvm-config$exe" "$top/include/llvm" "$top/include/llvm-c")
+  for library in "${libraries[@]}"; do
+    members+=("$top/$library")
+  done
+  tar -xJf "$work/$archive" -C "$work/extract" ${wildcards[@]+"${wildcards[@]}"} "${members[@]}"
   rm "$work/$archive"
   rm -rf "$prefix"
   mkdir -p "$(dirname "$prefix")"
@@ -133,6 +145,10 @@ else
   echo "Installed LLVM ${version} in ${prefix}"
 fi
 
+if [ -n "$exe" ]; then
+  # cargo is a Windows program and reads a Windows path.
+  prefix=$(cygpath -m "$prefix")
+fi
 echo "export LLVM_SYS_221_PREFIX=${prefix}"
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "LLVM_SYS_221_PREFIX=${prefix}" >> "$GITHUB_ENV"

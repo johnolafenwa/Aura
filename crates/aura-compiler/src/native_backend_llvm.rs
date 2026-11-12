@@ -581,6 +581,7 @@ fn host_triple() -> TargetTriple {
         ("aarch64", "linux") => TargetTriple::create("aarch64-unknown-linux-gnu"),
         ("aarch64", "macos") => TargetTriple::create("arm64-apple-macosx11.0.0"),
         ("x86_64", "macos") => TargetTriple::create("x86_64-apple-macosx10.12.0"),
+        ("x86_64", "windows") => TargetTriple::create("x86_64-pc-windows-msvc"),
         _ => TargetMachine::get_default_triple(),
     }
 }
