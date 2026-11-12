@@ -103,6 +103,10 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 75. [ADR-0075: FFI passes C text, out-parameters, and nullable handles](0075-ffi-c-text-and-out-parameters.md) — Accepted; `cstr`, `mut` scalar out-parameters, `Handle | None` parameters, and `mut Handle | None`
 76. [ADR-0076: FFI passes a list of scalars as an array pointer](0076-ffi-array-pointers.md) — Accepted; `ptr[T]` and `mut ptr[T]` parameters over the elements of a scalar list
 77. [ADR-0077: FFI passes C structs by value and by pointer](0077-ffi-c-structs.md) — Accepted; `extern "C" class` structs in registers or memory by the C calling convention
+78. [ADR-0078: Regular expressions](0078-regular-expressions.md) — Accepted; the `regex` module on a linear-time engine, with a `Regex` that holds a pattern number
+79. [ADR-0079: Dates and times](0079-dates-and-times.md) — Accepted; `time.DateTime` as an instant with a fixed offset, exact `Duration` arithmetic, RFC 3339 and pattern text
 80. [ADR-0080: FFI passes a named function as a C callback](0080-ffi-callbacks.md) — Accepted; function-typed extern parameters over scalars, with a failure parked until the C function returns
 81. [ADR-0081: Trait objects are `dyn Trait`](0081-trait-objects.md) — Accepted; `dyn Trait` types, conversion, per-method callability, `match` type arms, `Transfer` supertrait, dispatch on the held type
+82. [ADR-0082: The `http` client module](0082-http-client-module.md) — Accepted; a client module written mostly in Aura over a streamed response, with kept connections, redirects, decompression, and server-sent events; replaces `net.http_request_*`
 83. [ADR-0083: An opaque handle names the C function that releases it](0083-ffi-handle-drop-functions.md) — Accepted; `drop` clause on `extern "C" opaque class`, run once when the last owner goes away
+84. [ADR-0084: Foreign contracts are checked when the program runs, and `aura run` loads libraries privately](0084-foreign-contracts-run-and-libraries-load-privately.md) — Accepted; `AU4009` checks around contracted `extern "C"` calls, kept under `--remove-proved-checks`; `RTLD_LOCAL` loading and host symbols refused

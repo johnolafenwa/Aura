@@ -64,8 +64,8 @@ use crate::runtime_value::{
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
     EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    HttpExchangeValue, HttpListenerValue, InstanceValue, IntegerArithmeticMode, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
     RunOutput, RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
     TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
@@ -3167,7 +3167,7 @@ impl MirRuntime {
             Value::UdpDatagram(_) => Some(Type::Named("net.UdpDatagram".to_string(), Vec::new())),
             Value::HttpListener(_) => Some(Type::Named("net.HttpListener".to_string(), Vec::new())),
             Value::HttpExchange(_) => Some(Type::Named("net.HttpExchange".to_string(), Vec::new())),
-            Value::HttpResponse(_) => Some(Type::Named("net.HttpResponse".to_string(), Vec::new())),
+            Value::HttpResponse(_) => Some(Type::Named("http.Stream".to_string(), Vec::new())),
             Value::WebSocketListener(_) => {
                 Some(Type::Named("net.WebSocketListener".to_string(), Vec::new()))
             }
@@ -3630,6 +3630,60 @@ impl MirRuntime {
                         .push((index, try_clone_mir_value(&*env.place_ref(&param.name)?)?));
                 }
             }
+            let value = match value {
+                CallValueOutcome::Completed(Ok(return_value)) => {
+                    let mut generator_places = env
+                        .values
+                        .iter()
+                        .filter(|(name, held)| {
+                            let borrowed_self = name.as_str() == "self"
+                                && matches!(
+                                    function.receiver,
+                                    Some(MirReceiverKind::Borrow | MirReceiverKind::BorrowMut)
+                                );
+                            let borrowed_param = function.params.iter().any(|param| {
+                                &param.name == *name && param.passing != MirReceiverKind::Value
+                            });
+                            !borrowed_self && !borrowed_param && owns_generator(held)
+                        })
+                        .map(|(name, _)| name.clone())
+                        .collect::<Vec<_>>();
+                    // Close in the reverse of the order the places were first
+                    // assigned, as the end of a scope releases its values.
+                    generator_places.sort();
+                    if generator_places.len() > 1 {
+                        let first_assigned = |place: &String| {
+                            function
+                                .blocks
+                                .iter()
+                                .flat_map(|block| &block.instructions)
+                                .position(|instruction| {
+                                    matches!(
+                                        instruction,
+                                        Instruction::Assign { target, .. } if target == place
+                                    )
+                                })
+                                .unwrap_or(usize::MAX)
+                        };
+                        generator_places
+                            .sort_by_cached_key(|place| std::cmp::Reverse(first_assigned(place)));
+                    }
+                    let mut close_error = None;
+                    for place in generator_places {
+                        if let Some(released) = env.values.remove(&place) {
+                            if let Err(error) = self.close_released_generators(released) {
+                                close_error = Some(self.annotate_runtime_trap_once(error));
+                                break;
+                            }
+                        }
+                    }
+                    match close_error {
+                        Some(error) => CallValueOutcome::Completed(Err(error)),
+                        None => CallValueOutcome::Completed(Ok(return_value)),
+                    }
+                }
+                other => other,
+            };
             Ok(CallOutcome {
                 value,
                 updated_receiver,
@@ -3860,9 +3914,23 @@ impl MirRuntime {
         safepoint_fuel: &mut u64,
     ) -> Result<Option<Value>> {
         match instruction {
-            // The interpreter's values own themselves, so a retain or a
-            // release has nothing to do.
-            Instruction::Retain { .. } | Instruction::Release { .. } => Ok(None),
+            // The interpreter's values own themselves, so a retain has
+            // nothing to do; releasing a sole-owned generator closes it at
+            // the exact scope boundary so its `with` exits run in order and
+            // any trap reaches the enclosing frame.
+            Instruction::Retain { .. } => Ok(None),
+            Instruction::Release { place } => {
+                let on_cleanup_stack = cleanup_stack.iter().any(|(active, _)| active == place);
+                if !on_cleanup_stack
+                    && !env.loans.contains_key(place)
+                    && env.values.get(place).is_some_and(owns_generator)
+                {
+                    if let Some(released) = env.values.remove(place) {
+                        self.close_released_generators(released)?;
+                    }
+                }
+                Ok(None)
+            }
             // The interpreter lends a copy: the call reads the temporary,
             // and a mutable lend writes the call's change back.
             Instruction::Lend { place, temp, .. } => {
@@ -4041,6 +4109,18 @@ impl MirRuntime {
                 }
             }
             Instruction::Eval { value } => {
+                if let Operand::Place(place) = value {
+                    if place.starts_with("%t")
+                        && !cleanup_stack.iter().any(|(active, _)| active == place)
+                        && !env.loans.contains_key(place)
+                        && env.values.get(place).is_some_and(owns_generator)
+                    {
+                        if let Some(released) = env.values.remove(place) {
+                            self.close_released_generators(released)?;
+                        }
+                        return Ok(None);
+                    }
+                }
                 let _ = self.evaluate_owned_operand(value, env)?;
                 Ok(None)
             }
@@ -5652,10 +5732,6 @@ impl MirRuntime {
                 | "net::tls_connect"
                 | "net::tls_connect_timeout"
                 | "net::http_listen"
-                | "net::http_request_text"
-                | "net::http_request_text_timeout"
-                | "net::http_request_bytes"
-                | "net::http_request_bytes_timeout"
                 | "net::websocket_listen"
                 | "net::websocket_connect"
                 | "net::websocket_connect_timeout"
@@ -6273,9 +6349,6 @@ impl MirRuntime {
             }
             Value::HttpExchange(exchange) => {
                 self.evaluate_http_exchange_method(exchange.clone(), field, args, env)
-            }
-            Value::HttpResponse(response) => {
-                self.evaluate_http_response_method(response.clone(), field, args, env)
             }
             Value::WebSocketListener(listener) => {
                 self.evaluate_websocket_listener_method(listener.clone(), field, args, env)
@@ -9148,62 +9221,6 @@ impl MirRuntime {
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
-            "net::http_request_text" | "net::http_request_text_timeout" => {
-                let expected = if name == "net::http_request_text" {
-                    &["method", "url", "body", "headers"][..]
-                } else {
-                    &["method", "url", "body", "headers", "timeout"][..]
-                };
-                let bound = bind_builtin_args(expected, values)?;
-                let method = expect_string_value(&bound[0].value, name)?;
-                let url = expect_string_value(&bound[1].value, name)?;
-                let body = expect_string_value(&bound[2].value, name)?;
-                let headers = expect_headers_map(&bound[3].value, name)?;
-                let timeout = if bound.len() == 5 {
-                    io_timeout_or_return!(Some(&bound[4].value), name)
-                } else {
-                    None
-                };
-                match HttpResponseValue::request_text(
-                    &method,
-                    &url,
-                    &body,
-                    headers,
-                    timeout,
-                    Some(&self.cancellation),
-                ) {
-                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
-                    Err(error) => Ok(result_err(io_error(error))),
-                }
-            }
-            "net::http_request_bytes" | "net::http_request_bytes_timeout" => {
-                let expected = if name == "net::http_request_bytes" {
-                    &["method", "url", "bytes", "headers"][..]
-                } else {
-                    &["method", "url", "bytes", "headers", "timeout"][..]
-                };
-                let bound = bind_builtin_args(expected, values)?;
-                let method = expect_string_value(&bound[0].value, name)?;
-                let url = expect_string_value(&bound[1].value, name)?;
-                let bytes = expect_bytes_value(&bound[2].value, name)?;
-                let headers = expect_headers_map(&bound[3].value, name)?;
-                let timeout = if bound.len() == 5 {
-                    io_timeout_or_return!(Some(&bound[4].value), name)
-                } else {
-                    None
-                };
-                match HttpResponseValue::request_bytes(
-                    &method,
-                    &url,
-                    &bytes,
-                    headers,
-                    timeout,
-                    Some(&self.cancellation),
-                ) {
-                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
-                    Err(error) => Ok(result_err(io_error(error))),
-                }
-            }
             "net::websocket_listen" => {
                 let bound = bind_builtin_args(&["address"], values)?;
                 let address = expect_string_value(&bound[0].value, "net.websocket_listen(...)")?;
@@ -10181,32 +10198,6 @@ impl MirRuntime {
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported MIR http exchange method `{}`",
-                field
-            ))),
-        }
-    }
-
-    fn evaluate_http_response_method(
-        &mut self,
-        response: HttpResponseValue,
-        field: &str,
-        args: &[MirArg],
-        env: &mut Env,
-    ) -> Result<Value> {
-        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-        match field {
-            "status" => Ok(Value::Int(IntegerValue::from_signed(
-                response.status() as i128
-            ))),
-            "reason" => Ok(Value::String(response.reason().into())),
-            "headers" => Ok(headers_map_value(response.headers())),
-            "text" => match response.text() {
-                Ok(text) => Ok(result_ok(Value::String(text.into()))),
-                Err(error) => Ok(result_err(io_error(error))),
-            },
-            "bytes" => Ok(bytes_vec_value(response.bytes())),
-            _ => Err(Diagnostic::new(format!(
-                "unsupported MIR http response method `{}`",
                 field
             ))),
         }
@@ -11677,13 +11668,77 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
         .into_boxed_slice())
 }
 
-/// Whether `value` is a generator handle or a `Generator[T]` holding one.
+/// Whether `value` holds a generator handle or a `Generator[T]` wrapper.
 fn owns_generator(value: &Value) -> bool {
     match value {
         Value::Generator(_) => true,
-        Value::Instance(instance) => instance.class_name == "iter.Generator",
+        Value::Instance(instance) => {
+            instance.class_name == "iter.Generator"
+                || instance.fields.iter().any(|(_, v)| owns_generator(&v))
+        }
+        Value::Tuple(tuple) => tuple.elements.iter().any(owns_generator),
+        Value::Vec(vec) => vec.elements.iter().any(|v| owns_generator(&v)),
+        Value::EnumVariant(variant) => variant.payloads.iter().any(|v| owns_generator(&v)),
+        Value::Union(union) => owns_generator(&union.payload),
+        Value::Map(map) => map.entries.iter().any(|(_, v)| owns_generator(v)),
         Value::TraitObject(object) => owns_generator(&object.value),
         _ => false,
+    }
+}
+
+impl MirRuntime {
+    fn close_released_generators(&self, value: Value) -> Result<()> {
+        match value {
+            Value::Generator(generator) => {
+                if generator.should_close_on_release() {
+                    self.with_generator_resumer(|| generator.close())?;
+                }
+                Ok(())
+            }
+            Value::Instance(instance) => {
+                match instance.fields {
+                    crate::runtime_value::InstanceFields::Map(fields) => {
+                        for (_, field) in fields {
+                            self.close_released_generators(field)?;
+                        }
+                    }
+                    crate::runtime_value::InstanceFields::Typed(_) => {
+                        for (_, field) in instance.fields.iter() {
+                            if let Value::Generator(generator) = field.as_ref() {
+                                if matches!(field, Cow::Borrowed(_))
+                                    && generator.should_close_on_release()
+                                {
+                                    self.with_generator_resumer(|| generator.close())?;
+                                }
+                            }
+                        }
+                    }
+                }
+                Ok(())
+            }
+            Value::Tuple(tuple) => {
+                for element in tuple.elements {
+                    self.close_released_generators(element)?;
+                }
+                Ok(())
+            }
+            Value::Vec(vec) => {
+                if !vec.elements.is_shared() {
+                    for element in vec.elements.into_vec() {
+                        self.close_released_generators(element)?;
+                    }
+                }
+                Ok(())
+            }
+            Value::EnumVariant(variant) => {
+                for payload in variant.payloads.into_vec() {
+                    self.close_released_generators(payload)?;
+                }
+                Ok(())
+            }
+            Value::Union(union) => self.close_released_generators(union.payload),
+            _ => Ok(()),
+        }
     }
 }
 

@@ -888,7 +888,7 @@ pub(super) fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {
             | "net.UdpDatagram"
             | "net.HttpListener"
             | "net.HttpExchange"
-            | "net.HttpResponse"
+            | "http.Stream"
             | "net.WebSocketListener"
             | "net.WebSocket"
             | "net.UnixListener"
@@ -977,7 +977,7 @@ pub(crate) fn is_builtin_io_resource_type(name: &str, args: &[Type]) -> bool {
                 | "net.UdpDatagram"
                 | "net.HttpListener"
                 | "net.HttpExchange"
-                | "net.HttpResponse"
+                | "http.Stream"
                 | "net.WebSocketListener"
                 | "net.WebSocket"
                 | "net.UnixListener"
@@ -1390,7 +1390,7 @@ impl<'a> FunctionChecker<'a> {
                 if args.is_empty()
                     && matches!(
                         name.as_str(),
-                        "process.Completed" | "net.HttpResponse" | "net.UdpDatagram"
+                        "process.Completed" | "http.Stream" | "net.UdpDatagram"
                     ) =>
             {
                 TransferSummary::default()

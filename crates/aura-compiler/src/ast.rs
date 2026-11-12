@@ -572,9 +572,9 @@ pub struct ExternFunctionDecl {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c_string_result: bool,
     pub span: Span,
-    /// The trusted `requires` and `ensures` clauses of an indented block
-    /// after the signature: `aura verify` proves the `requires` at each
-    /// call and assumes the `ensures`, and no run checks either.
+    /// The `requires` and `ensures` clauses of an indented block after the
+    /// signature: `aura verify` proves the `requires` at each call and
+    /// assumes the `ensures`, and calls check both at run time.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub contracts: Vec<ContractClause>,
 }

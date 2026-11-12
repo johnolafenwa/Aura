@@ -2,7 +2,8 @@
 #
 # The server answers POST /items/<id>, GET /items/<id>, and GET /stats with
 # JSON bodies. The client sends one request per connection, which is how the
-# Aura HTTP client works, and checks every reply.
+# Aura HTTP server answers, and checks every reply.
+import http
 import io
 import json
 import net
@@ -116,14 +117,8 @@ class Reply:
 
 def request(address: str, method: str, path: str, body: str) -> Result[Reply, io.Error]:
     headers: dict[str, str] = {"Content-Type": "application/json"}
-    response = try net.http_request_text(
-        method,
-        "http://" + address + path,
-        body,
-        headers,
-    )
-    with reply = response:
-        return Result.Ok(Reply(status=reply.status(), body=try reply.text()))
+    with reply = try http.request(method, "http://" + address + path, body, headers):
+        return Result.Ok(Reply(status=reply.status as int32, body=try reply.text()))
 
 
 def run(n: int64) -> Result[str, io.Error]:

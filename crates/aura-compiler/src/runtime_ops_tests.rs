@@ -982,7 +982,11 @@ fn host_builtins_round_trip_through_their_names() {
         assert_eq!(json, format!("\"{}\"", builtin.name()));
         assert_eq!(serde_json::from_str::<HostBuiltin>(&json).unwrap(), builtin);
     }
-    assert_eq!(count + 1, HOST_BUILTIN_SYMBOLS.len());
+    // `sys::monotonic_time_ms`, twelve `time` functions, and ten `regex`
+    // functions have dedicated helpers.
+    assert_eq!(count + 23, HOST_BUILTIN_SYMBOLS.len());
+    assert_eq!(HostBuiltin::from_name("time::__aura_rfc3339"), None);
+    assert_eq!(HostBuiltin::from_name("regex::__aura_is_match"), None);
     assert_eq!(HostBuiltin::from_name("sys::monotonic_time_ms"), None);
     assert_eq!(HostBuiltin::from_name("json::missing"), None);
     let error = serde_json::from_str::<HostBuiltin>("\"json::missing\"").unwrap_err();

@@ -17,10 +17,10 @@ use crate::runtime_value::{
     lookup_found, lookup_missing, optional_absent, optional_bytes_value, optional_present,
     optional_str_value, poll_ready, poll_unavailable, ArrayStorage, ArrayValue, ChannelValue,
     EnumVariantValue, FfiHandleValue, FileValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig,
-    ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue, TcpStreamValue,
-    TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    HttpSnapshot, InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue,
+    ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{optional_type, Type};
 use rcgen::generate_simple_self_signed;
@@ -7369,18 +7369,23 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                 .expect("http response should write");
         })
     };
-    let http_response = HttpResponseValue::request_text(
+    let http_response = crate::runtime_value::http_client::http_send(
         "GET",
         &format!("http://{http_address}/types"),
-        "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        b"",
+        &crate::runtime_value::http_client::HttpRequestOptions {
+            timeout: Some(StdDuration::from_secs(2)),
+            keep_alive: false,
+            ..Default::default()
+        },
         Some(&CancellationContext::default()),
     )
+    .map(HttpResponseValue::new)
     .expect("http request should succeed");
     assert_eq!(
         MirRuntime::infer_value_type(&Value::HttpResponse(http_response)),
-        Some(Type::named("net.HttpResponse"))
+        Some(Type::named("http.Stream"))
     );
     http_server.join().expect("http server should join");
 
@@ -9123,7 +9128,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
         })
     };
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "POST",
         &format!("http://{http_address}/demo"),
         "body",
@@ -9132,40 +9137,11 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         Some(&CancellationContext::default()),
     )
     .expect("http request should succeed");
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "status", &[], &mut env)
-            .expect("http response status should succeed"),
-        Value::Int(IntegerValue::from_signed(200))
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "reason", &[], &mut env)
-            .expect("http response reason should succeed"),
-        Value::String("OK".to_string().into())
-    );
-    match runtime
-        .evaluate_http_response_method(response.clone(), "headers", &[], &mut env)
-        .expect("http response headers should succeed")
-    {
-        Value::Map(headers) => assert!(!headers.entries.is_empty()),
-        other => panic!("expected response header map, found {other:?}"),
-    }
-    assert_eq!(
-        result_ok_payload(
-            runtime
-                .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
-                .expect("http response text should succeed")
-        ),
-        Value::String("reply".to_string().into())
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "bytes", &[], &mut env)
-            .expect("http response bytes should succeed"),
-        bytes_vec_value(b"reply".to_vec())
-    );
-    let bytes_response = HttpResponseValue::request_bytes(
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.reason(), "OK");
+    assert!(!response.headers().is_empty());
+    assert_eq!(response.text().expect("the reply is text"), "reply");
+    let bytes_response = HttpSnapshot::request_bytes(
         "POST",
         &format!("http://{http_address}/demo-bytes"),
         b"bytes",
@@ -9177,18 +9153,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         Some(&CancellationContext::default()),
     )
     .expect("http bytes request should succeed");
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(bytes_response, "bytes", &[], &mut env)
-            .expect("http bytes response should succeed"),
-        bytes_vec_value(b"bytes-reply".to_vec())
-    );
-    let response_error = runtime
-        .evaluate_http_response_method(response, "missing", &[], &mut env)
-        .expect_err("unknown response method should fail");
-    assert!(response_error
-        .message
-        .contains("unsupported MIR http response method"));
+    assert_eq!(bytes_response.bytes(), b"bytes-reply");
     http_server.join().expect("http server should join");
     http_listener.close();
 }
@@ -11952,76 +11917,18 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         ),
         string_map_value(&[("Content-Type", "text/plain")]),
     );
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_text",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("body"), Operand::String("body".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                ],
-                &mut env,
-            )
-            .expect("http text request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_text_timeout",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("body"), Operand::String("body".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
-                ],
-                &mut env,
-            )
-            .expect("http text timeout request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_bytes",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                ],
-                &mut env,
-            )
-            .expect("http bytes request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_bytes_timeout",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
-                ],
-                &mut env,
-            )
-            .expect("http bytes request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
+    for expected in ["text-ok", "text-timeout-ok", "bytes-ok", "bytes-timeout-ok"] {
+        let response = HttpSnapshot::request_text(
+            "POST",
+            &format!("http://{http_address}/builtin"),
+            "body",
+            vec![("Content-Type".to_string(), "text/plain".to_string())],
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("the request should get a response");
+        assert_eq!(response.text().expect("the reply is text"), expected);
+    }
     http_server.join().expect("http server should join");
     http_listener.close();
 
@@ -22814,13 +22721,23 @@ fn websocket_listener_and_socket_methods_cover_unsupported_members_and_closed_pe
     );
     assert_absent(result_ok_payload(
         runtime
-            .evaluate_websocket_method(client.clone(), "recv_text", &[timeout.clone()], &mut env)
+            .evaluate_websocket_method(
+                client.clone(),
+                "recv_text",
+                std::slice::from_ref(&timeout),
+                &mut env,
+            )
             .expect("recv_text after the peer closed evaluates"),
     ));
     // The peer's TCP half may already be gone by the second read, so only
     // the absence of a payload is pinned here.
     match runtime
-        .evaluate_websocket_method(client.clone(), "recv_bytes", &[timeout.clone()], &mut env)
+        .evaluate_websocket_method(
+            client.clone(),
+            "recv_bytes",
+            std::slice::from_ref(&timeout),
+            &mut env,
+        )
         .expect("recv_bytes after the peer closed evaluates")
     {
         Value::EnumVariant(variant) if variant.variant_name == "Ok" => {
@@ -23003,7 +22920,7 @@ fn tcp_stream_methods_cover_eof_shutdowns_and_timed_writes_on_closed_streams() {
             .evaluate_tcp_stream_method(
                 half_closed.clone(),
                 "read_line",
-                &[timeout.clone()],
+                std::slice::from_ref(&timeout),
                 &mut env,
             )
             .expect("read_line after shutdown_read evaluates"),
@@ -23214,7 +23131,7 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
             );
         })
     };
-    let response = HttpResponseValue::request_bytes(
+    let response = HttpSnapshot::request_bytes(
         "POST",
         &format!("http://{address}/raw"),
         &[0xff],
@@ -23224,19 +23141,8 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
     )
     .expect("http request should succeed");
     server.join().expect("http server should join");
-    let mut runtime = test_runtime();
-    let mut env = Env::default();
-    assert_result_err(
-        runtime
-            .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
-            .expect("text on a non-UTF-8 body evaluates"),
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response, "bytes", &[], &mut env)
-            .expect("bytes evaluates"),
-        bytes_vec_value(vec![0xff])
-    );
+    assert!(response.text().is_err());
+    assert_eq!(response.bytes(), vec![0xff]);
     listener.close();
 }
 
@@ -23373,7 +23279,12 @@ fn tls_listener_and_stream_methods_cover_close_eof_and_partial_lines() {
     };
     let partial = result_ok_payload(
         runtime
-            .evaluate_tls_stream_method(first.clone(), "read_line", &[timeout.clone()], &mut env)
+            .evaluate_tls_stream_method(
+                first.clone(),
+                "read_line",
+                std::slice::from_ref(&timeout),
+                &mut env,
+            )
             .expect("read_line of a partial line evaluates"),
     );
     assert_eq!(
@@ -23382,7 +23293,12 @@ fn tls_listener_and_stream_methods_cover_close_eof_and_partial_lines() {
     );
     assert_absent(result_ok_payload(
         runtime
-            .evaluate_tls_stream_method(first.clone(), "read_line", &[timeout.clone()], &mut env)
+            .evaluate_tls_stream_method(
+                first.clone(),
+                "read_line",
+                std::slice::from_ref(&timeout),
+                &mut env,
+            )
             .expect("read_line at EOF evaluates"),
     ));
     assert_result_err(
@@ -23744,7 +23660,7 @@ fn https_requests_complete_against_a_local_tls_listener_with_a_pinned_ca() {
         listener.close();
     });
 
-    let response = HttpResponseValue::request_text_with_ca(
+    let response = HttpSnapshot::request_text_with_ca(
         "GET",
         &format!("https://localhost:{port}/"),
         "",
@@ -23756,20 +23672,13 @@ fn https_requests_complete_against_a_local_tls_listener_with_a_pinned_ca() {
     .expect("https request should succeed");
     server.join().expect("https server should join");
     assert_eq!(response.text().expect("body decodes"), "hello");
-    let mut runtime = test_runtime();
-    let mut env = Env::default();
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response, "status", &[], &mut env)
-            .expect("status evaluates"),
-        Value::Int(IntegerValue::from_signed(200))
-    );
+    assert_eq!(response.status(), 200);
     let _ = std::fs::remove_file(&cert_path);
     let _ = std::fs::remove_file(&key_path);
 }
 
 #[test]
-fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
+fn network_listen_builtins_report_bind_failures() {
     let mut runtime = test_runtime();
     for name in ["net::http_listen", "net::websocket_listen"] {
         assert_result_err(
@@ -23781,35 +23690,6 @@ fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
                 .expect("listen builtins evaluate"),
         );
     }
-    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp listener should bind");
-    let address = listener.local_addr().expect("tcp listener address");
-    listener.close();
-    let headers = EvaluatedMirArg {
-        name: Some("headers".to_string()),
-        value: Value::Map(MapValue {
-            key_type: Type::named("str").into(),
-            value_type: Type::named("str").into(),
-            entries: Vec::new().into(),
-        }),
-        ty: Some(Type::Named(
-            "dict".to_string(),
-            vec![Type::named("str"), Type::named("str")],
-        )),
-        writeback_place: None,
-    };
-    assert_result_err(
-        runtime
-            .evaluate_builtin_io_call(
-                "net::http_request_text",
-                vec![
-                    coverage_string_arg("method", "GET"),
-                    coverage_string_arg("url", &format!("http://{address}/")),
-                    coverage_string_arg("body", ""),
-                    headers,
-                ],
-            )
-            .expect("request builtins evaluate"),
-    );
 }
 
 #[test]
@@ -24504,6 +24384,145 @@ fn public_mir_execution_rejects_a_caller_supplied_link_plan() {
 }
 
 #[test]
+fn cross_module_union_with_same_class_name_dispatches_distinct_members() {
+    let dir = std::env::temp_dir().join(format!("aura_union_xmod_{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    std::fs::write(
+        dir.join("alpha.au"),
+        "public class Item:\n    public label: str\n",
+    )
+    .expect("alpha.au");
+    let main = dir.join("main.au");
+    std::fs::write(
+        &main,
+        r#"import alpha
+
+class Item:
+    count: int64
+
+type Choice = alpha.Item | Item
+
+def describe(c: Choice) -> str:
+    match c:
+        case Item as local_item:
+            return f"local:{local_item.count}"
+        case alpha.Item as remote_item:
+            return f"remote:{remote_item.label}"
+
+def main():
+    a: Choice = alpha.Item(label="hi")
+    b: Choice = Item(count=42)
+    assert describe(a) == "remote:hi"
+    assert describe(b) == "local:42"
+"#,
+    )
+    .expect("main.au");
+
+    let module = crate::lower_path_to_mir(&main).expect("lowers");
+    crate::run_mir(&module).expect("cross-module union runs without type confusion");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn generator_break_closes_before_post_loop_code_and_propagates_exit_traps() {
+    let order_source = r#"from iter import Generator
+
+class Guard:
+    events: Queue[str]
+
+    def __enter__(mut self) -> None:
+        _ = self.events.put("enter:gen")
+
+    def __exit__(mut self) -> None:
+        _ = self.events.put("exit:gen")
+
+def stream_numbers(events: Queue[str]) -> Generator[int64]:
+    with _g = Guard(events=events):
+        yield 10
+        yield 20
+
+def main():
+    events = Queue[str]()
+    for n in stream_numbers(events):
+        _ = events.put(f"got:{n}")
+        break
+    _ = events.put("after_loop")
+    events.close()
+    mut out: list[str] = []
+    for item in events:
+        out.append(item)
+    assert out == ["enter:gen", "got:10", "exit:gen", "after_loop"]
+"#;
+    let module = crate::lower_source_to_mir(order_source).expect("lowers");
+    crate::run_mir(&module).expect("generator closes immediately on break");
+
+    let trap_source = r#"from iter import Generator
+
+class FailingGuard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        assert false
+
+def broken() -> Generator[int64]:
+    with _g = FailingGuard():
+        yield 1
+        yield 2
+
+def main():
+    for x in broken():
+        if x == 1:
+            break
+"#;
+    let trap_module = crate::lower_source_to_mir(trap_source).expect("lowers");
+    let error = crate::run_mir(&trap_module)
+        .expect_err("a trap inside a generator `with` `__exit__` on break must fail the run");
+    assert_eq!(error.code, "AU4001");
+}
+
+#[test]
+fn generators_left_waiting_close_at_return_in_reverse_order_of_creation() {
+    let source = r#"from iter import Generator
+
+class Guard:
+    events: Queue[str]
+    name: str
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        _ = self.events.put("exit:" + self.name)
+
+def stream(events: Queue[str], name: own str) -> Generator[int64]:
+    with _g = Guard(events=events, name=name):
+        yield 10
+        yield 20
+
+def hold(events: Queue[str]) -> None:
+    mut zz = stream(events, "first")
+    mut aa = stream(events, "second")
+    mut mm = stream(events, "third")
+    _ = zz.next()
+    _ = aa.next()
+    _ = mm.next()
+    _ = events.put("end")
+
+def main():
+    events = Queue[str]()
+    hold(events)
+    events.close()
+    mut out: list[str] = []
+    for item in events:
+        out.append(item)
+    assert out == ["end", "exit:third", "exit:second", "exit:first"]
+"#;
+    crate::run_source(source).expect("generators close in reverse order at return");
+}
+
+#[test]
 fn ffi_structs_cross_as_c_bytes_and_come_back_as_instances() {
     use crate::c_layout::{CField, CFieldKind, CStruct};
     use crate::ffi::{FfiScalar, FfiType, FfiValue};
@@ -24897,4 +24916,80 @@ def main() -> int32:
     assert_eq!(released(), 1);
     // A place that held `None` decides nothing.
     assert!(super::stored_handle(&Value::Unit, &written(first)).is_none());
+}
+
+#[test]
+fn generators_held_in_tuples_lists_classes_enums_and_unions_close_at_return() {
+    let source = r#"from iter import Generator
+
+class Guard:
+    events: Queue[str]
+    name: str
+
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        _ = self.events.put("exit:" + self.name)
+
+def stream(events: Queue[str], name: own str) -> Generator[int64]:
+    with _g = Guard(events=events, name=name):
+        yield 10
+        yield 20
+
+class Holder:
+    source: Generator[int64]
+
+enum Slot:
+    Full(Generator[int64])
+    Empty
+
+def in_tuple(events: Queue[str]) -> None:
+    mut g = stream(events, "tuple")
+    _ = g.next()
+    pair = (1, g)
+    _ = events.put("end:tuple")
+
+def in_list(events: Queue[str]) -> None:
+    mut g = stream(events, "list")
+    _ = g.next()
+    mut items: list[Generator[int64]] = []
+    items.append(g)
+    _ = events.put("end:list")
+
+def in_class(events: Queue[str]) -> None:
+    mut g = stream(events, "class")
+    _ = g.next()
+    holder = Holder(source=g)
+    _ = events.put("end:class")
+
+def in_enum(events: Queue[str]) -> None:
+    mut g = stream(events, "enum")
+    _ = g.next()
+    slot = Slot.Full(g)
+    _ = events.put("end:enum")
+
+def in_union(events: Queue[str]) -> None:
+    mut g = stream(events, "union")
+    _ = g.next()
+    maybe: Generator[int64] | None = g
+    _ = events.put("end:union")
+
+def main():
+    events = Queue[str]()
+    in_tuple(events)
+    in_list(events)
+    in_class(events)
+    in_enum(events)
+    in_union(events)
+    events.close()
+    mut out: list[str] = []
+    for item in events:
+        out.append(item)
+    assert out == [
+        "end:tuple", "exit:tuple", "end:list", "exit:list", "end:class",
+        "exit:class", "end:enum", "exit:enum", "end:union", "exit:union",
+    ]
+"#;
+    crate::run_source(source).expect("held generators close when their owner returns");
 }

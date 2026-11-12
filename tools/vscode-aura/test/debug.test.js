@@ -133,6 +133,14 @@ test("lldb-dap gets the built binary, the formatter, and listed variables", () =
   assert.equal(withCwd.cwd, "/elsewhere");
   assert.deepEqual(withCwd.args, []);
   assert.deepEqual(withCwd.initCommands, ['command script import "/f.py"']);
+  const windowsFormatter = adapterConfiguration(
+    { program: "C:\\w\\app.au" },
+    "C:\\o\\app.exe",
+    'C:\\Users\\dev\\"ext"\\debug\\aura_lldb.py'
+  );
+  assert.deepEqual(windowsFormatter.initCommands, [
+    'command script import "C:\\\\Users\\\\dev\\\\\\"ext\\"\\\\debug\\\\aura_lldb.py"'
+  ]);
 });
 
 test("F5 with no launch.json debugs the open Aura file", () => {
@@ -285,13 +293,18 @@ test("a launch builds the program with --debug and starts lldb-dap on it", async
   }
 });
 
-test("a failed debug build stops the launch with the compiler's message", async () => {
+test("a failed debug build stops the launch with the compiler's message and avoids Windows CWD planting", async () => {
   const storage = fs.mkdtempSync(path.join(os.tmpdir(), "aura-debug-store-"));
   try {
     const fake = fakeVscode();
     const { provider } = registerDebugger(fake.vscode, fakeContext(storage), {
-      runFile: (command, _args, _options, done) => {
+      platform: "linux",
+      pathValue: "",
+      home: path.join(storage, "empty-home"),
+      systemDirs: [],
+      runFile: (command, _args, options, done) => {
         assert.equal(command, "aura");
+        assert.equal(options.cwd, undefined);
         done(new Error("exit 1"), "", "error[AU2001]: unknown name\n");
       }
     });
@@ -302,8 +315,32 @@ test("a failed debug build stops the launch with the compiler's message", async 
     assert.deepEqual(fake.errors, ["Aura: the debug build failed. error[AU2001]: unknown name"]);
     assert.equal(fake.shown(), 1);
 
+    const winMissing = fakeVscode();
+    let winSpawned = false;
+    const { provider: winProvider } = registerDebugger(winMissing.vscode, fakeContext(storage), {
+      platform: "win32",
+      pathValue: "",
+      home: path.join(storage, "empty-home"),
+      systemDirs: [],
+      runFile: () => {
+        winSpawned = true;
+      }
+    });
+    assert.equal(
+      await winProvider.resolveDebugConfigurationWithSubstitutedVariables(undefined, {
+        program: "C:\\untrusted\\app.au"
+      }),
+      undefined
+    );
+    assert.equal(winSpawned, false);
+    assert.match(winMissing.errors[0], /compilerPath/);
+
     const silent = fakeVscode();
     const { provider: quiet } = registerDebugger(silent.vscode, fakeContext(storage), {
+      platform: "linux",
+      pathValue: "",
+      home: path.join(storage, "empty-home"),
+      systemDirs: [],
       runFile: (_command, _args, _options, done) => done(new Error("spawn aura ENOENT"))
     });
     assert.equal(

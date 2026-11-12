@@ -18,6 +18,87 @@ in this file.
   `items[i].bump(2)` on a list element costs 34 instructions for a class
   with a `str` field (94 before, 2.8 times Rust) and 26 for a class of
   numbers (64 before, 1.6 times Rust).
+- The `time` and `regex` modules call the runtime with integer arguments
+  as plain words and get a `bool` or an integer back as one word, instead
+  of boxing each integer into an argument buffer. `date_time` goes from
+  0.77 s to 0.34 s, 1.9 times Rust's `chrono`, and `regex_scan` from 1.19 s
+  to 0.83 s, 3.0 times Rust's `regex`.
+- A loop that reads a file one line at a time with
+  `try file.read_line()` is more than twice as fast in a compiled
+  program. Reading 2 million lines (96 MB) takes 155 ms, where Python's
+  `for line in file` takes 250 ms and Rust's `BufRead::lines` 90 ms. It
+  took 400 ms before. The line reaches the program with no `Result` or
+  boxed `str | None` built around it. On Linux, `read_line` and
+  `read_lines` take bytes the operating system already holds in memory
+  on the calling thread, so the task does not park for them. A read that
+  would wait for a disk still goes to the blocking pool.
+- New example package `examples/agents/streaming_agent`, the reference
+  streaming agent. It sends a conversation to the Claude Messages API with
+  the `http` module, prints the reply as it arrives, runs the tool the
+  model calls, and sends the result back. With no `ANTHROPIC_API_KEY` it
+  runs against a loopback stand-in for the API, and both backends match
+  its pinned output.
+- New `http` module, the HTTP client. `http.get(url)`, `http.post(...)`,
+  `http.request(...)`, and `http.request_bytes(...)` return an
+  `http.Response` as soon as the status and headers arrive. The body is
+  read whole with `text()` and `bytes()`, or in pieces with `read_chunk`,
+  `read_line`, `read_lines`, and `read_event` for server-sent events, so
+  a long download or a streamed model reply never has to fit in memory.
+  The client follows redirects, keeps connections for reuse, decodes gzip
+  and deflate bodies, and takes its settings (`timeout`, `read_timeout`,
+  `max_redirects`, `decompress`, `keep_alive`, `ca_file`) as fields of
+  `http.Client`. The 34th
+  [cross-language program](benchmarks/cross_language/README.md),
+  `http_stream`, reads 400,000 streamed lines, 100,000 events, and 4,000
+  small replies over one connection in 1.19 s, where Python's
+  `http.client` takes 5.78 s and a hand-written Rust client 0.61 s. See
+  the [HTTP Module](docs/manual/http.md).
+- Breaking: `net.http_request_text`, `net.http_request_text_timeout`,
+  `net.http_request_bytes`, `net.http_request_bytes_timeout`, and
+  `net.HttpResponse` are removed. Use the `http` module. A response's
+  `status`, `reason`, and `url` are fields, its header names are in lower
+  case, and the 16 MiB limit on a whole response is gone.
+- Fixed: an `is None` or `is not None` test on a call result in a
+  condition, such as `if text.find("x") is None:`, always took the
+  not-`None` branch on both backends. The test reads the result. A test
+  on a variable or a field was not affected.
+- Fixed: `with` rejected a context manager whose class is declared in
+  another module (`AU2017`).
+- Fixed: editor completion offered the private fields and methods of a
+  class from another module.
+- New `time` module: `time.now()`, `time.utc(...)`, `time.from_unix(...)`,
+  and `time.parse_rfc3339(...)` return a `time.DateTime`, an instant with
+  the UTC offset its calendar fields are read at. It has field methods,
+  exact arithmetic with `Duration`, `to_offset` and `to_local`, RFC 3339
+  text, and `format` and `parse` with `%` directives. `time.monotonic()`
+  measures intervals. The 33rd
+  [cross-language program](benchmarks/cross_language/README.md),
+  `date_time`, takes 0.34 s for 200,000 instants where Python's `datetime`
+  takes 4.0 s and Rust's `chrono` 0.18 s. See the
+  [Time Module](docs/manual/time.md).
+- Fixed: `public copy class Name:` was read as a module constant named
+  `copy` and reported `AU1101`.
+- New `regex` module: `regex.compile(pattern)` returns a `regex.Regex`
+  that tests, finds, captures, replaces, and splits. Every search runs in
+  time linear in the text, positions count Unicode scalar values as `str`
+  indexes do, and a pattern that does not compile is a
+  `regex.Error.Invalid` value. The 32nd
+  [cross-language program](benchmarks/cross_language/README.md),
+  `regex_scan`, runs five patterns over 200,000 log lines: Aura 0.83 s,
+  Python 1.55 s, Rust 0.27 s. See the [Regex Module](docs/manual/regex.md).
+- Fixed the two regressions the 0.14.0 release measured against 0.13.0.
+  - A hello world executable is 68 KB smaller: 1,167,304 bytes before and
+    1,098,640 now, against 1,080,264 on 0.13.0. `print` no longer links
+    the list and dict code that turns a parsed `json.Value` into values.
+  - Fifteen of the 30 cross-language programs executed 2 to 6% more
+    instructions on 0.14.0. The 30 programs now execute 76,843M
+    instructions, against 79,828M on 0.14.0 and 79,994M on 0.13.0. A new
+    list no longer looks its element type up by name, a dict read tests
+    its storage form once, freeing a value is one inlined path again, and
+    a function with one call is inlined again when its loop has two
+    copies. Four programs stay 1 to 2% above 0.13.0, where they pay for
+    the smaller value header and the JSON tape that 0.14.0 added.
+
 - A method call on a list element no longer takes the element out of the
   list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
   shared call by index (`items[i].get()`), any call in
@@ -154,6 +235,37 @@ in this file.
 - `aura verify` finds the trusted contract of an extern function that has
   a `symbol` clause. It looked the contract up by the C symbol, so the
   contract was ignored.
+- Security and soundness fixes from the 2026-11-10 review.
+  - `aura verify` now reads the contracts, class invariants, `spec def`
+    functions, and `lemma def` functions of imported modules, proves an
+    imported lemma's body before relying on it, and checks that a default
+    argument is well-defined.
+  - A contract on an `extern "C"` function is checked when the program
+    runs: a broken `requires` or `ensures` stops it with `AU4009`, and
+    `--remove-proved-checks` keeps these checks (ADR-0084).
+  - A union of two classes or enums with the same name from different
+    modules, such as `alpha.Item | Item`, selects the right member.
+  - A generator left waiting when a `for` loop ends early is closed at that
+    point on `aura run` too, so its `with` exits run before the code after
+    the loop and a trap in one stops the program.
+  - A recursive `spec def` verifies for concrete arguments and for calls
+    that recurse at most eight levels; deeper calls report the limit.
+  - Git dependencies accept only `https://`, `ssh://`, `git@host:path`, and
+    local paths, never materialize symlinks, and a package's `src` must stay
+    inside the package. `--offline` and `AURA_OFFLINE=1` forbid network git
+    access, and the editor runs the compiler offline.
+  - `library_paths` entries may not contain `..`, a dependency's must stay
+    inside the dependency, and `aura build --no-rpath` leaves them out of
+    the binary's run-time search path.
+  - `aura run` stages a freshly built program in a private directory, loads
+    foreign libraries privately, and refuses a foreign symbol that resolves
+    into `aura` itself (ADR-0084).
+  - An HTTP method must be a token and a response status must be 100 to 999;
+    TLS `read_line` and `read_exact` have the size limits TCP streams have.
+  - `aura upgrade` and `install.sh` download over HTTPS only.
+  - The VS Code extension runs commands as structured tasks, quotes
+    PowerShell arguments literally, and never runs a bare `aura` from the
+    workspace directory; a newer save cancels a running `aura verify`.
 
 ## VS Code extension 0.14.0 — 2026-11-10
 

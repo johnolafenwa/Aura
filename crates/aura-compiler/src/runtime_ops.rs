@@ -229,11 +229,6 @@ resource_ops! {
     HttpExchangeBodyBytes => ("net.HttpExchange", HttpExchangeBodyBytes),
     HttpExchangeRespondText => ("net.HttpExchange", HttpExchangeRespondText),
     HttpExchangeRespondBytes => ("net.HttpExchange", HttpExchangeRespondBytes),
-    HttpResponseStatus => ("net.HttpResponse", HttpResponseStatus),
-    HttpResponseReason => ("net.HttpResponse", HttpResponseReason),
-    HttpResponseHeaders => ("net.HttpResponse", HttpResponseHeaders),
-    HttpResponseText => ("net.HttpResponse", HttpResponseText),
-    HttpResponseBytes => ("net.HttpResponse", HttpResponseBytes),
     WebSocketListenerAccept => ("net.WebSocketListener", WebsocketListenerAccept),
     WebSocketListenerLocalAddr => ("net.WebSocketListener", WebsocketListenerLocalAddr),
     WebSocketSendText => ("net.WebSocket", WebsocketSendText),
@@ -323,7 +318,6 @@ impl ResourceOp {
             | UdpDatagramText
             | HttpListenerLocalAddr
             | HttpExchangeBodyText
-            | HttpResponseText
             | WebSocketListenerLocalAddr
             | TlsListenerLocalAddr => io(str()),
             FileReadBytes | TcpStreamReadExact | UnixStreamReadExact | TlsStreamReadExact => {
@@ -358,17 +352,14 @@ impl ResourceOp {
             UdpDatagramAddress
             | HttpExchangeMethod
             | HttpExchangePath
-            | HttpResponseReason
             | ProcessCompletedStdout
             | ProcessCompletedStderr => str(),
             UdpDatagramBytes
             | HttpExchangeBodyBytes
-            | HttpResponseBytes
             | ProcessCompletedStdoutBytes
             | ProcessCompletedStderrBytes => bytes(),
             HttpListenerAccept => io(Type::named("net.HttpExchange")),
-            HttpExchangeHeaders | HttpResponseHeaders => headers(),
-            HttpResponseStatus => Type::named("int32"),
+            HttpExchangeHeaders => headers(),
             WebSocketListenerAccept => io(Type::named("net.WebSocket")),
             UnixListenerAccept => io(Type::named("net.UnixStream")),
             TlsListenerAccept => io(Type::named("net.TlsStream")),
@@ -2152,6 +2143,28 @@ function_ops! {
         Ord => ("ord", StringOrd),
         Chr => ("chr", StringChr),
         MonotonicTimeMs => ("sys::monotonic_time_ms", MonotonicTimeMs),
+        RegexIsMatch => ("regex::__aura_is_match", RegexScalar),
+        RegexCount => ("regex::__aura_count", RegexScalar),
+        RegexGroupIndex => ("regex::__aura_group_index", RegexScalar),
+        RegexFind => ("regex::__aura_find", RegexSearch),
+        RegexMatches => ("regex::__aura_matches", RegexSearch),
+        RegexFindAll => ("regex::__aura_find_all", RegexSearch),
+        RegexCaptures => ("regex::__aura_captures", RegexSearch),
+        RegexSplit => ("regex::__aura_split", RegexSearch),
+        RegexReplace => ("regex::__aura_replace", RegexReplace),
+        RegexReplaceAll => ("regex::__aura_replace_all", RegexReplace),
+        TimeRfc3339 => ("time::__aura_rfc3339", TimeRfc3339),
+        TimeFormat => ("time::__aura_format", TimeFormat),
+        TimeParseRfc3339 => ("time::__aura_parse_rfc3339", TimeParseRfc3339),
+        TimeParse => ("time::__aura_parse", TimeParse),
+        TimeFailed => ("time::__aura_failed", TimeFailed),
+        TimeParsedSeconds => ("time::__aura_parsed_seconds", TimeParsedPart),
+        TimeParsedNanos => ("time::__aura_parsed_nanos", TimeParsedPart),
+        TimeParsedOffset => ("time::__aura_parsed_offset", TimeParsedPart),
+        TimeDurationSeconds => ("time::__aura_duration_seconds", TimeDurationSeconds),
+        TimeDurationNanos => ("time::__aura_duration_nanos", TimeDurationNanos),
+        TimeDuration => ("time::__aura_duration", TimeDuration),
+        TimeLocalOffsetMinutes => ("time::__aura_local_offset_minutes", TimeLocalOffsetMinutes),
         IoWrite => ("io::write", IoWrite),
         IoFlush => ("io::flush", IoFlush),
         IoReadLine => ("io::read_line", IoReadLine),
@@ -2186,10 +2199,6 @@ function_ops! {
         NetTlsConnect => ("net::tls_connect", NetTlsConnect),
         NetTlsConnectTimeout => ("net::tls_connect_timeout", NetTlsConnectTimeout),
         NetHttpListen => ("net::http_listen", NetHttpListen),
-        NetHttpRequestText => ("net::http_request_text", NetHttpRequestText),
-        NetHttpRequestTextTimeout => ("net::http_request_text_timeout", NetHttpRequestTextTimeout),
-        NetHttpRequestBytes => ("net::http_request_bytes", NetHttpRequestBytes),
-        NetHttpRequestBytesTimeout => ("net::http_request_bytes_timeout", NetHttpRequestBytesTimeout),
         NetWebsocketListen => ("net::websocket_listen", NetWebsocketListen),
         NetWebsocketConnect => ("net::websocket_connect", NetWebsocketConnect),
         NetWebsocketConnectTimeout => ("net::websocket_connect_timeout", NetWebsocketConnectTimeout),
@@ -2299,6 +2308,11 @@ impl FunctionOp {
             DurationMilliseconds => (NANOS_PER_MILLISECOND_WORDS, false, 0),
             DurationSeconds => (NANOS_PER_SECOND_WORDS, false, 0),
             DurationMinutes => (NANOS_PER_MINUTE_WORDS, false, 0),
+            TimeParsedSeconds | RegexIsMatch | RegexFind | RegexReplace => (&[0], false, 0),
+            TimeParsedNanos | RegexCount | RegexMatches | RegexReplaceAll => (&[1], false, 0),
+            TimeParsedOffset | RegexGroupIndex | RegexFindAll => (&[2], false, 0),
+            RegexCaptures => (&[3], false, 0),
+            RegexSplit => (&[4], false, 0),
             ListWithCapacity | DictWithCapacity | SetWithCapacity => {
                 (COLLECTION_RESERVE_WORDS, false, 2)
             }

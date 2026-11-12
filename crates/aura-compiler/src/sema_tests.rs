@@ -2854,10 +2854,11 @@ def main():
         ("left >= right", ">="),
         ("left < middle <= right", "<"),
     ] {
-        let middle = expression
-            .contains("middle")
-            .then_some("    middle = acquire()\n")
-            .unwrap_or("");
+        let middle = if expression.contains("middle") {
+            "    middle = acquire()\n"
+        } else {
+            ""
+        };
         let source = format!(
             r#"
 extern "C" opaque class Handle
@@ -7973,6 +7974,7 @@ fn namespace(path: &str) -> ModuleNamespace {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn checker<'a>(
     module_name: &'a str,
     type_names: &'a TypeDefinitions,
@@ -11452,7 +11454,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
         ("udp_datagram", Type::named("net.UdpDatagram")),
         ("http_listener", Type::named("net.HttpListener")),
         ("http_exchange", Type::named("net.HttpExchange")),
-        ("http_response", Type::named("net.HttpResponse")),
         ("websocket_listener", Type::named("net.WebSocketListener")),
         ("websocket", Type::named("net.WebSocket")),
         ("unix_listener", Type::named("net.UnixListener")),
@@ -12547,46 +12548,6 @@ fn checker_member_call_helpers_cover_successful_string_vec_map_and_runtime_surfa
                 arg(headers_expr()),
             ],
             result_ty(Type::Unit),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "status".to_string(),
-            }),
-            Vec::new(),
-            int_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "reason".to_string(),
-            }),
-            Vec::new(),
-            string_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "headers".to_string(),
-            }),
-            Vec::new(),
-            headers_ty.clone(),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "text".to_string(),
-            }),
-            Vec::new(),
-            result_ty(string_ty.clone()),
-        ),
-        (
-            expr(ExprKind::Member {
-                object: Box::new(expr(ExprKind::Name("http_response".to_string()))),
-                field: "bytes".to_string(),
-            }),
-            Vec::new(),
-            bytes_ty.clone(),
         ),
         (
             expr(ExprKind::Member {
@@ -17080,7 +17041,6 @@ fn checker_builtin_constructor_and_variant_error_edges_cover_direct_paths() {
         None,
         "unknown name `Lookup`",
     );
-    drop(expect_error);
 
     assert_eq!(
         checker
@@ -17504,8 +17464,8 @@ fn checker_match_and_builtin_error_surfaces_cover_remaining_branches() {
                 "builtin resource `net.HttpExchange` must be created through its module functions",
             ),
             (
-                "import net\n\ndef main() -> int32:\n    response = net.HttpResponse()\n    return 0\n",
-                "builtin resource `net.HttpResponse` must be created through its module functions",
+                "import http\n\ndef main() -> int32:\n    stream = http.Stream()\n    return 0\n",
+                "builtin resource `http.Stream` must be created through its module functions",
             ),
             (
                 "import net\n\ndef main() -> int32:\n    listener = net.WebSocketListener()\n    return 0\n",
@@ -18857,7 +18817,7 @@ fn module_namespace_and_builtin_enum_helpers_cover_resolution_paths() {
         .expect_err("wrong explicit type arg arity should fail");
     assert!(builtin_arity.message.contains("expects 1 type argument"));
     let removed_option = checker
-        .explicit_builtin_type("Option", &[int_ty.clone()], span)
+        .explicit_builtin_type("Option", std::slice::from_ref(&int_ty), span)
         .expect_err("the removed builtin `Option` is an ordinary unknown name");
     assert!(removed_option.message.contains("unknown name `Option`"));
     let builtin_missing = checker
@@ -20380,19 +20340,13 @@ fn check_reports_field_default_and_trait_impl_validation_errors() {
         .message
         .contains("method `map` in impl of `Mapper` does not match the trait signature"));
 
-    for source in [
-        "trait Show:\n    def show(self, text: str) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own str) -> int32:\n        return self.value\n",
-    ] {
-        let error = crate::check_source(source)
-            .expect_err("a trait impl passing mismatch should fail");
-        assert!(
-            error
-                .message
-                .contains("does not match the trait signature"),
-            "unexpected diagnostic: {}",
-            error.message
-        );
-    }
+    let source = "trait Show:\n    def show(self, text: str) -> int32\n\nclass Box:\n    value: int32\n\nimpl Show for Box:\n    def show(self, text: own str) -> int32:\n        return self.value\n";
+    let error = crate::check_source(source).expect_err("a trait impl passing mismatch should fail");
+    assert!(
+        error.message.contains("does not match the trait signature"),
+        "unexpected diagnostic: {}",
+        error.message
+    );
 
     crate::check_source(
         "trait Identity:\n    def identity(self, value: own str) -> str\n\nclass Picker:\n    value: int32\n\nimpl Identity for Picker:\n    def identity(self, renamed: own str) -> str:\n        return renamed\n",
@@ -22979,13 +22933,14 @@ def close_only(queue: Queue[random.Rng]):
 fn owned_builtin_snapshots_are_transfer_but_live_authority_is_not() {
     crate::check_source(
         r#"
+import http
 import net
 import process
 
 def completed(value: own process.Completed) -> process.Completed:
     return value
 
-def response(value: own net.HttpResponse) -> net.HttpResponse:
+def response(value: own http.Response) -> http.Response:
     return value
 
 def datagram(value: own net.UdpDatagram) -> net.UdpDatagram:
@@ -22993,7 +22948,7 @@ def datagram(value: own net.UdpDatagram) -> net.UdpDatagram:
 
 def launch(
     completed_value: own process.Completed,
-    response_value: own net.HttpResponse,
+    response_value: own http.Response,
     datagram_value: own net.UdpDatagram
 ):
     with group = TaskGroup():
@@ -23002,7 +22957,7 @@ def launch(
         group.start(datagram, datagram_value)
 "#,
     )
-    .expect("completed process, HTTP, and UDP snapshots contain only owned Transfer data");
+    .expect("completed process and UDP snapshots and HTTP responses are Transfer");
 
     let live = crate::check_source(
         r#"

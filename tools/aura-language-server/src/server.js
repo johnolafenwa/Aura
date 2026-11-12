@@ -30,6 +30,7 @@ const {
   compilerDiagnosticsToLsp,
   compilerHoverAtPosition,
   compilerSymbolsToLsp,
+  isRunnableCompilerCommand,
   openDocumentOverlays,
   resolveCompilerCommand,
   setCompilerSchemaMismatchHandler,
@@ -482,25 +483,32 @@ function validateDocument(document) {
 // Runs `aura verify` on the document as it is now, then shows the results
 // if the text has not changed since.
 function verifyDocument(document) {
-  if (!verifyOnSave()) {
+  const filePath = uriToPath(document.uri);
+  if (!verifyOnSave() || !filePath) {
+    return;
+  }
+  const command = resolveCompilerCommand();
+  if (!isRunnableCompilerCommand(command)) {
     return;
   }
   const run = verificationState.start(document.uri);
+  const signal = verificationState.signal(document.uri);
   const version = document.version;
-  const filePath = uriToPath(document.uri) || document.uri;
-  void runVerifier(resolveCompilerCommand(), filePath, document.getText()).then((report) => {
-    const current = documents.get(document.uri);
-    if (!current || !verificationState.finish(document.uri, run, version, report)) {
-      return;
+  void runVerifier(command, filePath, document.getText(), undefined, undefined, { signal }).then(
+    (report) => {
+      const current = documents.get(document.uri);
+      if (!current || !verificationState.finish(document.uri, run, version, report)) {
+        return;
+      }
+      void validateDocument(current);
+      // A client without inlay hint refresh asks again when it scrolls.
+      try {
+        void connection.languages.inlayHint.refresh().catch(() => {});
+      } catch {
+        // Nothing to refresh.
+      }
     }
-    void validateDocument(current);
-    // A client without inlay hint refresh asks again when it scrolls.
-    try {
-      void connection.languages.inlayHint.refresh().catch(() => {});
-    } catch {
-      // Nothing to refresh.
-    }
-  });
+  );
 }
 
 async function getDocumentState(document) {

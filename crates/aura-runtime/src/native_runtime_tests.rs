@@ -16,7 +16,7 @@ use crate::randomness::SecureRandomError;
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, InstanceValue,
+    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot, InstanceValue,
     LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
@@ -2110,6 +2110,15 @@ fn every_host_builtin_entry_checks_its_argument_count() {
                 | "sys::monotonic_time_ms"
                 | "metrics::reset"
                 | "control::__retry_cancel_if_requested"
+                | "time::__aura_now"
+                | "time::__aura_monotonic"
+                | "time::__aura_failed"
+                | "time::__aura_error"
+                | "time::__aura_parsed_seconds"
+                | "time::__aura_parsed_nanos"
+                | "time::__aura_parsed_offset"
+                | "http::__aura_idle_connections"
+                | "http::__aura_close_idle"
         );
         match result {
             Ok(_) => assert!(!takes_arguments, "`{name}` accepted no arguments"),
@@ -5056,7 +5065,7 @@ fn direct_function_value_type_patterns_bind_nested_types_and_capabilities() {
     }
 
     fn function_value(signature: &Type, name: &'static [u8]) -> *mut OpaqueValue {
-        let encoded = super::canonical_runtime_type_name(&signature).into_bytes();
+        let encoded = super::canonical_runtime_type_name(signature).into_bytes();
         super::aura_direct_function_value(
             test_native_thunk as *const () as usize as i64,
             1,
@@ -7238,6 +7247,9 @@ fn native_runtime_direct_filesystem_wrappers_cover_io_error_results() {
     expect_io_result_error(super::aura_direct_file_read_all(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_bytes(file_ptr));
     expect_io_result_error(super::aura_direct_file_read_line(file_ptr));
+    let mut failure = std::ptr::null_mut();
+    assert!(super::aura_direct_file_read_line_try(file_ptr, &mut failure).is_null());
+    expect_io_result_error(failure);
     expect_io_result_error(super::aura_direct_file_read_lines(file_ptr, int_value(4)));
     expect_io_result_error(super::aura_direct_file_read_chunk(file_ptr, int_value(4)));
     expect_io_result_error(super::aura_direct_file_write_all(
@@ -7542,65 +7554,30 @@ fn native_runtime_direct_network_wrappers_cover_tcp_udp_http_success_paths() {
             }
         }
     });
-    let text_response = match expect_result_ok_payload(super::aura_direct_net_http_request_text(
-        string_value("POST"),
-        string_value(&format!("http://{http_address}/direct-text")),
-        string_value("hello"),
-        string_map(&[("x-client", "text")]),
-    )) {
-        Value::HttpResponse(response) => response,
-        other => panic!("expected net.HttpResponse, found {:?}", other),
-    };
-    assert_eq!(
-        super::aura_direct_http_response_status(boxed_value(Value::HttpResponse(
-            text_response.clone(),
-        ))),
-        200
-    );
-    assert_eq!(
-        expect_string(super::aura_direct_http_response_reason(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        ))),
-        "OK"
-    );
-    match unsafe {
-        take_value(super::aura_direct_http_response_headers(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        )))
-    } {
-        Value::Map(headers) => assert!(!headers.entries.is_empty()),
-        other => panic!("expected HTTP response header map, found {:?}", other),
-    }
-    assert_eq!(
-        expect_result_ok_string(super::aura_direct_http_response_text(boxed_value(
-            Value::HttpResponse(text_response.clone()),
-        ))),
-        "ack"
-    );
-    assert_eq!(
-        expect_vec_ints(super::aura_direct_http_response_bytes(boxed_value(
-            Value::HttpResponse(text_response),
-        ))),
-        vec![97, 99, 107]
-    );
+    let text_response = HttpSnapshot::request_text(
+        "POST",
+        &format!("http://{http_address}/direct-text"),
+        "hello",
+        vec![("x-client".to_string(), "text".to_string())],
+        None,
+        None,
+    )
+    .expect("the text request should get a response");
+    assert_eq!(text_response.status(), 200);
+    assert_eq!(text_response.reason(), "OK");
+    assert!(!text_response.headers().is_empty());
+    assert_eq!(text_response.text().expect("the body is text"), "ack");
 
-    let bytes_response =
-        match expect_result_ok_payload(super::aura_direct_net_http_request_bytes_timeout(
-            string_value("POST"),
-            string_value(&format!("http://{http_address}/direct-bytes")),
-            int_vec(&[114, 97, 119]),
-            string_map(&[("x-client", "bytes")]),
-            timeout,
-        )) {
-            Value::HttpResponse(response) => response,
-            other => panic!("expected net.HttpResponse, found {:?}", other),
-        };
-    assert_eq!(
-        expect_vec_ints(super::aura_direct_http_response_bytes(boxed_value(
-            Value::HttpResponse(bytes_response),
-        ))),
-        vec![114, 97, 119, 45, 111, 107]
-    );
+    let bytes_response = HttpSnapshot::request_bytes(
+        "POST",
+        &format!("http://{http_address}/direct-bytes"),
+        &[114, 97, 119],
+        vec![("x-client".to_string(), "bytes".to_string())],
+        Some(StdDuration::from_secs(5)),
+        None,
+    )
+    .expect("the byte request should get a response");
+    assert_eq!(bytes_response.bytes(), vec![114, 97, 119, 45, 111, 107]);
     http_server
         .join()
         .expect("http direct wrapper server should join");
@@ -7828,20 +7805,6 @@ fn native_runtime_direct_network_wrappers_cover_timeout_and_error_results() {
     expect_unit(super::aura_direct_http_listener_close(boxed_value(
         Value::HttpListener(http_listener),
     )));
-
-    expect_io_result_error(super::aura_direct_net_http_request_text_timeout(
-        string_value("GET"),
-        string_value("not-a-url"),
-        string_value(""),
-        string_map(&[]),
-        duration_value(1),
-    ));
-    expect_io_result_error(super::aura_direct_net_http_request_bytes(
-        string_value("POST"),
-        string_value("not-a-url"),
-        int_vec(&[1, 2]),
-        string_map(&[]),
-    ));
 
     expect_io_result_error(super::aura_direct_net_tls_listen(
         string_value("127.0.0.1:0"),
@@ -9880,6 +9843,7 @@ fn native_runtime_direct_task_claim_flag_is_released_when_spawn_fails() {
 #[cfg(debug_assertions)]
 #[test]
 fn native_runtime_direct_task_refuses_a_release_it_does_not_own() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let result = run_lightweight_root_task(move || {
         let args = super::aura_direct_arg_buffer_new(0);
         let group = super::aura_direct_task_group_new();
@@ -12689,6 +12653,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
             "file-read-line-type" => {
                 super::aura_direct_file_read_line(bool_value(true));
             }
+            "file-read-line-try-type" => {
+                let mut failure = std::ptr::null_mut();
+                super::aura_direct_file_read_line_try(bool_value(true), &mut failure);
+            }
             "file-read-lines-type" => {
                 super::aura_direct_file_read_lines(bool_value(true), int_value(1));
             }
@@ -13387,21 +13355,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
                     string_map(&[]),
                 );
             }
-            "http-response-status-type" => {
-                super::aura_direct_http_response_status(bool_value(true));
-            }
-            "http-response-reason-type" => {
-                super::aura_direct_http_response_reason(bool_value(true));
-            }
-            "http-response-headers-type" => {
-                super::aura_direct_http_response_headers(bool_value(true));
-            }
-            "http-response-text-type" => {
-                super::aura_direct_http_response_text(bool_value(true));
-            }
-            "http-response-bytes-type" => {
-                super::aura_direct_http_response_bytes(bool_value(true));
-            }
             "websocket-listener-accept-type" => {
                 super::aura_direct_websocket_listener_accept(bool_value(true), duration_value(1));
             }
@@ -14056,6 +14009,10 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         ("file-read-all-type", "expected `fs.File`, found `bool`"),
         ("file-read-bytes-type", "expected `fs.File`, found `bool`"),
         ("file-read-line-type", "expected `fs.File`, found `bool`"),
+        (
+            "file-read-line-try-type",
+            "expected `fs.File`, found `bool`",
+        ),
         ("file-read-lines-type", "expected `fs.File`, found `bool`"),
         (
             "file-read-lines-count-type",
@@ -14516,26 +14473,6 @@ fn direct_runtime_helper_errors_surface_expected_diagnostics() {
         (
             "http-exchange-respond-bytes-type",
             "expected `net.HttpExchange`, found `bool`",
-        ),
-        (
-            "http-response-status-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-reason-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-headers-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-text-type",
-            "expected `net.HttpResponse`, found `bool`",
-        ),
-        (
-            "http-response-bytes-type",
-            "expected `net.HttpResponse`, found `bool`",
         ),
         (
             "websocket-listener-accept-type",
@@ -15744,24 +15681,29 @@ fn native_runtime_resource_metadata_reports_maintained_type_names() {
             .write_all(b"HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n")
             .expect("http fixture should write response");
     });
-    let http_response = HttpResponseValue::request_text(
+    let http_response = crate::runtime_value::http_client::http_send(
         "GET",
         &format!("http://{http_address}/"),
-        "",
         Vec::new(),
-        Some(StdDuration::from_secs(1)),
+        b"",
+        &crate::runtime_value::http_client::HttpRequestOptions {
+            timeout: Some(StdDuration::from_secs(1)),
+            keep_alive: false,
+            ..Default::default()
+        },
         None,
     )
+    .map(HttpResponseValue::new)
     .expect("http response should be read from local fixture");
     http_thread
         .join()
         .expect("http fixture worker should join successfully");
     assert_value_metadata(
         &Value::HttpResponse(http_response.clone()),
-        "net.HttpResponse",
-        "net.HttpResponse",
+        "http.Stream",
+        "http.Stream",
     );
-    assert_direct_type_match(Value::HttpResponse(http_response), "net.HttpResponse");
+    assert_direct_type_match(Value::HttpResponse(http_response), "http.Stream");
 
     let ws_listener =
         WebSocketListenerValue::bind("127.0.0.1:0").expect("websocket listener should bind");
@@ -15945,10 +15887,10 @@ fn native_runtime_thread_local_and_pointer_helpers_cover_remaining_paths() {
     assert!(super::direct_primary_runtime_diagnostic().is_none());
 
     assert_eq!(
-        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_signed(7))),
+        extract_duration_nanoseconds(Value::Int(IntegerValue::from_signed(7))),
         7
     );
-    assert_eq!(extract_duration_nanoseconds(&Value::Duration(9)), 9);
+    assert_eq!(extract_duration_nanoseconds(Value::Duration(9)), 9);
     assert_eq!(decode_bytes(b"aura".as_ptr(), "aura".len()), "aura");
 
     unsafe {
@@ -16987,6 +16929,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
 
 #[test]
 fn native_runtime_child_task_inherits_youngest_first_ancestry_and_starts_a_new_call_chain() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let parent_ancestry = vec![RuntimeTaskFrame {
         task_function: "parent".to_string(),
         task_entry_span: runtime_source_span("/workspace/parent.au", 3, 1),
@@ -17857,6 +17800,7 @@ fn native_runtime_static_task_frames_preserve_absent_paths_and_reject_invalid_ut
 
 #[test]
 fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let signature = Type::Function {
         params: Vec::new(),
         return_type: Box::new(Type::Unit),
@@ -17911,6 +17855,7 @@ fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() 
 
 #[test]
 fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_thunks() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let non_callable = int_value(7);
     let missing_thunk = boxed_value(Value::Function(Box::new(FunctionValue {
         name: "declaration-only".to_string(),
@@ -20114,7 +20059,7 @@ fn native_runtime_collection_helpers_cover_remaining_success_paths() {
 #[test]
 fn duration_integer_outside_signed_range_helper_exits_with_error() {
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-int-out-of-range") {
-        extract_duration_nanoseconds(&Value::Int(IntegerValue::from_literal(u128::MAX)));
+        extract_duration_nanoseconds(Value::Int(IntegerValue::from_literal(u128::MAX)));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -20139,7 +20084,7 @@ fn duration_integer_outside_signed_range_helper_exits_with_error() {
 #[test]
 fn duration_type_mismatch_helper_exits_with_error() {
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() == Ok("duration-type") {
-        extract_duration_nanoseconds(&Value::String("oops".to_string().into()));
+        extract_duration_nanoseconds(Value::String("oops".to_string().into()));
     }
 
     let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -20289,15 +20234,12 @@ fn native_runtime_operator_and_io_helpers_cover_additional_paths() {
         expect_int(super::aura_direct_unary_value(0, int_value(9))),
         -9
     );
-    assert_eq!(
-        expect_bool_boxed(super::aura_direct_unary_value_at(
-            1,
-            bool_value(false),
-            3,
-            4
-        )),
-        true
-    );
+    assert!(expect_bool_boxed(super::aura_direct_unary_value_at(
+        1,
+        bool_value(false),
+        3,
+        4
+    )));
 
     assert_eq!(
         expect_int(super::aura_direct_binary_value(
@@ -23097,7 +23039,8 @@ fn direct_union_tag_take_and_inject_reject_invalid_metadata_and_identities() {
     let union_name = super::canonical_runtime_type_name(&Type::Union(Box::new(target.clone())));
     let scalar_name = super::canonical_runtime_type_name(&Type::named("int64"));
 
-    let cases: Vec<(&str, Box<dyn FnOnce() + Send>)> = vec![
+    type Case<'a> = (&'a str, Box<dyn FnOnce() + Send>);
+    let cases: Vec<Case<'_>> = vec![
         (
             "invalid union tag type",
             Box::new(|| {
@@ -24140,33 +24083,6 @@ fn direct_network_connectors_report_unreachable_endpoints_as_io_errors() {
         string_value(&closed),
         string_value("localhost"),
         string_value(missing_cert.to_str().expect("utf-8 temp path")),
-        timeout(),
-    ));
-    let url = format!("http://{closed}/");
-    expect_result_err_payload(super::aura_direct_net_http_request_text(
-        string_value("GET"),
-        string_value(&url),
-        string_value(""),
-        string_map(&[]),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_text_timeout(
-        string_value("GET"),
-        string_value(&url),
-        string_value(""),
-        string_map(&[]),
-        timeout(),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_bytes(
-        string_value("POST"),
-        string_value(&url),
-        int_vec(&[]),
-        string_map(&[]),
-    ));
-    expect_result_err_payload(super::aura_direct_net_http_request_bytes_timeout(
-        string_value("POST"),
-        string_value(&url),
-        int_vec(&[]),
-        string_map(&[]),
         timeout(),
     ));
     expect_result_err_payload(super::aura_direct_net_websocket_connect_timeout(
@@ -25951,7 +25867,7 @@ fn leaf_runtime_type_tags_skip_the_value_lock() {
 fn values_take_the_lock_only_once_shared() {
     let value = string_value("confined");
     let opaque = unsafe { &*value };
-    assert!(!opaque.shared_lock().is_some());
+    assert!(opaque.shared_lock().is_none());
     assert!(matches!(
         opaque.access(true),
         super::DirectValueAccess::Confined
@@ -25986,6 +25902,7 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
 
 #[test]
 fn task_arguments_are_shared_before_the_child_starts() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let argument = string_value("task argument");
     let argument_address = argument as usize;
     let result = run_lightweight_root_task(move || {
@@ -27318,7 +27235,8 @@ fn direct_lookup_payload_gets_agree_with_lookup_gets() {
         super::aura_direct_vec_push_in_place(groups, int_vec(&[1]));
         groups
     }
-    let cases: [(fn(), fn()); 5] = [
+    type FnPair = (fn(), fn());
+    let cases: [FnPair; 5] = [
         (
             || {
                 super::aura_direct_map_get_str_payload(int_value(3), b"age".as_ptr(), 3);
@@ -27471,7 +27389,8 @@ fn direct_scalar_variant_payloads_read_in_place_with_the_boxed_messages() {
             payloads: vec![Value::Int(IntegerValue::from_u64(u64::MAX))].into(),
         }))
     }
-    let cases: [(fn(), fn()); 7] = [
+    type FnPair = (fn(), fn());
+    let cases: [FnPair; 7] = [
         (
             || {
                 super::aura_direct_variant_payload_int64(text_variant(), 0);
@@ -28982,4 +28901,457 @@ fn map_insert_in_place_stores_what_set_in_place_stores_without_a_result() {
         })
     };
     unsafe { release_value(map) };
+}
+
+/// What a direct helper that traps reports.
+fn direct_trap_message(run: impl FnOnce() + Send + 'static) -> String {
+    run_lightweight_root_task(move || {
+        super::with_task_runtime_error_capture(|| {
+            run();
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("the helper traps")
+    .message
+}
+
+#[test]
+fn direct_time_helpers_write_parse_and_keep_the_outcome() {
+    let text = |value: *mut OpaqueValue| match unsafe { take_value(value) } {
+        Value::String(text) => text.to_string(),
+        other => panic!("expected str, found {other:?}"),
+    };
+    let handle = |text: &str| boxed_value(Value::string(text));
+    assert_eq!(
+        text(super::aura_direct_time_rfc3339(
+            1_700_000_000,
+            250_000_000,
+            60
+        )),
+        "2023-11-14T23:13:20.250+01:00"
+    );
+
+    let pattern = handle("%Y-%m-%d %e %H:%M:%S %z");
+    assert_eq!(
+        text(super::aura_direct_time_format(
+            1_700_000_000,
+            0,
+            -90,
+            pattern
+        )),
+        "2023-11-14 14 20:43:20 -0130"
+    );
+    assert_eq!(super::aura_direct_time_failed(), 0);
+    let bad_pattern = handle("%Q");
+    assert_eq!(
+        text(super::aura_direct_time_format(0, 0, 0, bad_pattern)),
+        ""
+    );
+    assert_eq!(super::aura_direct_time_failed(), 1);
+    assert_eq!(
+        text(direct_host_builtin_call("time::__aura_error", &[])),
+        "unknown directive `%Q`"
+    );
+
+    let stamp = handle("2023-11-14T23:13:20.25+01:00");
+    assert_eq!(super::aura_direct_time_parse_rfc3339(stamp), 1);
+    assert_eq!(super::aura_direct_time_failed(), 0);
+    assert_eq!(super::aura_direct_time_parsed_part(0), 1_700_000_000);
+    assert_eq!(super::aura_direct_time_parsed_part(1), 250_000_000);
+    assert_eq!(super::aura_direct_time_parsed_part(2), 60);
+    let written = handle("2023-11-14 22:13");
+    let layout = handle("%Y-%m-%d %H:%M");
+    assert_eq!(super::aura_direct_time_parse(written, layout), 1);
+    assert_eq!(super::aura_direct_time_parsed_part(0), 1_699_999_980);
+    assert_eq!(super::aura_direct_time_parsed_part(2), 0);
+    assert_eq!(super::aura_direct_time_parse(written, pattern), 0);
+    assert_eq!(super::aura_direct_time_failed(), 1);
+    assert_eq!(super::aura_direct_time_parse_rfc3339(written), 0);
+
+    let amount = boxed_value(Value::Duration(-1));
+    assert_eq!(super::aura_direct_time_duration_seconds(amount), -1);
+    assert_eq!(super::aura_direct_time_duration_nanos(amount), 999_999_999);
+    assert_eq!(
+        unsafe { take_value(super::aura_direct_time_duration(-2, 500_000_000)) },
+        Value::Duration(-1_500_000_000)
+    );
+    assert!((-1_439..=1_439).contains(&super::aura_direct_time_local_offset_minutes(0)));
+
+    unsafe {
+        for value in [pattern, bad_pattern, stamp, written, layout, amount] {
+            release_value(value);
+        }
+    }
+
+    let message = direct_trap_message(|| {
+        let number = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_time_parse_rfc3339(number);
+    });
+    assert_eq!(
+        message,
+        "`time::__aura_parse_rfc3339` expects `str`, found `bool`"
+    );
+    let message = direct_trap_message(|| {
+        let number = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_time_duration_seconds(number);
+    });
+    assert_eq!(
+        message,
+        "`time::__aura_duration_seconds` expects `Duration`, found `bool`"
+    );
+}
+
+#[test]
+fn direct_regex_helpers_search_with_a_pattern_number() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"(?<digits>\d+)")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let Value::Int(number) = &compiled.elements[0] else {
+        panic!("expected a pattern number");
+    };
+    let number = number.as_i128().expect("a small number") as i64;
+    let text = boxed_value(Value::string("a12b3"));
+    let name = boxed_value(Value::string("digits"));
+    let replacement = boxed_value(Value::string("#"));
+
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 0), 1);
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 1), 2);
+    assert_eq!(super::aura_direct_regex_scalar(number, name, 2), 1);
+    assert_eq!(super::aura_direct_regex_scalar(number, text, 2), -1);
+    for operation in 0..5 {
+        let found = super::aura_direct_regex_search(number, text, operation);
+        let direct = unsafe { take_value(found) };
+        let builtin = super::DIRECT_REGEX_SEARCHES[operation as usize];
+        let expected = crate::runtime_value::regex_host::evaluate_regex_builtin(
+            builtin,
+            number,
+            "a12b3",
+            crate::runtime_value::regex_host::RegexArgument::None,
+        )
+        .expect("the builtin searches");
+        assert_eq!(direct, expected, "{builtin}");
+    }
+    assert_eq!(
+        unsafe {
+            take_value(super::aura_direct_regex_replace(
+                number,
+                text,
+                replacement,
+                0,
+            ))
+        },
+        Value::string("a#b3")
+    );
+    assert_eq!(
+        unsafe {
+            take_value(super::aura_direct_regex_replace(
+                number,
+                text,
+                replacement,
+                1,
+            ))
+        },
+        Value::string("a#b#")
+    );
+    unsafe {
+        for value in [text, name, replacement] {
+            release_value(value);
+        }
+    }
+
+    let message = direct_trap_message(|| {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_scalar(i64::MAX, text, 0);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(|| {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_search(i64::MAX, text, 0);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(move || {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_search(number, text, 9);
+    });
+    assert_eq!(message, "unknown regex search operation");
+    let message = direct_trap_message(move || {
+        let text = boxed_value(Value::string("a"));
+        let _ = super::aura_direct_regex_replace(i64::MAX, text, text, 1);
+    });
+    assert!(message.contains("holds no compiled pattern"), "{message}");
+    let message = direct_trap_message(move || {
+        let number_value = boxed_value(Value::Bool(true));
+        let _ = super::aura_direct_regex_scalar(number, number_value, 0);
+    });
+    assert_eq!(message, "`regex` expects `str`, found `bool`");
+}
+
+#[test]
+fn every_regex_search_entry_reads_borrowed_handles() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"(?<digits>\d+)")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let number = compiled.elements[0].clone();
+    for (name, texts) in [
+        ("regex::__aura_is_match", &["a12b3"][..]),
+        ("regex::__aura_count", &["a12b3"][..]),
+        ("regex::__aura_find", &["a12b3"][..]),
+        ("regex::__aura_matches", &["a12b3"][..]),
+        ("regex::__aura_find_all", &["a12b3"][..]),
+        ("regex::__aura_captures", &["a12b3"][..]),
+        ("regex::__aura_group_index", &["digits"][..]),
+        ("regex::__aura_split", &["a12b3"][..]),
+        ("regex::__aura_replace", &["a12b3", "#"][..]),
+        ("regex::__aura_replace_all", &["a12b3", "#"][..]),
+    ] {
+        let arguments: Vec<*mut OpaqueValue> = std::iter::once(boxed_value(number.clone()))
+            .chain(texts.iter().map(|text| boxed_value(Value::string(*text))))
+            .collect();
+        let result = direct_host_builtin_call(name, &arguments);
+        assert!(!result.is_null(), "`{name}` returned no value");
+        unsafe {
+            release_value(result);
+            for argument in arguments {
+                release_value(argument);
+            }
+        }
+    }
+}
+
+#[test]
+fn direct_regex_reads_its_number_and_texts_through_borrowed_handles() {
+    use crate::runtime_value::host_builtins::host_builtin_function;
+    let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
+    let Value::Tuple(compiled) =
+        compile(vec![Value::string(r"\d+")], None).expect("compile returns")
+    else {
+        panic!("expected a tuple");
+    };
+    let number = compiled.elements[0].clone();
+    let handles = |texts: &[&str]| super::DirectHostArgBuffer {
+        handles: std::iter::once(boxed_value(number.clone()) as i64)
+            .chain(
+                texts
+                    .iter()
+                    .map(|text| boxed_value(Value::string(*text)) as i64),
+            )
+            .collect(),
+    };
+    let search = handles(&["a12b3"]);
+    assert_eq!(
+        super::direct_regex("regex::__aura_count", &search).expect("count"),
+        Value::Int(IntegerValue::from_i64(2))
+    );
+    let replace = handles(&["a12b3", "#"]);
+    assert_eq!(
+        super::direct_regex("regex::__aura_replace_all", &replace).expect("replace"),
+        Value::string("a#b#")
+    );
+
+    let bad_pattern = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(Value::Bool(true)) as i64,
+            boxed_value(Value::string("text")) as i64,
+        ],
+    };
+    let error = super::direct_regex("regex::__aura_count", &bad_pattern)
+        .expect_err("a bool is not a pattern number");
+    assert!(error.message.contains("pattern number"), "{error:?}");
+    let bad_text = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(number.clone()) as i64,
+            boxed_value(Value::Bool(true)) as i64,
+        ],
+    };
+    let error =
+        super::direct_regex("regex::__aura_count", &bad_text).expect_err("a bool is not a text");
+    assert!(
+        error.message.contains("argument 2 to be `str`"),
+        "{error:?}"
+    );
+    let bad_replacement = super::DirectHostArgBuffer {
+        handles: vec![
+            boxed_value(number.clone()) as i64,
+            boxed_value(Value::string("a1")) as i64,
+            boxed_value(Value::Bool(true)) as i64,
+        ],
+    };
+    let error = super::direct_regex("regex::__aura_replace", &bad_replacement)
+        .expect_err("a bool is not a replacement");
+    assert!(
+        error.message.contains("argument 3 to be `str`"),
+        "{error:?}"
+    );
+}
+
+#[test]
+fn http_host_entries_borrow_the_stream_and_read_a_response_through_the_native_abi() {
+    let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("the fixture should bind");
+    let address = listener.local_addr().expect("the fixture has an address");
+    let server = thread::spawn(move || {
+        let (mut stream, _) = listener.accept().expect("the fixture accepts one request");
+        let mut request = [0_u8; 1024];
+        let _ = stream.read(&mut request).expect("the fixture reads");
+        stream
+            .write_all(
+                b"HTTP/1.1 200 OK\r\nContent-Length: 12\r\nConnection: close\r\n\r\nfirst\nsecond",
+            )
+            .expect("the fixture replies");
+    });
+
+    let arguments = [
+        string_value("GET"),
+        string_value(&format!("http://{address}/native")),
+        string_map(&[("x-native", "yes")]),
+        string_value(""),
+        boxed_value(Value::Vec(crate::runtime_value::VecValue {
+            element_type: crate::runtime_value::SharedType::named("uint8"),
+            elements: crate::runtime_value::ListElements::from_uint8(Vec::new()),
+            str_view: Default::default(),
+        })),
+        boxed_value(Value::Duration(5_000_000_000)),
+        boxed_value(Value::Duration(0)),
+        int_value(0),
+        int_value(4),
+        string_value(""),
+    ];
+    let sent = expect_result_ok_payload(direct_host_builtin_call("http::__aura_send", &arguments));
+    for argument in arguments {
+        unsafe { release_value(argument) };
+    }
+    let Value::Tuple(sent) = sent else {
+        panic!("a send returns a tuple");
+    };
+    assert_eq!(sent.elements[1].render(), "200");
+    let stream = boxed_value(sent.elements[0].clone());
+
+    // The entry borrows the stream: the caller's handle reads on after it.
+    let line = expect_result_ok_payload(direct_host_builtin_call(
+        "http::__aura_read_line",
+        &[stream],
+    ));
+    assert_eq!(line.render(), "first");
+    let limit = int_value(64);
+    let rest = expect_result_ok_string(direct_host_builtin_call(
+        "http::__aura_read_text",
+        &[stream, limit],
+    ));
+    assert_eq!(rest, "second");
+    expect_unit(direct_host_builtin_call("http::__aura_close", &[stream]));
+    unsafe {
+        release_value(limit);
+        release_value(stream);
+    }
+    server.join().expect("the fixture should finish");
+
+    assert!(
+        expect_int(direct_host_builtin_call(
+            "http::__aura_idle_connections",
+            &[]
+        )) >= 0,
+        "the pool reports a count"
+    );
+    expect_unit(direct_host_builtin_call("http::__aura_close_idle", &[]));
+}
+
+#[test]
+fn file_read_line_try_hands_back_the_line_and_leaves_a_failure_in_its_word() {
+    let path = std::env::temp_dir().join(format!(
+        "aura-native-read-line-try-{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time should be after unix epoch")
+            .as_nanos()
+    ));
+    std::fs::write(&path, b"one\r\ntwo\nbad \xff\nlast").expect("fixture should be written");
+    let opened = expect_variant_ptr(
+        super::aura_direct_fs_open(string_value(path.to_str().expect("temp path is UTF-8"))),
+        "Result",
+        "Ok",
+    );
+    let file = match opened.as_slice() {
+        [Value::File(file)] => boxed_value(Value::File(file.clone())),
+        other => panic!("expected opened fs.File, found {:?}", other),
+    };
+    let mut failure = std::ptr::null_mut();
+    let line = |failure: &mut *mut OpaqueValue| {
+        let text = super::aura_direct_file_read_line_try(file, failure);
+        assert!(!text.is_null(), "the file has another line");
+        string_payload(unsafe { take_value(text) }, "`str`")
+    };
+    for expected in ["one", "two"] {
+        assert_eq!(line(&mut failure), expected);
+        assert!(failure.is_null(), "a line that is read leaves no failure");
+    }
+    assert!(
+        super::aura_direct_file_read_line_try(file, &mut failure).is_null(),
+        "a line that is not UTF-8 is a failure"
+    );
+    assert!(expect_variant_value(
+        expect_result_err_payload(failure),
+        "io.Error",
+        "InvalidData"
+    )
+    .is_empty());
+    let mut failure = std::ptr::null_mut();
+    assert_eq!(line(&mut failure), "last");
+    assert!(
+        super::aura_direct_file_read_line_try(file, &mut failure).is_null(),
+        "the end of the file is a null line"
+    );
+    assert!(failure.is_null(), "the end of the file is not a failure");
+    expect_unit(super::aura_direct_file_close(file));
+    unsafe { release_value(file) };
+    std::fs::remove_file(&path).expect("fixture should be removed");
+}
+
+#[test]
+fn every_direct_task_start_test_holds_claim_flag_test_guard() {
+    let source = include_str!("native_runtime_tests.rs");
+    let lines: Vec<&str> = source.lines().collect();
+    let mut unguarded = Vec::new();
+    let mut index = 0;
+    while index < lines.len() {
+        let trimmed = lines[index].trim();
+        let is_test_attr = trimmed == "#[test]";
+        if is_test_attr {
+            let mut fn_idx = index + 1;
+            while fn_idx < lines.len() && lines[fn_idx].trim().starts_with("#[") {
+                fn_idx += 1;
+            }
+            if fn_idx < lines.len() && lines[fn_idx].starts_with("fn ") {
+                let fn_header = lines[fn_idx];
+                let mut end_idx = fn_idx + 1;
+                while end_idx < lines.len() && lines[end_idx] != "}" {
+                    end_idx += 1;
+                }
+                let body = lines[fn_idx..=end_idx.min(lines.len() - 1)].join("\n");
+                let needle_start = ["aura_direct_start_task", "_"].concat();
+                let needle_count = ["direct_task_claim_flag_live", "_count"].concat();
+                let needle_guard = ["direct_task_claim_flag_test", "_guard"].concat();
+                if (body.contains(&needle_start) || body.contains(&needle_count))
+                    && !body.contains(&needle_guard)
+                {
+                    unguarded.push(format!("line {}: {}", fn_idx + 1, fn_header));
+                }
+                index = end_idx + 1;
+                continue;
+            }
+        }
+        index += 1;
+    }
+    assert!(
+        unguarded.is_empty(),
+        "direct-task tests missing direct_task_claim_flag_test_guard():\n{}",
+        unguarded.join("\n")
+    );
 }

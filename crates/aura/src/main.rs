@@ -30,11 +30,22 @@ enum DiagnosticFormat {
 }
 
 fn main() {
-    let mut args = std::env::args().skip(1);
+    let raw_args = std::env::args().skip(1).collect::<Vec<_>>();
+    let delimiter = raw_args.iter().position(|argument| argument == "--");
+    let head_end = delimiter.unwrap_or(raw_args.len());
+    let mut filtered_args = Vec::with_capacity(raw_args.len());
+    for (index, argument) in raw_args.into_iter().enumerate() {
+        if index < head_end && argument == "--offline" {
+            aura_compiler::set_offline_mode(true);
+        } else {
+            filtered_args.push(argument);
+        }
+    }
+    let mut args = filtered_args.into_iter();
     let Some(command) = args.next() else {
         print_usage_and_exit(2);
     };
-    let rest = std::env::args().skip(2).collect::<Vec<_>>();
+    let rest = args.as_slice().to_vec();
     if rest
         .iter()
         .take_while(|argument| argument.as_str() != "--")
@@ -206,7 +217,7 @@ fn main() {
                 .into_iter()
                 .filter(|arg| arg != "--remove-proved-checks")
                 .collect();
-            let (output_path, debug, input_args) = parse_build_args(remaining);
+            let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
             // A debug build keeps every check.
             let result = if remove_proved_checks && !debug {
@@ -263,6 +274,7 @@ fn main() {
                             &mir,
                             &output_path,
                             debug,
+                            embed_rpath,
                             || progress_reporter.wait(),
                         )
                     };
@@ -449,19 +461,45 @@ fn handle_upgrade_command(args: Vec<String>) {
     write_stdout("Aura upgrade complete\n");
 }
 
+fn validate_and_build_curl_args(
+    url: &str,
+    output_path: &Path,
+) -> Result<Vec<std::ffi::OsString>, String> {
+    let trimmed = url.trim();
+    let proto_args: &[&str] = if trimmed.starts_with("https://") {
+        &["--proto", "=https", "--tlsv1.2"]
+    } else if trimmed.starts_with("file://") {
+        &["--proto", "=file"]
+    } else {
+        return Err(format!(
+            "refusing insecure installer URL `{url}`; expected an `https://` URL"
+        ));
+    };
+    let mut args = Vec::with_capacity(proto_args.len() + 5);
+    args.push("-fsSL".into());
+    for flag in proto_args {
+        args.push((*flag).into());
+    }
+    args.push("-o".into());
+    args.push(output_path.as_os_str().to_owned());
+    args.push("--".into());
+    args.push(trimmed.into());
+    Ok(args)
+}
+
 fn run_upgrade() -> Result<(), String> {
     let installer_url = std::env::var("AURA_UPGRADE_INSTALLER_URL")
         .unwrap_or_else(|_| DEFAULT_UPGRADE_INSTALLER_URL.to_string());
     let workspace = create_upgrade_workspace()
         .map_err(|error| format!("could not create a private temporary directory: {error}"))?;
     let installer_path = workspace.path.join("install.sh");
+    let curl_args = validate_and_build_curl_args(&installer_url, &installer_path)?;
 
     write_stdout(&format!(
         "Downloading the Aura installer from {installer_url}\n"
     ));
     let download = Command::new("curl")
-        .args(["-fsSL", &installer_url, "-o"])
-        .arg(&installer_path)
+        .args(curl_args)
         .status()
         .map_err(|error| format!("could not start curl; install curl and try again: {error}"))?;
     if !download.success() {
@@ -773,7 +811,26 @@ fn format_or_exit(label: &str, source: &str) -> String {
 }
 
 fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String> {
-    fn visit(path: &Path, paths: &mut Vec<PathBuf>) -> Result<(), String> {
+    const MAX_SOURCE_WALK_DEPTH: usize = 64;
+
+    fn visit(
+        path: &Path,
+        paths: &mut Vec<PathBuf>,
+        visited_dirs: &mut std::collections::BTreeSet<PathBuf>,
+        depth: usize,
+        is_top_level: bool,
+    ) -> Result<(), String> {
+        if depth > MAX_SOURCE_WALK_DEPTH {
+            return Ok(());
+        }
+        if !is_top_level {
+            let Ok(meta) = fs::symlink_metadata(path) else {
+                return Ok(());
+            };
+            if meta.file_type().is_symlink() {
+                return Ok(());
+            }
+        }
         if path.is_file() {
             if path.extension().and_then(|extension| extension.to_str()) == Some("au") {
                 paths.push(path.to_path_buf());
@@ -786,30 +843,41 @@ fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String>
                 path.display()
             ));
         }
+        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        if !visited_dirs.insert(canonical) {
+            return Ok(());
+        }
         for entry in fs::read_dir(path)
             .map_err(|error| format!("failed to read `{}`: {error}", path.display()))?
         {
             let entry = entry.map_err(|error| {
                 format!("failed to read entry under `{}`: {error}", path.display())
             })?;
+            let Ok(file_type) = entry.file_type() else {
+                continue;
+            };
+            if file_type.is_symlink() {
+                continue;
+            }
             let child = entry.path();
             let name = child
                 .file_name()
                 .and_then(|name| name.to_str())
                 .unwrap_or("");
-            if child.is_dir()
+            if file_type.is_dir()
                 && (name.starts_with('.') || matches!(name, "target" | "node_modules"))
             {
                 continue;
             }
-            visit(&child, paths)?;
+            visit(&child, paths, visited_dirs, depth + 1, false)?;
         }
         Ok(())
     }
 
     let mut paths = Vec::new();
+    let mut visited_dirs = std::collections::BTreeSet::new();
     for input in inputs {
-        visit(input, &mut paths)?;
+        visit(input, &mut paths, &mut visited_dirs, 0, true)?;
     }
     paths.sort();
     paths.dedup();
@@ -2202,7 +2270,16 @@ fn run_through_native_backend(
         }
 
         progress.rebuild();
-        let output_path = temporary_run_binary_path(&input.path);
+        let workspace = match create_private_run_workspace(&input.path) {
+            Ok(workspace) => workspace,
+            Err(error) => {
+                return native_backend_failure(
+                    backend,
+                    format!("failed to create private run staging directory: {error}"),
+                );
+            }
+        };
+        let output_path = workspace.binary_path.clone();
         let build = build_direct_native_binary_with_identity(
             &input.path,
             &input.source,
@@ -2244,7 +2321,7 @@ fn run_through_native_backend(
             }
             Err(reason) => native_backend_failure(backend, reason),
         };
-        let _ = fs::remove_file(&output_path);
+        drop(workspace);
         return outcome;
     }
 }
@@ -3954,25 +4031,58 @@ fn native_binary_has_expected_shape(contents: &[u8]) -> bool {
     }
 }
 
-fn temporary_run_binary_path(source_path: &str) -> PathBuf {
+struct PrivateRunWorkspace {
+    dir: PathBuf,
+    binary_path: PathBuf,
+}
+
+impl Drop for PrivateRunWorkspace {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.dir);
+    }
+}
+
+fn create_private_run_workspace(source_path: &str) -> io::Result<PrivateRunWorkspace> {
     let stem = Path::new(source_path)
         .file_stem()
         .and_then(|name| name.to_str())
+        .filter(|name| !name.is_empty())
         .unwrap_or("aura-run");
-    let unique = format!(
-        "aura-run-{}-{}-{}",
-        stem,
-        std::process::id(),
-        system_time_nanos()
-    );
-    std::env::temp_dir().join(unique)
+    let root = native_cache_root()
+        .and_then(|cache_root| {
+            let staging = cache_root.join("run-staging");
+            create_private_cache_directory_all(&staging)
+                .ok()
+                .map(|()| staging)
+        })
+        .unwrap_or_else(std::env::temp_dir);
+    for attempt in 0..16_u32 {
+        let dir = root.join(format!(
+            "aura-run-{}-{}-{attempt}",
+            std::process::id(),
+            system_time_nanos()
+        ));
+        match create_private_directory(&dir) {
+            Ok(()) => {
+                let binary_path = dir.join(stem);
+                return Ok(PrivateRunWorkspace { dir, binary_path });
+            }
+            Err(error) if error.kind() == io::ErrorKind::AlreadyExists => continue,
+            Err(error) => return Err(error),
+        }
+    }
+    Err(io::Error::new(
+        io::ErrorKind::AlreadyExists,
+        "exhausted private run staging directory attempts",
+    ))
 }
 
-/// The output path, whether the build is a debug build, and the input
-/// arguments of `aura build`.
-fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, Vec<String>) {
+/// The output path, whether the build is a debug build, whether `-rpath` is
+/// embedded, and the input arguments of `aura build`.
+fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, bool, Vec<String>) {
     let mut output = None;
     let mut debug = false;
+    let mut embed_rpath = true;
     let mut input_args = Vec::new();
     let mut index = 0;
 
@@ -4004,6 +4114,10 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, Vec<String>) {
                 debug = true;
                 index += 1;
             }
+            "--no-rpath" => {
+                embed_rpath = false;
+                index += 1;
+            }
             _ => {
                 input_args.push(args[index].clone());
                 index += 1;
@@ -4016,7 +4130,7 @@ fn parse_build_args(args: Vec<String>) -> (PathBuf, bool, Vec<String>) {
         print_usage_and_exit(2);
     }
 
-    (output, debug, input_args)
+    (output, debug, embed_rpath, input_args)
 }
 
 fn read_input(args: &mut impl Iterator<Item = String>) -> Input {
@@ -4255,10 +4369,20 @@ fn build_binary(
     mir: &MirModule,
     output_path: &Path,
     debug: bool,
+    embed_rpath: bool,
     mut on_wait: impl FnMut(),
 ) -> std::result::Result<(), String> {
     let runtime_lock = acquire_native_runtime_build_lock(Some(&mut on_wait))?;
-    link_direct_native_binary(path, source, mir, output_path, runtime_lock, debug).map(|_| ())
+    link_direct_native_binary(
+        path,
+        source,
+        mir,
+        output_path,
+        runtime_lock,
+        debug,
+        embed_rpath,
+    )
+    .map(|_| ())
 }
 
 #[cfg(test)]
@@ -4281,7 +4405,7 @@ fn build_direct_native_binary_with_identity(
     output_path: &Path,
     runtime_lock: Option<NativeBuildLock>,
 ) -> std::result::Result<NativeRuntimeIdentity, String> {
-    link_direct_native_binary(path, source, mir, output_path, runtime_lock, false)
+    link_direct_native_binary(path, source, mir, output_path, runtime_lock, false, true)
 }
 
 /// Emits `mir`, links it with the runtime at `output_path`, and returns the
@@ -4295,6 +4419,7 @@ fn link_direct_native_binary(
     output_path: &Path,
     runtime_lock: Option<NativeBuildLock>,
     debug: bool,
+    embed_rpath: bool,
 ) -> std::result::Result<NativeRuntimeIdentity, String> {
     if let Some(parent) = output_path.parent() {
         fs::create_dir_all(parent).map_err(|error| {
@@ -4391,7 +4516,7 @@ fn link_direct_native_binary(
     for arg in &native_runtime.native_link_args {
         command.arg(arg);
     }
-    match foreign_link_args(&mir.foreign_link, std::env::consts::OS) {
+    match foreign_link_args(&mir.foreign_link, std::env::consts::OS, embed_rpath) {
         Ok(args) => command.args(args),
         Err(error) => {
             let _ = fs::remove_file(&temp_staticlib);
@@ -4491,24 +4616,27 @@ fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
 }
 
 /// The linker arguments for the native libraries a program's packages name
-/// under `[ffi]`: each search path, also recorded as a run path so the
+/// under `[ffi]`: each search path, optionally recorded as a run path so the
 /// program finds a library there when it starts, then each library, then
 /// each macOS framework. The names are checked again here, so nothing but
 /// a library name follows `-l`.
 fn foreign_link_args(
     plan: &aura_compiler::ForeignLinkPlan,
     os: &str,
+    embed_rpath: bool,
 ) -> std::result::Result<Vec<std::ffi::OsString>, String> {
     let mut args = Vec::new();
     for path in &plan.library_paths {
         args.push("-L".into());
         args.push(path.clone().into_os_string());
-        // `-Xlinker` passes the path as its own argument, so a comma in it
-        // cannot split a `-Wl,` option.
-        for part in ["-Xlinker", "-rpath", "-Xlinker"] {
-            args.push(part.into());
+        if embed_rpath {
+            // `-Xlinker` passes the path as its own argument, so a comma in it
+            // cannot split a `-Wl,` option.
+            for part in ["-Xlinker", "-rpath", "-Xlinker"] {
+                args.push(part.into());
+            }
+            args.push(path.clone().into_os_string());
         }
-        args.push(path.clone().into_os_string());
     }
     for (kind, names) in [
         ("library", &plan.libraries),
@@ -5045,12 +5173,12 @@ fn write_stdout(text: &str) {
 }
 
 fn usage_text() -> &'static str {
-    "usage: aura <check|run> [--format human|json] <file.au>\n\
+    "usage: aura <check|run> [--offline] [--format human|json] <file.au>\n\
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
-       or: aura run [--backend mir|direct|auto] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--remove-proved-checks] [--format human|json] --stdin <virtual-path>\n\
+       or: aura run [--backend mir|direct|auto] [--offline] <file.au> [-- <program-args>...]\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--offline] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--offline] [--format human|json] --stdin <virtual-path>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] --stdin <virtual-path>\n\
        or: aura <signature-help|references|prepare-rename|rename> --line <n> --character <n> [--new-name <name>] [--include-declaration] [--stdin] <path>\n\
@@ -5060,7 +5188,7 @@ fn usage_text() -> &'static str {
        or: aura doc [--out <dir>] [--json] [path ...]\n\
        or: aura test [-k <substring>] [--format json] [--timeout-ms <n>] [path ...]\n\
        or: aura verify [--solver <path>] [--timeout <ms>] [--function <name>] [--no-cache] [--format human|json] <file.au>\n\
-       or: aura deps update [package]\n\
+       or: aura deps update [--offline] [package]\n\
        or: aura upgrade\n\
        or: aura help\n\
        or: aura version"
@@ -5130,6 +5258,8 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+    #[cfg(target_os = "macos")]
+    use super::native_launch_error_invalidates_cache;
     #[cfg(unix)]
     use super::{
         acquire_native_build_lock_at, create_private_directory,
@@ -5140,9 +5270,8 @@ mod tests {
         cleanup_stale_native_cache_artifacts_at, cleanup_stale_verified_native_directories,
         configure_native_runtime_cargo, create_private_cache_directory_all, is_sha256_hex,
         lsp_response_for_line, native_cache_key, native_cache_key_for_semantic_schema,
-        native_execution_failure, native_launch_error_invalidates_cache,
-        native_runtime_identity_material, parse_native_static_libs, parse_run_backend,
-        parse_static_library_artifact_path, query_native_runtime_link_args,
+        native_execution_failure, native_runtime_identity_material, parse_native_static_libs,
+        parse_run_backend, parse_static_library_artifact_path, query_native_runtime_link_args,
         remove_native_cache_entry_if_unchanged,
         resolve_installed_runtime_artifacts_from_executable, resolve_static_library_path,
         runtime_archive_digest, runtime_archive_memo_stamp, select_run_outcome,
@@ -6194,17 +6323,21 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             "-lstdc++",
         ];
         assert_eq!(
-            text(super::foreign_link_args(&plan, "linux").expect("the plan is valid")),
+            text(super::foreign_link_args(&plan, "linux", true).expect("the plan is valid")),
             shared
+        );
+        assert_eq!(
+            text(super::foreign_link_args(&plan, "linux", false).expect("the plan is valid")),
+            ["-L", "/pkg/native,lib", "-lsqlite3", "-lstdc++"]
         );
         let mut macos = shared.to_vec();
         macos.extend(["-framework", "Accelerate"]);
         assert_eq!(
-            text(super::foreign_link_args(&plan, "macos").expect("the plan is valid")),
+            text(super::foreign_link_args(&plan, "macos", true).expect("the plan is valid")),
             macos
         );
         assert_eq!(
-            super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux"),
+            super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux", true),
             Ok(Vec::new())
         );
     }
@@ -6230,10 +6363,86 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             };
             for os in ["linux", "macos"] {
                 assert_eq!(
-                    super::foreign_link_args(&plan, os),
+                    super::foreign_link_args(&plan, os, true),
                     Err(message.to_string())
                 );
             }
         }
+    }
+
+    #[test]
+    fn validate_and_build_curl_args_enforces_scheme_and_option_terminator() {
+        let out = std::path::Path::new("/tmp/install.sh");
+        let https_args = super::validate_and_build_curl_args("https://example.com/install.sh", out)
+            .expect("https URL must succeed");
+        assert_eq!(
+            https_args,
+            vec![
+                std::ffi::OsString::from("-fsSL"),
+                std::ffi::OsString::from("--proto"),
+                std::ffi::OsString::from("=https"),
+                std::ffi::OsString::from("--tlsv1.2"),
+                std::ffi::OsString::from("-o"),
+                std::ffi::OsString::from("/tmp/install.sh"),
+                std::ffi::OsString::from("--"),
+                std::ffi::OsString::from("https://example.com/install.sh"),
+            ]
+        );
+        for bad in [
+            "http://example.com/install.sh",
+            "-K/tmp/curlrc",
+            "ftp://example.com/a",
+        ] {
+            assert!(
+                super::validate_and_build_curl_args(bad, out).is_err(),
+                "expected {bad} to be rejected"
+            );
+        }
+    }
+
+    #[test]
+    fn private_run_workspace_uses_restricted_permissions_and_cleans_up_on_drop() {
+        let dir_path = {
+            let workspace = super::create_private_run_workspace("examples/hello.au")
+                .expect("private run workspace should be created");
+            assert!(workspace.dir.is_dir());
+            assert_eq!(
+                workspace.binary_path.file_name().and_then(|n| n.to_str()),
+                Some("hello")
+            );
+            #[cfg(unix)]
+            {
+                use std::os::unix::fs::PermissionsExt;
+                let mode = fs::metadata(&workspace.dir)
+                    .expect("workspace metadata")
+                    .permissions()
+                    .mode()
+                    & 0o777;
+                assert_eq!(mode, 0o700, "private run workspace must be mode 0700");
+            }
+            workspace.dir.clone()
+        };
+        assert!(
+            !dir_path.exists(),
+            "private run workspace should be removed on drop"
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn collect_aura_source_paths_skips_symlink_cycles() {
+        let root = unique_temp_dir("source-walk-symlink-loop");
+        let sub = root.join("sub");
+        fs::create_dir_all(&sub).expect("create sub dir");
+        let main_au = root.join("main.au");
+        fs::write(&main_au, "def main():\n    pass\n").expect("write main.au");
+        std::os::unix::fs::symlink(&root, sub.join("loop")).expect("create directory symlink loop");
+        std::os::unix::fs::symlink(root.join("nonexistent.au"), sub.join("dangling.au"))
+            .expect("create dangling file symlink");
+
+        let found = super::collect_aura_source_paths(std::slice::from_ref(&root))
+            .expect("directory walk must terminate cleanly on symlink cycles");
+        let _ = fs::remove_dir_all(&root);
+        assert_eq!(found, vec![main_au]);
     }
 }

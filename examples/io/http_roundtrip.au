@@ -1,3 +1,4 @@
+import http
 import io
 import net
 
@@ -24,10 +25,9 @@ def run() -> Result[None, io.Error]:
         address = try receive_address(addresses)
 
         headers: dict[str, str] = {"X-Test": "ok"}
-        response = try net.http_request_text_timeout("POST", "http://" + address + "/hello", "body", headers, 5s)
-        with http_response = response:
-            print(http_response.status())
-            print(try http_response.text())
+        with response = try http.Client(timeout=5s).post("http://" + address + "/hello", "body", headers):
+            print(response.status)
+            print(try response.text())
 
         match own server.result():
             case TaskResult.Ready(result):

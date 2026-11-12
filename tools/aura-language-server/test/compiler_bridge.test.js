@@ -25,6 +25,7 @@ const {
   expandHome,
   findOnPath,
   installedCompiler,
+  isRunnableCompilerCommand,
   openDocumentOverlays,
   resolveCompilerCommand,
   runCommand,
@@ -519,10 +520,20 @@ test("compiler bridge preserves populated runtime frame metadata without rewriti
 
 test("compiler bridge ignores workspace binaries and cargo unless explicitly opted in", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-untrusted-"));
-  const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
-  const originalOptIn = process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
+  const saved = {
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH,
+    AURA_LSP_USE_WORKSPACE_COMPILER: process.env.AURA_LSP_USE_WORKSPACE_COMPILER,
+    AURA_LSP_SYSTEM_BIN_DIRS: process.env.AURA_LSP_SYSTEM_BIN_DIRS,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    PATH: process.env.PATH
+  };
   try {
     delete process.env.AURA_LSP_AURA_PATH;
+    process.env.HOME = path.join(tempRoot, "empty-home");
+    process.env.USERPROFILE = process.env.HOME;
+    process.env.PATH = path.join(tempRoot, "empty-path");
+    process.env.AURA_LSP_SYSTEM_BIN_DIRS = "";
     const workspace = path.join(tempRoot, "cloned-project");
     fs.mkdirSync(path.join(workspace, "target", "debug"), { recursive: true });
     fs.mkdirSync(path.join(workspace, "target", "release"), { recursive: true });
@@ -539,7 +550,11 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
       } else {
         process.env.AURA_LSP_USE_WORKSPACE_COMPILER = value;
       }
-      assert.deepEqual(resolveCompilerCommand(), { cmd: "aura", args: [], cwd: workspace });
+      assert.deepEqual(resolveCompilerCommand(), {
+        cmd: binaryName(),
+        args: [],
+        cwd: undefined
+      });
     }
 
     process.env.AURA_LSP_USE_WORKSPACE_COMPILER = "1";
@@ -549,15 +564,12 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
       cwd: workspace
     });
   } finally {
-    if (originalEnvPath === undefined) {
-      delete process.env.AURA_LSP_AURA_PATH;
-    } else {
-      process.env.AURA_LSP_AURA_PATH = originalEnvPath;
-    }
-    if (originalOptIn === undefined) {
-      delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
-    } else {
-      process.env.AURA_LSP_USE_WORKSPACE_COMPILER = originalOptIn;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
     setWorkspaceRoots([]);
     fs.rmSync(tempRoot, { recursive: true, force: true });
@@ -566,8 +578,21 @@ test("compiler bridge ignores workspace binaries and cargo unless explicitly opt
 
 test("compiler bridge resolves compiler commands across env, cargo, binaries, and fallback", () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-bridge-command-"));
-  const originalEnvPath = process.env.AURA_LSP_AURA_PATH;
+  const saved = {
+    AURA_LSP_AURA_PATH: process.env.AURA_LSP_AURA_PATH,
+    AURA_LSP_USE_WORKSPACE_COMPILER: process.env.AURA_LSP_USE_WORKSPACE_COMPILER,
+    AURA_LSP_SYSTEM_BIN_DIRS: process.env.AURA_LSP_SYSTEM_BIN_DIRS,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
+    PATH: process.env.PATH
+  };
   try {
+    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = "1";
+    process.env.HOME = path.join(tempRoot, "empty-home");
+    process.env.USERPROFILE = process.env.HOME;
+    process.env.PATH = path.join(tempRoot, "empty-path");
+    process.env.AURA_LSP_SYSTEM_BIN_DIRS = "";
+
     const fakeAura = path.join(tempRoot, binaryName());
     fs.writeFileSync(fakeAura, "");
     process.env.AURA_LSP_AURA_PATH = fakeAura;
@@ -609,22 +634,24 @@ test("compiler bridge resolves compiler commands across env, cargo, binaries, an
 
     setWorkspaceRoots([tempRoot]);
     assert.deepEqual(resolveCompilerCommand(), {
-      cmd: "aura",
+      cmd: binaryName(),
       args: [],
-      cwd: tempRoot
+      cwd: undefined
     });
 
     setWorkspaceRoots(null);
     assert.deepEqual(resolveCompilerCommand(), {
-      cmd: "aura",
+      cmd: binaryName(),
       args: [],
       cwd: undefined
     });
   } finally {
-    if (originalEnvPath === undefined) {
-      delete process.env.AURA_LSP_AURA_PATH;
-    } else {
-      process.env.AURA_LSP_AURA_PATH = originalEnvPath;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
     }
     fs.rmSync(tempRoot, { recursive: true, force: true });
   }
@@ -4390,9 +4417,10 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     const prelude = [
       "import io",
       "import fs",
+      "import http",
       "import net",
       "",
-      "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: net.HttpResponse, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:"
+      "def inspect(file: fs.File, listener: net.TcpListener, stream: net.TcpStream, udp: net.UdpSocket, packet: net.UdpDatagram, http_listener: net.HttpListener, exchange: net.HttpExchange, response: http.Response, ws_listener: net.WebSocketListener, socket: net.WebSocket, unix_listener: net.UnixListener, unix_stream: net.UnixStream, tls_listener: net.TlsListener, tls_stream: net.TlsStream) -> int32:"
     ];
     const sourceForLine = (line) => [...prelude, line, "    return 0"].join("\n");
     const completionsForLine = async (line) => {
@@ -4445,10 +4473,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(netNames.has("connect_timeout"));
     assert.ok(netNames.has("udp_bind"));
     assert.ok(netNames.has("http_listen"));
-    assert.ok(netNames.has("http_request_text"));
-    assert.ok(netNames.has("http_request_text_timeout"));
-    assert.ok(netNames.has("http_request_bytes"));
-    assert.ok(netNames.has("http_request_bytes_timeout"));
+    assert.ok(!netNames.has("http_request_text"));
     assert.ok(netNames.has("websocket_listen"));
     assert.ok(netNames.has("websocket_connect"));
     assert.ok(netNames.has("websocket_connect_timeout"));
@@ -4459,7 +4484,7 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(netNames.has("tls_connect"));
     assert.ok(netNames.has("tls_connect_timeout"));
     assert.ok(netNames.has("UdpSocket"));
-    assert.ok(netNames.has("HttpResponse"));
+    assert.ok(!netNames.has("HttpResponse"));
     assert.ok(netNames.has("TlsStream"));
 
     const streamNames = await completionsForLine("    stream.");
@@ -4500,6 +4525,20 @@ test("compiler bridge includes builtin io/fs/net module and resource members", a
     assert.ok(responseNames.has("headers"));
     assert.ok(responseNames.has("text"));
     assert.ok(responseNames.has("bytes"));
+    assert.ok(responseNames.has("read_chunk"));
+    assert.ok(responseNames.has("read_lines"));
+    assert.ok(responseNames.has("read_event"));
+    assert.ok(!responseNames.has("stream"));
+
+    const httpNames = await completionsForLine("    http.");
+    assert.ok(httpNames.has("get"));
+    assert.ok(httpNames.has("post"));
+    assert.ok(httpNames.has("request"));
+    assert.ok(httpNames.has("request_bytes"));
+    assert.ok(httpNames.has("Client"));
+    assert.ok(httpNames.has("Response"));
+    assert.ok(httpNames.has("Event"));
+    assert.ok(!httpNames.has("__aura_send"));
 
     const socketNames = await completionsForLine("    socket.");
     assert.ok(socketNames.has("send_text"));
@@ -4597,7 +4636,19 @@ test("compiler bridge exposes control-plane module completions", async () => {
   try {
     const mainPath = path.join(tempRoot, "main.au");
     const mainUri = `file://${mainPath}`;
-    const modules = ["sys", "path", "json", "toml", "log", "metrics", "trace", "control", "gzip"];
+    const modules = [
+      "sys",
+      "path",
+      "json",
+      "toml",
+      "log",
+      "metrics",
+      "trace",
+      "control",
+      "gzip",
+      "regex",
+      "time",
+    ];
     const prelude = [...modules.map((name) => `import ${name}`), "", "def main() -> int32:"];
     const completions = async (moduleName) => {
       const line = `    ${moduleName}.`;
@@ -4626,6 +4677,16 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const gzipNames = await completionNames("gzip");
     for (const expected of ["compress", "decompress", "Error"]) {
       assert.ok(gzipNames.has(expected), `gzip completion should include ${expected}`);
+    }
+
+    const regexNames = await completionNames("regex");
+    for (const expected of ["compile", "escape", "Regex", "Match", "Captures", "Error"]) {
+      assert.ok(regexNames.has(expected), `regex completion should include ${expected}`);
+    }
+
+    const timeNames = await completionNames("time");
+    for (const expected of ["now", "utc", "parse_rfc3339", "monotonic", "DateTime", "Error"]) {
+      assert.ok(timeNames.has(expected), `time completion should include ${expected}`);
     }
 
     const retryCompletion = (await completions("control")).find(
@@ -6923,15 +6984,28 @@ test("without aura on PATH the server uses an installed compiler or reports it m
   const root = fs.mkdtempSync(path.join(os.tmpdir(), "aura-installed-"));
   const saved = {
     HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
     PATH: process.env.PATH,
-    workspace: process.env.AURA_LSP_USE_WORKSPACE_COMPILER
+    AURA_LSP_SYSTEM_BIN_DIRS: process.env.AURA_LSP_SYSTEM_BIN_DIRS,
+    AURA_LSP_USE_WORKSPACE_COMPILER: process.env.AURA_LSP_USE_WORKSPACE_COMPILER
   };
   const notices = [];
   try {
     process.env.HOME = root;
+    process.env.USERPROFILE = root;
     process.env.PATH = path.join(root, "empty");
+    process.env.AURA_LSP_SYSTEM_BIN_DIRS = "";
     delete process.env.AURA_LSP_USE_WORKSPACE_COMPILER;
     setWorkspaceRoots([root]);
+
+    assert.equal(isRunnableCompilerCommand(null), false);
+    assert.equal(isRunnableCompilerCommand({ cmd: "aura", args: [] }), false);
+    assert.equal(isRunnableCompilerCommand({ cmd: "cargo", args: [] }), true);
+    assert.equal(isRunnableCompilerCommand({ cmd: process.execPath, args: [] }), true);
+
+    const earlyDisposed = new CompilerService({ cmd: "aura", args: [], cwd: root });
+    earlyDisposed.dispose();
+    await new Promise((resolve) => setImmediate(resolve));
 
     setCompilerUnavailableHandler("not a function");
     assert.equal(await analyzeWithCompiler("untitled:missing", "def main():\n    pass\n"), null);
@@ -6939,7 +7013,8 @@ test("without aura on PATH the server uses an installed compiler or reports it m
     disposeCompilerService();
     assert.equal(await analyzeWithCompiler("untitled:missing", "def main():\n    pass\n"), null);
     assert.equal(notices.length, 1);
-    assert.equal(notices[0].command.cmd, "aura");
+    assert.equal(notices[0].command.cmd, binaryName());
+    assert.equal(notices[0].command.cwd, undefined);
 
     const installed = path.join(root, ".local", "bin", binaryName());
     fs.mkdirSync(path.dirname(installed), { recursive: true });
@@ -6955,9 +7030,60 @@ test("without aura on PATH the server uses an installed compiler or reports it m
   } finally {
     setCompilerUnavailableHandler(null);
     disposeCompilerService();
-    process.env.HOME = saved.HOME;
-    process.env.PATH = saved.PATH;
-    process.env.AURA_LSP_USE_WORKSPACE_COMPILER = saved.workspace;
+    for (const [key, value] of Object.entries(saved)) {
+      if (value === undefined) {
+        delete process.env[key];
+      } else {
+        process.env[key] = value;
+      }
+    }
     fs.rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("persistent compiler service sets AURA_OFFLINE=1 by default without overriding explicit env", async () => {
+  const script = [
+    "const readline = require('node:readline');",
+    "const lines = readline.createInterface({ input: process.stdin });",
+    "lines.on('line', (line) => {",
+    "  const request = JSON.parse(line);",
+    `  process.stdout.write(JSON.stringify({ id: request.id, semantic_interface_version: ${JSON.stringify(
+      SUPPORTED_SEMANTIC_INTERFACE_SCHEMA_VERSION
+    )}, result: { offline: process.env.AURA_OFFLINE } }) + '\\n');`,
+    "});"
+  ].join("\n");
+  const savedOffline = process.env.AURA_OFFLINE;
+  let defaultService = null;
+  let overrideService = null;
+  try {
+    delete process.env.AURA_OFFLINE;
+    defaultService = new CompilerService({
+      cmd: process.execPath,
+      args: ["-e", script],
+      cwd: repoRoot
+    });
+    assert.deepEqual(await defaultService.request("analyze", {}), { offline: "1" });
+    defaultService.dispose();
+
+    process.env.AURA_OFFLINE = "0";
+    overrideService = new CompilerService({
+      cmd: process.execPath,
+      args: ["-e", script],
+      cwd: repoRoot
+    });
+    assert.deepEqual(await overrideService.request("analyze", {}), { offline: "0" });
+    overrideService.dispose();
+  } finally {
+    if (defaultService) {
+      defaultService.dispose();
+    }
+    if (overrideService) {
+      overrideService.dispose();
+    }
+    if (savedOffline === undefined) {
+      delete process.env.AURA_OFFLINE;
+    } else {
+      process.env.AURA_OFFLINE = savedOffline;
+    }
   }
 });

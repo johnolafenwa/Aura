@@ -1365,55 +1365,6 @@ fn direct_runtime_resource_ffi_symbols_execute_through_the_library_copy() {
             let _ = fs::remove_file(&unix_path);
         }
 
-        let http_listener =
-            TcpListener::bind("127.0.0.1:0").expect("HTTP fixture should bind locally");
-        let http_address = http_listener
-            .local_addr()
-            .expect("HTTP fixture should expose a local address");
-        let http_server = thread::spawn(move || {
-            let (mut stream, _) = http_listener
-                .accept()
-                .expect("HTTP fixture should accept one request");
-            let mut request = [0_u8; 512];
-            let _ = stream
-                .read(&mut request)
-                .expect("HTTP fixture should read request");
-            stream
-                .write_all(
-                    b"HTTP/1.1 201 Created\r\nTransfer-Encoding: chunked\r\nX-Test: yes\r\n\r\n",
-                )
-                .expect("HTTP fixture should write response headers");
-            stream
-                .flush()
-                .expect("HTTP fixture should flush response headers");
-            thread::sleep(Duration::from_millis(5));
-            stream
-                .write_all(b"1;kind=text\r\no\r\n1\r\nk\r\n0\r\nX-Done: yes\r\n\r\n")
-                .expect("HTTP fixture should write chunked response body");
-        });
-        let http_response = expect_result_ok_payload(aura_direct_net_http_request_bytes_timeout(
-            ScopedValue::new(string_value("POST")).as_ptr(),
-            ScopedValue::new(string_value(&format!("http://{http_address}/ffi"))).as_ptr(),
-            ScopedValue::new(byte_vec(b"body")).as_ptr(),
-            ScopedValue::new(aura_direct_map_empty()).as_ptr(),
-            ScopedValue::new(duration_value(5_000)).as_ptr(),
-        ));
-        assert_eq!(aura_direct_http_response_status(http_response), 201);
-        assert_eq!(
-            expect_string(aura_direct_http_response_reason(http_response)),
-            "Created"
-        );
-        release(aura_direct_http_response_headers(http_response));
-        assert_eq!(
-            expect_result_ok_string(aura_direct_http_response_text(http_response)),
-            "ok"
-        );
-        release(aura_direct_http_response_bytes(http_response));
-        release(http_response);
-        http_server
-            .join()
-            .expect("HTTP fixture server should finish");
-
         let ws_listener = expect_result_ok_payload(aura_direct_net_websocket_listen(
             ScopedValue::new(string_value("127.0.0.1:0")).as_ptr(),
         ));

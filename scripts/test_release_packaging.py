@@ -367,6 +367,33 @@ class LandingAndInstallerTests(unittest.TestCase):
             self.assertTrue((prefix / "share" / "aura" / "examples" / "hello.au").is_file())
             self.assertFalse(stale_runtime.exists())
 
+    def test_installer_rejects_non_https_remote_base_urls(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-install-insecure-") as temp:
+            root = Path(temp)
+            prefix = root / "prefix"
+            for bad_url in [
+                "http://127.0.0.1:9/release",
+                "-K/tmp/curlrc",
+            ]:
+                result = subprocess.run(
+                    ["sh", str(INSTALL_SCRIPT)],
+                    cwd=root,
+                    env={
+                        **os.environ,
+                        "AURA_INSTALL_BASE_URL": bad_url,
+                        "AURA_INSTALL_PREFIX": str(prefix),
+                    },
+                    text=True,
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                    timeout=10,
+                    check=False,
+                )
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn("https://", result.stderr)
+                self.assertFalse(prefix.exists())
+
+
 
 class ReleaseWorkflowTests(unittest.TestCase):
     def setUp(self) -> None:

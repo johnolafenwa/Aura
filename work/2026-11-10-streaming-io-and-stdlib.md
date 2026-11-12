@@ -53,9 +53,9 @@ How the batch read got there, from a first version at 480 ms:
 
 - Every `Result[str | None, io.Error]` or `Result[str, E]` value crosses
   the runtime boundary as a boxed enum (about 2,500 instructions each), so
-  `read_line()` in a loop is 2.4 times slower than Python, and a user
-  `Iterator[Result[str, io.Error]]` is as slow. This is a compiler gap, not
-  a file one. A `for line in file` form waits on it.
+  `read_line()` in a loop was 2.4 times slower than Python, and a user
+  `Iterator[Result[str, io.Error]]` is as slow. Step 5 below closes the
+  `try file.read_line()` case.
 - `for line in batch` over a `list[str]` copies each string (about 85 ns
   per line here). It is the larger half of the 300 ms above.
 - A match on a builtin enum whose runtime name is not in
@@ -65,3 +65,249 @@ How the batch read got there, from a first version at 480 ms:
 ## Verification
 
 Recorded with the pull request.
+
+## Step 2a: `regex` (work completed)
+
+- The `regex` module (ADR-0078): `regex.compile`, `regex.escape`,
+  `regex.Regex` with `is_match`, `count`, `find`, `find_all`, `matches`,
+  `captures`, `replace`, `replace_all`, `split`, and `pattern`,
+  `regex.Match`, `regex.Captures`, and `regex.Error`, on both backends.
+- Example `examples/strings/regex_log.au`, the manual's Regex page, and the
+  `regex_scan` cross-language program.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `regex_scan` at 200,000 lines | 1.19 s | 1.63 s | 0.30 s |
+
+How it got there, from a first version at 9.8 s:
+
+- The compiled program is shared, not cloned, on each call. A clone starts
+  with empty scratch space (49 microseconds per search). 9.8 s to 1.97 s.
+- No copy of the pattern per call, a short list of recent patterns in
+  front of the map, and a group-name lookup in the runtime. 1.83 s.
+- A `Regex` holds a pattern number, not the text. Reading a `str` or a
+  class-typed field out of a class instance costs about 2,000 instructions
+  and a release, and every method read one. 1.19 s.
+
+## Gaps found in step 2a, left for later
+
+- A non-scalar field read (`str`, a list, or a class instance held by
+  another class) goes through `aura_direct_instance_get_field`, which
+  copies the field. Scalar fields are inline loads. This is the largest
+  cost left in programs that keep text in objects.
+- A small host call costs about 1,900 instructions around its work: an
+  argument buffer, boxed scalar arguments, and a boxed result.
+
+## Step 2b: `time` (work completed)
+
+- The `time` module (ADR-0079): `time.now`, `now_local`, `monotonic`,
+  `utc`, `from_unix`, `from_unix_ms`, `parse_rfc3339`, `parse`, and
+  `time.DateTime` with calendar fields, offsets, exact `Duration`
+  arithmetic, comparison, RFC 3339 text, and `format`, on both backends.
+- `regex.Regex` and `time.DateTime` are `copy class` values with a
+  `Display` implementation. `public copy class` did not parse before (it
+  was read as a constant named `copy`); the parser is fixed.
+- Example `examples/time/timestamps.au`, the manual's Time page, the book's
+  history log now writes `time.now()`, and the `date_time` cross-language
+  program.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `date_time` at 200,000 instants | 0.77 s | 4.1 s | 0.16 s |
+
+## Gaps found in step 2b, left for later
+
+- A tuple of scalars returned from a function is a boxed runtime value
+  (`aura_direct_tuple_new`, then `aura_direct_tuple_element` and an unbox
+  per field). Returning the date as `(int64, int64, int64)` from a helper
+  cost a third of the benchmark. The field methods now return one integer
+  each.
+- A module-level constant in a builtin source module is not visible inside
+  its methods (`AU4001: unknown MIR place`), and negating one in a
+  condition fails MIR validation. `std/time.au` writes its limits as
+  literals.
+- Host calls take scalar arguments boxed (about 330 instructions per
+  integer) and return several values only as a tuple. A call path that
+  passes integers in registers would bring `regex`, `time`, and
+  `fs.File.read_line()` much closer to Rust.
+
+## Step 3: the `http` client (work completed, 2026-11-11)
+
+- The `http` module (ADR-0082) replaces `net.http_request_*` and
+  `net.HttpResponse`. `Client`, `Response`, and `Event` are Aura classes in
+  `std/http.au`; the runtime half is `crates/aura-runtime/src/http_client.rs`
+  with ten host functions and the opaque `http.Stream`.
+- A response is returned when its head arrives. The body is read with
+  `read_chunk`, `read_line`, `read_lines`, `read_event` (server-sent
+  events), or whole with `text` and `bytes` (64 MiB default limit).
+- Redirects (301, 302, 303, 307, 308), a process-wide pool of kept
+  connections with one retry of a request on a stale connection, gzip and
+  deflate decoding, a head timeout and a read timeout, task cancellation,
+  and a certificate authority file.
+- 39 runtime tests against a scripted local server, plus the compiler,
+  CLI, and editor tests moved off the old functions. The examples
+  `http_roundtrip.au` and `retrying_network_worker.au`, `http_api`,
+  `mini_browser`, and the release `retrying_worker` use the new module.
+- Fixed on the way: `with` on a class from another module (`AU2017`), and
+  completion of private members of a class from another module.
+
+| Work | Aura | Python | Rust |
+| --- | --- | --- | --- |
+| `http_stream` at 400,000 lines | 1.19 s | 5.78 s | 0.61 s |
+
+## Compiler fix found while writing the streaming agent (2026-11-11)
+
+`if text.find("x") is None:` took the not-`None` branch every time. The
+condition lowering in `lower_condition_branch` only read a union tag when
+the tested value was a place. A call result fell through to a constant
+`Branch`. The value form, `print(x.find("y") is None)`, was correct. The
+fix holds the result in a temporary, reads its tag, and ends any element
+loan the call took before the branch. Tests:
+`a_none_test_on_a_call_result_in_a_condition_reads_the_result` in
+`mir_tests.rs` and
+`none_test_on_a_call_result_in_a_condition_runs_on_both_backends` in the
+CLI tests.
+
+## Gaps found in step 3, left for later
+
+- No HTTP/2, proxies, cookies, or streamed request bodies.
+- A `str` cannot be indexed, and there is no integer-to-hex formatting;
+  the benchmark's server builds chunk sizes digit by digit.
+- A function in a builtin source module that appends to a `str` local with
+  `+=` and also lends a field gets its temporaries numbered differently
+  when ownership is stripped and inserted again
+  (`stripping_undoes_the_lends_and_the_pass_makes_them_again`).
+  `Response.header` avoids the pattern.
+
+## Step 4: the reference streaming agent (work completed, 2026-11-11)
+
+`examples/agents/streaming_agent` is a package of three modules.
+`claude.au` is a streaming client for the Claude Messages API on the
+`http` module. `main.au` holds one tool and the conversation loop.
+`mock.au` is a loopback stand-in for the API that streams a scripted
+reply, used when `ANTHROPIC_API_KEY` is not set.
+
+- The client reads the reply with `Response.read_event()` and builds text,
+  thinking, and tool call blocks from their deltas.
+- A tool call's input is decoded against a derived `json.Codec` class
+  before the tool runs. A bad input goes back as an error result.
+- The loop handles `tool_use`, `pause_turn`, and every other stop reason,
+  and sends the assistant turn back unchanged.
+- The CLI test
+  `reference_streaming_agent_package_has_pinned_output_on_both_backends`
+  checks both backends against `stdout.txt`.
+
+Not verified: a run against the live API. No key is available where this
+was built, so only the stand-in path has run.
+
+## Gaps found in step 4, left for later
+
+- `json.Value` has no `clone()`. The client keeps blocks it does not
+  build itself as JSON text and parses them again to send them back.
+- A conversation is a `list[str]` of JSON messages for the same reason.
+- There is no JSON object literal shorter than
+  `json.Value.Object({...})` with each value wrapped by hand.
+
+## Step 5: `read_line()` faster than Python (work completed, 2026-11-11)
+
+Goal: a loop over `try file.read_line()` beats Python's `for line in f`.
+It was the one measured place where item 1 lost to Python.
+
+Where the time went, by stack sampling a 2 million line read (callgrind's
+instruction counts hid most of it, because the cost was in atomic
+operations and in bytes that crossed processors):
+
+- The `Result[str | None, io.Error]` box, its type tag, and the match that
+  took it apart: about 40% of the instructions.
+- The boxed `str | None` inside it, built by the runtime and unboxed at
+  once into the inline union the native code keeps: about 25% of the time
+  that remained.
+- A clone of the file handle out of its box on every call.
+- Each buffer fill was a trip to the blocking pool, and the buffer it
+  filled was then read by another processor.
+
+What changed:
+
+- The native backend lowers `try file.read_line()` as one call to
+  `aura_direct_file_read_line_try`. It returns the `str` itself, null at
+  the end of the file, or null with a `Result.Err` in a stack word. The
+  line goes straight into the words of the inline `str | None`. A read
+  whose `Result` is kept still uses the plain helper. The interpreter is
+  unchanged.
+- A line the read buffer already holds is taken while the handle stays in
+  its box (`FileValue::buffered_line`).
+- On Linux, a fill first asks for the bytes the page cache holds with
+  `preadv2(RWF_NOWAIT)`, on the calling thread, 64 KiB at a time. A file
+  on `tmpfs` or `ramfs`, which has no such read, is read with a plain
+  `read`, because its bytes are in memory. Anything else, and every other
+  host, fills on the blocking pool as before.
+
+Measured, 2 million lines (96 MB), medians of 15 interleaved runs:
+
+| File on | Aura before | Aura | Python | Rust |
+| --- | --- | --- | --- | --- |
+| `tmpfs` | 400 ms | 159 ms | 251 ms | 95 ms |
+| `ext4` | | 154 ms | 257 ms | 87 ms |
+
+Not measured: macOS. It has no read that does not wait, so its fills stay
+on the blocking pool. The fused call and the buffered line apply there.
+
+Tests: `direct_try_of_a_file_line_read_builds_no_result`,
+`direct_file_line_read_kept_as_a_result_uses_the_plain_helper`,
+`file_read_line_try_hands_back_the_line_and_leaves_a_failure_in_its_word`,
+`file_read_buffer_fills_from_memory_without_waiting`,
+`a_cached_read_of_an_empty_pipe_waits`,
+`a_file_kept_in_memory_fills_on_the_calling_thread`,
+`file_buffered_line_takes_only_what_the_buffer_holds`, and the CLI test
+`try_of_a_file_line_read_matches_on_both_backends`.
+
+## Gaps found in step 5, left for later
+
+- The same fusion would help `try` on the other line reads
+  (`net.TcpStream.read_line`, `process.Pipe.read_line`, `io.read_line`)
+  and on `read_chunk`. Each needs its own helper.
+- A `Result` a runtime helper returns still costs about 1,000 instructions
+  when the program keeps it as a value.
+
+## Step 6: direct calls for `time` and `regex`
+
+The final benchmark pass had `regex_scan` and `date_time` at 4.4 times
+Rust. A profile of `date_time` showed 46,000 instructions per instant, most
+of them in the general host call: an argument buffer, a box per integer
+argument, a tuple result, and a box per tuple element read back.
+
+- Twelve `time` functions and ten `regex` functions are now `FunctionOp`s
+  with a helper each family shares (`aura_direct_time_*`,
+  `aura_direct_regex_scalar`, `aura_direct_regex_search`,
+  `aura_direct_regex_replace`). `function_op_arg_layout` takes the argument
+  index, so one op can pass integers as words and texts as handles.
+- A parse returns a `bool`. The host keeps the instant or the failure per
+  thread and `std/time.au` reads it back with `__aura_parsed_seconds`,
+  `__aura_parsed_nanos`, `__aura_parsed_offset`, and `__aura_error`.
+  `__aura_format` returns the text and `__aura_failed` says whether the
+  pattern could be followed. `__aura_duration_parts` became
+  `__aura_duration_seconds` and `__aura_duration_nanos`.
+- The host writes date digits itself, not through `core::fmt`.
+- `regex.__aura_matches` returns the spans only and `Regex.matches` slices
+  the text. The host builds scalar lists in their scalar form.
+
+| Program | Before | After | Python | Rust |
+| --- | --- | --- | --- | --- |
+| `date_time` at 200,000 instants | 757 ms | 339 ms | 4028 ms | 180 ms |
+| `regex_scan` at 200,000 lines | 1139 ms | 831 ms | 1549 ms | 273 ms |
+
+`date_time` runs 431 million instructions for 20,000 instants where it ran
+925 million. `regex_scan` runs 978 million for 20,000 lines where it ran
+1,295 million, and about 280 million of those are the regex engine.
+
+Tests: `direct_time_helpers_write_parse_and_keep_the_outcome`,
+`direct_regex_helpers_search_with_a_pattern_number`,
+`direct_time_and_regex_module_calls_use_their_scalar_helpers`, and the
+existing `time` and `regex` host and CLI tests.
+
+## Gaps found in step 6, left for later
+
+- What is left in `regex_scan` is the cost of a class instance: creating a
+  `Match` and dropping it cost about 1,700 instructions.
+- `Result[DateTime, Error]` boxes the `DateTime`, about 900 instructions for
+  each `time.parse` and `time.from_unix`.

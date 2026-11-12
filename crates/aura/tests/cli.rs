@@ -54,6 +54,65 @@ fn hosted_ci_safepoint_windows_scale_without_changing_local_windows() {
 }
 
 #[test]
+fn reference_streaming_agent_package_has_pinned_output_on_both_backends() {
+    let package = repo_root().join("examples/agents/streaming_agent");
+    let expected = fs::read(package.join("stdout.txt")).expect("pinned streaming agent output");
+    let temp = TempDir::new("aura-reference-streaming-agent");
+    fs::create_dir_all(temp.path().join("src")).unwrap();
+    for name in [
+        "Aura.toml",
+        "Aura.lock",
+        "src/main.au",
+        "src/claude.au",
+        "src/mock.au",
+    ] {
+        fs::copy(package.join(name), temp.path().join(name)).unwrap();
+    }
+    let binary = temp.path().join("streaming-agent");
+    let build = Command::new(aura_bin())
+        .current_dir(temp.path())
+        .args(["build", "--backend", "direct", "-o"])
+        .arg(&binary)
+        .arg("src/main.au")
+        .output()
+        .expect("build streaming agent package");
+    assert!(
+        build.status.success(),
+        "{}",
+        String::from_utf8_lossy(&build.stderr)
+    );
+    for backend in ["mir", "direct"] {
+        let mut command = if backend == "mir" {
+            let mut command = Command::new(aura_bin());
+            command
+                .current_dir(temp.path())
+                .args(["run", "--backend", "mir", "src/main.au"]);
+            command
+        } else {
+            generated_binary(&binary)
+        };
+        // With no key the agent talks to its own loopback stand-in for the
+        // API, so the run needs no network.
+        command.env_remove("ANTHROPIC_API_KEY");
+        let output = command_output_with_timeout(
+            command,
+            std::time::Duration::from_secs(60),
+            "reference streaming agent package",
+        );
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            String::from_utf8_lossy(&expected),
+            "{backend} streaming agent output"
+        );
+    }
+}
+
+#[test]
 fn reference_tool_runner_package_has_pinned_output_on_both_backends() {
     let package = repo_root().join("examples/agents/tool_runner");
     let expected = fs::read(package.join("stdout.txt")).expect("pinned reference agent output");
@@ -4761,6 +4820,7 @@ fn large_http_responses_complete_without_timing_out() {
     fs::write(&body_path, "x".repeat(2_000_000)).expect("failed to write HTTP response body");
     let source = format!(
         r#"import fs
+import http
 import io
 import net
 
@@ -4778,9 +4838,8 @@ def run() -> Result[None, io.Error]:
         group.start_soon(serve, "{body_path}", addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
-                resp = try net.http_request_text_timeout("GET", "http://" + address + "/big", "x", {{}}, 5s)
-                with r = resp:
-                    print(r.status())
+                with r = try http.Client(timeout=5s).request("GET", "http://" + address + "/big", "x", {{}}):
+                    print(r.status)
                     text = try r.text()
                     print(text.len())
             case QueueReceive.Closed:
@@ -4805,15 +4864,63 @@ def main() -> int32:
 }
 
 #[test]
-fn http_declared_response_above_fixed_cap_is_typed_on_both_backends() {
-    let source = r#"import io
+fn none_test_on_a_call_result_in_a_condition_runs_on_both_backends() {
+    let source = r#"def find_or_none(text: str, wanted: str) -> int64 | None:
+    return text.find(wanted)
+
+def absent(text: str) -> str:
+    if text.find("zzz") is None:
+        return "absent"
+    return "present"
+
+def present(text: str) -> str:
+    if find_or_none(text, "zzz") is not None:
+        return "present"
+    else:
+        return "absent"
+
+def both(text: str) -> str:
+    if text.find("a") is not None and not (text.find("zzz") is None):
+        return "both"
+    return "not both"
+
+def count_missing(texts: list[str]) -> int64:
+    mut missing = 0
+    mut index = 0
+    while index < texts.len() and texts[index].find("zzz") is None:
+        missing += 1
+        index += 1
+    return missing
+
+def main() -> int32:
+    print(absent("abc"))
+    print(absent("zzz"))
+    print(present("abc"))
+    print(present("a zzz"))
+    print(both("abc"))
+    print(both("a zzz"))
+    print(count_missing(["a", "b", "zzz", "c"]))
+    print("yes" if "abc".find("zzz") is None else "no")
+    return 0
+"#;
+    assert_run_and_direct_source_stdout(
+        "aura-none-test-call-result",
+        source,
+        "absent\npresent\nabsent\npresent\nnot both\nboth\n2\nyes\n",
+    );
+}
+
+#[test]
+fn http_declared_body_above_the_read_limit_is_typed_on_both_backends() {
+    let source = r#"import http
+import io
 import net
 
 def serve(addresses: Queue[str]) -> Result[None, io.Error]:
     with listener = try net.http_listen("127.0.0.1:0"):
         _ = addresses.put(try listener.local_addr())
         mut request = try listener.accept(timeout=5s)
-        try request.respond_text(200, "", {"Content-Length": "16777217"})
+        try request.respond_text(200, "", {"Content-Length": "67108865"})
         return Result.Ok(None)
 
 def run() -> Result[None, io.Error]:
@@ -4822,14 +4929,15 @@ def run() -> Result[None, io.Error]:
         group.start_soon(serve, addresses)
         match addresses.get(timeout=5s):
             case QueueReceive.Item(address):
-                response = net.http_request_text_timeout("GET", "http://" + address + "/oversized", "", {}, 5s)
-                match response:
-                    case Result.Err(io.Error.InvalidData):
-                        print("http-too-large")
-                    case Result.Err(error):
-                        print(error)
-                    case Result.Ok(_):
-                        print("unexpected-success")
+                with response = try http.Client(timeout=5s).get("http://" + address + "/oversized"):
+                    print(response.header("content-length"))
+                    match response.text():
+                        case Result.Err(io.Error.InvalidData):
+                            print("http-too-large")
+                        case Result.Err(error):
+                            print(error)
+                        case Result.Ok(_):
+                            print("unexpected-success")
             case QueueReceive.Closed:
                 return Result.Err(io.Error.Other(message="HTTP address queue closed"))
             case QueueReceive.TimedOut:
@@ -4847,7 +4955,11 @@ def main() -> int32:
             return 1
 "#;
 
-    assert_run_and_direct_source_stdout("aura-http-fixed-response-cap", source, "http-too-large\n");
+    assert_run_and_direct_source_stdout(
+        "aura-http-fixed-response-cap",
+        source,
+        "67108865\nhttp-too-large\n",
+    );
 }
 
 #[test]
@@ -11912,6 +12024,109 @@ fn run_and_direct_backends_run_atomic_save_example() {
 }
 
 #[test]
+fn try_of_a_file_line_read_matches_on_both_backends() {
+    // The direct backend reads the line of `try file.read_line()` through
+    // one helper that builds no `Result`. The loop forms, the end of the
+    // file, a failed read, and a converted error must match the interpreter.
+    let fixtures = TempDir::new("aura-try-read-line-fixtures");
+    let directory = fixtures
+        .path()
+        .to_str()
+        .expect("temp path should be valid UTF-8")
+        .replace('\\', "/");
+    let source = r#"import fs
+import io
+
+enum AppError:
+    Io(error: io.Error)
+    Empty
+
+impl From[io.Error] for AppError:
+    def from(value: own io.Error) -> AppError:
+        return AppError.Io(error=value)
+
+def count(path: str) -> Result[(int64, int64), io.Error]:
+    mut lines = 0
+    mut bytes = 0
+    with file = try fs.open(path):
+        while true:
+            match try file.read_line():
+                case str as line:
+                    lines += 1
+                    bytes += line.byte_len()
+                case None:
+                    break
+    return Result.Ok((lines, bytes))
+
+def longest(path: str) -> Result[str, AppError]:
+    mut best = ""
+    with file = try fs.open(path):
+        while true:
+            line = try file.read_line()
+            if line is None:
+                break
+            if line.byte_len() > best.byte_len():
+                best = line
+    if best == "":
+        return Result.Err(AppError.Empty)
+    return Result.Ok(best)
+
+def report(path: str) -> None:
+    match count(path):
+        case Result.Ok((lines, bytes)):
+            print(f"{lines} lines, {bytes} bytes")
+        case Result.Err(error):
+            print(f"count failed: {error}")
+    match longest(path):
+        case Result.Ok(line):
+            print(f"longest has {line.byte_len()} bytes")
+        case Result.Err(AppError.Io(error)):
+            print(f"longest failed: {error}")
+        case Result.Err(AppError.Empty):
+            print("longest: no lines")
+
+def write_fixtures(directory: str) -> Result[None, io.Error]:
+    mut text = ""
+    for index in range(0, 30000):
+        text += f"line {index}\r\n"
+    text += "the last line has no line feed"
+    try fs.write_string(directory + "/many.txt", text)
+    try fs.write_string(directory + "/empty.txt", "")
+    try fs.write_bytes(directory + "/bad.txt", [111, 107, 10, 255, 254, 10, 122, 10])
+    return Result.Ok(None)
+
+def main() -> int32:
+    directory = "__DIRECTORY__"
+    match write_fixtures(directory):
+        case Result.Ok(_):
+            pass
+        case Result.Err(error):
+            print(error)
+            return 1
+    report(directory + "/many.txt")
+    report(directory + "/empty.txt")
+    report(directory + "/bad.txt")
+    report(directory + "/missing.txt")
+    return 0
+"#
+    .replace("__DIRECTORY__", &directory);
+    assert_run_and_direct_source_stdout(
+        "aura-try-read-line",
+        &source,
+        concat!(
+            "30001 lines, 288920 bytes\n",
+            "longest has 30 bytes\n",
+            "0 lines, 0 bytes\n",
+            "longest: no lines\n",
+            "count failed: io.Error.InvalidData\n",
+            "longest failed: io.Error.InvalidData\n",
+            "count failed: io.Error.NotFound\n",
+            "longest failed: io.Error.NotFound\n",
+        ),
+    );
+}
+
+#[test]
 fn run_and_direct_backends_run_read_lines_example() {
     let expected = "4 lines, 9 words\nthe quick brown fox\n24\n3\ntrue\n";
     let output = Command::new(aura_bin())
@@ -11947,6 +12162,50 @@ fn run_and_direct_backends_run_sign_and_compress_example() {
     assert_direct_backend_example_runs(
         "examples/io/sign_and_compress.au",
         "sign-and-compress-direct",
+        expected,
+    );
+}
+
+#[test]
+fn run_and_direct_backends_run_regex_log_example() {
+    let expected = "true\n3\n[took=120ms, user=7, retries=3]\ntook=120ms at 9..19\n4\ntook\n120\nms\nNone\n9: took=120ms\n20: user=7\n27: retries=3\ncafé up: took:120 user=7 retries=3\ncafé up: 120 7 3\n[café up: ,  ,  , ]\ninvalid pattern\ntrue\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/strings/regex_log.au"))
+        .output()
+        .expect("failed to run aura run on regex log example");
+    assert!(
+        output.status.success(),
+        "run should succeed for regex log example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/strings/regex_log.au",
+        "regex-log-direct",
+        expected,
+    );
+}
+
+#[test]
+fn run_and_direct_backends_run_timestamps_example() {
+    let expected = "2026-11-10T20:14:38.250Z\n2026-11-10 is day 314, weekday 2\n1794341678250\n2026-11-11T01:44:38.250+05:30\n11 1:44\ntrue\n2027-01-09T20:14:38.250Z\n5184000.0\ntrue\nSaturday 09 January 2027, 08:14 PM\nday 29 is not in month 2 of 2026\n2026-11-10T20:14:38Z\ntrue\ntrue\n";
+    let output = Command::new(aura_bin())
+        .arg("run")
+        .arg(repo_root().join("examples/time/timestamps.au"))
+        .output()
+        .expect("failed to run aura run on timestamps example");
+    assert!(
+        output.status.success(),
+        "run should succeed for timestamps example, stderr was:\n{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    assert_eq!(String::from_utf8_lossy(&output.stdout), expected);
+
+    assert_direct_backend_example_runs(
+        "examples/time/timestamps.au",
+        "timestamps-direct",
         expected,
     );
 }
@@ -12434,6 +12693,7 @@ fn direct_backend_build_supports_advanced_io_and_network_surface() {
     let source = format!(
         r#"import io
 import fs
+import http
 import net
 
 def serve_udp(addresses: Queue[str]) -> Result[str, io.Error]:
@@ -12535,9 +12795,8 @@ def run() -> Result[None, io.Error]:
         http_task = group.start(serve_http, http_addresses)
         http_addr = try receive_address(http_addresses)
         headers: dict[str, str] = {{"X-Test": "ok"}}
-        response = try net.http_request_text("POST", "http://" + http_addr + "/hello", "body", headers.copy())
-        with http_response = response:
-            print(http_response.status())
+        with http_response = try http.request("POST", "http://" + http_addr + "/hello", "body", headers.copy()):
+            print(http_response.status)
             print(try http_response.text())
         match own http_task.result():
             case TaskResult.Ready(result):
@@ -12552,10 +12811,9 @@ def run() -> Result[None, io.Error]:
         http_bytes_addresses = Queue[str](capacity=1)
         http_bytes_task = group.start(serve_http_bytes, http_bytes_addresses)
         http_bytes_addr = try receive_address(http_bytes_addresses)
-        bytes_response = try net.http_request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers)
-        with received_bytes = bytes_response:
-            print(received_bytes.status())
-            print(received_bytes.bytes().len())
+        with received_bytes = try http.request_bytes("POST", "http://" + http_bytes_addr + "/bytes", [1 as uint8, 2 as uint8], headers):
+            print(received_bytes.status)
+            print((try received_bytes.bytes()).len())
         match own http_bytes_task.result():
             case TaskResult.Ready(result):
                 try result
@@ -17036,4 +17294,213 @@ fn verify_reports_proved_and_failed_checks_in_human_and_json_form() {
         .expect("run aura verify with a missing solver");
     assert_eq!(output.status.code(), Some(1));
     assert!(String::from_utf8_lossy(&output.stderr).contains("AU5103"));
+}
+
+#[test]
+fn run_and_direct_backends_distinguish_same_named_classes_in_cross_module_unions() {
+    let alpha = r#"public class Item:
+    public label: str
+"#;
+    let main = r#"import alpha
+
+class Item:
+    count: int64
+
+type Choice = alpha.Item | Item
+
+def describe(choice: Choice) -> str:
+    match choice:
+        case Item as local_item:
+            return f"local:{local_item.count}"
+        case alpha.Item as remote_item:
+            return f"remote:{remote_item.label}"
+
+def main() -> int32:
+    first: Choice = alpha.Item(label="hello")
+    second: Choice = Item(count=7)
+    print(describe(first))
+    print(describe(second))
+    return 0
+"#;
+    assert_run_and_direct_program_stdout(
+        "aura-cross-module-union-nominal-collision",
+        main,
+        &[("alpha.au", alpha)],
+        "remote:hello\nlocal:7\n",
+    );
+}
+
+#[test]
+fn run_and_direct_backends_close_broken_generators_and_propagate_exit_traps() {
+    let cleanup_source =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/generator_break_cleanup.au");
+    let cleanup_expected =
+        include_str!("../../aura-compiler/tests/fixtures/run-pass/generator_break_cleanup.stdout");
+    assert_run_and_direct_source_stdout(
+        "aura-generator-break-cleanup-order",
+        cleanup_source,
+        cleanup_expected,
+    );
+
+    let trap_source = r#"from iter import Generator
+
+class FailingGuard:
+    def __enter__(mut self) -> None:
+        pass
+
+    def __exit__(mut self) -> None:
+        assert false
+
+def broken() -> Generator[int64]:
+    with _g = FailingGuard():
+        yield 1
+        yield 2
+
+def main() -> int32:
+    for x in broken():
+        if x == 1:
+            break
+    print("survived")
+    return 0
+"#;
+    assert_run_and_direct_source_failure_with_timeout(
+        "aura-generator-break-exit-trap",
+        trap_source,
+        std::time::Duration::from_secs(30),
+        "",
+        "assertion failed",
+    );
+}
+
+#[cfg(unix)]
+#[test]
+fn cli_enforces_https_upgrade_urls_offline_flag_and_no_rpath_builds() {
+    let temp = TempDir::new("aura-cli-hardening-flags");
+
+    // 1. LOW-01: `aura upgrade` rejects plaintext `http://` installer URLs before invoking curl.
+    let insecure_upgrade = Command::new(aura_bin())
+        .arg("upgrade")
+        .env(
+            "AURA_UPGRADE_INSTALLER_URL",
+            "http://example.invalid/install.sh",
+        )
+        .output()
+        .expect("run aura upgrade with http URL");
+    assert!(
+        !insecure_upgrade.status.success(),
+        "aura upgrade must reject plaintext http:// URLs"
+    );
+    let upgrade_stderr = String::from_utf8_lossy(&insecure_upgrade.stderr);
+    assert!(
+        upgrade_stderr.contains("https://"),
+        "unexpected upgrade stderr:\n{upgrade_stderr}"
+    );
+
+    // 2. HIGH-03: `aura check --offline` blocks uncached remote git dependency fetches.
+    let app_dir = temp.path.join("app");
+    fs::create_dir_all(app_dir.join("src")).expect("create app/src");
+    fs::write(
+        app_dir.join("Aura.toml"),
+        "[package]\nname = \"app\"\nversion = \"0.1.0\"\nedition = \"2026\"\n\n[dependencies]\ndep = { git = \"https://example.invalid/org/dep.git\", branch = \"main\" }\n",
+    )
+    .expect("write app Aura.toml");
+    let main_au = app_dir.join("src/main.au");
+    fs::write(
+        &main_au,
+        "import dep.lib\n\ndef main() -> int32:\n    print(dep.lib.val())\n    return 0\n",
+    )
+    .expect("write app main.au");
+
+    let offline_check = Command::new(aura_bin())
+        .args(["check", "--offline"])
+        .arg(&main_au)
+        .env("XDG_CACHE_HOME", temp.path.join("empty-cache"))
+        .output()
+        .expect("run aura check --offline");
+    assert!(
+        !offline_check.status.success(),
+        "aura check --offline must reject uncached remote git dependencies"
+    );
+    assert!(
+        String::from_utf8_lossy(&offline_check.stderr).contains("offline mode"),
+        "unexpected offline stderr:\n{}",
+        String::from_utf8_lossy(&offline_check.stderr)
+    );
+
+    // 3. MED-03: `aura build --no-rpath` links without embedding build-host library_paths in rpath.
+    let ffi_pkg = temp.path.join("ffi-pkg");
+    let native_dir = ffi_pkg.join("native-rpath-probe");
+    fs::create_dir_all(&native_dir).expect("create native_dir");
+    fs::create_dir_all(ffi_pkg.join("src")).expect("create ffi-pkg/src");
+    let c_lib_name = if cfg!(target_os = "macos") {
+        "libprobe.dylib"
+    } else {
+        "libprobe.so"
+    };
+    let c_src = temp.path.join("probe.c");
+    fs::write(&c_src, "int probe_fn(void) { return 5; }\n").expect("write probe.c");
+    let shared_args: &[&str] = if cfg!(target_os = "macos") {
+        &[
+            "-dynamiclib",
+            "-fPIC",
+            "-Wl,-install_name,@rpath/libprobe.dylib",
+        ]
+    } else {
+        &["-shared", "-fPIC", "-Wl,-soname,libprobe.so"]
+    };
+    let cc_status = Command::new("cc")
+        .args(shared_args)
+        .arg(&c_src)
+        .arg("-o")
+        .arg(native_dir.join(c_lib_name))
+        .status()
+        .expect("compile probe shared library");
+    assert!(cc_status.success());
+
+    fs::write(
+        ffi_pkg.join("Aura.toml"),
+        "[package]\nname = \"ffipkg\"\nversion = \"0.1.0\"\nedition = \"2026\"\nallow_ffi = true\n\n[ffi]\nlibraries = [\"probe\"]\nlibrary_paths = [\"native-rpath-probe\"]\n",
+    )
+    .expect("write ffi-pkg Aura.toml");
+    let ffi_main = ffi_pkg.join("src/main.au");
+    fs::write(
+        &ffi_main,
+        "extern \"C\" def probe_fn() -> int32\n\ndef main() -> int32:\n    print(probe_fn())\n    return 0\n",
+    )
+    .expect("write ffi main.au");
+    let out_with_rpath = temp.path.join("ffipkg-with-rpath");
+    let build_with_rpath = Command::new(aura_bin())
+        .args(["build", "-o"])
+        .arg(&out_with_rpath)
+        .arg(&ffi_main)
+        .output()
+        .expect("run aura build with default rpath");
+    assert!(
+        build_with_rpath.status.success(),
+        "default aura build failed:\n{}",
+        String::from_utf8_lossy(&build_with_rpath.stderr)
+    );
+    let with_rpath_bytes = fs::read(&out_with_rpath).expect("read default built binary");
+    assert!(
+        String::from_utf8_lossy(&with_rpath_bytes).contains("native-rpath-probe"),
+        "default aura build should embed library_paths in rpath"
+    );
+
+    let out_bin = temp.path.join("ffipkg-no-rpath");
+    let build_no_rpath = Command::new(aura_bin())
+        .args(["build", "--no-rpath", "-o"])
+        .arg(&out_bin)
+        .arg(&ffi_main)
+        .output()
+        .expect("run aura build --no-rpath");
+    assert!(
+        build_no_rpath.status.success(),
+        "aura build --no-rpath failed:\n{}",
+        String::from_utf8_lossy(&build_no_rpath.stderr)
+    );
+    let bin_bytes = fs::read(&out_bin).expect("read built binary");
+    assert!(
+        !String::from_utf8_lossy(&bin_bytes).contains("native-rpath-probe"),
+        "--no-rpath binary must not embed build-host library_paths in rpath"
+    );
 }

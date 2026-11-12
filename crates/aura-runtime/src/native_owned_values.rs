@@ -224,13 +224,22 @@ impl DirectOwnedValues {
     /// # Safety
     ///
     /// `header` is linked into this ledger.
+    #[inline]
     unsafe fn unlink(&mut self, header: &OpaqueValue) {
         let slot = header.slot.get() as usize;
         debug_assert!(std::ptr::eq(self.linked[slot], header));
-        self.linked.swap_remove(slot);
-        if let Some(&moved) = self.linked.get(slot) {
-            // SAFETY: a linked value is live and confined to this thread.
-            unsafe { (*moved).slot.set(slot as u32) };
+        let last = self.linked.len() - 1;
+        // SAFETY: the list holds `header` at `slot`, so it is not empty and
+        // `slot` is at most `last`. The last value is live and confined to
+        // this thread, and it is `header` itself when `slot` is `last`. A
+        // freed value leaves the list on every release, so the move tests
+        // no bound.
+        unsafe {
+            let values = self.linked.as_mut_ptr();
+            let moved = *values.add(last);
+            *values.add(slot) = moved;
+            (*moved).slot.set(slot as u32);
+            self.linked.set_len(last);
         }
         header.owner.set(ptr::null_mut());
         header.slot.set(0);
@@ -278,6 +287,7 @@ pub(super) unsafe fn detach_for_sharing(value: *mut OpaqueValue, header: &Opaque
 /// # Safety
 ///
 /// As for [`detach_for_sharing`].
+#[inline(always)]
 pub(super) unsafe fn detach_for_drop(header: &OpaqueValue) {
     let owner = header.owner.get();
     if owner.is_null() {
@@ -361,11 +371,11 @@ pub(super) unsafe fn generated_retain(
             return false;
         }
         let ref_count = base.offset(layout.ref_count_offset as isize).cast::<u32>();
-        if ref_count.read() == u32::MAX {
+        let owned = base.offset(layout.owned_offset as isize).cast::<u32>();
+        if ref_count.read() == u32::MAX || owned.read() == u32::MAX {
             return false;
         }
         ref_count.write(ref_count.read() + 1);
-        let owned = word(layout.owned_offset);
         owned.write(owned.read() + 1);
     }
     true
@@ -393,7 +403,7 @@ pub(super) unsafe fn generated_release(
             return false;
         }
         let ref_count = base.offset(layout.ref_count_offset as isize).cast::<u32>();
-        let owned = word(layout.owned_offset);
+        let owned = base.offset(layout.owned_offset as isize).cast::<u32>();
         if owned.read() <= 1 || ref_count.read() <= 1 {
             return false;
         }

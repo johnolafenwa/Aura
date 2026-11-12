@@ -26,7 +26,7 @@ use super::{
     wait_condvar, wait_for_runtime_scheduler, wait_timeout_condvar, ArrayBinaryOp, ArrayDType,
     ArrayReduction, ArrayStorage, ArrayValue, BlockingIoPool, CancellationContext, ChannelValue,
     ClosureCaptureValue, ClosureEnvironment, EnumVariantValue, FfiHandleValue, FileValue,
-    FloatPowerWidth, FormatSpecErrorKind, FunctionValue, HttpListenerValue, HttpResponseValue,
+    FloatPowerWidth, FormatSpecErrorKind, FunctionValue, HttpListenerValue, HttpSnapshot,
     InstanceValue, IntegerArithmeticMode, LightweightTaskFailureSignal, MapValue,
     ModuleNamespaceValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue,
     ProcessRestartPolicy, ProcessStdioConfig, ProcessSupervisorValue, ProcessSupervisorWaitStatus,
@@ -4019,8 +4019,7 @@ fn tcp_connect_to_a_literal_address_reports_refusal_from_the_reactor_wait() {
         Some(StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
     )
-    .err()
-    .expect("nothing listens on a port just released");
+    .expect_err("nothing listens on a port just released");
     assert_eq!(error.kind(), io::ErrorKind::ConnectionRefused);
 }
 
@@ -5805,6 +5804,7 @@ fn float32_slots_render_named_fields_and_payloads_with_float32_digits() {
 }
 
 #[test]
+#[allow(clippy::approx_constant)]
 fn render_float_formats_current_surface() {
     assert_eq!(render_float(42.0), "42.0");
     assert_eq!(render_float(3.5), "3.5");
@@ -6865,29 +6865,6 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
         }),
         "net.UdpDatagram",
     );
-    assert_eq!(
-        Value::HttpResponse(crate::runtime_value::parse_http_response(
-            200,
-            "OK".to_string(),
-            vec![],
-            vec![1, 2]
-        ))
-        .render(),
-        "<http-response 200 2 bytes>"
-    );
-    assert_value_equals_clone(Value::HttpResponse(
-        crate::runtime_value::parse_http_response(200, "OK".to_string(), vec![], vec![1, 2]),
-    ));
-    assert_source_type(
-        Value::HttpResponse(crate::runtime_value::parse_http_response(
-            200,
-            "OK".to_string(),
-            vec![],
-            vec![],
-        )),
-        "net.HttpResponse",
-    );
-
     let http_listener =
         HttpListenerValue::bind("127.0.0.1:0").expect("http listener should bind locally");
     assert_eq!(format!("{http_listener:?}"), "HttpListenerValue(..)");
@@ -7248,7 +7225,7 @@ fn runtime_json_clone_preserves_empty_containers_and_shares_buffers_until_a_writ
         match variant.payloads.values() {
             [Value::Vec(vector)] => {
                 if !vector.elements.is_empty() {
-                    output.push(vector.elements.as_ptr() as usize);
+                    output.push(vector.elements.as_ptr());
                 }
                 for element in vector.elements.as_values().unwrap_or_default() {
                     container_buffers(element, output);
@@ -12352,6 +12329,171 @@ fn file_read_line_spans_read_buffers_and_rejects_invalid_text() {
     );
 }
 
+#[test]
+fn file_read_buffer_fills_from_memory_without_waiting() {
+    let temp = TempDir::new("aura-file-fill-cached");
+    let path = temp.path().join("lines.txt");
+    fs::write(&path, "one\ntwo\n").expect("fixture should be written");
+    let file = fs::File::open(&path).expect("fixture should open");
+    let mut read = super::FileReadBuffer::default();
+    if cfg!(all(target_os = "linux", target_env = "gnu")) {
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("a file just written is in memory")
+                .expect("the read succeeds"),
+            8
+        );
+        assert_eq!(read.unread(), b"one\ntwo\n");
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("the end of the file needs no wait")
+                .expect("the read succeeds"),
+            0
+        );
+        assert_ne!(read.fill_source, super::FillSource::Pool);
+    } else {
+        assert!(read.fill_cached(&file).is_none());
+        assert_eq!(
+            read.fill_source,
+            super::FillSource::Pool,
+            "a host without the read is not asked again"
+        );
+    }
+
+    // A handle that cannot be read is left to the blocking read, which
+    // reports the failure, and is not asked again.
+    let write_only = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("fixture should reopen");
+    let mut refused = super::FileReadBuffer::default();
+    assert!(refused.fill_cached(&write_only).is_none());
+    assert_eq!(refused.fill_source, super::FillSource::Pool);
+    assert!(refused.fill_cached(&write_only).is_none());
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_file_kept_in_memory_fills_on_the_calling_thread() {
+    let shared = std::path::Path::new("/dev/shm");
+    if !shared.is_dir() {
+        return;
+    }
+    let path = shared.join(format!("aura-file-fill-memory-{}", std::process::id()));
+    fs::write(&path, "kept in memory\n").expect("fixture should be written");
+    let file = fs::File::open(&path).expect("fixture should open");
+    assert!(super::file_is_in_memory(&file));
+    let mut read = super::FileReadBuffer::default();
+    for expected in [15, 0] {
+        assert_eq!(
+            read.fill_cached(&file)
+                .expect("a file in memory needs no wait")
+                .expect("the read succeeds"),
+            expected
+        );
+    }
+    assert_ne!(read.fill_source, super::FillSource::Pool);
+    // A plain read takes over where the host has no read that does not
+    // wait, and reports its own failures.
+    let mut plain = super::FileReadBuffer {
+        fill_source: super::FillSource::Memory,
+        ..Default::default()
+    };
+    let again = fs::File::open(&path).expect("fixture should reopen");
+    assert_eq!(
+        plain
+            .fill_cached(&again)
+            .expect("a plain read never defers")
+            .expect("the read succeeds"),
+        15
+    );
+    let write_only = fs::OpenOptions::new()
+        .write(true)
+        .open(&path)
+        .expect("fixture should reopen");
+    let mut refused = super::FileReadBuffer {
+        fill_source: super::FillSource::Memory,
+        ..Default::default()
+    };
+    refused
+        .fill_cached(&write_only)
+        .expect("a plain read never defers")
+        .expect_err("a handle opened for writing cannot read");
+    fs::remove_file(&path).expect("fixture should be removed");
+    let on_disk = fs::File::open("/proc/self/exe");
+    if let Ok(on_disk) = on_disk {
+        let _ = super::file_is_in_memory(&on_disk);
+    }
+}
+
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+#[test]
+fn a_cached_read_of_an_empty_pipe_waits() {
+    use std::os::fd::FromRawFd;
+    let mut ends = [0; 2];
+    // SAFETY: `ends` has room for the two descriptors.
+    assert_eq!(unsafe { libc::pipe(ends.as_mut_ptr()) }, 0);
+    // SAFETY: the pipe's descriptors are open and owned by nothing else.
+    let (reader, mut writer) = unsafe {
+        (
+            fs::File::from_raw_fd(ends[0]),
+            fs::File::from_raw_fd(ends[1]),
+        )
+    };
+    let mut read = super::FileReadBuffer::default();
+    assert!(read.fill_cached(&reader).is_none());
+    assert_eq!(
+        read.fill_source,
+        super::FillSource::Cache,
+        "an empty pipe is asked again"
+    );
+    writer.write_all(b"ready\n").expect("pipe write succeeds");
+    assert_eq!(
+        read.fill_cached(&reader)
+            .expect("the pipe holds bytes")
+            .expect("the read succeeds"),
+        6
+    );
+    assert_eq!(
+        read.take_line()
+            .expect("a whole line")
+            .expect("the line is UTF-8"),
+        "ready"
+    );
+}
+
+#[test]
+fn file_buffered_line_takes_only_what_the_buffer_holds() {
+    let temp = TempDir::new("aura-file-buffered-line");
+    let path = temp.path().join("lines.txt");
+    fs::write(&path, "one\ntwo").expect("fixture should be written");
+    let file = open_for_reading(&path);
+    assert!(
+        file.buffered_line().is_none(),
+        "nothing is buffered before the first read"
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("one".to_string())
+    );
+    assert!(
+        file.buffered_line().is_none(),
+        "a last line without a line feed needs the end of the file"
+    );
+    assert_eq!(
+        file.read_line().expect("line read should succeed"),
+        Some("two".to_string())
+    );
+    file.close();
+    assert_eq!(
+        file.buffered_line()
+            .expect("a closed handle answers at once")
+            .expect_err("a closed handle cannot read")
+            .to_string(),
+        "resource is closed"
+    );
+}
+
 fn batch_of_lines(file: &FileValue, max_lines: i64) -> Vec<String> {
     match file
         .read_lines(max_lines)
@@ -13319,7 +13461,7 @@ fn unix_error_normalization_helpers_cover_udp_and_websocket_edges() {
         "UDP datagram exceeds the platform send limit"
     );
 
-    let other = super::normalize_udp_send_error(io::Error::new(io::ErrorKind::Other, "plain"));
+    let other = super::normalize_udp_send_error(io::Error::other("plain"));
     assert_eq!(other.kind(), io::ErrorKind::Other);
     assert_eq!(other.to_string(), "plain");
 
@@ -13718,7 +13860,7 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
                 .expect("http respond should succeed");
         })
     };
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "POST",
         &format!("http://{}/echo", http_address),
         "aura",
@@ -14122,7 +14264,7 @@ fn tcp_and_http_helpers_handle_large_payloads() {
                 .expect("http respond should succeed for large payloads");
         })
     };
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "GET",
         &format!("http://{http_address}/large"),
         "",
@@ -14161,7 +14303,7 @@ fn lightweight_scheduler_handles_large_http_binary_round_trip() {
             Ok(Value::Unit)
         })?;
 
-        let response = HttpResponseValue::request_bytes(
+        let response = HttpSnapshot::request_bytes(
             "GET",
             &format!("http://{address}/large"),
             &[0],
@@ -14218,7 +14360,7 @@ fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
 
         let timer_progressed_in_client = timer_progressed.clone();
         let client = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
-            let response = HttpResponseValue::request_bytes(
+            let response = HttpSnapshot::request_bytes(
                 "GET",
                 &format!("http://{address}/small-stack"),
                 &[],
@@ -14468,7 +14610,7 @@ fn lightweight_scheduler_handles_http_after_blocking_io_server_step() {
             Ok(Value::Unit)
         })?;
 
-        let response = HttpResponseValue::request_text(
+        let response = HttpSnapshot::request_text(
             "GET",
             &format!("http://{address}/large"),
             "x",
@@ -16969,7 +17111,7 @@ fn fixed_resource_caps_are_distinct_and_enforced_without_large_allocations() {
 
 #[test]
 fn http_request_rejects_control_characters_in_headers() {
-    let error = HttpResponseValue::request_text(
+    let error = HttpSnapshot::request_text(
         "GET",
         "http://127.0.0.1:1/test",
         "",
@@ -16983,7 +17125,7 @@ fn http_request_rejects_control_characters_in_headers() {
 
 #[test]
 fn http_request_rejects_invalid_header_names_and_non_ascii_values() {
-    let bad_name = HttpResponseValue::request_text(
+    let bad_name = HttpSnapshot::request_text(
         "GET",
         "http://127.0.0.1:1/test",
         "",
@@ -16994,7 +17136,7 @@ fn http_request_rejects_invalid_header_names_and_non_ascii_values() {
     .expect_err("request headers with invalid token characters should be rejected");
     assert_eq!(bad_name.kind(), std::io::ErrorKind::InvalidInput);
 
-    let bad_value = HttpResponseValue::request_text(
+    let bad_value = HttpSnapshot::request_text(
         "GET",
         "http://127.0.0.1:1/test",
         "",
@@ -17103,33 +17245,9 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
         assert_eq!(super::http_reason_phrase(status), expected);
     }
 
-    assert!(super::parse_http_response_head(b"HTTP/1.1 200")
-        .expect("partial response head should parse")
-        .is_none());
     assert!(super::parse_http_request_head(b"GET / HTTP/1.1")
         .expect("partial request head should parse")
         .is_none());
-
-    let (_, status, reason, headers, framing) =
-        super::parse_http_response_head(b"HTTP/1.1 202 Accepted\r\nContent-Length: 2\r\n\r\n")
-            .expect("response head should parse")
-            .expect("response head should be complete");
-    assert_eq!(status, 202);
-    assert_eq!(reason, "Accepted");
-    assert_eq!(
-        headers,
-        vec![("Content-Length".to_string(), "2".to_string())]
-    );
-    assert_eq!(framing, super::HttpBodyFraming::ContentLength(2));
-
-    let (_, status, reason, headers, framing) =
-        super::parse_http_response_head(b"HTTP/1.1 204\r\n\r\n")
-            .expect("response head without explicit reason should parse")
-            .expect("response head should be complete");
-    assert_eq!(status, 204);
-    assert_eq!(reason, "");
-    assert!(headers.is_empty());
-    assert_eq!(framing, super::HttpBodyFraming::UntilClose);
 
     let (_, method, path, headers, framing) = super::parse_http_request_head(
         b"POST /submit HTTP/1.1\r\nHost: example.test\r\nContent-Length: 0\r\n\r\n",
@@ -17141,18 +17259,6 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
     assert_eq!(headers[0], ("Host".to_string(), "example.test".to_string()));
     assert_eq!(framing, super::HttpBodyFraming::ContentLength(0));
 
-    let error = super::parse_http_response_head(b"HTTP/1.1 200 OK\r\nX-Bad: \xff\r\n\r\n")
-        .expect_err("non-UTF-8 header values should fail");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-
-    let error = super::parse_http_response_head(b"HTTP/1.1 nope\r\n\r\n")
-        .expect_err("invalid response heads should fail");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-
-    let error = super::parse_http_response_head(b"HTTP/1.1 200 OK\r\nContent-Length: nope\r\n\r\n")
-        .expect_err("invalid content-length should fail");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-
     assert!(super::is_http_bad_request_error(&io::Error::new(
         io::ErrorKind::InvalidData,
         "malformed request"
@@ -17161,8 +17267,7 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
         io::ErrorKind::UnexpectedEof,
         "truncated request"
     )));
-    assert!(!super::is_http_bad_request_error(&io::Error::new(
-        io::ErrorKind::Other,
+    assert!(!super::is_http_bad_request_error(&io::Error::other(
         "network failure"
     )));
     assert!(!super::is_http_bad_request_error(
@@ -17191,8 +17296,8 @@ fn http_helper_parsing_covers_reason_phrases_and_header_errors() {
         "the parser should preserve the rejected header value: {error}"
     );
 
-    let error = super::parse_http_response_head(
-        b"HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n",
+    let error = super::parse_http_request_head(
+        b"POST / HTTP/1.1\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\n",
     )
     .expect_err("conflicting content-length values should fail");
     assert_eq!(error.kind(), io::ErrorKind::InvalidData);
@@ -17421,7 +17526,7 @@ fn http_request_builder_covers_host_variants_and_header_overrides() {
     assert!(!overridden.contains("Host: example.com\r\n"));
     assert!(!overridden.contains("Connection: close\r\n"));
 
-    let error = HttpResponseValue::request_text(
+    let error = HttpSnapshot::request_text(
         "GET",
         "ftp://example.com/",
         "",
@@ -17431,6 +17536,30 @@ fn http_request_builder_covers_host_variants_and_header_overrides() {
     )
     .expect_err("unsupported URL schemes should fail before connecting");
     assert_eq!(error.kind(), io::ErrorKind::InvalidInput);
+}
+
+/// Reads the whole response a peer writes to `stream` with the HTTP
+/// client's reader.
+fn read_http_response_from_stream(
+    stream: &mut std::net::TcpStream,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+) -> io::Result<HttpSnapshot> {
+    read_http_response_from_stream_with_limit(
+        stream,
+        deadline,
+        cancellation,
+        super::MAX_HTTP_MESSAGE_BYTES,
+    )
+}
+
+fn read_http_response_from_stream_with_limit(
+    stream: &mut std::net::TcpStream,
+    deadline: Option<Instant>,
+    cancellation: Option<&CancellationContext>,
+    limit: usize,
+) -> io::Result<HttpSnapshot> {
+    HttpSnapshot::read_from(stream, deadline, cancellation, limit)
 }
 
 #[test]
@@ -17445,7 +17574,7 @@ fn http_stream_helpers_cover_response_without_content_length_and_custom_headers(
     });
 
     let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-    let response = super::read_http_response_from_stream(
+    let response = read_http_response_from_stream(
         &mut client,
         Some(Instant::now() + StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
@@ -17455,7 +17584,7 @@ fn http_stream_helpers_cover_response_without_content_length_and_custom_headers(
     assert_eq!(response.reason(), "Accepted");
     assert_eq!(
         response.headers(),
-        vec![("Connection".to_string(), "close".to_string())]
+        vec![("connection".to_string(), "close".to_string())]
     );
     assert_eq!(response.bytes(), b"body");
     assert_eq!(
@@ -17511,7 +17640,7 @@ fn http_response_limit_rejects_declared_and_close_delimited_overflow_early() {
                 .expect("test response should write");
         });
         let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-        let error = super::read_http_response_from_stream_with_limit(
+        let error = read_http_response_from_stream_with_limit(
             &mut client,
             Some(Instant::now() + StdDuration::from_secs(2)),
             Some(&CancellationContext::default()),
@@ -17529,84 +17658,14 @@ fn http_response_limit_rejects_declared_and_close_delimited_overflow_early() {
     assert!(declared.to_string().contains("64 bytes"));
 
     let mut close_delimited = b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec();
-    close_delimited.extend(std::iter::repeat_n(b'x', TEST_HTTP_LIMIT));
+    close_delimited.extend(std::iter::repeat_n(b'x', TEST_HTTP_LIMIT + 1));
     let close_delimited = response_error(close_delimited);
     assert_eq!(close_delimited.kind(), io::ErrorKind::InvalidData);
     assert!(close_delimited.to_string().contains("64 bytes"));
 }
 
 #[test]
-fn http_streams_report_truncated_chunked_messages_and_incremental_limit_overflow() {
-    struct ScriptedHttpReader {
-        chunks: std::collections::VecDeque<Vec<u8>>,
-    }
-
-    impl Read for ScriptedHttpReader {
-        fn read(&mut self, buffer: &mut [u8]) -> io::Result<usize> {
-            let Some(chunk) = self.chunks.pop_front() else {
-                return Ok(0);
-            };
-            buffer[..chunk.len()].copy_from_slice(&chunk);
-            Ok(chunk.len())
-        }
-    }
-
-    impl super::HttpDeadlineReader for ScriptedHttpReader {
-        fn read_http_some(
-            &mut self,
-            max_bytes: usize,
-            _deadline: Option<Instant>,
-            _cancellation: Option<&CancellationContext>,
-        ) -> io::Result<Option<Vec<u8>>> {
-            let mut buffer = vec![0; max_bytes];
-            let count = self.read(&mut buffer)?;
-            if count == 0 {
-                Ok(None)
-            } else {
-                buffer.truncate(count);
-                Ok(Some(buffer))
-            }
-        }
-    }
-
-    let mut truncated_response = ScriptedHttpReader {
-        chunks: std::collections::VecDeque::from([
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nab".to_vec(),
-        ]),
-    };
-    let error =
-        super::read_http_response_from_stream_with_limit(&mut truncated_response, None, None, 128)
-            .expect_err("EOF in a declared chunk must be reported, not accepted as a short body");
-    assert_eq!(error.kind(), io::ErrorKind::UnexpectedEof);
-    assert_eq!(
-        error.to_string(),
-        "stream closed before the chunked HTTP response body was fully received"
-    );
-
-    let mut malformed_response = ScriptedHttpReader {
-        chunks: std::collections::VecDeque::from([
-            b"HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\nnope\r\n".to_vec(),
-        ]),
-    };
-    let error =
-        super::read_http_response_from_stream_with_limit(&mut malformed_response, None, None, 128)
-            .expect_err("a malformed response chunk size must be rejected at the stream boundary");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(error.to_string().contains("invalid HTTP chunk size `nope`"));
-
-    let mut incremental_overflow = ScriptedHttpReader {
-        chunks: std::collections::VecDeque::from([
-            b"HTTP/1.1 200 OK\r\nConnection: close\r\n\r\n".to_vec(),
-            vec![b'a'; 20],
-            vec![b'b'; 10],
-        ]),
-    };
-    let error =
-        super::read_http_response_from_stream_with_limit(&mut incremental_overflow, None, None, 64)
-            .expect_err("a close-delimited body must retain the cap across incremental reads");
-    assert_eq!(error.kind(), io::ErrorKind::InvalidData);
-    assert!(error.to_string().contains("64 bytes"));
-
+fn http_request_streams_report_truncated_and_malformed_chunked_messages() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("server should bind");
     let address = listener.local_addr().expect("server address should exist");
     let client = thread::spawn(move || {
@@ -17706,7 +17765,7 @@ fn http_stream_helpers_decode_chunked_requests_and_responses() {
             .expect("chunked response should write");
     });
     let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-    let response = super::read_http_response_from_stream(
+    let response = read_http_response_from_stream(
         &mut client,
         Some(Instant::now() + StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
@@ -17802,7 +17861,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
             .expect("HTTPS response should write");
         stream.close();
     });
-    let response = HttpResponseValue::request_text_with_ca(
+    let response = HttpSnapshot::request_text_with_ca(
         "GET",
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
@@ -17855,7 +17914,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
             .expect("HTTPS response without content length should write");
         stream.close();
     });
-    let response = HttpResponseValue::request_text_with_ca(
+    let response = HttpSnapshot::request_text_with_ca(
         "GET",
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
@@ -17931,7 +17990,7 @@ fn https_client_reports_incomplete_and_oversized_response_framing() {
 
     let url = format!("https://localhost:{port}/");
     let request = || {
-        HttpResponseValue::request_text_with_ca(
+        HttpSnapshot::request_text_with_ca(
             "GET",
             &url,
             "",
@@ -17954,7 +18013,7 @@ fn https_client_reports_incomplete_and_oversized_response_framing() {
     assert_eq!(
         oversized.to_string(),
         format!(
-            "HTTP message exceeds the supported size limit of {} bytes",
+            "the HTTP response body is larger than {} bytes",
             super::MAX_HTTP_MESSAGE_BYTES
         )
     );
@@ -17963,14 +18022,14 @@ fn https_client_reports_incomplete_and_oversized_response_framing() {
     assert_eq!(truncated_fixed.kind(), io::ErrorKind::UnexpectedEof);
     assert_eq!(
         truncated_fixed.to_string(),
-        "stream closed before the HTTP response body was fully received"
+        "connection closed before the HTTP response body was complete"
     );
 
     let truncated_chunked = request().expect_err("a truncated chunked HTTPS body must fail");
     assert_eq!(truncated_chunked.kind(), io::ErrorKind::UnexpectedEof);
     assert_eq!(
         truncated_chunked.to_string(),
-        "stream closed before the chunked HTTP response body was fully received"
+        "connection closed before the HTTP response body was complete"
     );
 
     server.join().expect("HTTPS framing server should join");
@@ -18032,7 +18091,7 @@ fn http_stream_helpers_report_unexpected_eof_for_incomplete_messages() {
             .expect("partial response head should write");
     });
     let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-    let error = super::read_http_response_from_stream(
+    let error = read_http_response_from_stream(
         &mut client,
         Some(Instant::now() + StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
@@ -18050,7 +18109,7 @@ fn http_stream_helpers_report_unexpected_eof_for_incomplete_messages() {
             .expect("short response body should write");
     });
     let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-    let error = super::read_http_response_from_stream(
+    let error = read_http_response_from_stream(
         &mut client,
         Some(Instant::now() + StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
@@ -18103,7 +18162,7 @@ fn http_stream_helpers_read_split_request_and_response_bodies() {
             .expect("response body should write");
     });
     let mut client = std::net::TcpStream::connect(address).expect("client should connect");
-    let response = super::read_http_response_from_stream(
+    let response = read_http_response_from_stream(
         &mut client,
         Some(Instant::now() + StdDuration::from_secs(2)),
         Some(&CancellationContext::default()),
@@ -18162,7 +18221,7 @@ fn http_listener_replies_with_413_for_oversized_requests_and_continues_accepting
         "expected a 413 response, got: {response:?}"
     );
 
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "GET",
         &format!("http://{}/ok", address),
         "",
@@ -18233,7 +18292,7 @@ fn http_listener_replies_with_431_for_too_many_headers_and_continues_accepting()
         "expected a 431 response, got: {response:?}"
     );
 
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "GET",
         &format!("http://{}/ok", address),
         "",
@@ -18293,7 +18352,7 @@ fn http_listener_replies_with_400_for_malformed_requests_and_continues_accepting
         "expected a 400 response, got: {response:?}"
     );
 
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "GET",
         &format!("http://{}/ok", address),
         "",
@@ -18359,7 +18418,7 @@ fn http_resources_use_nonblocking_descriptors_internally() {
         })
     };
 
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "GET",
         &format!("http://{}/nonblocking", address),
         "",
@@ -20284,6 +20343,7 @@ fn array_aware_copy_keeps_enum_variants_with_leaf_and_nested_payloads() {
 }
 
 #[test]
+#[allow(clippy::cmp_owned, clippy::nonminimal_bool)]
 fn runtime_names_behave_like_their_text() {
     use super::RuntimeName;
     use std::collections::hash_map::DefaultHasher;
@@ -20950,4 +21010,138 @@ fn json_tape_values_dump_convert_and_copy_inside_trees() {
     };
     assert!(first.payloads.json().is_some());
     assert_eq!(copied.elements.value_at(1), Some(&mixed));
+}
+
+#[test]
+fn http_wire_builders_reject_malformed_methods_and_out_of_range_status_codes() {
+    let url = url::Url::parse("http://example.com/items").expect("valid URL");
+    for bad_method in [
+        "",
+        "GET /admin HTTP/1.1\r\nHost: evil.example\r\nX-Ignore:",
+        "POST ",
+        "GET\r\n",
+        "M\x00",
+        "GET/1",
+    ] {
+        let err = super::build_http_request_bytes(bad_method, &url, b"", Vec::new())
+            .expect_err("invalid HTTP method token must be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "unexpected error kind for method {bad_method:?}: {err}"
+        );
+    }
+    let valid_req = super::build_http_request_bytes("PATCH", &url, b"ok", Vec::new())
+        .expect("valid RFC 9110 method token must succeed");
+    assert!(valid_req.starts_with(b"PATCH /items HTTP/1.1\r\n"));
+
+    for bad_status in [-200, -1, 0, 99, 1000, i32::MAX] {
+        let err = super::build_http_response_bytes(bad_status, Vec::new(), b"")
+            .expect_err("out-of-range HTTP status code must be rejected");
+        assert_eq!(
+            err.kind(),
+            io::ErrorKind::InvalidInput,
+            "unexpected error kind for status {bad_status}: {err}"
+        );
+    }
+    let valid_resp = super::build_http_response_bytes(204, Vec::new(), b"")
+        .expect("valid 3-digit HTTP status code must succeed");
+    assert!(valid_resp.starts_with(b"HTTP/1.1 204 No Content\r\n"));
+}
+
+#[test]
+fn tls_stream_enforces_stream_read_size_and_line_limits() {
+    let closed_tls = TlsStreamValue {
+        inner: Arc::new(super::TlsStreamState {
+            stream: Mutex::new(None),
+            busy: AtomicBool::new(false),
+            closed: AtomicBool::new(true),
+        }),
+    };
+    let zero_err = closed_tls
+        .read_exact(0, None, None)
+        .expect_err("TLS read_exact(0) must fail with InvalidInput like TCP read_exact(0)");
+    assert_eq!(zero_err.kind(), io::ErrorKind::InvalidInput);
+
+    let oversize_err = closed_tls
+        .read_exact(super::MAX_STREAM_READ_BYTES + 1, None, None)
+        .expect_err("TLS read_exact above MAX_STREAM_READ_BYTES must fail before stream access");
+    assert_eq!(oversize_err.kind(), io::ErrorKind::InvalidInput);
+    assert!(
+        oversize_err.to_string().contains("supported read limit"),
+        "expected read limit message, got: {oversize_err}"
+    );
+
+    let suffix = format!(
+        "{}-{}",
+        std::process::id(),
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .expect("system time after epoch")
+            .as_nanos()
+    );
+    let certificate =
+        generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
+    let cert_path = std::env::temp_dir().join(format!("aura-tls-bounds-{suffix}-cert.pem"));
+    let key_path = std::env::temp_dir().join(format!("aura-tls-bounds-{suffix}-key.pem"));
+    fs::write(&cert_path, certificate.cert.pem().as_bytes()).expect("write cert pem");
+    fs::write(&key_path, certificate.key_pair.serialize_pem().as_bytes()).expect("write key pem");
+    let cert_str = cert_path.to_str().expect("utf-8 cert path").to_string();
+    let key_str = key_path.to_str().expect("utf-8 key path").to_string();
+
+    let listener = TlsListenerValue::bind("127.0.0.1:0", &cert_str, &key_str)
+        .expect("tls listener should bind");
+    let address = listener.local_addr().expect("tls local addr");
+    let server = {
+        let listener = listener.clone();
+        thread::spawn(move || {
+            let cancellation = CancellationContext::default();
+            let accepted = listener
+                .accept(Some(StdDuration::from_secs(5)), Some(&cancellation))
+                .expect("accept tls client");
+            let payload = "a".repeat(70_000);
+            accepted
+                .write_all(
+                    &payload,
+                    Some(StdDuration::from_secs(5)),
+                    Some(&cancellation),
+                )
+                .expect("write payload");
+            accepted.close();
+            listener.close();
+        })
+    };
+
+    let client = TlsStreamValue::connect(
+        &address,
+        "localhost",
+        Some(&cert_str),
+        Some(StdDuration::from_secs(5)),
+        Some(&CancellationContext::default()),
+    )
+    .expect("tls client connect");
+    let line_err = client
+        .read_line_with_limit(
+            32,
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect_err("TLS read_line exceeding limit must fail");
+    assert!(
+        line_err.to_string().contains("network read_line"),
+        "expected network read_line limit error, got: {line_err}"
+    );
+    let remaining = client
+        .read_exact(
+            70_000 - 32,
+            Some(StdDuration::from_secs(5)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("multi-step >64 KiB TLS read_exact should succeed");
+    assert_eq!(remaining.len(), 70_000 - 32);
+    assert!(remaining.iter().all(|&b| b == b'a'));
+    client.close();
+    server.join().expect("server thread joins");
+    let _ = fs::remove_file(&cert_path);
+    let _ = fs::remove_file(&key_path);
 }

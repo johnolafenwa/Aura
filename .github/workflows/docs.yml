@@ -15,6 +15,7 @@ on:
       - 'crates/**'
       - 'Cargo.lock'
       - 'scripts/check_doc_examples.py'
+      - 'scripts/generate_llms.py'
   pull_request:
     paths:
       - '**/*.md'
@@ -28,6 +29,7 @@ on:
       - 'crates/**'
       - 'Cargo.lock'
       - 'scripts/check_doc_examples.py'
+      - 'scripts/generate_llms.py'
   workflow_dispatch:
 
 permissions:
@@ -54,6 +56,9 @@ jobs:
 
       - name: Install npm dependencies
         run: npm ci
+
+      - name: Check LLM documentation
+        run: npm run docs:llms:check
 
       - name: Build docs
         env:

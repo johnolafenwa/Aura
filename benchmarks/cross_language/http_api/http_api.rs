@@ -2,7 +2,7 @@
 //!
 //! The server answers POST /items/<id>, GET /items/<id>, and GET /stats with
 //! JSON bodies. The client sends one request per connection, as the Aura HTTP
-//! client does, and checks every reply. HTTP/1.1 framing is written by hand on
+//! server answers, and checks every reply. HTTP/1.1 framing is written by hand on
 //! tokio streams, as in the retrying_worker reference.
 use serde_json::{json, Value};
 use std::collections::HashMap;

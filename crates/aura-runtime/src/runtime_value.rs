@@ -65,14 +65,22 @@ use aura_core::types::Type;
 mod generator;
 #[path = "host_builtins.rs"]
 pub mod host_builtins;
+#[path = "http_client.rs"]
+pub mod http_client;
+#[path = "regex_host.rs"]
+pub mod regex_host;
+#[path = "time_host.rs"]
+pub mod time_host;
 pub use generator::{
     generator_yield, without_generator_drop_close, GeneratorHooks, GeneratorValue,
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
+pub use http_client::HttpResponseValue;
+#[cfg(any(test, feature = "test-support"))]
+pub use http_client::HttpSnapshot;
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
-type HttpResponseHead = (usize, i32, String, HttpHeaders, HttpBodyFraming);
 type HttpRequestParts = (String, String, HttpHeaders, Vec<u8>);
 
 pub const DIRECT_RUNTIME_TYPE_FIELD: &str = "\0aura:runtime-type";
@@ -1166,6 +1174,17 @@ impl VariantPayloads {
         }
     }
 
+    /// Payload `index` of a variant that keeps its payloads as values or
+    /// in a layout. A `json.Value` in a tape gives `None`: its payload is
+    /// read through the tape, and this path links none of that code.
+    pub fn stored(&self, index: usize) -> Option<Cow<'_, Value>> {
+        match self {
+            Self::Values(payloads) => payloads.get(index).map(Cow::Borrowed),
+            Self::Typed(typed) => typed.get(index),
+            Self::Json(_) => None,
+        }
+    }
+
     /// Payload `index` where it lies: a payload kept as a value or in a
     /// box of its own. A scalar kept in a layout's block has no `Value` to
     /// borrow and gives `None`.
@@ -1901,7 +1920,7 @@ impl ArrayValue {
             ))
         }));
         Ok(Value::Vec(VecValue {
-            element_type: SharedType::from(Type::named("int64")),
+            element_type: SharedType::named("int64"),
             elements: elements.into(),
             str_view: Default::default(),
         }))
@@ -4317,19 +4336,6 @@ pub struct HttpExchangeValue {
     inner: Arc<HttpExchangeState>,
 }
 
-/// An HTTP response. Its parts live behind one pointer, since a response is
-/// rare and every [`Value`] is as large as its largest variant.
-#[derive(Clone, Debug, PartialEq)]
-pub struct HttpResponseValue(Box<HttpResponseParts>);
-
-#[derive(Clone, Debug, PartialEq)]
-pub struct HttpResponseParts {
-    status: i32,
-    reason: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-}
-
 #[derive(Clone)]
 pub struct WebSocketListenerValue {
     inner: Arc<WebSocketListenerState>,
@@ -4482,6 +4488,8 @@ struct FileReadBuffer {
     /// `FILE_READ_BUFFER_MAX_BYTES`, because each fill of a file read from
     /// start to end is one trip to the blocking pool.
     fill_bytes: usize,
+    /// Where a fill on the calling thread gets the file's bytes.
+    fill_source: FillSource,
 }
 
 /// The buffer size above which an emptied read buffer gives its memory
@@ -4612,18 +4620,9 @@ impl FileReadBuffer {
     /// Reads once from `file` into the buffer and returns how many bytes
     /// came. Zero means the end of the file.
     fn fill(&mut self, file: &mut StdFile) -> io::Result<usize> {
-        if self.start > 0 {
-            self.bytes.copy_within(self.start..self.end, 0);
-            self.end -= self.start;
-            self.valid_until = self.valid_until.saturating_sub(self.start);
-            self.start = 0;
-        }
         let fill = self.fill_bytes.max(FILE_READ_BUFFER_BYTES);
         self.fill_bytes = (fill * 2).min(FILE_READ_BUFFER_MAX_BYTES);
-        let room = self.end + fill;
-        if self.bytes.len() < room {
-            self.bytes.resize(room, 0);
-        }
+        let room = self.room_for(fill);
         let read = loop {
             match file.read(&mut self.bytes[self.end..room]) {
                 Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
@@ -4633,6 +4632,149 @@ impl FileReadBuffer {
         self.end += *read.as_ref().unwrap_or(&0);
         read
     }
+
+    /// Moves the unread bytes to the front and makes room for `fill` more
+    /// after them. Returns where that room ends.
+    fn room_for(&mut self, fill: usize) -> usize {
+        if self.start > 0 {
+            self.bytes.copy_within(self.start..self.end, 0);
+            self.end -= self.start;
+            self.valid_until = self.valid_until.saturating_sub(self.start);
+            self.start = 0;
+        }
+        let room = self.end + fill;
+        if self.bytes.len() < room {
+            self.bytes.resize(room, 0);
+        }
+        room
+    }
+
+    /// Reads into the buffer the bytes the host has in memory, on the
+    /// calling thread, and returns how many came. Zero means the end of the
+    /// file. `None` means the host would have to wait for them, or cannot
+    /// say, so the read belongs on the blocking pool.
+    ///
+    /// A file that is read from start to end is in the host's page cache
+    /// after its first read, so most fills take this path. The bytes then
+    /// stay in the cache of the processor that uses them, and the task
+    /// never parks.
+    fn fill_cached(&mut self, file: &StdFile) -> Option<io::Result<usize>> {
+        if self.fill_source == FillSource::Pool {
+            return None;
+        }
+        let room = self.room_for(FILE_READ_BUFFER_BYTES);
+        let buffer = &mut self.bytes[self.end..room];
+        let read = match self.fill_source {
+            FillSource::Memory => read_retrying(file, buffer),
+            _ => match read_cached(file, buffer) {
+                CachedRead::Read(read) => Ok(read),
+                CachedRead::Waits => return None,
+                // A file system that keeps its files in memory has nothing
+                // to wait for, so a plain read does the same.
+                CachedRead::Unsupported if file_is_in_memory(file) => {
+                    self.fill_source = FillSource::Memory;
+                    read_retrying(file, buffer)
+                }
+                CachedRead::Unsupported | CachedRead::Refused => {
+                    self.fill_source = FillSource::Pool;
+                    return None;
+                }
+            },
+        };
+        self.end += *read.as_ref().unwrap_or(&0);
+        Some(read)
+    }
+}
+
+/// Where a fill on the calling thread gets a file's bytes.
+#[derive(Clone, Copy, Debug, Default, Eq, PartialEq)]
+enum FillSource {
+    /// The host's page cache, by a read that does not wait.
+    #[default]
+    Cache,
+    /// A file system that keeps its files in memory, by a plain read.
+    Memory,
+    /// Nowhere: every fill goes to the blocking pool.
+    Pool,
+}
+
+/// What a read that must not wait found.
+#[cfg_attr(
+    not(all(target_os = "linux", target_env = "gnu")),
+    expect(dead_code, reason = "only Linux has a read that does not wait")
+)]
+enum CachedRead {
+    /// This many bytes came. Zero is the end of the file.
+    Read(usize),
+    /// The host has to wait for the bytes.
+    Waits,
+    /// The file's file system has no read that does not wait.
+    Unsupported,
+    /// The read failed. The blocking read reports why.
+    Refused,
+}
+
+/// A plain read of `file` into `buffer`, again after an interruption.
+fn read_retrying(mut file: &StdFile, buffer: &mut [u8]) -> io::Result<usize> {
+    loop {
+        match file.read(buffer) {
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+            result => return result,
+        }
+    }
+}
+
+/// Reads from `file`'s position into `buffer` only what the host holds in
+/// memory.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn read_cached(file: &StdFile, buffer: &mut [u8]) -> CachedRead {
+    use std::os::fd::AsRawFd;
+    let vector = libc::iovec {
+        iov_base: buffer.as_mut_ptr().cast(),
+        iov_len: buffer.len(),
+    };
+    loop {
+        // SAFETY: the vector names `buffer`, which is writable for its
+        // whole length, and an offset of -1 reads at the file's position.
+        let read = unsafe { libc::preadv2(file.as_raw_fd(), &vector, 1, -1, libc::RWF_NOWAIT) };
+        if let Ok(read) = usize::try_from(read) {
+            return CachedRead::Read(read);
+        }
+        match io::Error::last_os_error().raw_os_error() {
+            Some(libc::EINTR) => {}
+            Some(libc::EAGAIN) => return CachedRead::Waits,
+            Some(libc::EOPNOTSUPP) => return CachedRead::Unsupported,
+            _ => return CachedRead::Refused,
+        }
+    }
+}
+
+/// Whether `file` lies on a file system that keeps its files in memory.
+#[cfg(all(target_os = "linux", target_env = "gnu"))]
+fn file_is_in_memory(file: &StdFile) -> bool {
+    use std::os::fd::AsRawFd;
+    // SAFETY: `statfs` is plain data, and the call fills it for an open
+    // descriptor.
+    let kind = unsafe {
+        let mut stat: libc::statfs = std::mem::zeroed();
+        if libc::fstatfs(file.as_raw_fd(), &mut stat) != 0 {
+            return false;
+        }
+        stat.f_type
+    };
+    // `ramfs` has no constant in `libc`.
+    const RAMFS_MAGIC: libc::c_long = 0x8584_58f6;
+    kind == libc::TMPFS_MAGIC || kind == RAMFS_MAGIC
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn read_cached(_file: &StdFile, _buffer: &mut [u8]) -> CachedRead {
+    CachedRead::Refused
+}
+
+#[cfg(not(all(target_os = "linux", target_env = "gnu")))]
+fn file_is_in_memory(_file: &StdFile) -> bool {
+    false
 }
 
 /// A `list[str]` of `lines`, each a `str` value.
@@ -4665,6 +4807,16 @@ impl OpenFile {
         let mut bytes = self.read.take_all();
         bytes.extend_from_slice(&rest);
         Ok(bytes)
+    }
+
+    /// Fills the read buffer with bytes the host has in memory (see
+    /// [`FileReadBuffer::fill_cached`]). A handle with unflushed writes
+    /// flushes first, which may wait, so it reads on the blocking pool.
+    fn fill_cached(&mut self, limit: usize) -> Option<io::Result<usize>> {
+        if !self.pending.is_empty() || self.read.unread().len() >= limit {
+            return None;
+        }
+        self.read.fill_cached(&self.file)
     }
 
     /// The next line of the file, read on the calling thread.
@@ -5884,7 +6036,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::UdpDatagram(_) => "net.UdpDatagram".to_string(),
             Value::HttpListener(_) => "net.HttpListener".to_string(),
             Value::HttpExchange(_) => "net.HttpExchange".to_string(),
-            Value::HttpResponse(_) => "net.HttpResponse".to_string(),
+            Value::HttpResponse(_) => "http.Stream".to_string(),
             Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
             Value::WebSocket(_) => "net.WebSocket".to_string(),
             Value::ProcessChild(_) => "process.Child".to_string(),
@@ -10168,11 +10320,7 @@ impl Value {
                         )),
                         Value::HttpListener(_) => rendered.push_str("<http-listener>"),
                         Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
-                        Value::HttpResponse(response) => rendered.push_str(&format!(
-                            "<http-response {} {} bytes>",
-                            response.status,
-                            response.body.len()
-                        )),
+                        Value::HttpResponse(_) => rendered.push_str("<http-stream>"),
                         Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
                         Value::WebSocket(_) => rendered.push_str("<websocket>"),
                         Value::ProcessChild(_) => rendered.push_str("<process-child>"),
@@ -10223,10 +10371,56 @@ impl Value {
                             rendered.push_str(enum_name);
                             rendered.push('.');
                             rendered.push_str(&variant.variant_name);
-                            if !variant.payloads.is_empty() {
+                            if let VariantPayloads::Json(node) = &variant.payloads {
+                                // Rendered from the tape. Making the payload
+                                // a list or dict value first would link the
+                                // list and dict code into every program that
+                                // prints, since `print` renders this way.
                                 rendered.push('(');
                                 actions.push(RenderAction::Static(")"));
-                                for (index, payload) in variant.payloads.iter().enumerate().rev() {
+                                match node.payload_parts() {
+                                    crate::json_tape::JsonPayloadParts::Text(text) => {
+                                        actions.push(RenderAction::Text(text));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Scalar(value) => {
+                                        actions.push(RenderAction::Owned(value));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Elements(elements) => {
+                                        actions.push(RenderAction::Static("]"));
+                                        let elements = elements.collect::<Vec<_>>();
+                                        for (index, element) in
+                                            elements.into_iter().enumerate().rev()
+                                        {
+                                            actions.push(RenderAction::Owned(element));
+                                            if index > 0 {
+                                                actions.push(RenderAction::Static(", "));
+                                            }
+                                        }
+                                        actions.push(RenderAction::Static("["));
+                                    }
+                                    crate::json_tape::JsonPayloadParts::Entries(entries) => {
+                                        actions.push(RenderAction::Static("}"));
+                                        let entries = entries.collect::<Vec<_>>();
+                                        for (index, (key, value)) in
+                                            entries.into_iter().enumerate().rev()
+                                        {
+                                            actions.push(RenderAction::Owned(value));
+                                            actions.push(RenderAction::Static(": "));
+                                            actions.push(RenderAction::Text(key));
+                                            if index > 0 {
+                                                actions.push(RenderAction::Static(", "));
+                                            }
+                                        }
+                                        actions.push(RenderAction::Static("{"));
+                                    }
+                                }
+                            } else if !variant.payloads.is_empty() {
+                                rendered.push('(');
+                                actions.push(RenderAction::Static(")"));
+                                for index in (0..variant.payloads.len()).rev() {
+                                    let Some(payload) = variant.payloads.stored(index) else {
+                                        continue;
+                                    };
                                     // A payload read out of a variant's block
                                     // renders as its value form renders it.
                                     let float32 = slots.is_some_and(|slots| {
@@ -12130,14 +12324,15 @@ fn validate_requested_read_size(label: &str, count: usize) -> io::Result<usize> 
     Ok(count)
 }
 
-fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
-    if buffer_len >= MAX_STREAM_READ_BYTES {
-        return Err(read_all_limit_error(
-            "network read_line",
-            MAX_STREAM_READ_BYTES,
-        ));
+fn validate_read_line_capacity_with_limit(buffer_len: usize, limit: usize) -> io::Result<()> {
+    if buffer_len >= limit {
+        return Err(read_all_limit_error("network read_line", limit));
     }
     Ok(())
+}
+
+fn validate_read_line_capacity(buffer_len: usize) -> io::Result<()> {
+    validate_read_line_capacity_with_limit(buffer_len, MAX_STREAM_READ_BYTES)
 }
 
 fn push_limited_bytes_with_limit(
@@ -12208,16 +12403,39 @@ fn read_tls_config_file(path: &str, label: &str) -> io::Result<Vec<u8>> {
     read_std_file_with_limit(&mut file, label, MAX_TLS_CONFIG_BYTES)
 }
 
-fn validate_http_header_name(name: &str) -> io::Result<()> {
-    fn is_tchar(byte: u8) -> bool {
-        matches!(
-            byte,
-            b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
-                | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
-        )
-    }
+fn is_http_tchar(byte: u8) -> bool {
+    matches!(
+        byte,
+        b'!' | b'#' | b'$' | b'%' | b'&' | b'\'' | b'*' | b'+' | b'-' | b'.' | b'^' | b'_'
+            | b'`' | b'|' | b'~' | b'0'..=b'9' | b'A'..=b'Z' | b'a'..=b'z'
+    )
+}
 
-    if name.is_empty() || name.bytes().any(|byte| !is_tchar(byte)) {
+fn validate_http_method(method: &str) -> io::Result<()> {
+    if method.is_empty() || method.bytes().any(|byte| !is_http_tchar(byte)) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!("invalid HTTP method `{}`", method),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_status_code(status: i32) -> io::Result<()> {
+    if !(100..=999).contains(&status) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidInput,
+            format!(
+                "HTTP status code must be between 100 and 999, found {}",
+                status
+            ),
+        ));
+    }
+    Ok(())
+}
+
+fn validate_http_header_name(name: &str) -> io::Result<()> {
+    if name.is_empty() || name.bytes().any(|byte| !is_http_tchar(byte)) {
         return Err(io::Error::new(
             io::ErrorKind::InvalidInput,
             format!("invalid HTTP header name `{}`", name),
@@ -12780,20 +12998,6 @@ fn build_tls_root_store(ca_pem: Option<Vec<u8>>) -> io::Result<RootCertStore> {
     Ok(roots)
 }
 
-fn parse_http_response(
-    status: i32,
-    reason: String,
-    headers: Vec<(String, String)>,
-    body: Vec<u8>,
-) -> HttpResponseValue {
-    HttpResponseValue(Box::new(HttpResponseParts {
-        status,
-        reason,
-        headers,
-        body,
-    }))
-}
-
 const MAX_HTTP_HEADERS: usize = 64;
 const MAX_HTTP_MESSAGE_BYTES: usize = 16 * 1024 * 1024;
 const HTTP_MESSAGE_TOO_LARGE_PREFIX: &str = "HTTP message exceeds the supported size limit";
@@ -13108,32 +13312,6 @@ fn parse_http_request_head(buffer: &[u8]) -> io::Result<Option<HttpRequestHead>>
     }
 }
 
-fn parse_http_response_head(buffer: &[u8]) -> io::Result<Option<HttpResponseHead>> {
-    let mut raw_headers = [httparse::EMPTY_HEADER; MAX_HTTP_HEADERS];
-    let mut response = HttpParseResponse::new(&mut raw_headers);
-    match response.parse(buffer).map_err(|error| {
-        io::Error::new(
-            io::ErrorKind::InvalidData,
-            format!("invalid HTTP response: {}", error),
-        )
-    })? {
-        HttpParseStatus::Complete(header_len) => {
-            let status = i32::from(response.code.ok_or(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "HTTP response missing status code",
-            ))?);
-            let reason = response
-                .reason
-                .unwrap_or(http_reason_phrase(status))
-                .to_string();
-            let headers = parse_http_headers(response.headers)?;
-            let framing = parse_http_body_framing(&headers, HttpBodyFraming::UntilClose)?;
-            Ok(Some((header_len, status, reason, headers, framing)))
-        }
-        HttpParseStatus::Partial => Ok(None),
-    }
-}
-
 /// Runs an HTTP/1.1 parsing or rendering step on the calling task. These
 /// steps are iterative and use a few KB of stack (`httparse` keeps at most
 /// `MAX_HTTP_HEADERS` header slices), so unlike TLS and WebSocket steps
@@ -13156,14 +13334,6 @@ fn parse_http_request_head_step(
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<Option<HttpRequestHead>> {
     run_http_step_before(|| parse_http_request_head(buffer), deadline, cancellation)
-}
-
-fn parse_http_response_head_step(
-    buffer: &[u8],
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<HttpResponseHead>> {
-    run_http_step_before(|| parse_http_response_head(buffer), deadline, cancellation)
 }
 
 fn decode_chunked_http_body_step(
@@ -13252,133 +13422,13 @@ fn read_http_request_from_stream(
     read_http_request_from_stream_with_limit(stream, deadline, cancellation, MAX_HTTP_MESSAGE_BYTES)
 }
 
-trait HttpDeadlineReader: Read {
-    fn read_http_some(
-        &mut self,
-        max_bytes: usize,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Option<Vec<u8>>>;
-}
-
-impl HttpDeadlineReader for StdTcpStream {
-    fn read_http_some(
-        &mut self,
-        max_bytes: usize,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Option<Vec<u8>>> {
-        read_some_with_deadline(self, max_bytes, deadline, cancellation)
-    }
-}
-
-#[cfg(unix)]
-impl HttpDeadlineReader for rustls::StreamOwned<ClientConnection, StdTcpStream> {
-    fn read_http_some(
-        &mut self,
-        max_bytes: usize,
-        deadline: Option<Instant>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Option<Vec<u8>>> {
-        read_some_with_fd_deadline(
-            self,
-            self.sock.as_raw_fd(),
-            max_bytes,
-            libc::POLLIN | libc::POLLOUT,
-            deadline,
-            cancellation,
-        )
-    }
-}
-
-fn read_http_response_from_stream_with_limit<R: HttpDeadlineReader>(
-    stream: &mut R,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-    message_limit: usize,
-) -> io::Result<HttpResponseValue> {
-    let mut buffer = Vec::new();
-    let (header_len, status, reason, headers, framing) = loop {
-        let parsed = parse_http_response_head_step(&buffer, deadline, cancellation)?;
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        if let Some(parsed) = parsed {
-            break parsed;
-        }
-        let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "stream closed before a complete HTTP response was received",
-            ));
-        };
-        push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
-    };
-
-    let body = match framing {
-        HttpBodyFraming::ContentLength(content_length) => {
-            if header_len.saturating_add(content_length) > message_limit {
-                return Err(http_message_too_large_error_with_limit(message_limit));
-            }
-            while buffer.len() < header_len.saturating_add(content_length) {
-                let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "stream closed before the HTTP response body was fully received",
-                    ));
-                };
-                push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
-            }
-            buffer[header_len..header_len.saturating_add(content_length)].to_vec()
-        }
-        HttpBodyFraming::Chunked => loop {
-            let decoded = decode_chunked_http_body_step(
-                &buffer,
-                header_len,
-                message_limit,
-                deadline,
-                cancellation,
-            )?;
-            check_deadline_and_cancellation(deadline, cancellation)?;
-            if let Some(body) = decoded {
-                break body;
-            }
-            let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? else {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "stream closed before the chunked HTTP response body was fully received",
-                ));
-            };
-            push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
-        },
-        HttpBodyFraming::UntilClose => {
-            while let Some(chunk) = stream.read_http_some(4096, deadline, cancellation)? {
-                push_http_chunk_with_limit(&mut buffer, &chunk, message_limit)?;
-            }
-            buffer[header_len..].to_vec()
-        }
-    };
-
-    Ok(parse_http_response(status, reason, headers, body))
-}
-
-fn read_http_response_from_stream<R: HttpDeadlineReader>(
-    stream: &mut R,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<HttpResponseValue> {
-    read_http_response_from_stream_with_limit(
-        stream,
-        deadline,
-        cancellation,
-        MAX_HTTP_MESSAGE_BYTES,
-    )
-}
-
 fn build_http_request_bytes(
     method: &str,
     url: &Url,
     body: &[u8],
     headers: Vec<(String, String)>,
 ) -> io::Result<Vec<u8>> {
+    validate_http_method(method)?;
     validate_http_headers(&headers)?;
     let mut path = if url.path().is_empty() {
         "/".to_string()
@@ -13467,6 +13517,7 @@ fn build_http_response_bytes(
     headers: Vec<(String, String)>,
     body: &[u8],
 ) -> io::Result<Vec<u8>> {
+    validate_http_status_code(status)?;
     validate_http_headers(&headers)?;
     let mut rendered =
         format!("HTTP/1.1 {} {}\r\n", status, http_reason_phrase(status)).into_bytes();
@@ -13793,19 +13844,38 @@ impl FileValue {
         )
     }
 
+    /// The next line when the read buffer holds all of it, and `None` when
+    /// the buffer needs more of the file. It never waits, so a caller may
+    /// hold the handle's box across it.
+    pub fn buffered_line(&self) -> Option<io::Result<Option<String>>> {
+        let mut file = try_lock_mutex(&self.inner.file)?;
+        let Some(open) = file.as_mut() else {
+            return Some(Err(closed_resource_error()));
+        };
+        open.read.take_line().map(|line| line.map(Some))
+    }
+
     /// The next line of the file without its LF or CRLF, or `None` at the
     /// end of the file. A line the read buffer already holds costs no trip
     /// to the blocking pool.
     pub fn read_line(&self) -> io::Result<Option<String>> {
+        if let Some(line) = self.buffered_line() {
+            return line;
+        }
+        flush_other_buffered_files(Some(&self.inner));
         if let Some(mut file) = try_lock_mutex(&self.inner.file) {
             let Some(open) = file.as_mut() else {
                 return Err(closed_resource_error());
             };
-            if let Some(line) = open.read.take_line() {
-                return line.map(Some);
+            while let Some(read) = open.fill_cached(MAX_STREAM_READ_BYTES) {
+                if read? == 0 {
+                    return open.read.take_last_line();
+                }
+                if let Some(line) = open.read.take_line() {
+                    return line.map(Some);
+                }
             }
         }
-        flush_other_buffered_files(Some(&self.inner));
         let state = self.inner.clone();
         run_blocking_io(
             move || {
@@ -13856,6 +13926,15 @@ impl FileValue {
             }
             drop(file);
             flush_other_buffered_files(Some(&self.inner));
+            if let Some(mut file) = try_lock_mutex(&self.inner.file) {
+                let cached = file
+                    .as_mut()
+                    .and_then(|open| open.fill_cached(MAX_STREAM_READ_BYTES));
+                if let Some(read) = cached {
+                    at_end = read? == 0;
+                    continue;
+                }
+            }
             let state = self.inner.clone();
             at_end = run_blocking_io(
                 move || {
@@ -16203,16 +16282,19 @@ fn tls_stream_raw_fd(stream: &TlsStreamKind) -> i32 {
     }
 }
 
+const MAX_TLS_READ_STEP_BYTES: usize = 64 * 1024;
+
 fn tls_read_step(
     stream: TlsStreamKind,
     max_bytes: usize,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<(TlsStreamKind, io::Result<Vec<u8>>)> {
+    let step_bytes = max_bytes.min(MAX_TLS_READ_STEP_BYTES);
     let (stream, result) = run_protocol_state_step(
         stream,
         move |stream| {
-            let mut bytes = vec![0u8; max_bytes];
+            let mut bytes = vec![0u8; step_bytes];
             let count = match stream {
                 TlsStreamKind::Client(stream) => stream.read(&mut bytes),
                 TlsStreamKind::Server(stream) => stream.read(&mut bytes),
@@ -16330,90 +16412,6 @@ fn write_all_tls_client_owned(
     Ok(stream)
 }
 
-fn read_http_response_tls_client_owned(
-    mut stream: rustls::StreamOwned<ClientConnection, StdTcpStream>,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<(
-    rustls::StreamOwned<ClientConnection, StdTcpStream>,
-    HttpResponseValue,
-)> {
-    let mut buffer = Vec::new();
-    let (header_len, status, reason, headers, framing) = loop {
-        let parsed = parse_http_response_head_step(&buffer, deadline, cancellation)?;
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        if let Some(parsed) = parsed {
-            break parsed;
-        }
-        let (returned, chunk) = tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
-        stream = returned;
-        let Some(chunk) = chunk else {
-            return Err(io::Error::new(
-                io::ErrorKind::UnexpectedEof,
-                "stream closed before a complete HTTP response was received",
-            ));
-        };
-        push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
-    };
-
-    let body = match framing {
-        HttpBodyFraming::ContentLength(content_length) => {
-            if header_len.saturating_add(content_length) > MAX_HTTP_MESSAGE_BYTES {
-                return Err(http_message_too_large_error_with_limit(
-                    MAX_HTTP_MESSAGE_BYTES,
-                ));
-            }
-            while buffer.len() < header_len.saturating_add(content_length) {
-                let (returned, chunk) =
-                    tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
-                stream = returned;
-                let Some(chunk) = chunk else {
-                    return Err(io::Error::new(
-                        io::ErrorKind::UnexpectedEof,
-                        "stream closed before the HTTP response body was fully received",
-                    ));
-                };
-                push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
-            }
-            buffer[header_len..header_len.saturating_add(content_length)].to_vec()
-        }
-        HttpBodyFraming::Chunked => loop {
-            let decoded = decode_chunked_http_body_step(
-                &buffer,
-                header_len,
-                MAX_HTTP_MESSAGE_BYTES,
-                deadline,
-                cancellation,
-            )?;
-            check_deadline_and_cancellation(deadline, cancellation)?;
-            if let Some(body) = decoded {
-                break body;
-            }
-            let (returned, chunk) =
-                tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
-            stream = returned;
-            let Some(chunk) = chunk else {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "stream closed before the chunked HTTP response body was fully received",
-                ));
-            };
-            push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
-        },
-        HttpBodyFraming::UntilClose => loop {
-            let (returned, chunk) =
-                tls_client_read_some_owned(stream, 4096, deadline, cancellation)?;
-            stream = returned;
-            let Some(chunk) = chunk else {
-                break buffer[header_len..].to_vec();
-            };
-            push_http_chunk_with_limit(&mut buffer, &chunk, MAX_HTTP_MESSAGE_BYTES)?;
-        },
-    };
-
-    Ok((stream, parse_http_response(status, reason, headers, body)))
-}
-
 impl TlsStreamValue {
     fn take_stream_for_step(&self) -> io::Result<TlsStreamKind> {
         if self.inner.closed.load(Ordering::Acquire) {
@@ -16501,11 +16499,21 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Option<String>> {
+        self.read_line_with_limit(MAX_STREAM_READ_BYTES, timeout, cancellation)
+    }
+
+    fn read_line_with_limit(
+        &self,
+        limit: usize,
+        timeout: Option<StdDuration>,
+        cancellation: Option<&CancellationContext>,
+    ) -> io::Result<Option<String>> {
         let deadline = deadline_from_timeout(timeout)?;
         let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
         let mut buffer = Vec::new();
         loop {
             check_deadline_and_cancellation(deadline, cancellation)?;
+            validate_read_line_capacity_with_limit(buffer.len(), limit)?;
             let stream = self.take_stream_for_step()?;
             let (stream, result) = tls_read_step(stream, 1, deadline, cancellation)?;
             let fd = tls_stream_raw_fd(&stream);
@@ -16542,9 +16550,10 @@ impl TlsStreamValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Vec<u8>> {
+        validate_requested_read_size("read_exact(...)", count)?;
         let deadline = deadline_from_timeout(timeout)?;
         let _operation = acquire_protocol_operation(&self.inner.busy, deadline, cancellation)?;
-        let mut output = Vec::with_capacity(count);
+        let mut output = Vec::with_capacity(count.min(MAX_TLS_READ_STEP_BYTES));
         while output.len() < count {
             check_deadline_and_cancellation(deadline, cancellation)?;
             let stream = self.take_stream_for_step()?;
@@ -16814,187 +16823,6 @@ impl HttpExchangeValue {
             write_http_response_to_stream(&mut raw_stream, status, headers, body, None, None);
         stream.close();
         result
-    }
-}
-
-impl std::ops::Deref for HttpResponseValue {
-    type Target = HttpResponseParts;
-
-    fn deref(&self) -> &HttpResponseParts {
-        &self.0
-    }
-}
-
-impl std::ops::DerefMut for HttpResponseValue {
-    fn deref_mut(&mut self) -> &mut HttpResponseParts {
-        &mut self.0
-    }
-}
-
-impl HttpResponseValue {
-    pub fn request_text(
-        method: &str,
-        url: &str,
-        body: &str,
-        headers: Vec<(String, String)>,
-        timeout: Option<StdDuration>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Self> {
-        Self::request_bytes(method, url, body.as_bytes(), headers, timeout, cancellation)
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    pub fn request_text_with_ca(
-        method: &str,
-        url: &str,
-        body: &str,
-        headers: Vec<(String, String)>,
-        timeout: Option<StdDuration>,
-        cancellation: Option<&CancellationContext>,
-        ca_pem_path: &str,
-    ) -> io::Result<Self> {
-        Self::request_bytes_with_ca(
-            method,
-            url,
-            body.as_bytes(),
-            headers,
-            timeout,
-            cancellation,
-            Some(ca_pem_path),
-        )
-    }
-
-    pub fn request_bytes(
-        method: &str,
-        url: &str,
-        body: &[u8],
-        headers: Vec<(String, String)>,
-        timeout: Option<StdDuration>,
-        cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Self> {
-        Self::request_bytes_with_ca(method, url, body, headers, timeout, cancellation, None)
-    }
-
-    fn request_bytes_with_ca(
-        method: &str,
-        url: &str,
-        body: &[u8],
-        headers: Vec<(String, String)>,
-        timeout: Option<StdDuration>,
-        cancellation: Option<&CancellationContext>,
-        ca_pem_path: Option<&str>,
-    ) -> io::Result<Self> {
-        let deadline = deadline_from_timeout(timeout)?;
-        let method = method.to_string();
-        let url_text = url.to_string();
-        let (url, host, request) = run_http_step_before(
-            || {
-                let url = Url::parse(&url_text).map_err(|error| {
-                    io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!("invalid URL `{url_text}`: {error}"),
-                    )
-                })?;
-                if !matches!(url.scheme(), "http" | "https") {
-                    return Err(io::Error::new(
-                        io::ErrorKind::InvalidInput,
-                        format!(
-                        "Aura HTTP requests require `http://` or `https://` URLs, found `{url}`"
-                    ),
-                    ));
-                }
-                let host = match url.host() {
-                    Some(url::Host::Ipv6(host)) => {
-                        format!("[{}]:{}", host, url.port_or_known_default().unwrap_or(80))
-                    }
-                    Some(url::Host::Ipv4(host)) => {
-                        format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
-                    }
-                    Some(url::Host::Domain(host)) => {
-                        format!("{}:{}", host, url.port_or_known_default().unwrap_or(80))
-                    }
-                    None => {
-                        return Err(io::Error::new(
-                            io::ErrorKind::InvalidInput,
-                            format!("invalid URL `{url}`: missing host"),
-                        ))
-                    }
-                };
-                let request = build_http_request_bytes(&method, &url, body, headers)?;
-                Ok((url, host, request))
-            },
-            deadline,
-            cancellation,
-        )?;
-        if url.scheme() == "http" {
-            let stream = TcpStreamValue::connect_before(&host, deadline, cancellation)?;
-            let mut guard = lock_mutex(&stream.inner.stream);
-            let Some(mut raw_stream) = guard.take() else {
-                return Err(closed_resource_error());
-            };
-            drop(guard);
-            let response = (|| {
-                write_all_with_deadline(&mut raw_stream, &request, deadline, cancellation)?;
-                read_http_response_from_stream(&mut raw_stream, deadline, cancellation)
-            })();
-            *lock_mutex(&stream.inner.stream) = Some(raw_stream);
-            stream.close();
-            return response;
-        }
-
-        #[cfg(unix)]
-        {
-            let server_name = url.host_str().ok_or_else(|| {
-                io::Error::new(io::ErrorKind::InvalidInput, "HTTPS URL is missing a host")
-            })?;
-            let stream = TlsStreamValue::connect_before(
-                &host,
-                server_name,
-                ca_pem_path,
-                deadline,
-                cancellation,
-            )?;
-            let mut guard = lock_mutex(&stream.inner.stream);
-            let Some(TlsStreamKind::Client(raw_stream)) = guard.take() else {
-                return Err(closed_resource_error());
-            };
-            drop(guard);
-            let raw_stream =
-                write_all_tls_client_owned(raw_stream, &request, deadline, cancellation)?;
-            let (raw_stream, response) =
-                read_http_response_tls_client_owned(raw_stream, deadline, cancellation)?;
-            stream.restore_stream_after_step(TlsStreamKind::Client(raw_stream));
-            stream.close();
-            Ok(response)
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = (ca_pem_path, deadline);
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "HTTPS requests are supported on Aura's Unix preview platforms",
-            ))
-        }
-    }
-
-    pub fn status(&self) -> i32 {
-        self.status
-    }
-
-    pub fn reason(&self) -> String {
-        self.reason.clone()
-    }
-
-    pub fn headers(&self) -> Vec<(String, String)> {
-        self.headers.clone()
-    }
-
-    pub fn text(&self) -> io::Result<String> {
-        io_decode_utf8(&self.body)
-    }
-
-    pub fn bytes(&self) -> Vec<u8> {
-        self.body.clone()
     }
 }
 
@@ -17887,7 +17715,9 @@ pub fn optional_kept(
     let found = KEPT_OPTIONALS.with_borrow(|unions| {
         unions
             .iter()
-            .find(|(known, ..)| *known == key)
+            // A key is a literal, so the same key is most often the same
+            // address.
+            .find(|(known, ..)| std::ptr::eq(*known, key) || *known == key)
             .map(|(_, union_type, present, absent)| (Arc::clone(union_type), *present, *absent))
     });
     let (union_type, present, absent) = found.unwrap_or_else(|| {
@@ -19165,7 +18995,7 @@ impl json_codec::JsonTree for RuntimeJson {
             4,
             "Array",
             Value::Vec(VecValue {
-                element_type: SharedType::from(Type::named("json.Value")),
+                element_type: SharedType::named("json.Value"),
                 elements: elements.into(),
                 str_view: Default::default(),
             }),
@@ -20464,7 +20294,7 @@ pub fn wait_all_ready(values: Vec<Value>) -> Value {
         enum_name: RuntimeName::from_static("WaitAll"),
         variant_name: RuntimeName::from_static("Ready"),
         payloads: (vec![Value::Vec(VecValue {
-            element_type: SharedType::from(Type::named("Unknown")),
+            element_type: SharedType::named("Unknown"),
             elements: values.into(),
             str_view: Default::default(),
         })])

@@ -1,0 +1,199 @@
+# Streamed HTTP: a client that reads long replies as they arrive.
+#
+# A server task speaks HTTP/1.1 by hand over loopback TCP and keeps its
+# connection open between requests. The client asks for N log lines sent as a
+# chunked body and reads them in batches, asks for N/4 server-sent events and
+# reads them one at a time as it would a model reply, then sends N/100 small
+# requests. Everything goes over one kept connection, which the last reply
+# confirms by reporting how many connections the server accepted.
+import http
+import io
+import net
+import sys
+
+
+class Rng:
+    state: int64
+
+    def next(mut self) -> int64:
+        self.state = self.state * 48271 % 2147483647
+        return self.state
+
+
+def hex(value: int64) -> str:
+    digits = ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "a", "b", "c", "d", "e", "f"]
+    if value == 0:
+        return "0"
+    mut rest = value
+    mut text = ""
+    while rest > 0:
+        text = digits[rest % 16] + text
+        rest = rest // 16
+    return text
+
+
+def send_chunk(conn: mut net.TcpStream, piece: str) -> Result[None, io.Error]:
+    try conn.write_all(hex(piece.byte_len()) + "\r\n" + piece + "\r\n")
+    return Result.Ok(None)
+
+
+def send_lines(conn: mut net.TcpStream, count: int64) -> Result[None, io.Error]:
+    words = ["connect", "read", "write", "close", "retry", "timeout", "accept", "flush"]
+    mut rng = Rng(state=41)
+    try conn.write_all("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\n\r\n")
+    mut piece = ""
+    for i in range(count):
+        view word = words[rng.next() % 8]
+        piece += f"{i} {word} worker-{rng.next() % 64} {rng.next() % 100000}\n"
+        if i % 64 == 63:
+            try send_chunk(conn, piece)
+            piece = ""
+    if piece != "":
+        try send_chunk(conn, piece)
+    try conn.write_all("0\r\n\r\n")
+    return Result.Ok(None)
+
+
+def send_events(conn: mut net.TcpStream, count: int64) -> Result[None, io.Error]:
+    mut rng = Rng(state=43)
+    try conn.write_all("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nTransfer-Encoding: chunked\r\n\r\n")
+    for i in range(count):
+        try send_chunk(conn, f"event: delta\nid: {i}\ndata: {{\"index\":{i},\"text\":\"tok-{rng.next() % 5000}\"}}\n\n")
+    try send_chunk(conn, "event: done\ndata: [DONE]\n\n")
+    try conn.write_all("0\r\n\r\n")
+    return Result.Ok(None)
+
+
+def send_text(conn: mut net.TcpStream, body: str, close: bool) -> Result[None, io.Error]:
+    mut head = f"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: {body.byte_len()}\r\n"
+    if close:
+        head += "Connection: close\r\n"
+    try conn.write_all(head + "\r\n" + body)
+    return Result.Ok(None)
+
+
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
+    mut accepted = 0
+    with listener = try net.listen("127.0.0.1:0"):
+        _ = addresses.put(try listener.local_addr())
+        while true:
+            with conn = try listener.accept():
+                accepted += 1
+                while true:
+                    mut target = ""
+                    match own try conn.read_line():
+                        case str as start:
+                            target = start.split(" ")[1].clone()
+                        case None:
+                            break
+                    while true:
+                        match own try conn.read_line():
+                            case str as header:
+                                if header == "" or header == "\r":
+                                    break
+                            case None:
+                                break
+                    if target == "/quit":
+                        try send_text(conn, f"{accepted}", true)
+                        return Result.Ok(None)
+                    match target.strip_prefix("/lines/"):
+                        case str as count:
+                            try send_lines(conn, try_int(count))
+                            continue
+                        case None:
+                            pass
+                    match target.strip_prefix("/events/"):
+                        case str as count:
+                            try send_events(conn, try_int(count))
+                            continue
+                        case None:
+                            pass
+                    try send_text(conn, "item " + target, false)
+    return Result.Ok(None)
+
+
+def try_int(text: str) -> int64:
+    match parse_int64(text):
+        case Result.Ok(value):
+            return value
+        case Result.Err(_):
+            return 0
+
+
+def receive_address(addresses: Queue[str]) -> Result[str, io.Error]:
+    match own addresses.get(timeout=5s):
+        case QueueReceive.Item(address):
+            return Result.Ok(address)
+        case _:
+            return Result.Err(io.Error.TimedOut)
+
+
+def run(n: int64) -> Result[str, io.Error]:
+    event_count = n // 4
+    request_count = n // 100
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses)
+        base = "http://" + try receive_address(addresses)
+
+        mut lines = 0
+        mut value_sum = 0
+        mut retries = 0
+        with reply = try http.get(base + f"/lines/{n}"):
+            while true:
+                batch = try reply.read_lines(1024)
+                if batch.is_empty():
+                    break
+                for line in batch:
+                    fields = line.split(" ")
+                    lines += 1
+                    value_sum += try_int(fields[3])
+                    if fields[1] == "retry":
+                        retries += 1
+
+        mut events = 0
+        mut event_bytes = 0
+        mut last_id = ""
+        with stream = try http.get(base + f"/events/{event_count}"):
+            while true:
+                event = try stream.read_event()
+                if event is None:
+                    break
+                if event.event == "done":
+                    last_id = event.id.clone()
+                    continue
+                events += 1
+                event_bytes += event.data.byte_len()
+
+        mut body_bytes = 0
+        for i in range(request_count):
+            with item = try http.get(base + f"/item/{i}"):
+                body_bytes += (try item.text()).byte_len()
+
+        mut connections = ""
+        with quit = try http.get(base + "/quit"):
+            connections = try quit.text()
+
+        match own server.result():
+            case TaskResult.Ready(result):
+                try result
+                return Result.Ok(
+                    f"http_stream lines={lines} value_sum={value_sum} retries={retries} events={events} event_bytes={event_bytes} last_id={last_id} requests={request_count} body_bytes={body_bytes} connections={connections}"
+                )
+            case _:
+                return Result.Err(io.Error.Other(message="server task failed"))
+
+
+def main() -> int32:
+    match parse_int64(sys.args()[0]):
+        case Result.Ok(n):
+            match run(n):
+                case Result.Ok(line):
+                    print(line)
+                    return 0
+                case Result.Err(error):
+                    print(error)
+                    return 1
+        case Result.Err(_):
+            print("usage: http_stream <lines>")
+            return 2

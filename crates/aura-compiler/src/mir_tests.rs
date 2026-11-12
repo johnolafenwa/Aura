@@ -9843,14 +9843,6 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         Some(Type::Unit)
     );
     assert_eq!(
-        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "reason"),
-        Some(Type::named("str"))
-    );
-    assert_eq!(
-        member_result_type(&lowerer, &Type::named("net.HttpResponse"), "close"),
-        Some(Type::Unit)
-    );
-    assert_eq!(
         member_result_type(&lowerer, &Type::named("net.WebSocketListener"), "close"),
         Some(Type::Unit)
     );
@@ -13281,8 +13273,10 @@ fn batch1_loan_ancestor_walks_stop_on_cycles() {
 #[test]
 fn batch1_loan_path_budgets_reject_oversized_expansions() {
     let function = batch1_test_function("budget");
-    let mut state = ValidatedLoanState::default();
-    state.active_path_bytes = MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES;
+    let state = ValidatedLoanState {
+        active_path_bytes: MAX_VALIDATED_EXPANDED_LOAN_PATH_BYTES,
+        ..Default::default()
+    };
     let error = validate_active_loan_path_budget(&function, "loan", &state, 1)
         .expect_err("a full path budget admits no new loan");
     assert!(
@@ -15868,4 +15862,146 @@ def main() -> int32:
     assert_eq!(encoded["foreign_link"]["libraries"][0], "sqlite3");
     let decoded: MirModule = serde_json::from_value(encoded).expect("MIR reads back");
     assert_eq!(decoded.foreign_link, linked.foreign_link);
+}
+
+/// `if call() is None:` once took a constant branch: only a named place was
+/// tested by its tag, and any other operand was treated as never `None`.
+const NONE_TEST_ON_CALL_RESULTS: &str = r#"def find_or_none(text: str, wanted: str) -> int64 | None:
+    return text.find(wanted)
+
+def absent(text: str) -> str:
+    if text.find("zzz") is None:
+        return "absent"
+    return "present"
+
+def present(text: str) -> str:
+    if find_or_none(text, "zzz") is not None:
+        return "present"
+    else:
+        return "absent"
+
+def both(text: str) -> str:
+    if text.find("a") is not None and not (text.find("zzz") is None):
+        return "both"
+    return "not both"
+
+def count_missing(texts: list[str]) -> int64:
+    mut missing = 0
+    mut index = 0
+    while index < texts.len() and texts[index].find("zzz") is None:
+        missing += 1
+        index += 1
+    return missing
+
+def main() -> int32:
+    print(absent("abc"))
+    print(absent("zzz"))
+    print(present("abc"))
+    print(present("a zzz"))
+    print(both("abc"))
+    print(both("a zzz"))
+    print(count_missing(["a", "b", "zzz", "c"]))
+    print("yes" if "abc".find("zzz") is None else "no")
+    return 0
+"#;
+
+#[test]
+fn a_none_test_on_a_call_result_in_a_condition_reads_the_result() {
+    let output = crate::run_source(NONE_TEST_ON_CALL_RESULTS).expect("the None tests should run");
+    assert_eq!(
+        output.stdout,
+        "absent\npresent\nabsent\npresent\nnot both\nboth\n2\nyes\n"
+    );
+    let module =
+        crate::lower_source_to_mir(NONE_TEST_ON_CALL_RESULTS).expect("the None tests should lower");
+    let absent = module
+        .functions
+        .iter()
+        .find(|function| function.name == "absent")
+        .expect("absent is lowered");
+    assert!(
+        absent.blocks.iter().all(|block| !matches!(
+            block.terminator,
+            Terminator::Branch {
+                condition: Operand::Bool(_),
+                ..
+            }
+        )),
+        "the branch must test the call result, not a constant"
+    );
+}
+
+#[test]
+fn a_contracted_extern_with_a_callback_gets_a_wrapper_for_each_callback() {
+    let source = r#"extern "C" def qsort(
+    base: mut ptr[int32], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None:
+    requires size == 4
+extern "C" def labs(value: int64) -> int64:
+    ensures result >= 0
+extern "C" def frexp(value: float64, exponent: mut int32) -> float64:
+    ensures exponent >= old(exponent) - 2000
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def descending(a: mut int32, b: mut int32) -> int32:
+    return b - a
+
+def main():
+    mut values: list[int32] = [3, 9, 1]
+    qsort(values, 3, 4, ascending)
+    qsort(values, 3, 4, descending)
+    qsort(values, 3, 4, compare=descending)
+    print(labs(-2))
+    mut exponent: int32 = 0
+    print(frexp(48.0, exponent))
+"#;
+    let module = lower_ffi_source(source);
+    let wrappers = module
+        .functions
+        .iter()
+        .filter(|function| function.name.contains("::__extern_contract"))
+        .map(|function| function.name.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(
+        wrappers,
+        [
+            "frexp::__extern_contract",
+            "labs::__extern_contract",
+            "qsort::__extern_contract::compare=ascending",
+            "qsort::__extern_contract::compare=descending",
+        ]
+    );
+    // Each copy names its callback in the foreign call.
+    for (wrapper, callback) in [(wrappers[2], "ascending"), (wrappers[3], "descending")] {
+        let function = module
+            .functions
+            .iter()
+            .find(|function| function.name == wrapper)
+            .expect("the wrapper exists");
+        let named = function
+            .blocks
+            .iter()
+            .flat_map(|block| &block.instructions)
+            .any(|instruction| {
+                matches!(
+                    instruction,
+                    Instruction::Assign {
+                        value: Rvalue::Call { callee: CallTarget::Extern(_), args, .. },
+                        ..
+                    } if args.iter().any(|arg| matches!(
+                        &arg.value,
+                        Operand::Function { name, .. } if name == callback
+                    ))
+                )
+            });
+        assert!(named, "{wrapper}");
+    }
+    assert_eq!(
+        crate::mir::public_function_name(wrappers[2]),
+        "qsort",
+        "a backtrace shows the declared name"
+    );
 }

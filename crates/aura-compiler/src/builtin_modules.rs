@@ -1200,7 +1200,6 @@ fn net_namespace() -> ModuleNamespace {
     let udp_datagram = class_info("net", "UdpDatagram");
     let http_listener = class_info("net", "HttpListener");
     let http_exchange = class_info("net", "HttpExchange");
-    let http_response = class_info("net", "HttpResponse");
     let websocket_listener = class_info("net", "WebSocketListener");
     let websocket = class_info("net", "WebSocket");
     let unix_listener = class_info("net", "UnixListener");
@@ -1214,7 +1213,6 @@ fn net_namespace() -> ModuleNamespace {
     classes.insert(udp_datagram.decl.name.clone(), udp_datagram.clone());
     classes.insert(http_listener.decl.name.clone(), http_listener.clone());
     classes.insert(http_exchange.decl.name.clone(), http_exchange.clone());
-    classes.insert(http_response.decl.name.clone(), http_response.clone());
     classes.insert(
         websocket_listener.decl.name.clone(),
         websocket_listener.clone(),
@@ -1320,52 +1318,6 @@ fn net_namespace() -> ModuleNamespace {
             "http_listen",
             vec![value_param("address", type_ref("str", Vec::new()))],
             result_type_ref(type_ref("net.HttpListener", Vec::new())),
-        ),
-        function_info(
-            "net",
-            "http_request_text",
-            vec![
-                value_param("method", type_ref("str", Vec::new())),
-                value_param("url", type_ref("str", Vec::new())),
-                value_param("body", type_ref("str", Vec::new())),
-                value_param("headers", string_map_type_ref()),
-            ],
-            result_type_ref(type_ref("net.HttpResponse", Vec::new())),
-        ),
-        function_info(
-            "net",
-            "http_request_text_timeout",
-            vec![
-                value_param("method", type_ref("str", Vec::new())),
-                value_param("url", type_ref("str", Vec::new())),
-                value_param("body", type_ref("str", Vec::new())),
-                value_param("headers", string_map_type_ref()),
-                value_param("timeout", type_ref("Duration", Vec::new())),
-            ],
-            result_type_ref(type_ref("net.HttpResponse", Vec::new())),
-        ),
-        function_info(
-            "net",
-            "http_request_bytes",
-            vec![
-                value_param("method", type_ref("str", Vec::new())),
-                value_param("url", type_ref("str", Vec::new())),
-                value_param("bytes", bytes_type_ref()),
-                value_param("headers", string_map_type_ref()),
-            ],
-            result_type_ref(type_ref("net.HttpResponse", Vec::new())),
-        ),
-        function_info(
-            "net",
-            "http_request_bytes_timeout",
-            vec![
-                value_param("method", type_ref("str", Vec::new())),
-                value_param("url", type_ref("str", Vec::new())),
-                value_param("bytes", bytes_type_ref()),
-                value_param("headers", string_map_type_ref()),
-                value_param("timeout", type_ref("Duration", Vec::new())),
-            ],
-            result_type_ref(type_ref("net.HttpResponse", Vec::new())),
         ),
         function_info(
             "net",
@@ -1690,6 +1642,257 @@ fn iter_namespace() -> ModuleNamespace {
     namespace.classes = BTreeMap::from([("GeneratorHandle".to_string(), class)]);
     namespace.all_classes = namespace.classes.clone();
     namespace
+}
+
+/// The host part of `regex`: the searches themselves, keyed by the number
+/// the runtime gave the pattern. `Regex`, `Match`, `Captures`, and `compile`
+/// are Aura source in `std/regex.au`.
+fn regex_namespace() -> ModuleNamespace {
+    let text = || type_ref("str", Vec::new());
+    let int64 = || type_ref("int64", Vec::new());
+    let list_of = |item: TypeRef| type_ref("list", vec![item]);
+    let pair =
+        |left: TypeRef, right: TypeRef| TypeRef::tuple(vec![left, right], false, builtin_span());
+    let search = |name: &str, result: TypeRef| {
+        function_info(
+            "regex",
+            name,
+            vec![
+                value_param("pattern", int64()),
+                borrow_param("text", text()),
+            ],
+            result,
+        )
+    };
+    let substitute = |name: &str| {
+        function_info(
+            "regex",
+            name,
+            vec![
+                value_param("pattern", int64()),
+                borrow_param("text", text()),
+                borrow_param("replacement", text()),
+            ],
+            text(),
+        )
+    };
+    function_only_namespace(
+        "regex",
+        vec![
+            function_info(
+                "regex",
+                "__aura_compile",
+                vec![value_param("pattern", text())],
+                pair(int64(), text()),
+            ),
+            function_info(
+                "regex",
+                "__aura_pattern",
+                vec![value_param("pattern", int64())],
+                text(),
+            ),
+            function_info(
+                "regex",
+                "__aura_escape",
+                vec![value_param("text", text())],
+                text(),
+            ),
+            search("__aura_is_match", type_ref("bool", Vec::new())),
+            search("__aura_count", int64()),
+            search(
+                "__aura_find",
+                optional_type_ref(TypeRef::tuple(
+                    vec![text(), int64(), int64()],
+                    false,
+                    builtin_span(),
+                )),
+            ),
+            search("__aura_matches", list_of(int64())),
+            search("__aura_find_all", list_of(text())),
+            search(
+                "__aura_captures",
+                pair(list_of(text()), list_of(type_ref("bool", Vec::new()))),
+            ),
+            search("__aura_group_index", int64()),
+            search("__aura_split", list_of(text())),
+            substitute("__aura_replace"),
+            substitute("__aura_replace_all"),
+        ],
+    )
+}
+
+/// The host part of `time`: the clocks, the system time zone, and date and
+/// time text. `DateTime` and the calendar arithmetic are Aura source in
+/// `std/time.au`.
+fn http_namespace() -> ModuleNamespace {
+    let text = || type_ref("str", Vec::new());
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let stream = || type_ref("http.Stream", Vec::new());
+    let list_of = |item: TypeRef| type_ref("list", vec![item]);
+    let tuple = |elements: Vec<TypeRef>| TypeRef::tuple(elements, false, builtin_span());
+    let read = |name: &str, mut extra: Vec<Param>, result: TypeRef| {
+        let mut params = vec![borrow_param("stream", stream())];
+        params.append(&mut extra);
+        function_info("http", name, params, result_type_ref(result))
+    };
+    let mut namespace = function_only_namespace(
+        "http",
+        vec![
+            function_info(
+                "http",
+                "__aura_send",
+                vec![
+                    borrow_param("method", text()),
+                    borrow_param("url", text()),
+                    borrow_param("headers", string_map_type_ref()),
+                    borrow_param("text", text()),
+                    borrow_param("body", bytes_vec_type_ref()),
+                    value_param("timeout", type_ref("Duration", Vec::new())),
+                    value_param("read_timeout", type_ref("Duration", Vec::new())),
+                    value_param("max_redirects", int64()),
+                    value_param("flags", int64()),
+                    borrow_param("ca_file", text()),
+                ],
+                result_type_ref(tuple(vec![
+                    stream(),
+                    int64(),
+                    text(),
+                    list_of(text()),
+                    text(),
+                ])),
+            ),
+            read(
+                "__aura_read_chunk",
+                vec![value_param("max_bytes", int64())],
+                optional_type_ref(bytes_vec_type_ref()),
+            ),
+            read("__aura_read_line", Vec::new(), optional_type_ref(text())),
+            read(
+                "__aura_read_lines",
+                vec![value_param("max_lines", int64())],
+                list_of(text()),
+            ),
+            read(
+                "__aura_read_event",
+                Vec::new(),
+                tuple(vec![boolean(), text(), text(), text(), int64()]),
+            ),
+            read(
+                "__aura_read_all",
+                vec![value_param("max_bytes", int64())],
+                bytes_vec_type_ref(),
+            ),
+            read(
+                "__aura_read_text",
+                vec![value_param("max_bytes", int64())],
+                text(),
+            ),
+            function_info(
+                "http",
+                "__aura_close",
+                vec![borrow_param("stream", stream())],
+                type_ref("None", Vec::new()),
+            ),
+            function_info("http", "__aura_idle_connections", Vec::new(), int64()),
+            function_info(
+                "http",
+                "__aura_close_idle",
+                Vec::new(),
+                type_ref("None", Vec::new()),
+            ),
+        ],
+    );
+    // The body of a response: a connection the runtime reads in pieces.
+    // `std/http.au` keeps one in each `http.Response`.
+    let body = class_info("http", "Stream");
+    namespace
+        .classes
+        .insert(body.decl.name.clone(), body.clone());
+    namespace.all_classes.insert(body.decl.name.clone(), body);
+    namespace
+}
+
+fn time_namespace() -> ModuleNamespace {
+    let text = || type_ref("str", Vec::new());
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let duration = || type_ref("Duration", Vec::new());
+    let tuple = |elements: Vec<TypeRef>| TypeRef::tuple(elements, false, builtin_span());
+    let instant = || {
+        vec![
+            value_param("seconds", int64()),
+            value_param("nanos", int64()),
+            value_param("offset", int64()),
+        ]
+    };
+    function_only_namespace(
+        "time",
+        vec![
+            function_info(
+                "time",
+                "__aura_now",
+                Vec::new(),
+                tuple(vec![int64(), int64()]),
+            ),
+            function_info("time", "__aura_monotonic", Vec::new(), duration()),
+            function_info(
+                "time",
+                "__aura_local_offset_minutes",
+                vec![value_param("seconds", int64())],
+                int64(),
+            ),
+            function_info(
+                "time",
+                "__aura_duration_seconds",
+                vec![value_param("amount", duration())],
+                int64(),
+            ),
+            function_info(
+                "time",
+                "__aura_duration_nanos",
+                vec![value_param("amount", duration())],
+                int64(),
+            ),
+            function_info(
+                "time",
+                "__aura_duration",
+                vec![
+                    value_param("seconds", int64()),
+                    value_param("nanos", int64()),
+                ],
+                duration(),
+            ),
+            function_info("time", "__aura_rfc3339", instant(), text()),
+            function_info(
+                "time",
+                "__aura_format",
+                {
+                    let mut params = instant();
+                    params.push(value_param("pattern", text()));
+                    params
+                },
+                text(),
+            ),
+            function_info(
+                "time",
+                "__aura_parse_rfc3339",
+                vec![value_param("text", text())],
+                boolean(),
+            ),
+            function_info(
+                "time",
+                "__aura_parse",
+                vec![value_param("text", text()), value_param("pattern", text())],
+                boolean(),
+            ),
+            function_info("time", "__aura_failed", Vec::new(), boolean()),
+            function_info("time", "__aura_error", Vec::new(), text()),
+            function_info("time", "__aura_parsed_seconds", Vec::new(), int64()),
+            function_info("time", "__aura_parsed_nanos", Vec::new(), int64()),
+            function_info("time", "__aura_parsed_offset", Vec::new(), int64()),
+        ],
+    )
 }
 
 fn control_namespace() -> ModuleNamespace {
@@ -2487,6 +2690,9 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "math" => Some(math_namespace()),
         "bytes" => Some(bytes_namespace()),
         "gzip" => Some(gzip_namespace()),
+        "regex" => Some(regex_namespace()),
+        "http" => Some(http_namespace()),
+        "time" => Some(time_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2499,8 +2705,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "bytes", "gzip", "json", "iter", "toml", "metrics", "log", "trace",
-    "random",
+    "sys", "path", "math", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml",
+    "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2624,6 +2830,9 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "math"
             | "bytes"
             | "gzip"
+            | "http"
+            | "regex"
+            | "time"
             | "json"
             | "iter"
             | "prelude"
@@ -2644,7 +2853,7 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "bytes", "gzip",
-        "json", "iter", "prelude", "toml", "log", "metrics", "trace",
+        "regex", "time", "http", "json", "iter", "prelude", "toml", "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))
