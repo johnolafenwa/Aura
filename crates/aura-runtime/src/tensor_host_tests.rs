@@ -276,6 +276,39 @@ fn a_mistake_is_reported_by_the_call_that_made_it() {
 }
 
 #[test]
+fn float_maths_follows_ieee_and_never_stops_the_program() {
+    let wide = tensor(float32(&[1000.0, -1.0, 0.0, 4.0], &[4]), TensorDevice::Cpu);
+    let grown = array(&unary(&wide, 2).unwrap());
+    assert_eq!(grown.value_at_flat(0), Value::Float(f64::INFINITY));
+    let logs = array(&unary(&wide, 3).unwrap());
+    assert!(matches!(logs.value_at_flat(1), Value::Float(value) if value.is_nan()));
+    assert_eq!(logs.value_at_flat(2), Value::Float(f64::NEG_INFINITY));
+    let roots = array(&unary(&wide, 1).unwrap());
+    assert!(matches!(roots.value_at_flat(1), Value::Float(value) if value.is_nan()));
+    assert_eq!(roots.value_at_flat(3), Value::Float(2.0));
+    let half = tensor(float32(&[0.5], &[1]), TensorDevice::Cpu);
+    let powers = array(&binary(&wide, &half, 18).unwrap());
+    assert_eq!(powers.shape.as_ref(), &[4]);
+    assert_eq!(powers.value_at_flat(3), Value::Float(2.0));
+    assert!(matches!(powers.value_at_flat(1), Value::Float(value) if value.is_nan()));
+    let double = host_tensor_full(
+        vec![ints(&[2]), Value::Float(1.0e200), int(3), int(0)],
+        None,
+    )
+    .unwrap();
+    let squared = array(&binary(&double, &double, 18).unwrap());
+    assert_eq!(squared.value_at_flat(0), Value::Float(f64::INFINITY));
+    assert_eq!(
+        array(&unary(&double, 1).unwrap()).value_at_flat(0),
+        Value::Float(1.0e100)
+    );
+    // A function of an integer tensor is the Array member's error.
+    let l = leaves(TensorDevice::Cpu);
+    assert!(unary(&l.counts, 2).is_err());
+    assert!(binary(&l.a, &l.tall, 18).is_err());
+}
+
+#[test]
 fn a_long_chain_runs_before_it_is_read() {
     deferred(|| {
         let l = leaves(TensorDevice::Cpu);

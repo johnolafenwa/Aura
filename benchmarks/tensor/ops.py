@@ -32,8 +32,7 @@ def main():
             def item(value):
                 return float(value)
 
-            lib = np
-            exp, log, sqrt = np.exp, np.log, np.sqrt
+            sin, cos, log, sqrt = np.sin, np.cos, np.log, np.sqrt
             absolute, maximum, matmul = np.abs, np.maximum, np.matmul
         elif side_name.startswith("torch"):
             import torch
@@ -54,7 +53,7 @@ def main():
             def item(value):
                 return float(value.item())
 
-            exp, log, sqrt = torch.exp, torch.log, torch.sqrt
+            sin, cos, log, sqrt = torch.sin, torch.cos, torch.log, torch.sqrt
             absolute, maximum, matmul = torch.abs, torch.maximum, torch.matmul
         elif side_name == "mlx":
             import mlx.core as mx
@@ -69,7 +68,7 @@ def main():
             def item(value):
                 return float(value.item())
 
-            exp, log, sqrt = mx.exp, mx.log, mx.sqrt
+            sin, cos, log, sqrt = mx.sin, mx.cos, mx.log, mx.sqrt
             absolute, maximum, matmul = mx.abs, mx.maximum, mx.matmul
         else:
             print(f"unknown side {side_name}")
@@ -107,8 +106,8 @@ def main():
 
         start = time.perf_counter()
         for _ in range(reps):
-            done(maximum(absolute(log(exp(x)) - x), y))
-        print(f"exp_log_max {side * side} {ms(start)} {item(maximum(absolute(log(exp(x)) - x), y).max())}")
+            done(maximum(absolute(sin(x) * cos(y)), log(y)))
+        print(f"sin_cos_log_max {side * side} {ms(start)} {item(maximum(absolute(sin(x) * cos(y)), log(y)).max())}")
 
     def products(side, reps):
         a = grid(side, 0.001)

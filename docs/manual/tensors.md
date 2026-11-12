@@ -36,7 +36,7 @@ def main():
 ```
 
 ```text
-97.5
+106.5
 Array[float32](shape=[4], values=[10.0, 12.0, 9.0, 12.0])
 ```
 
@@ -66,8 +66,12 @@ every program on those machines.
 
 A GPU has no `float64`. Making a `Tensor[float64]` on a GPU device, or
 converting one to `float64` there, is error `AU4007`. A tensor never
-narrows a `float64` silently. Convert the `Array` with `to_float32()`
-first.
+narrows a `float64` silently. Convert the `Array` first, with `values as Array[float32]`.
+
+Float operations on a tensor follow IEEE 754 on every device: an
+overflow gives an infinity, and a value outside a function's domain,
+such as `log` of a negative number, gives a NaN. The program does not
+stop. The `Array` math members stop the program in those cases.
 
 Integer arithmetic on a tensor wraps on every device. A GPU cannot stop a
 program on overflow, and a result must not depend on the device. This is

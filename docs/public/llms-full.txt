@@ -1194,6 +1194,10 @@ scope, terminology, authority, and conformance language.
 - [SIMD Module](/manual/simd): lane values of two, four, or eight floats
   that native code keeps in vector registers, with loads and stores over
   lists and results that are the same on every machine.
+- [Tensor Module](/manual/tensors): `Tensor[T]` values that live on a
+  device, the CPU or the Metal GPU of a Mac, with the `Array` shape rules,
+  one meaning on every device, and whole expressions run as one piece of
+  GPU work.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1518,6 +1522,30 @@ and `E` is its element type.
 | `V.mul_add` | `mul_add(self, factor: V, addend: V) -> V` | `self * factor + addend` in each lane, rounded twice. Float lanes only. |
 | `V.sum` | `sum(self) -> E` | The lanes added in pairs. |
 | `V.to_list` | `to_list(self) -> list[E]` | The lanes as a new list. |
+
+## Tensors
+
+[Tensor Module](/manual/tensors) covers devices, dtypes, when work runs,
+and how results compare across devices. `E` is the element type.
+
+| API | Signature |
+| --- | --- |
+| `tensor.Device.cpu` | `cpu() -> Device` |
+| `tensor.Device.metal` | `metal() -> Device \| None` |
+| `tensor.Device.default` | `default() -> Device` |
+| `tensor.Tensor[E].from_array` | `from_array(values: Array[E], device: Device) -> Tensor[E]` |
+| `tensor.Tensor[E].full` | `full(shape: list[int64], value: E, device: Device) -> Tensor[E]` |
+| `tensor.Tensor[E].zeros` | `zeros(shape: list[int64], device: Device) -> Tensor[E]` |
+| `to_array` | `to_array(self) -> Array[E]` |
+| `item` | `item(self) -> E` |
+| `scalar` | `scalar(self, value: E) -> Tensor[E]` |
+| `to` | `to(self, device: Device) -> Tensor[E]` |
+| `eval` | `eval(self) -> None` |
+| `tensor.choose` | `choose(mask: Tensor[bool], when_true: Tensor[T], when_false: Tensor[T]) -> Tensor[T]` |
+
+Operators `+`, `-`, `*`, `/`, and unary `-` take tensors of one dtype.
+The elementwise members, comparisons, reductions, `matmul`, and shape
+members have the names of the matching `Array` members.
 
 ## Gzip
 
@@ -24982,6 +25010,209 @@ See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned tool
 - [ADR-0041: Contiguous numeric arrays and explicit integer arithmetic modes](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0041-contiguous-numeric-arrays.md)
 - [ADR-0047: Integer literal bases, bitwise operators, and shifts](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0047-integer-literals-bitwise-and-shifts.md)
 - [ADR-0048: Power, rounding, divmod, and the math module](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0048-power-round-divmod-and-math.md)
+
+## Source: docs/manual/tensors.md
+
+# Tensor Module
+
+The `tensor` module has `Tensor[T]`: numbers of one dtype that live on a
+device and are computed there. The device is the CPU or a GPU. The same
+program runs on either, and gives the same integers and masks and the
+same floats to within a few units in the last place.
+
+```aura
+from tensor import Device, Tensor, choose
+```
+
+Use an `Array` for numeric work on the CPU. Use a tensor when the work is
+large enough to be worth a GPU: arithmetic over millions of elements, or a
+long expression over big operands. Small work is faster on the CPU,
+because each run on a GPU has a fixed cost of about a fifth of a
+millisecond.
+
+This release has the CPU device on every platform and the Metal device on
+a Mac. See [Devices](#devices) for what is not there yet.
+
+## Example
+
+```aura
+from tensor import Device, Tensor, choose
+
+def main():
+    device = Device.default()
+    prices = Array[float32].from_list([10.0, 12.5, 9.0, 14.0], [4])
+    counts = Array[float32].from_list([3.0, 1.0, 4.0, 2.0], [4])
+    x = Tensor[float32].from_array(prices, device)
+    y = Tensor[float32].from_array(counts, device)
+    total = (x * y).sum()
+    print(total.item())
+    capped = choose(x.greater(x.scalar(12.0)), x.scalar(12.0), x)
+    print(capped.to_array())
+```
+
+```text
+106.5
+Array[float32](shape=[4], values=[10.0, 12.0, 9.0, 12.0])
+```
+
+## Devices
+
+`Device` is a Copy class that names where a tensor's memory is.
+
+| API | Result |
+| --- | --- |
+| `Device.cpu()` | The CPU device. Every machine has it. |
+| `Device.metal()` | The Metal GPU of this Mac as `Device \| None`. `None` on other systems and on a Mac whose GPU cannot be used, such as a virtual machine. |
+| `Device.default()` | The GPU when this machine has one Aura can use, else the CPU. |
+| `name(self) -> str` | `"cpu"` or `"metal"`. |
+| `is_gpu(self) -> bool` | Whether the device is a GPU. |
+
+A tensor stays on the device it was made on. Both operands of an operation
+must be on one device. `to(device)` copies a tensor to another device.
+
+There is no NVIDIA device and no Windows device yet. The CPU device runs
+every program on those machines.
+
+## Dtypes
+
+`T` is `float32`, `int32`, `int64`, or `bool` on every device, and also
+`float64` on the CPU device. A mask, the result of a comparison, is a
+`Tensor[bool]`.
+
+A GPU has no `float64`. Making a `Tensor[float64]` on a GPU device, or
+converting one to `float64` there, is error `AU4007`. A tensor never
+narrows a `float64` silently. Convert the `Array` first, with `values as Array[float32]`.
+
+Float operations on a tensor follow IEEE 754 on every device: an
+overflow gives an infinity, and a value outside a function's domain,
+such as `log` of a negative number, gives a NaN. The program does not
+stop. The `Array` math members stop the program in those cases.
+
+Integer arithmetic on a tensor wraps on every device. A GPU cannot stop a
+program on overflow, and a result must not depend on the device. This is
+different from an `Array`, whose integer arithmetic is checked.
+
+## Making and Reading Tensors
+
+These members name the dtype, so they are called on `Tensor[T]` with the
+dtype written: `Tensor[float32].from_array(values, device)`. `E` is the
+element type.
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `Tensor[E].from_array` | `from_array(values: Array[E], device: Device) -> Tensor[E]` | A tensor holding a copy of the Array's elements. |
+| `Tensor[E].full` | `full(shape: list[int64], value: E, device: Device) -> Tensor[E]` | Every element is `value`. |
+| `Tensor[E].zeros` | `zeros(shape: list[int64], device: Device) -> Tensor[E]` | Every element is zero, or `false`. |
+| `to_array` | `to_array(self) -> Array[E]` | An Array holding a copy of the elements. |
+| `item` | `item(self) -> E` | The element of a tensor that has exactly one. |
+| `scalar` | `scalar(self, value: E) -> Tensor[E]` | A one-element tensor on this tensor's device, to use as an operand. |
+
+Moving between an `Array` and a tensor is always written. No operation
+takes one where it expects the other.
+
+## Operations
+
+A tensor is never changed. Each operation gives a new tensor. Shapes
+follow the [`Array` rules](/manual/numeric-arrays): two shapes broadcast
+when each pair of dimensions, counted from the last, is equal or has a
+one.
+
+| API | Result |
+| --- | --- |
+| `a + b`, `a - b`, `a * b` | The operation on each pair of elements. |
+| `a / b` | Division, for float tensors. |
+| `-a` | Each element negated. |
+| `minimum(other)`, `maximum(other)` | The smaller or larger of each pair. A NaN operand gives NaN. |
+| `pow(exponent)` | Each element raised to the matching exponent. Float tensors. |
+| `abs()` | The absolute value of each element. |
+| `sqrt()`, `exp()`, `log()`, `sin()`, `cos()` | The function of each element. Float tensors. |
+| `less(other)`, `less_equal(other)`, `greater(other)`, `greater_equal(other)`, `equal(other)`, `not_equal(other)` | A `Tensor[bool]` of where the comparison holds. |
+| `choose(mask, when_true, when_false)` | A module function. Each element of `when_true` where `mask` holds, else of `when_false`. |
+| `sum(axis=None)`, `min(axis=None)`, `max(axis=None)`, `mean(axis=None)` | Over every element, as a tensor of shape `[1]`, or along one axis, which removes that axis. `mean` is for float tensors and keeps the dtype. |
+| `matmul(other)` | The matrix product, with the `Array.matmul` shape rules. |
+| `reshape(shape)`, `flatten()`, `transpose()`, `permute(axes)` | The same elements in a new shape or axis order. |
+| `to_int32()`, `to_int64()`, `to_float32()`, `to_float64()` | Each element converted. A float that does not fit the integer type is an error. |
+| `to(device)` | This tensor on another device. |
+| `shape()`, `len()`, `device()` | The shape as `list[int64]`, the element count, and the device. |
+| `clone()` | Another handle to the same memory. Nothing is copied. |
+| `eval()` | Runs the work the tensor is waiting on. |
+
+Both operands of an operator are tensors of the same dtype. To use one
+number, make it a tensor with `scalar`: `x * x.scalar(2.0)`.
+
+A mistake in shapes or dtypes is reported by the call that makes it, on
+every device, with the message the same `Array` operation gives.
+
+## When the Work Runs
+
+The CPU device runs each operation when it is called.
+
+A GPU device waits. An operation gives a tensor that knows its shape and
+dtype but has not been computed. The whole expression behind a tensor
+runs as one piece of GPU work when the program reads it: `to_array()`,
+`item()`, `to(device)`, or `eval()`. This is why a long expression costs
+one trip to the GPU and not one for each operator.
+
+```aura
+z = (x * y + x).sqrt()    # nothing has run on the GPU
+z.eval()                  # the three operations run together
+```
+
+Aura compiles each distinct expression for the GPU once and keeps it. A
+loop that evaluates the same expression over tensors of the same shapes
+pays that cost on its first pass only.
+
+A chain of more than 128 waiting operations runs when it reaches that
+length, so a loop that never reads a result cannot grow without bound.
+
+The results do not depend on when the work runs.
+
+## What Runs on the GPU
+
+On the Metal device these run on the GPU:
+
+- `+`, `-`, `*`, `minimum`, `maximum`, negation, and comparisons, for
+  `float32`, `int32`, and `int64`
+- `/`, `pow`, `abs`, `sqrt`, `exp`, `log`, `sin`, `cos`, the four
+  reductions, and `matmul` of operands of rank two or more, for `float32`
+- `choose`, `reshape`, `flatten`, `transpose`, `permute`
+- conversions from an integer dtype to `float32`, and from `int32` to
+  `int64`
+
+Every other operation on a GPU tensor runs on the CPU and gives a tensor
+on the same device: integer reductions and `abs`, which are checked for
+overflow, conversions from a float to an integer, which are checked for
+range, integer `matmul`, and `matmul` with a rank-one operand. So every
+operation exists on every device and means the same thing. An empty
+tensor is always computed on the CPU.
+
+## Results Across Devices
+
+| Operation | GPU result compared with the CPU device |
+| --- | --- |
+| Integer arithmetic, comparisons, `choose`, shape changes | Equal. |
+| `+`, `-`, `*`, `/`, `sqrt`, `abs`, `minimum`, `maximum`, `min`, `max` on `float32` | Equal. |
+| `sum`, `mean`, `matmul` | Within a few units in the last place. The GPU adds in a different order. |
+| `exp`, `log`, `sin`, `cos`, `pow` | Within a few units in the last place. |
+
+The test suite checks these on a machine with a GPU. The hosted CI
+machines have no usable GPU, so the Metal checks run on a developer Mac
+and report that they were skipped elsewhere.
+
+## Errors
+
+| Code | When |
+| --- | --- |
+| `AU4007` | Shapes that do not broadcast, operands of different dtypes or devices, an axis outside the rank, `item()` on a tensor with more than one element, `float64` on a GPU device, a device this machine does not have, or a GPU failure. |
+
+## Limits
+
+- No `tensor * 2.0`. Write `x * x.scalar(2.0)`.
+- No indexing or slicing of a tensor. Convert with `to_array()`.
+- No integer division. `Array` has none either.
+- No convolution, pooling, or other neural network layers yet.
+- No way yet to write your own GPU operation. That is the planned kernel
+  layer, which will work on these same tensors without copying them.
 
 ## Source: docs/manual/time.md
 

@@ -521,6 +521,69 @@ pub(crate) const PAIR_OPERATION_BASE: i64 = 16;
 /// [`ArrayUnaryOp`]'s.
 pub(crate) const NEGATE_OPERATION: i64 = 64;
 
+/// A float function of every element, or `None` for an Array that is not
+/// float. A tensor's float maths follows IEEE 754 on every device: an
+/// overflow is an infinity and a value outside the domain is a NaN,
+/// because a GPU cannot stop the program. The Array members stop it.
+fn float_map(
+    elements: &ArrayValue,
+    single: fn(f32) -> f32,
+    double: fn(f64) -> f64,
+) -> Result<Option<ArrayValue>> {
+    let values = elements.elements()?;
+    let storage = match &*values {
+        ArrayStorage::Float32(values) => ArrayStorage::Float32(
+            values
+                .iter()
+                .map(|&value| single(value))
+                .collect::<Box<[f32]>>()
+                .into(),
+        ),
+        ArrayStorage::Float64(values) => ArrayStorage::Float64(
+            values
+                .iter()
+                .map(|&value| double(value))
+                .collect::<Box<[f64]>>()
+                .into(),
+        ),
+        _ => return Ok(None),
+    };
+    ArrayValue::new(elements.try_shape()?, storage).map(Some)
+}
+
+/// `base` raised to `exponent` for two float Arrays of one dtype whose
+/// shapes broadcast, by the IEEE rules.
+fn float_pow(base: &ArrayValue, exponent: &ArrayValue) -> Result<ArrayValue> {
+    // Multiplying by ones of the other shape broadcasts each operand and
+    // keeps every value, a NaN and a negative zero included.
+    let ones =
+        |like: &ArrayValue| ArrayValue::full(base.dtype(), like.shape.clone(), &Value::Float(1.0));
+    let mode = IntegerArithmeticMode::Checked;
+    let base = base.binary(&ones(exponent)?, ArrayBinaryOp::Mul, mode)?;
+    let exponent = exponent.binary(&ones(&base)?, ArrayBinaryOp::Mul, mode)?;
+    let (bases, exponents) = (base.elements()?, exponent.elements()?);
+    let storage = match (&*bases, &*exponents) {
+        (ArrayStorage::Float32(bases), ArrayStorage::Float32(exponents)) => ArrayStorage::Float32(
+            bases
+                .iter()
+                .zip(exponents.iter())
+                .map(|(&base, &exponent)| base.powf(exponent))
+                .collect::<Box<[f32]>>()
+                .into(),
+        ),
+        (ArrayStorage::Float64(bases), ArrayStorage::Float64(exponents)) => ArrayStorage::Float64(
+            bases
+                .iter()
+                .zip(exponents.iter())
+                .map(|(&base, &exponent)| base.powf(exponent))
+                .collect::<Box<[f64]>>()
+                .into(),
+        ),
+        _ => unreachable!("both operands are floats of one dtype"),
+    };
+    ArrayValue::new(base.try_shape()?, storage)
+}
+
 /// The result of `operation` by the Array kernels, which is what the
 /// operation means on every device.
 fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
@@ -536,13 +599,9 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
         Operation::Binary(code) => {
             let operation =
                 ArrayPairOp::from_code(code - PAIR_OPERATION_BASE).ok_or_else(unknown)?;
-            if operation == ArrayPairOp::Pow && first.dtype() == ArrayDType::Float32 {
-                // The Array kernel for `pow` is `float64` only.
-                let exponent = inputs[1].cast(ArrayDType::Float64)?;
-                first
-                    .cast(ArrayDType::Float64)?
-                    .pairwise(&Value::Array(exponent), operation)?
-                    .cast(ArrayDType::Float32)
+            let float = matches!(first.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+            if operation == ArrayPairOp::Pow && float && inputs[1].dtype() == first.dtype() {
+                float_pow(first, inputs[1])
             } else {
                 first.pairwise(&other(1), operation)
             }
@@ -551,15 +610,20 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
             .binary(first, ArrayBinaryOp::Sub, arithmetic_mode(first.dtype())),
         Operation::Unary(code) => {
             let operation = ArrayUnaryOp::from_code(*code).ok_or_else(unknown)?;
-            let float64_only = !matches!(operation, ArrayUnaryOp::Abs | ArrayUnaryOp::LogicalNot);
-            if float64_only && first.dtype() == ArrayDType::Float32 {
-                // The Array kernels for these are `float64` only.
-                first
-                    .cast(ArrayDType::Float64)?
-                    .unary(operation)?
-                    .cast(ArrayDType::Float32)
-            } else {
-                first.unary(operation)
+            let functions: Option<(fn(f32) -> f32, fn(f64) -> f64)> = match operation {
+                ArrayUnaryOp::Sqrt => Some((f32::sqrt, f64::sqrt)),
+                ArrayUnaryOp::Exp => Some((f32::exp, f64::exp)),
+                ArrayUnaryOp::Log => Some((f32::ln, f64::ln)),
+                ArrayUnaryOp::Sin => Some((f32::sin, f64::sin)),
+                ArrayUnaryOp::Cos => Some((f32::cos, f64::cos)),
+                _ => None,
+            };
+            match functions {
+                Some((single, double)) => match float_map(first, single, double)? {
+                    Some(mapped) => Ok(mapped),
+                    None => first.unary(operation),
+                },
+                None => first.unary(operation),
             }
         }
         Operation::Compare(code) => first.compare(
@@ -645,7 +709,7 @@ fn float64_error(device: TensorDevice) -> Diagnostic {
     Diagnostic::coded(
         "AU4007",
         format!(
-            "the {} device has no float64 elements; convert with `to_float32()` on the cpu device first",
+            "the {} device has no float64 elements; convert to float32 first",
             device.name()
         ),
     )
