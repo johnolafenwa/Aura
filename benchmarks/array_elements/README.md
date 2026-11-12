@@ -23,14 +23,33 @@ since a Python loop over elements measures the interpreter.
 
 ## Results
 
-RESULTS_TABLE
+Best of three runs on the 4-core x86-64 Linux build box, 2026-11-12.
+Milliseconds, lower is better. One run varies by about a fifth.
+
+| Loop | Aura | Rust | NumPy | Aura / Rust |
+| --- | ---: | ---: | ---: | ---: |
+| `element_sum` | 73 | 65 | 28 | 1.1 |
+| `element_fill` | 207 | 125 | 532 | 1.7 |
+| `stencil_2d` | 191 | 64 | 217 | 3.0 |
+| `center_columns` | 94 | 130 | 134 | 0.7 |
+| `mask_choose` | 126 | 144 | 108 | 0.9 |
+| `sqrt_exp` | 195 | 233 | 48 | 0.8 |
+| `batched_matmul` | 30 | 66 | 10 | 0.5 |
+| `lane_dot` | 154 | 54 | 22 | 2.9 |
+| `shared_tasks` | 248 | 154 | 208 | 1.6 |
 
 ## Reading the numbers
 
-- **Element loops match Rust on reads and stay within three times on
-  the stencil.** Compiled code checks each coordinate and touches the
-  element in place. A loop that only reads and writes elements checks
-  the Array once at its entry.
+- **Element loops match Rust on reads.** Compiled code checks each
+  coordinate and touches the element in place. A loop that only reads
+  and writes elements checks the Array once at its entry.
+- **`stencil_2d` is three times Rust** and ahead of NumPy's slice form.
+  Each access still checks two coordinates. The Rust loop checks one
+  flat index and its compiler removes most of those checks. Proving the
+  coordinates of a counted loop in range at the loop's entry, as list
+  loops do, is the next step.
+- **`lane_dot` is 2.9 times a Rust loop over chunks,** the same ratio as
+  lanes loaded from a list.
 - **`element_sum` and `lane_dot` are behind NumPy** because the NumPy
   side is one kernel call: `m.sum()` and `xs @ ys`. The same calls in
   Aura are `m.fast_sum()` and `xs.dot(ys)`, which
@@ -41,4 +60,7 @@ RESULTS_TABLE
 - **`batched_matmul` is behind NumPy's BLAS** and ahead of the plain
   Rust loops.
 - **`shared_tasks` copies nothing.** Each `clone()` shares the buffer,
-  so the time is four sums of 32 MB on four cores.
+  so the time is four sums of 32 MB. One sum on the main task takes
+  1.2 ms, and the four tasks finish in 2.5 ms, so they do not all run at
+  once. The same holds for tasks that touch no Array, which makes it a
+  scheduler cost and not a transport cost.
