@@ -127,13 +127,22 @@ compiles it with NVRTC at run time, once for each distinct plan.
   shapes are constants in the source, so a broadcast is index arithmetic
   the compiler folds.
 - A reduction fuses the expression it reduces. Along an axis, one thread
-  reduces one lane. Over every element, each thread reduces one run of
-  about the square root of the count, and a second kernel reduces the
-  runs.
+  reduces one lane. Over every element the work runs in stages. In a
+  stage, thread `t` of `n` threads reduces elements `t`, `t + n`,
+  `t + 2n` and so on, 64 for each thread, so neighbouring threads read
+  neighbouring memory. The next stage reduces what the threads wrote, and
+  a last stage of one thread reduces at most 128 values. On an NVIDIA
+  A40 this made a sum of 16.8 million elements about PLACEHOLDER times
+  faster than one stage of square-root runs.
 - `matmul` is a cuBLAS `gemm` for each matrix pair of the batch. cuBLAS
   is column-major, so the row-major product A B is asked for as the
   product of B and A as stored.
 - A step read more than once, or read by `matmul`, gets a buffer.
+- The PTX image of a compiled plan is kept in a file under
+  `cuda-kernels` in the Aura cache directory, named by a hash of the
+  source and the NVRTC version. A program's later runs load the image
+  and skip the compile, which takes 10 to 20 ms for each plan. An image
+  the driver refuses is compiled again.
 - Integer arithmetic is done on the unsigned type, because signed
   overflow is undefined in C. `--fmad=false` keeps a multiply and an add
   from fusing, which would round differently from the CPU device.

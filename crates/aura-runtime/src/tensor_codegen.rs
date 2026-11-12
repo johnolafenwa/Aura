@@ -75,6 +75,12 @@ AURA_MINMAX(aura_max_d, double, 1.0, >)
 "#;
 
 /// Threads in one block of a kernel launch.
+/// The elements one thread reduces in a stage of a whole reduction.
+const STAGE_RUN: usize = 64;
+
+/// The most elements the single thread of a last stage reduces.
+const LAST_STAGE: usize = 128;
+
 pub(crate) const BLOCK_THREADS: usize = 256;
 
 fn dtype_of(code: i64) -> ArrayDType {
@@ -448,54 +454,65 @@ impl<'a> Generator<'a> {
                 });
             }
             None => {
-                // Each thread reduces one run of elements, then one thread
-                // reduces the runs.
-                let run = (count as f64).sqrt().ceil().max(1.0) as usize;
-                let runs = count.div_ceil(run);
-                let (first, next) = (at("start"), at("j"));
-                let step = combine("acc", &next);
-                writeln!(
-                    self.source,
-                    "extern \"C\" __global__ void k{slot}a({ty}* out{parameters}) {{\n    \
-                     long long run = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
-                     if (run >= {runs}LL) return;\n    \
-                     long long start = run * {run}LL;\n    \
-                     long long end = start + {run}LL < {count}LL ? start + {run}LL : {count}LL;\n    \
-                     {ty} acc = {first};\n    \
-                     for (long long j = start + 1; j < end; j++) acc = {step};\n    \
-                     out[run] = acc;\n}}"
-                )
-                .expect("writing to a string cannot fail");
-                let finish = if reduction == 3 {
-                    format!("acc / ({ty}){count}")
-                } else {
-                    "acc".to_string()
-                };
-                let last = combine("acc", "runs[j]");
-                writeln!(
-                    self.source,
-                    "extern \"C\" __global__ void k{slot}b({ty}* out, const {ty}* runs) {{\n    \
-                     if (blockIdx.x != 0 || threadIdx.x != 0) return;\n    \
-                     {ty} acc = runs[0];\n    \
-                     for (long long j = 1; j < {runs}LL; j++) acc = {last};\n    \
-                     out[0] = {finish};\n}}"
-                )
-                .expect("writing to a string cannot fail");
-                let partial = self.scratch();
-                self.actions.push(Action::Kernel {
-                    name: format!("k{slot}a"),
-                    output: partial,
-                    bytes: runs * bytes,
-                    threads: runs,
-                    inputs: leaves,
-                });
-                self.actions.push(Action::Kernel {
-                    name: format!("k{slot}b"),
-                    output: slot,
-                    bytes,
-                    threads: 1,
-                    inputs: vec![partial],
-                });
+                // The reduction runs in stages. In each stage thread `t`
+                // of `threads` reduces the elements `t`, `t + threads`,
+                // `t + 2 * threads` and so on, so the threads beside each
+                // other read memory beside each other, and the next stage
+                // reduces what the threads wrote. The last stage is one
+                // thread.
+                let operand_element = (at("t"), at("j"));
+                let mut remaining = count;
+                let mut input: Option<usize> = None;
+                let mut stage = 0;
+                loop {
+                    let threads = if remaining <= LAST_STAGE {
+                        1
+                    } else {
+                        remaining.div_ceil(STAGE_RUN)
+                    };
+                    let last = threads == 1;
+                    let (first, next) = match input {
+                        None => operand_element.clone(),
+                        Some(_) => ("in[t]".to_string(), "in[j]".to_string()),
+                    };
+                    let step = combine("acc", &next);
+                    let finish = if last && reduction == 3 {
+                        format!("acc / ({ty}){count}")
+                    } else {
+                        "acc".to_string()
+                    };
+                    let parameters = match input {
+                        None => parameters.clone(),
+                        Some(_) => format!(", const {ty}* in"),
+                    };
+                    writeln!(
+                        self.source,
+                        "extern \"C\" __global__ void k{slot}r{stage}({ty}* out{parameters}) {{\n    \
+                         long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+                         if (t >= {threads}LL) return;\n    \
+                         {ty} acc = {first};\n    \
+                         for (long long j = t + {threads}LL; j < {remaining}LL; j += {threads}LL) acc = {step};\n    \
+                         out[t] = {finish};\n}}"
+                    )
+                    .expect("writing to a string cannot fail");
+                    let output = if last { slot } else { self.scratch() };
+                    self.actions.push(Action::Kernel {
+                        name: format!("k{slot}r{stage}"),
+                        output,
+                        bytes: threads * bytes,
+                        threads,
+                        inputs: match input {
+                            None => leaves.clone(),
+                            Some(input) => vec![input],
+                        },
+                    });
+                    if last {
+                        break;
+                    }
+                    input = Some(output);
+                    remaining = threads;
+                    stage += 1;
+                }
             }
         }
     }

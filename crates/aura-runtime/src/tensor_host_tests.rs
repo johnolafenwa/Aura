@@ -965,6 +965,38 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
     }
 
     #[test]
+    fn a_large_whole_reduction_runs_in_stages() {
+        deferred(|| {
+            // 20,000 elements reduce to 313, then 5, then 1.
+            let values: Vec<f32> = (0..20_000)
+                .map(|index| ((index * 37) % 1_001) as f32 * 0.25 - 100.0)
+                .collect();
+            let wide = tensor(float32(&values, &[100, 200]), TensorDevice::Cpu);
+            let doubled = binary(&wide, &wide, 0).unwrap();
+            for (tag, reduction) in [0, 1, 2, 3].into_iter().enumerate() {
+                let waiting = reduce(&doubled, reduction, None).unwrap();
+                let (plan, storage) = Plan::collect(node(&waiting));
+                let program = tensor_codegen::generate(&plan);
+                let threads: Vec<usize> = program
+                    .actions
+                    .iter()
+                    .map(|action| match action {
+                        Action::Kernel { threads, .. } => *threads,
+                        Action::Matmul { .. } => panic!("a reduction has no matmul"),
+                    })
+                    .collect();
+                assert_eq!(threads, [313, 5, 1]);
+                assert_eq!(program.buffers, plan.slots.len() + 2, "two scratch buffers");
+                let Some(generated) = run(&plan, &storage, 900 + tag) else {
+                    eprintln!("SKIPPED: this machine has no C++ compiler");
+                    return;
+                };
+                close("staged reduction", &generated, &array(&waiting));
+            }
+        });
+    }
+
+    #[test]
     fn elementwise_steps_fuse_into_one_kernel() {
         deferred(|| {
             let l = leaves(TensorDevice::Cpu);
@@ -993,14 +1025,10 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
             let program = tensor_codegen::generate(&plan);
             assert_eq!(
                 program.actions.len(),
-                2,
-                "a whole sum is two kernels over the fused chain"
+                1,
+                "a small whole sum is one kernel over the fused chain"
             );
-            assert_eq!(
-                program.buffers,
-                plan.slots.len() + 1,
-                "one scratch buffer of runs"
-            );
+            assert_eq!(program.buffers, plan.slots.len(), "no scratch buffer");
 
             let product = matmul(&chain, &l.tall).unwrap();
             let (plan, _) = Plan::collect(node(&product));

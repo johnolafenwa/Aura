@@ -191,8 +191,11 @@ Aura writes the expression as one CUDA kernel, compiles it the first time
 the expression is evaluated, and keeps the compiled kernel. A chain of
 elementwise operations is a single pass over the data with no temporary
 tensors in between. `matmul` is a cuBLAS call. The first evaluation of
-each distinct expression on CUDA therefore takes some tens of
-milliseconds, and later ones take none of that.
+each distinct expression on CUDA therefore takes 10 to 20 milliseconds,
+and later ones take none of that. Compiled kernels are also kept on disk,
+in `cuda-kernels` under `~/.cache/aura` (or under `AURA_CACHE_DIR` when
+it is set), so a later run of the program does not compile them again.
+The directory can be deleted at any time.
 
 ## Results Across Devices
 

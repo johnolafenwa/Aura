@@ -62,6 +62,7 @@ struct Api {
     nvrtcGetProgramLogSize: unsafe extern "C" fn(*mut c_void, *mut usize) -> Status,
     nvrtcGetProgramLog: unsafe extern "C" fn(*mut c_void, *mut c_char) -> Status,
     nvrtcDestroyProgram: unsafe extern "C" fn(*mut *mut c_void) -> Status,
+    nvrtcVersion: unsafe extern "C" fn(*mut c_int, *mut c_int) -> Status,
     cublasCreate_v2: unsafe extern "C" fn(*mut *mut c_void) -> Status,
     #[allow(clippy::type_complexity)]
     cublasSgemm_v2: unsafe extern "C" fn(
@@ -187,6 +188,7 @@ impl Api {
             nvrtcGetProgramLogSize: load!(nvrtc, nvrtcGetProgramLogSize),
             nvrtcGetProgramLog: load!(nvrtc, nvrtcGetProgramLog),
             nvrtcDestroyProgram: load!(nvrtc, nvrtcDestroyProgram),
+            nvrtcVersion: load!(nvrtc, nvrtcVersion),
             cublasCreate_v2: load!(cublas, cublasCreate_v2),
             cublasSgemm_v2: load!(cublas, cublasSgemm_v2),
             cublasDgemm_v2: load!(cublas, cublasDgemm_v2),
@@ -215,6 +217,8 @@ struct Runtime {
     api: Api,
     context: *mut c_void,
     cublas: *mut c_void,
+    /// The NVRTC version, part of the name of a cached kernel.
+    compiler: (c_int, c_int),
     pool: Mutex<Pool>,
     /// Held for a whole run: the cuBLAS handle serves one thread at a
     /// time.
@@ -260,10 +264,14 @@ impl Runtime {
                 return None;
             }
         }
+        let mut compiler = (0, 0);
+        // SAFETY: both pointers are to live integers.
+        unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) };
         Some(Self {
             api,
             context,
             cublas,
+            compiler,
             pool: Mutex::default(),
             compiled: Mutex::default(),
         })
@@ -422,11 +430,57 @@ impl Buffer {
     }
 }
 
+/// The file that keeps the compiled form of `source` between runs of a
+/// program: `cuda-kernels` under `AURA_CACHE_DIR` when it is set, else
+/// under `~/.cache/aura`. The name is a hash of the source and of the
+/// compiler version, so a new compiler or a changed kernel is a new file.
+fn kernel_cache_file(source: &str, compiler: (c_int, c_int)) -> Option<std::path::PathBuf> {
+    use sha2::{Digest, Sha256};
+    let root = match std::env::var_os("AURA_CACHE_DIR").filter(|dir| !dir.is_empty()) {
+        Some(dir) => std::path::PathBuf::from(dir),
+        None => std::path::PathBuf::from(std::env::var_os("HOME").filter(|home| !home.is_empty())?)
+            .join(".cache")
+            .join("aura"),
+    };
+    let mut hash = Sha256::new();
+    hash.update(format!(
+        "nvrtc {}.{} {COMPILE_OPTION}\n",
+        compiler.0, compiler.1
+    ));
+    hash.update(source);
+    let name: String = hash
+        .finalize()
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect();
+    Some(root.join("cuda-kernels").join(format!("{name}.ptx")))
+}
+
+/// Keeps `image` in `file`. The cache only saves time, so a failure to
+/// write it is not an error. The image is written beside the file and
+/// renamed, so another process never reads half of it.
+fn keep_kernel_image(file: &std::path::Path, image: &[u8]) {
+    let Some(directory) = file.parent() else {
+        return;
+    };
+    if std::fs::create_dir_all(directory).is_err() {
+        return;
+    }
+    let partial = file.with_extension(format!("{}.partial", std::process::id()));
+    if std::fs::write(&partial, image).is_err() || std::fs::rename(&partial, file).is_err() {
+        let _ = std::fs::remove_file(&partial);
+    }
+}
+
+/// A fused multiply-add would round differently from the CPU device,
+/// whose `a * b + c` rounds twice.
+const COMPILE_OPTION: &str = "--fmad=false";
+
 impl Compiled {
-    fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
-        let program = tensor_codegen::generate(plan);
-        let source = CString::new(program.source.as_str())
-            .map_err(|_| cuda_error("made a kernel source with a NUL byte"))?;
+    /// The PTX image NVRTC compiles `source` to.
+    fn compile(runtime: &Runtime, source: &str) -> Result<Vec<u8>> {
+        let source =
+            CString::new(source).map_err(|_| cuda_error("made a kernel source with a NUL byte"))?;
         let api = &runtime.api;
         let mut handle = std::ptr::null_mut();
         // SAFETY: `source` and the name are NUL-terminated and there are
@@ -442,9 +496,8 @@ impl Compiled {
             )
         };
         check(status, "start a kernel compile")?;
-        // A fused multiply-add would round differently from the CPU
-        // device, whose `a * b + c` rounds twice.
-        let options = [c"--fmad=false".as_ptr()];
+        let option = CString::new(COMPILE_OPTION).expect("the option has no NUL byte");
+        let options = [option.as_ptr()];
         // SAFETY: `handle` is the program just created.
         let status = unsafe { (api.nvrtcCompileProgram)(handle, 1, options.as_ptr()) };
         let image = if status == 0 {
@@ -473,11 +526,44 @@ impl Compiled {
         };
         // SAFETY: `handle` is a live program.
         unsafe { (api.nvrtcDestroyProgram)(&mut handle) };
-        let image = image?;
+        image
+    }
+
+    /// The loaded module of a PTX `image`, or `None` when the driver does
+    /// not take it.
+    fn load(runtime: &Runtime, image: &[u8]) -> Option<*mut c_void> {
+        // The driver reads the image as a NUL-terminated string.
+        if image.last() != Some(&0) {
+            return None;
+        }
         let mut module = std::ptr::null_mut();
-        // SAFETY: `image` is NUL-terminated PTX.
-        let status = unsafe { (api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
-        check(status, "load a compiled kernel")?;
+        // SAFETY: `image` is NUL-terminated.
+        let status = unsafe { (runtime.api.cuModuleLoadData)(&mut module, image.as_ptr().cast()) };
+        (status == 0).then_some(module)
+    }
+
+    fn new(runtime: &Runtime, plan: &Plan) -> Result<Self> {
+        let program = tensor_codegen::generate(plan);
+        let api = &runtime.api;
+        // A kernel compiled by an earlier run of any program is read from
+        // the cache. A file the driver does not take is compiled again.
+        let file = kernel_cache_file(&program.source, runtime.compiler);
+        let kept = file
+            .as_deref()
+            .and_then(|file| std::fs::read(file).ok())
+            .and_then(|image| Self::load(runtime, &image));
+        let module = match kept {
+            Some(module) => module,
+            None => {
+                let image = Self::compile(runtime, &program.source)?;
+                let module = Self::load(runtime, &image)
+                    .ok_or_else(|| cuda_error("could not load a compiled kernel"))?;
+                if let Some(file) = &file {
+                    keep_kernel_image(file, &image);
+                }
+                module
+            }
+        };
         let mut functions = HashMap::new();
         for action in &program.actions {
             if let Action::Kernel { name, .. } = action {
@@ -655,4 +741,35 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Storage> {
         .take()
         .expect("a plan's last slot is written by its last action");
     Ok(Storage::Cuda(result))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_kernel_image_is_kept_under_a_name_made_from_its_source_and_compiler() {
+        let one = kernel_cache_file("kernel one", (13, 2)).expect("the tests run with a home");
+        let same = kernel_cache_file("kernel one", (13, 2)).unwrap();
+        let other_source = kernel_cache_file("kernel two", (13, 2)).unwrap();
+        let other_compiler = kernel_cache_file("kernel one", (13, 3)).unwrap();
+        assert_eq!(one, same);
+        assert_ne!(one, other_source);
+        assert_ne!(one, other_compiler);
+        assert_eq!(one.extension().unwrap(), "ptx");
+        assert_eq!(one.parent().unwrap().file_name().unwrap(), "cuda-kernels");
+
+        let directory = std::env::temp_dir().join(format!("aura-kernels-{}", std::process::id()));
+        let file = directory.join("deep").join("image.ptx");
+        keep_kernel_image(&file, b"image\0");
+        assert_eq!(std::fs::read(&file).unwrap(), b"image\0");
+        keep_kernel_image(&file, b"again\0");
+        assert_eq!(std::fs::read(&file).unwrap(), b"again\0");
+        assert_eq!(
+            std::fs::read_dir(file.parent().unwrap()).unwrap().count(),
+            1,
+            "no partial file is left"
+        );
+        std::fs::remove_dir_all(&directory).unwrap();
+    }
 }
