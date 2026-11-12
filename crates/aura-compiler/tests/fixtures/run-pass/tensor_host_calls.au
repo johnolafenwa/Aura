@@ -1,0 +1,64 @@
+import tensor
+from tensor import Device, Linear, Module, SGD, Tensor
+
+
+def main():
+    # Every host function of the tensor module, on the CPU device, so a
+    # compiled program calls each one.
+    device = Device.cpu()
+    print(Device.default().name() != "")
+    i = Tensor[int32].from_array(Array[int32].from_list([1, 2, 3, 4], [2, 2]), device)
+    l = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3, 4], [2, 2]), device)
+    f = Tensor[float32].from_array(Array[float32].from_list([1.0, 2.0, 3.0, 4.0], [2, 2]), device)
+    d = Tensor[float64].from_array(Array[float64].from_list([1.0, 2.0, 3.0, 4.0], [2, 2]), device)
+    b = Tensor[bool].from_array(Array[bool].from_list([true, false, false, true], [2, 2]), device)
+    print(i.to_array())
+    print(l.to_array())
+    print(f.to_array())
+    print(d.to_array())
+    print(b.to_array())
+    print(Tensor[int32].full([1], 5, device).item())
+    print(Tensor[int64].full([1], 6, device).item())
+    print(Tensor[float32].full([1], 7.5, device).item())
+    print(Tensor[float64].full([1], 8.5, device).item())
+    print(Tensor[bool].full([1], true, device).item())
+    print(f.shape())
+    print(f.len())
+    print(f.device().name())
+    print((f + f).to_array())
+    print(f.sqrt().to_array())
+    print(f.less(f * 2.0).to_array())
+    print((l * 2).to_array())
+    print(tensor.where(b, f, f * 0.0).to_array())
+    print(f.sum(1).to_array())
+    print(f.matmul(f).to_array())
+    print(f.reshape([4]).to_array())
+    print(f.permute([1, 0]).to_array())
+    print(f.to_int64().to_array())
+    moved = f.to(device)
+    moved.eval()
+    print(moved.to_array())
+    print(f.slice(0, 0, 1).to_array())
+    print(tensor.cat([f.clone(), f.clone()]).shape())
+    print(tensor.randn([2, 3], 1, device).shape())
+    mut layer = Linear(2, 1, 3, device)
+    mut optimizer = SGD(layer.parameters(), lr=0.1)
+    loss = layer.forward(f).sum()
+    loss.backward()
+    optimizer.step()
+    path = "/tmp/aura_tensor_host_calls.safetensors"
+    match tensor.save(path, ["f"], [f.clone()]):
+        case Ok(written):
+            print(written > 0)
+        case Err(message):
+            print(message)
+    match tensor.weight_names(path):
+        case Ok(names):
+            print(names)
+        case Err(message):
+            print(message)
+    match tensor.load_float32(path, "f", device):
+        case Ok(loaded):
+            print(loaded.to_array())
+        case Err(message):
+            print(message)

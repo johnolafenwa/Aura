@@ -1133,3 +1133,12 @@ fn a_long_tracked_chain_is_freed_without_recursion() {
     drop(total);
     assert!(node(&watched).is_ready());
 }
+
+#[test]
+fn the_trace_is_off_unless_asked_for_and_measures_gaps() {
+    // The tests run without `AURA_TENSOR_TRACE`.
+    assert_eq!(trace_level(), 0);
+    trace_gap();
+    std::thread::sleep(std::time::Duration::from_millis(2));
+    assert!(trace_gap() >= 2.0);
+}
