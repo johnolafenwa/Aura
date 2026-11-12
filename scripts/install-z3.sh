@@ -2,7 +2,8 @@
 # Installs the pinned Z3 that `aura verify` and its tests run against.
 #
 # Z3 comes from the `z3-solver` Python wheel, which carries a prebuilt `z3`
-# executable for Linux and macOS on x86-64 and arm64, into a private
+# executable for Linux and macOS on x86-64 and arm64 and for Windows on
+# x86-64, into a private
 # virtual environment. pip checks the wheel's hash against PyPI's index.
 #
 # Usage: scripts/install-z3.sh [prefix]
@@ -17,13 +18,28 @@ set -euo pipefail
 version=5.3.3.0
 prefix="${1:-$HOME/.cache/aura/z3/$version}"
 
-if [ ! -x "$prefix/bin/z3" ]; then
-  python3 -m venv "$prefix"
-  "$prefix/bin/python" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
-fi
-
-mkdir -p "$prefix/solver"
-ln -sf "$prefix/bin/z3" "$prefix/solver/z3"
+case "$(uname -s)" in
+  MINGW* | MSYS*)
+    # A Windows virtual environment keeps its programs under Scripts, and
+    # a copy stands in for the link Windows does not make without a
+    # privilege.
+    if [ ! -x "$prefix/Scripts/z3.exe" ]; then
+      "$(command -v python3 || command -v python)" -m venv "$prefix"
+      "$prefix/Scripts/python.exe" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
+    fi
+    mkdir -p "$prefix/solver"
+    cp "$prefix/Scripts/z3.exe" "$prefix/solver/z3.exe"
+    find "$prefix/Lib/site-packages/z3" -name 'libz3.dll' -exec cp {} "$prefix/solver/" \;
+    ;;
+  *)
+    if [ ! -x "$prefix/bin/z3" ]; then
+      python3 -m venv "$prefix"
+      "$prefix/bin/python" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
+    fi
+    mkdir -p "$prefix/solver"
+    ln -sf "$prefix/bin/z3" "$prefix/solver/z3"
+    ;;
+esac
 "$prefix/solver/z3" --version
 echo "export PATH=$prefix/solver:\$PATH"
 if [ -n "${GITHUB_PATH:-}" ]; then

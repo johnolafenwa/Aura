@@ -190,6 +190,10 @@ jobs:
         if: ${{ !cancelled() }}
         run: bash scripts/install-llvm.sh
 
+      - name: Install Z3
+        if: ${{ !cancelled() }}
+        run: bash scripts/install-z3.sh
+
       - name: Build the compiler and the aura command
         if: ${{ !cancelled() }}
         run: cargo build --locked -p aura 2>&1 | tee "$RUNNER_TEMP/aura-build.log"
@@ -262,7 +266,8 @@ jobs:
           tail -n 40 "$RUNNER_TEMP/smoke.log" || true
           grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true
           grep -E "FAILED|failed|panicked|over 60 seconds|test result|^error" "$RUNNER_TEMP/command-tests.log" | tail -n 60 || true
-          grep -E "FAILED|failed|panicked|over 60 seconds|test result|^error" "$RUNNER_TEMP/compiler-tests.log" | tail -n 80 || true
+          grep -E "FAILED|failed|over 60 seconds|test result|^error" "$RUNNER_TEMP/compiler-tests.log" | tail -n 60 || true
+          grep -E "panicked at" -A 14 "$RUNNER_TEMP/compiler-tests.log" | cut -c 1-400 | tail -n 220 || true
           grep -vE "^ +Compiling|^warning|^ *$" "$RUNNER_TEMP/package.log" | tail -n 40 || true
 
   native-binaries:
