@@ -645,7 +645,7 @@ diagnostics. The bundled VS Code extension uses that compiler-owned surface.
 
 ## Limits And Implementation-Defined Behavior
 
-Aura 0.14 Arrays are CPU-only, row-major, and have rank one or more. They do
+Aura 0.15 Arrays are CPU-only, row-major, and have rank one or more. They do
 not have:
 
 - mixed promotion between dtypes

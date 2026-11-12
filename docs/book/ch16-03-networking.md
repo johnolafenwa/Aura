@@ -354,7 +354,7 @@ matter.
 
 ## What the HTTP helpers do not do
 
-The HTTP client in Aura 0.14 is deliberately small. Each call makes one
+The HTTP client in Aura 0.15 is deliberately small. Each call makes one
 request on a fresh connection. It does not follow redirects, pool
 connections, speak HTTP/2, use a proxy, or decompress bodies. `https://` URLs
 work and verify the server's certificate against the standard public root
