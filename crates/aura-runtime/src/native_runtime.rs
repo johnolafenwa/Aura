@@ -1427,16 +1427,29 @@ pub struct OpaqueValue {
 }
 
 impl Drop for OpaqueValue {
+    // Every release of a last reference ends here, so the body joins the
+    // code that drops the box's fields instead of being called from it.
+    #[inline(always)]
     fn drop(&mut self) {
         // A value freed while a ledger still lists it leaves the list, so no
         // ledger releases it again.
         // SAFETY: a linked value is confined to this thread.
         unsafe { owned_values::detach_for_drop(self) };
         let lock = *self.shared_lock.get_mut();
-        if !lock.is_null() && !std::ptr::eq(lock, &FROZEN_VALUE_LOCK) {
-            // SAFETY: `share_direct_value` leaked this box for the value.
-            drop(unsafe { Box::from_raw(lock) });
+        if !lock.is_null() {
+            free_shared_lock(lock);
         }
+    }
+}
+
+/// Frees the lock of a value that was shared between threads. Few values
+/// are, so the code stays out of the path every release takes.
+#[cold]
+#[inline(never)]
+fn free_shared_lock(lock: *mut RwLock<()>) {
+    if !std::ptr::eq(lock, &FROZEN_VALUE_LOCK) {
+        // SAFETY: `share_direct_value` leaked this box for the value.
+        drop(unsafe { Box::from_raw(lock) });
     }
 }
 
@@ -2610,6 +2623,9 @@ pub(crate) struct RuntimeTypeTag {
     /// variant of that enum takes when tagged, built once so that tagging
     /// each new `Result.Ok(...)` shares it instead of allocating.
     pub(crate) tagged_enum_name: Option<RuntimeName>,
+    /// For a list type, its element type, shared once so that each new
+    /// list of the type takes a reference to it instead of a copy.
+    pub(crate) list_element: Option<SharedType>,
 }
 
 /// The name of a variant of enum `base` tagged with `runtime_type_name`.
@@ -2711,6 +2727,12 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         }
         _ => None,
     };
+    let list_element = match &parsed {
+        Type::Named(name, args) if name == "list" && args.len() == 1 => {
+            Some(SharedType::from(args[0].clone()))
+        }
+        _ => None,
+    };
     let tag = Arc::new(RuntimeTypeTag {
         name: RuntimeName::from_static(Box::leak(name.to_owned().into_boxed_str())),
         parsed: Arc::new(parsed),
@@ -2719,6 +2741,7 @@ fn shared_runtime_type_tag(bytes: &[u8]) -> Arc<RuntimeTypeTag> {
         shape_free,
         descriptor,
         tagged_enum_name,
+        list_element,
     });
     let mut registry = registry
         .lock()
@@ -4340,7 +4363,7 @@ fn decode_bytes(ptr: *const u8, len: usize) -> String {
 
 fn bytes_vec_value(bytes: Vec<u8>) -> Value {
     Value::Vec(VecValue {
-        element_type: SharedType::from(Type::named("uint8")),
+        element_type: SharedType::named("uint8"),
         elements: ListElements::from_uint8(bytes),
         str_view: Default::default(),
     })
@@ -7233,7 +7256,7 @@ pub extern "C-unwind" fn aura_direct_string_split(
         unsafe {
             with_value(value, |value| match value {
                 Value::String(text) => boxed_value(Value::Vec(VecValue {
-                    element_type: SharedType::from(Type::named("str")),
+                    element_type: SharedType::named("str"),
                     elements: split_text(text, separator.as_str()).into(),
                     str_view: Default::default(),
                 })),
@@ -8042,7 +8065,7 @@ fn normalize_vec_index(index: i64, len: usize) -> Option<usize> {
 pub extern "C-unwind" fn aura_direct_vec_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Vec(VecValue {
-            element_type: SharedType::from(Type::named("Unknown")),
+            element_type: SharedType::named("Unknown"),
             elements: Vec::new().into(),
             str_view: Default::default(),
         }))
@@ -8064,14 +8087,13 @@ pub extern "C-unwind" fn aura_direct_vec_empty_tagged(
             runtime_error("direct runtime received a null type tag cell");
         };
         let tag = celled_runtime_type_tag(cell, slice::from_raw_parts(type_ptr, type_len));
-        let element_type = match &*tag.parsed {
-            Type::Named(name, args) if name == "list" && args.len() == 1 => args[0].clone(),
-            _ => runtime_error(format!("an empty list cannot take the type `{}`", tag.name)),
+        let Some(element_type) = tag.list_element.clone() else {
+            runtime_error(format!("an empty list cannot take the type `{}`", tag.name));
         };
         let elements = empty_elements_for(&element_type);
         let boxed = boxed_value_with_type(
             Value::Vec(VecValue {
-                element_type: SharedType::from(element_type),
+                element_type,
                 elements,
                 str_view: Default::default(),
             }),
@@ -12854,7 +12876,7 @@ pub extern "C-unwind" fn aura_direct_map_extend_in_place(
 pub extern "C-unwind" fn aura_direct_set_empty() -> *mut OpaqueValue {
     task_runtime_boundary(|| {
         boxed_value(Value::Set(SetValue {
-            element_type: SharedType::from(Type::named("Unknown")),
+            element_type: SharedType::named("Unknown"),
             elements: SetElements::new(),
         }))
     })
@@ -12908,7 +12930,7 @@ pub extern "C-unwind" fn aura_direct_set_insert_int64_in_place(
     task_runtime_boundary(|| {
         let inserted = with_set_mut(set, |set| {
             if is_unknown_runtime_type(&set.element_type) {
-                set.element_type = SharedType::from(Type::named("int64"));
+                set.element_type = SharedType::named("int64");
             }
             set.elements.insert_i64(value)
         });
@@ -17514,7 +17536,7 @@ pub extern "C-unwind" fn aura_direct_fs_read_dir(path: *mut OpaqueValue) -> *mut
                 Some(&current_cancellation()),
             ) {
                 Ok(names) => boxed_value(result_ok(Value::Vec(VecValue {
-                    element_type: SharedType::from(Type::named("str")),
+                    element_type: SharedType::named("str"),
                     elements: names.into_iter().map(Value::string).collect(),
                     str_view: Default::default(),
                 }))),

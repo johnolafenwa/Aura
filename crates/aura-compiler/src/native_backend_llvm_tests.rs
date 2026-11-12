@@ -1533,3 +1533,186 @@ fn optimized_ir_is_written_beside_the_named_prefix() {
     assert!(error.starts_with("failed to write LLVM IR"), "{error}");
     std::fs::remove_dir_all(&directory).expect("the directory should be removed");
 }
+
+/// A local `callee` that adds one, `extra` times over, and an exported
+/// `looper` whose loop calls it once and has a copy.
+fn define_copied_call(module: &mut LlvmModule, extra: usize, recursive: bool) -> FuncHandle {
+    let sig = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let callee = module
+        .declare_function("callee", Linkage::Local, &sig)
+        .expect("the callee should declare");
+    module
+        .define_function(
+            callee,
+            &sig,
+            Box::new(move |builder| {
+                let entry = builder.create_block();
+                builder.append_block_params_for_function_params(entry);
+                builder.switch_to_block(entry);
+                let mut word = builder.block_params(entry)[0];
+                for _ in 0..=extra {
+                    word = builder.iadd_imm(word, 1);
+                }
+                if recursive {
+                    let this = builder.import_function(callee);
+                    word = builder.call(this, &[word]).results[0];
+                }
+                builder.return_(&[word]);
+                builder.verify()
+            }),
+        )
+        .expect("the callee should define");
+
+    let looper = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(module, "looper", Linkage::Export, &looper, move |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        builder.seal_block(entry);
+        let [count, flag] = builder.block_params(entry)[..] else {
+            unreachable!("two parameters")
+        };
+        let total = Var(0);
+        builder.declare_var(total, types::I64);
+        let header = builder.create_block();
+        let index = builder.append_block_param(header, types::I64);
+        let body = builder.create_block();
+        let exit = builder.create_block();
+        let zero = builder.iconst(types::I64, 0);
+        builder.def_var(total, zero);
+        builder.jump(header, &[zero]);
+
+        builder.switch_to_block(header);
+        let more = builder.icmp(IntCC::SignedLessThan, index, count);
+        builder.brif(more, body, &[], exit, &[]);
+
+        builder.switch_to_block(body);
+        builder.seal_block(body);
+        let seven = builder.iconst(types::I64, 7);
+        let holds = builder.icmp_imm(IntCC::NotEqual, flag, 0);
+        let select = builder.select(holds, seven, index);
+        let target = builder.import_function(callee);
+        let called = builder.call(target, &[select]).results[0];
+        let sum = builder.use_var(total);
+        let added = builder.iadd(sum, called);
+        builder.def_var(total, added);
+        let next = builder.iadd_imm(index, 1);
+        builder.jump(header, &[next]);
+        builder.seal_block(header);
+
+        builder.switch_to_block(exit);
+        builder.seal_block(exit);
+        let returned = builder.use_var(total);
+        builder.return_(&[returned]);
+        assert!(builder.version_blocks(
+            &[header, body],
+            &[(select, None)],
+            &[(entry, flag, Some((flag, 1)))],
+        ));
+    });
+    callee
+}
+
+/// A function named `name` that calls `callee` once, or takes its address.
+fn define_user_of(
+    module: &mut LlvmModule,
+    name: &str,
+    linkage: Linkage,
+    callee: FuncHandle,
+    address: bool,
+) {
+    let sig = signature(CallConv::C, &[types::I64], &[types::I64]);
+    define(module, name, linkage, &sig, move |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let word = builder.block_params(entry)[0];
+        let target = builder.import_function(callee);
+        let result = if address {
+            builder.func_addr(types::I64, target)
+        } else {
+            builder.call(target, &[word]).results[0]
+        };
+        builder.return_(&[result]);
+    });
+}
+
+#[test]
+fn a_function_whose_one_call_a_loop_copy_doubled_is_inlined() {
+    let mut module = module();
+    let callee = define_copied_call(&mut module, 0, false);
+    // A thunk nothing reaches does not count as a second call.
+    define_user_of(&mut module, "thunk", Linkage::Local, callee, false);
+    assert!(!module.functions[callee.0 as usize].inline);
+    module.inline_calls_copied_with_their_loops();
+    assert!(module.functions[callee.0 as usize].inline);
+
+    let before = ir(&module);
+    assert_eq!(before.matches("call i64 @callee").count(), 3, "{before}");
+    let after = optimized_ir(&module);
+    assert!(!after.contains("@callee"), "{after}");
+}
+
+#[test]
+fn a_copied_call_is_not_inlined_when_its_function_has_other_uses() {
+    // A second call from a function the program reaches.
+    let mut called_twice = module();
+    let callee = define_copied_call(&mut called_twice, 0, false);
+    define_user_of(&mut called_twice, "other", Linkage::Export, callee, false);
+    called_twice.inline_calls_copied_with_their_loops();
+    assert!(!called_twice.functions[callee.0 as usize].inline);
+
+    // A function that takes its address.
+    let mut address_taken = module();
+    let callee = define_copied_call(&mut address_taken, 0, false);
+    define_user_of(&mut address_taken, "other", Linkage::Export, callee, true);
+    address_taken.inline_calls_copied_with_their_loops();
+    assert!(!address_taken.functions[callee.0 as usize].inline);
+
+    // A data object that holds its address.
+    let mut in_data = module();
+    let callee = define_copied_call(&mut in_data, 0, false);
+    let table = in_data
+        .declare_data("table", Linkage::Local, false)
+        .unwrap();
+    let mut contents = DataDescription::new(vec![0; 8]);
+    contents.write_function_addr(0, callee);
+    in_data.define_data(table, contents).unwrap();
+    in_data.inline_calls_copied_with_their_loops();
+    assert!(!in_data.functions[callee.0 as usize].inline);
+
+    // A function that calls itself.
+    let mut recursive = module();
+    let callee = define_copied_call(&mut recursive, 0, true);
+    recursive.inline_calls_copied_with_their_loops();
+    assert!(!recursive.functions[callee.0 as usize].inline);
+
+    // A function over the weight.
+    let mut large = module();
+    let callee = define_copied_call(&mut large, super::COPIED_CALL_INLINE_WEIGHT, false);
+    large.inline_calls_copied_with_their_loops();
+    assert!(!large.functions[callee.0 as usize].inline);
+
+    // A debug build, which keeps every function.
+    let mut debug = module();
+    let callee = define_copied_call(&mut debug, 0, false);
+    debug.enable_debug_info();
+    debug.inline_calls_copied_with_their_loops();
+    assert!(!debug.functions[callee.0 as usize].inline);
+}
+
+#[test]
+fn a_call_no_loop_copied_leaves_its_function_to_llvm() {
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64], &[types::I64]);
+    let callee = define(&mut module, "callee", Linkage::Local, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let word = builder.block_params(entry)[0];
+        builder.return_(&[word]);
+    });
+    define_user_of(&mut module, "caller", Linkage::Export, callee, false);
+    module.inline_calls_copied_with_their_loops();
+    assert!(!module.functions[callee.0 as usize].inline);
+}

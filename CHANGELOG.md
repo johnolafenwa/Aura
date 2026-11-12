@@ -123,6 +123,19 @@ in this file.
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
   when the option is absent.
+- Fixed the two regressions the 0.14.0 release measured against 0.13.0.
+  - A hello world executable is 68 KB smaller: 1,167,304 bytes before and
+    1,098,640 now, against 1,080,264 on 0.13.0. `print` no longer links
+    the list and dict code that turns a parsed `json.Value` into values.
+  - Fifteen of the 30 cross-language programs executed 2 to 6% more
+    instructions on 0.14.0. The 30 programs now execute 76,843M
+    instructions, against 79,828M on 0.14.0 and 79,994M on 0.13.0. A new
+    list no longer looks its element type up by name, a dict read tests
+    its storage form once, freeing a value is one inlined path again, and
+    a function with one call is inlined again when its loop has two
+    copies. Four programs stay 1 to 2% above 0.13.0, where they pay for
+    the smaller value header and the JSON tape that 0.14.0 added.
+
 - A method call on a list element no longer takes the element out of the
   list and puts it back. A `mut self` call by index (`items[i].bump(1)`), a
   shared call by index (`items[i].get()`), any call in

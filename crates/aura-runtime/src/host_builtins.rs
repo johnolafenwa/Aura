@@ -238,7 +238,7 @@ pub fn host_sys_args(args: Vec<Value>, program_args: Option<&[String]>) -> Resul
     let name = "sys::args";
     host_expect_arity(name, &args, 0)?;
     Ok(Value::Vec(VecValue {
-        element_type: SharedType::from(Type::named("str")),
+        element_type: SharedType::named("str"),
         elements: program_args
             .map(<[String]>::to_vec)
             .unwrap_or_else(host_process_args)
