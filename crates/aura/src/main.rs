@@ -2834,6 +2834,7 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
     Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
 }
 
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
     #[cfg(unix)]
     if error.raw_os_error() == Some(libc::ENOEXEC) {
@@ -3031,6 +3032,26 @@ fn acquire_native_build_lock_at(
 
     #[cfg(not(unix))]
     {
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                if let Some(on_wait) = on_wait.as_mut() {
+                    on_wait();
+                }
+                file.lock().map_err(|error| {
+                    format!(
+                        "failed to wait for native build lock `{}`: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(format!(
+                    "failed to acquire native build lock `{}`: {error}",
+                    path.display()
+                ));
+            }
+        }
         Ok(NativeBuildLock { _file: file })
     }
 }
@@ -3138,11 +3159,34 @@ fn native_process_is_live(pid: u32) -> bool {
         let result = unsafe { libc::kill(pid, 0) };
         result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_process_is_live(pid)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         true
     }
+}
+
+/// Reports whether a Windows process with this identifier is still running.
+/// A process that cannot be opened for any reason other than not existing
+/// counts as live, so cleanup never removes what it cannot inspect.
+#[cfg(windows)]
+fn windows_process_is_live(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return io::Error::last_os_error().raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32);
+    }
+    let live = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
+    unsafe { CloseHandle(handle) };
+    live
 }
 
 /// Writes `contents` to a new file that only its owner can read. It refuses a
@@ -3490,7 +3534,11 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntim
 /// Cached program binaries live under their own directory so the cache can
 /// hold its own bookkeeping without either colliding with a content key.
 const NATIVE_CACHE_PROGRAMS: &str = "programs";
+#[cfg(not(windows))]
 const NATIVE_CACHE_PROGRAM: &str = "program";
+/// Windows starts a program only from a file with an executable extension.
+#[cfg(windows)]
+const NATIVE_CACHE_PROGRAM: &str = "program.exe";
 const NATIVE_CACHE_DIGEST: &str = "program.sha256";
 const NATIVE_CACHE_ENTRY_ID: &str = "entry-id";
 const MAX_NATIVE_CACHE_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
@@ -3650,7 +3698,6 @@ fn launch_verified_native_binary(
         ))
     })?;
 
-    #[cfg(unix)]
     let launch_lease = match create_verified_native_launch_lease(&directory) {
         Ok(lease) => lease,
         Err(error) => {
@@ -3715,13 +3762,18 @@ fn launch_verified_native_binary(
     // Clean after exit. Removing an executing Mach-O can cause an otherwise
     // successful child to terminate with status 1 on macOS. Interrupted
     // parents are handled by the bounded stale-launch collector on the next
-    // verified run.
+    // verified run. A Unix child inherits the lease; elsewhere this process
+    // holds it for the life of the child and releases it here, because an
+    // open file can keep its directory from being removed.
+    #[cfg(not(unix))]
+    drop(launch_lease);
     remove_private_native_launch(&private_binary, &directory);
 
     Ok(outcome)
 }
 
 fn create_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -3759,6 +3811,22 @@ fn create_verified_native_launch_lease(directory: &Path) -> io::Result<fs::File>
     }
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == -1 {
         let error = io::Error::last_os_error();
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_verified_native_launch_lease(directory: &Path) -> io::Result<fs::File> {
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    if let Err(error) = file.lock() {
         drop(file);
         let _ = fs::remove_file(&path);
         return Err(error);
@@ -3851,7 +3919,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
             continue;
         }
 
-        #[cfg(unix)]
         match acquire_abandoned_verified_native_launch_lease(&path) {
             Ok(VerifiedNativeLaunchLeaseState::Busy) | Err(_) => continue,
             Ok(VerifiedNativeLaunchLeaseState::Acquired(_lease)) => {
@@ -3861,13 +3928,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
                 continue;
             }
             Ok(VerifiedNativeLaunchLeaseState::Missing) => {}
-        }
-        #[cfg(not(unix))]
-        {
-            // The maintained native hosts use the lease path above. On other
-            // targets cleanup is conservative rather than guessing whether an
-            // executable may still be live.
-            continue;
         }
 
         // A lockless directory can only precede lease creation; no child is
@@ -3884,7 +3944,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
     }
 }
 
-#[cfg(unix)]
 enum VerifiedNativeLaunchLeaseState {
     Missing,
     Busy,
@@ -3930,6 +3989,31 @@ fn acquire_abandoned_verified_native_launch_lease(
     }
 }
 
+#[cfg(not(unix))]
+fn acquire_abandoned_verified_native_launch_lease(
+    directory: &Path,
+) -> io::Result<VerifiedNativeLaunchLeaseState> {
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(VerifiedNativeLaunchLeaseState::Missing);
+        }
+        Err(error) => return Err(error),
+    };
+    if !file.metadata()?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "verified-native launch lease is not a regular file",
+        ));
+    }
+    match file.try_lock() {
+        Ok(()) => Ok(VerifiedNativeLaunchLeaseState::Acquired(file)),
+        Err(fs::TryLockError::WouldBlock) => Ok(VerifiedNativeLaunchLeaseState::Busy),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 fn verified_native_launch_owner_is_live(name: &str) -> bool {
     #[cfg(unix)]
     {
@@ -3945,8 +4029,10 @@ fn verified_native_launch_owner_is_live(name: &str) -> bool {
     }
     #[cfg(not(unix))]
     {
-        let _ = name;
-        true
+        name.strip_prefix("aura-verified-native-")
+            .and_then(|suffix| suffix.split_once('-').map(|(pid, _)| pid))
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_none_or(native_process_is_live)
     }
 }
 
@@ -4773,6 +4859,7 @@ fn native_keep_symbols() -> bool {
 /// The link arguments of a debug build: no section garbage collection, and
 /// the runtime's `aura_debug_render`, which nothing in the program calls,
 /// linked in for the debugger's formatter.
+#[cfg_attr(windows, allow(dead_code))]
 fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
     match os {
         "macos" => &["-Wl,-u,_aura_debug_render"],
@@ -4785,6 +4872,7 @@ fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
 /// program finds a library there when it starts, then each library, then
 /// each macOS framework. The names are checked again here, so nothing but
 /// a library name follows `-l`.
+#[cfg_attr(windows, allow(dead_code))]
 fn foreign_link_args(
     plan: &aura_compiler::ForeignLinkPlan,
     os: &str,
@@ -4827,6 +4915,7 @@ fn foreign_link_args(
     Ok(args)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn user_binary_link_args(os: &str) -> &'static [&'static str] {
     match os {
         "macos" => &["-Wl,-dead_strip"],
