@@ -37,6 +37,11 @@ pub(super) struct ProgramShapes {
     /// The functions whose parameters only plain assignments write, so a
     /// write-back hands back a box that carries its parameter's tag.
     tagged_writebacks: HashSet<String>,
+    /// The methods that only read and write scalar fields of a receiver
+    /// kept in a box and never name the box itself (see
+    /// `leaf_body`): such a method hands back the box it was given as it
+    /// was, so a call tags neither the receiver nor the write-back.
+    field_only_methods: HashSet<String>,
 }
 
 impl ProgramShapes {
@@ -96,6 +101,17 @@ impl ProgramShapes {
             }
         }
         shapes
+    }
+
+    /// Records the methods that never name their receiver's box.
+    pub(super) fn set_field_only_methods(&mut self, methods: HashSet<String>) {
+        self.field_only_methods = methods;
+    }
+
+    /// Whether `function` only reads and writes scalar fields of its
+    /// receiver's box, so the box's tag is the same after a call as before.
+    pub(super) fn keeps_receiver_shape(&self, function: &str) -> bool {
+        self.field_only_methods.contains(function)
     }
 
     /// Whether a call of `function` returns a box that carries its return

@@ -43,8 +43,20 @@ Last updated: 2026-11-12
   about 2,800 instructions down to 36 for a class of numbers and 92 for a
   class with a `str` field. Probes `element_mut_call` and
   `element_plain_mut_call` record it.
-- Open: a call that is not inlined pays about 50 instructions for its
-  frame, which keeps the two probes at 7.8 and 4.0 times Rust.
+- Closed by "Call frame cost" below: the two probes were at 7.8 and 4.0
+  times Rust because the method call was not inlined.
+
+## Call frame cost (complete)
+
+- A leaf with a `mut self` receiver or `mut` parameter gets a second body
+  with no frame record, which direct calls with no write-through sink
+  enter and LLVM inlines. A method that only touches scalar fields of a
+  boxed receiver is a leaf too, and its caller skips the type tag checks.
+- `element_mut_call` 94 to 34 instructions (2.8 times Rust),
+  `element_plain_mut_call` 64 to 26 (1.6 times). Details are in
+  `2026-11-11-call-frame-cost.md`.
+- Open: a call of a function that is not a leaf still pays about 30
+  instructions for its record (push, pop, and the stack accessor).
 
 ## Streaming I/O and a deeper standard library (in progress)
 
