@@ -1,5 +1,9 @@
 # The official LLVM libraries for Windows are built against the static C
 # runtime, and a program links one C runtime. Building Aura against it too
 # also leaves `aura.exe` with no Visual C++ runtime DLL to install.
+#
+# The main thread of a Windows program gets a 1 MiB stack unless the linker
+# is told otherwise. The compiler recurses on it, so `aura.exe` asks for the
+# 8 MiB it has on Linux and macOS.
 [target.x86_64-pc-windows-msvc]
-rustflags = ["-C", "target-feature=+crt-static"]
+rustflags = ["-C", "target-feature=+crt-static", "-C", "link-arg=/STACK:8388608"]

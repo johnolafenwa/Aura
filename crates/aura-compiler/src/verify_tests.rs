@@ -716,7 +716,6 @@ fn every_run_pass_fixture_verifies_without_an_internal_error() {
 }
 
 /// A directory of stand-in solver scripts for this test.
-#[cfg(unix)]
 fn script_dir(test: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("aura-verify-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);

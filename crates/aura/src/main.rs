@@ -4900,7 +4900,13 @@ fn msvc_link_args(
     foreign: &aura_compiler::ForeignLinkPlan,
     debug: bool,
 ) -> std::result::Result<Vec<std::ffi::OsString>, String> {
-    let mut args: Vec<std::ffi::OsString> = vec!["/NOLOGO".into(), "/SUBSYSTEM:CONSOLE".into()];
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "/NOLOGO".into(),
+        "/SUBSYSTEM:CONSOLE".into(),
+        // The main thread gets the 8 MiB stack it has on Linux and macOS.
+        // The Windows default is 1 MiB.
+        "/STACK:8388608".into(),
+    ];
     args.extend(objects.iter().map(|object| object.clone().into_os_string()));
     args.push(staticlib.as_os_str().to_owned());
     let mut output = std::ffi::OsString::from("/OUT:");
@@ -5763,10 +5769,13 @@ mod tests {
         let target = root.join("target").join("debug");
         let deps = target.join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let primary = target.join("libaura_runtime.a");
+        let primary = target.join(super::static_library_file_name());
         fs::write(&primary, b"primary").expect("primary staticlib should write");
-        fs::write(deps.join("libaura_runtime-old.a"), b"stale hashed archive")
-            .expect("hashed archive should write");
+        fs::write(
+            deps.join(hashed_runtime_archive("old")),
+            b"stale hashed archive",
+        )
+        .expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
             .expect("should resolve runtime library");
@@ -6557,7 +6566,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             .expect("bin dir should exist");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
         fs::write(&executable, b"test executable").expect("test executable should write");
-        let staticlib = runtime_dir.join("libaura_runtime.a");
+        let staticlib = runtime_dir.join(super::static_library_file_name());
         fs::write(&staticlib, b"test runtime").expect("test runtime should write");
         fs::write(
             runtime_dir.join("native-link-args.json"),
@@ -6662,7 +6671,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let archive = deps.join("libaura_runtime-only.a");
+        let archive = deps.join(hashed_runtime_archive("only"));
         fs::write(&archive, b"archive").expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
@@ -6677,10 +6686,10 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("ambiguous-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let first = deps.join("libaura_runtime-first.a");
+        let first = deps.join(hashed_runtime_archive("first"));
         fs::write(&first, b"first").expect("first archive should write");
         thread::sleep(Duration::from_millis(10));
-        let second = deps.join("libaura_runtime-second.a");
+        let second = deps.join(hashed_runtime_archive("second"));
         fs::write(&second, b"second").expect("second archive should write");
 
         let error = resolve_static_library_path(root.clone(), "debug")
@@ -6694,13 +6703,25 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The name Cargo gives the runtime archive under `deps` on this host.
+    fn hashed_runtime_archive(hash: &str) -> String {
+        format!(
+            "{}-{hash}{}",
+            super::RUNTIME_ARCHIVE_STEM,
+            super::RUNTIME_ARCHIVE_SUFFIX
+        )
+    }
+
     #[test]
     fn parse_static_library_artifact_path_prefers_cargo_reported_archive() {
-        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aura_runtime"},"filenames":["/tmp/libaura_runtime-abc123.rlib","/tmp/libaura_runtime-abc123.a"]}
-{"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/libother.a"]}"#;
-        let resolved = parse_static_library_artifact_path(stdout)
+        let archive = hashed_runtime_archive("abc123");
+        let stdout = format!(
+            r#"{{"reason":"compiler-artifact","target":{{"name":"aura_runtime"}},"filenames":["/tmp/libaura_runtime-abc123.rlib","/tmp/{archive}"]}}
+{{"reason":"compiler-artifact","target":{{"name":"other"}},"filenames":["/tmp/libother.a","/tmp/other.lib"]}}"#
+        );
+        let resolved = parse_static_library_artifact_path(stdout.as_bytes())
             .expect("cargo artifact output should expose a static archive");
-        assert_eq!(resolved, PathBuf::from("/tmp/libaura_runtime-abc123.a"));
+        assert_eq!(resolved, PathBuf::from(format!("/tmp/{archive}")));
     }
 
     #[test]
@@ -6825,6 +6846,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             [
                 "/NOLOGO",
                 "/SUBSYSTEM:CONSOLE",
+                "/STACK:8388608",
                 "a.obj",
                 "b.obj",
                 "aura_runtime.lib",
@@ -6851,6 +6873,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             [
                 "/NOLOGO",
                 "/SUBSYSTEM:CONSOLE",
+                "/STACK:8388608",
                 "a.obj",
                 "aura_runtime.lib",
                 "/OUT:app.exe",
