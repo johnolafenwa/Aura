@@ -21,6 +21,12 @@ in this file.
 - The `tensor` module has the layers of a transformer, written in Aura:
   `Linear`, `Embedding`, `LayerNorm`, `Attention`, `attention`,
   `cross_entropy`, and the optimizers `SGD` and `AdamW`.
+- `tensor.MixtureOfExperts` is a layer of several networks and a gate
+  that keeps each row's highest scoring experts. `one_hot`,
+  `top_indices` and `top_mask` pick the largest elements of each lane.
+- Fixed: a method of an imported class can name, in a local variable's
+  type, a class of its own module that the importing program does not
+  import.
 - `tensor.save`, `weight_names`, `load_float32` and `load_int64` write
   and read safetensors files.
 - New `tensor` module. `Tensor[T]` holds numbers on a device and computes

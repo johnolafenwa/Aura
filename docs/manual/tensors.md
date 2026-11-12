@@ -235,6 +235,10 @@ weights, `apply` to run it, and `variables()` to list its variables.
 | `Embedding.create(count, width, seed, device)` | A row of `weight` for each index of a `Tensor[int64]`. |
 | `LayerNorm.create(width, device)` | Each lane along the last axis moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. |
 | `Attention.create(width, heads, seed, device)` | Self-attention with several heads over a `[batch, length, width]` tensor. `apply(x, causal=false)`. |
+| `MixtureOfExperts.create(width, hidden, experts, active, seed, device)` | Several two layer networks and a gate. `apply(x)` weights the outputs of each row's `active` highest scoring experts by the softmax of their scores. `weights(x)` gives those weights. Every expert runs on every row. |
+| `one_hot(indices, count)` | A mask with one more axis, of length `count`, that holds at the place each index names. |
+| `top_indices(x, count)` | The places of the `count` largest elements of each lane along the last axis, largest first. |
+| `top_mask(x, count)` | A mask in the shape of `x` that holds at the `count` largest elements of each lane along the last axis. |
 | `attention(query, key, value, causal=false)` | Scaled dot-product attention over the last two axes. With `causal`, row `i` attends to rows `0` to `i` only. |
 | `cross_entropy(logits, targets)` | The mean over the rows of `logits` of the negative logarithm of the softmax entry the row's target names. |
 | `SGD.create(variables, rate)` | `step(loss)` moves each variable against its gradient. |

@@ -2465,6 +2465,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
 
             for (class_name, class) in &program.classes {
+                // An imported class's methods were checked in their own
+                // module, where the names in their bodies resolve.
+                if class.module_name != program.module_name {
+                    continue;
+                }
                 for (method_name, method) in &class.methods {
                     let sink = Rc::new(RefCell::new(BTreeSet::new()));
                     let equality_sink = Rc::new(RefCell::new(BTreeSet::new()));

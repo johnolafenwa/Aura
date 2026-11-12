@@ -1605,6 +1605,54 @@ def main():
 }
 
 #[test]
+fn a_mixture_of_experts_keeps_its_top_experts_and_learns() {
+    // The program names neither `Linear` nor `Variable`, which the
+    // layer's own methods use.
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, MixtureOfExperts, AdamW
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, 5.0, 3.0, 4.0, 9.0, 2.0, 8.0, 7.0], [2, 4]), device)
+    print(tensor.top_indices(x, 2).to_array())
+    print(tensor.top_mask(x, 2).to_array())
+    print(tensor.one_hot(x.argmax(), 4).to_array())
+    layer = MixtureOfExperts.create(4, 8, 3, 2, 7, device)
+    weights = layer.weights(x)
+    one = Tensor[float32].full([1], 1.0, device)
+    print(tensor.choose(weights.greater(one * 0.0), one, one * 0.0).sum(1).to_array())
+    total = weights.sum().item()
+    print(total > 1.9999 and total < 2.0001)
+    rows = tensor.normal([64, 4], 1, device)
+    wanted = rows * rows - 1.0
+    mut optimizer = AdamW.create(layer.variables(), 0.01)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(200):
+        gap = layer.apply(rows) - wanted
+        loss = (gap * gap).mean()
+        optimizer.step(loss)
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first * 0.2)
+"#,
+    )
+    .expect("a mixture of experts trains");
+    assert_eq!(
+        output.stdout,
+        "Array[int64](shape=[2, 2], values=[1, 3, 0, 2])
+Array[bool](shape=[2, 4], values=[false, true, false, true, true, false, true, false])
+Array[bool](shape=[2, 4], values=[false, true, false, false, true, false, false, false])
+Array[float32](shape=[2], values=[2.0, 2.0])
+true
+true
+"
+    );
+}
+
+#[test]
 fn a_tensor_operator_takes_a_number_on_either_side() {
     let output = crate::run_source(
         r#"from tensor import Device, Tensor

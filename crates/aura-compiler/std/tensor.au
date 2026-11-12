@@ -471,6 +471,97 @@ public class Attention:
         return all
 
 
+public def one_hot(indices: Tensor[int64], count: int64) -> Tensor[bool]:
+    """A mask with one more axis than `indices`, of length `count`, that
+    holds at the place each index names."""
+    mut shape = indices.shape()
+    shape.append(1)
+    return arange(count, indices.device()).equal(indices.reshape(shape))
+
+
+public def top_indices(x: Tensor[float32], count: int64) -> Tensor[int64]:
+    """The places of the `count` largest elements of each lane along the
+    last axis, largest first, as a last axis of length `count`."""
+    mut shape = x.shape()
+    last = shape.len() - 1
+    width = shape[last]
+    shape[last] = 1
+    mut left = x.detach()
+    mut found = list[Tensor[int64]]()
+    mut at = 0
+    while at < count:
+        place = left.argmax()
+        left = choose(one_hot(place, width), left.scalar(-3.0e38), left)
+        found.append(place.reshape(shape))
+        at += 1
+    return concat(found, last)
+
+
+public def top_mask(x: Tensor[float32], count: int64) -> Tensor[bool]:
+    """A mask in the shape of `x` that holds at the `count` largest
+    elements of each lane along the last axis."""
+    width = x.shape()[x.shape().len() - 1]
+    mut left = x.detach()
+    mut taken = left.scalar(0.0)
+    mut at = 0
+    while at < count:
+        hot = one_hot(left.argmax(), width)
+        taken = taken + choose(hot, left.scalar(1.0), left.scalar(0.0))
+        left = choose(hot, left.scalar(-3.0e38), left)
+        at += 1
+    return taken.greater(left.scalar(0.5))
+
+
+public class MixtureOfExperts:
+    """Several two layer networks and a gate. For each row the gate keeps
+    its `active` highest scoring experts, and the result is their outputs
+    weighted by the softmax of those scores. Every expert runs on every
+    row, and a row's other experts have weight zero."""
+    public gate: Linear
+    public wide: list[Linear]
+    public narrow: list[Linear]
+    public active: int64
+
+    public def create(width: int64, hidden: int64, experts: int64, active: int64, seed: int64, device: Device) -> MixtureOfExperts:
+        mut wide: list[Linear] = []
+        mut narrow: list[Linear] = []
+        mut at = 0
+        while at < experts:
+            wide.append(Linear.create(width, hidden, seed + 2 + at * 4, device))
+            narrow.append(Linear.create(hidden, width, seed + 4 + at * 4, device))
+            at += 1
+        return MixtureOfExperts(gate=Linear.create(width, experts, seed, device), wide=wide, narrow=narrow, active=active)
+
+    public def weights(self, x: Tensor[float32]) -> Tensor[float32]:
+        """The weight of each expert for each row of `x`, as a last axis
+        with one entry for each expert."""
+        scores = self.gate.apply(x)
+        return choose(top_mask(scores, self.active), scores, scores.scalar(-1.0e30)).softmax(-1)
+
+    public def apply(self, x: Tensor[float32]) -> Tensor[float32]:
+        weights = self.weights(x)
+        last = x.shape().len() - 1
+        mut total = x.scalar(0.0)
+        mut at = 0
+        while at < self.wide.len():
+            view wide = self.wide[at]
+            view narrow = self.narrow[at]
+            total = total + narrow.apply(wide.apply(x).gelu()) * weights.slice(last, at, at + 1)
+            at += 1
+        return total
+
+    public def variables(self) -> list[Variable[float32]]:
+        mut all = self.gate.variables()
+        mut at = 0
+        while at < self.wide.len():
+            view wide = self.wide[at]
+            view narrow = self.narrow[at]
+            all.extend(wide.variables())
+            all.extend(narrow.variables())
+            at += 1
+        return all
+
+
 public class SGD:
     """Gradient descent: each variable less `rate` times its gradient."""
     variables: list[Variable[float32]]
