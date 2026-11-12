@@ -113,6 +113,31 @@ sha256_of() {
   fi
 }
 
+# Copies the Windows SDK import libraries LLVM names, such as psapi.lib,
+# next to LLVM's own. Aura links the static C runtime on Windows, and
+# llvm-sys then asks rustc for LLVM's system libraries as static libraries.
+# rustc finds those only in its search directories, which include LLVM's
+# library directory and not the SDK's.
+copy_windows_system_libraries() {
+  local root=$1 sdk="" candidate library
+  for candidate in "/c/Program Files (x86)/Windows Kits/10/Lib"/*/um/x64; do
+    if [ -f "$candidate/psapi.lib" ]; then
+      sdk=$candidate
+    fi
+  done
+  if [ -z "$sdk" ]; then
+    echo "install-llvm.sh: cannot find the Windows SDK libraries; install the Visual Studio Build Tools with the Windows SDK" >&2
+    exit 1
+  fi
+  for library in $("$root/bin/llvm-config.exe" --system-libs --link-static | tr -d '\r'); do
+    library=${library#-l}
+    library=${library%.lib}.lib
+    if [ -f "$sdk/$library" ]; then
+      cp "$sdk/$library" "$root/lib/$library"
+    fi
+  done
+}
+
 if [ -x "$prefix/bin/llvm-config$exe" ] && [ "$("$prefix/bin/llvm-config$exe" --version)" = "$version" ]; then
   echo "LLVM ${version} is already installed in ${prefix}"
 else
@@ -139,6 +164,9 @@ else
   done
   tar -xJf "$work/$archive" -C "$work/extract" ${wildcards[@]+"${wildcards[@]}"} "${members[@]}"
   rm "$work/$archive"
+  if [ -n "$exe" ]; then
+    copy_windows_system_libraries "$work/extract/$top"
+  fi
   rm -rf "$prefix"
   mkdir -p "$(dirname "$prefix")"
   mv "$work/extract/$top" "$prefix"
