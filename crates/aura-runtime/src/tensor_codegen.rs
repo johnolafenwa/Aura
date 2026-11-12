@@ -106,6 +106,24 @@ const STAGE_RUN: usize = 64;
 /// The most elements the single thread of a last stage reduces.
 const LAST_STAGE: usize = 128;
 
+/// The shortest lane of a last axis that a group of threads reduces.
+const SPLIT_LANE: usize = 32;
+
+/// The threads that share a lane of `length` elements on a last axis, or
+/// `None` when one thread reduces the lane. Threads beside each other
+/// read memory beside each other, which one thread per lane does not do
+/// when a lane is a long run of memory.
+fn lane_parts(inner: usize, length: usize) -> Option<usize> {
+    if inner != 1 || length < SPLIT_LANE {
+        return None;
+    }
+    let mut parts = 8;
+    while parts * parts < length {
+        parts *= 2;
+    }
+    Some(parts)
+}
+
 /// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
 
@@ -586,6 +604,67 @@ impl<'a> Generator<'a> {
         let first = self.element(slot, operand, "start", &arguments);
         let next = self.element(slot, operand, "(start + k * step)", &arguments);
         let wins = if largest { ">" } else { "<" };
+        if let Some(parts) = lane_parts(inner, length) {
+            // Thread `part` of a lane finds the best of the places `part`,
+            // `part + parts` and so on, then one thread for each lane
+            // picks among what its threads found.
+            let (first, next, found) = (
+                self.element(slot, operand, "(start + part)", &arguments),
+                self.element(slot, operand, "(start + k)", &arguments),
+                self.element(slot, operand, "(start + at)", &arguments),
+            );
+            let threads = lanes * parts;
+            writeln!(
+                self.source,
+                "extern \"C\" __global__ void k{slot}r0(long long* out{parameters}) {{\n    \
+                 long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+                 if (t >= {threads}LL) return;\n    \
+                 long long part = t % {parts}LL;\n    \
+                 long long start = (t / {parts}LL) * {length}LL;\n    \
+                 {ty} best = {first};\n    \
+                 long long place = part;\n    \
+                 for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) {{\n        \
+                 {ty} value = {next};\n        \
+                 if (value {wins} best || (value != value && best == best)) {{ best = value; place = k; }}\n    \
+                 }}\n    \
+                 out[t] = place;\n}}\n\
+                 extern \"C\" __global__ void k{slot}(long long* out{parameters}, const long long* in) {{\n    \
+                 long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+                 if (lane >= {lanes}LL) return;\n    \
+                 long long start = lane * {length}LL;\n    \
+                 long long place = in[lane * {parts}LL];\n    \
+                 long long at = place;\n    \
+                 {ty} best = {found};\n    \
+                 for (long long part = 1; part < {parts}LL; part++) {{\n        \
+                 at = in[lane * {parts}LL + part];\n        \
+                 {ty} value = {found};\n        \
+                 bool none = value != value, held = best != best;\n        \
+                 if (none ? (!held || at < place) : (!held && (value {wins} best || (value == best && at < place)))) {{ best = value; place = at; }}\n    \
+                 }}\n    \
+                 out[lane] = place;\n}}"
+            )
+            .expect("writing to a string cannot fail");
+            let partial = self.scratch();
+            self.actions.push(Action::Kernel {
+                name: format!("k{slot}r0"),
+                output: partial,
+                bytes: threads * 8,
+                threads,
+                inputs: leaves.clone(),
+                clear: false,
+            });
+            let mut inputs = leaves;
+            inputs.push(partial);
+            self.actions.push(Action::Kernel {
+                name: format!("k{slot}"),
+                output: slot,
+                bytes: lanes * 8,
+                threads: lanes,
+                inputs,
+                clear: false,
+            });
+            return;
+        }
         writeln!(
             self.source,
             "extern \"C\" __global__ void k{slot}(long long* out{parameters}) {{\n    \
@@ -649,6 +728,52 @@ impl<'a> Generator<'a> {
                 } else {
                     "acc".to_string()
                 };
+                if let Some(parts) = lane_parts(inner, length) {
+                    // Thread `part` of a lane reduces the places `part`,
+                    // `part + parts` and so on, then one thread for each
+                    // lane reduces what its threads wrote.
+                    let threads = lanes * parts;
+                    let step = combine("acc", &at("(start + k)"));
+                    let join = combine("acc", "in[lane * PARTS + part]");
+                    writeln!(
+                        self.source,
+                        "extern \"C\" __global__ void k{slot}r0({ty}* out{parameters}) {{\n    \
+                         long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+                         if (t >= {threads}LL) return;\n    \
+                         long long part = t % {parts}LL;\n    \
+                         long long start = (t / {parts}LL) * {length}LL;\n    \
+                         {ty} acc = {first};\n    \
+                         for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step};\n    \
+                         out[t] = acc;\n}}\n\
+                         extern \"C\" __global__ void k{slot}({ty}* out, const {ty}* in) {{\n    \
+                         long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
+                         if (lane >= {lanes}LL) return;\n    \
+                         const long long PARTS = {parts}LL;\n    \
+                         {ty} acc = in[lane * PARTS];\n    \
+                         for (long long part = 1; part < PARTS; part++) acc = {join};\n    \
+                         out[lane] = {finish};\n}}",
+                        first = at("(start + part)"),
+                    )
+                    .expect("writing to a string cannot fail");
+                    let partial = self.scratch();
+                    self.actions.push(Action::Kernel {
+                        name: format!("k{slot}r0"),
+                        output: partial,
+                        bytes: threads * bytes,
+                        threads,
+                        inputs: leaves,
+                        clear: false,
+                    });
+                    self.actions.push(Action::Kernel {
+                        name: format!("k{slot}"),
+                        output: slot,
+                        bytes: lanes * bytes,
+                        threads: lanes,
+                        inputs: vec![partial],
+                        clear: false,
+                    });
+                    return;
+                }
                 let (first, next) = (at("start"), at("(start + k * step)"));
                 let step = combine("acc", &next);
                 writeln!(

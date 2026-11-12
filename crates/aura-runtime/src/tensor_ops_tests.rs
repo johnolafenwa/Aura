@@ -1142,3 +1142,96 @@ fn the_trace_is_off_unless_asked_for_and_measures_gaps() {
     std::thread::sleep(std::time::Duration::from_millis(2));
     assert!(trace_gap() >= 2.0);
 }
+
+/// Rows of 100 elements with ties, a row with a `NaN` and a row of one
+/// value, so a lane is long enough for a group of threads.
+fn wide_rows() -> ArrayValue {
+    let mut values: Vec<f32> = (0..500)
+        .map(|index| ((index * 53) % 41) as f32 * 0.5 - 7.0)
+        .collect();
+    values[100 + 77] = f32::NAN;
+    values[100 + 93] = f32::NAN;
+    for value in &mut values[200..300] {
+        *value = 2.5;
+    }
+    values[300 + 99] = -90.0;
+    values[400] = 90.0;
+    float32(&values, &[5, 100])
+}
+
+type Wide = fn(&Value) -> Result<Value>;
+
+const WIDE: &[(&str, Wide)] = &[
+    ("sum", |rows| reduce(rows, 0, Some(1))),
+    ("min", |rows| reduce(rows, 1, Some(-1))),
+    ("max", |rows| reduce(rows, 2, Some(1))),
+    ("mean", |rows| reduce(rows, 3, Some(1))),
+    ("argmax", |rows| node_op(rows, 2, &[1])),
+    ("argmin", |rows| node_op(rows, 3, &[1])),
+    ("argmin of an expression", |rows| {
+        node_op(&binary(rows, rows, 2)?, 3, &[1])
+    }),
+    ("sum of an expression", |rows| {
+        reduce(&binary(rows, rows, 2)?, 0, Some(1))
+    }),
+];
+
+#[test]
+fn a_long_last_axis_is_reduced_by_a_group_of_threads_for_each_lane() {
+    deferred(|| {
+        for (tag, (name, expression)) in WIDE.iter().enumerate() {
+            let rows = tensor(wide_rows(), TensorDevice::Cpu);
+            let waiting = expression(&rows).unwrap();
+            let (plan, storage) = Plan::collect(node(&waiting));
+            let program = tensor_codegen::generate(&plan);
+            let threads: Vec<usize> = program
+                .actions
+                .iter()
+                .map(|action| match action {
+                    tensor_codegen::Action::Kernel { threads, .. } => *threads,
+                    tensor_codegen::Action::Matmul { .. } => panic!("no matmul here"),
+                })
+                .collect();
+            assert_eq!(
+                threads[threads.len() - 2..],
+                [5 * 16, 5],
+                "{name}: 16 threads share a lane of 100, then one thread joins them"
+            );
+            let Some(generated) = generated_kernels::run(&plan, &storage, 1100 + tag) else {
+                eprintln!("SKIPPED: this machine has no C++ compiler");
+                return;
+            };
+            close(name, &generated, &array(&waiting));
+        }
+        // A short lane and a lane that is not the last axis keep one thread.
+        let rows = tensor(wide_rows(), TensorDevice::Cpu);
+        for (waiting, lanes) in [
+            (reduce(&rows, 0, Some(0)).unwrap(), 100),
+            (
+                reduce(&reshape(&rows, &[25, 20]).unwrap(), 0, Some(1)).unwrap(),
+                25,
+            ),
+        ] {
+            let (plan, _) = Plan::collect(node(&waiting));
+            let program = tensor_codegen::generate(&plan);
+            let Some(tensor_codegen::Action::Kernel { threads, .. }) = program.actions.last()
+            else {
+                panic!("a reduction ends in a kernel");
+            };
+            assert_eq!(*threads, lanes);
+            assert_eq!(program.buffers, plan.slots.len(), "no scratch buffer");
+        }
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_long_lanes() {
+    for device in gpus() {
+        for (name, expression) in WIDE {
+            let host = expression(&tensor(wide_rows(), TensorDevice::Cpu)).unwrap();
+            let gpu = expression(&tensor(wide_rows(), device)).unwrap();
+            close(name, &array(&gpu), &array(&host));
+        }
+        println!("RAN: {} long lane expressions on a GPU device", WIDE.len());
+    }
+}

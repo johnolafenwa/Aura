@@ -106,3 +106,14 @@ later, on the same tensors (ADR-0097).
 - Fixed since the A40 run: a tensor a program keeps is computed once
   (k-means), and a slice's start is an operand, so batches share one
   compiled plan (MLP training). Not yet timed on the A40.
+- A40 at 9ee4585, Aura CUDA against PyTorch CUDA in ms: MLP training 288
+  against 864, inference 746 against 897, k-means 79 against 68,
+  conjugate gradient 20 against 21, transformer training 466 against 313
+  to 435, Monte Carlo 4 against 21.
+- A reduction or `argmax`/`argmin` along a last axis of 32 or more
+  elements is two kernels on CUDA: a group of threads shares each lane,
+  so threads beside each other read memory beside each other, then one
+  thread for each lane joins what its group found. One thread reading a
+  long lane alone was the slow part of k-means.
+- Integer sums stay in host memory on a GPU device: the CPU sum reports
+  an overflow and a GPU kernel would wrap.
