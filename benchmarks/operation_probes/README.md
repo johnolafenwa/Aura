@@ -188,16 +188,24 @@ the list keeps it:
 | operation | count | Rust instr/op | Aura instr/op | Aura/Rust |
 | --- | ---: | ---: | ---: | ---: |
 | `element_mut_call`, before | 100,000 | 12.0 | about 2,800 | about 230x |
-| `element_mut_call` | 100,000 | 12.0 | 94.1 | 7.8x |
+| `element_mut_call`, at `d37640c` | 100,000 | 12.0 | 94.1 | 7.8x |
+| `element_mut_call` | 100,000 | 12.0 | 34.0 | 2.8x |
 | `element_plain_mut_call`, before | 100,000 | 16.0 | about 2,800 | about 175x |
-| `element_plain_mut_call` | 100,000 | 16.0 | 64.1 | 4.0x |
+| `element_plain_mut_call`, at `d37640c` | 100,000 | 16.0 | 64.1 | 4.0x |
+| `element_plain_mut_call` | 100,000 | 16.0 | 26.0 | 1.6x |
 
 The earlier figures were read on the same loops over 1,000 elements before
 the probes existed. Both phases of each probe make one pass first, because
 the first calls on a list's elements settle how the list stores them (about
 one call in eight of that first pass still goes through the runtime), and
-the probes measure the calls after. What is left is the cost of a call that
-is not inlined, not of reaching the element: `Tally.bump` itself runs 49 of
-the 64 instructions, most of them the entry and exit of its frame for
-stack traces, and Rust inlines its `bump`. The same loop with the method
-inlined costs 36 instructions, and `counters[i].count += 1` costs 18.
+the probes measure the calls after.
+
+At `d37640c` what was left was the cost of a call that was not inlined:
+`Tally.bump` ran 49 of the 64 instructions, most of them the entry and exit
+of its frame record, and the caller checked the type tag of a boxed
+receiver before and after the call. A small method that calls nothing now
+has a body with no frame record, which is inlined into its direct callers
+(see "Frame Records" in
+[the native backend notes](../../architecture_docs/08-native-codegen-and-runtime.md)),
+and a method that only touches scalar fields of its receiver needs no tag
+check. No other probe changed.

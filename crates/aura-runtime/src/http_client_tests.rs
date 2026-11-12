@@ -67,6 +67,8 @@ fn serve(
     connections: usize,
     mut reply: impl FnMut(&Seen) -> Reply + Send + 'static,
 ) -> (String, u16, thread::JoinHandle<Vec<Seen>>) {
+    // A test that clears the whole pool waits for this test to end.
+    pool_test_lock::share();
     let listener = StdListener::bind("127.0.0.1:0").expect("a test server binds");
     let address = listener.local_addr().expect("a local address");
     let handle = thread::spawn(move || {
@@ -1061,6 +1063,7 @@ fn a_response_head_that_is_malformed_too_large_or_cut_short_is_an_error() {
 #[test]
 fn the_pool_keeps_a_bounded_number_of_connections_per_host() {
     let total = MAX_IDLE_PER_HOST + 2;
+    pool_test_lock::share();
     let listener = StdListener::bind("127.0.0.1:0").expect("a test server binds");
     let address = listener.local_addr().expect("an address");
     let server = thread::spawn(move || {
@@ -1432,7 +1435,7 @@ fn the_pool_can_be_cleared() {
     let (base, port, server) = serve(1, |_| Reply::Send(ok("x")));
     let mut response = get(&base).expect("a response");
     assert_eq!(
-        host("http::__aura_close_idle", Vec::new()).expect("a clear"),
+        pool_test_lock::alone(|| host("http::__aura_close_idle", Vec::new())).expect("a clear"),
         Value::Unit
     );
     assert_eq!(text(&mut response), "x");

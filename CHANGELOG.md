@@ -123,6 +123,17 @@ in this file.
   compile the program for `generic` (the default), `native`, or on x86-64
   `x86-64-v2`, `x86-64-v3`, or `x86-64-v4`. `AURA_TARGET_CPU` sets it
   when the option is absent.
+- A call of a small method that changes its receiver is now inlined. A
+  method with a `mut self` receiver or a `mut` parameter that calls
+  nothing and works on numbers, such as `def bump(mut self, by: int64):
+  self.count += by`, used to keep a stack-trace record on every call,
+  which cost about 30 instructions and kept the call from being inlined.
+  It no longer does for a direct call, and a trap inside it still names
+  it in the call chain. The same holds for a method that only reads
+  number fields of a class with `str` or list fields, such as a getter.
+  `items[i].bump(2)` on a list element costs 34 instructions for a class
+  with a `str` field (94 before, 2.8 times Rust) and 26 for a class of
+  numbers (64 before, 1.6 times Rust).
 - The `time` and `regex` modules call the runtime with integer arguments
   as plain words and get a `bool` or an integer back as one word, instead
   of boxing each integer into an argument buffer. `date_time` goes from
