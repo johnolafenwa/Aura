@@ -12466,7 +12466,7 @@ Every value is one or more machine words. Nothing lives on a heap.
 | `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
 | `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
 | Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
-| `if`, `while`, `for` over `range`, `match` on a union | `try`, `with`, tasks, queues |
+| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
 | `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
 | `abs`, `min`, `max`, `sqrt` | Every builtin module |
 | `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |

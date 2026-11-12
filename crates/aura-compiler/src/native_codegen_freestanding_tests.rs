@@ -233,6 +233,179 @@ export "C" def run(a: int64, flag: bool) -> int64:
 }
 
 #[test]
+fn float32_results_and_wide_integer_casts_compile_on_every_target() {
+    let source = r#"
+export "C" def half(a: float32) -> float32:
+    return a / (2.0 as float32)
+
+export "C" def widen(a: uint64, b: int64) -> float64:
+    return (a as float64) + (b as float64) + ((a as float32) as float64)
+
+export "C" def narrow(a: float64) -> uint32:
+    return a as uint32
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert_eq!(global, ["half", "narrow", "widen"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
+}
+
+#[test]
+fn a_generator_a_for_loop_consumes_compiles_to_a_plain_loop() {
+    let source = r#"
+from iter import Generator
+
+def count(n: int64) -> Generator[int64]:
+    mut i: int64 = 0
+    while i < n:
+        yield i
+        i = i + 1
+
+export "C" def run(a: int64) -> int64:
+    mut total: int64 = 0
+    for v in count(a):
+        total = total + v
+    return total
+"#;
+    for target in TARGETS {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert_eq!(global, ["run"]);
+        assert_eq!(undefined, ["aura_trap"]);
+    }
+}
+
+#[test]
+fn hosted_constructs_in_helpers_are_reported() {
+    for (source, expected) in [
+        (
+            r#"
+def seed() -> int64:
+    return 41
+START: int64 = seed() + 1
+export "C" def get() -> int64:
+    return START
+"#,
+            &["reads the module constant"][..],
+        ),
+        (
+            r#"
+class Guard:
+    code: int64
+    def __enter__(mut self) -> None:
+        pass
+    def __exit__(mut self) -> None:
+        pass
+export "C" def run(a: int64) -> int64:
+    with Guard(code=a) as guard:
+        return a
+"#,
+            &["uses a `with` block"],
+        ),
+        (
+            r#"
+def total(values: list[int64]) -> int64:
+    mut sum: int64 = 0
+    for value in values:
+        sum = sum + value
+    return sum
+export "C" def run(a: int64) -> int64:
+    return total([a, a])
+"#,
+            &[
+                "`run` builds a collection",
+                "`total` takes `values` of type `list[int64]`",
+                "reads an element of a collection",
+            ],
+        ),
+        (
+            r#"
+trait Shape:
+    def area(self) -> int64
+copy class Square:
+    side: int64
+impl Shape for Square:
+    def area(self) -> int64:
+        return self.side
+export "C" def run(a: int64) -> int64:
+    shape: dyn Shape = Square(side=a)
+    return shape.area()
+"#,
+            &["uses a trait object", "calls the method `area`"],
+        ),
+        (
+            r#"
+def parse(a: int64) -> Result[int64, str]:
+    if a > 0:
+        return Ok(a)
+    return Err("no")
+def inner(a: int64) -> Result[int64, str]:
+    value = try parse(a)
+    return Ok(value + 1)
+export "C" def run(a: int64) -> int64:
+    match inner(a):
+        case Ok(value):
+            return value
+        case Err(_):
+            return 0
+"#,
+            &[
+                "`inner` uses `try`",
+                "`parse` returns `Result[int64, str]`",
+                "`run` matches on an enum value",
+            ],
+        ),
+        (
+            "export \"C\" def run(a: float64) -> float64:\n    return a % 2.0 + 3.0 // a\n",
+            &["uses `%` on floats", "uses `//` on floats"],
+        ),
+        (
+            r#"
+export "C" def run(a: int64) -> int64:
+    step = a + 1
+    add: def(int64) -> int64 = lambda v: v + step
+    return add(2)
+"#,
+            &["makes a function value"],
+        ),
+        (
+            r#"
+def work(a: int64) -> int64:
+    return a + 1
+export "C" def run(a: int64) -> int64:
+    with group = TaskGroup():
+        task = group.start(work, a)
+    return a
+"#,
+            &["starts a task", "uses a `with` block"],
+        ),
+        (
+            "import sys\nexport \"C\" def run(a: int64) -> int64:\n    return len(sys.args()) + a\n",
+            &["calls `sys::args`"],
+        ),
+        (
+            "export \"C\" def run(a: int64) -> int64:\n    return len(f\"{a}\")\n",
+            &["builds text", "calls `len`"],
+        ),
+    ] {
+        for expected in expected {
+            assert_problem(source, expected);
+        }
+    }
+}
+
+#[test]
+fn two_exports_with_one_symbol_are_refused() {
+    let mut module = lower("export \"C\" def tick(a: int64) -> int64:\n    return a\n");
+    let again = module.foreign_link.exports[0].clone();
+    module.foreign_link.exports.push(again);
+    let found = check_freestanding(&module);
+    assert_eq!(found.len(), 1, "{found:?}");
+    assert_eq!(found[0].code, UNSUPPORTED);
+    assert!(found[0].message.contains("`tick`"), "{}", found[0].message);
+}
+
+#[test]
 fn a_generic_function_reports_a_problem_once() {
     let found = problems(
         r#"
