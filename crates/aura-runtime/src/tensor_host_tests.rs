@@ -876,7 +876,18 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                 *buffer = to_bytes(&leaves.next().unwrap().to_host(*dtype, shape).unwrap());
             }
         }
-        for action in &program.actions {
+        let finished = tensor_codegen::finished_buffers(&program, plan);
+        for (index, action) in program.actions.iter().enumerate() {
+            let read: &[usize] = match action {
+                Action::Kernel { inputs, .. } => inputs,
+                Action::Matmul { left, right, .. } => &[*left, *right],
+            };
+            for &buffer in read {
+                assert!(
+                    !buffers[buffer].is_empty(),
+                    "an action reads a buffer an earlier one let go of"
+                );
+            }
             match action {
                 Action::Kernel {
                     name,
@@ -958,6 +969,9 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     }
                     buffers[*output] = made;
                 }
+            }
+            for &buffer in &finished[index] {
+                buffers[buffer] = Vec::new();
             }
         }
         Some(

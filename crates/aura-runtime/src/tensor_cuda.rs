@@ -248,15 +248,52 @@ impl Api {
 struct Pool {
     free: HashMap<usize, Vec<DevicePointer>>,
     bytes: usize,
+    /// Runs under way. While there is one, a dropped buffer is always
+    /// kept: freeing device memory would wait for the kernels launched
+    /// so far.
+    running: usize,
 }
 
-/// The most memory the pool keeps. A buffer dropped beyond it is freed.
-const MAX_POOLED_BYTES: usize = 1 << 30;
+impl Pool {
+    /// Takes buffers out until at most `keep` bytes are left, and gives
+    /// them to be freed.
+    fn trim(&mut self, keep: usize) -> Vec<DevicePointer> {
+        let mut freed = Vec::new();
+        // The largest sizes go first: they are the least likely to be
+        // asked for again.
+        let mut sizes: Vec<usize> = self.free.keys().copied().collect();
+        sizes.sort_unstable();
+        while self.bytes > keep {
+            let Some(&size) = sizes.last() else {
+                break;
+            };
+            match self.free.get_mut(&size).and_then(Vec::pop) {
+                Some(pointer) => {
+                    self.bytes -= size;
+                    freed.push(pointer);
+                }
+                None => {
+                    self.free.remove(&size);
+                    sizes.pop();
+                }
+            }
+        }
+        freed
+    }
+}
+
+/// The most memory the pool keeps between runs. A buffer dropped beyond
+/// it is freed.
+const MAX_POOLED_BYTES: usize = 2 << 30;
 
 /// A compiled plan: the kernels by name and the actions that run them.
 struct Compiled {
     program: Program,
     functions: HashMap<String, usize>,
+    /// For each action, the buffers no later action reads and the run
+    /// does not give back: the run lets go of them once the action is
+    /// launched, so a later action can use their memory.
+    finished: Vec<Vec<usize>>,
 }
 
 struct Runtime {
@@ -396,7 +433,7 @@ impl Drop for Buffer {
             return;
         }
         let mut pool = runtime.pool();
-        if pool.bytes + self.bytes <= MAX_POOLED_BYTES {
+        if pool.running > 0 || pool.bytes + self.bytes <= MAX_POOLED_BYTES {
             pool.bytes += self.bytes;
             pool.free.entry(self.bytes).or_default().push(self.pointer);
             return;
@@ -433,7 +470,18 @@ impl Buffer {
         runtime.enter()?;
         let mut pointer = 0;
         // SAFETY: `pointer` receives the allocation.
-        let status = unsafe { (runtime.api.cuMemAlloc_v2)(&mut pointer, bytes) };
+        let mut status = unsafe { (runtime.api.cuMemAlloc_v2)(&mut pointer, bytes) };
+        if status != 0 {
+            // The pool may hold the memory this buffer needs.
+            let freed = runtime.pool().trim(0);
+            for pointer in freed {
+                // SAFETY: the pool owned the allocation, and freeing waits
+                // for any kernel still using it.
+                unsafe { (runtime.api.cuMemFree_v2)(pointer) };
+            }
+            // SAFETY: `pointer` receives the allocation.
+            status = unsafe { (runtime.api.cuMemAlloc_v2)(&mut pointer, bytes) };
+        }
         check(status, &format!("allocate {bytes} bytes"))?;
         Ok(Self {
             pointer,
@@ -662,7 +710,12 @@ impl Compiled {
                 functions.insert(name.clone(), function as usize);
             }
         }
-        Ok(Self { program, functions })
+        let finished = tensor_codegen::finished_buffers(&program, plan);
+        Ok(Self {
+            program,
+            functions,
+            finished,
+        })
     }
 }
 
@@ -788,7 +841,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             .pointer
     };
     let mut outcome = Ok(());
-    for action in &compiled.program.actions {
+    runtime.pool().running += 1;
+    for (index, action) in compiled.program.actions.iter().enumerate() {
         let action_began = std::time::Instant::now();
         outcome = match action {
             Action::Kernel {
@@ -1016,6 +1070,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         if outcome.is_err() {
             break;
         }
+        // Later actions run after this one on the device, so they can
+        // write over what only this one and earlier ones read.
+        for &buffer in &compiled.finished[index] {
+            buffers[buffer] = None;
+        }
         if trace > 0 {
             if trace == 1 {
                 // Waiting after each action gives the action its own time.
@@ -1045,6 +1104,19 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
     // buffer of this run is dropped or read.
     // SAFETY: the context is current on this thread.
     let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
+    let freed = {
+        let mut pool = runtime.pool();
+        pool.running -= 1;
+        if pool.running == 0 {
+            pool.trim(MAX_POOLED_BYTES)
+        } else {
+            Vec::new()
+        }
+    };
+    for pointer in freed {
+        // SAFETY: the pool owned the allocation and no kernel is running.
+        unsafe { (api.cuMemFree_v2)(pointer) };
+    }
     if trace > 0 {
         let traced = Traced {
             known,

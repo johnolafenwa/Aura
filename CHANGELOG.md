@@ -34,6 +34,9 @@ in this file.
   network runs as one piece of GPU work: a chain of waiting operations
   was cut every 128 operations and is now cut every 8,192. Long chains
   of tensors are collected and freed without recursion.
+- The CUDA device reuses the memory of a value inside one piece of work
+  once nothing later reads it, copies the numbers of an expression to
+  the device in one copy, and keeps freed memory for the next step.
 - `AURA_TENSOR_TRACE=1` writes to standard error each piece of CUDA
   work with the host time before it, its slowest actions, each read into
   host memory, and each operation that ran in host memory.

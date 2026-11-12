@@ -878,3 +878,25 @@ fn unary(code: i64, dtype: ArrayDType, operand: &str) -> String {
 pub(crate) fn generate(plan: &Plan) -> Program {
     Generator::new(plan).generate()
 }
+
+/// The buffers each action of `program` is the last to read, leaving out
+/// the plan's outputs.
+pub(crate) fn finished_buffers(program: &Program, plan: &Plan) -> Vec<Vec<usize>> {
+    let mut last: std::collections::HashMap<usize, usize> = std::collections::HashMap::new();
+    for (index, action) in program.actions.iter().enumerate() {
+        let read: &[usize] = match action {
+            Action::Kernel { inputs, .. } => inputs,
+            Action::Matmul { left, right, .. } => &[*left, *right],
+        };
+        for &buffer in read {
+            last.insert(buffer, index);
+        }
+    }
+    let mut finished = vec![Vec::new(); program.actions.len()];
+    for (buffer, index) in last {
+        if !plan.outputs.contains(&buffer) {
+            finished[index].push(buffer);
+        }
+    }
+    finished
+}
