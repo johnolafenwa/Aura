@@ -3716,23 +3716,48 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
     },
     DynamicHostAbi {
         name: "tensor::__aura_full_i32",
-        params: &[borrowed("shape"), borrowed("value"), borrowed("dtype"), borrowed("device")],
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_full_i64",
-        params: &[borrowed("shape"), borrowed("value"), borrowed("dtype"), borrowed("device")],
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_full_f32",
-        params: &[borrowed("shape"), borrowed("value"), borrowed("dtype"), borrowed("device")],
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_full_f64",
-        params: &[borrowed("shape"), borrowed("value"), borrowed("dtype"), borrowed("device")],
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_full_bool",
-        params: &[borrowed("shape"), borrowed("value"), borrowed("dtype"), borrowed("device")],
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_shape",
@@ -3760,11 +3785,20 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
     },
     DynamicHostAbi {
         name: "tensor::__aura_where",
-        params: &[borrowed("mask"), borrowed("when_true"), borrowed("when_false")],
+        params: &[
+            borrowed("mask"),
+            borrowed("when_true"),
+            borrowed("when_false"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_reduce",
-        params: &[borrowed("node"), borrowed("reduction"), borrowed("axis"), borrowed("has_axis")],
+        params: &[
+            borrowed("node"),
+            borrowed("reduction"),
+            borrowed("axis"),
+            borrowed("has_axis"),
+        ],
     },
     DynamicHostAbi {
         name: "tensor::__aura_matmul",

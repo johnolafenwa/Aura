@@ -7,11 +7,23 @@
 //! made it on every device.
 //!
 //! The CPU device keeps a node's elements in an [`ArrayValue`] and runs
-//! each operation through the Array kernels. Integer arithmetic wraps, as
-//! it does on a GPU, so a result does not depend on the device.
+//! each operation through the Array kernels when it is asked for. Integer
+//! arithmetic wraps, as it does on a GPU, so a result does not depend on
+//! the device.
+//!
+//! A GPU device keeps an operation its library has as a waiting node, and
+//! runs the whole expression behind a tensor as one [`Plan`] when the
+//! tensor is read. An operation the library lacks runs through the Array
+//! kernels at once, in host memory, so every operation exists on every
+//! device with one meaning.
 
 use super::*;
 use host_builtins::HostBuiltinFn;
+use std::sync::Mutex;
+
+#[cfg(target_os = "macos")]
+#[path = "tensor_metal.rs"]
+pub(crate) mod tensor_metal;
 
 /// Where a tensor's memory lives. The codes are the ones `std/tensor.au`
 /// passes.
@@ -39,16 +51,91 @@ impl TensorDevice {
 
     /// Whether this process can run work on the device.
     pub fn is_available(self) -> bool {
-        matches!(self, Self::Cpu)
+        match self {
+            Self::Cpu => true,
+            #[cfg(target_os = "macos")]
+            Self::Metal => tensor_metal::is_available(),
+            #[cfg(not(target_os = "macos"))]
+            Self::Metal => false,
+        }
     }
+}
+
+/// One operation over tensors. A node that is waiting keeps the operation
+/// that makes it, and a plan is a list of them.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum Operation {
+    /// Arithmetic by [`ArrayBinaryOp`] code, or a pair operation by
+    /// [`ArrayPairOp`] code plus [`PAIR_OPERATION_BASE`].
+    Binary(i64),
+    /// An [`ArrayUnaryOp`] code, or [`NEGATE_OPERATION`].
+    Unary(i64),
+    /// An [`ArrayCompareOp`] code.
+    Compare(i64),
+    /// Mask, value where it holds, value where it does not.
+    Where,
+    /// An [`ArrayReduction`] code over one axis, or over every element.
+    Reduce {
+        reduction: i64,
+        axis: Option<i64>,
+    },
+    Matmul,
+    Reshape(Vec<i64>),
+    /// The axes in a new order. An empty order reverses them.
+    Permute(Vec<i64>),
+    /// An [`ArrayDType`] code.
+    Cast(i64),
+}
+
+/// Where a tensor's elements are.
+#[derive(Clone)]
+pub(crate) enum Storage {
+    /// Host memory. The CPU device keeps every tensor here, and a GPU
+    /// device keeps here an empty tensor and the result of an operation
+    /// its library does not have.
+    Host(ArrayValue),
+    /// A buffer the Metal device owns.
+    #[cfg(target_os = "macos")]
+    Metal(Arc<tensor_metal::Buffer>),
+}
+
+impl Storage {
+    /// The elements in host memory, for memory of `dtype` and `shape`.
+    #[cfg_attr(not(target_os = "macos"), allow(unused_variables))]
+    fn to_host(&self, dtype: i64, shape: &[usize]) -> Result<ArrayValue> {
+        match self {
+            Self::Host(elements) => Ok(elements.clone()),
+            #[cfg(target_os = "macos")]
+            Self::Metal(buffer) => buffer.to_array(
+                ArrayDType::from_code(dtype).expect("a plan holds known dtypes"),
+                shape,
+            ),
+        }
+    }
+}
+
+/// A node that has not run yet.
+struct Pending {
+    operation: Operation,
+    inputs: Vec<TensorValue>,
+    /// The longest chain of waiting nodes below this one, counting it.
+    depth: usize,
+}
+
+enum State {
+    Ready(Storage),
+    Pending(Pending),
 }
 
 struct TensorNode {
     device: TensorDevice,
-    elements: ArrayValue,
+    dtype: ArrayDType,
+    shape: Box<[usize]>,
+    state: Mutex<State>,
 }
 
-/// A `tensor.Node`: shared, immutable device memory.
+/// A `tensor.Node`: shared, immutable device memory, or the work that
+/// will fill it.
 #[derive(Clone)]
 pub struct TensorValue(Arc<TensorNode>);
 
@@ -64,9 +151,33 @@ impl std::fmt::Debug for TensorValue {
     }
 }
 
+/// A chain of waiting nodes longer than this runs when it is made, so a
+/// loop that never reads a result cannot grow one without bound.
+const MAX_PENDING_DEPTH: usize = 128;
+
 impl TensorValue {
-    fn new(device: TensorDevice, elements: ArrayValue) -> Self {
-        Self(Arc::new(TensorNode { device, elements }))
+    fn ready(
+        device: TensorDevice,
+        dtype: ArrayDType,
+        shape: Box<[usize]>,
+        storage: Storage,
+    ) -> Self {
+        Self(Arc::new(TensorNode {
+            device,
+            dtype,
+            shape,
+            state: Mutex::new(State::Ready(storage)),
+        }))
+    }
+
+    /// A tensor of the elements of `elements`, in host memory.
+    fn host(device: TensorDevice, elements: ArrayValue) -> Self {
+        Self::ready(
+            device,
+            elements.dtype(),
+            elements.shape.clone(),
+            Storage::Host(elements),
+        )
     }
 
     pub fn device(&self) -> TensorDevice {
@@ -74,12 +185,489 @@ impl TensorValue {
     }
 
     pub fn dtype(&self) -> ArrayDType {
-        self.0.elements.dtype()
+        self.0.dtype
     }
 
-    fn elements(&self) -> &ArrayValue {
-        &self.0.elements
+    pub fn shape(&self) -> &[usize] {
+        &self.0.shape
     }
+
+    pub fn len(&self) -> usize {
+        self.0.shape.iter().product()
+    }
+
+    pub fn is_empty(&self) -> bool {
+        self.len() == 0
+    }
+
+    fn state(&self) -> std::sync::MutexGuard<'_, State> {
+        self.0
+            .state
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    }
+
+    fn depth(&self) -> usize {
+        match &*self.state() {
+            State::Ready(_) => 0,
+            State::Pending(pending) => pending.depth,
+        }
+    }
+
+    /// Whether the tensor's work has run.
+    pub fn is_ready(&self) -> bool {
+        matches!(&*self.state(), State::Ready(_))
+    }
+
+    /// The tensor's memory, after running the work it waits on. Two
+    /// threads that ask at once both run the work and store equal results.
+    fn storage(&self) -> Result<Storage> {
+        if let State::Ready(storage) = &*self.state() {
+            return Ok(storage.clone());
+        }
+        let (plan, leaves) = Plan::collect(self);
+        let storage = plan.run(self.device(), &leaves)?;
+        *self.state() = State::Ready(storage.clone());
+        Ok(storage)
+    }
+
+    /// The tensor's elements in host memory.
+    fn elements(&self) -> Result<ArrayValue> {
+        self.storage()?.to_host(self.dtype() as i64, self.shape())
+    }
+}
+
+/// One value of a plan: memory that exists, or the result of a step over
+/// earlier values.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) enum Slot {
+    Leaf {
+        dtype: i64,
+        shape: Vec<usize>,
+    },
+    Step {
+        operation: Operation,
+        inputs: Vec<usize>,
+        dtype: i64,
+        shape: Vec<usize>,
+    },
+}
+
+/// The work one tensor waits on, with every value before the values made
+/// from it. The last slot is the tensor. A plan names no memory, so two
+/// runs of one expression over tensors of the same shapes have equal
+/// plans, and a device compiles the plan once.
+#[derive(Clone, Debug, Eq, Hash, PartialEq)]
+pub(crate) struct Plan {
+    pub(crate) slots: Vec<Slot>,
+}
+
+impl Plan {
+    /// The plan for `root` and the memory of its leaves, in slot order.
+    fn collect(root: &TensorValue) -> (Self, Vec<Storage>) {
+        fn visit(
+            node: &TensorValue,
+            slots: &mut Vec<Slot>,
+            leaves: &mut Vec<Storage>,
+            seen: &mut HashMap<*const TensorNode, usize>,
+        ) -> usize {
+            let key = Arc::as_ptr(&node.0);
+            if let Some(&slot) = seen.get(&key) {
+                return slot;
+            }
+            let waiting = match &*node.state() {
+                State::Ready(storage) => {
+                    leaves.push(storage.clone());
+                    None
+                }
+                State::Pending(pending) => {
+                    Some((pending.operation.clone(), pending.inputs.clone()))
+                }
+            };
+            let dtype = node.dtype() as i64;
+            let shape = node.shape().to_vec();
+            let slot = match waiting {
+                None => Slot::Leaf { dtype, shape },
+                Some((operation, inputs)) => Slot::Step {
+                    operation,
+                    inputs: inputs
+                        .iter()
+                        .map(|input| visit(input, slots, leaves, seen))
+                        .collect(),
+                    dtype,
+                    shape,
+                },
+            };
+            slots.push(slot);
+            seen.insert(key, slots.len() - 1);
+            slots.len() - 1
+        }
+        let mut slots = Vec::new();
+        let mut leaves = Vec::new();
+        visit(root, &mut slots, &mut leaves, &mut HashMap::new());
+        (Self { slots }, leaves)
+    }
+
+    fn run(&self, device: TensorDevice, leaves: &[Storage]) -> Result<Storage> {
+        #[cfg(target_os = "macos")]
+        if device == TensorDevice::Metal {
+            return tensor_metal::run(self, leaves);
+        }
+        let _ = device;
+        self.run_on_host(leaves).map(Storage::Host)
+    }
+
+    /// Runs every step through the Array kernels. This is what a plan
+    /// means: a device's result is checked against it.
+    pub(crate) fn run_on_host(&self, leaves: &[Storage]) -> Result<ArrayValue> {
+        let mut leaves = leaves.iter();
+        let mut values: Vec<ArrayValue> = Vec::with_capacity(self.slots.len());
+        for slot in &self.slots {
+            let value = match slot {
+                Slot::Leaf { dtype, shape } => leaves
+                    .next()
+                    .expect("a plan has memory for each leaf")
+                    .to_host(*dtype, shape)?,
+                Slot::Step {
+                    operation, inputs, ..
+                } => {
+                    let inputs: Vec<&ArrayValue> =
+                        inputs.iter().map(|&input| &values[input]).collect();
+                    apply(operation, &inputs)?
+                }
+            };
+            values.push(value);
+        }
+        Ok(values.pop().expect("a plan has a last slot"))
+    }
+}
+
+thread_local! {
+    /// Makes the CPU device wait like a GPU device, so the tests of
+    /// waiting nodes and plans run on every machine.
+    static DEFER_ON_CPU: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether an operation on `device` waits until its result is read.
+fn defers(device: TensorDevice) -> bool {
+    device == TensorDevice::Metal || DEFER_ON_CPU.with(std::cell::Cell::get)
+}
+
+/// The dtype and shape of an operation a GPU library runs, or `None` for
+/// one it does not: an operand that is empty, a dtype or operation the
+/// library lacks or gives a different meaning, or operands the Array rules
+/// reject. Those run through the Array kernels at once, which also words
+/// the error of a mistake.
+fn planned_result(
+    operation: &Operation,
+    inputs: &[&TensorValue],
+) -> Option<(ArrayDType, Box<[usize]>)> {
+    use ArrayDType::{Bool, Float32, Int32, Int64};
+    if inputs.iter().any(|input| input.is_empty()) {
+        return None;
+    }
+    let dtype = inputs[0].dtype();
+    let same_dtype = inputs.iter().all(|input| input.dtype() == dtype);
+    let number = matches!(dtype, Float32 | Int32 | Int64);
+    let broadcast = || {
+        inputs[1..]
+            .iter()
+            .try_fold(inputs[0].shape().to_vec(), |shape, input| {
+                array_layout::broadcast_shape(&shape, input.shape())
+            })
+            .map(Vec::into_boxed_slice)
+    };
+    let rank = inputs[0].shape().len();
+    let normalize = |axis: i64| {
+        let rank = rank as i64;
+        let axis = if axis < 0 { axis + rank } else { axis };
+        (0..rank).contains(&axis).then_some(axis as usize)
+    };
+    match operation {
+        Operation::Binary(code) => {
+            let supported = match *code {
+                0..=2 | 16 | 17 => number,
+                3 | 18 => dtype == Float32,
+                _ => false,
+            };
+            (supported && same_dtype)
+                .then(broadcast)?
+                .map(|shape| (dtype, shape))
+        }
+        Operation::Unary(code) => {
+            let supported = match *code {
+                NEGATE_OPERATION => number,
+                0..=3 | 6 | 7 => dtype == Float32,
+                _ => false,
+            };
+            supported.then(|| (dtype, inputs[0].shape().into()))
+        }
+        Operation::Compare(code) => ((0..=5).contains(code) && number && same_dtype)
+            .then(broadcast)?
+            .map(|shape| (Bool, shape)),
+        Operation::Where => {
+            let value = inputs[1].dtype();
+            (dtype == Bool
+                && inputs[2].dtype() == value
+                && matches!(value, Float32 | Int32 | Int64))
+            .then(broadcast)?
+            .map(|shape| (value, shape))
+        }
+        Operation::Reduce { reduction, axis } => {
+            if dtype != Float32 || !(0..=3).contains(reduction) {
+                return None;
+            }
+            let shape: Vec<usize> = match axis {
+                None => vec![1],
+                Some(axis) => {
+                    let axis = normalize(*axis)?;
+                    let mut shape = inputs[0].shape().to_vec();
+                    shape.remove(axis);
+                    if shape.is_empty() {
+                        shape.push(1);
+                    }
+                    shape
+                }
+            };
+            Some((dtype, shape.into()))
+        }
+        Operation::Matmul => {
+            let (left, right) = (inputs[0].shape(), inputs[1].shape());
+            if dtype != Float32 || !same_dtype || left.len() < 2 || right.len() < 2 {
+                return None;
+            }
+            let (left_lead, left_matrix) = left.split_at(left.len() - 2);
+            let (right_lead, right_matrix) = right.split_at(right.len() - 2);
+            if left_matrix[1] != right_matrix[0] {
+                return None;
+            }
+            let mut shape = array_layout::broadcast_shape(left_lead, right_lead)?;
+            shape.extend([left_matrix[0], right_matrix[1]]);
+            Some((dtype, shape.into()))
+        }
+        Operation::Reshape(shape) => {
+            let len = inputs[0].len();
+            let known: usize = shape
+                .iter()
+                .filter(|&&dimension| dimension != -1)
+                .try_fold(1_usize, |known, &dimension| {
+                    known.checked_mul(usize::try_from(dimension).ok()?)
+                })?;
+            let inferred = shape.iter().filter(|&&dimension| dimension == -1).count();
+            if shape.is_empty() || inferred > 1 || known == 0 || !len.is_multiple_of(known) {
+                return None;
+            }
+            if inferred == 0 && known != len {
+                return None;
+            }
+            let shape = shape
+                .iter()
+                .map(|&dimension| {
+                    if dimension == -1 {
+                        len / known
+                    } else {
+                        dimension as usize
+                    }
+                })
+                .collect();
+            Some((dtype, shape))
+        }
+        Operation::Permute(axes) => {
+            let axes: Vec<usize> = if axes.is_empty() {
+                (0..rank).rev().collect()
+            } else {
+                axes.iter()
+                    .map(|&axis| normalize(axis))
+                    .collect::<Option<_>>()?
+            };
+            let mut seen = vec![false; rank];
+            if axes.len() != rank
+                || axes
+                    .iter()
+                    .any(|&axis| std::mem::replace(&mut seen[axis], true))
+            {
+                return None;
+            }
+            Some((
+                dtype,
+                axes.iter().map(|&axis| inputs[0].shape()[axis]).collect(),
+            ))
+        }
+        Operation::Cast(target) => {
+            let target = ArrayDType::from_code(*target)?;
+            // A float to integer cast traps on a value out of range, which
+            // a GPU cannot do, so it runs on the host.
+            matches!((dtype, target), (Int32 | Int64, Float32) | (Int32, Int64))
+                .then(|| (target, inputs[0].shape().into()))
+        }
+    }
+}
+
+/// Integer tensors wrap on every device, because a GPU cannot trap. The
+/// Array kernels take the wrapping mode for integer elements only.
+fn arithmetic_mode(dtype: ArrayDType) -> IntegerArithmeticMode {
+    if matches!(dtype, ArrayDType::Int32 | ArrayDType::Int64) {
+        IntegerArithmeticMode::Wrapping
+    } else {
+        IntegerArithmeticMode::Checked
+    }
+}
+
+/// The first code of the pair operations in [`Operation::Binary`]. The
+/// codes below it are [`ArrayBinaryOp`]'s.
+pub(crate) const PAIR_OPERATION_BASE: i64 = 16;
+
+/// The code of negation in [`Operation::Unary`]. The codes below it are
+/// [`ArrayUnaryOp`]'s.
+pub(crate) const NEGATE_OPERATION: i64 = 64;
+
+/// The result of `operation` by the Array kernels, which is what the
+/// operation means on every device.
+fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
+    let unknown = || tensor_error("tensor", "was given an unknown operation");
+    let first = inputs[0];
+    let other = |index: usize| Value::Array(inputs[index].clone());
+    match operation {
+        Operation::Binary(code) if *code < PAIR_OPERATION_BASE => first.binary(
+            inputs[1],
+            ArrayBinaryOp::from_code(*code).ok_or_else(unknown)?,
+            arithmetic_mode(first.dtype()),
+        ),
+        Operation::Binary(code) => {
+            let operation =
+                ArrayPairOp::from_code(code - PAIR_OPERATION_BASE).ok_or_else(unknown)?;
+            if operation == ArrayPairOp::Pow && first.dtype() == ArrayDType::Float32 {
+                // The Array kernel for `pow` is `float64` only.
+                let exponent = inputs[1].cast(ArrayDType::Float64)?;
+                first
+                    .cast(ArrayDType::Float64)?
+                    .pairwise(&Value::Array(exponent), operation)?
+                    .cast(ArrayDType::Float32)
+            } else {
+                first.pairwise(&other(1), operation)
+            }
+        }
+        Operation::Unary(NEGATE_OPERATION) => ArrayValue::zeros(first.dtype(), Box::new([1]))?
+            .binary(first, ArrayBinaryOp::Sub, arithmetic_mode(first.dtype())),
+        Operation::Unary(code) => {
+            let operation = ArrayUnaryOp::from_code(*code).ok_or_else(unknown)?;
+            let float64_only = !matches!(operation, ArrayUnaryOp::Abs | ArrayUnaryOp::LogicalNot);
+            if float64_only && first.dtype() == ArrayDType::Float32 {
+                // The Array kernels for these are `float64` only.
+                first
+                    .cast(ArrayDType::Float64)?
+                    .unary(operation)?
+                    .cast(ArrayDType::Float32)
+            } else {
+                first.unary(operation)
+            }
+        }
+        Operation::Compare(code) => first.compare(
+            &other(1),
+            ArrayCompareOp::from_code(*code).ok_or_else(unknown)?,
+        ),
+        Operation::Where => {
+            if inputs[1].dtype() != inputs[2].dtype() {
+                return Err(tensor_error(
+                    "tensor::choose",
+                    "expects two tensors of one dtype",
+                ));
+            }
+            first.choose(&other(1), &other(2), inputs[1].dtype())
+        }
+        Operation::Reduce { reduction, axis } => {
+            let reduction = ArrayReduction::from_code(*reduction).ok_or_else(unknown)?;
+            let reduced = match axis {
+                Some(axis) => first.reduce_axis(reduction, *axis)?,
+                None => {
+                    let value = first.reduce(reduction)?;
+                    let dtype = match reduction {
+                        ArrayReduction::Mean | ArrayReduction::FastMean => ArrayDType::Float64,
+                        _ => first.dtype(),
+                    };
+                    ArrayValue::full(dtype, Box::new([1]), &value)?
+                }
+            };
+            // A mean keeps a float tensor's dtype.
+            if reduced.dtype() != first.dtype()
+                && matches!(first.dtype(), ArrayDType::Float32 | ArrayDType::Float64)
+            {
+                reduced.cast(first.dtype())
+            } else {
+                Ok(reduced)
+            }
+        }
+        Operation::Matmul => first.matmul(inputs[1]),
+        Operation::Reshape(shape) => first.reshape(shape),
+        Operation::Permute(axes) if axes.is_empty() => first.transpose(),
+        Operation::Permute(axes) => first.permute(axes),
+        Operation::Cast(dtype) => first.cast(ArrayDType::from_code(*dtype).ok_or_else(unknown)?),
+    }
+}
+
+/// The tensor `operation` gives over `inputs`, which are on one device. A
+/// GPU device keeps the operation to run with the ones after it. The CPU
+/// device, and a GPU device whose library lacks the operation, run it now.
+fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
+    let device = inputs[0].device();
+    if defers(device) {
+        if let Some((dtype, shape)) = planned_result(&operation, inputs) {
+            let depth = 1 + inputs.iter().map(|input| input.depth()).max().unwrap_or(0);
+            let node = TensorValue(Arc::new(TensorNode {
+                device,
+                dtype,
+                shape,
+                state: Mutex::new(State::Pending(Pending {
+                    operation,
+                    inputs: inputs.iter().map(|&input| input.clone()).collect(),
+                    depth,
+                })),
+            }));
+            if depth > MAX_PENDING_DEPTH {
+                node.storage()?;
+            }
+            return Ok(Value::Tensor(node));
+        }
+    }
+    let arrays = inputs
+        .iter()
+        .map(|input| input.elements())
+        .collect::<Result<Vec<_>>>()?;
+    let result = apply(&operation, &arrays.iter().collect::<Vec<_>>())?;
+    if device != TensorDevice::Cpu && result.dtype() == ArrayDType::Float64 {
+        return Err(float64_error(device));
+    }
+    Ok(Value::Tensor(TensorValue::host(device, result)))
+}
+
+/// A GPU has no `float64`, and a tensor never narrows one silently.
+fn float64_error(device: TensorDevice) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4007",
+        format!(
+            "the {} device has no float64 elements; convert with `to_float32()` on the cpu device first",
+            device.name()
+        ),
+    )
+}
+
+/// A tensor of `elements` on `device`, in the device's own memory when it
+/// has one.
+fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
+    if device != TensorDevice::Cpu && elements.dtype() == ArrayDType::Float64 {
+        return Err(float64_error(device));
+    }
+    #[cfg(target_os = "macos")]
+    if device == TensorDevice::Metal && !elements.is_empty() {
+        let buffer = tensor_metal::Buffer::from_array(&elements)?;
+        return Ok(Value::Tensor(TensorValue::ready(
+            device,
+            elements.dtype(),
+            elements.shape.clone(),
+            Storage::Metal(Arc::new(buffer)),
+        )));
+    }
+    Ok(Value::Tensor(TensorValue::host(device, elements)))
 }
 
 fn tensor_error(name: &str, message: impl std::fmt::Display) -> Diagnostic {
@@ -173,18 +761,8 @@ fn pair_args<'a>(args: &'a [Value], name: &str) -> Result<(&'a TensorValue, &'a 
     Ok((left, right))
 }
 
-fn node(device: TensorDevice, elements: ArrayValue) -> Value {
-    Value::Tensor(TensorValue::new(device, elements))
-}
-
 fn int_value(value: i64) -> Value {
     Value::Int(IntegerValue::from_i64(value))
-}
-
-/// A one-element Array holding `value`, the form a whole-tensor reduction
-/// gives.
-fn single(value: &Value, dtype: ArrayDType) -> Result<ArrayValue> {
-    ArrayValue::full(dtype, Box::new([1]), value)
 }
 
 /// `tensor::__aura_device_available`.
@@ -201,7 +779,7 @@ pub fn host_tensor_from_array(args: Vec<Value>, _: Option<&[String]>) -> Result<
     let name = "tensor::__aura_from_array";
     host_expect_arity(name, &args, 2)?;
     let device = device_arg(&args, 1, name)?;
-    Ok(node(device, array_arg(&args, 0, name)?.detached()?))
+    place(device, array_arg(&args, 0, name)?.detached()?)
 }
 
 /// `tensor::__aura_to_array`: an Array holding a copy of a tensor's
@@ -209,24 +787,26 @@ pub fn host_tensor_from_array(args: Vec<Value>, _: Option<&[String]>) -> Result<
 pub fn host_tensor_to_array(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_to_array";
     host_expect_arity(name, &args, 1)?;
-    Ok(Value::Array(node_arg(&args, 0, name)?.elements().try_clone()?))
+    Ok(Value::Array(
+        node_arg(&args, 0, name)?.elements()?.try_clone()?,
+    ))
 }
 
 /// `tensor::__aura_item`: the element of a one-element tensor.
 pub fn host_tensor_item(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_item";
     host_expect_arity(name, &args, 1)?;
-    let elements = node_arg(&args, 0, name)?.elements();
-    if elements.len() != 1 {
+    let node = node_arg(&args, 0, name)?;
+    if node.len() != 1 {
         return Err(tensor_error(
             name,
             format!(
                 "expects a tensor of one element, found shape {:?}",
-                elements.try_shape()?
+                node.shape()
             ),
         ));
     }
-    Ok(elements.value_at_flat(0))
+    Ok(node.elements()?.value_at_flat(0))
 }
 
 /// `tensor::__aura_full`: a tensor of one value.
@@ -237,21 +817,30 @@ pub fn host_tensor_full(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
     let dtype = ArrayDType::from_code(int_arg(&args, 2, name)?)
         .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
     let device = device_arg(&args, 3, name)?;
-    Ok(node(device, ArrayValue::full(dtype, shape, &args[1])?))
+    place(device, ArrayValue::full(dtype, shape, &args[1])?)
 }
 
 /// `tensor::__aura_shape`.
 pub fn host_tensor_shape(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_shape";
     host_expect_arity(name, &args, 1)?;
-    node_arg(&args, 0, name)?.elements().shape_value()
+    let shape = node_arg(&args, 0, name)?.shape();
+    let mut elements = try_array_buffer(shape.len(), "Tensor.shape result")?;
+    elements.extend(shape.iter().map(|&dimension| {
+        int_value(i64::try_from(dimension).expect("a live tensor's shape fits int64"))
+    }));
+    Ok(Value::Vec(VecValue {
+        element_type: SharedType::named("int64"),
+        elements: elements.into(),
+        str_view: Default::default(),
+    }))
 }
 
 /// `tensor::__aura_len`.
 pub fn host_tensor_len(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_len";
     host_expect_arity(name, &args, 1)?;
-    let len = node_arg(&args, 0, name)?.elements().len();
+    let len = node_arg(&args, 0, name)?.len();
     Ok(int_value(
         i64::try_from(len).expect("a live tensor's length fits int64"),
     ))
@@ -264,84 +853,21 @@ pub fn host_tensor_device(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     Ok(int_value(node_arg(&args, 0, name)?.device() as i64))
 }
 
-/// Integer tensors wrap on every device, because a GPU cannot trap. The
-/// Array kernels take the wrapping mode for integer elements only.
-fn arithmetic_mode(dtype: ArrayDType) -> IntegerArithmeticMode {
-    if matches!(dtype, ArrayDType::Int32 | ArrayDType::Int64) {
-        IntegerArithmeticMode::Wrapping
-    } else {
-        IntegerArithmeticMode::Checked
-    }
-}
-
-/// The first code of the pair operations in `tensor::__aura_binary`. The
-/// codes below it are [`ArrayBinaryOp`]'s.
-const PAIR_OPERATION_BASE: i64 = 16;
-
 /// `tensor::__aura_binary`: arithmetic, minimum, maximum, or power over
 /// two tensors whose shapes broadcast.
 pub fn host_tensor_binary(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_binary";
     host_expect_arity(name, &args, 3)?;
     let (left, right) = pair_args(&args, name)?;
-    let code = int_arg(&args, 2, name)?;
-    let unknown = || tensor_error(name, "was given an unknown operation");
-    let elements = if code < PAIR_OPERATION_BASE {
-        let operation = ArrayBinaryOp::from_code(code).ok_or_else(unknown)?;
-        left.elements().binary(
-            right.elements(),
-            operation,
-            arithmetic_mode(left.dtype()),
-        )?
-    } else {
-        let operation = ArrayPairOp::from_code(code - PAIR_OPERATION_BASE).ok_or_else(unknown)?;
-        if operation == ArrayPairOp::Pow && left.dtype() == ArrayDType::Float32 {
-            // The Array kernel for `pow` is `float64` only.
-            let exponent = right.elements().cast(ArrayDType::Float64)?;
-            left.elements()
-                .cast(ArrayDType::Float64)?
-                .pairwise(&Value::Array(exponent), operation)?
-                .cast(ArrayDType::Float32)?
-        } else {
-            left.elements()
-                .pairwise(&Value::Array(right.elements().try_clone()?), operation)?
-        }
-    };
-    Ok(node(left.device(), elements))
+    operate(Operation::Binary(int_arg(&args, 2, name)?), &[left, right])
 }
-
-/// The code of negation in `tensor::__aura_unary`. The codes below it are
-/// [`ArrayUnaryOp`]'s.
-const NEGATE_OPERATION: i64 = 64;
 
 /// `tensor::__aura_unary`: one function of every element.
 pub fn host_tensor_unary(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_unary";
     host_expect_arity(name, &args, 2)?;
     let operand = node_arg(&args, 0, name)?;
-    let code = int_arg(&args, 1, name)?;
-    let elements = if code == NEGATE_OPERATION {
-        ArrayValue::zeros(operand.dtype(), Box::new([1]))?.binary(
-            operand.elements(),
-            ArrayBinaryOp::Sub,
-            arithmetic_mode(operand.dtype()),
-        )?
-    } else {
-        let operation = ArrayUnaryOp::from_code(code)
-            .ok_or_else(|| tensor_error(name, "was given an unknown operation"))?;
-        let float64_only = !matches!(operation, ArrayUnaryOp::Abs | ArrayUnaryOp::LogicalNot);
-        if float64_only && operand.dtype() == ArrayDType::Float32 {
-            // The Array kernels for these are `float64` only.
-            operand
-                .elements()
-                .cast(ArrayDType::Float64)?
-                .unary(operation)?
-                .cast(ArrayDType::Float32)?
-        } else {
-            operand.elements().unary(operation)?
-        }
-    };
-    Ok(node(operand.device(), elements))
+    operate(Operation::Unary(int_arg(&args, 1, name)?), &[operand])
 }
 
 /// `tensor::__aura_compare`: a mask of where a comparison holds.
@@ -349,12 +875,7 @@ pub fn host_tensor_compare(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
     let name = "tensor::__aura_compare";
     host_expect_arity(name, &args, 3)?;
     let (left, right) = pair_args(&args, name)?;
-    let operation = ArrayCompareOp::from_code(int_arg(&args, 2, name)?)
-        .ok_or_else(|| tensor_error(name, "was given an unknown operation"))?;
-    let elements = left
-        .elements()
-        .compare(&Value::Array(right.elements().try_clone()?), operation)?;
-    Ok(node(left.device(), elements))
+    operate(Operation::Compare(int_arg(&args, 2, name)?), &[left, right])
 }
 
 /// `tensor::__aura_where`: each element from the second tensor where the
@@ -364,15 +885,7 @@ pub fn host_tensor_where(args: Vec<Value>, _: Option<&[String]>) -> Result<Value
     host_expect_arity(name, &args, 3)?;
     let (mask, when_true) = pair_args(&args, name)?;
     let (_, when_false) = pair_args(&args[1..], name)?;
-    if when_true.dtype() != when_false.dtype() {
-        return Err(tensor_error(name, "expects two tensors of one dtype"));
-    }
-    let elements = mask.elements().choose(
-        &Value::Array(when_true.elements().try_clone()?),
-        &Value::Array(when_false.elements().try_clone()?),
-        when_true.dtype(),
-    )?;
-    Ok(node(mask.device(), elements))
+    operate(Operation::Where, &[mask, when_true, when_false])
 }
 
 /// `tensor::__aura_reduce`: a reduction over one axis, or over every
@@ -382,27 +895,9 @@ pub fn host_tensor_reduce(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     let name = "tensor::__aura_reduce";
     host_expect_arity(name, &args, 4)?;
     let operand = node_arg(&args, 0, name)?;
-    let reduction = ArrayReduction::from_code(int_arg(&args, 1, name)?)
-        .ok_or_else(|| tensor_error(name, "was given an unknown reduction"))?;
-    let axis = int_arg(&args, 2, name)?;
-    let elements = operand.elements();
-    let reduced = if bool_arg(&args, 3, name)? {
-        elements.reduce_axis(reduction, axis)?
-    } else {
-        let value = elements.reduce(reduction)?;
-        let dtype = match reduction {
-            ArrayReduction::Mean | ArrayReduction::FastMean => ArrayDType::Float64,
-            _ => operand.dtype(),
-        };
-        single(&value, dtype)?
-    };
-    let reduced = if reduced.dtype() != operand.dtype()
-        && matches!(operand.dtype(), ArrayDType::Float32 | ArrayDType::Float64) {
-        reduced.cast(operand.dtype())?
-    } else {
-        reduced
-    };
-    Ok(node(operand.device(), reduced))
+    let reduction = int_arg(&args, 1, name)?;
+    let axis = bool_arg(&args, 3, name)?.then_some(int_arg(&args, 2, name)?);
+    operate(Operation::Reduce { reduction, axis }, &[operand])
 }
 
 /// `tensor::__aura_matmul`.
@@ -410,10 +905,7 @@ pub fn host_tensor_matmul(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
     let name = "tensor::__aura_matmul";
     host_expect_arity(name, &args, 2)?;
     let (left, right) = pair_args(&args, name)?;
-    Ok(node(
-        left.device(),
-        left.elements().matmul(right.elements())?,
-    ))
+    operate(Operation::Matmul, &[left, right])
 }
 
 /// `tensor::__aura_reshape`.
@@ -421,8 +913,10 @@ pub fn host_tensor_reshape(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
     let name = "tensor::__aura_reshape";
     host_expect_arity(name, &args, 2)?;
     let operand = node_arg(&args, 0, name)?;
-    let shape = int_list_arg(&args, 1, name)?;
-    Ok(node(operand.device(), operand.elements().reshape(&shape)?))
+    operate(
+        Operation::Reshape(int_list_arg(&args, 1, name)?),
+        &[operand],
+    )
 }
 
 /// `tensor::__aura_permute`: the axes in a new order. An empty order
@@ -431,13 +925,10 @@ pub fn host_tensor_permute(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
     let name = "tensor::__aura_permute";
     host_expect_arity(name, &args, 2)?;
     let operand = node_arg(&args, 0, name)?;
-    let axes = int_list_arg(&args, 1, name)?;
-    let elements = if axes.is_empty() {
-        operand.elements().transpose()?
-    } else {
-        operand.elements().permute(&axes)?
-    };
-    Ok(node(operand.device(), elements))
+    operate(
+        Operation::Permute(int_list_arg(&args, 1, name)?),
+        &[operand],
+    )
 }
 
 /// `tensor::__aura_cast`: every element converted to another dtype.
@@ -445,9 +936,14 @@ pub fn host_tensor_cast(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
     let name = "tensor::__aura_cast";
     host_expect_arity(name, &args, 2)?;
     let operand = node_arg(&args, 0, name)?;
-    let dtype = ArrayDType::from_code(int_arg(&args, 1, name)?)
-        .ok_or_else(|| tensor_error(name, "was given an unknown dtype"))?;
-    Ok(node(operand.device(), operand.elements().cast(dtype)?))
+    let dtype = int_arg(&args, 1, name)?;
+    if dtype == operand.dtype() as i64 {
+        return Ok(Value::Tensor(operand.clone()));
+    }
+    if operand.device() != TensorDevice::Cpu && dtype == ArrayDType::Float64 as i64 {
+        return Err(float64_error(operand.device()));
+    }
+    operate(Operation::Cast(dtype), &[operand])
 }
 
 /// `tensor::__aura_eval`: runs the work a tensor is waiting on. The CPU
@@ -455,7 +951,7 @@ pub fn host_tensor_cast(args: Vec<Value>, _: Option<&[String]>) -> Result<Value>
 pub fn host_tensor_eval(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
     let name = "tensor::__aura_eval";
     host_expect_arity(name, &args, 1)?;
-    node_arg(&args, 0, name)?;
+    node_arg(&args, 0, name)?.storage()?;
     Ok(Value::Unit)
 }
 
@@ -499,3 +995,7 @@ pub fn tensor_host_function(name: &str) -> Option<HostBuiltinFn> {
         _ => return None,
     })
 }
+
+#[cfg(test)]
+#[path = "tensor_host_tests.rs"]
+mod tests;

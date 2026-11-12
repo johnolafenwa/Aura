@@ -83,9 +83,9 @@ pub use generator::{
     DIRECT_GENERATOR_STACK_BYTES, INTERPRETED_GENERATOR_STACK_BYTES,
 };
 pub use http_client::HttpResponseValue;
-pub use tensor_host::{TensorDevice, TensorValue};
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
+pub use tensor_host::{TensorDevice, TensorValue};
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
