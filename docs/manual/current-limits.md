@@ -212,7 +212,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS certificate, private-key, and CA-file loading uses the same independent 64 MiB ceiling.
 - A bounded byte count of zero is invalid.
 - UDP receives accept `max_bytes` from 1 through 65,535.
-- Incoming HTTP parsing accepts at most 64 headers and 16 MiB of wire data per message. The 16 MiB covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap.
+- The HTTP server accepts at most 64 headers and 16 MiB of wire data per request. The 16 MiB covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap. The `http` client reads a response body in pieces without a total cap; its whole-body reads stop at 64 MiB by default and 256 MiB at most.
 - WebSocket messages are capped at 64 MiB. Individual frames and write buffers are capped at 16 MiB.
 - Byte-codec inputs have no separate byte-count cap. Byte conversions and the hex and padded-base64 codecs check each fresh destination against a fixed 2,147,483,647-byte safety ceiling first.
 - Crossing that codec output ceiling, or failing allocation, traps with `AU4005`. The ceiling is independent of the public str and `list` length domains.
@@ -222,7 +222,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 - TLS handshakes have a 10-second hard cap, even when the caller supplies no shorter timeout.
 - TLS APIs require PEM certificate and key assets.
-- High-level HTTP clients support HTTP/1.1 over `http://` and validated `https://`, including content-length, chunked, and close-delimited responses. Redirects, pooling, HTTP/2, proxy configuration, decompression, and high-level custom CA arguments are not implemented.
+- The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.14 contract.
 - Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.

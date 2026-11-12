@@ -2091,6 +2091,7 @@ impl<'a> NativeCodegen<'a> {
             native_loans: HashMap::new(),
             push_entry_loans: element_loans::push_entry_loans(function),
             fused_entry_probes,
+            pending_try_read: None,
             fused_entry_slots: HashMap::new(),
             entry_copy_loans: entry_copy_loans.clone(),
             shadow_entry_copies,
@@ -2885,14 +2886,34 @@ enum FunctionOpArgLayout {
     Int64,
 }
 
-fn function_op_arg_layout(op: FunctionOp) -> FunctionOpArgLayout {
+fn function_op_arg_layout(op: FunctionOp, index: usize) -> FunctionOpArgLayout {
     match op {
+        // The instant's three integers, then the pattern.
+        FunctionOp::TimeFormat if index < 3 => FunctionOpArgLayout::Int64,
+        // The pattern number, then the texts.
+        FunctionOp::RegexIsMatch
+        | FunctionOp::RegexCount
+        | FunctionOp::RegexGroupIndex
+        | FunctionOp::RegexFind
+        | FunctionOp::RegexMatches
+        | FunctionOp::RegexFindAll
+        | FunctionOp::RegexCaptures
+        | FunctionOp::RegexSplit
+        | FunctionOp::RegexReplace
+        | FunctionOp::RegexReplaceAll
+            if index == 0 =>
+        {
+            FunctionOpArgLayout::Int64
+        }
         FunctionOp::RngNew
         | FunctionOp::RandomSecureInt
         | FunctionOp::RandomSecureBytes
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
         | FunctionOp::DurationMinutes
+        | FunctionOp::TimeRfc3339
+        | FunctionOp::TimeDuration
+        | FunctionOp::TimeLocalOffsetMinutes
         | FunctionOp::Chr => FunctionOpArgLayout::Int64,
         _ => FunctionOpArgLayout::Boxed,
     }
@@ -2918,10 +2939,22 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
         FunctionOp::YieldNow | FunctionOp::Sleep | FunctionOp::Eprint => {
             FunctionOpResultLayout::Unit
         }
-        FunctionOp::Cancelled => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
-        FunctionOp::RandomSecureInt | FunctionOp::MonotonicTimeMs | FunctionOp::Ord => {
-            FunctionOpResultLayout::Scalar(ScalarKind::Int64)
-        }
+        FunctionOp::Cancelled
+        | FunctionOp::TimeParseRfc3339
+        | FunctionOp::TimeParse
+        | FunctionOp::TimeFailed
+        | FunctionOp::RegexIsMatch => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
+        FunctionOp::RandomSecureInt
+        | FunctionOp::MonotonicTimeMs
+        | FunctionOp::TimeParsedSeconds
+        | FunctionOp::TimeParsedNanos
+        | FunctionOp::TimeParsedOffset
+        | FunctionOp::TimeDurationSeconds
+        | FunctionOp::TimeDurationNanos
+        | FunctionOp::TimeLocalOffsetMinutes
+        | FunctionOp::RegexCount
+        | FunctionOp::RegexGroupIndex
+        | FunctionOp::Ord => FunctionOpResultLayout::Scalar(ScalarKind::Int64),
         FunctionOp::FsExists => FunctionOpResultLayout::BoxedBool,
         FunctionOp::Chr => FunctionOpResultLayout::Boxed(Some(Type::named("str"))),
         FunctionOp::Abs
@@ -3527,6 +3560,9 @@ struct FunctionCompiler<'a> {
     /// The `contains_key` tests whose entry loan shares their probe, and
     /// the probes those tests made, by loan.
     fused_entry_probes: HashMap<String, element_loans::FusedEntryProbe>,
+    /// The result temporary, line word, and failure word address of a
+    /// `try file.read_line()` whose read is emitted and whose `try` is next.
+    pending_try_read: Option<(String, Val, Val)>,
     fused_entry_slots: HashMap<String, Var>,
     /// The entry loans of the function a fused test may copy for, with
     /// whether each is read once, and the copies those tests made, by loan.
@@ -4466,6 +4502,24 @@ impl<'a> FunctionCompiler<'a> {
             {
                 skipped = fused - 1;
                 continue;
+            }
+            if self.opens_with_try_read(&block.instructions[instruction_index..]) {
+                if let Instruction::Assign {
+                    target,
+                    value:
+                        Rvalue::Call {
+                            callee:
+                                CallTarget::Runtime {
+                                    receiver: Some(file),
+                                    ..
+                                },
+                            ..
+                        },
+                } = instruction
+                {
+                    self.compile_try_read(target, file)?;
+                    continue;
+                }
             }
             self.str_append_root =
                 str_append_root(&block.instructions[instruction_index..]).map(str::to_string);
@@ -8674,12 +8728,12 @@ impl<'a> FunctionCompiler<'a> {
         let mut first_layout = None;
         // MIR binds one argument to each parameter, in order. An omitted
         // timeout or queue capacity passes no value.
-        for argument in args {
+        for (index, argument) in args.iter().enumerate() {
             if argument.value == Operand::Default(ArgDefault::Omitted) {
                 words.push(self.builder.iconst(types::I64, 0));
                 continue;
             }
-            let word = match function_op_arg_layout(op) {
+            let word = match function_op_arg_layout(op, index) {
                 FunctionOpArgLayout::Int64 => {
                     let value = self
                         .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
@@ -13523,26 +13577,23 @@ impl<'a> FunctionCompiler<'a> {
         releases_on_error: &[String],
         from: Option<&str>,
     ) -> std::result::Result<(), String> {
+        if let Some((source, line, failure)) = self.pending_try_read.take() {
+            debug_assert!(
+                matches!(try_value, Operand::MovePlace(moved) if *moved == source),
+                "a `try` after a fused read takes that read"
+            );
+            return self.compile_try_of_read(
+                target,
+                target_ty,
+                &source,
+                line,
+                failure,
+                releases_on_error,
+                from,
+            );
+        }
         let loaded = self.load_operand(try_value)?;
-        let (source_error_ty, target_error_ty) = match (&loaded.ty, &self.return_type) {
-            (
-                DirectType::Opaque(Type::Named(source_name, source_args)),
-                Type::Named(target_name, target_args),
-            ) if source_name == "Result"
-                && source_args.len() == 2
-                && target_name == "Result"
-                && target_args.len() == 2 =>
-            {
-                (source_args[1].clone(), target_args[1].clone())
-            }
-            _ => {
-                return Err(format!(
-                    "direct backend `try` for `{target}` requires Result types, found operand `{}` and return `{}`",
-                    render_direct_type(&loaded.ty),
-                    self.return_type
-                ))
-            }
-        };
+        let (source_error_ty, target_error_ty) = self.try_error_types(target, &loaded.ty)?;
         let value = self.ensure_opaque(loaded)?;
         let source_is_owned = self.temporary_owns_opaque(&value);
         if source_is_owned {
@@ -13580,18 +13631,68 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(ok_block);
 
         self.builder.switch_to_block(err_block);
+        self.compile_try_error_return(
+            &value,
+            source_is_owned,
+            &source_error_ty,
+            &target_error_ty,
+            releases_on_error,
+            from,
+        )?;
+        self.builder.seal_block(err_block);
+
+        self.builder.switch_to_block(join_block);
+        self.builder.seal_block(join_block);
+        Ok(())
+    }
+
+    /// The error types of a `try` on a `source` result in this function.
+    fn try_error_types(
+        &self,
+        target: &str,
+        source: &DirectType,
+    ) -> std::result::Result<(Type, Type), String> {
+        match (source, &self.return_type) {
+            (
+                DirectType::Opaque(Type::Named(source_name, source_args)),
+                Type::Named(target_name, target_args),
+            ) if source_name == "Result"
+                && source_args.len() == 2
+                && target_name == "Result"
+                && target_args.len() == 2 =>
+            {
+                Ok((source_args[1].clone(), target_args[1].clone()))
+            }
+            _ => Err(format!(
+                "direct backend `try` for `{target}` requires Result types, found operand `{}` and return `{}`",
+                render_direct_type(source),
+                self.return_type
+            )),
+        }
+    }
+
+    /// Returns from the function with the error `value`, a `Result.Err`,
+    /// holds, converted when the function's error type differs.
+    fn compile_try_error_return(
+        &mut self,
+        value: &ValueRef,
+        source_is_owned: bool,
+        source_error_ty: &Type,
+        target_error_ty: &Type,
+        releases_on_error: &[String],
+        from: Option<&str>,
+    ) -> std::result::Result<(), String> {
         if source_is_owned {
-            self.mark_temporary_opaque_owned(&value);
+            self.mark_temporary_opaque_owned(value);
         }
         let error_result = if source_error_ty == target_error_ty {
             value.clone()
         } else {
-            let source_error = direct_type(&source_error_ty, &self.classes)
+            let source_error = direct_type(source_error_ty, &self.classes)
                 .unwrap_or_else(|| DirectType::Opaque(source_error_ty.clone()));
-            let payload =
-                self.compile_try_payload(&value, "Err", &source_error, source_is_owned)?;
+            let payload = self.compile_try_payload(value, "Err", &source_error, source_is_owned)?;
             if source_is_owned {
-                self.clear_temporary_opaque_owned(&value);
+                self.clear_temporary_opaque_owned(value);
                 self.release_opaque_handle(value.values[0]);
             }
             let from = from.ok_or_else(|| {
@@ -13599,7 +13700,7 @@ impl<'a> FunctionCompiler<'a> {
                     "direct backend `try` names no `From[{source_error_ty}] for {target_error_ty}` conversion"
                 )
             })?;
-            let converted = self.convert_try_error_via_from(payload, from, &source_error_ty)?;
+            let converted = self.convert_try_error_via_from(payload, from, source_error_ty)?;
             self.compile_enum_variant_from_values(
                 "Result",
                 "Err",
@@ -13607,7 +13708,146 @@ impl<'a> FunctionCompiler<'a> {
                 self.return_type.clone(),
             )?
         };
-        self.emit_return_value(error_result, releases_on_error)?;
+        self.emit_return_value(error_result, releases_on_error)
+    }
+
+    /// Whether `instructions` open with `try file.read_line()`: the read
+    /// into a temporary and the `try` that moves it out.
+    fn opens_with_try_read(&self, instructions: &[Instruction]) -> bool {
+        let [Instruction::Assign {
+            target: result,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Resource(crate::runtime_ops::ResourceOp::FileReadLine),
+                            receiver: Some(Operand::Place(_)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }, Instruction::Assign {
+            target: line,
+            value:
+                Rvalue::Try {
+                    value: Operand::MovePlace(moved),
+                    ..
+                },
+        }, ..] = instructions
+        else {
+            return false;
+        };
+        result == moved
+            && result.starts_with('%')
+            && args.is_empty()
+            && !self.lent_places.contains(result.as_str())
+            && !self.lookup_slots.contains(result.as_str())
+            && self
+                .type_of_place(line)
+                .is_ok_and(|ty| optional_str_members(&ty).is_some())
+    }
+
+    /// The read of a `try file.read_line()` (see [`Self::opens_with_try_read`]).
+    /// One helper reads the line and hands back the `str` itself, or null
+    /// at the end of the file, so a successful read builds neither a
+    /// `Result` nor a boxed `str | None`. The `try` that follows takes the
+    /// two words this leaves in `pending_try_read`.
+    fn compile_try_read(
+        &mut self,
+        result: &str,
+        file: &Operand,
+    ) -> std::result::Result<(), String> {
+        let loaded = self.load_operand(file)?;
+        let file = self.ensure_opaque(loaded)?;
+        let slot = self.builder.create_sized_stack_slot(8, 3);
+        let failure = self.builder.stack_addr(types::I64, slot, 0);
+        let zero = self.builder.iconst(types::I64, 0);
+        self.builder.store(MemFlags::new(), zero, failure, 0);
+        let call = self.builder.call(
+            self.runtime[RuntimeFn::FileReadLineTry],
+            &[file.values[0], failure],
+        );
+        self.pending_try_read = Some((result.to_string(), call.results[0], failure));
+        Ok(())
+    }
+
+    /// The `try` of a `try file.read_line()`. A line is a `str` handle. A
+    /// null line is the end of the file when the failure word is null too,
+    /// and otherwise the read failed and the word holds the `Result.Err` to
+    /// return.
+    #[allow(clippy::too_many_arguments)]
+    fn compile_try_of_read(
+        &mut self,
+        target: &str,
+        target_ty: DirectType,
+        source: &str,
+        line: Val,
+        failure: Val,
+        releases_on_error: &[String],
+        from: Option<&str>,
+    ) -> std::result::Result<(), String> {
+        let source_ty = self.type_of_place(source)?;
+        let (source_error_ty, target_error_ty) = self.try_error_types(target, &source_ty)?;
+        let Some((union, text_index, none_index)) = optional_str_members(&target_ty) else {
+            return Err(format!(
+                "direct backend expected `{target}` to hold a line as an inline `str | None`"
+            ));
+        };
+        let ok_block = self.builder.create_block();
+        let end_block = self.builder.create_block();
+        let err_block = self.builder.create_block();
+        let join_block = self.builder.create_block();
+        self.builder.set_cold_block(end_block);
+        self.builder.set_cold_block(err_block);
+        let read = self.builder.icmp_imm(IntCC::NotEqual, line, 0);
+        self.builder.brif(read, ok_block, &[], end_block, &[]);
+
+        self.builder.switch_to_block(end_block);
+        let failed = self.builder.load(types::I64, MemFlags::new(), failure, 0);
+        let ended = self.builder.icmp_imm(IntCC::Equal, failed, 0);
+        self.builder.brif(ended, ok_block, &[], err_block, &[]);
+        self.builder.seal_block(end_block);
+
+        // The union's words say which member is active, so the line goes
+        // into them as it is and no box is made around it.
+        self.builder.switch_to_block(ok_block);
+        self.builder.seal_block(ok_block);
+        let text = ValueRef {
+            values: vec![line],
+            ty: DirectType::Opaque(Type::named("str")),
+        };
+        let present = self.union_words_from_member(&union, text_index, text)?;
+        let unit = unit_value(&mut *self.builder);
+        let absent = self.union_words_from_member(&union, none_index, unit)?;
+        let words = present
+            .into_iter()
+            .zip(absent)
+            .map(|(present, absent)| self.builder.select(read, present, absent))
+            .collect();
+        let value = ValueRef {
+            values: words,
+            ty: target_ty.clone(),
+        };
+        self.mark_temporary_union_owned(&value);
+        let coerced = self.coerce_value(value, &target_ty)?;
+        self.store_place(target, coerced)?;
+        self.release_all_temporary_owned();
+        self.builder.jump(join_block, &[]);
+
+        self.builder.switch_to_block(err_block);
+        let value = ValueRef {
+            values: vec![failed],
+            ty: source_ty,
+        };
+        self.compile_try_error_return(
+            &value,
+            true,
+            &source_error_ty,
+            &target_error_ty,
+            releases_on_error,
+            from,
+        )?;
         self.builder.seal_block(err_block);
 
         self.builder.switch_to_block(join_block);
@@ -16501,6 +16741,22 @@ impl<'a> FunctionCompiler<'a> {
         }
         Ok(value)
     }
+}
+
+/// The inline `str | None` union `ty` is, with the positions of its `str`
+/// and `None` members.
+fn optional_str_members(ty: &DirectType) -> Option<(DirectUnionType, usize, usize)> {
+    let DirectType::Union(union) = ty else {
+        return None;
+    };
+    if union.members.len() != 2 {
+        return None;
+    }
+    let position =
+        |wanted: &DirectType| union.members.iter().position(|member| &member.ty == wanted);
+    let text = position(&DirectType::Opaque(Type::named("str")))?;
+    let none = position(&DirectType::Scalar(ScalarKind::Unit))?;
+    Some((union.clone(), text, none))
 }
 
 fn unit_value(builder: &mut dyn FunctionBackend) -> ValueRef {

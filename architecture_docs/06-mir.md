@@ -628,8 +628,8 @@ A `Member` or `TraitMember` call names what it runs in `dispatch`, a
   generic method names its specialized copy when there is one.
 - `Runtime(op)` is a runtime op on one member of a union receiver. Any
   other call that resolves to an op is already a `Runtime` call.
-- `Nothing` runs nothing: `close` on `net.HttpExchange`,
-  `net.HttpResponse`, or `net.WebSocketListener`, which own no host
+- `Nothing` runs nothing: `close` on `net.HttpExchange` or
+  `net.WebSocketListener`, which own no host
   resource.
 - `Union(arms)` switches on a union receiver's tag. It holds one arm for
   each member, in the union's member order, and each arm is one of the

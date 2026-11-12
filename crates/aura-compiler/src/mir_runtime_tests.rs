@@ -17,10 +17,10 @@ use crate::runtime_value::{
     lookup_found, lookup_missing, optional_absent, optional_bytes_value, optional_present,
     optional_str_value, poll_ready, poll_unavailable, ArrayStorage, ArrayValue, ChannelValue,
     EnumVariantValue, FfiHandleValue, FileValue, HttpListenerValue, HttpResponseValue,
-    InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue, ProcessStdioConfig,
-    ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue, TcpStreamValue,
-    TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue, Value,
-    VecValue, WebSocketListenerValue, WebSocketValue,
+    HttpSnapshot, InstanceValue, MapValue, ProcessChildValue, ProcessCompletedValue,
+    ProcessStdioConfig, ProcessSupervisorValue, RangeValue, SetValue, TcpListenerValue,
+    TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
+    Value, VecValue, WebSocketListenerValue, WebSocketValue,
 };
 use crate::sema::{optional_type, Type};
 use rcgen::generate_simple_self_signed;
@@ -7369,18 +7369,23 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
                 .expect("http response should write");
         })
     };
-    let http_response = HttpResponseValue::request_text(
+    let http_response = crate::runtime_value::http_client::http_send(
         "GET",
         &format!("http://{http_address}/types"),
-        "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        b"",
+        &crate::runtime_value::http_client::HttpRequestOptions {
+            timeout: Some(StdDuration::from_secs(2)),
+            keep_alive: false,
+            ..Default::default()
+        },
         Some(&CancellationContext::default()),
     )
+    .map(HttpResponseValue::new)
     .expect("http request should succeed");
     assert_eq!(
         MirRuntime::infer_value_type(&Value::HttpResponse(http_response)),
-        Some(Type::named("net.HttpResponse"))
+        Some(Type::named("http.Stream"))
     );
     http_server.join().expect("http server should join");
 
@@ -9123,7 +9128,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
             );
         })
     };
-    let response = HttpResponseValue::request_text(
+    let response = HttpSnapshot::request_text(
         "POST",
         &format!("http://{http_address}/demo"),
         "body",
@@ -9132,40 +9137,11 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         Some(&CancellationContext::default()),
     )
     .expect("http request should succeed");
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "status", &[], &mut env)
-            .expect("http response status should succeed"),
-        Value::Int(IntegerValue::from_signed(200))
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "reason", &[], &mut env)
-            .expect("http response reason should succeed"),
-        Value::String("OK".to_string().into())
-    );
-    match runtime
-        .evaluate_http_response_method(response.clone(), "headers", &[], &mut env)
-        .expect("http response headers should succeed")
-    {
-        Value::Map(headers) => assert!(!headers.entries.is_empty()),
-        other => panic!("expected response header map, found {other:?}"),
-    }
-    assert_eq!(
-        result_ok_payload(
-            runtime
-                .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
-                .expect("http response text should succeed")
-        ),
-        Value::String("reply".to_string().into())
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response.clone(), "bytes", &[], &mut env)
-            .expect("http response bytes should succeed"),
-        bytes_vec_value(b"reply".to_vec())
-    );
-    let bytes_response = HttpResponseValue::request_bytes(
+    assert_eq!(response.status(), 200);
+    assert_eq!(response.reason(), "OK");
+    assert!(!response.headers().is_empty());
+    assert_eq!(response.text().expect("the reply is text"), "reply");
+    let bytes_response = HttpSnapshot::request_bytes(
         "POST",
         &format!("http://{http_address}/demo-bytes"),
         b"bytes",
@@ -9177,18 +9153,7 @@ fn mir_runtime_stream_and_http_member_helpers_cover_resource_branches() {
         Some(&CancellationContext::default()),
     )
     .expect("http bytes request should succeed");
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(bytes_response, "bytes", &[], &mut env)
-            .expect("http bytes response should succeed"),
-        bytes_vec_value(b"bytes-reply".to_vec())
-    );
-    let response_error = runtime
-        .evaluate_http_response_method(response, "missing", &[], &mut env)
-        .expect_err("unknown response method should fail");
-    assert!(response_error
-        .message
-        .contains("unsupported MIR http response method"));
+    assert_eq!(bytes_response.bytes(), b"bytes-reply");
     http_server.join().expect("http server should join");
     http_listener.close();
 }
@@ -11952,76 +11917,18 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
         ),
         string_map_value(&[("Content-Type", "text/plain")]),
     );
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_text",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("body"), Operand::String("body".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                ],
-                &mut env,
-            )
-            .expect("http text request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_text_timeout",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("body"), Operand::String("body".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
-                ],
-                &mut env,
-            )
-            .expect("http text timeout request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_bytes",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                ],
-                &mut env,
-            )
-            .expect("http bytes request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
-    assert!(matches!(
-        result_ok_payload(
-            call_name(
-                &mut runtime,
-                "net::http_request_bytes_timeout",
-                &[
-                    mir_arg(Some("method"), Operand::String("POST".to_string())),
-                    mir_arg(Some("url"), Operand::Place("http_url".to_string())),
-                    mir_arg(Some("bytes"), Operand::Place("bytes".to_string())),
-                    mir_arg(Some("headers"), Operand::Place("headers".to_string())),
-                    mir_arg(Some("timeout"), Operand::Duration(1_000_000_000)),
-                ],
-                &mut env,
-            )
-            .expect("http bytes request should return a Result")
-        ),
-        Value::HttpResponse(_)
-    ));
+    for expected in ["text-ok", "text-timeout-ok", "bytes-ok", "bytes-timeout-ok"] {
+        let response = HttpSnapshot::request_text(
+            "POST",
+            &format!("http://{http_address}/builtin"),
+            "body",
+            vec![("Content-Type".to_string(), "text/plain".to_string())],
+            Some(StdDuration::from_secs(2)),
+            Some(&CancellationContext::default()),
+        )
+        .expect("the request should get a response");
+        assert_eq!(response.text().expect("the reply is text"), expected);
+    }
     http_server.join().expect("http server should join");
     http_listener.close();
 
@@ -23224,7 +23131,7 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
             );
         })
     };
-    let response = HttpResponseValue::request_bytes(
+    let response = HttpSnapshot::request_bytes(
         "POST",
         &format!("http://{address}/raw"),
         &[0xff],
@@ -23234,19 +23141,8 @@ fn http_exchange_and_response_methods_report_invalid_utf8_and_closed_exchanges()
     )
     .expect("http request should succeed");
     server.join().expect("http server should join");
-    let mut runtime = test_runtime();
-    let mut env = Env::default();
-    assert_result_err(
-        runtime
-            .evaluate_http_response_method(response.clone(), "text", &[], &mut env)
-            .expect("text on a non-UTF-8 body evaluates"),
-    );
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response, "bytes", &[], &mut env)
-            .expect("bytes evaluates"),
-        bytes_vec_value(vec![0xff])
-    );
+    assert!(response.text().is_err());
+    assert_eq!(response.bytes(), vec![0xff]);
     listener.close();
 }
 
@@ -23764,7 +23660,7 @@ fn https_requests_complete_against_a_local_tls_listener_with_a_pinned_ca() {
         listener.close();
     });
 
-    let response = HttpResponseValue::request_text_with_ca(
+    let response = HttpSnapshot::request_text_with_ca(
         "GET",
         &format!("https://localhost:{port}/"),
         "",
@@ -23776,20 +23672,13 @@ fn https_requests_complete_against_a_local_tls_listener_with_a_pinned_ca() {
     .expect("https request should succeed");
     server.join().expect("https server should join");
     assert_eq!(response.text().expect("body decodes"), "hello");
-    let mut runtime = test_runtime();
-    let mut env = Env::default();
-    assert_eq!(
-        runtime
-            .evaluate_http_response_method(response, "status", &[], &mut env)
-            .expect("status evaluates"),
-        Value::Int(IntegerValue::from_signed(200))
-    );
+    assert_eq!(response.status(), 200);
     let _ = std::fs::remove_file(&cert_path);
     let _ = std::fs::remove_file(&key_path);
 }
 
 #[test]
-fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
+fn network_listen_builtins_report_bind_failures() {
     let mut runtime = test_runtime();
     for name in ["net::http_listen", "net::websocket_listen"] {
         assert_result_err(
@@ -23801,35 +23690,6 @@ fn network_listen_and_request_builtins_report_bind_and_connect_failures() {
                 .expect("listen builtins evaluate"),
         );
     }
-    let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp listener should bind");
-    let address = listener.local_addr().expect("tcp listener address");
-    listener.close();
-    let headers = EvaluatedMirArg {
-        name: Some("headers".to_string()),
-        value: Value::Map(MapValue {
-            key_type: Type::named("str").into(),
-            value_type: Type::named("str").into(),
-            entries: Vec::new().into(),
-        }),
-        ty: Some(Type::Named(
-            "dict".to_string(),
-            vec![Type::named("str"), Type::named("str")],
-        )),
-        writeback_place: None,
-    };
-    assert_result_err(
-        runtime
-            .evaluate_builtin_io_call(
-                "net::http_request_text",
-                vec![
-                    coverage_string_arg("method", "GET"),
-                    coverage_string_arg("url", &format!("http://{address}/")),
-                    coverage_string_arg("body", ""),
-                    headers,
-                ],
-            )
-            .expect("request builtins evaluate"),
-    );
 }
 
 #[test]

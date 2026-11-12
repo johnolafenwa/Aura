@@ -498,7 +498,7 @@ A separate `Transfer` check applies to task captures, task results, Queue constr
 
 | Category | Types |
 | --- | --- |
-| Qualifies | Copy values, `str`, and aggregates made entirely from transferable components. `process.Completed`, `net.HttpResponse`, and `net.UdpDatagram`, which are owned snapshot data rather than live resources. |
+| Qualifies | Copy values, `str`, and aggregates made entirely from transferable components. `process.Completed` and `net.UdpDatagram`, which are owned snapshot data rather than live resources. |
 | Does not qualify | `random.Rng`, `TaskGroup`, and live host resources, including `process.Child`, `net.HttpExchange`, and `net.UdpSocket`. |
 
 A Copy value read through shared or mutable access is a narrow exception. Task capture materializes an independent owned snapshot, so no capability crosses. A non-copy access cannot be captured this way, because the child would need ownership of the value.

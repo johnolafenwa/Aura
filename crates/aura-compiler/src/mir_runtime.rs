@@ -64,8 +64,8 @@ use crate::runtime_value::{
     yield_now_with_runtime_scheduler, ArrayBinaryOp, ArrayDType, ArrayReduction, ArrayValue,
     CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DictEntries,
     EnumVariantValue, FfiHandleValue, FileValue, FloatPowerWidth, FunctionValue, GeneratorValue,
-    HttpExchangeValue, HttpListenerValue, HttpResponseValue, InstanceValue, IntegerArithmeticMode,
-    MapValue, ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
+    HttpExchangeValue, HttpListenerValue, InstanceValue, IntegerArithmeticMode, MapValue,
+    ProcessChildValue, ProcessChildWaitStatus, ProcessCompletedValue, ProcessPipeValue,
     ProcessSupervisorValue, ProcessSupervisorWaitStatus, RangeValue, RecvValueResult, RngValue,
     RunOutput, RuntimeName, RuntimeSchedulerWakeReason, SendValueError, SetElements, SetValue,
     TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
@@ -3167,7 +3167,7 @@ impl MirRuntime {
             Value::UdpDatagram(_) => Some(Type::Named("net.UdpDatagram".to_string(), Vec::new())),
             Value::HttpListener(_) => Some(Type::Named("net.HttpListener".to_string(), Vec::new())),
             Value::HttpExchange(_) => Some(Type::Named("net.HttpExchange".to_string(), Vec::new())),
-            Value::HttpResponse(_) => Some(Type::Named("net.HttpResponse".to_string(), Vec::new())),
+            Value::HttpResponse(_) => Some(Type::Named("http.Stream".to_string(), Vec::new())),
             Value::WebSocketListener(_) => {
                 Some(Type::Named("net.WebSocketListener".to_string(), Vec::new()))
             }
@@ -5732,10 +5732,6 @@ impl MirRuntime {
                 | "net::tls_connect"
                 | "net::tls_connect_timeout"
                 | "net::http_listen"
-                | "net::http_request_text"
-                | "net::http_request_text_timeout"
-                | "net::http_request_bytes"
-                | "net::http_request_bytes_timeout"
                 | "net::websocket_listen"
                 | "net::websocket_connect"
                 | "net::websocket_connect_timeout"
@@ -6353,9 +6349,6 @@ impl MirRuntime {
             }
             Value::HttpExchange(exchange) => {
                 self.evaluate_http_exchange_method(exchange.clone(), field, args, env)
-            }
-            Value::HttpResponse(response) => {
-                self.evaluate_http_response_method(response.clone(), field, args, env)
             }
             Value::WebSocketListener(listener) => {
                 self.evaluate_websocket_listener_method(listener.clone(), field, args, env)
@@ -9228,62 +9221,6 @@ impl MirRuntime {
                     Err(error) => Ok(result_err(io_error(error))),
                 }
             }
-            "net::http_request_text" | "net::http_request_text_timeout" => {
-                let expected = if name == "net::http_request_text" {
-                    &["method", "url", "body", "headers"][..]
-                } else {
-                    &["method", "url", "body", "headers", "timeout"][..]
-                };
-                let bound = bind_builtin_args(expected, values)?;
-                let method = expect_string_value(&bound[0].value, name)?;
-                let url = expect_string_value(&bound[1].value, name)?;
-                let body = expect_string_value(&bound[2].value, name)?;
-                let headers = expect_headers_map(&bound[3].value, name)?;
-                let timeout = if bound.len() == 5 {
-                    io_timeout_or_return!(Some(&bound[4].value), name)
-                } else {
-                    None
-                };
-                match HttpResponseValue::request_text(
-                    &method,
-                    &url,
-                    &body,
-                    headers,
-                    timeout,
-                    Some(&self.cancellation),
-                ) {
-                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
-                    Err(error) => Ok(result_err(io_error(error))),
-                }
-            }
-            "net::http_request_bytes" | "net::http_request_bytes_timeout" => {
-                let expected = if name == "net::http_request_bytes" {
-                    &["method", "url", "bytes", "headers"][..]
-                } else {
-                    &["method", "url", "bytes", "headers", "timeout"][..]
-                };
-                let bound = bind_builtin_args(expected, values)?;
-                let method = expect_string_value(&bound[0].value, name)?;
-                let url = expect_string_value(&bound[1].value, name)?;
-                let bytes = expect_bytes_value(&bound[2].value, name)?;
-                let headers = expect_headers_map(&bound[3].value, name)?;
-                let timeout = if bound.len() == 5 {
-                    io_timeout_or_return!(Some(&bound[4].value), name)
-                } else {
-                    None
-                };
-                match HttpResponseValue::request_bytes(
-                    &method,
-                    &url,
-                    &bytes,
-                    headers,
-                    timeout,
-                    Some(&self.cancellation),
-                ) {
-                    Ok(response) => Ok(result_ok(Value::HttpResponse(response))),
-                    Err(error) => Ok(result_err(io_error(error))),
-                }
-            }
             "net::websocket_listen" => {
                 let bound = bind_builtin_args(&["address"], values)?;
                 let address = expect_string_value(&bound[0].value, "net.websocket_listen(...)")?;
@@ -10261,32 +10198,6 @@ impl MirRuntime {
             }
             _ => Err(Diagnostic::new(format!(
                 "unsupported MIR http exchange method `{}`",
-                field
-            ))),
-        }
-    }
-
-    fn evaluate_http_response_method(
-        &mut self,
-        response: HttpResponseValue,
-        field: &str,
-        args: &[MirArg],
-        env: &mut Env,
-    ) -> Result<Value> {
-        bind_builtin_args(&[], evaluate_named_args(args, env)?)?;
-        match field {
-            "status" => Ok(Value::Int(IntegerValue::from_signed(
-                response.status() as i128
-            ))),
-            "reason" => Ok(Value::String(response.reason().into())),
-            "headers" => Ok(headers_map_value(response.headers())),
-            "text" => match response.text() {
-                Ok(text) => Ok(result_ok(Value::String(text.into()))),
-                Err(error) => Ok(result_err(io_error(error))),
-            },
-            "bytes" => Ok(bytes_vec_value(response.bytes())),
-            _ => Err(Diagnostic::new(format!(
-                "unsupported MIR http response method `{}`",
                 field
             ))),
         }

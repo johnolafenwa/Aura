@@ -44,11 +44,13 @@ every sample with the commit.
 | `binary_trees` | Allocation: builds and walks many complete binary trees (Benchmarks Game) |
 | `bytecode_vm` | A two-pass assembler and a stack-machine dispatch loop running three programs |
 | `csv_aggregate` | Parses a CSV sales export and aggregates it by region, product, and month |
+| `date_time` | The `time` module over generated instants: RFC 3339 text out and back, Duration arithmetic, calendar fields, and a log layout out and back |
 | `docdb` | A schemaless JSON document database with a primary and a secondary index, saved and reloaded as JSON lines |
 | `file_io` | Writes and reads a line log, a binary record file, and a directory of small files |
 | `graph_paths` | BFS, Dijkstra with a binary heap, and union-find on a random graph |
 | `hashing` | FNV-1a, CRC-32, Adler-32, and content-defined chunking over a byte buffer |
 | `http_api` | An HTTP JSON item service and a client, over loopback |
+| `http_stream` | An HTTP client reading a chunked body in line batches, server-sent events one at a time, and small replies, all over one kept connection |
 | `image_filters` | Blur, edge detection, a histogram, downscaling, and PGM encoding |
 | `interpreter` | Lexes, parses, and runs a small imperative language with a tree-walking interpreter |
 | `json_roundtrip` | Parses, walks, and serializes an API-style JSON payload |
@@ -62,6 +64,7 @@ every sample with the commit.
 | `pubsub_broker` | A publish/subscribe broker with topic fan-out and mailboxes, over loopback TCP |
 | `raytracer` | A ray tracer with shadows and reflections |
 | `regex_match` | A regular-expression compiler and Pike VM run over generated log lines |
+| `regex_scan` | The `regex` module over generated log lines: a test, groups, every match with its position, a rewrite, and a split |
 | `sort_records` | Built-in sorts, key sorts, string sorts, and hand-written quicksort and merge sort |
 | `spreadsheet` | Formulas, a dependency graph in topological order, and recalculation after edits |
 | `sql_engine` | A SQL tokenizer, parser, planner, and executor with an id index, range scans, updates, deletes, and `GROUP BY` |
@@ -151,6 +154,26 @@ and `template_render`. No program is above 8x Rust.
 takes 766 ms in Aura, 938 ms in Python, and 430 ms in Rust: 0.82 times
 Python's time and 1.8 times Rust's. It is not in the table or the totals
 above.
+
+`regex_scan` was added the same day with the `regex` module. At 200,000
+lines it takes 0.83 s in Aura, 1.55 s in Python, and 0.27 s in Rust: 0.54
+times Python's time and 3.0 times Rust's. Rust's `regex` crate is the engine
+under both the Aura and the Rust program, so the difference is the cost of
+handing each result to the program as Aura values. It is not in the table or
+the totals above either.
+
+`date_time` was added the same day with the `time` module. At 200,000
+instants it takes 0.34 s in Aura, 4.0 s in Python (`datetime`), and 0.18 s
+in Rust (`chrono`): 0.08 times Python's time and 1.9 times Rust's. It is not
+in the table or the totals above either.
+
+`http_stream` was added on 11 November 2026 with the `http` module. At
+400,000 lines, 100,000 events, and 4,000 small requests it takes 1.19 s in
+Aura, 5.78 s in Python (`http.client`), and 0.61 s in Rust (a client
+written by hand on the standard library): 0.21 times Python's time and 1.9
+times Rust's. Each version also runs the server. It is not in the table or
+the totals above either. `http_api` and `mini_browser` now use the `http`
+module, and their times did not change.
 
 0.14.0 brings compact JSON storage and the rest of the lean-values work:
 

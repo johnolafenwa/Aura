@@ -1,0 +1,7 @@
+[model mock]
+> How many words are in "the quick brown fox"?
+I'll count the words.
+[tool word_count {"text": "the quick brown fox"} -> {"words":4}]
+The sentence has 4 words.
+[stopped: end_turn]
+[2 requests on 1 connection]

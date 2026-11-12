@@ -1,0 +1,281 @@
+"""A streaming client for the Claude Messages API, written on the `http` module."""
+
+import http
+import io
+import json
+
+
+public enum Failure:
+    """Why a turn did not produce a reply."""
+
+    Transport(error: io.Error)
+    Api(status: int64, body: str)
+    Stream(reason: str)
+
+
+public class Block:
+    """One content block of a reply, built up from the stream's deltas."""
+
+    # "text", "thinking", "tool_use", or another type the API sent.
+    public kind: str
+    # The text of a text block or the summary of a thinking block.
+    public text: str = ""
+    public signature: str = ""
+    # The id, name, and JSON input text of a tool call.
+    public id: str = ""
+    public name: str = ""
+    public input: str = ""
+    # The block as the stream announced it, as JSON text, kept for types
+    # this client does not build itself.
+    public start: str = "null"
+
+    public def to_json(self) -> json.Value:
+        """The block as the next request must send it back."""
+        if self.kind == "text":
+            return json.Value.Object(
+                {
+                    "type": json.Value.String("text"),
+                    "text": json.Value.String(self.text.clone()),
+                }
+            )
+        if self.kind == "thinking":
+            return json.Value.Object(
+                {
+                    "type": json.Value.String("thinking"),
+                    "thinking": json.Value.String(self.text.clone()),
+                    "signature": json.Value.String(self.signature.clone()),
+                }
+            )
+        if self.kind == "tool_use":
+            mut input = json.Value.Object({})
+            match own json.parse(self.input):
+                case Result.Ok(parsed):
+                    input = parsed
+                case Result.Err(_):
+                    pass
+            return json.Value.Object(
+                {
+                    "type": json.Value.String("tool_use"),
+                    "id": json.Value.String(self.id.clone()),
+                    "name": json.Value.String(self.name.clone()),
+                    "input": input,
+                }
+            )
+        match own json.parse(self.start):
+            case Result.Ok(start):
+                return start
+            case Result.Err(_):
+                return json.Value.Null
+
+
+public class Reply:
+    """An assistant turn: its content blocks and why the model stopped."""
+
+    public blocks: list[Block]
+    public stop_reason: str
+
+    public def message(self) -> str:
+        """The turn as a message, in JSON, to append to the conversation
+        unchanged."""
+        mut content = list[json.Value]()
+        for block in self.blocks:
+            content.append(block.to_json())
+        return json.dumps(
+            json.Value.Object(
+                {
+                    "role": json.Value.String("assistant"),
+                    "content": json.Value.Array(content),
+                }
+            )
+        )
+
+
+public class Client:
+    """Where requests go and what every request carries."""
+
+    public base_url: str = "https://api.anthropic.com"
+    public api_key: str
+    public model: str = "claude-opus-5-5"
+    public max_tokens: int64 = 64000
+    # Print each piece of the reply's text as it arrives.
+    public show: bool = true
+
+    public def send(
+        self,
+        system: str,
+        tools: str,
+        messages: list[str],
+    ) -> Result[Reply, Failure]:
+        """Sends the conversation and reads the reply as it streams. `tools`
+        is a JSON array and each message is a JSON object, as text."""
+        # `fallbacks` lets another model answer a request that the safety
+        # classifiers decline, instead of ending the turn.
+        body = "{" + f"\"model\":{quote(self.model)},\"max_tokens\":{self.max_tokens},\"stream\":true,\"fallbacks\":\"default\",\"system\":{quote(system)},\"tools\":{tools},\"messages\":[" + ",".join(
+            messages
+        ) + "]}"
+        headers: dict[str, str] = {
+            "content-type": "application/json",
+            "accept": "text/event-stream",
+            "x-api-key": self.api_key.clone(),
+            "anthropic-version": "2026-10-21",
+            "anthropic-beta": "server-side-fallback-2026-07-01",
+        }
+        # The wait for the first byte is bounded. A reply may then stream
+        # for minutes, so each read has its own limit.
+        settings = http.Client(timeout=60s, read_timeout=120s)
+        match own settings.post(self.base_url + "/v1/messages", body, headers):
+            case Result.Ok(response):
+                with stream = response:
+                    if not stream.ok():
+                        match own stream.text_up_to(1048576):
+                            case Result.Ok(text):
+                                return Result.Err(
+                                    Failure.Api(status=stream.status, body=text)
+                                )
+                            case Result.Err(error):
+                                return Result.Err(Failure.Transport(error=error))
+                    return read_reply(stream, self.show)
+            case Result.Err(error):
+                return Result.Err(Failure.Transport(error=error))
+
+
+def read_reply(stream: mut http.Response, show: bool) -> Result[Reply, Failure]:
+    mut blocks = list[Block]()
+    mut stop_reason = ""
+    mut finished = false
+    while true:
+        mut data = ""
+        match own stream.read_event():
+            case Result.Ok(next):
+                if next is None:
+                    break
+                if next.event == "ping":
+                    continue
+                data = next.data.clone()
+            case Result.Err(error):
+                return Result.Err(Failure.Transport(error=error))
+        mut fields = dict[str, json.Value]()
+        match own json.parse(data):
+            case Result.Ok(value):
+                match own json.into_object(value):
+                    case dict[str, json.Value] as object:
+                        fields = object
+                    case None:
+                        return Result.Err(
+                            Failure.Stream(reason="an event is not a JSON object")
+                        )
+            case Result.Err(error):
+                return Result.Err(
+                    Failure.Stream(reason=f"an event is not JSON: {error}")
+                )
+        kind = text_field(fields, "type")
+        if kind == "content_block_start":
+            blocks.append(start_block(fields))
+        elif kind == "content_block_delta":
+            index = int_field(fields, "index")
+            if index < 0 or index >= blocks.len():
+                return Result.Err(
+                    Failure.Stream(reason="a delta names a block that was not started")
+                )
+            delta_kind = text_at(fields, "delta", "type")
+            if delta_kind == "text_delta":
+                piece = text_at(fields, "delta", "text")
+                if show:
+                    _ = io.write(piece)
+                    _ = io.flush()
+                blocks[index].text += piece
+            elif delta_kind == "thinking_delta":
+                blocks[index].text += text_at(fields, "delta", "thinking")
+            elif delta_kind == "signature_delta":
+                blocks[index].signature += text_at(fields, "delta", "signature")
+            elif delta_kind == "input_json_delta":
+                blocks[index].input += text_at(fields, "delta", "partial_json")
+        elif kind == "content_block_stop":
+            index = int_field(fields, "index")
+            if show and index >= 0 and index < blocks.len() and blocks[
+                index
+            ].kind == "text":
+                _ = io.write("\n")
+        elif kind == "message_delta":
+            reason = text_at(fields, "delta", "stop_reason")
+            if reason != "":
+                stop_reason = reason
+        elif kind == "message_stop":
+            finished = true
+        elif kind == "error":
+            return Result.Err(
+                Failure.Stream(
+                    reason=text_at(fields, "error", "type") + ": " + text_at(
+                        fields,
+                        "error",
+                        "message",
+                    )
+                )
+            )
+    if not finished:
+        return Result.Err(
+            Failure.Stream(reason="the stream ended before the message did")
+        )
+    return Result.Ok(Reply(blocks=blocks, stop_reason=stop_reason))
+
+
+def start_block(fields: dict[str, json.Value]) -> Block:
+    mut start = "null"
+    match fields.lookup("content_block"):
+        case Lookup.Found(value):
+            start = json.dumps(value)
+        case Lookup.Missing:
+            pass
+    return Block(
+        kind=text_at(fields, "content_block", "type"),
+        text=text_at(fields, "content_block", "text") + text_at(
+            fields,
+            "content_block",
+            "thinking",
+        ),
+        signature=text_at(fields, "content_block", "signature"),
+        id=text_at(fields, "content_block", "id"),
+        name=text_at(fields, "content_block", "name"),
+        start=start,
+    )
+
+
+public def quote(text: str) -> str:
+    """`text` as a JSON string."""
+    return json.dumps(json.Value.String(text.clone()))
+
+
+def text_field(fields: dict[str, json.Value], name: str) -> str:
+    match fields.lookup(name.clone()):
+        case Lookup.Found(value):
+            match value:
+                case json.Value.String(text):
+                    return text.clone()
+                case _:
+                    return ""
+        case Lookup.Missing:
+            return ""
+
+
+def text_at(fields: dict[str, json.Value], outer: str, name: str) -> str:
+    match fields.lookup(outer.clone()):
+        case Lookup.Found(value):
+            match value:
+                case json.Value.Object(inner):
+                    return text_field(inner, name)
+                case _:
+                    return ""
+        case Lookup.Missing:
+            return ""
+
+
+def int_field(fields: dict[str, json.Value], name: str) -> int64:
+    match fields.lookup(name.clone()):
+        case Lookup.Found(value):
+            match json.as_int(value):
+                case int64 as number:
+                    return number
+                case None:
+                    return -1
+        case Lookup.Missing:
+            return -1

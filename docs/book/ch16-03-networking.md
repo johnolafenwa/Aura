@@ -218,16 +218,16 @@ server failed: io.Error.AddrInUse
 
 ## The HTTP probe
 
-Now the client side. `net.http_request_text_timeout` sends one request and
-returns a `net.HttpResponse`. Add `import net` to *src/main.au* and write
-`fetch`:
+Now the client side. The client lives in its own module, `http`. An
+`http.Client` holds the settings of a request, and its `get` method sends
+one and returns an `http.Response`. Add `import http` to *src/main.au* and
+write `fetch`:
 
 ```aura fragment
 def fetch(url: str) -> str:
-    headers: dict[str, str] = {}
-    match own net.http_request_text_timeout("GET", url, "", headers, 2s):
+    match own http.Client(timeout=2s).get(url):
         case Result.Ok(response):
-            status = response.status()
+            status = response.status
             if status >= 200 and status < 400:
                 return "ok"
             return f"failed (HTTP {status})"
@@ -244,11 +244,22 @@ and point the last arm of `run_check` at it:
             return fetch(url)
 ```
 
-The arguments are the method, the URL, a text body (empty for a `GET`), a
-header dictionary, and the deadline. The empty dictionary needs its type
-written out, because there is nothing in `{}` for the compiler to infer it
-from. There are four client functions: text or byte bodies, each with and
-without a timeout. For a check, always use a timeout.
+`http.get(url)` does the same with the default settings, which wait without
+limit. For a check, always set a timeout. The client also has `post`, and
+`request` and `request_bytes` for any method with a text or byte body and a
+header dictionary. It follows redirects, so the status we see is the one at
+the end of the chain.
+
+The response arrives as soon as its status and headers do. We only look at
+the status here, so we never read the body, and dropping the response
+closes its connection. A program that wants the body calls `text()` or
+`bytes()`, or reads it in pieces with `read_chunk`, `read_line`,
+`read_lines`, or, for a server that streams events, `read_event`. The
+[HTTP Module](/manual/http) page has the details.
+
+For a complete program built on a streamed response, see
+`examples/agents/streaming_agent` in the repository. It reads a model's
+reply event by event and prints the text as it arrives.
 
 Notice the two different ways a check can fail here, as with commands. A
 response with status `404` or `500` is a successful request that brought bad
