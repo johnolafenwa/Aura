@@ -20,16 +20,17 @@ prefix="${1:-$HOME/.cache/aura/z3/$version}"
 
 case "$(uname -s)" in
   MINGW* | MSYS*)
-    # A Windows virtual environment keeps its programs under Scripts, and
-    # a copy stands in for the link Windows does not make without a
-    # privilege.
-    if [ ! -x "$prefix/Scripts/z3.exe" ]; then
+    # A Windows virtual environment keeps Python under Scripts, the wheel
+    # puts the solver under bin and its libraries beside the Python
+    # package, and copies stand in for the link Windows does not make
+    # without a privilege.
+    if [ ! -x "$prefix/bin/z3.exe" ]; then
       "$(command -v python3 || command -v python)" -m venv "$prefix"
       "$prefix/Scripts/python.exe" -m pip install --quiet --disable-pip-version-check "z3-solver==$version"
     fi
     mkdir -p "$prefix/solver"
-    cp "$prefix/Scripts/z3.exe" "$prefix/solver/z3.exe"
-    find "$prefix/Lib/site-packages/z3" -name 'libz3.dll' -exec cp {} "$prefix/solver/" \;
+    cp "$prefix/bin/z3.exe" "$prefix/solver/z3.exe"
+    cp "$prefix"/Lib/site-packages/z3/lib/*.dll "$prefix/solver/"
     ;;
   *)
     if [ ! -x "$prefix/bin/z3" ]; then
