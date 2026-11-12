@@ -337,5 +337,6 @@ directly, once with the default worker count and once with `AURA_WORKERS=1`.
 | --- | --- | --- |
 | `spawn_join.au` | `spawn-join 30000` | `serial_ms` (start and join one child at a time) and `batch_ms` (start all, then join) |
 | `imbalance.au` | `imbalance` | `ms` for 16 CPU jobs, four of them 8x longer; the ideal on 4 workers is the 1-worker time divided by 4 |
+| `parallel_start.au` | `parallel-start` | milliseconds for 20 rounds of one, two, and four CPU-bound children of about 3 ms each; with idle workers, `two` and `four` should stay close to `one` |
 | `cancel_parked.au` | `cancel-parked` | milliseconds from `cancel()` to the last of 1,000 parked children exiting, and to group exit |
 | `parked_memory.au` | `parked-memory 10000` | resident bytes per parked sleeper (Linux only) |

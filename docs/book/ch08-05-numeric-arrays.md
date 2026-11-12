@@ -806,7 +806,7 @@ stays an error, and `a.equal(b).all()` says what you mean.
 An `Array` lives in the computer's ordinary memory and the CPU does its
 arithmetic. For very large arrays a graphics processor can be much
 faster. The `tensor` module gives you `Tensor[T]`, which holds numbers on
-a *device*: the CPU, or the GPU of a Mac.
+a *device*: the CPU, the GPU of a Mac, or an NVIDIA GPU on Linux.
 
 ```aura
 from tensor import Device, Tensor
