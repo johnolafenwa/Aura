@@ -160,7 +160,7 @@ jobs:
     # in full; the compiler and the `aura` command are built, and their
     # tests and `aura build` follow.
     runs-on: windows-2025
-    timeout-minutes: 120
+    timeout-minutes: 150
     defaults:
       run:
         shell: bash
@@ -203,6 +203,8 @@ jobs:
             target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
             target/hello_world.exe
             target/debug/aura.exe run --backend direct examples/control_flow.au
+            target/debug/aura.exe run --backend direct examples/basic_addition.au
+            target/debug/aura.exe run --backend direct examples/agents/retrying_network_worker.au
           } 2>&1 | tee "$RUNNER_TEMP/smoke.log"
 
       - name: Run the runtime tests
@@ -214,6 +216,32 @@ jobs:
           RUST_MIN_STACK: 33554432
         run: cargo test --locked -p aura-core -p aura-runtime 2>&1 | tee "$RUNNER_TEMP/runtime-tests.log"
 
+      - name: Run the aura command's unit tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura --bin aura 2>&1 | tee "$RUNNER_TEMP/command-tests.log"
+
+      - name: Run the compiler's unit tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 45
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura-compiler --lib 2>&1 | tee "$RUNNER_TEMP/compiler-tests.log"
+
+      - name: Package the release archive and run it outside the source tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 40
+        run: |
+          {
+            cargo build --release --locked -p aura
+            version="$(target/release/aura.exe --version | tr -d '\r' | awk '{ print $2 }')"
+            archive="aura-v$version-x86_64-pc-windows-msvc"
+            scripts/package-cli-windows.sh "$archive"
+            scripts/smoke-cli-archive-windows.sh "$archive.zip"
+          } 2>&1 | tee "$RUNNER_TEMP/package.log"
+
       - name: Show where a failed step stopped
         # The job log is long, so the failures are repeated at its end.
         if: ${{ failure() }}
@@ -221,6 +249,9 @@ jobs:
           grep -E "^error|^warning: unused|panicked" -A 12 "$RUNNER_TEMP/aura-build.log" | tail -n 40 || true
           tail -n 40 "$RUNNER_TEMP/smoke.log" || true
           grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true
+          grep -E "FAILED|failed|panicked|over 60 seconds|test result|^error" "$RUNNER_TEMP/command-tests.log" | tail -n 60 || true
+          grep -E "FAILED|failed|panicked|over 60 seconds|test result|^error" "$RUNNER_TEMP/compiler-tests.log" | tail -n 80 || true
+          grep -vE "^ +Compiling|^warning|^ *$" "$RUNNER_TEMP/package.log" | tail -n 40 || true
 
   native-binaries:
     strategy:

@@ -3373,13 +3373,60 @@ fn runtime_archive_memo_stamp(path: &Path, metadata: &fs::Metadata) -> Option<St
             metadata.ctime_nsec()
         ))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        windows_archive_memo_stamp(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, metadata);
         // Platforms without a stable file-identity/change token rehash rather
         // than reuse a memo that could alias different archive contents.
         None
     }
+}
+
+/// The Windows form of the archive stamp: the volume and file identifiers,
+/// the size, and the creation, write and change times of the open file.
+#[cfg(windows)]
+fn windows_archive_memo_stamp(path: &Path) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
+    };
+
+    let file = fs::File::open(path).ok()?;
+    let handle = file.as_raw_handle();
+    let mut identity: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(handle, &mut identity) } == 0 {
+        return None;
+    }
+    let mut times: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+    let times_size = u32::try_from(std::mem::size_of::<FILE_BASIC_INFO>()).ok()?;
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            std::ptr::from_mut(&mut times).cast(),
+            times_size,
+        )
+    } == 0
+    {
+        return None;
+    }
+    Some(format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        path.display(),
+        identity.dwVolumeSerialNumber,
+        (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow),
+        (u64::from(identity.nFileSizeHigh) << 32) | u64::from(identity.nFileSizeLow),
+        times.CreationTime,
+        times.LastWriteTime,
+        times.ChangeTime,
+        identity.nNumberOfLinks
+    ))
 }
 
 fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<NativeRuntimeIdentity> {
@@ -5739,7 +5786,7 @@ mod tests {
         assert!(is_sha256_hex(&runtime_archive_digest(b"")));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
         let root = unique_temp_dir("runtime-memo-stamp");
@@ -5751,7 +5798,7 @@ mod tests {
             .modified()
             .expect("first archive should have an mtime");
         let first_stamp = runtime_archive_memo_stamp(&archive, &first_metadata)
-            .expect("Unix archive metadata should have a reliable stamp");
+            .expect("archive metadata should have a reliable stamp");
 
         fs::write(&replacement, b"archive-b").expect("replacement archive should write");
         let replacement_file = fs::OpenOptions::new()
@@ -5771,7 +5818,7 @@ mod tests {
             first_modified
         );
         let second_stamp = runtime_archive_memo_stamp(&archive, &second_metadata)
-            .expect("Unix replacement should have a reliable stamp");
+            .expect("replacement should have a reliable stamp");
         assert_ne!(
             second_stamp, first_stamp,
             "file identity or ctime must invalidate a same-size, same-mtime archive memo"
