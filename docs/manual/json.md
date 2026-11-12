@@ -458,7 +458,8 @@ decoder:
 
 The checker rejects these with `AU2046`:
 
-- a bodyless implementation of a trait other than `json.Codec`
+- a bodyless implementation of a trait other than `json.Codec` and
+  `tensor.Module`
 - a type declared in another module, or a generic class or enum
 - a class that declares `__init__`. Decode a plain wire class and call the
   initializer in an explicit implementation instead.

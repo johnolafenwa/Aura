@@ -311,13 +311,13 @@ followed by `step()`.
 ### Modules
 
 A model is a class whose fields are layers, and it implements the
-`Module` trait. This is Aura's form of PyTorch's `nn.Module`. Aura has
-no inheritance, so the model names its parts in one method, `collect`,
-and the trait gives it the rest:
+`Module` trait. This is Aura's form of PyTorch's `nn.Module`. Write
+`impl Module for Net` with no body, and the compiler finds the fields
+that hold weights:
 
 ```aura
 import tensor
-from tensor import AdamW, Collector, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
+from tensor import AdamW, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
 
 class Net:
     hidden: Linear
@@ -326,10 +326,7 @@ class Net:
     def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         return self.output.forward(self.hidden.forward(x).relu())
 
-impl Module for Net:
-    def collect(self, into: mut Collector) -> None:
-        into.add("hidden", self.hidden)
-        into.add("output", self.output)
+impl Module for Net
 
 def main():
     device = Device.default()
@@ -351,22 +348,60 @@ def main():
 
 | API | Result |
 | --- | --- |
-| `collect(self, into: mut Collector)` | The one method an implementation writes. It names each field that holds weights. |
+| `collect(self, into: mut Collector)` | Names each field that holds weights. The compiler writes it for an implementation with no body. |
 | `parameters(mut self) -> list[Parameter[float32]]` | The model's parameters, for an optimizer. |
 | `named_parameters(mut self) -> list[(str, Parameter[float32])]` | Each parameter with its name, such as `hidden.weight`. |
 | `state_dict(self) -> dict[str, Tensor[float32]]` | The tensor each parameter holds now, by name. |
 | `load_state_dict(mut self, state) -> Result[int64, str]` | Replaces every parameter with the tensor of its name, and gives how many it replaced. Changes nothing and gives an error when a name is missing or a shape differs. |
 
-Inside `collect`, a `Collector` takes three kinds of field:
+The compiler-written `collect` walks three kinds of field, in the
+order the class declares them:
+
+| Field type | Parameters named |
+| --- | --- |
+| `Parameter[float32]` | `name` |
+| A type that implements `Module`, or `dyn Layer`, `dyn Module`, or a trait object of a trait of the same module that extends one of them | `name.` and the names inside it, such as `hidden.weight` |
+| A list of such a type | `name.0.`, `name.1.`, and so on |
+
+A field of any other type holds no weights and is left out: a number, a
+string, a plain `Tensor`. A plain `Tensor` field is a constant of the
+model, and it does not train.
+
+A field that holds weights in another shape is an error, `AU2046`, so a
+derived `collect` never leaves weights out silently. Such shapes are a
+union as in `Linear | None`, a tuple, a dictionary, a nested list, a list
+of parameters, and a `Parameter` of another dtype. A generic class cannot
+derive `Module` either. For those, write `collect` by hand. It calls a
+`Collector` once for each field:
 
 | Collector method | Field |
 | --- | --- |
 | `add(name, module)` | A layer or another model: anything that implements `Module`. |
-| `add_list(name, modules)` | A list of modules of one type. Its parameters are named `name.0`, `name.1`, and so on. |
+| `add_list(name, modules)` | A list of modules of one type. |
 | `parameter(name, param)` | A `Parameter[float32]` of the model's own. |
 
-A weight that `collect` does not name is not given to the optimizer and
-does not train.
+```aura
+from tensor import Collector, Linear, Module
+
+class Pair:
+    left: Linear
+    right: Linear | None
+
+impl Module for Pair:
+    def collect(self, into: mut Collector) -> None:
+        into.add("left", self.left)
+        match self.right:
+            case None:
+                return
+            case Linear as right:
+                into.add("right", right)
+
+def main():
+    return
+```
+
+A weight that a hand-written `collect` does not name is not given to the
+optimizer and does not train.
 
 `Module` keeps the rule in [What Can Change](#what-can-change).
 `parameters()`, `named_parameters()`, and `load_state_dict()` take
@@ -391,8 +426,8 @@ takes other arguments.
 - `dim` and `keepdim` are spelled as in PyTorch. Aura's `Array` uses
   `axis` for the same thing.
 - `step()` clears the gradients it used.
-- A model implements `Module` and writes `collect`. It does not inherit
-  from a base class, and `model.forward(x)` is called by name:
+- A model implements `Module` with `impl Module for Net`. It does not
+  inherit from a base class, and `model.forward(x)` is called by name:
   `model(x)` is not a call.
 - `state_dict()` gives the tensors as values, not as live references to
   the weights.

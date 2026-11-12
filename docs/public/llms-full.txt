@@ -7639,7 +7639,7 @@ String and format-specification diagnostics are described under
 | `AU2043` | invalid Display implementation | A `Display` implementation for a type the module does not declare, a builtin, tuple, or union, a partial or bounded generic target, an overlap, or a mismatched `display` method. | Implement `def display(self) -> str` once, in the module that declares the type, for every specialization. |
 | `AU2044` | invalid property declaration | An `@property` getter outside a class, with a receiver other than `self`, with parameters, type parameters, a `None` or view result, or a name that collides with a field. | Declare `def name(self) -> Type:` in the class body. |
 | `AU2045` | invalid property use | Assignment, compound assignment, a `mut` argument or receiver, `match mut`, a view, or call syntax on a property. | Read the property without parentheses, or bind it to a local and change the local. |
-| `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
+| `AU2046` | invalid derived implementation | A bodyless `impl` for a trait other than `json.Codec` and `tensor.Module`, for a type from another module, a generic class or enum, or a class with `__init__`. Also a positional enum payload, a field type with no JSON form, or a union whose members a decoder cannot tell apart. | Write the implementation by hand, or change the field to a supported type. See [Derived Codecs](/manual/json#derived-codecs). |
 | `AU2047` | invalid decorator | A decorator on a generic function, on `main`, on a function with a parameter default or a view result, or a decorator line not followed by a module-level `def`. | Remove the decorator, or change the function so a closure can stand in for it. See [Decorators](/manual/functions#decorators). |
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
@@ -7818,7 +7818,8 @@ computed value, not a method, and cannot be called``.
 **`AU2046` invalid derived implementation.** The message names the type and,
 for a field or payload, its name and type, such as ``cannot derive `json.Codec` for
 `Bag`: field `items` has the type `set[str]`, which a derived `json.Codec`
-cannot encode``.
+cannot encode``. A derived `tensor.Module` reports a field that holds
+weights in a type its `collect` cannot walk.
 
 **`AU2047` invalid decorator.** The message names the decorated function and
 the rule it breaks, such as ``decorated function `identity` cannot be
@@ -13464,7 +13465,7 @@ def build[T: shapes.Make](seed: int64) -> T:
 
 The qualified name and a `from shapes import Make` name the same trait. A module alias works too, as in `impl sh.Make for Gadget` after `import shapes as sh`.
 
-An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs).
+An implementation with no body, such as `impl json.Codec for Point`, asks the compiler to derive the methods. Only `json.Codec` and `tensor.Module` can be derived, and the checker rejects any other bodyless implementation with `AU2046`. See [Derived Codecs](/manual/json#derived-codecs) and [Modules](/manual/tensors#modules).
 
 Aura 0.15 imposes no separate orphan rule. An implementation must still refer to known, visible types and traits. It takes part only where it is present in the loaded module or package context.
 
@@ -16630,7 +16631,8 @@ decoder:
 
 The checker rejects these with `AU2046`:
 
-- a bodyless implementation of a trait other than `json.Codec`
+- a bodyless implementation of a trait other than `json.Codec` and
+  `tensor.Module`
 - a type declared in another module, or a generic class or enum
 - a class that declares `__init__`. Decode a plain wire class and call the
   initializer in an explicit implementation instead.
@@ -25348,13 +25350,13 @@ followed by `step()`.
 ### Modules
 
 A model is a class whose fields are layers, and it implements the
-`Module` trait. This is Aura's form of PyTorch's `nn.Module`. Aura has
-no inheritance, so the model names its parts in one method, `collect`,
-and the trait gives it the rest:
+`Module` trait. This is Aura's form of PyTorch's `nn.Module`. Write
+`impl Module for Net` with no body, and the compiler finds the fields
+that hold weights:
 
 ```aura
 import tensor
-from tensor import AdamW, Collector, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
+from tensor import AdamW, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
 
 class Net:
     hidden: Linear
@@ -25363,10 +25365,7 @@ class Net:
     def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         return self.output.forward(self.hidden.forward(x).relu())
 
-impl Module for Net:
-    def collect(self, into: mut Collector) -> None:
-        into.add("hidden", self.hidden)
-        into.add("output", self.output)
+impl Module for Net
 
 def main():
     device = Device.default()
@@ -25388,22 +25387,60 @@ def main():
 
 | API | Result |
 | --- | --- |
-| `collect(self, into: mut Collector)` | The one method an implementation writes. It names each field that holds weights. |
+| `collect(self, into: mut Collector)` | Names each field that holds weights. The compiler writes it for an implementation with no body. |
 | `parameters(mut self) -> list[Parameter[float32]]` | The model's parameters, for an optimizer. |
 | `named_parameters(mut self) -> list[(str, Parameter[float32])]` | Each parameter with its name, such as `hidden.weight`. |
 | `state_dict(self) -> dict[str, Tensor[float32]]` | The tensor each parameter holds now, by name. |
 | `load_state_dict(mut self, state) -> Result[int64, str]` | Replaces every parameter with the tensor of its name, and gives how many it replaced. Changes nothing and gives an error when a name is missing or a shape differs. |
 
-Inside `collect`, a `Collector` takes three kinds of field:
+The compiler-written `collect` walks three kinds of field, in the
+order the class declares them:
+
+| Field type | Parameters named |
+| --- | --- |
+| `Parameter[float32]` | `name` |
+| A type that implements `Module`, or `dyn Layer`, `dyn Module`, or a trait object of a trait of the same module that extends one of them | `name.` and the names inside it, such as `hidden.weight` |
+| A list of such a type | `name.0.`, `name.1.`, and so on |
+
+A field of any other type holds no weights and is left out: a number, a
+string, a plain `Tensor`. A plain `Tensor` field is a constant of the
+model, and it does not train.
+
+A field that holds weights in another shape is an error, `AU2046`, so a
+derived `collect` never leaves weights out silently. Such shapes are a
+union as in `Linear | None`, a tuple, a dictionary, a nested list, a list
+of parameters, and a `Parameter` of another dtype. A generic class cannot
+derive `Module` either. For those, write `collect` by hand. It calls a
+`Collector` once for each field:
 
 | Collector method | Field |
 | --- | --- |
 | `add(name, module)` | A layer or another model: anything that implements `Module`. |
-| `add_list(name, modules)` | A list of modules of one type. Its parameters are named `name.0`, `name.1`, and so on. |
+| `add_list(name, modules)` | A list of modules of one type. |
 | `parameter(name, param)` | A `Parameter[float32]` of the model's own. |
 
-A weight that `collect` does not name is not given to the optimizer and
-does not train.
+```aura
+from tensor import Collector, Linear, Module
+
+class Pair:
+    left: Linear
+    right: Linear | None
+
+impl Module for Pair:
+    def collect(self, into: mut Collector) -> None:
+        into.add("left", self.left)
+        match self.right:
+            case None:
+                return
+            case Linear as right:
+                into.add("right", right)
+
+def main():
+    return
+```
+
+A weight that a hand-written `collect` does not name is not given to the
+optimizer and does not train.
 
 `Module` keeps the rule in [What Can Change](#what-can-change).
 `parameters()`, `named_parameters()`, and `load_state_dict()` take
@@ -25428,8 +25465,8 @@ takes other arguments.
 - `dim` and `keepdim` are spelled as in PyTorch. Aura's `Array` uses
   `axis` for the same thing.
 - `step()` clears the gradients it used.
-- A model implements `Module` and writes `collect`. It does not inherit
-  from a base class, and `model.forward(x)` is called by name:
+- A model implements `Module` with `impl Module for Net`. It does not
+  inherit from a base class, and `model.forward(x)` is called by name:
   `model(x)` is not a call.
 - `state_dict()` gives the tensors as values, not as live references to
   the weights.

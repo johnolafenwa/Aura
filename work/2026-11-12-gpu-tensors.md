@@ -101,8 +101,8 @@ later, on the same tensors (ADR-0097).
   method called with a `Parameter[float32]` field inferred
   `Parameter[Unknown]`, and a `view` of a list element before an early
   `return` fails the loan check in a default method.
-- Next: the compiler writes `collect` from a class's fields, in a second
-  pull request. `sema/json_derive.rs` is the model for generated source.
+- `impl Module for Net` with no body derives `collect`
+  (`sema/tensor_derive.rs`, ADR-0099), modelled on `sema/json_derive.rs`.
 - Fixed since the A40 run: a tensor a program keeps is computed once
   (k-means), and a slice's start is an operand, so batches share one
   compiled plan (MLP training). Not yet timed on the A40.

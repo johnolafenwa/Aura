@@ -1984,3 +1984,200 @@ fn a_module_not_declared_mut_gives_out_no_parameters() {
         assert_eq!(check(collect, body).expect_err(body), expected);
     }
 }
+
+#[test]
+fn a_bodyless_module_impl_collects_the_fields_that_hold_weights() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import AdamW, Device, Layer, Linear, Module, Parameter, ReLU, Sequential, Tensor
+
+
+class Block:
+    scale: Parameter[float32]
+    inner: Linear
+    name: str
+
+impl Module for Block
+
+
+class Net:
+    blocks: list[Block]
+    head: tensor.Linear
+    stack: Sequential
+    extra: dyn Layer
+    steps: int64
+
+impl tensor.Module for Net
+
+
+def main():
+    device = Device.cpu()
+    mut net = Net(
+        blocks=[
+            Block(scale=Parameter[float32](Tensor[float32].full([1], 1.0, device)), inner=Linear(2, 2, 1, device), name="a"),
+            Block(scale=Parameter[float32](Tensor[float32].full([1], 1.0, device)), inner=Linear(2, 2, 2, device), name="b"),
+        ],
+        head=Linear(2, 1, 3, device),
+        stack=Sequential([Linear(2, 2, 4, device) as dyn Layer, ReLU()]),
+        extra=Linear(2, 2, 5, device),
+        steps=0,
+    )
+    for name, param in net.named_parameters():
+        print(f"{name} {param.value().shape()}")
+    print(net.parameters().len())
+"#,
+    )
+    .expect("a derived module names its parameters");
+    assert_eq!(
+        output.stdout,
+        "blocks.0.scale [1]\nblocks.0.inner.weight [2, 2]\nblocks.0.inner.bias [2]\nblocks.1.scale [1]\nblocks.1.inner.weight [2, 2]\nblocks.1.inner.bias [2]\nhead.weight [2, 1]\nhead.bias [1]\nstack.0.weight [2, 2]\nstack.0.bias [2]\nextra.weight [2, 2]\nextra.bias [2]\n12\n"
+    );
+}
+
+#[test]
+fn a_derived_module_follows_aliases_and_traits_of_its_own_module() {
+    let output = crate::run_source(
+        r#"import tensor as t
+from tensor import Device, Parameter, Tensor
+
+trait Step: t.Layer:
+    def label(self) -> str
+
+class Scale:
+    by: t.Parameter[float32]
+
+impl t.Module for Scale
+
+impl t.Layer for Scale:
+    def forward(self, x: t.Tensor[float32]) -> t.Tensor[float32]:
+        return x * self.by.value()
+
+impl Step for Scale:
+    def label(self) -> str:
+        return "scale"
+
+class Empty:
+    count: int64
+    note: (str, int64)
+    table: dict[str, float64]
+    run: def(int64) -> int64
+
+impl t.Module for Empty
+
+class Net:
+    first: dyn Step
+    rest: list[dyn Step]
+    empty: Empty
+
+impl t.Module for Net
+
+def twice(x: int64) -> int64:
+    return x * 2
+
+def main():
+    device = Device.cpu()
+    one = Tensor[float32].full([1], 1.0, device)
+    mut net = Net(
+        first=Scale(by=Parameter[float32](one.clone())),
+        rest=[Scale(by=Parameter[float32](one.clone())) as dyn Step],
+        empty=Empty(count=0, note=("a", 1), table={"a": 1.0}, run=twice),
+    )
+    for name, param in net.named_parameters():
+        print(name)
+"#,
+    )
+    .expect("a derived module follows a module alias and a local trait");
+    assert_eq!(output.stdout, "first.by\nrest.0.by\n");
+}
+
+#[test]
+fn a_derived_module_keeps_the_mut_rule_and_rejects_what_it_cannot_walk() {
+    let check = |fields: &str, target: &str, body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Device, Linear, Module, Parameter, SGD, Tensor\n\nclass Net:\n    hidden: Linear\n{fields}\nclass Pair[T]:\n    left: T\n\ntrait Named:\n    def name(self) -> str\n\nimpl {target}\n\ndef main():\n    device = Device.cpu()\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    check("", "Module for Net", "    return\n").expect("a derived module checks");
+    let net = "    net = Net(hidden=Linear(2, 2, 1, device))\n";
+    let walk = |field: &str| {
+        format!("cannot derive `tensor.Module` for `Net`: field `{field}` holds weights in a type a derived `collect` cannot walk")
+    };
+    let cases = [
+        (
+            "",
+            "Module for Net",
+            format!("{net}    optimizer = SGD(net.parameters(), lr=0.1)\n"),
+            "method `parameters` requires a mutable receiver".to_string(),
+        ),
+        (
+            "    spare: Linear | None\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("spare"),
+        ),
+        (
+            "    named: dict[str, Linear]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("named"),
+        ),
+        (
+            "    weights: list[Parameter[float32]]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("weights"),
+        ),
+        (
+            "    wide: Parameter[float64]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("wide"),
+        ),
+        (
+            "    both: (Linear, int64)\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("both"),
+        ),
+        (
+            "    grid: list[list[Linear]]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("grid"),
+        ),
+        (
+            "",
+            "[T] Module for Pair[T]",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` for the generic class `Pair` is not implemented".to_string(),
+        ),
+        (
+            "",
+            "Module for Linear",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` must be in the module that declares the class `Linear`".to_string(),
+        ),
+        (
+            "",
+            "Module for (int64, int64)",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` needs a class declared in this module".to_string(),
+        ),
+        (
+            "",
+            "Named for Net",
+            "    return\n".to_string(),
+            "only `json.Codec` and `tensor.Module` can be derived; `impl Named for ...` needs a body".to_string(),
+        ),
+    ];
+    for (fields, target, body, expected) in cases {
+        assert_eq!(
+            check(fields, target, &body).expect_err(target),
+            expected,
+            "{fields}"
+        );
+    }
+}

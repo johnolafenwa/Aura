@@ -86,7 +86,7 @@ pub(super) fn expand(module: &mut Module, context: &mut ModuleContext) -> Result
                 CODE,
                 decl.span,
                 format!(
-                    "only `json.Codec` can be derived; `impl {} for ...` needs a body",
+                    "only `json.Codec` and `tensor.Module` can be derived; `impl {} for ...` needs a body",
                     decl.trait_name
                 ),
             )

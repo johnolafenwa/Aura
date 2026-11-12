@@ -1,6 +1,6 @@
 import sys
 import tensor
-from tensor import AdamW, Collector, Device, Embedding, LayerNorm, Layer, Linear, Module, MultiheadAttention, ReLU, Sequential, Tensor
+from tensor import AdamW, Device, Embedding, LayerNorm, Layer, Linear, Module, MultiheadAttention, ReLU, Sequential, Tensor
 
 
 # Each workload prints `<name> <size> <milliseconds> <result> <first pass
@@ -148,13 +148,7 @@ class Block:
         )
 
 
-impl Module for Block:
-    def collect(self, into: mut Collector) -> None:
-        into.add("norm1", self.norm1)
-        into.add("mix", self.mix)
-        into.add("norm2", self.norm2)
-        into.add("wide", self.wide)
-        into.add("narrow", self.narrow)
+impl Module for Block
 
 
 def wrapped(x: Tensor[int64], count: int64) -> Tensor[int64]:

@@ -126,8 +126,8 @@ left out: PyTorch's call exists to run hooks around `forward`, Aura has
 no hooks, and a call on a class value would be a new rule for the whole
 language that could not be taken back. It can be added later.
 
-The compiler writing `collect` from a class's fields is planned and not
-part of this decision.
+The compiler writes `collect` for an implementation with no body
+(ADR-0099).
 
 ### Several tensors run as one plan
 

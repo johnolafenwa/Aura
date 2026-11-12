@@ -21,6 +21,11 @@ in this file.
   `parameters()`, `named_parameters()`, `state_dict()` and
   `load_state_dict()`. `tensor.Sequential` applies a list of layers, with
   `ReLU` and `GELU` as layers. The `mut` rule holds through all of them.
+- `impl Module for Net` with no body asks the compiler to write
+  `collect` from the class's fields: each `Parameter[float32]`, each
+  module, and each list of modules. A field that holds weights in a
+  shape it cannot walk is an error, `AU2046`, not a weight left out
+  (ADR-0099).
 - A default method of an imported trait can name private items of the
   trait's own module. It was checked and compiled in the importing
   module before, where those names did not resolve.

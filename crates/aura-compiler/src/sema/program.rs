@@ -611,12 +611,15 @@ fn check_pipeline(module: Module, context: ModuleContext) -> Result<Program> {
     let mut context = context;
     let generators = super::generators::expand(&mut module, &mut context)?;
     let decorated = super::decorators::expand(&mut module)?;
+    let modules = super::tensor_derive::expand(&mut module, &mut context)?;
     let derived = super::json_derive::expand(&mut module, &mut context)?;
     super::assoc_bounds::expand(&mut module, &mut context);
     super::iterator_loops::check_with_iterator_loops(module, context, |module, context| {
         super::property_reads::check_with_property_reads(module, context, check_with_context_once)
     })
-    .map_err(|error| generators.map_error(decorated.map_error(derived.map_error(error))))
+    .map_err(|error| {
+        generators.map_error(decorated.map_error(derived.map_error(modules.map_error(error))))
+    })
 }
 
 fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Program> {
