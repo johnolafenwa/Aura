@@ -301,30 +301,24 @@ fn pull(
             }
         })?,
         Operation::Expand(_) => give(0, &|| sum_to(flow, first.shape()))?,
-        Operation::Slice {
-            axis, start, step, ..
-        } => give(0, &|| {
+        Operation::Slice { axis, step, .. } => give(0, &|| {
             run(
                 Operation::Unslice {
                     axis: *axis,
-                    start: *start,
                     step: *step,
                     size: first.shape()[*axis],
                 },
-                &[flow],
+                &[flow, &inputs[1]],
             )
         })?,
-        Operation::Unslice {
-            axis, start, step, ..
-        } => give(0, &|| {
+        Operation::Unslice { axis, step, .. } => give(0, &|| {
             run(
                 Operation::Slice {
                     axis: *axis,
-                    start: *start,
                     step: *step,
                     length: first.shape()[*axis],
                 },
-                &[flow],
+                &[flow, &inputs[1]],
             )
         })?,
         Operation::Concat { axis } => {
@@ -332,11 +326,10 @@ fn pull(
                 run(
                     Operation::Slice {
                         axis: *axis,
-                        start,
                         step: 1,
                         length,
                     },
-                    &[flow],
+                    &[flow, &start_tensor(flow.device(), start)?],
                 )
             };
             let split = first.shape()[*axis];

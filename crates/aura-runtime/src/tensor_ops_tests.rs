@@ -63,13 +63,11 @@ fn slice(operand: &Value, axis: i64, start: i64, stop: i64, step: i64) -> Result
 
 fn unslice(operand: &Value, axis: usize, start: usize, step: usize, size: usize) -> Result<Value> {
     operate(
-        Operation::Unslice {
-            axis,
-            start,
-            step,
-            size,
-        },
-        &[node(operand)],
+        Operation::Unslice { axis, step, size },
+        &[
+            node(operand),
+            &start_tensor(node(operand).device(), start).unwrap(),
+        ],
     )
 }
 
@@ -1100,5 +1098,24 @@ fn a_waiting_tensor_the_program_holds_keeps_its_memory() {
         let second = binary(&shared, &l.b, 0).unwrap();
         evaluate_together(&[node(&first).clone(), node(&second).clone()]).unwrap();
         assert!(node(&shared).is_ready());
+    });
+}
+
+#[test]
+fn slices_that_differ_in_their_start_share_a_plan() {
+    deferred(|| {
+        let l = leaves(TensorDevice::Cpu);
+        let plan_of = |start: i64| {
+            let rows = slice(&l.tall, 0, start, start + 2, 1).unwrap();
+            let total = reduce(&binary(&rows, &rows, 2).unwrap(), 0, None).unwrap();
+            let plan = Plan::collect(node(&total)).0;
+            (plan, floats(&array(&total)))
+        };
+        let (first, first_sum) = plan_of(0);
+        let (second, second_sum) = plan_of(1);
+        assert_eq!(first, second);
+        // tall is [[1, 2], [3, 4], [5, 6]].
+        assert_eq!(first_sum, [30.0]);
+        assert_eq!(second_sum, [86.0]);
     });
 }

@@ -405,26 +405,23 @@ impl<'a> Generator<'a> {
             Operation::Where => format!("({} ? {} : {})", operand(0), operand(1), operand(2)),
             Operation::Reshape(_) | Operation::Permute(_) | Operation::Expand(_) => operand(0),
             Operation::Cast(_) => format!("({result})({})", operand(0)),
-            Operation::Slice {
-                axis, start, step, ..
-            } => {
+            Operation::Slice { axis, step, .. } => {
                 let inner = inner_of(shape, *axis);
                 let lane = split(inner, shape[*axis]);
-                let place = format!("({} * {step}LL + {start}LL)", lane.1);
+                let place = format!("({} * {step}LL + (long long){})", lane.1, at(1, "0"));
                 at(0, &join(inner, source[*axis], &lane, &place))
             }
-            Operation::Unslice {
-                axis, start, step, ..
-            } => {
+            Operation::Unslice { axis, step, .. } => {
                 let inner = inner_of(shape, *axis);
                 let lane = split(inner, shape[*axis]);
                 let length = source[*axis];
                 let element = at(0, &join(inner, length, &lane, &format!("(c / {step}LL)")));
                 format!(
-                    "0; long long c = {} - {start}LL; \
+                    "0; long long c = {} - (long long){}; \
                      if (c >= 0 && c % {step}LL == 0 && c / {step}LL < {length}LL) return {element}; \
                      return 0",
-                    lane.1
+                    lane.1,
+                    at(1, "0"),
                 )
             }
             Operation::Concat { axis } => {

@@ -119,19 +119,20 @@ pub(crate) enum Operation {
     Permute(Vec<i64>),
     /// An [`ArrayDType`] code.
     Cast(i64),
-    /// `length` elements of each lane along `axis`, from `start`, `step`
-    /// apart.
+    /// `length` elements of each lane along `axis`, `step` apart, from
+    /// the place the second operand holds: a tensor of one `int64`. The
+    /// start is an operand so that slices which differ only in where
+    /// they start, such as the batches of a training loop, share a plan.
     Slice {
         axis: usize,
-        start: usize,
         step: usize,
         length: usize,
     },
     /// The reverse of a slice: lanes of `size` elements that hold the
-    /// operand's elements from `start`, `step` apart, and zero elsewhere.
+    /// operand's elements from the start the second operand holds,
+    /// `step` apart, and zero elsewhere.
     Unslice {
         axis: usize,
-        start: usize,
         step: usize,
         size: usize,
     },
@@ -1067,18 +1068,12 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
         Operation::Permute(axes) if axes.is_empty() => first.transpose(),
         Operation::Permute(axes) => first.permute(axes),
         Operation::Cast(dtype) => first.cast(ArrayDType::from_code(*dtype).ok_or_else(unknown)?),
-        Operation::Slice {
-            axis,
-            start,
-            step,
-            length,
-        } => tensor_kernels::slice(first, *axis, *start, *step, *length),
-        Operation::Unslice {
-            axis,
-            start,
-            step,
-            size,
-        } => tensor_kernels::unslice(first, *axis, *start, *step, *size),
+        Operation::Slice { axis, step, length } => {
+            tensor_kernels::slice(first, *axis, slice_start(inputs[1])?, *step, *length)
+        }
+        Operation::Unslice { axis, step, size } => {
+            tensor_kernels::unslice(first, *axis, slice_start(inputs[1])?, *step, *size)
+        }
         Operation::Expand(shape) => tensor_kernels::expand(first, shape),
         Operation::Concat { axis } => tensor_kernels::concat(first, inputs[1], *axis),
         Operation::Take { axis } => tensor_kernels::take(first, inputs[1], *axis),
@@ -1598,14 +1593,14 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             let bound = |at: i64| (if at < 0 { at + length } else { at }).clamp(0, length);
             let (start, stop) = (bound(start), bound(stop));
             let taken = ((stop - start).max(0) + step - 1) / step;
+            let start = start_tensor(operand.device(), start as usize)?;
             operate(
                 Operation::Slice {
                     axis,
-                    start: start as usize,
                     step: step as usize,
                     length: taken as usize,
                 },
-                &[operand],
+                &[operand, &start],
             )
         }
         1 => {
@@ -1716,6 +1711,31 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             Ok(Value::Tensor(operand.clone()))
         }
         _ => Err(tensor_error(name, "was given an unknown operation")),
+    }
+}
+
+/// The start of a slice as the tensor of one `int64` its operation
+/// takes.
+pub(super) fn start_tensor(device: TensorDevice, start: usize) -> Result<TensorValue> {
+    let elements = ArrayValue::new(
+        Box::new([1]),
+        ArrayStorage::Int64(vec![start as i64].into()),
+    )?;
+    match place(device, elements)? {
+        Value::Tensor(node) => Ok(node),
+        _ => unreachable!("placing elements gives a tensor"),
+    }
+}
+
+/// The start a slice's second operand holds.
+fn slice_start(start: &ArrayValue) -> Result<usize> {
+    match start.value_at_flat(0) {
+        Value::Int(start) => usize::try_from(start.as_i128().unwrap_or(-1))
+            .map_err(|_| tensor_error("tensor::slice", "was given a negative start")),
+        _ => Err(tensor_error(
+            "tensor::slice",
+            "was given a start that is not an integer",
+        )),
     }
 }
 
