@@ -192,7 +192,7 @@ jobs:
 
       - name: Build the compiler and the aura command
         if: ${{ !cancelled() }}
-        run: cargo build --locked -p aura
+        run: cargo build --locked -p aura 2>&1 | tee "$RUNNER_TEMP/aura-build.log"
 
       - name: Run a program in the interpreter and as a native executable
         if: ${{ !cancelled() }}
@@ -210,37 +210,14 @@ jobs:
         timeout-minutes: 12
         env:
           RUST_MIN_STACK: 33554432
-        run: cargo test --locked -p aura-core -p aura-runtime
+        run: cargo test --locked -p aura-core -p aura-runtime 2>&1 | tee "$RUNNER_TEMP/runtime-tests.log"
 
-  windows-trace:
-    # Native Windows is being brought up in steps. The runtime's tests run
-    # in full; the compiler and the `aura` command are built, and their
-    # tests and `aura build` follow.
-    runs-on: windows-2025
-    timeout-minutes: 20
-    defaults:
-      run:
-        shell: bash
-
-    steps:
-      - name: Checkout
-        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
-
-      - name: Setup Rust
-        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
-        with:
-          toolchain: 1.95.0
-          components: clippy, llvm-tools-preview, rustfmt
-
-      - name: Put the POSIX commands the tests spawn on PATH
-        # Git for Windows carries `sh`, `echo`, `true` and the rest.
-        run: echo "C:\\Program Files\\Git\\usr\\bin" >> "$GITHUB_PATH"
-
-      - name: Trace the network wrapper test (temporary)
-        timeout-minutes: 12
-        env:
-          RUST_MIN_STACK: 33554432
-        run: cargo test --locked -p aura-runtime --lib -- native_runtime_direct_network_wrappers_cover_timeout_and_error_results --nocapture
+      - name: Show where a failed step stopped
+        # The job log is long, so the failures are repeated at its end.
+        if: ${{ failure() }}
+        run: |
+          tail -n 60 "$RUNNER_TEMP/aura-build.log" || true
+          grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true
 
   native-binaries:
     strategy:
