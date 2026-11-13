@@ -28,11 +28,13 @@ bash benchmarks/tensor/run.sh
 
 ## Workloads
 
-`workloads.au` and `workloads.py` run six whole programs in Aura and in
+`workloads.au` and `workloads.py` run eight whole programs in Aura and in
 PyTorch: training a two layer network with AdamW, labelling a large
 batch with a three layer network, k-means, conjugate gradient on a dense
-system, training a small transformer of the nanoGPT shape, and pricing an
-option by Monte Carlo. Each prints a result that shows the work was done,
+system, training a small transformer of the nanoGPT shape, pricing an
+option by Monte Carlo, training a small residual network of
+convolutions and batch norms, and naming the next token with a model of
+the GPT-2 shape and random weights. Each prints a result that shows the work was done,
 such as the final loss. The two sides draw different random numbers, so
 a result is close to the other side's, not equal to it.
 
@@ -43,6 +45,31 @@ CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
 ```
 
 ## Results
+
+### Whole Programs, NVIDIA A40
+
+NVIDIA A40, CUDA 13.2, 2026-11-13. Milliseconds for the timed passes of
+a row, the range of three runs.
+
+| Program | Aura, CUDA device | PyTorch, CUDA |
+| --- | ---: | ---: |
+| `mlp_train`, 500 steps | 256 to 259 | 887 to 955 |
+| `mlp_infer`, 65,536 rows | 733 to 740 | 894 to 904 |
+| `kmeans`, 200,000 rows | 38 | 68 to 70 |
+| `conjugate_gradient`, 4,096 | 19 to 20 | 19 to 20 |
+| `transformer_train`, 4 layers of 256 | 350 to 359 | 298 to 425 |
+| `monte_carlo`, 10,000,000 paths | 3 to 4 | 21 |
+| `cnn_train`, 50 steps | 441 to 466 | 302 to 323 |
+| `gpt_infer`, 12 layers of 768 | 358 to 402 | 266 to 267 |
+
+The two rows behind are the newest. A convolution reads its windows
+with an indexed read and multiplies them in cuBLAS, where PyTorch calls
+cuDNN. The inference row spends 31 of its 36 ms a step waiting for the
+GPU. The loss of `cnn_train` differs in its fourth digit between runs
+on both sides: gradients that add into one element add in an order the
+GPU does not fix.
+
+### Single Expressions
 
 ### NVIDIA A40, CUDA
 
