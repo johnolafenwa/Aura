@@ -335,9 +335,9 @@ jobs:
         if: ${{ failure() }}
         run: |
           grep -E "^error" -A 12 "$RUNNER_TEMP/integration-tests.log" | head -n 60 || true
-          grep -E "panicked at" -A 8 "$RUNNER_TEMP/integration-tests.log" | grep -v "^--$" | cut -c 1-300 | head -n 150 || true
+          grep -E "panicked at" -A 40 "$RUNNER_TEMP/integration-tests.log" | grep -v "^--$" | cut -c 1-400 | head -n 200 || true
           grep -E "^test .* FAILED|over 60 seconds" "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 | head -n 120 || true
-          grep -E "Running|test result" "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 || true
+          grep -E "test result: FAILED" -B 1 "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 || true
 
   native-binaries:
     strategy:

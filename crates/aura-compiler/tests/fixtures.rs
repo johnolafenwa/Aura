@@ -29,8 +29,8 @@ fn parse_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -57,8 +57,8 @@ fn check_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -84,8 +84,8 @@ fn check_path_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&normalize_workspace_path(&rendered)),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&normalize_workspace_path(&rendered)),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -117,18 +117,25 @@ fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
 
 #[test]
 fn run_pass_fixtures_match_expected_stdout() {
+    // Every fixture runs, so one report names all that differ.
+    let mut failures = Vec::new();
     for fixture in fixture_files("run-pass") {
         let (_adapted, runnable) = host_fixture(&fixture);
-        let output = run_path_on_large_stack(runnable)
-            .unwrap_or_else(|error| panic!("{} should run: {}", fixture.display(), error));
-        let expected = read_expected(&fixture, "stdout");
-        assert_eq!(
-            normalize_newlines(&output.stdout),
-            normalize_newlines(&expected),
-            "unexpected stdout for {}",
-            fixture.display()
-        );
+        let expected = normalize_newlines(&read_expected(&fixture, "stdout"));
+        match run_path_on_large_stack(runnable) {
+            Ok(output) => {
+                let stdout = normalize_newlines(&output.stdout);
+                if stdout != expected {
+                    failures.push(format!(
+                        "unexpected stdout for {}\n  left: {stdout:?}\n right: {expected:?}",
+                        fixture.display()
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!("{} should run: {error}", fixture.display())),
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A debug build's markers change nothing else: with its `SourceLocation`s
@@ -241,8 +248,8 @@ fn run_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected runtime diagnostic for {}",
             fixture.display()
         );
@@ -355,26 +362,20 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-/// One spelling of line ends on every host, and of the path a diagnostic
-/// points at: the expected files spell it with forward slashes.
 fn normalize_newlines(text: &str) -> String {
-    let text = text.replace("\r\n", "\n");
-    if !cfg!(windows) {
-        return text.trim_end().to_string();
+    text.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// A rendered diagnostic in the one spelling the expected files use. On
+/// Windows the paths in it carry backslashes, so both sides of a comparison
+/// are read with forward slashes.
+fn normalize_diagnostic(text: &str) -> String {
+    let text = normalize_newlines(text);
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
     }
-    text.lines()
-        .map(|line| {
-            let line_start = line.trim_start();
-            if line_start.starts_with("-->") || line_start.starts_with("= related") {
-                line.replace('\\', "/")
-            } else {
-                line.to_string()
-            }
-        })
-        .collect::<Vec<_>>()
-        .join("\n")
-        .trim_end()
-        .to_string()
 }
 
 fn normalize_workspace_path(text: &str) -> String {

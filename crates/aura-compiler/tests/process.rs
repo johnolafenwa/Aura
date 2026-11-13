@@ -36,13 +36,13 @@ impl Drop for TempDir {
 }
 
 /// The source as this host runs it. Windows has no `/bin`: CI puts the
-/// tools Git for Windows ships on `PATH`, and its `pwd` prints a Windows
-/// path only with `-W`.
+/// tools Git for Windows ships on `PATH`, and its `cygpath -am .` prints
+/// the working directory as a Windows path.
 fn host_source(source: &str) -> String {
     if !cfg!(windows) {
         return source.to_string();
     }
-    let mut source = source.replace("\"/bin/pwd\"", "\"pwd\", \"-W\"");
+    let mut source = source.replace("\"/bin/pwd\"", "\"cygpath\", \"-am\", \".\"");
     for tool in [
         "/usr/bin/printenv",
         "/usr/bin/false",
@@ -184,7 +184,7 @@ fn builtin_process_module_runs_through_public_api() {
     let temp = TempDir::new("aura-process-run");
     let entry = temp.path().join("main.au");
     // Forward slashes, since a backslash starts an escape in Aura text, and
-    // they are what `pwd -W` prints on Windows.
+    // they are what `cygpath -am .` prints on Windows.
     let cwd = aura_compiler::host_path::canonicalize(temp.path())
         .expect("temp path should canonicalize")
         .display()
