@@ -17,8 +17,11 @@ Last updated: 2026-11-13
   pass on Windows in the `windows-integration (compiler)` CI job. Two
   Windows bugs fixed on the way: an endless wait on a huge timeout, and a
   connect to `localhost` that used its whole deadline on the first address.
-- In progress: speed on Windows and Linux arm64, with the `Platform speed`
-  workflow timing the cross-language programs on hosted runners.
+- Done: speed measured on Windows and Linux arm64 with the `Platform
+  speed` workflow. Linux arm64 tracks x86-64 Linux. Windows compute
+  programs are level with Linux against Rust.
+- In progress: Windows network programs, 1.2x to 1.6x of Rust. Socket
+  waits now start on the reactor's own thread.
 - Open: musl Linux, cross-compilation.
 
 ## Freestanding builds (complete)

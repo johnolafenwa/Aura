@@ -66,10 +66,29 @@ follow.
 - Local: `cargo check --target x86_64-pc-windows-gnu` type-checks the
   Windows code on Linux, and Wine runs the runtime tests.
 
+## Speed
+
+The `Platform speed` workflow times the cross-language programs on
+hosted runners. Compare ratios within one runner, not milliseconds
+across runners. First run, on main `7af5cf1`:
+
+- Linux arm64 tracks x86-64 Linux on every program.
+- Windows compute programs are level with or ahead of Linux against
+  Rust. The slowest are `lzw_compress` (5.0x Rust) and `markdown_render`
+  (4.9x).
+- Windows loopback network programs are behind: `kv_server` 4911 ms
+  (0.91x Python, 1.5x Rust), `pubsub_broker` 5816 ms (0.97x, 1.6x),
+  `http_api` 1545 ms (0.62x, 1.2x). On Linux the same programs run at
+  0.3x to 0.6x of Rust. Cause: every socket wait went through the shared
+  watcher thread, three thread wake-ups per wait.
+- `template_render` is slower than Python on every host (1.17x to
+  1.46x). It is not a platform matter.
+
+Socket waits on Windows now start on the reactor's own thread
+(`LocalSocketWaits` in `socket_watcher.rs`): the reactor polls a new
+wait with a zero-timeout `WSAPoll` for 200 microseconds and only then
+moves it to the watcher thread. Tests for it run on every host.
+
 ## Open
 
-- Speed on Windows and Linux arm64 is being measured by the `Platform
-  speed` workflow, which times the cross-language programs on hosted
-  runners.
-- No Windows speed measurements: the hosted runner is the only machine.
 - musl Linux and cross-compilation are not started.
