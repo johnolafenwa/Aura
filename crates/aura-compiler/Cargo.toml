@@ -10,8 +10,11 @@ aura-core = { path = "../aura-core" }
 aura-runtime = { path = "../aura-runtime" }
 # The native code generator. It links static LLVM 22 libraries; see
 # CONTRIBUTING.md.
-inkwell = { version = "0.11.0", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64"] }
+inkwell = { version = "0.11.0", default-features = false, features = ["llvm22-1", "target-x86", "target-aarch64", "target-riscv"] }
 libc = "0.2"
+# Reads a freestanding object back to check the symbols it needs, and
+# reads objects in tests.
+object = { version = "0.36", default-features = false, features = ["read_core", "elf", "macho", "std"] }
 serde = { version = "1", features = ["derive"] }
 serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_depth"] }
 sha2 = "0.10"
@@ -22,6 +25,7 @@ aura-core = { path = "../aura-core", features = ["test-support"] }
 aura-runtime = { path = "../aura-runtime", features = ["test-support"] }
 corosensei = "0.3.3"
 getrandom = "0.2"
+# The Windows object tests read COFF.
 object = { version = "0.36", default-features = false, features = ["read_core", "coff", "elf", "macho", "std"] }
 rcgen = "0.13"
 

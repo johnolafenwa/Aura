@@ -519,3 +519,18 @@ fn trait_object_types_keep_one_space_after_dyn() {
         "def total(shapes: list[dyn Shape], extra: dyn Shape | None) -> dyn Shape:\n    first: dyn Shape = pick(shapes)\n    return first\n",
     );
 }
+
+#[test]
+fn an_exported_function_formats_as_a_declaration() {
+    assert_formats(
+        "export   \"C\"   def kernel_main( magic:uint32,info:uint64 )->None:\n    pass\ndef next()->None:\n    pass\n",
+        "export \"C\" def kernel_main(magic: uint32, info: uint64) -> None:\n    pass\n\n\ndef next() -> None:\n    pass\n",
+    );
+    let long = "export \"C\" def a_rather_long_exported_function_name(first_parameter: uint64, second_parameter: uint64, third: uint64) -> uint64:\n    return first_parameter\n";
+    let formatted = format(long);
+    assert!(
+        formatted.lines().all(|line| line.len() <= LINE_WIDTH),
+        "{formatted}"
+    );
+    assert_eq!(format(&formatted), formatted);
+}

@@ -2215,6 +2215,7 @@ fn every_host_builtin_entry_checks_its_argument_count() {
                 | "sys::unix_time_ms"
                 | "sys::monotonic_time_ms"
                 | "metrics::reset"
+                | "mem::fence"
                 | "control::__retry_cancel_if_requested"
                 | "time::__aura_now"
                 | "time::__aura_monotonic"

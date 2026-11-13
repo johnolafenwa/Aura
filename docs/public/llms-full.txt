@@ -65,9 +65,11 @@ access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
 The long-term goal is a general-purpose systems language for every kind of
 software: applications, services, databases, language runtimes, embedded
-software, operating systems, and device drivers. Freestanding targets,
-low-level memory facilities, hardware interfaces, and the platform controls
-that scope needs are not implemented yet. [Why Aura](docs/positioning.md)
+software, operating systems, and device drivers. A first
+[freestanding build](docs/manual/freestanding.md) compiles code over
+numbers and plain classes with no runtime. Low-level memory facilities,
+hardware interfaces, and the platform controls that scope needs are not
+implemented yet. [Why Aura](docs/positioning.md)
 explains the project direction.
 
 ## Documentation
@@ -1289,6 +1291,10 @@ scope, terminology, authority, and conformance language.
 - [SIMD Module](/manual/simd): lane values of two, four, or eight floats
   that native code keeps in vector registers, with loads and stores over
   lists and results that are the same on every machine.
+- [Freestanding Builds](/manual/freestanding): objects with no runtime and
+  no operating system, exported C functions, and the trap hook.
+- [Memory Module](/manual/mem): plain, volatile, and atomic access to
+  integers at a raw address.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1537,6 +1543,25 @@ evaluation-order, diagnostic, and backend rules.
 | `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+
+## Memory
+
+[Memory Module](/manual/mem) has the rules for alignment, ordering, and
+undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
+32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`, at any alignment. |
+| `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
+| `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |
+| `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | One write the compiler never merges or drops. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
+| `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
 
 ## Randomness
 
@@ -3124,6 +3149,8 @@ aura check app.au
 | `aura build --no-rpath -o path file.au` | Build a native binary without embedding `library_paths` as run-time search paths. |
 | `aura build --debug -o path file.au` | Build an unoptimized native binary with debug information, for a debugger. |
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
+| `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
+| `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
@@ -7711,6 +7738,7 @@ String and format-specification diagnostics are described under
 | `AU2048` | invalid contract clause | A clause after the body's first statement or in the wrong body (`requires` and `ensures` belong to functions, `invariant` to loops and class bodies, `decreases` to `while` loops), `decreases` on a `for` loop or twice on one loop, a condition that calls a user function or a method of a user type, a method named `__invariant__`, an `old` outside `ensures` or around something other than a parameter path, a `spec def` whose body is not one pure `return` or that is used outside a contract, `ensures` on `__init__` or on a function with a view result, an `ensures` that reads an `own` parameter, a parameter named `result` beside `ensures`, or a clause on a trait implementation method. | Put clauses first, keep conditions to reads and pure builtins, and see [Contracts](/manual/contracts). |
 | `AU2050` | invalid trait object type | A bare trait name used as a type, `dyn` before a name that is not a trait, a trait with associated types after `dyn`, a wrong number of trait arguments, or an `impl` whose target is a trait object type. | Write `dyn Trait` for a value of any implementing type, or bound a type parameter, as `T: Trait`. See [Trait Objects](/manual/generics-and-traits#trait-objects). |
 | `AU2051` | invalid trait object use | A call on a trait object to a method that takes no `self`, declares type parameters, or names `Self` in its signature. Also a trait object passed for a type parameter whose bound promises such a method, a method two exposed traits both declare, a `mut` argument whose type is not already the parameter's trait object type, and `value as dyn Trait` used as a `mut` receiver or a `mut` argument. | Call the method on a value whose type is known or through a type parameter. For a `mut` parameter, bind the value first, as `mut name: dyn Trait = ...`. |
+| `AU2052` | not available in a freestanding build | A function that `aura check --freestanding` or `aura build --freestanding` reaches holds a value or an operation that needs the Aura runtime: text, a collection, a tuple, an enum, a closure, a trait object, `print`, `try`, `with`, a task, a 128-bit integer, or a builtin module. Also a program with no exported function, or two exports with one name. | Keep freestanding code to fixed-width numbers, `bool`, classes of those, and unions with `None`, and move the rest behind a function the exports do not call. See [Freestanding Builds](/manual/freestanding). |
 | `AU2999` | general compile-time rejection | A rejection that has no narrower public category. | Follow the message. |
 
 **`AU2002` type mismatch.** List `map`, `filter`, and keyed `sort` require the
@@ -11650,6 +11678,9 @@ The rules for these declarations:
   with a block of fields. It has no methods, invariants, field defaults, or
   type parameters. See [Structs](#structs).
 
+To define a function that C code calls by name, see
+[Exported Functions](/manual/freestanding#exported-functions).
+
 Raw pointer syntax and `...` variadics are reserved. The
 compiler rejects them with teaching diagnostics. Aura code cannot construct an
 opaque handle. An extern declaration is direct-call-only, so it cannot be used
@@ -12530,6 +12561,249 @@ Aura 0.15 implements the one-shot functions, the `fs.File` methods, typed errors
 The skipped-entry behavior in `fs.read_dir` is a known defect. Do not rely on it. Aura 0.15 has no seeking, transactional operations, richer metadata, or cross-platform path abstraction API.
 
 Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0073: Streaming reads, gzip, and HMAC](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0073-streaming-reads-gzip-and-hmac.md).
+
+## Source: docs/manual/freestanding.md
+
+# Freestanding Builds
+
+A freestanding build compiles Aura code for a machine with no operating
+system and no Aura runtime: a kernel, a boot stage, firmware, or a routine
+linked into a C program. The build writes one relocatable object file and
+links nothing. Your linker, linker script, and startup code place it.
+
+```sh
+aura build --freestanding -o kernel.o kernel.au
+aura build --freestanding --target riscv64gc-unknown-none-elf -o kernel.o kernel.au
+aura check --freestanding kernel.au
+```
+
+`aura run`, `aura test`, and an ordinary `aura build` treat the same source
+as a hosted program, so logic that does not touch hardware is tested on the
+host.
+
+## Exported Functions
+
+A freestanding program has no `main`. Its entry points are the functions
+declared with `export "C" def`:
+
+```aura
+export "C" def checksum(seed: uint32, count: uint32) -> uint32:
+    mut total = seed
+    mut i: uint32 = 0
+    while i < count:
+        total = (total * 31 + i) % 65521
+        i = i + 1
+    return total
+
+export "C" def divide(a: int64, b: int64, remainder: mut int64) -> int64:
+    remainder = a % b
+    return a // b
+```
+
+Each one is defined in the object under its own name, with the C calling
+convention of the target:
+
+```c
+uint32_t checksum(uint32_t seed, uint32_t count);
+int64_t divide(int64_t a, int64_t b, int64_t *remainder);
+```
+
+| Rule | Detail |
+| --- | --- |
+| Parameters | `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64`. A `mut` parameter of one of those types is a C pointer to it. |
+| Result | One of the same types, or `None` for `void`. |
+| Shape | A module-level function with a body. No type parameters, no receiver, no default values, no decorators. |
+| Name | The symbol is the function's name. Two exports with one name in a program are an error. |
+| Visibility | `public export "C" def` lets other modules import it. |
+| Calls from Aura | An exported function is called like any other function. |
+
+`export` is a word only before the string `"C"` at the start of a
+declaration. Anywhere else it is an ordinary name. The declaration needs no
+permission in `Aura.toml`. In a hosted build it is an ordinary function and
+the binary does not export it.
+
+A freestanding build needs at least one exported function. It compiles the
+functions the exports reach, in every module of the program, and nothing
+else. An export in an imported module is also defined in the object.
+
+## What A Freestanding Program May Hold
+
+Every value is one or more machine words. Nothing lives on a heap.
+
+| Available | Not available |
+| --- | --- |
+| `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, `float64` | `int128`, `uint128`, `Duration` |
+| Classes whose fields are available types, with methods | Classes that hold a `str`, a collection, or an `indirect` field |
+| `extern "C"` classes | `str`, `bytes`, `list`, `dict`, `set`, tuples, `Array` |
+| `T \| None` and other unions of available types | Enums, `Result`, `Lookup` |
+| Functions, generics, traits with static dispatch, `mut` parameters | Closures, function values, trait objects |
+| `if`, `while`, `for` over `range` or over a call of a generator function, `match` on a union | `try`, `with`, tasks, queues |
+| `assert`, `requires`, `ensures`, checked arithmetic, `as` casts | `print`, f-strings, text building |
+| `abs`, `min`, `max`, `sqrt`, and the [`mem` module](/manual/mem) | Every other builtin module |
+| `+ - * / // %` on integers, `+ - * /` on floats, shifts, bit operators, comparisons | `**`, float `//` and `%`, `round` |
+| Module constants with a literal value | Module constants computed when the program starts |
+| `extern "C"` calls with scalar, `mut` scalar, struct, literal text, and callback arguments | Opaque handles, `bytes` and `ptr[T]` arguments. Pass an address as a `uint64`. |
+
+`aura check --freestanding` and the build report each construct outside the
+subset as [`AU2052`](/manual/diagnostics), with the function that holds it:
+
+```text
+error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
+ --> kernel.au:3:5
+```
+
+Only reached functions are checked. A package may hold hosted helpers and
+tests that a freestanding build never compiles.
+
+## Failed Checks
+
+Integer overflow, division by zero, a failed `assert`, a failed contract,
+and a cast out of range are checked exactly as in a hosted build. A failed
+check calls one function, which the program or its environment defines:
+
+```c
+void aura_trap(uint32_t code, const char *file, size_t file_length,
+               uint32_t line, uint32_t column);
+```
+
+| Code | Check |
+| --- | --- |
+| 1 | Integer overflow, including `abs` of the lowest value |
+| 2 | Division or remainder by zero |
+| 3 | Failed `assert` |
+| 4 | Failed `requires`, `ensures`, or `invariant` |
+| 5 | `as` cast out of the target type's range |
+| 6 | Shift count out of range |
+| 7 | A foreign `bool` that is neither 0 nor 1 |
+| 8 | Unreachable code was reached |
+
+- `file` is the source file's path relative to the directory of the file
+  that was built. It is not NUL-terminated. `file_length` is its length in
+  bytes.
+- `line` and `column` count from 1 and name the failed check.
+- The hook must not return. A trap instruction follows the call.
+- There is no call trace and no message text. An `assert` message is not
+  kept in the object.
+- The object names `aura_trap` only when it holds a check.
+
+The hook can be written in Aura:
+
+```aura
+export "C" def aura_trap(code: uint32, file: uint64, file_length: uint64, line: uint32, column: uint32) -> None:
+    while true:
+        pass
+
+export "C" def halve(value: int64) -> int64:
+    requires value % 2 == 0
+    return value // 2
+```
+
+`aura build --freestanding --remove-proved-checks` removes the checks that
+`aura verify` proves can never fail, as in a hosted build. See
+[Verification](/manual/verification#trust).
+
+## Hardware Access
+
+The [`mem` module](/manual/mem) reads and writes integers at a raw address,
+with volatile forms for device registers and atomic forms for cells shared
+between cores. It needs `allow_ffi = true` in `Aura.toml`.
+
+```aura fragment
+import mem
+
+UART: uint64 = 268435456
+
+export "C" def put(byte: uint8) -> None:
+    mem.volatile_write_uint8(UART, byte)
+```
+
+## Targets
+
+`--target` names the machine. Without it the build targets the
+architecture of the machine that runs the compiler.
+
+| `--target` | Calling convention | Instruction set |
+| --- | --- | --- |
+| `x86_64-unknown-none` | System V | x86-64 baseline with SSE2 |
+| `aarch64-unknown-none` | AAPCS64 | ARMv8-A with FP and NEON, aligned access only |
+| `riscv64gc-unknown-none-elf` | LP64D | RV64GC |
+
+Every target writes an ELF object, on every host.
+
+- Code is position independent and uses no thread-local or global state,
+  so every function is reentrant.
+- There are no unwind tables and no stack probes.
+- Floats use the hardware float registers. Startup code must enable them
+  before the first Aura function runs: SSE on x86-64, FP and NEON on
+  AArch64, and the F and D extensions on RISC-V.
+- A C struct passed or returned by value is not supported on RISC-V. Pass a
+  `mut` parameter.
+- `--debug` and `--target-cpu` are refused.
+
+## What The Object Needs
+
+The object refers to these symbols and no others:
+
+| Symbol | When |
+| --- | --- |
+| `aura_trap` | The object holds a check. |
+| The program's `extern "C"` functions | The program calls them. |
+
+The compiler may copy or compare a large value through `memcpy`, `memmove`,
+`memset`, or `memcmp`. The object carries a small weak definition of each,
+so it links with no C library. A C library's definitions take their place.
+A program that exports one of the four names supplies its own.
+
+The build reads the finished object and fails if it needs any other symbol,
+so an object cannot depend on the Aura runtime by accident.
+
+## Linking
+
+With a C program on Linux:
+
+```sh
+aura build --freestanding -o routines.o routines.au
+cc main.c routines.o -o program
+```
+
+For bare metal, link with your startup object and linker script:
+
+```sh
+aura build --freestanding --target aarch64-unknown-none -o kernel.o kernel.au
+ld.lld -T board.ld start.o kernel.o -o kernel.elf
+```
+
+Each function is in its own section, so `--gc-sections` drops what the
+image does not use.
+
+## Size And Speed
+
+`benchmarks/freestanding` builds five routines with Aura, C, and Rust
+without its standard library, and links each with one harness. On an
+x86-64 Linux machine:
+
+| Routine | Aura | C (`clang -O2`) | Rust | Rust with overflow checks |
+| --- | --- | --- | --- | --- |
+| `crc32` | 50 ms | 195 ms | 50 ms | 54 ms |
+| `collatz` | 231 ms | 157 ms | 139 ms | 302 ms |
+| `isqrt_sum` | 98 ms | 105 ms | 145 ms | 164 ms |
+| `gcd_sum` | 201 ms | 131 ms | 156 ms | 175 ms |
+| `orbit` | 832 ms | 882 ms | 778 ms | 756 ms |
+
+Aura keeps its overflow and divisor checks, and `%` rounds toward negative
+infinity, which costs a few instructions over C's remainder. The five
+functions are 993 bytes of code against 914 for C. The Aura object also
+holds 115 bytes of memory routines and the file name for the trap hook.
+
+## Current Limits
+
+- No heap values. A freestanding program cannot allocate.
+- No inline assembly and no port I/O instructions. Memory-mapped devices
+  are reached with the [`mem` module](/manual/mem), and everything else
+  through `extern "C"` functions.
+- No mutable module-level state. Keep state in the entry function's locals,
+  behind `mut` parameters, or in C.
+- 32-bit targets are not supported.
 
 ## Source: docs/manual/functions.md
 
@@ -14597,6 +14871,7 @@ Several words are contextual:
 | `type` | At module level, `type` followed by an identifier, optional type parameters, and `=` declares a type alias. Elsewhere it is an ordinary identifier. |
 | `is` | After a comparison operand, forms the `is [not] None` test. Elsewhere it is an ordinary identifier. |
 | `dyn` | In a type, `dyn` followed by a trait name forms a trait object type. Elsewhere it is an ordinary identifier. It cannot name a class, enum, trait, or type alias. |
+| `export` | At module level, `export` followed by a string starts an exported function declaration. Elsewhere it is an ordinary identifier. |
 | `lambda` | Lexed as an identifier, but introduces a lambda at the start of an expression. Member and named-argument positions may still use the spelling. |
 
 `copy`, `self`, `None`, `set`, `Self`, and `_` are lexed as identifiers. They
@@ -14788,6 +15063,7 @@ item
     | decorator, { decorator }, [ "public" ], function-declaration
     | [ "public" ], extern-function-declaration
     | [ "public" ], extern-opaque-declaration
+    | [ "public" ], export-function-declaration
     | [ "public" ], trait-declaration
     | impl-declaration ;
 
@@ -14803,6 +15079,9 @@ extern-function-declaration
 extern-opaque-declaration
     = "extern", STRING, "opaque", "class", identifier,
       [ "drop", identifier ], NEWLINE ;
+
+export-function-declaration
+    = "export", STRING, function-declaration ;
 
 contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
@@ -14823,6 +15102,12 @@ declarations are bodyless and non-generic. An extern function's optional
 indented block holds only `requires` and `ensures` clauses, its trusted
 contract. `symbol` and `drop` are words only in these clauses.
 [FFI](/manual/ffi) restricts their parameter modes and types.
+
+`export` is a word only when a string follows it at the start of a
+module-level declaration. The string must be exactly `"C"`. The function has
+a body and is otherwise an ordinary function whose parameter and result
+types are limited as [Freestanding Builds](/manual/freestanding#exported-functions)
+describes.
 
 ## Type References And Type Parameters
 
@@ -17783,6 +18068,113 @@ backends: the constants and functions, their exact bits and signatures, the
 exceptional-value classifications, initialization and evaluation order, and
 diagnostics.
 
+## Source: docs/manual/mem.md
+
+# Memory Module
+
+The `mem` module reads and writes integers at a raw address. It is for
+device registers, memory shared with C, and the lock-free cells a kernel or
+a driver needs. Each function compiles to one machine instruction, in
+hosted and [freestanding](/manual/freestanding) builds alike.
+
+```aura fragment
+import mem
+
+UART: uint64 = 268435456
+
+export "C" def put(byte: uint8) -> None:
+    mem.volatile_write_uint8(UART, byte)
+```
+
+An address is a `uint64`. Aura does not check it. A read or write through
+an address that is not valid for that access has undefined behavior, as in
+C, and it can break the guarantees of every other part of the program. For
+that reason a module may import `mem` only in a package whose `Aura.toml`
+sets `allow_ffi = true`, the permission that [foreign
+functions](/manual/ffi) need.
+
+## Public API
+
+`N` is 8, 16, 32, or 64 for the plain and volatile functions, and 32 or 64
+for the atomic ones.
+
+| API | Signature | Result |
+| --- | --- | --- |
+| `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`. |
+| `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`. |
+| `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | Reads once, exactly where the program says. |
+| `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | Writes once, exactly where the program says. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`. Returns the previous value either way, so the exchange happened when the result equals `expected`. |
+| `mem.fence` | `fence() -> None` | Orders every earlier memory access before every later one. |
+
+## Rules
+
+- **Byte order.** An integer is read and written in the byte order of the
+  machine. Every supported target is little-endian.
+- **Plain access.** `read_uintN` and `write_uintN` accept any address,
+  aligned or not. The compiler may merge two reads of one address, drop a
+  write that a later write replaces, and move an access across other code.
+  Use them for ordinary memory.
+- **Volatile access.** Each call is exactly one access of exactly `N` bits,
+  in program order, and the compiler never merges, drops, or splits it.
+  Use it for device registers. The address must be a multiple of `N / 8`.
+- **Atomic access.** Each call is one indivisible step with respect to
+  every other atomic call on the same cell, on every core. All atomic
+  functions use sequentially consistent ordering. The address must be a
+  multiple of `N / 8`.
+- **`atomic_add` wraps.** It is the one place an Aura addition does not
+  check for overflow, because a failed check could not undo the step.
+- **Aura values have no address.** There is no way to take the address of a
+  local, a field, or a list element. Addresses come from the platform, a
+  linker symbol read through C, or a foreign function.
+- **Verification.** `aura verify` treats a read as an unknown value of its
+  type and does not model writes. A write to memory that an Aura value
+  occupies is outside what a proof covers.
+
+## A Spin Lock
+
+```aura fragment
+import mem
+
+def acquire(lock: uint64) -> None:
+    while mem.atomic_compare_exchange_uint32(lock, 0, 1) != 0:
+        pass
+
+def release(lock: uint64) -> None:
+    mem.atomic_store_uint32(lock, 0)
+```
+
+## Hosted Programs
+
+The module works under `aura run` and in an ordinary `aura build`, with
+the same results. An address there comes from C:
+
+```aura fragment
+import mem
+
+extern "C" def malloc(size: uint64) -> uint64
+extern "C" def free(address: uint64) -> None
+
+def main() -> None:
+    block = malloc(16)
+    mem.write_uint32(block, 7)
+    print(mem.read_uint32(block))
+    free(block)
+```
+
+## Current Limits
+
+- Unsigned integers only. Convert with `as` for a signed or float value's
+  bits.
+- No atomic access to 8-bit and 16-bit cells.
+- One ordering, sequentially consistent.
+- No inline assembly and no port I/O instructions. On x86-64, reach I/O
+  ports through an `extern "C"` function written in assembly.
+
 ## Source: docs/manual/names-and-scopes.md
 
 # Names And Scopes
@@ -20044,7 +20436,8 @@ rejected.
 ### FFI Opt-In
 
 `allow_ffi = true` is an optional `[package]` field. Its default is `false`.
-It authorizes that package to contain FFI declarations. It grants no
+It authorizes that package to contain FFI declarations and to import the
+[`mem` module](/manual/mem). It grants no
 permission to other packages and does not validate the native code.
 
 When any direct or transitive dependency enables FFI, the root package must
@@ -52716,10 +53109,171 @@ whose ownership the checker tracks, so a use after close or a double close is
 a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
 boundary of the C code itself, and why FFI keeps that boundary small.
 
+The next section goes one step further down:
+[a program with no operating system under it](/book/ch18-01-without-an-operating-system).
+
 That completes the tour of the language and its tools. In
 [Chapter 19](/book/ch19-00-final-project) we put the pieces together in one
 last project: a supervised job runner that runs jobs in parallel with a
 worker pool, restarts the ones that fail, and shuts down gracefully.
+
+## Source: docs/book/ch18-01-without-an-operating-system.md
+
+# Without an Operating System
+
+Every program so far has run on top of an operating system and Aura's
+runtime. The runtime is what gives you strings, lists, tasks, and files, and
+it needs an operating system underneath for memory and threads. A kernel, a
+bootloader, or the firmware of a small board has neither. This section
+builds a program that boots on a bare machine, prints over a serial port,
+and reports its own failed checks, with no C in it beyond a dozen lines of
+startup assembly.
+
+## A function C can call
+
+A freestanding program has no `main`. Something else decides when its code
+runs: a bootloader, an interrupt, or a C program that links it in. So the
+program's entry points are ordinary functions that the outside world can
+call by name. You mark one with `export "C"`:
+
+```aura
+export "C" def checksum(seed: uint32, count: uint32) -> uint32:
+    mut total = seed
+    mut i: uint32 = 0
+    while i < count:
+        total = (total * 31 + i) % 65521
+        i = i + 1
+    return total
+```
+
+Save that as *sum.au* and build it with one new flag:
+
+```console
+$ aura build --freestanding -o sum.o sum.au
+aura: built `sum.o` for `x86_64-unknown-none` (freestanding object, 1600 bytes)
+```
+
+The result is an object file, not a program. It holds `checksum` as a C
+symbol and depends on nothing but one function we will meet in a moment. A
+C program can link it and call `uint32_t checksum(uint32_t, uint32_t)`.
+
+The parameters and the result of an exported function are numbers and
+`bool`. A `mut` parameter is a pointer on the C side, which is how such a
+function hands back a second result.
+
+## What fits in a freestanding program
+
+Aura keeps a number, a `bool`, or a class made of those directly in machine
+registers and on the stack. Those values need no runtime, and they are what
+a freestanding program is made of: fixed-width integers and floats, classes
+of them, `T | None`, functions, generics, traits, loops, `assert`, and
+contracts.
+
+Anything that lives on the heap is out: `str`, lists, dictionaries, enums
+with payloads, closures, tasks. You do not have to remember the list. Ask
+the compiler:
+
+```console
+$ aura check --freestanding kernel.au
+error[AU2052]: `entry` calls `print`, which a freestanding build cannot compile
+ --> kernel.au:3:5
+```
+
+The check looks only at the functions your exports reach. A package can
+keep hosted helpers and tests next to its freestanding code, and
+`aura test` still runs the logic on your own machine. That is the practical
+way to work: test the arithmetic hosted, then build it freestanding.
+
+## When a check fails
+
+Aura's checks do not go away. An addition that overflows, a division by
+zero, a failed `assert`: each one still stops the program. With no runtime
+to print a message, the program calls a function named `aura_trap` and you
+decide what happens:
+
+```aura
+export "C" def aura_trap(code: uint32, file: uint64, file_length: uint64, line: uint32, column: uint32) -> None:
+    while true:
+        pass
+```
+
+`code` says which check failed, 1 for overflow and 2 for division by zero
+among others, and the rest is the position in your source. The hook must
+not return. This one hangs the machine. A real one prints the position
+first, as ours will.
+
+## Touching hardware
+
+A serial port on most boards is a few bytes of memory at a fixed address:
+write a byte there and it goes out on the wire. Aura has no pointers, so
+how do we write to an address? With the `mem` module, which reads and
+writes integers at a `uint64` address:
+
+```aura fragment
+import mem
+
+def put(uart: uint64, byte: uint8) -> None:
+    mem.volatile_write_uint8(uart, byte)
+```
+
+The word *volatile* matters. An ordinary write to memory is something the
+optimizer may drop if a later write replaces it. For a device, every write
+is an event, so `volatile_write_uint8` promises exactly one write, exactly
+here.
+
+`mem` is the sharpest tool in the language. Nothing checks the address, and
+a wrong one can corrupt anything. For that reason it needs the same
+permission as calling C: `allow_ffi = true` in *Aura.toml*.
+
+There are no strings in a freestanding program, so printing a number means
+producing its digits ourselves:
+
+```aura fragment
+def put_number(uart: uint64, value: uint64) -> None:
+    mut divisor: uint64 = 1
+    while value // divisor >= 10:
+        divisor = divisor * 10
+    mut rest = value
+    while divisor > 0:
+        put(uart, (48 + rest // divisor) as uint8)
+        rest = rest % divisor
+        divisor = divisor // 10
+```
+
+## Booting it
+
+The complete program is in *examples/freestanding/kernel*. Its
+`kernel_main` counts primes, runs a float computation, takes a spin lock
+built from `mem.atomic_compare_exchange_uint32`, and then overflows a
+`uint8` on purpose. Each board adds a short assembly file that sets the
+stack pointer, turns the float registers on, and calls `kernel_main`, plus
+a linker script that says where memory is.
+
+QEMU can emulate both boards the example supports:
+
+```console
+$ examples/freestanding/kernel/run.sh riscv64
+p=168
+c=111
+r=1000
+n=100
+trap 1 main.au:154:13
+```
+
+The first four lines are computed results. The last is our `aura_trap`
+hook reporting the overflow, with the file and line it happened on, from a
+machine that has no operating system at all. Run it with `aarch64` and the
+output is the same.
+
+## What is missing
+
+This is the first step toward systems work in Aura, and it is honest to
+say where it stops. There is no allocator, so there are no strings or
+collections. There is no inline assembly, so startup code and x86 port
+I/O stay in an assembly file. State that outlives a function call has to
+live at an address you manage through `mem`. The
+[Freestanding Builds](/manual/freestanding) and
+[Memory Module](/manual/mem) pages have the exact rules.
 
 ## Source: docs/book/ch19-00-final-project.md
 

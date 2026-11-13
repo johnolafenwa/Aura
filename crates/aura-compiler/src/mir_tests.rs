@@ -16342,3 +16342,31 @@ def main():
         "a backtrace shows the declared name"
     );
 }
+
+#[test]
+fn exported_functions_are_listed_with_their_c_symbols() {
+    let module = crate::lower_source_to_mir(
+        "export \"C\" def tick() -> int64:\n    return 1\ndef other() -> None:\n    pass\nexport \"C\" def start() -> None:\n    other()\n",
+    )
+    .expect("source should lower");
+    let exports = module
+        .foreign_link
+        .exports
+        .iter()
+        .map(|export| (export.function.as_str(), export.symbol.as_str()))
+        .collect::<Vec<_>>();
+    assert_eq!(exports, [("start", "start"), ("tick", "tick")]);
+    assert!(module.foreign_link.is_empty() && !module.foreign_link.is_blank());
+    let json = serde_json::to_value(&module).expect("MIR serializes");
+    assert_eq!(json["foreign_link"]["exports"][0]["symbol"], "start");
+    let round_trip: MirModule = serde_json::from_value(json).expect("MIR reads back");
+    assert_eq!(round_trip.foreign_link.exports.len(), 2);
+
+    let plain =
+        crate::lower_source_to_mir("def main() -> None:\n    pass\n").expect("source should lower");
+    assert!(plain.foreign_link.is_blank());
+    assert!(serde_json::to_value(&plain)
+        .expect("MIR serializes")
+        .get("foreign_link")
+        .is_none());
+}
