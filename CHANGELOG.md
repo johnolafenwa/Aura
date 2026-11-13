@@ -54,6 +54,12 @@ in this file.
 - The CUDA device reuses the memory of a value inside one piece of work
   once nothing later reads it, copies the numbers of an expression to
   the device in one copy, and keeps freed memory for the next step.
+- The CUDA device runs small elementwise kernels that do not read each
+  other in one launch, writes a kept result from the kernel that already
+  computes it, reads a transposed operand of a matrix product in place,
+  and shares a long lane of any axis among threads in a reduction. A
+  transformer training step went from 385 to 418 ms to 341 to 370 ms
+  for 20 steps on an A40.
 - `AURA_TENSOR_TRACE=1` writes to standard error each piece of CUDA
   work with the host time before it, its slowest actions, each read into
   host memory, and each operation that ran in host memory.
