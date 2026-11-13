@@ -749,6 +749,7 @@ using std::copysign;
 #define __device__
 #define __forceinline__ inline
 #define __global__
+#define AURA_HOST_HARNESS
 struct AuraIndex { unsigned x, y, z; };
 static AuraIndex blockIdx, blockDim, threadIdx;
 template <class T> T atomicAdd(T* address, T value) { T old = *address; *address += value; return old; }
@@ -926,6 +927,10 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                         pointers.push(buffers[other].as_mut_ptr().cast_const());
                     }
                     pointers.extend(inputs.iter().map(|&input| buffers[input].as_ptr()));
+                    let all = (1 + pointers.len() > tensor_codegen::HARNESS_POINTERS)
+                        .then(|| function(library, &format!("{name}_all")));
+                    let mut every: Vec<*const u8> = vec![made.as_mut_ptr().cast_const()];
+                    every.extend(&pointers);
                     for thread in 0..threads.div_ceil(BLOCK_THREADS).max(1) * BLOCK_THREADS {
                         // SAFETY: the kernel takes the output and one
                         // pointer for each input, and checks its index.
@@ -934,6 +939,13 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                                 (thread / BLOCK_THREADS) as u32,
                                 (thread % BLOCK_THREADS) as u32,
                             );
+                            if let Some(all) = all {
+                                std::mem::transmute::<
+                                    *mut std::ffi::c_void,
+                                    unsafe extern "C" fn(*mut *const u8),
+                                >(all)(every.as_mut_ptr());
+                                continue;
+                            }
                             let out = made.as_mut_ptr();
                             type P = *const u8;
                             match pointers[..] {

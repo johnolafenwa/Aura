@@ -118,12 +118,23 @@ const LAST_STAGE: usize = 128;
 /// The shortest lane of a last axis that a group of threads reduces.
 const SPLIT_LANE: usize = 32;
 
-/// The threads that share a lane of `length` elements on a last axis, or
-/// `None` when one thread reduces the lane. Threads beside each other
-/// read memory beside each other, which one thread per lane does not do
-/// when a lane is a long run of memory.
+/// The shortest lane of another axis that a group of threads reduces.
+/// Threads beside each other already read memory beside each other
+/// there, so a group only pays for a lane long enough to keep one thread
+/// busy.
+const SPLIT_STRIDED_LANE: usize = 512;
+
+/// The threads that share a lane of `length` elements `inner` apart, or
+/// `None` when one thread reduces the lane. On a last axis, threads
+/// beside each other then read memory beside each other, which one thread
+/// per lane does not do when a lane is a long run of memory.
 fn lane_parts(inner: usize, length: usize) -> Option<usize> {
-    if inner != 1 || length < SPLIT_LANE {
+    let shortest = if inner == 1 {
+        SPLIT_LANE
+    } else {
+        SPLIT_STRIDED_LANE
+    };
+    if length < shortest {
         return None;
     }
     let mut parts = 8;
@@ -132,6 +143,16 @@ fn lane_parts(inner: usize, length: usize) -> Option<usize> {
     }
     Some(parts)
 }
+
+/// The most threads of an elementwise kernel that shares its launch.
+const GROUPED_THREADS: usize = 1 << 20;
+
+/// The most buffers the kernels of one launch name. A CUDA launch passes
+/// at most 4,096 bytes of arguments.
+const GROUPED_POINTERS: usize = 256;
+
+/// The most buffers a host test passes to a kernel one by one.
+pub(crate) const HARNESS_POINTERS: usize = 7;
 
 /// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
@@ -247,6 +268,9 @@ struct Generator<'a> {
     /// The results each kernel writes beside its own: steps only that
     /// kernel reads, which the program keeps.
     beside: Vec<Vec<usize>>,
+    /// The places in `actions` of the elementwise kernels, whose launch
+    /// kernels are emitted last.
+    maps: Vec<usize>,
     source: String,
     actions: Vec<Action>,
     buffers: usize,
@@ -402,6 +426,7 @@ impl<'a> Generator<'a> {
             plan,
             materialized,
             beside,
+            maps: Vec::new(),
             source: PREAMBLE.to_string(),
             actions: Vec::new(),
             buffers: count,
@@ -651,17 +676,19 @@ impl<'a> Generator<'a> {
             write!(writes, " out{other}[j] = v{slot}_{other}(j{arguments});")
                 .expect("writing to a string cannot fail");
         }
+        // The body is a function of its own, so that one launch can run
+        // the bodies of several small kernels.
         writeln!(
             self.source,
-            "extern \"C\" __global__ void k{slot}({result}* out{outputs}{parameters}) {{\n    \
-             long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
-             if (j < {count}LL) {{ out[j] = v{slot}_{slot}(j{arguments});{writes} }}\n}}"
+            "AURA_INLINE void b{slot}(long long j, {result}* out{outputs}{parameters}) {{\n    \
+             out[j] = v{slot}_{slot}(j{arguments});{writes}\n}}"
         )
         .expect("writing to a string cannot fail");
         let more = beside
             .iter()
             .map(|&other| (other, count * element_bytes(self.dtype(other))))
             .collect();
+        self.maps.push(self.actions.len());
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
@@ -670,6 +697,184 @@ impl<'a> Generator<'a> {
             inputs: leaves,
             clear: false,
             more,
+        });
+    }
+
+    /// Emits the kernels of the elementwise actions. Small ones that
+    /// follow each other and do not read each other's results share one
+    /// launch: each thread runs the body its index falls in. An optimizer
+    /// step updates every parameter this way in a few launches.
+    fn launch_maps(&mut self) {
+        let maps = std::mem::take(&mut self.maps);
+        let actions = std::mem::take(&mut self.actions);
+        // A small elementwise kernel whose results no later action reads,
+        // such as the update of a parameter, moves to the end, where it
+        // meets the others like it.
+        let small_map = |index: usize, action: &Action| {
+            matches!(action, Action::Kernel { threads, .. }
+                if maps.contains(&index) && *threads <= GROUPED_THREADS)
+        };
+        let mut read_later = vec![false; self.buffers];
+        let mut last = vec![false; actions.len()];
+        for (index, action) in actions.iter().enumerate().rev() {
+            if let Action::Kernel { output, more, .. } = action {
+                last[index] = small_map(index, action)
+                    && !read_later[*output]
+                    && !more.iter().any(|(other, _)| read_later[*other]);
+            }
+            let read: &[usize] = match action {
+                Action::Kernel { inputs, .. } => inputs,
+                Action::Matmul { left, right, .. } => &[*left, *right],
+                Action::Alias { input, .. } => std::slice::from_ref(input),
+            };
+            for &buffer in read {
+                read_later[buffer] = true;
+            }
+        }
+        let (ended, kept): (Vec<_>, Vec<_>) = actions
+            .into_iter()
+            .enumerate()
+            .partition(|(index, _)| last[*index]);
+        let actions: Vec<(usize, Action)> = kept.into_iter().chain(ended).collect();
+        let maps: Vec<usize> = actions
+            .iter()
+            .enumerate()
+            .filter(|(_, (index, _))| maps.contains(index))
+            .map(|(place, _)| place)
+            .collect();
+        let actions: Vec<Action> = actions.into_iter().map(|(_, action)| action).collect();
+        let mut grouped: Vec<Action> = Vec::with_capacity(actions.len());
+        // The actions of the group being gathered, and the buffers they
+        // write.
+        let mut group: Vec<Action> = Vec::new();
+        let mut written: Vec<usize> = Vec::new();
+        let mut pointers = 0;
+        for (index, action) in actions.into_iter().enumerate() {
+            let small = match &action {
+                Action::Kernel {
+                    threads,
+                    inputs,
+                    more,
+                    ..
+                } if maps.contains(&index) && *threads <= GROUPED_THREADS => {
+                    Some((inputs.clone(), 1 + more.len() + inputs.len()))
+                }
+                _ => None,
+            };
+            let joins = small.as_ref().is_some_and(|(inputs, count)| {
+                pointers + count <= GROUPED_POINTERS
+                    && !inputs.iter().any(|input| written.contains(input))
+            });
+            if !joins {
+                self.launch_group(std::mem::take(&mut group), &mut grouped);
+                written.clear();
+                pointers = 0;
+            }
+            match small {
+                Some((_, count)) => {
+                    if let Action::Kernel { output, more, .. } = &action {
+                        written.push(*output);
+                        written.extend(more.iter().map(|(other, _)| *other));
+                    }
+                    pointers += count;
+                    group.push(action);
+                }
+                None if maps.contains(&index) => {
+                    self.launch_group(vec![action], &mut grouped);
+                }
+                None => grouped.push(action),
+            }
+        }
+        self.launch_group(group, &mut grouped);
+        self.actions = grouped;
+    }
+
+    /// Emits one kernel for the elementwise actions of `group` and adds
+    /// its action to `actions`.
+    fn launch_group(&mut self, group: Vec<Action>, actions: &mut Vec<Action>) {
+        let Some(Action::Kernel { output: first, .. }) = group.first() else {
+            return;
+        };
+        let first = *first;
+        let name = if group.len() == 1 {
+            format!("k{first}")
+        } else {
+            format!("g{first}")
+        };
+        let (mut outputs, mut inputs): (Vec<(usize, usize)>, Vec<usize>) = (Vec::new(), Vec::new());
+        let (mut body, mut threads) = (String::new(), 0);
+        for action in &group {
+            let Action::Kernel {
+                output,
+                bytes,
+                threads: count,
+                inputs: read,
+                more,
+                ..
+            } = action
+            else {
+                unreachable!("a group holds kernels")
+            };
+            let mut call = format!("b{output}(j, o{output}");
+            outputs.push((*output, *bytes));
+            for (other, bytes) in more {
+                write!(call, ", o{other}").expect("writing to a string cannot fail");
+                outputs.push((*other, *bytes));
+            }
+            for &input in read {
+                write!(call, ", p{input}").expect("writing to a string cannot fail");
+                if !inputs.contains(&input) {
+                    inputs.push(input);
+                }
+            }
+            writeln!(
+                body,
+                "    if (j < {count}LL) {{ {call}); return; }}\n    j -= {count}LL;"
+            )
+            .expect("writing to a string cannot fail");
+            threads += count;
+        }
+        let parameters: Vec<String> = outputs
+            .iter()
+            .map(|(slot, _)| format!("{}* o{slot}", c_type(self.dtype(*slot))))
+            .chain(
+                inputs
+                    .iter()
+                    .map(|&slot| format!("const {}* p{slot}", c_type(self.dtype(slot)))),
+            )
+            .collect();
+        writeln!(
+            self.source,
+            "extern \"C\" __global__ void {name}({}) {{\n    \
+             long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n{body}}}",
+            parameters.join(", ")
+        )
+        .expect("writing to a string cannot fail");
+        if outputs.len() + inputs.len() > HARNESS_POINTERS {
+            // A test on the host calls a kernel of many buffers through
+            // one array of them.
+            let passed: Vec<String> = outputs
+                .iter()
+                .map(|(slot, _)| c_type(self.dtype(*slot)))
+                .chain(inputs.iter().map(|&slot| c_type(self.dtype(slot))))
+                .enumerate()
+                .map(|(place, ty)| format!("({ty}*)buffers[{place}]"))
+                .collect();
+            writeln!(
+                self.source,
+                "#ifdef AURA_HOST_HARNESS\nextern \"C\" void {name}_all(void** buffers) {{ {name}({}); }}\n#endif",
+                passed.join(", ")
+            )
+            .expect("writing to a string cannot fail");
+        }
+        actions.push(Action::Kernel {
+            name,
+            output: outputs[0].0,
+            bytes: outputs[0].1,
+            threads,
+            inputs,
+            clear: false,
+            more: outputs[1..].to_vec(),
         });
     }
 
@@ -739,7 +944,7 @@ impl<'a> Generator<'a> {
         let first = self.element(slot, operand, "start", &arguments);
         let next = self.element(slot, operand, "(start + k * step)", &arguments);
         let wins = if largest { ">" } else { "<" };
-        if let Some(parts) = lane_parts(inner, length) {
+        if let Some(parts) = lane_parts(inner, length).filter(|_| inner == 1) {
             // Thread `part` of a lane finds the best of the places `part`,
             // `part + parts` and so on, then one thread for each lane
             // picks among what its threads found.
@@ -870,27 +1075,33 @@ impl<'a> Generator<'a> {
                     // Thread `part` of a lane reduces the places `part`,
                     // `part + parts` and so on, then one thread for each
                     // lane reduces what its threads wrote.
+                    // Thread `t` is place `t % inner` after the axis,
+                    // part `(t / inner) % parts`, so threads beside each
+                    // other read memory beside each other.
                     let threads = lanes * parts;
-                    let step = combine("acc", &at("(start + k)"));
-                    let join = combine("acc", "in[lane * PARTS + part]");
+                    let step = combine("acc", &at("(start + k * step)"));
+                    let join = combine("acc", "in[base + part * step]");
                     writeln!(
                         self.source,
                         "extern \"C\" __global__ void k{slot}r0({ty}* out{parameters}) {{\n    \
                          long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (t >= {threads}LL) return;\n    \
-                         long long part = t % {parts}LL;\n    \
-                         long long start = (t / {parts}LL) * {length}LL;\n    \
+                         const long long step = {inner}LL;\n    \
+                         long long part = (t / step) % {parts}LL;\n    \
+                         long long start = (t / (step * {parts}LL)) * ({length}LL * step) + t % step;\n    \
                          {ty} acc = {first};\n    \
-                         for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step};\n    \
+                         for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step_code};\n    \
                          out[t] = acc;\n}}\n\
                          extern \"C\" __global__ void k{slot}({ty}* out, const {ty}* in) {{\n    \
                          long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (lane >= {lanes}LL) return;\n    \
-                         const long long PARTS = {parts}LL;\n    \
-                         {ty} acc = in[lane * PARTS];\n    \
-                         for (long long part = 1; part < PARTS; part++) acc = {join};\n    \
+                         const long long step = {inner}LL;\n    \
+                         long long base = (lane / step) * ({parts}LL * step) + lane % step;\n    \
+                         {ty} acc = in[base];\n    \
+                         for (long long part = 1; part < {parts}LL; part++) acc = {join};\n    \
                          out[lane] = {finish};\n}}",
-                        first = at("(start + part)"),
+                        first = at("(start + part * step)"),
+                        step_code = step,
                     )
                     .expect("writing to a string cannot fail");
                     let partial = self.scratch();
@@ -1072,6 +1283,7 @@ impl<'a> Generator<'a> {
                 _ => self.map(slot),
             }
         }
+        self.launch_maps();
         Program {
             source: self.source,
             actions: self.actions,

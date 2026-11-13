@@ -515,6 +515,36 @@ pub(crate) enum Slot {
     },
 }
 
+/// A hasher for the address of a node: addresses are spread already, so
+/// one multiplication mixes them, and a walk over thousands of nodes does
+/// not pay for a keyed hash.
+#[derive(Clone, Copy, Default)]
+struct PointerHasher(u64);
+
+impl std::hash::Hasher for PointerHasher {
+    fn finish(&self) -> u64 {
+        self.0
+    }
+
+    fn write(&mut self, bytes: &[u8]) {
+        for &byte in bytes {
+            self.0 = (self.0 ^ u64::from(byte)).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+        }
+    }
+
+    fn write_usize(&mut self, address: usize) {
+        self.0 = (address as u64 >> 4).wrapping_mul(0x9E37_79B9_7F4A_7C15);
+    }
+}
+
+impl std::hash::BuildHasher for PointerHasher {
+    type Hasher = Self;
+
+    fn build_hasher(&self) -> Self {
+        *self
+    }
+}
+
 /// The work one tensor waits on, with every value before the values made
 /// from it. The last slot is the tensor. A plan names no memory, so two
 /// runs of one expression over tensors of the same shapes have equal
@@ -590,7 +620,8 @@ impl Plan {
         let mut slots = Vec::new();
         let mut leaves = Vec::new();
         let mut nodes = Vec::new();
-        let mut seen: HashMap<*const TensorNode, usize> = HashMap::new();
+        let mut seen: HashMap<*const TensorNode, usize, PointerHasher> =
+            HashMap::with_hasher(PointerHasher::default());
         let mut outputs = Vec::with_capacity(roots.len());
         // A chain of waiting nodes can be thousands long, so the walk
         // keeps its own stack. A node is entered once to queue its
@@ -603,44 +634,42 @@ impl Plan {
                 if seen.contains_key(&key) {
                     continue;
                 }
-                let waiting = match &*node.state() {
-                    State::Ready(storage) => {
-                        leaves.push(storage.clone());
-                        None
-                    }
-                    State::Pending(pending) => {
-                        Some((pending.operation.clone(), pending.inputs.clone()))
-                    }
-                };
                 let dtype = node.dtype() as i64;
-                let shape = node.shape().to_vec();
-                let slot = match waiting {
-                    None => Slot::Leaf { dtype, shape },
-                    Some((operation, inputs)) => {
-                        if !entered {
-                            stack.push((node.clone(), true));
+                let slot = {
+                    let state = node.state();
+                    match &*state {
+                        State::Ready(storage) => {
+                            leaves.push(storage.clone());
+                            Slot::Leaf {
+                                dtype,
+                                shape: node.shape().to_vec(),
+                            }
+                        }
+                        State::Pending(pending) if !entered => {
                             // The first operand is walked first.
-                            for input in inputs.into_iter().rev() {
+                            stack.push((node.clone(), true));
+                            for input in pending.inputs.iter().rev() {
                                 if !seen.contains_key(&Arc::as_ptr(&input.0)) {
-                                    stack.push((input, false));
+                                    stack.push((input.clone(), false));
                                 }
                             }
                             continue;
                         }
-                        Slot::Step {
-                            operation,
-                            inputs: inputs
+                        State::Pending(pending) => Slot::Step {
+                            operation: pending.operation.clone(),
+                            inputs: pending
+                                .inputs
                                 .iter()
                                 .map(|input| seen[&Arc::as_ptr(&input.0)])
                                 .collect(),
                             dtype,
-                            shape,
-                        }
+                            shape: node.shape().to_vec(),
+                        },
                     }
                 };
                 slots.push(slot);
-                nodes.push(node.clone());
                 seen.insert(key, slots.len() - 1);
+                nodes.push(node);
             }
             outputs.push(seen[&Arc::as_ptr(&root.0)]);
         }
