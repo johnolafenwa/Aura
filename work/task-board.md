@@ -47,7 +47,9 @@ Last updated: 2026-11-12
 - Also done: stacked `matmul` in one cuBLAS call, a mixture-of-experts
   layer with top-k picks, and six workload programs beside PyTorch in
   `benchmarks/tensor/workloads.au`.
-- Remaining: the A40 and Mac runs, Metal support for the new operations, convolution and pooling,
+- Done 2026-11-13: convolution, pooling and batch norm layers
+  (ADR-0100), and the `cnn_train` and `gpt_infer` workload rows.
+- Remaining: the Mac runs, Metal support for the new operations,
   `float16`, and the whole-program benchmarks listed in
   `2026-11-12-gpu-tensors.md`.
 
