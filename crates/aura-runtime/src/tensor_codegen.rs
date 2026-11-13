@@ -707,6 +707,42 @@ impl<'a> Generator<'a> {
     fn launch_maps(&mut self) {
         let maps = std::mem::take(&mut self.maps);
         let actions = std::mem::take(&mut self.actions);
+        // A small elementwise kernel whose results no later action reads,
+        // such as the update of a parameter, moves to the end, where it
+        // meets the others like it.
+        let small_map = |index: usize, action: &Action| {
+            matches!(action, Action::Kernel { threads, .. }
+                if maps.contains(&index) && *threads <= GROUPED_THREADS)
+        };
+        let mut read_later = vec![false; self.buffers];
+        let mut last = vec![false; actions.len()];
+        for (index, action) in actions.iter().enumerate().rev() {
+            if let Action::Kernel { output, more, .. } = action {
+                last[index] = small_map(index, action)
+                    && !read_later[*output]
+                    && !more.iter().any(|(other, _)| read_later[*other]);
+            }
+            let read: &[usize] = match action {
+                Action::Kernel { inputs, .. } => inputs,
+                Action::Matmul { left, right, .. } => &[*left, *right],
+                Action::Alias { input, .. } => std::slice::from_ref(input),
+            };
+            for &buffer in read {
+                read_later[buffer] = true;
+            }
+        }
+        let (ended, kept): (Vec<_>, Vec<_>) = actions
+            .into_iter()
+            .enumerate()
+            .partition(|(index, _)| last[*index]);
+        let actions: Vec<(usize, Action)> = kept.into_iter().chain(ended).collect();
+        let maps: Vec<usize> = actions
+            .iter()
+            .enumerate()
+            .filter(|(_, (index, _))| maps.contains(index))
+            .map(|(place, _)| place)
+            .collect();
+        let actions: Vec<Action> = actions.into_iter().map(|(_, action)| action).collect();
         let mut grouped: Vec<Action> = Vec::with_capacity(actions.len());
         // The actions of the group being gathered, and the buffers they
         // write.

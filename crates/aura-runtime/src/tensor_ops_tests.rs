@@ -1605,6 +1605,24 @@ fn small_kernels_that_do_not_read_each_other_share_a_launch() {
             }
         }
 
+        // Small kernels whose results nothing later reads move to the
+        // end, past a reduction between them, and share a launch there.
+        let first = binary(&l.a, &l.b, 0).unwrap();
+        let total = reduce(&binary(&l.a, &l.b, 2).unwrap(), 0, Some(1)).unwrap();
+        let second = binary(&l.row, &l.row, 0).unwrap();
+        let (plan, storage) = Plan::collect_all(&[node(&first), node(&total), node(&second)]);
+        let program = tensor_codegen::generate(&plan);
+        let [tensor_codegen::Action::Kernel { more: none, .. }, tensor_codegen::Action::Kernel { name, more, .. }] =
+            &program.actions[..]
+        else {
+            panic!("a reduction, then one shared launch: {:?}", program.actions);
+        };
+        assert!(none.is_empty() && name.starts_with('g') && more.len() == 1);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2202) {
+            close("first", &generated[0], &expected[0]);
+            close("second", &generated[2], &expected[2]);
+        }
+
         // A kernel that reads another's result is launched after it.
         let sum = binary(&l.a, &l.b, 0).unwrap();
         let square = binary(&sum, &sum, 2).unwrap();
