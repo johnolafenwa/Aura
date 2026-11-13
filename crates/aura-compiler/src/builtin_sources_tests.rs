@@ -80,21 +80,37 @@ fn modules_without_a_source_part_bind_their_host_namespace() {
 }
 
 #[test]
-fn the_registry_carries_source_parts_only_on_request() {
-    let host = builtin_registry(false);
+fn the_registry_carries_the_source_parts_a_program_imports() {
+    let parts = |names: &[&str]| names.iter().map(|name| name.to_string()).collect();
+    let host = builtin_registry(&parts(&[]));
     assert!(!host["json"].traits.contains_key("Codec"));
-    let full = builtin_registry(true);
-    assert!(full["json"].traits.contains_key("Codec"));
-    assert_eq!(host.len(), full.len());
+    assert!(!host["iter"].classes.contains_key("ListIter"));
+    let json = builtin_registry(&parts(&["json"]));
+    assert!(json["json"].traits.contains_key("Codec"));
+    assert_eq!(host.len(), json.len());
+    // The parts behind operators and `for` come with any other part.
+    assert!(json["iter"].classes.contains_key("ListIter"));
+    // A module the program does not import adds nothing to its output.
+    assert!(!json["regex"].classes.contains_key("Regex"));
+    assert!(!json["tensor"].classes.contains_key("Tensor"));
+    let both = builtin_registry(&parts(&["json", "tensor"]));
+    assert!(both["tensor"].classes.contains_key("Tensor"));
 }
 
 #[test]
-fn imports_source_part_sees_module_and_from_imports() {
-    let module = |source: &str| crate::parse_source(source).expect("source parses");
-    assert!(imports_source_part(&module("import json\n")));
-    assert!(imports_source_part(&module("from json import Codec\n")));
-    assert!(!imports_source_part(&module("import math\n")));
-    assert!(!imports_source_part(&module("from math import sqrt\n")));
+fn imported_source_parts_sees_module_and_from_imports() {
+    let parts = |source: &str| {
+        imported_source_parts(&crate::parse_source(source).expect("source parses"))
+            .into_iter()
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(parts("import json\n"), ["json"]);
+    assert_eq!(
+        parts("from json import Codec\nimport regex\n"),
+        ["json", "regex"]
+    );
+    assert!(parts("import math\n").is_empty());
+    assert!(parts("from math import sqrt\n").is_empty());
 }
 
 #[test]
@@ -119,9 +135,10 @@ fn regex_source_part_adds_the_typed_api_to_the_host_searches() {
     }
     assert!(merged.enums.contains_key("Error"));
     assert!(merged.classes["Regex"].decl.copy, "a Regex is one integer");
-    assert!(imports_source_part(
-        &crate::parse_source("import regex\n").expect("source parses")
-    ));
+    assert!(
+        imported_source_parts(&crate::parse_source("import regex\n").expect("source parses"))
+            .contains("regex")
+    );
 }
 
 #[test]

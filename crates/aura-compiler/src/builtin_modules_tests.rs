@@ -1318,3 +1318,866 @@ def main() -> int32:
             print(error)
             return 1
 "#;
+
+#[test]
+fn tensor_module_runs_its_whole_api_on_the_cpu_device() {
+    assert!(super::is_builtin_root_module("tensor"));
+    assert!(super::builtin_module_registry().contains_key("tensor"));
+    let binary = host_builtin_metadata("tensor::__aura_binary").expect("tensor binary metadata");
+    assert_eq!(binary.params.len(), 3);
+
+    let output = crate::run_source(
+        r#"from tensor import Device, Tensor, where
+
+def main():
+    device = Device.cpu()
+    print(f"{device.name()} {device.is_gpu()} {Device.default().name() != ""}")
+    a = Array[float32].from_list([1.0, 2.0, 3.0, 4.0, 5.0, 6.0], [2, 3])
+    x = Tensor[float32].from_array(a, device)
+    y = Tensor[float32].full([2, 3], 2.0, device)
+    z = x * y + x - y / y
+    print(z.to_array())
+    print(f"{z.shape()} {z.len()} {z.device().name()}")
+    print(f"{z.sum().item()} {z.min().item()} {z.max().item()} {z.mean().item()}")
+    print(z.sum(dim=0).to_array())
+    print(x.matmul(y.transpose()).to_array())
+    print(x.minimum(y).maximum(-x).to_array())
+    print(x.pow(y).sqrt().abs().to_array())
+    round_trip = (x.exp().log() - x).abs().max().item()
+    unit = (x.sin() * x.sin() + x.cos() * x.cos()).sum().item()
+    print(f"{round_trip < 0.0001} {unit > 5.9999 and unit < 6.0001}")
+    mask = x.greater(x.scalar(3.0))
+    print(mask.to_array())
+    print(where(mask, x, -x).to_array())
+    print(f"{x.less(y).to_array()} {x.less_equal(y).to_array()}")
+    print(f"{x.greater_equal(y).to_array()} {x.equal(y).to_array()} {x.not_equal(y).to_array()}")
+    print(x.reshape([3, 2]).flatten().permute([0]).to_array())
+    i = Tensor[int64].full([4], 7, device)
+    print((i * i.scalar(3) - i).to_array())
+    print(f"{i.to_float32().to_array()} {i.to_int32().to_array()} {i.to_float64().to_array()}")
+    print(x.to_int64().to_array())
+    zero = Tensor[int32].zeros([2], device)
+    print(f"{zero.to_array()} {Tensor[bool].zeros([2], device).to_array()}")
+    print(Tensor[float64].full([1], 0.5, device).item())
+    w = z.clone().to(device)
+    w.eval()
+    print(w.max(dim=1).to_array())
+    match Device.metal():
+        case Device as gpu:
+            print(gpu.is_gpu())
+        case None:
+            print(true)
+"#,
+    )
+    .expect("the tensor API should run");
+    assert_eq!(
+        output.stdout,
+        "cpu false true\n\
+         Array[float32](shape=[2, 3], values=[2.0, 5.0, 8.0, 11.0, 14.0, 17.0])\n\
+         [2, 3] 6 cpu\n\
+         57.0 2.0 17.0 9.5\n\
+         Array[float32](shape=[3], values=[13.0, 19.0, 25.0])\n\
+         Array[float32](shape=[2, 2], values=[12.0, 12.0, 30.0, 30.0])\n\
+         Array[float32](shape=[2, 3], values=[1.0, 2.0, 2.0, 2.0, 2.0, 2.0])\n\
+         Array[float32](shape=[2, 3], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
+         true true\n\
+         Array[bool](shape=[2, 3], values=[false, false, false, true, true, true])\n\
+         Array[float32](shape=[2, 3], values=[-1.0, -2.0, -3.0, 4.0, 5.0, 6.0])\n\
+         Array[bool](shape=[2, 3], values=[true, false, false, false, false, false]) Array[bool](shape=[2, 3], values=[true, true, false, false, false, false])\n\
+         Array[bool](shape=[2, 3], values=[false, true, true, true, true, true]) Array[bool](shape=[2, 3], values=[false, true, false, false, false, false]) Array[bool](shape=[2, 3], values=[true, false, true, true, true, true])\n\
+         Array[float32](shape=[6], values=[1.0, 2.0, 3.0, 4.0, 5.0, 6.0])\n\
+         Array[int64](shape=[4], values=[14, 14, 14, 14])\n\
+         Array[float32](shape=[4], values=[7.0, 7.0, 7.0, 7.0]) Array[int32](shape=[4], values=[7, 7, 7, 7]) Array[float64](shape=[4], values=[7.0, 7.0, 7.0, 7.0])\n\
+         Array[int64](shape=[2, 3], values=[1, 2, 3, 4, 5, 6])\n\
+         Array[int32](shape=[2], values=[0, 0]) Array[bool](shape=[2], values=[false, false])\n\
+         0.5\n\
+         Array[float32](shape=[2], values=[8.0, 17.0])\n\
+         true\n"
+    );
+
+    let error = crate::check_source(
+        "import tensor\n\ndef forge() -> tensor.Node:\n    return tensor.Node()\n",
+    )
+    .expect_err("only the tensor module makes a node");
+    assert!(error.message.contains("Node"), "{}", error.message);
+    let error = crate::check_source(
+        "from tensor import Device, Tensor\n\ndef bad(x: Tensor[float32], y: Tensor[int64]) -> Tensor[float32]:\n    return x + y\n",
+    )
+    .expect_err("operands have one dtype");
+    assert!(error.message.contains("Tensor"), "{}", error.message);
+    let error = crate::run_source(
+        "from tensor import Device, Tensor\n\ndef main():\n    x = Tensor[float32].zeros([2, 3], Device.cpu())\n    y = Tensor[float32].zeros([4], Device.cpu())\n    print((x + y).len())\n",
+    )
+    .expect_err("shapes must broadcast");
+    assert_eq!(error.code, "AU4007");
+}
+
+#[test]
+fn an_associated_trait_call_runs_the_implementation_for_the_written_type_arguments() {
+    let output = crate::run_source(
+        r#"trait Make[E]:
+    def make(value: E) -> Self
+    def what(self) -> str
+
+class Box[T]:
+    size: int64
+
+impl Make[float32] for Box[float32]:
+    def make(value: float32) -> Box[float32]:
+        return Box[float32](size=1)
+    def what(self) -> str:
+        return "float32"
+
+impl Make[int64] for Box[int64]:
+    def make(value: int64) -> Box[int64]:
+        return Box[int64](size=2)
+    def what(self) -> str:
+        return "int64"
+
+def main():
+    a = Box[float32].make(1.5)
+    b = Box[int64].make(3)
+    print(f"{a.what()} {a.size} {b.what()} {b.size}")
+"#,
+    )
+    .expect("each call names one implementation");
+    assert_eq!(output.stdout, "float32 1 int64 2\n");
+}
+
+#[test]
+fn tensors_are_indexed_joined_and_reduced_with_kept_axes() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, -2.0, 3.0, 4.5, 0.25, 6.0], [2, 3]), device)
+    rows = Tensor[int64].from_array(Array[int64].from_list([1, 1, 0], [3]), device)
+    print(x.slice(1, 1, 3).to_array())
+    print(x.slice(1, 0, -1, 2).to_array())
+    print(x.index_select(0, rows).shape())
+    print(x.index_select(1, rows).to_array())
+    print(tensor.cat([x.clone(), x.clone()], 1).shape())
+    print(tensor.cat([x.clone(), x.clone(), x.clone()]).shape())
+    print(x.index_add(Tensor[int64].from_array(Array[int64].from_list([1, 1], [2]), device), 3).to_array())
+    print(x.argmax().to_array())
+    print(x.argmin(0).to_array())
+    print(x.sum(1, true).to_array())
+    print(x.max(keepdim=true).shape())
+    print(x.mean(-2, true).shape())
+    print(x.slice(0, 0, 1).expand([2, 2, 3]).shape())
+    print(tensor.arange(4, device).to_array())
+    print(tensor.rand([2, 2], 7, device).shape())
+    drift = (tensor.randn([3], 7, device) - tensor.randn([3], 7, device)).abs().max().item()
+    print(drift == 0.0)
+    print(x.softmax().sum(1).to_array())
+    print(f"{x.tanh().shape()} {x.sigmoid().shape()} {x.erf().shape()} {x.gelu().shape()}")
+"#,
+    )
+    .expect("the indexed members run");
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[2, 2], values=[-2.0, 3.0, 0.25, 6.0])\n\
+         Array[float32](shape=[2, 1], values=[1.0, 4.5])\n\
+         [3, 3]\n\
+         Array[float32](shape=[2, 3], values=[-2.0, -2.0, 1.0, 0.25, 0.25, 4.5])\n\
+         [2, 6]\n\
+         [6, 3]\n\
+         Array[float32](shape=[3, 3], values=[0.0, 0.0, 0.0, 5.5, -1.75, 9.0, 0.0, 0.0, 0.0])\n\
+         Array[int64](shape=[2], values=[2, 2])\n\
+         Array[int64](shape=[3], values=[0, 0, 0])\n\
+         Array[float32](shape=[2, 1], values=[2.0, 10.75])\n\
+         [1, 1]\n\
+         [1, 3]\n\
+         [2, 2, 3]\n\
+         Array[int64](shape=[4], values=[0, 1, 2, 3])\n\
+         [2, 2]\n\
+         true\n\
+         Array[float32](shape=[2], values=[1.0, 1.0])\n\
+         [2, 3] [2, 3] [2, 3] [2, 3]\n"
+    );
+}
+
+#[test]
+fn a_tensor_program_learns_by_gradient_descent() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    # y = 2 * x0 - 3 * x1 + 1
+    inputs = Tensor[float32].from_array(Array[float32].from_list([1.0, 0.0, 0.0, 1.0, 1.0, 1.0, 2.0, -1.0], [4, 2]), device)
+    wanted = Tensor[float32].from_array(Array[float32].from_list([3.0, -2.0, 0.0, 8.0], [4, 1]), device)
+    mut weights = Tensor[float32].zeros([2, 1], device).requires_grad()
+    mut bias = Tensor[float32].zeros([1], device).requires_grad()
+    mut step = 0
+    while step < 300:
+        error = inputs.matmul(weights) + bias - wanted
+        loss = (error * error).mean()
+        weights = (weights.detach() - loss.gradient(weights) * 0.1).requires_grad()
+        bias = (bias.detach() - loss.gradient(bias) * 0.1).requires_grad()
+        step += 1
+    first = weights.slice(0, 0, 1).sum().item()
+    second = weights.slice(0, 1, 2).sum().item()
+    offset = bias.item()
+    print(f"{first > 1.9 and first < 2.1} {second > -3.1 and second < -2.9} {offset > 0.9 and offset < 1.1}")
+
+    logits = Tensor[float32].from_array(Array[float32].from_list([2.0, 0.0, 0.0, 0.0, 0.0, 2.0], [2, 3]), device).requires_grad()
+    targets = Tensor[int64].from_array(Array[int64].from_list([0, 1], [2]), device)
+    loss = tensor.cross_entropy(logits, targets)
+    print(f"{loss.item() > 1.2} {loss.item() < 1.3}")
+    drift = loss.gradient(logits).sum().item()
+    print(drift > -0.000001 and drift < 0.000001)
+    print(loss.gradient(logits).argmin().to_array())
+"#,
+    )
+    .expect("a tensor program learns");
+    assert_eq!(
+        output.stdout,
+        "true true true\ntrue true\ntrue\nArray[int64](shape=[2], values=[0, 1])\n"
+    );
+}
+
+#[test]
+fn a_small_transformer_learns_with_the_tensor_layers() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Parameter, LayerNorm, MultiheadAttention, Linear, Embedding, AdamW
+
+class Block:
+    norm1: LayerNorm
+    mix: MultiheadAttention
+    norm2: LayerNorm
+    wide: Linear
+    narrow: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        attended = x + self.mix.forward(self.norm1.forward(x), true)
+        return attended + self.narrow.forward(self.wide.forward(self.norm2.forward(attended)).gelu())
+
+    def parameters(mut self) -> list[Parameter[float32]]:
+        mut all = self.norm1.parameters()
+        all.extend(self.mix.parameters())
+        all.extend(self.norm2.parameters())
+        all.extend(self.wide.parameters())
+        all.extend(self.narrow.parameters())
+        return all
+
+
+def main():
+    device = Device.cpu()
+    width = 16
+    mut tokens = tensor.Embedding(5, width, 1, device)
+    mut places = tensor.Embedding(8, width, 2, device)
+    mut block = Block(norm1=tensor.LayerNorm(width, device), mix=tensor.MultiheadAttention(width, 2, 10, device), norm2=tensor.LayerNorm(width, device), wide=tensor.Linear(width, 32, 20, device), narrow=tensor.Linear(32, width, 30, device))
+    mut head = tensor.Linear(width, 5, 40, device)
+    mut params = tokens.parameters()
+    params.extend(places.parameters())
+    params.extend(block.parameters())
+    params.extend(head.parameters())
+    mut optimizer = tensor.AdamW(params, lr=0.01)
+    # Each row counts up by one, modulo five. The model learns the next token.
+    inputs = Tensor[int64].from_array(Array[int64].from_list([0, 1, 2, 3, 4, 0, 1, 2, 2, 3, 4, 0, 1, 2, 3, 4], [2, 8]), device)
+    wanted = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3, 4, 0, 1, 2, 3, 3, 4, 0, 1, 2, 3, 4, 0], [16]), device)
+    positions = tensor.arange(8, device)
+    mut step = 0
+    while step < 40:
+        hidden = block.forward(tokens.forward(inputs) + places.forward(positions))
+        logits = head.forward(hidden).reshape([16, 5])
+        loss = tensor.cross_entropy(logits, wanted)
+        optimizer.minimize(loss)
+        if step == 0 or step == 39:
+            print(loss.item() < 0.01)
+        step += 1
+    hidden = block.forward(tokens.forward(inputs) + places.forward(positions))
+    print(head.forward(hidden).reshape([16, 5]).argmax().to_array())
+    kept = tensor.dropout(Tensor[float32].full([1000], 1.0, device), 0.25, 3).sum().item()
+    print(kept > 900.0 and kept < 1100.0)
+"#,
+    )
+    .expect("a transformer trains");
+    assert_eq!(
+        output.stdout,
+        "false\ntrue\nArray[int64](shape=[16], values=[1, 2, 3, 4, 0, 1, 2, 3, 3, 4, 0, 1, 2, 3, 4, 0])\ntrue\n"
+    );
+}
+
+#[test]
+fn a_mixture_of_experts_keeps_its_top_experts_and_learns() {
+    // The program names neither `Linear` nor `Parameter`, which the
+    // layer's own methods use.
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, MixtureOfExperts, AdamW
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, 5.0, 3.0, 4.0, 9.0, 2.0, 8.0, 7.0], [2, 4]), device)
+    print(tensor.top_indices(x, 2).to_array())
+    print(tensor.top_mask(x, 2).to_array())
+    print(tensor.one_hot(x.argmax(), 4).to_array())
+    mut layer = MixtureOfExperts(4, 8, 3, 2, 7, device)
+    weights = layer.weights(x)
+    one = Tensor[float32].full([1], 1.0, device)
+    print(tensor.where(weights.greater(one * 0.0), one, one * 0.0).sum(1).to_array())
+    total = weights.sum().item()
+    print(total > 1.9999 and total < 2.0001)
+    rows = tensor.randn([64, 4], 1, device)
+    wanted = rows * rows - 1.0
+    mut optimizer = AdamW(layer.parameters(), lr=0.01)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(200):
+        gap = layer.forward(rows) - wanted
+        loss = (gap * gap).mean()
+        optimizer.minimize(loss)
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first * 0.2)
+"#,
+    )
+    .expect("a mixture of experts trains");
+    assert_eq!(
+        output.stdout,
+        "Array[int64](shape=[2, 2], values=[1, 3, 0, 2])
+Array[bool](shape=[2, 4], values=[false, true, false, true, true, false, true, false])
+Array[bool](shape=[2, 4], values=[false, true, false, false, true, false, false, false])
+Array[float32](shape=[2], values=[2.0, 2.0])
+true
+true
+"
+    );
+}
+
+#[test]
+fn a_model_trains_with_backward_and_an_optimizer_step() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Parameter, Linear, AdamW
+
+class Net:
+    hidden: Linear
+    output: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return self.output.forward(self.hidden.forward(x).relu())
+
+    def parameters(mut self) -> list[Parameter[float32]]:
+        mut all = self.hidden.parameters()
+        all.extend(self.output.parameters())
+        return all
+
+
+def main():
+    device = Device.cpu()
+    x = tensor.randn([64, 4], 1, device)
+    y = (x * x).sum(1, true)
+    mut model = Net(hidden=Linear(4, 16, 2, device), output=Linear(16, 1, 3, device))
+    mut optimizer = AdamW(model.parameters(), lr=0.01)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(300):
+        gap = model.forward(x) - y
+        loss = (gap * gap).mean()
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first * 0.2)
+    # Gradients add up until the parameter is replaced.
+    mut w = Parameter[float32](Tensor[float32].full([2], 3.0, device))
+    (w.value() * w.value()).sum().backward()
+    print(w.grad.to_array())
+    (w.value() * 2.0).sum().backward()
+    print(w.grad.to_array())
+    moved = w.value().detach() - w.grad * 0.5
+    w.copy_(moved)
+    print(w.value().to_array())
+    print(w.grad.to_array())
+"#,
+    )
+    .expect("a model trains");
+    assert_eq!(
+        output.stdout,
+        "true\nArray[float32](shape=[2], values=[6.0, 6.0])\nArray[float32](shape=[2], values=[8.0, 8.0])\nArray[float32](shape=[2], values=[-1.0, -1.0])\nArray[float32](shape=[2], values=[0.0, 0.0])\n"
+    );
+}
+
+#[test]
+fn the_weights_of_a_model_not_declared_mut_cannot_change() {
+    let check = |body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Device, Tensor, Parameter, Linear, SGD\n\ndef main():\n    device = Device.cpu()\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    // A `mut` layer hands its parameters to an optimizer.
+    check("    mut layer = Linear(2, 1, 7, device)\n    mut optimizer = SGD(layer.parameters(), lr=0.1)\n    optimizer.step()\n")
+        .expect("a mut layer trains");
+    // A layer not declared `mut` does not, and neither private handles
+    // nor moves give a second way to its weights.
+    let zeros = "Tensor[float32].zeros([2, 1], device)";
+    let read = "    print(layer.forward(Tensor[float32].zeros([1, 2], device)).to_array())\n";
+    let cases = [
+        (
+            "    layer = Linear(2, 1, 7, device)\n    optimizer = SGD(layer.parameters(), lr=0.1)\n".to_string(),
+            "method `parameters` requires a mutable receiver",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    layer.weight.copy_({zeros})\n"),
+            "method `copy_` requires a mutable receiver",
+        ),
+        (
+            format!("    mut layer = Linear(2, 1, 7, device)\n    layer.weight.assign({zeros})\n"),
+            "method `assign` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    other = layer.weight.share()\n".to_string(),
+            "method `share` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    layer.weight.zero_grad()\n".to_string(),
+            "method `zero_grad` is private on `Parameter`",
+        ),
+        (
+            "    mut layer = Linear(2, 1, 7, device)\n    optimizer = SGD(layer.parameters(), lr=0.1)\n    optimizer.step()\n".to_string(),
+            "method `step` requires a mutable receiver",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut stolen = layer.weight\n    stolen.copy_({zeros})\n{read}"),
+            "use of partially moved value `layer`",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut copy = layer\n    mut optimizer = SGD(copy.parameters(), lr=0.1)\n{read}"),
+            "use of moved value `layer`",
+        ),
+        (
+            format!("    layer = Linear(2, 1, 7, device)\n    mut twin = Linear(2, 1, 7, device)\n    twin.weight = layer.weight\n{read}"),
+            "use of partially moved value `layer`",
+        ),
+    ];
+    for (body, expected) in cases {
+        assert_eq!(check(&body).expect_err(&body), expected);
+    }
+}
+
+#[test]
+fn a_tensor_operator_takes_a_number_on_either_side() {
+    let output = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, -2.0, 3.0], [3]), device)
+    k = Tensor[int64].from_array(Array[int64].from_list([1, 2, 3], [3]), device)
+    half: float32 = 0.5
+    two: int32 = 2
+    print((x * 2.0).to_array())
+    print((x * half + 1).to_array())
+    print((2.0 * x - 1.0).to_array())
+    print((1 - x).to_array())
+    print((6 / x).to_array())
+    print((-x / two).to_array())
+    print((k * 3 + 1).to_array())
+    print((10 - k).to_array())
+    print(x.relu().to_array())
+    print(x.clamp(-1.0, 2.0).to_array())
+    print(x.powf(2.0).to_array())
+"#,
+    )
+    .expect("numbers combine with tensors");
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[3], values=[2.0, -4.0, 6.0])\n\
+         Array[float32](shape=[3], values=[1.5, 0.0, 2.5])\n\
+         Array[float32](shape=[3], values=[1.0, -5.0, 5.0])\n\
+         Array[float32](shape=[3], values=[0.0, 3.0, -2.0])\n\
+         Array[float32](shape=[3], values=[6.0, -3.0, 2.0])\n\
+         Array[float32](shape=[3], values=[-0.5, 1.0, -1.5])\n\
+         Array[int64](shape=[3], values=[4, 7, 10])\n\
+         Array[int64](shape=[3], values=[9, 8, 7])\n\
+         Array[float32](shape=[3], values=[1.0, 0.0, 3.0])\n\
+         Array[float32](shape=[3], values=[1.0, -1.0, 2.0])\n\
+         Array[float32](shape=[3], values=[1.0, 4.0, 9.0])\n"
+    );
+
+    let error = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    k = Tensor[int64].full([2], 1, Device.cpu())
+    print((k * 1.5).to_array())
+"#,
+    )
+    .expect_err("a float does not combine with an integer tensor");
+    assert_eq!(error.code, "AU4007");
+    assert!(error
+        .message
+        .contains("cannot use a float with a `Tensor[int64]`"));
+}
+
+#[test]
+fn tensors_of_two_dtypes_do_not_combine() {
+    let error = crate::run_source(
+        r#"from tensor import Device, Tensor
+
+def main():
+    device = Device.cpu()
+    x = Tensor[float32].full([2], 1.0, device)
+    k = Tensor[int64].full([2], 1, device)
+    print((x + k).to_array())
+"#,
+    )
+    .expect_err("the dtypes differ");
+    assert!(error.message.contains("Tensor"), "{}", error.message);
+}
+
+#[test]
+fn a_generic_implementation_satisfies_a_bound_for_any_trait_argument() {
+    let output = crate::run_source(
+        r#"trait Scale[T]:
+    def factor(self) -> float64
+
+class Box[T]:
+    value: float64
+
+impl[T] Scale[T] for float64:
+    def factor(self) -> float64:
+        return self
+
+impl[T] Scale[T] for Box[T]:
+    def factor(self) -> float64:
+        return self.value
+
+impl[T, R: Scale[T]] Add[R, Box[T]] for Box[T]:
+    def add(self, rhs: R) -> Box[T]:
+        return Box[T](value=self.value + rhs.factor())
+
+def main():
+    a = Box[int32](value=1.0)
+    b = Box[int32](value=10.0)
+    print(f"{(a + 2.5).value} {(a + b).value}")
+"#,
+    )
+    .expect("float64 implements Scale[int32]");
+    assert_eq!(output.stdout, "3.5 11.0\n");
+}
+
+#[test]
+fn a_model_is_a_module_with_named_parameters_and_a_state_dict() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import AdamW, Collector, Device, Layer, Linear, Module, ReLU, Sequential, Tensor
+
+
+class Net:
+    hidden: Linear
+    output: Linear
+
+
+impl Module for Net:
+    def collect(self, into: mut Collector) -> None:
+        into.add("hidden", self.hidden)
+        into.add("output", self.output)
+
+
+impl Layer for Net:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return self.output.forward(self.hidden.forward(x).relu())
+
+
+def main() -> int32:
+    device = Device.cpu()
+    mut net = Net(hidden=Linear(4, 8, 1, device), output=Linear(8, 2, 2, device))
+    x = tensor.randn([16, 4], 3, device)
+    labels = x.matmul(tensor.randn([4, 2], 4, device)).argmax()
+    mut optimizer = AdamW(net.parameters(), lr=0.05)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(30):
+        loss = tensor.cross_entropy(net.forward(x), labels)
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            first = loss.item()
+        last = loss.item()
+    print(last < first)
+    for name, param in net.named_parameters():
+        print(f"{name} {param.value().shape()}")
+    state = net.state_dict()
+    print(state.len())
+    mut other = Net(hidden=Linear(4, 8, 7, device), output=Linear(8, 2, 8, device))
+    match other.load_state_dict(state):
+        case Ok(_):
+            print((other.forward(x) - net.forward(x)).abs().max().item())
+        case Err(message):
+            print(message)
+    mut stack = Sequential([Linear(4, 8, 1, device) as dyn Layer, ReLU(), Linear(8, 2, 2, device)])
+    print(stack.forward(x).shape())
+    for name, param in stack.named_parameters():
+        print(name)
+    return 0
+"#,
+    )
+    .expect("a module trains, names its parameters, and loads a state dict");
+    assert_eq!(
+        output.stdout,
+        "true\nhidden.weight [4, 8]\nhidden.bias [8]\noutput.weight [8, 2]\noutput.bias [2]\n4\n0.0\n[16, 2]\n0.weight\n0.bias\n2.weight\n2.bias\n"
+    );
+}
+
+#[test]
+fn a_module_not_declared_mut_gives_out_no_parameters() {
+    let check = |collect: &str, body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Collector, Device, Linear, Module, Parameter, SGD, Tensor\n\nclass Net:\n    hidden: Linear\n    output: Linear\n\nimpl Module for Net:\n    def collect(self, into: mut Collector) -> None:\n        into.add(\"hidden\", self.hidden)\n        into.add(\"output\", self.output)\n{collect}\ndef main():\n    device = Device.cpu()\n    net = Net(hidden=Linear(2, 2, 1, device), output=Linear(2, 1, 2, device))\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    // Reading a model's weights needs no `mut`.
+    check("", "    state = net.state_dict()\n").expect("a state dict reads the model");
+    let cases = [
+        (
+            "",
+            "    optimizer = SGD(net.parameters(), lr=0.1)\n",
+            "method `parameters` requires a mutable receiver",
+        ),
+        (
+            "",
+            "    names = net.named_parameters()\n",
+            "method `named_parameters` requires a mutable receiver",
+        ),
+        (
+            "",
+            "    done = net.load_state_dict(net.state_dict())\n",
+            "method `load_state_dict` requires a mutable receiver",
+        ),
+        // `collect` runs on a model that is not `mut`, so what it gathers
+        // stays inside the `tensor` module.
+        (
+            "        stolen = into.params\n",
+            "",
+            "field `params` is private on `Collector`",
+        ),
+        (
+            "",
+            "    into = Collector(names=list[str](), params=list[Parameter[float32]](), prefix=\"\")\n",
+            "field `names` is private on `Collector`",
+        ),
+        (
+            "",
+            "    into = tensor.collected(net)\n",
+            "item `collected` is private in module `tensor`",
+        ),
+    ];
+    for (collect, body, expected) in cases {
+        assert_eq!(check(collect, body).expect_err(body), expected);
+    }
+}
+
+#[test]
+fn a_bodyless_module_impl_collects_the_fields_that_hold_weights() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import AdamW, Device, Layer, Linear, Module, Parameter, ReLU, Sequential, Tensor
+
+
+class Block:
+    scale: Parameter[float32]
+    inner: Linear
+    name: str
+
+impl Module for Block
+
+
+class Net:
+    blocks: list[Block]
+    head: tensor.Linear
+    stack: Sequential
+    extra: dyn Layer
+    steps: int64
+
+impl tensor.Module for Net
+
+
+def main():
+    device = Device.cpu()
+    mut net = Net(
+        blocks=[
+            Block(scale=Parameter[float32](Tensor[float32].full([1], 1.0, device)), inner=Linear(2, 2, 1, device), name="a"),
+            Block(scale=Parameter[float32](Tensor[float32].full([1], 1.0, device)), inner=Linear(2, 2, 2, device), name="b"),
+        ],
+        head=Linear(2, 1, 3, device),
+        stack=Sequential([Linear(2, 2, 4, device) as dyn Layer, ReLU()]),
+        extra=Linear(2, 2, 5, device),
+        steps=0,
+    )
+    for name, param in net.named_parameters():
+        print(f"{name} {param.value().shape()}")
+    print(net.parameters().len())
+"#,
+    )
+    .expect("a derived module names its parameters");
+    assert_eq!(
+        output.stdout,
+        "blocks.0.scale [1]\nblocks.0.inner.weight [2, 2]\nblocks.0.inner.bias [2]\nblocks.1.scale [1]\nblocks.1.inner.weight [2, 2]\nblocks.1.inner.bias [2]\nhead.weight [2, 1]\nhead.bias [1]\nstack.0.weight [2, 2]\nstack.0.bias [2]\nextra.weight [2, 2]\nextra.bias [2]\n12\n"
+    );
+}
+
+#[test]
+fn a_derived_module_follows_aliases_and_traits_of_its_own_module() {
+    let output = crate::run_source(
+        r#"import tensor as t
+from tensor import Device, Parameter, Tensor
+
+trait Step: t.Layer:
+    def label(self) -> str
+
+class Scale:
+    by: t.Parameter[float32]
+
+impl t.Module for Scale
+
+impl t.Layer for Scale:
+    def forward(self, x: t.Tensor[float32]) -> t.Tensor[float32]:
+        return x * self.by.value()
+
+impl Step for Scale:
+    def label(self) -> str:
+        return "scale"
+
+class Empty:
+    count: int64
+    note: (str, int64)
+    table: dict[str, float64]
+    run: def(int64) -> int64
+
+impl t.Module for Empty
+
+class Net:
+    first: dyn Step
+    rest: list[dyn Step]
+    empty: Empty
+
+impl t.Module for Net
+
+def twice(x: int64) -> int64:
+    return x * 2
+
+def main():
+    device = Device.cpu()
+    one = Tensor[float32].full([1], 1.0, device)
+    mut net = Net(
+        first=Scale(by=Parameter[float32](one.clone())),
+        rest=[Scale(by=Parameter[float32](one.clone())) as dyn Step],
+        empty=Empty(count=0, note=("a", 1), table={"a": 1.0}, run=twice),
+    )
+    for name, param in net.named_parameters():
+        print(name)
+"#,
+    )
+    .expect("a derived module follows a module alias and a local trait");
+    assert_eq!(output.stdout, "first.by\nrest.0.by\n");
+}
+
+#[test]
+fn a_derived_module_keeps_the_mut_rule_and_rejects_what_it_cannot_walk() {
+    let check = |fields: &str, target: &str, body: &str| {
+        let source = format!(
+            "import tensor\nfrom tensor import Device, Linear, Module, Parameter, SGD, Tensor\n\nclass Net:\n    hidden: Linear\n{fields}\nclass Pair[T]:\n    left: T\n\ntrait Named:\n    def name(self) -> str\n\nimpl {target}\n\ndef main():\n    device = Device.cpu()\n{body}"
+        );
+        crate::check_source(&source)
+            .map(|_| ())
+            .map_err(|error| error.message)
+    };
+    check("", "Module for Net", "    return\n").expect("a derived module checks");
+    let net = "    net = Net(hidden=Linear(2, 2, 1, device))\n";
+    let walk = |field: &str| {
+        format!("cannot derive `tensor.Module` for `Net`: field `{field}` holds weights in a type a derived `collect` cannot walk")
+    };
+    let cases = [
+        (
+            "",
+            "Module for Net",
+            format!("{net}    optimizer = SGD(net.parameters(), lr=0.1)\n"),
+            "method `parameters` requires a mutable receiver".to_string(),
+        ),
+        (
+            "    spare: Linear | None\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("spare"),
+        ),
+        (
+            "    named: dict[str, Linear]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("named"),
+        ),
+        (
+            "    weights: list[Parameter[float32]]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("weights"),
+        ),
+        (
+            "    wide: Parameter[float64]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("wide"),
+        ),
+        (
+            "    both: (Linear, int64)\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("both"),
+        ),
+        (
+            "    grid: list[list[Linear]]\n",
+            "Module for Net",
+            "    return\n".to_string(),
+            walk("grid"),
+        ),
+        (
+            "",
+            "[T] Module for Pair[T]",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` for the generic class `Pair` is not implemented".to_string(),
+        ),
+        (
+            "",
+            "Module for Linear",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` must be in the module that declares the class `Linear`".to_string(),
+        ),
+        (
+            "",
+            "Module for (int64, int64)",
+            "    return\n".to_string(),
+            "a derived `tensor.Module` needs a class declared in this module".to_string(),
+        ),
+        (
+            "",
+            "Named for Net",
+            "    return\n".to_string(),
+            "only `json.Codec` and `tensor.Module` can be derived; `impl Named for ...` needs a body".to_string(),
+        ),
+    ];
+    for (fields, target, body, expected) in cases {
+        assert_eq!(
+            check(fields, target, &body).expect_err(target),
+            expected,
+            "{fields}"
+        );
+    }
+}

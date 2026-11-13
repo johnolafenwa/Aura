@@ -1815,6 +1815,199 @@ fn http_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// The host part of `tensor`: device memory behind a `tensor.Node`, and
+/// the operations on it. `Tensor[T]` and `Device` are Aura source in
+/// `std/tensor.au`. The functions whose signature names an `Array[T]` or a
+/// `T` exist once for each dtype.
+fn tensor_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let node = || type_ref("tensor.Node", Vec::new());
+    let shape = || type_ref("list", vec![int64()]);
+    let text = || type_ref("str", Vec::new());
+    let outcome = |value: TypeRef| type_ref("Result", vec![value, type_ref("str", Vec::new())]);
+    let function = |name: &str, params: Vec<Param>, result: TypeRef| {
+        function_info("tensor", name, params, result)
+    };
+    let on_node = |name: &str, mut extra: Vec<Param>, result: TypeRef| {
+        let mut params = vec![borrow_param("node", node())];
+        params.append(&mut extra);
+        function_info("tensor", name, params, result)
+    };
+    let on_pair = |name: &str, mut extra: Vec<Param>| {
+        let mut params = vec![borrow_param("left", node()), borrow_param("right", node())];
+        params.append(&mut extra);
+        function_info("tensor", name, params, node())
+    };
+    let mut functions = vec![
+        function(
+            "__aura_device_available",
+            vec![borrow_param("device", int64())],
+            boolean(),
+        ),
+        on_node("__aura_shape", Vec::new(), shape()),
+        on_node("__aura_len", Vec::new(), int64()),
+        on_node("__aura_device", Vec::new(), int64()),
+        on_pair("__aura_binary", vec![borrow_param("operation", int64())]),
+        on_node(
+            "__aura_unary",
+            vec![borrow_param("operation", int64())],
+            node(),
+        ),
+        on_pair("__aura_compare", vec![borrow_param("operation", int64())]),
+        function(
+            "__aura_where",
+            vec![
+                borrow_param("mask", node()),
+                borrow_param("when_true", node()),
+                borrow_param("when_false", node()),
+            ],
+            node(),
+        ),
+        on_node(
+            "__aura_reduce",
+            vec![
+                borrow_param("reduction", int64()),
+                borrow_param("axis", int64()),
+                borrow_param("has_axis", boolean()),
+            ],
+            node(),
+        ),
+        on_pair("__aura_matmul", Vec::new()),
+        on_node(
+            "__aura_reshape",
+            vec![borrow_param("shape", shape())],
+            node(),
+        ),
+        on_node(
+            "__aura_permute",
+            vec![borrow_param("axes", shape())],
+            node(),
+        ),
+        on_node("__aura_cast", vec![borrow_param("dtype", int64())], node()),
+        on_node(
+            "__aura_to_device",
+            vec![borrow_param("device", int64())],
+            node(),
+        ),
+        on_node("__aura_eval", Vec::new(), type_ref("None", Vec::new())),
+        on_node("__aura_share", Vec::new(), node()),
+        on_node(
+            "__aura_scalar_like_f64",
+            vec![borrow_param("value", type_ref("float64", Vec::new()))],
+            node(),
+        ),
+        on_node(
+            "__aura_scalar_like_i64",
+            vec![borrow_param("value", int64())],
+            node(),
+        ),
+        on_node(
+            "__aura_node_op",
+            vec![
+                borrow_param("operation", int64()),
+                borrow_param("parameters", shape()),
+            ],
+            node(),
+        ),
+        on_pair(
+            "__aura_pair_op",
+            vec![
+                borrow_param("operation", int64()),
+                borrow_param("parameters", shape()),
+            ],
+        ),
+        function(
+            "__aura_weights_names",
+            vec![borrow_param("path", text())],
+            outcome(type_ref("list", vec![text()])),
+        ),
+        function(
+            "__aura_weights_load",
+            vec![
+                borrow_param("path", text()),
+                borrow_param("name", text()),
+                borrow_param("dtype", int64()),
+                borrow_param("device", int64()),
+            ],
+            outcome(node()),
+        ),
+        function(
+            "__aura_weights_put",
+            vec![
+                borrow_param("path", text()),
+                borrow_param("name", text()),
+                borrow_param("node", node()),
+            ],
+            type_ref("None", Vec::new()),
+        ),
+        function(
+            "__aura_weights_write",
+            vec![borrow_param("path", text())],
+            outcome(int64()),
+        ),
+        function(
+            "__aura_filled",
+            vec![
+                borrow_param("shape", shape()),
+                borrow_param("fill", int64()),
+                borrow_param("seed", int64()),
+                borrow_param("dtype", int64()),
+                borrow_param("device", int64()),
+            ],
+            node(),
+        ),
+    ];
+    for (suffix, dtype) in [
+        ("i32", "int32"),
+        ("i64", "int64"),
+        ("f32", "float32"),
+        ("f64", "float64"),
+        ("bool", "bool"),
+    ] {
+        let element = || type_ref(dtype, Vec::new());
+        let array = || type_ref("Array", vec![element()]);
+        functions.push(function(
+            &format!("__aura_from_array_{suffix}"),
+            vec![
+                borrow_param("values", array()),
+                borrow_param("device", int64()),
+            ],
+            node(),
+        ));
+        functions.push(on_node(
+            &format!("__aura_to_array_{suffix}"),
+            Vec::new(),
+            array(),
+        ));
+        functions.push(on_node(
+            &format!("__aura_item_{suffix}"),
+            Vec::new(),
+            element(),
+        ));
+        functions.push(function(
+            &format!("__aura_full_{suffix}"),
+            vec![
+                borrow_param("shape", shape()),
+                borrow_param("value", element()),
+                borrow_param("dtype", int64()),
+                borrow_param("device", int64()),
+            ],
+            node(),
+        ));
+    }
+    let mut namespace = function_only_namespace("tensor", functions);
+    // Device memory. `std/tensor.au` keeps one in each `Tensor[T]`.
+    let memory = class_info("tensor", "Node");
+    namespace
+        .classes
+        .insert(memory.decl.name.clone(), memory.clone());
+    namespace
+        .all_classes
+        .insert(memory.decl.name.clone(), memory);
+    namespace
+}
+
 fn time_namespace() -> ModuleNamespace {
     let text = || type_ref("str", Vec::new());
     let int64 = || type_ref("int64", Vec::new());
@@ -2756,6 +2949,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "regex" => Some(regex_namespace()),
         "http" => Some(http_namespace()),
         "time" => Some(time_namespace()),
+        "tensor" => Some(tensor_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2770,8 +2964,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 }
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
-    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "json", "iter", "toml",
-    "metrics", "log", "trace", "random",
+    "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "tensor", "json",
+    "iter", "toml", "metrics", "log", "trace", "random",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -2899,6 +3093,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "http"
             | "regex"
             | "time"
+            | "tensor"
             | "json"
             | "iter"
             | "prelude"
@@ -2920,8 +3115,8 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
-        "gzip", "regex", "time", "http", "json", "iter", "prelude", "simd", "toml", "log",
-        "metrics", "trace",
+        "gzip", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd", "toml",
+        "log", "metrics", "trace",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

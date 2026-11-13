@@ -3170,6 +3170,7 @@ impl MirRuntime {
             Value::HttpListener(_) => Some(Type::Named("net.HttpListener".to_string(), Vec::new())),
             Value::HttpExchange(_) => Some(Type::Named("net.HttpExchange".to_string(), Vec::new())),
             Value::HttpResponse(_) => Some(Type::Named("http.Stream".to_string(), Vec::new())),
+            Value::Tensor(_) => Some(Type::Named("tensor.Node".to_string(), Vec::new())),
             Value::WebSocketListener(_) => {
                 Some(Type::Named("net.WebSocketListener".to_string(), Vec::new()))
             }
@@ -4457,6 +4458,7 @@ impl MirRuntime {
             }
             Value::HttpExchange(_) => Ok(None),
             Value::HttpResponse(_) => Ok(None),
+            Value::Tensor(_) => Ok(None),
             Value::WebSocketListener(_) => Ok(None),
             Value::WebSocket(socket) => {
                 let _ = socket.close();

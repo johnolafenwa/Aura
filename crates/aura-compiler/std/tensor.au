@@ -1,0 +1,1214 @@
+# The Aura-source part of the builtin `tensor` module. The compiler checks
+# this file as module `tensor` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. A `Tensor[T]` holds a
+# `tensor.Node`: memory that a device owns. Every operation is a host call
+# on nodes, so the same source runs on the CPU device and on a GPU.
+import tensor
+
+
+public trait Sub[Rhs, Out]:
+    """Subtraction of `Rhs`, producing `Out`. `-` calls `sub` when no builtin
+    subtraction applies."""
+    def sub(self, rhs: Rhs) -> Out
+
+
+public trait Mul[Rhs, Out]:
+    """Multiplication by `Rhs`, producing `Out`. `*` calls `mul` when no
+    builtin multiplication applies."""
+    def mul(self, rhs: Rhs) -> Out
+
+
+public trait Div[Rhs, Out]:
+    """Division by `Rhs`, producing `Out`. `/` calls `div` when no builtin
+    division applies."""
+    def div(self, rhs: Rhs) -> Out
+
+
+public trait Neg[Out]:
+    """Negation, producing `Out`. Unary `-` calls `neg` when no builtin
+    negation applies."""
+    def neg(self) -> Out
+
+
+public copy class Device:
+    """Where a tensor's memory lives and its operations run."""
+    kind: int64
+
+    public def cpu() -> Device:
+        """The CPU device. Every machine has it."""
+        return Device(kind=0)
+
+    public def metal() -> Device | None:
+        """The Metal GPU of this Mac, or `None` when there is none."""
+        if tensor.__aura_device_available(1):
+            return Device(kind=1)
+        return None
+
+    public def cuda() -> Device | None:
+        """The NVIDIA GPU of this machine, or `None` when there is none
+        with a driver and the CUDA libraries."""
+        if tensor.__aura_device_available(2):
+            return Device(kind=2)
+        return None
+
+    public def default() -> Device:
+        """The GPU when this machine has one Aura can use, else the CPU."""
+        if tensor.__aura_device_available(1):
+            return Device(kind=1)
+        if tensor.__aura_device_available(2):
+            return Device(kind=2)
+        return Device(kind=0)
+
+    public def name(self) -> str:
+        """`"cpu"`, `"metal"`, or `"cuda"`."""
+        if self.kind == 1:
+            return "metal"
+        if self.kind == 2:
+            return "cuda"
+        return "cpu"
+
+    public def is_gpu(self) -> bool:
+        return self.kind != 0
+
+
+public class Tensor[T]:
+    """Numbers of one dtype on a device. A tensor is never changed: each
+    operation gives a new one. Shapes follow the `Array` rules."""
+    node: tensor.Node
+
+    public def shape(self) -> list[int64]:
+        return tensor.__aura_shape(self.node)
+
+    public def len(self) -> int64:
+        """The number of elements."""
+        return tensor.__aura_len(self.node)
+
+    public def device(self) -> Device:
+        return Device(kind=tensor.__aura_device(self.node))
+
+    public def to(self, device: Device) -> Tensor[T]:
+        """This tensor on `device`. The elements are copied unless it is
+        already there."""
+        return Tensor[T](node=tensor.__aura_to_device(self.node, device.kind))
+
+    public def clone(self) -> Tensor[T]:
+        """Another handle to the same memory. Nothing is copied."""
+        return Tensor[T](node=tensor.__aura_share(self.node))
+
+    public def eval(self) -> None:
+        """Runs any work this tensor is still waiting on. A device failure
+        is reported here."""
+        tensor.__aura_eval(self.node)
+
+    public def reshape(self, shape: list[int64]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_reshape(self.node, shape))
+
+    public def flatten(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_reshape(self.node, [self.len()]))
+
+    public def transpose(self) -> Tensor[T]:
+        """The axes in reverse order."""
+        return Tensor[T](node=tensor.__aura_permute(self.node, list[int64]()))
+
+    public def permute(self, axes: list[int64]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_permute(self.node, axes))
+
+    public def matmul(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_matmul(self.node, other.node))
+
+    public def minimum(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, other.node, 16))
+
+    public def maximum(self, other: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, other.node, 17))
+
+    public def pow(self, exponent: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, exponent.node, 18))
+
+    public def powf(self, exponent: float64) -> Tensor[T]:
+        """Each element raised to one exponent."""
+        return Tensor[T](node=tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, exponent), 18))
+
+    public def clamp(self, low: float64, high: float64) -> Tensor[T]:
+        """Each element, or `low` where it is below `low`, or `high` where
+        it is above `high`."""
+        raised = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, low), 17)
+        return Tensor[T](node=tensor.__aura_binary(raised, tensor.__aura_scalar_like_f64(self.node, high), 16))
+
+    public def relu(self) -> Tensor[T]:
+        """Each element, or zero where it is negative."""
+        return Tensor[T](node=tensor.__aura_binary(self.node, tensor.__aura_scalar_like_i64(self.node, 0), 17))
+
+    public def abs(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 0))
+
+    public def sqrt(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 1))
+
+    public def exp(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 2))
+
+    public def log(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 3))
+
+    public def sin(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 6))
+
+    public def cos(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 7))
+
+    public def tanh(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 65))
+
+    public def sigmoid(self) -> Tensor[T]:
+        """`1 / (1 + exp(-x))` of each element."""
+        return Tensor[T](node=tensor.__aura_unary(self.node, 66))
+
+    public def erf(self) -> Tensor[T]:
+        """The error function of each element."""
+        return Tensor[T](node=tensor.__aura_unary(self.node, 67))
+
+    public def gelu(self) -> Tensor[T]:
+        """`x * (1 + erf(x / sqrt(2))) / 2` of each element."""
+        scaled = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, 0.7071067811865476), 2)
+        raised = tensor.__aura_binary(tensor.__aura_unary(scaled, 67), tensor.__aura_scalar_like_f64(self.node, 1.0), 0)
+        halved = tensor.__aura_binary(self.node, tensor.__aura_scalar_like_f64(self.node, 0.5), 2)
+        return Tensor[T](node=tensor.__aura_binary(halved, raised, 2))
+
+    public def slice(self, dim: int64, start: int64, stop: int64, step: int64 = 1) -> Tensor[T]:
+        """The entries `start` to `stop`, without `stop`, along `dim`,
+        `step` apart. A negative bound counts from the end."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 0, [dim, start, stop, step]))
+
+    public def expand(self, shape: list[int64]) -> Tensor[T]:
+        """This tensor repeated to `shape`, which its shape broadcasts
+        to."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 1, shape))
+
+    public def index_select(self, dim: int64, indices: Tensor[int64]) -> Tensor[T]:
+        """For each index, the entry at that place along `dim`. The
+        shape of `indices` takes the place of the axis."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, indices.node, 1, [dim]))
+
+    public def index_add(self, indices: Tensor[int64], size: int64, dim: int64 = 0) -> Tensor[T]:
+        """A tensor with `size` entries along `dim`, where entry `k` is
+        the sum of this tensor's entries whose index is `k`. The shape of
+        `indices` is this tensor's shape from `dim`."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, indices.node, 2, [dim, size]))
+
+    public def argmax(self, dim: int64 = -1) -> Tensor[int64]:
+        """The place of the largest element of each lane along `dim`."""
+        return Tensor[int64](node=tensor.__aura_node_op(self.node, 2, [dim]))
+
+    public def argmin(self, dim: int64 = -1) -> Tensor[int64]:
+        """The place of the smallest element of each lane along `dim`."""
+        return Tensor[int64](node=tensor.__aura_node_op(self.node, 3, [dim]))
+
+    public def requires_grad(self) -> Tensor[T]:
+        """This tensor as one that gradients are taken with respect to.
+        Float tensors only."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 4, list[int64]()))
+
+    public def detach(self) -> Tensor[T]:
+        """This tensor as a constant: no gradient passes through it."""
+        return Tensor[T](node=tensor.__aura_node_op(self.node, 5, list[int64]()))
+
+    public def gradient(self, of: Tensor[T]) -> Tensor[T]:
+        """The gradient of the sum of this tensor with respect to `of`,
+        a tensor made with `requires_grad()`, in the shape of `of`."""
+        return Tensor[T](node=tensor.__aura_pair_op(self.node, of.node, 3, list[int64]()))
+
+    public def backward(self) -> None:
+        """Adds the gradient of the sum of this tensor to the `grad` of
+        every `Parameter` it was computed from. The work waits, and runs
+        with the optimizer step that follows."""
+        tensor.__aura_node_op(self.node, 10, list[int64]())
+
+    public def softmax(self, dim: int64 = -1) -> Tensor[T]:
+        """Each lane along `dim` as positive numbers that sum to one."""
+        powers = tensor.__aura_unary(shifted(self.node, dim), 2)
+        return Tensor[T](node=tensor.__aura_binary(powers, reduce(powers, 0, dim, true), 3))
+
+    public def log_softmax(self, dim: int64 = -1) -> Tensor[T]:
+        """The logarithm of `softmax(dim)`, computed without overflow."""
+        moved = shifted(self.node, dim)
+        total = reduce(tensor.__aura_unary(moved, 2), 0, dim, true)
+        return Tensor[T](node=tensor.__aura_binary(moved, tensor.__aura_unary(total, 3), 1))
+
+    public def less(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 0))
+
+    public def less_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 1))
+
+    public def greater(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 2))
+
+    public def greater_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 3))
+
+    public def equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 4))
+
+    public def not_equal(self, other: Tensor[T]) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_compare(self.node, other.node, 5))
+
+    public def sum(self, dim: int64 | None = None, keepdim: bool = false) -> Tensor[T]:
+        """The sum of every element as a tensor of shape `[1]`, or of each
+        lane along `dim`. The order of the additions is not fixed. With
+        `keepdim`, the result has the tensor's rank, with length one on each
+        axis that was summed."""
+        return Tensor[T](node=reduce(self.node, 0, dim, keepdim))
+
+    public def min(self, dim: int64 | None = None, keepdim: bool = false) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 1, dim, keepdim))
+
+    public def max(self, dim: int64 | None = None, keepdim: bool = false) -> Tensor[T]:
+        return Tensor[T](node=reduce(self.node, 2, dim, keepdim))
+
+    public def mean(self, dim: int64 | None = None, keepdim: bool = false) -> Tensor[T]:
+        """The mean, in the tensor's own dtype. Float tensors only."""
+        return Tensor[T](node=reduce(self.node, 3, dim, keepdim))
+
+    public def to_int32(self) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_cast(self.node, 0))
+
+    public def to_int64(self) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_cast(self.node, 1))
+
+    public def to_float32(self) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_cast(self.node, 2))
+
+    public def to_float64(self) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_cast(self.node, 3))
+
+
+public class Parameter[T]:
+    """A float tensor that training replaces: a weight. It is the one
+    tensor type that changes in place. An optimizer holds handles to a
+    model's parameters, which only `parameters()` of a `mut` model gives
+    out, so the weights of a model not declared `mut` never change."""
+    slot: tensor.Node
+
+    public def __init__(self, value: Tensor[T]):
+        """A parameter that starts as `value`. Float tensors only."""
+        self.slot = tensor.__aura_node_op(value.node, 6, list[int64]())
+
+    public def value(self) -> Tensor[T]:
+        """The tensor the parameter holds now. A result computed from it
+        has a gradient with respect to it."""
+        return Tensor[T](node=tensor.__aura_node_op(self.slot, 7, list[int64]()))
+
+    @property
+    public def grad(self) -> Tensor[T]:
+        """The gradients `backward()` has added since the parameter was
+        last assigned or cleared: zeros when there are none."""
+        return Tensor[T](node=tensor.__aura_node_op(tensor.__aura_node_op(self.slot, 7, list[int64]()), 11, list[int64]()))
+
+    public def copy_(mut self, value: Tensor[T]) -> None:
+        """Replaces the tensor the parameter holds with `value`, of the
+        same shape, and clears `grad`. The parameter must be reached
+        through a `mut` binding."""
+        tensor.__aura_pair_op(self.slot, value.node, 4, list[int64]())
+
+    def zero_grad(self) -> None:
+        tensor.__aura_node_op(tensor.__aura_node_op(self.slot, 7, list[int64]()), 12, list[int64]())
+
+    def assign(self, value: Tensor[T]) -> None:
+        # Replaces the held tensor through any handle. Only the
+        # optimizers of this module call it, on handles that a `mut`
+        # model gave out.
+        tensor.__aura_pair_op(self.slot, value.node, 4, list[int64]())
+
+    def share(self) -> Parameter[T]:
+        # Another handle to the same parameter. Private: handles leave
+        # this module only through `parameters(mut self)`.
+        return Parameter[T](Tensor[T](node=tensor.__aura_share(self.slot)))
+
+
+public def evaluate[T](tensors: list[Tensor[T]]) -> None:
+    """Runs the work the tensors wait on, as one piece of work, so an
+    expression several of them share is computed once."""
+    if tensors.len() == 0:
+        return
+    mut at = 0
+    while at + 1 < tensors.len():
+        tensor.__aura_node_op(tensors[at].node, 8, list[int64]())
+        at += 1
+    tensor.__aura_node_op(tensors[at].node, 9, list[int64]())
+
+
+public def weight_names(path: str) -> Result[list[str], str]:
+    """The names of the tensors in the safetensors file at `path`, in the
+    file's order."""
+    return tensor.__aura_weights_names(path)
+
+
+public def load_float32(path: str, name: str, device: Device) -> Result[Tensor[float32], str]:
+    """The float tensor `name` of the safetensors file at `path`. A
+    tensor stored as `float16`, `bfloat16` or `float64` is converted."""
+    match own tensor.__aura_weights_load(path, name, 2, device.kind):
+        case Ok(node):
+            return Ok(Tensor[float32](node=node))
+        case Err(message):
+            return Err(message)
+
+
+public def load_int64(path: str, name: str, device: Device) -> Result[Tensor[int64], str]:
+    """The integer tensor `name` of the safetensors file at `path`."""
+    match own tensor.__aura_weights_load(path, name, 1, device.kind):
+        case Ok(node):
+            return Ok(Tensor[int64](node=node))
+        case Err(message):
+            return Err(message)
+
+
+public def save[T](path: str, names: list[str], tensors: list[Tensor[T]]) -> Result[int64, str]:
+    """Writes `tensors` under `names` as a safetensors file at `path`, and
+    gives the file's length in bytes."""
+    if names.len() != tensors.len():
+        return Err("`tensor.save` expects one name for each tensor")
+    mut at = 0
+    while at < names.len():
+        tensor.__aura_weights_put(path, names[at], tensors[at].node)
+        at += 1
+    return tensor.__aura_weights_write(path)
+
+
+public class Collector:
+    """The parameters of a model, gathered by `Module.collect`. Only this
+    module reads what a collector holds."""
+    names: list[str]
+    params: list[Parameter[float32]]
+    prefix: str
+
+    public def parameter(mut self, name: str, param: Parameter[float32]) -> None:
+        """Gathers `param`, a field called `name`."""
+        if self.prefix == "":
+            self.names.append(name.clone())
+        else:
+            self.names.append(self.prefix + "." + name)
+        self.params.append(param.share())
+
+    public def add[M: Module](mut self, name: str, module: M) -> None:
+        """Gathers the parameters of `module`, a field called `name`."""
+        saved = self.prefix.clone()
+        if saved == "":
+            self.prefix = name.clone()
+        else:
+            self.prefix = saved + "." + name
+        module.collect(self)
+        self.prefix = saved
+
+    public def add_list[M: Module](mut self, name: str, modules: list[M]) -> None:
+        """Gathers the parameters of each module of a list field called
+        `name`, under `name.0`, `name.1` and so on."""
+        mut at = 0
+        while at < modules.len():
+            view module = modules[at]
+            self.add(f"{name}.{at}", module)
+            at += 1
+
+
+def held_shape(params: list[Parameter[float32]], at: int64) -> list[int64]:
+    view param = params[at]
+    return param.value().shape()
+
+
+def stored_shape(state: dict[str, Tensor[float32]], name: str) -> list[int64]:
+    view found = state[name]
+    return found.shape()
+
+
+def assign_all(into: Collector, state: dict[str, Tensor[float32]]) -> None:
+    mut at = 0
+    while at < into.names.len():
+        view name = into.names[at]
+        view param = into.params[at]
+        view found = state[name]
+        param.assign(found.detach())
+        at += 1
+
+
+def load_all(into: Collector, state: dict[str, Tensor[float32]]) -> Result[int64, str]:
+    if state.len() != into.names.len():
+        return Err(f"`load_state_dict` expects {into.names.len()} tensors, found {state.len()}")
+    mut at = 0
+    while at < into.names.len():
+        name = into.names[at].clone()
+        if not (name in state):
+            return Err(f"`load_state_dict` found no tensor called `{name}`")
+        wanted = held_shape(into.params, at)
+        found = stored_shape(state, name)
+        if found != wanted:
+            return Err(f"`load_state_dict` expects `{name}` to have the shape {wanted}, found {found}")
+        at += 1
+    assign_all(into, state)
+    return Ok(into.names.len())
+
+
+def collected[M: Module](module: M) -> Collector:
+    mut into = Collector(names=list[str](), params=list[Parameter[float32]](), prefix="")
+    module.collect(into)
+    return into
+
+
+public trait Module:
+    """A part of a model that holds parameters: a layer, or a class whose
+    fields are layers. An implementation writes `collect`, and gets the
+    rest."""
+
+    def collect(self, into: mut Collector) -> None
+
+    def parameters(mut self) -> list[Parameter[float32]]:
+        """The model's parameters, for an optimizer. The model must be
+        declared `mut`: handing out its parameters lets them change."""
+        into = collected(self)
+        return into.params
+
+    def named_parameters(mut self) -> list[(str, Parameter[float32])]:
+        """Each parameter with its name, such as `hidden.weight`."""
+        into = collected(self)
+        mut all = list[(str, Parameter[float32])]()
+        mut at = 0
+        while at < into.names.len():
+            view param = into.params[at]
+            all.append((into.names[at].clone(), param.share()))
+            at += 1
+        return all
+
+    def state_dict(self) -> dict[str, Tensor[float32]]:
+        """The tensor each parameter holds now, by name."""
+        into = collected(self)
+        mut state = dict[str, Tensor[float32]]()
+        mut at = 0
+        while at < into.names.len():
+            view param = into.params[at]
+            state[into.names[at].clone()] = param.value().detach()
+            at += 1
+        return state
+
+    def load_state_dict(mut self, state: dict[str, Tensor[float32]]) -> Result[int64, str]:
+        """Replaces every parameter with the tensor `state` holds under
+        its name. Changes nothing when a name is missing, a name is not
+        a parameter, or a shape differs."""
+        into = collected(self)
+        return load_all(into, state)
+
+
+public trait Layer: Module:
+    """A module that maps one float tensor to another, so it can be a
+    step of a `Sequential`."""
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]
+
+
+public class Linear:
+    """`x.matmul(weight) + bias` over the last axis of `x`."""
+    public weight: Parameter[float32]
+    public bias: Parameter[float32]
+
+    public def __init__(self, in_features: int64, out_features: int64, seed: int64, device: Device):
+        """A layer from `in_features` to `out_features`, with weights
+        spread evenly between plus and minus `1 / sqrt(in_features)`."""
+        bound = 1.0 / (in_features as float64).sqrt()
+        self.weight = Parameter[float32]((rand([in_features, out_features], seed, device) * 2.0 - 1.0) * bound)
+        self.bias = Parameter[float32]((rand([out_features], seed + 1, device) * 2.0 - 1.0) * bound)
+
+
+
+
+impl Module for Linear:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+
+
+impl Layer for Linear:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        mut shape = x.shape()
+        last = shape.len() - 1
+        weight = self.weight.value()
+        flat = x.reshape([-1, shape[last]]).matmul(weight) + self.bias.value()
+        shape[last] = weight.shape()[1]
+        return flat.reshape(shape)
+
+
+public class Embedding:
+    """A row of `weight` for each index."""
+    public weight: Parameter[float32]
+
+    public def __init__(self, num_embeddings: int64, embedding_dim: int64, seed: int64, device: Device):
+        self.weight = Parameter[float32](randn([num_embeddings, embedding_dim], seed, device) * 0.02)
+
+    public def forward(self, indices: Tensor[int64]) -> Tensor[float32]:
+        return self.weight.value().index_select(0, indices)
+
+
+
+impl Module for Embedding:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+
+
+public class LayerNorm:
+    """Each lane along the last axis moved to mean zero and deviation
+    one, then scaled by `weight` and moved by `bias`."""
+    public weight: Parameter[float32]
+    public bias: Parameter[float32]
+    public eps: float64
+
+    public def __init__(self, normalized_shape: int64, device: Device):
+        self.weight = Parameter[float32](Tensor[float32].full([normalized_shape], 1.0, device))
+        self.bias = Parameter[float32](Tensor[float32].zeros([normalized_shape], device))
+        self.eps = 0.00001
+
+
+
+
+impl Module for LayerNorm:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+
+
+impl Layer for LayerNorm:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        centered = x - x.mean(-1, true)
+        spread = (centered * centered).mean(-1, true)
+        return centered / (spread + self.eps).sqrt() * self.weight.value() + self.bias.value()
+
+
+public def dropout(x: Tensor[float32], p: float64, seed: int64) -> Tensor[float32]:
+    """`x` with a share `p` of its elements, chosen by `seed`, set to
+    zero, and the others scaled up so the mean stays."""
+    kept = rand(x.shape(), seed, x.device()).greater_equal(x.scalar(p as float32))
+    return where(kept, x / (1.0 - p), x.scalar(0.0))
+
+
+public def scaled_dot_product_attention(query: Tensor[float32], key: Tensor[float32], value: Tensor[float32], is_causal: bool = false) -> Tensor[float32]:
+    """Scaled dot-product attention over the last two axes: for each
+    query row, the rows of `value` weighted by the softmax of the query's
+    products with the rows of `key`. With `is_causal`, row `i` attends to
+    rows `0` to `i` only."""
+    shape = query.shape()
+    rank = shape.len()
+    mut axes = list[int64]()
+    mut axis = 0
+    while axis < rank:
+        axes.append(axis)
+        axis += 1
+    axes[rank - 1] = rank - 2
+    axes[rank - 2] = rank - 1
+    mut scores = query.matmul(key.permute(axes)) * (1.0 / (shape[rank - 1] as float64).sqrt())
+    if is_causal:
+        rows = arange(shape[rank - 2], query.device())
+        columns = arange(key.shape()[rank - 2], query.device())
+        seen = rows.reshape([-1, 1]).greater_equal(columns.reshape([1, -1]))
+        scores = where(seen, scores, scores.scalar(-1.0e30))
+    return scores.softmax(-1).matmul(value)
+
+
+public class MultiheadAttention:
+    """Self-attention with several heads over a `[batch, length, width]`
+    tensor."""
+    public query: Linear
+    public key: Linear
+    public value: Linear
+    public output: Linear
+    public num_heads: int64
+
+    public def __init__(self, embed_dim: int64, num_heads: int64, seed: int64, device: Device):
+        self.query = Linear(embed_dim, embed_dim, seed, device)
+        self.key = Linear(embed_dim, embed_dim, seed + 2, device)
+        self.value = Linear(embed_dim, embed_dim, seed + 4, device)
+        self.output = Linear(embed_dim, embed_dim, seed + 6, device)
+        self.num_heads = num_heads
+
+    def split(self, x: Tensor[float32]) -> Tensor[float32]:
+        shape = x.shape()
+        return x.reshape([shape[0], shape[1], self.num_heads, shape[2] // self.num_heads]).permute([0, 2, 1, 3])
+
+    public def forward(self, x: Tensor[float32], is_causal: bool = false) -> Tensor[float32]:
+        mixed = scaled_dot_product_attention(self.split(self.query.forward(x)), self.split(self.key.forward(x)), self.split(self.value.forward(x)), is_causal)
+        return self.output.forward(mixed.permute([0, 2, 1, 3]).reshape(x.shape()))
+
+
+
+impl Module for MultiheadAttention:
+    def collect(self, into: mut Collector) -> None:
+        into.add("query", self.query)
+        into.add("key", self.key)
+        into.add("value", self.value)
+        into.add("output", self.output)
+
+
+public def one_hot(indices: Tensor[int64], num_classes: int64) -> Tensor[bool]:
+    """A mask with one more axis than `indices`, of length `num_classes`, that
+    holds at the place each index names."""
+    mut shape = indices.shape()
+    shape.append(1)
+    return arange(num_classes, indices.device()).equal(indices.reshape(shape))
+
+
+public def top_indices(x: Tensor[float32], count: int64) -> Tensor[int64]:
+    """The places of the `count` largest elements of each lane along the
+    last axis, largest first, as a last axis of length `count`."""
+    mut shape = x.shape()
+    last = shape.len() - 1
+    width = shape[last]
+    shape[last] = 1
+    mut left = x.detach()
+    mut found = list[Tensor[int64]]()
+    mut at = 0
+    while at < count:
+        place = left.argmax()
+        left = where(one_hot(place, width), left.scalar(-3.0e38), left)
+        found.append(place.reshape(shape))
+        at += 1
+    return cat(found, last)
+
+
+public def top_mask(x: Tensor[float32], count: int64) -> Tensor[bool]:
+    """A mask in the shape of `x` that holds at the `count` largest
+    elements of each lane along the last axis."""
+    width = x.shape()[x.shape().len() - 1]
+    mut left = x.detach()
+    mut taken = left.scalar(0.0)
+    mut at = 0
+    while at < count:
+        hot = one_hot(left.argmax(), width)
+        taken = taken + where(hot, left.scalar(1.0), left.scalar(0.0))
+        left = where(hot, left.scalar(-3.0e38), left)
+        at += 1
+    return taken.greater(left.scalar(0.5))
+
+
+public class MixtureOfExperts:
+    """Several two layer networks and a gate. For each row the gate keeps
+    its `active` highest scoring experts, and the result is their outputs
+    weighted by the softmax of those scores. Every expert runs on every
+    row, and a row's other experts have weight zero."""
+    public gate: Linear
+    public wide: list[Linear]
+    public narrow: list[Linear]
+    public active: int64
+
+    public def __init__(self, width: int64, hidden: int64, experts: int64, active: int64, seed: int64, device: Device):
+        mut wide: list[Linear] = []
+        mut narrow: list[Linear] = []
+        mut at = 0
+        while at < experts:
+            wide.append(Linear(width, hidden, seed + 2 + at * 4, device))
+            narrow.append(Linear(hidden, width, seed + 4 + at * 4, device))
+            at += 1
+        self.gate = Linear(width, experts, seed, device)
+        self.wide = wide
+        self.narrow = narrow
+        self.active = active
+
+    public def weights(self, x: Tensor[float32]) -> Tensor[float32]:
+        """The weight of each expert for each row of `x`, as a last axis
+        with one entry for each expert."""
+        scores = self.gate.forward(x)
+        return where(top_mask(scores, self.active), scores, scores.scalar(-1.0e30)).softmax(-1)
+
+
+
+
+impl Module for MixtureOfExperts:
+    def collect(self, into: mut Collector) -> None:
+        into.add("gate", self.gate)
+        into.add_list("wide", self.wide)
+        into.add_list("narrow", self.narrow)
+
+
+impl Layer for MixtureOfExperts:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        weights = self.weights(x)
+        last = x.shape().len() - 1
+        mut total = x.scalar(0.0)
+        mut at = 0
+        while at < self.wide.len():
+            view wide = self.wide[at]
+            view narrow = self.narrow[at]
+            total = total + narrow.forward(wide.forward(x).gelu()) * weights.slice(last, at, at + 1)
+            at += 1
+        return total
+
+
+public class Sequential:
+    """Layers applied one after another."""
+    public layers: list[dyn Layer]
+
+    public def __init__(self, layers: own list[dyn Layer]):
+        self.layers = layers
+
+
+impl Module for Sequential:
+    def collect(self, into: mut Collector) -> None:
+        mut at = 0
+        while at < self.layers.len():
+            view layer = self.layers[at]
+            saved = into.prefix.clone()
+            if saved == "":
+                into.prefix = f"{at}"
+            else:
+                into.prefix = f"{saved}.{at}"
+            layer.collect(into)
+            into.prefix = saved
+            at += 1
+
+
+impl Layer for Sequential:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        mut out = x.clone()
+        mut at = 0
+        while at < self.layers.len():
+            view layer = self.layers[at]
+            out = layer.forward(out)
+            at += 1
+        return out
+
+
+public class ReLU:
+    """`relu` as a layer."""
+
+
+impl Module for ReLU:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for ReLU:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return x.relu()
+
+
+public class GELU:
+    """`gelu` as a layer."""
+
+
+impl Module for GELU:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for GELU:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return x.gelu()
+
+
+public class SGD:
+    """Gradient descent: each parameter less `lr` times its gradient."""
+    params: list[Parameter[float32]]
+    public lr: float64
+
+    public def __init__(self, params: own list[Parameter[float32]], lr: float64):
+        self.params = params
+        self.lr = lr
+
+    public def zero_grad(mut self) -> None:
+        """Clears the gradient of every parameter. `step()` does this
+        too, so a loop needs it only to drop gradients it will not use."""
+        mut at = 0
+        while at < self.params.len():
+            view param = self.params[at]
+            param.zero_grad()
+            at += 1
+
+    public def step(mut self) -> None:
+        """Moves every parameter against its gradient and clears the
+        gradients. The loss, the gradients and every update run as one
+        piece of work."""
+        mut updates = list[Tensor[float32]]()
+        mut at = 0
+        while at < self.params.len():
+            view param = self.params[at]
+            updates.append(param.value().detach() - param.grad * self.lr)
+            at += 1
+        evaluate(updates)
+        at = 0
+        while at < self.params.len():
+            view param = self.params[at]
+            view update = updates[at]
+            param.assign(update)
+            at += 1
+
+    public def minimize(mut self, loss: Tensor[float32]) -> None:
+        """`loss.backward()` and `step()`."""
+        loss.backward()
+        self.step()
+
+
+public class AdamW:
+    """Adam with weight decay applied to the parameters themselves."""
+    params: list[Parameter[float32]]
+    public lr: float64
+    public weight_decay: float64
+    beta1: float64
+    beta2: float64
+    eps: float64
+    first: list[Tensor[float32]]
+    second: list[Tensor[float32]]
+    power1: float64
+    power2: float64
+
+    public def __init__(self, params: own list[Parameter[float32]], lr: float64 = 0.001, weight_decay: float64 = 0.01):
+        mut first = list[Tensor[float32]]()
+        mut second = list[Tensor[float32]]()
+        mut at = 0
+        while at < params.len():
+            view param = params[at]
+            current = param.value()
+            first.append(Tensor[float32].zeros(current.shape(), current.device()))
+            second.append(Tensor[float32].zeros(current.shape(), current.device()))
+            at += 1
+        self.params = params
+        self.lr = lr
+        self.weight_decay = weight_decay
+        self.beta1 = 0.9
+        self.beta2 = 0.999
+        self.eps = 0.00000001
+        self.first = first
+        self.second = second
+        self.power1 = 1.0
+        self.power2 = 1.0
+
+    public def zero_grad(mut self) -> None:
+        """Clears the gradient of every parameter. `step()` does this
+        too, so a loop needs it only to drop gradients it will not use."""
+        mut at = 0
+        while at < self.params.len():
+            view param = self.params[at]
+            param.zero_grad()
+            at += 1
+
+    public def step(mut self) -> None:
+        """Moves every parameter by one Adam step against its gradient
+        and clears the gradients. The loss, the gradients and every
+        update run as one piece of work."""
+        self.power1 = self.power1 * self.beta1
+        self.power2 = self.power2 * self.beta2
+        count = self.params.len()
+        mut work = list[Tensor[float32]]()
+        mut first = list[Tensor[float32]]()
+        mut second = list[Tensor[float32]]()
+        mut at = 0
+        while at < count:
+            view param = self.params[at]
+            view mean = self.first[at]
+            view square = self.second[at]
+            slope = param.grad
+            moved = mean * self.beta1 + slope * (1.0 - self.beta1)
+            spread = square * self.beta2 + slope * slope * (1.0 - self.beta2)
+            size = (spread / (1.0 - self.power2)).sqrt() + self.eps
+            work.append(param.value().detach() * (1.0 - self.lr * self.weight_decay) - moved / size * (self.lr / (1.0 - self.power1)))
+            first.append(moved)
+            second.append(spread)
+            at += 1
+        at = 0
+        while at < count:
+            view moved = first[at]
+            view spread = second[at]
+            work.append(moved.clone())
+            work.append(spread.clone())
+            at += 1
+        evaluate(work)
+        at = 0
+        while at < count:
+            view param = self.params[at]
+            view update = work[at]
+            param.assign(update)
+            at += 1
+        self.first = first
+        self.second = second
+
+    public def minimize(mut self, loss: Tensor[float32]) -> None:
+        """`loss.backward()` and `step()`."""
+        loss.backward()
+        self.step()
+
+
+def reduce(node: tensor.Node, reduction: int64, axis: int64 | None, keep: bool) -> tensor.Node:
+    mut shape = tensor.__aura_shape(node)
+    match axis:
+        case None:
+            made = tensor.__aura_reduce(node, reduction, 0, false)
+            if not keep:
+                return made
+            mut at = 0
+            while at < shape.len():
+                shape[at] = 1
+                at += 1
+            return tensor.__aura_reshape(made, shape)
+        case int64 as lane:
+            made = tensor.__aura_reduce(node, reduction, lane, true)
+            if not keep:
+                return made
+            if lane < 0:
+                shape[lane + shape.len()] = 1
+            else:
+                shape[lane] = 1
+            return tensor.__aura_reshape(made, shape)
+
+
+def shifted(node: tensor.Node, axis: int64) -> tensor.Node:
+    # Each lane less its largest element, which keeps `exp` from
+    # overflowing. The shift is a constant: it cancels in the gradient.
+    largest = tensor.__aura_node_op(reduce(node, 2, axis, true), 5, list[int64]())
+    return tensor.__aura_binary(node, largest, 1)
+
+
+public def cat[T](tensors: list[Tensor[T]], dim: int64 = 0) -> Tensor[T]:
+    """The tensors, one after another along `dim`."""
+    mut joined = tensor.__aura_share(tensors[0].node)
+    mut at = 1
+    while at < tensors.len():
+        joined = tensor.__aura_pair_op(joined, tensors[at].node, 0, [dim])
+        at += 1
+    return Tensor[T](node=joined)
+
+
+public def rand(shape: list[int64], seed: int64, device: Device) -> Tensor[float32]:
+    """Random floats spread evenly from zero up to, and not including,
+    one. A seed always gives the same tensor."""
+    return Tensor[float32](node=tensor.__aura_filled(shape, 0, seed, 2, device.kind))
+
+
+public def randn(shape: list[int64], seed: int64, device: Device) -> Tensor[float32]:
+    """Random floats of the normal distribution with mean zero and
+    deviation one. A seed always gives the same tensor."""
+    return Tensor[float32](node=tensor.__aura_filled(shape, 1, seed, 2, device.kind))
+
+
+public def arange(count: int64, device: Device) -> Tensor[int64]:
+    """The integers from zero up to, and not including, `count`."""
+    return Tensor[int64](node=tensor.__aura_filled([count], 2, 0, 1, device.kind))
+
+
+public def cross_entropy[T](logits: Tensor[T], targets: Tensor[int64]) -> Tensor[T]:
+    """The mean, over the rows of `logits`, of the negative logarithm of
+    the softmax entry that the row's target names. `logits` has one row
+    for each target and one column for each class."""
+    shape = tensor.__aura_shape(logits.node)
+    scores = logits.log_softmax(1)
+    classes = tensor.__aura_filled([shape[1]], 2, 0, 1, tensor.__aura_device(logits.node))
+    named = tensor.__aura_compare(classes, tensor.__aura_reshape(targets.node, [shape[0], 1]), 4)
+    zero = tensor.__aura_scalar_like_f64(scores.node, 0.0)
+    total = tensor.__aura_reduce(tensor.__aura_where(named, scores.node, zero), 0, 0, false)
+    scale = tensor.__aura_scalar_like_f64(scores.node, -1.0 / (shape[0] as float64))
+    return Tensor[T](node=tensor.__aura_binary(total, scale, 2))
+
+
+public def where[T](mask: Tensor[bool], input: Tensor[T], other: Tensor[T]) -> Tensor[T]:
+    """Each element of `input` where `mask` holds, else of `other`. The three shapes broadcast."""
+    return Tensor[T](node=tensor.__aura_where(mask.node, input.node, other.node))
+
+
+public trait Operand[T]:
+    """What can stand on the other side of a `Tensor[T]` in an operator or
+    an elementwise member: a `Tensor[T]`, or a number, which is used as a
+    tensor of one element of the tensor's dtype."""
+    def operand(self, like: tensor.Node) -> tensor.Node
+
+
+impl[T] Operand[T] for Tensor[T]:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_share(self.node)
+
+
+impl[T] Operand[T] for float64:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_f64(like, self)
+
+
+impl[T] Operand[T] for float32:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_f64(like, self as float64)
+
+
+impl[T] Operand[T] for int64:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_i64(like, self)
+
+
+impl[T] Operand[T] for int32:
+    def operand(self, like: tensor.Node) -> tensor.Node:
+        return tensor.__aura_scalar_like_i64(like, self as int64)
+
+
+impl[T, R: Operand[T]] Add[R, Tensor[T]] for Tensor[T]:
+    def add(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 0))
+
+
+impl[T] Add[Tensor[T], Tensor[T]] for float64:
+    def add(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 0))
+
+
+impl[T] Add[Tensor[T], Tensor[T]] for int64:
+    def add(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 0))
+
+
+impl[T, R: Operand[T]] Sub[R, Tensor[T]] for Tensor[T]:
+    def sub(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 1))
+
+
+impl[T] Sub[Tensor[T], Tensor[T]] for float64:
+    def sub(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 1))
+
+
+impl[T] Sub[Tensor[T], Tensor[T]] for int64:
+    def sub(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 1))
+
+
+impl[T, R: Operand[T]] Mul[R, Tensor[T]] for Tensor[T]:
+    def mul(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 2))
+
+
+impl[T] Mul[Tensor[T], Tensor[T]] for float64:
+    def mul(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 2))
+
+
+impl[T] Mul[Tensor[T], Tensor[T]] for int64:
+    def mul(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 2))
+
+
+impl[T, R: Operand[T]] Div[R, Tensor[T]] for Tensor[T]:
+    def div(self, rhs: R) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(self.node, rhs.operand(self.node), 3))
+
+
+impl[T] Div[Tensor[T], Tensor[T]] for float64:
+    def div(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_f64(rhs.node, self), rhs.node, 3))
+
+
+impl[T] Div[Tensor[T], Tensor[T]] for int64:
+    def div(self, rhs: Tensor[T]) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_binary(tensor.__aura_scalar_like_i64(rhs.node, self), rhs.node, 3))
+
+
+impl[T] Neg[Tensor[T]] for Tensor[T]:
+    def neg(self) -> Tensor[T]:
+        return Tensor[T](node=tensor.__aura_unary(self.node, 64))
+
+
+public trait Elements[A, E]:
+    """The members of a tensor that name its dtype: moving to and from an
+    `Array`, and single elements."""
+    def from_array(values: A, device: Device) -> Self
+    def full(shape: list[int64], value: E, device: Device) -> Self
+    def zeros(shape: list[int64], device: Device) -> Self
+    def to_array(self) -> A
+    def item(self) -> E
+    def scalar(self, value: E) -> Self
+
+
+impl Elements[Array[int32], int32] for Tensor[int32]:
+    def from_array(values: Array[int32], device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_from_array_i32(values, device.kind))
+
+    def full(shape: list[int64], value: int32, device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32(shape, value, 0, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32(shape, 0, 0, device.kind))
+
+    def to_array(self) -> Array[int32]:
+        return tensor.__aura_to_array_i32(self.node)
+
+    def item(self) -> int32:
+        return tensor.__aura_item_i32(self.node)
+
+    def scalar(self, value: int32) -> Tensor[int32]:
+        return Tensor[int32](node=tensor.__aura_full_i32([1], value, 0, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[int64], int64] for Tensor[int64]:
+    def from_array(values: Array[int64], device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_from_array_i64(values, device.kind))
+
+    def full(shape: list[int64], value: int64, device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64(shape, value, 1, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64(shape, 0, 1, device.kind))
+
+    def to_array(self) -> Array[int64]:
+        return tensor.__aura_to_array_i64(self.node)
+
+    def item(self) -> int64:
+        return tensor.__aura_item_i64(self.node)
+
+    def scalar(self, value: int64) -> Tensor[int64]:
+        return Tensor[int64](node=tensor.__aura_full_i64([1], value, 1, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[float32], float32] for Tensor[float32]:
+    def from_array(values: Array[float32], device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_from_array_f32(values, device.kind))
+
+    def full(shape: list[int64], value: float32, device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32(shape, value, 2, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32(shape, 0.0, 2, device.kind))
+
+    def to_array(self) -> Array[float32]:
+        return tensor.__aura_to_array_f32(self.node)
+
+    def item(self) -> float32:
+        return tensor.__aura_item_f32(self.node)
+
+    def scalar(self, value: float32) -> Tensor[float32]:
+        return Tensor[float32](node=tensor.__aura_full_f32([1], value, 2, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[float64], float64] for Tensor[float64]:
+    def from_array(values: Array[float64], device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_from_array_f64(values, device.kind))
+
+    def full(shape: list[int64], value: float64, device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64(shape, value, 3, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64(shape, 0.0, 3, device.kind))
+
+    def to_array(self) -> Array[float64]:
+        return tensor.__aura_to_array_f64(self.node)
+
+    def item(self) -> float64:
+        return tensor.__aura_item_f64(self.node)
+
+    def scalar(self, value: float64) -> Tensor[float64]:
+        return Tensor[float64](node=tensor.__aura_full_f64([1], value, 3, tensor.__aura_device(self.node)))
+
+
+impl Elements[Array[bool], bool] for Tensor[bool]:
+    def from_array(values: Array[bool], device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_from_array_bool(values, device.kind))
+
+    def full(shape: list[int64], value: bool, device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool(shape, value, 4, device.kind))
+
+    def zeros(shape: list[int64], device: Device) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool(shape, false, 4, device.kind))
+
+    def to_array(self) -> Array[bool]:
+        return tensor.__aura_to_array_bool(self.node)
+
+    def item(self) -> bool:
+        return tensor.__aura_item_bool(self.node)
+
+    def scalar(self, value: bool) -> Tensor[bool]:
+        return Tensor[bool](node=tensor.__aura_full_bool([1], value, 4, tensor.__aura_device(self.node)))

@@ -88,6 +88,10 @@ scope, terminology, authority, and conformance language.
 - [SIMD Module](/manual/simd): lane values of two, four, or eight floats
   that native code keeps in vector registers, with loads and stores over
   lists and results that are the same on every machine.
+- [Tensor Module](/manual/tensors): `Tensor[T]` values that live on a
+  device, the CPU or the Metal GPU of a Mac, with the `Array` shape rules,
+  one meaning on every device, and whole expressions run as one piece of
+  GPU work.
 - [Freestanding Builds](/manual/freestanding): objects with no runtime and
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to

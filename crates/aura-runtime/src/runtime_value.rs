@@ -75,6 +75,8 @@ pub mod host_builtins;
 pub mod http_client;
 #[path = "regex_host.rs"]
 pub mod regex_host;
+#[path = "tensor_host.rs"]
+pub mod tensor_host;
 #[path = "time_host.rs"]
 pub mod time_host;
 
@@ -86,6 +88,7 @@ pub use generator::{
 pub use http_client::HttpResponseValue;
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
+pub use tensor_host::{TensorDevice, TensorValue};
 
 type HttpHeaders = Vec<(String, String)>;
 type HttpRequestHead = (usize, String, String, HttpHeaders, HttpBodyFraming);
@@ -319,6 +322,7 @@ pub enum Value {
     HttpListener(HttpListenerValue),
     HttpExchange(HttpExchangeValue),
     HttpResponse(HttpResponseValue),
+    Tensor(TensorValue),
     WebSocketListener(WebSocketListenerValue),
     WebSocket(WebSocketValue),
     ProcessChild(ProcessChildValue),
@@ -6924,6 +6928,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::HttpListener(_) => "net.HttpListener".to_string(),
             Value::HttpExchange(_) => "net.HttpExchange".to_string(),
             Value::HttpResponse(_) => "http.Stream".to_string(),
+            Value::Tensor(_) => "tensor.Node".to_string(),
             Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
             Value::WebSocket(_) => "net.WebSocket".to_string(),
             Value::ProcessChild(_) => "process.Child".to_string(),
@@ -10920,6 +10925,7 @@ impl Clone for Value {
             Self::HttpListener(value) => Self::HttpListener(value.clone()),
             Self::HttpExchange(value) => Self::HttpExchange(value.clone()),
             Self::HttpResponse(value) => Self::HttpResponse(value.clone()),
+            Self::Tensor(value) => Self::Tensor(value.clone()),
             Self::WebSocketListener(value) => Self::WebSocketListener(value.clone()),
             Self::WebSocket(value) => Self::WebSocket(value.clone()),
             Self::ProcessChild(value) => Self::ProcessChild(value.clone()),
@@ -10966,6 +10972,7 @@ impl PartialEq for Value {
             (Value::HttpListener(left), Value::HttpListener(right)) => left == right,
             (Value::HttpExchange(left), Value::HttpExchange(right)) => left == right,
             (Value::HttpResponse(left), Value::HttpResponse(right)) => left == right,
+            (Value::Tensor(left), Value::Tensor(right)) => left == right,
             (Value::WebSocketListener(left), Value::WebSocketListener(right)) => left == right,
             (Value::WebSocket(left), Value::WebSocket(right)) => left == right,
             (Value::ProcessChild(left), Value::ProcessChild(right)) => left == right,
@@ -11205,6 +11212,7 @@ impl Value {
                         Value::HttpListener(_) => rendered.push_str("<http-listener>"),
                         Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
                         Value::HttpResponse(_) => rendered.push_str("<http-stream>"),
+                        Value::Tensor(_) => rendered.push_str("<tensor-node>"),
                         Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
                         Value::WebSocket(_) => rendered.push_str("<websocket>"),
                         Value::ProcessChild(_) => rendered.push_str("<process-child>"),

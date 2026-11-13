@@ -11448,11 +11448,22 @@ fn lower_trait_impl(
             trait_impl.for_type,
             method.decl.name
         );
+        // A default body the implementation inherits names what its
+        // trait's module sees, so it lowers in that module.
+        let inherited = !trait_impl
+            .decl
+            .methods
+            .iter()
+            .any(|written| written.name == method.decl.name);
+        let body_module = match program.traits.get(&trait_impl.trait_name) {
+            Some(trait_info) if inherited => trait_info.module_name.as_str(),
+            _ => module_name,
+        };
         if seen_function_names.insert(qualified_name.clone()) {
             functions.extend(lower_function(
                 program,
                 &qualified_name,
-                module_name,
+                body_module,
                 ClosureOwner::TraitImplMethod {
                     trait_name: trait_impl.trait_name.clone(),
                     for_type: trait_impl.for_type.to_string(),
@@ -26582,8 +26593,15 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                     }
+                    let written_type_args = match &object.kind {
+                        ExprKind::Specialize { type_args, .. } => type_args
+                            .iter()
+                            .map(|type_arg| self.lower_type_ref_with_provenance(type_arg))
+                            .collect::<Vec<_>>(),
+                        _ => Vec::new(),
+                    };
                     if let Some((function_name, params, param_passings)) = self
-                        .trait_impl_method_for_class_name(class_name, field)
+                        .trait_impl_method_for_class_name(class_name, &written_type_args, field)
                         .filter(|(_, method)| method.decl.receiver.is_none())
                         .map(|(trait_impl, method)| {
                             (
@@ -29330,8 +29348,16 @@ impl<'a> Lowerer<'a> {
                                     ExprKind::Name(name) => name,
                                     _ => unreachable!(),
                                 };
+                                // A class imported by name is the type its
+                                // own module's implementations are for.
+                                let type_name = self
+                                    .resolve_class_info(inner_name)
+                                    .map(|class| {
+                                        mir_class_type_name(self.program, class, inner_name)
+                                    })
+                                    .unwrap_or_else(|| inner_name.clone());
                                 Some(Type::Named(
-                                    inner_name.clone(),
+                                    type_name,
                                     type_args
                                         .iter()
                                         .map(|ty| self.lower_type_ref_with_provenance(ty))
@@ -30375,23 +30401,40 @@ impl<'a> Lowerer<'a> {
             .map(|(_, method, substitutions)| (method, substitutions))
     }
 
+    /// The implementation whose method `field` an associated call on
+    /// `class_name`, written with `type_args`, names. A class imported from
+    /// another module is the same class as its qualified name, and of two
+    /// implementations for different arguments of one generic class, only
+    /// the one for the arguments written applies.
     fn trait_impl_method_for_class_name(
         &self,
         class_name: &str,
+        type_args: &[Type],
         field: &str,
     ) -> Option<(crate::sema::TraitImplInfo, crate::sema::TraitImplMethodInfo)> {
+        let mut spellings = vec![class_name.to_string()];
+        if let Some(class) = self.resolve_class_info(class_name) {
+            spellings.push(class.decl.name.clone());
+            spellings.push(format!("{}.{}", class.module_name, class.decl.name));
+        }
         self.trait_impls_in_scope()
-            .filter_map(|trait_impl| match &trait_impl.for_type {
-                Type::Named(name, _) if name == class_name => {
-                    trait_impl.methods.get(field).cloned().map(|method| {
-                        (
-                            crate::sema::trait_impl_specificity(trait_impl),
-                            trait_impl.clone(),
-                            method,
-                        )
-                    })
+            .filter_map(|trait_impl| {
+                let Type::Named(name, impl_args) = &trait_impl.for_type else {
+                    return None;
+                };
+                if !spellings.contains(name) {
+                    return None;
                 }
-                _ => None,
+                if !type_args.is_empty() || impl_args.is_empty() {
+                    let actual = Type::Named(name.clone(), type_args.to_vec());
+                    self.trait_impl_substitutions(trait_impl, &actual)?;
+                }
+                let method = trait_impl.methods.get(field).cloned()?;
+                Some((
+                    crate::sema::trait_impl_specificity(trait_impl),
+                    trait_impl.clone(),
+                    method,
+                ))
             })
             .max_by_key(|(specificity, _, _)| *specificity)
             .map(|(_, trait_impl, method)| (trait_impl, method))

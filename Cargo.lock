@@ -68,6 +68,7 @@ version = "0.15.0"
 dependencies = [
  "aura-core",
  "base64",
+ "cc",
  "corosensei",
  "flate2",
  "getrandom 0.2.17",

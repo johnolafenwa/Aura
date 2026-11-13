@@ -40,6 +40,9 @@ windows-sys = { version = "0.59", features = ["Win32_Foundation",
 # Test hooks and corpora that aura-compiler's tests also use.
 test-support = []
 
+[build-dependencies]
+cc = "1"
+
 [dev-dependencies]
 rcgen = "0.13"
 
