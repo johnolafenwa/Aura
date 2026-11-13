@@ -278,7 +278,13 @@ fn read(path: &Path) -> String {
         .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error))
 }
 
+/// The expected text beside a fixture. A `<name>.windows.<extension>` file
+/// wins on Windows, for output that spells host paths.
 fn read_expected(path: &Path, extension: &str) -> String {
+    let windows_path = path.with_extension(format!("windows.{extension}"));
+    if cfg!(windows) && windows_path.is_file() {
+        return read(&windows_path);
+    }
     let expected_path = path.with_extension(extension);
     read(&expected_path)
 }
@@ -298,8 +304,25 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
+/// One spelling of line ends on every host, and of the path a diagnostic
+/// points at: the expected files spell it with forward slashes.
 fn normalize_newlines(text: &str) -> String {
-    text.replace("\r\n", "\n").trim_end().to_string()
+    let text = text.replace("\r\n", "\n");
+    if !cfg!(windows) {
+        return text.trim_end().to_string();
+    }
+    text.lines()
+        .map(|line| {
+            if line.trim_start().starts_with("-->") {
+                line.replace('\\', "/")
+            } else {
+                line.to_string()
+            }
+        })
+        .collect::<Vec<_>>()
+        .join("\n")
+        .trim_end()
+        .to_string()
 }
 
 fn normalize_workspace_path(text: &str) -> String {

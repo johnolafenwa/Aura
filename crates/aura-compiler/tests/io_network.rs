@@ -136,7 +136,8 @@ def main() -> int32:
             return 1
 
 "#,
-        path = file_path.display()
+        // Forward slashes, since a backslash starts an escape in Aura text.
+        path = file_path.display().to_string().replace('\\', "/")
     );
 
     let output = run_path_with_source(&entry, &source)
@@ -519,7 +520,8 @@ def main() -> int32:
             print(error)
             return 1
 "#,
-        path = file_path.display()
+        // Forward slashes, since a backslash starts an escape in Aura text.
+        path = file_path.display().to_string().replace('\\', "/")
     );
 
     let output =
