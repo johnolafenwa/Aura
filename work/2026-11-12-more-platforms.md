@@ -60,12 +60,16 @@ follow.
   slashes. One test stays Unix only because it compares `pwd` output
   with a directory path. A cached program that Windows refuses to load
   (errors 191, 192, 193, 216) is rebuilt.
+- CI job `windows-integration (compiler)`: the 60 integration suites of
+  the compiler and runtime crates. Fixtures that spell host paths carry a
+  `<name>.windows.stdout` expected file.
 - Local: `cargo check --target x86_64-pc-windows-gnu` type-checks the
   Windows code on Linux, and Wine runs the runtime tests.
 
 ## Open
 
-- The compiler's integration tests are being brought to green on
-  Windows in the `windows-integration (compiler)` job.
+- Speed on Windows and Linux arm64 is being measured by the `Platform
+  speed` workflow, which times the cross-language programs on hosted
+  runners.
 - No Windows speed measurements: the hosted runner is the only machine.
 - musl Linux and cross-compilation are not started.

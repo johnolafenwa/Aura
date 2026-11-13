@@ -13,9 +13,13 @@ Last updated: 2026-11-13
   archive script, an archive smoke test and a PowerShell installer.
 - Done 2026-11-13: the `aura` command's 474 integration tests pass on
   Windows in the `windows-integration (command)` CI job.
-- Open: compiler integration tests on Windows (job
-  `windows-integration (compiler)` added, being brought to green), speed
-  measurements, musl Linux, cross-compilation.
+- Done 2026-11-13: the compiler's and runtime's 60 integration suites
+  pass on Windows in the `windows-integration (compiler)` CI job. Two
+  Windows bugs fixed on the way: an endless wait on a huge timeout, and a
+  connect to `localhost` that used its whole deadline on the first address.
+- In progress: speed on Windows and Linux arm64, with the `Platform speed`
+  workflow timing the cross-language programs on hosted runners.
+- Open: musl Linux, cross-compilation.
 
 ## Freestanding builds (complete)
 

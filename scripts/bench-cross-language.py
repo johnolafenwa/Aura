@@ -45,6 +45,8 @@ REPORT_SCHEMA_VERSION = 1
 TIMING_PROFILE = 'cross-language'
 CHECK_PROFILE = 'dev'
 RUN_TIMEOUT_S = 1800
+# Windows names its executables with this suffix.
+EXE = '.exe' if os.name == 'nt' else ''
 CALLGRIND_TOTAL = re.compile(r'^==\d+== Collected : (\d+)$', re.MULTILINE)
 
 
@@ -57,7 +59,7 @@ def load_programs(path=MANIFEST):
 
 
 def resolve_aura():
-    for candidate in (ROOT / 'target/release/aura', ROOT / 'target/debug/aura'):
+    for candidate in (ROOT / f'target/release/aura{EXE}', ROOT / f'target/debug/aura{EXE}'):
         if candidate.is_file():
             return candidate
     sys.exit('no aura binary found; run cargo build --release -p aura first')
@@ -98,16 +100,27 @@ def build_rust(target, profile, names):
     run(rust_build_command(target, profile, names), 'Rust cross-language build', env=env,
         timeout=RUN_TIMEOUT_S)
     directory = 'debug' if profile == 'dev' else profile
-    return {name: target / directory / name for name in names}
+    return {name: target / directory / f'{name}{EXE}' for name in names}
 
 
-def build_aura(aura, names, output):
-    """Build the Aura versions with `aura build`; return each program's binary."""
+def build_aura(aura, names, output, failures=None):
+    """Build the Aura versions with `aura build`; return each program's binary.
+
+    With a `failures` list, a program that does not build is added to it and
+    left out of the result.
+    """
     binaries = {}
     for name in names:
-        binary = output / name
-        run([str(aura), 'build', '-o', str(binary), str(BENCH_DIR / name / f'{name}.au')],
-            f'aura build {name}', cwd=ROOT, timeout=RUN_TIMEOUT_S)
+        binary = output / f'{name}{EXE}'
+        try:
+            run([str(aura), 'build', '-o', str(binary), str(BENCH_DIR / name / f'{name}.au')],
+                f'aura build {name}', cwd=ROOT, timeout=RUN_TIMEOUT_S)
+        except BenchmarkError as error:
+            if failures is None:
+                raise
+            failures.append(f'{name}: {error}')
+            print(f'{name:<20} FAILED to build: {str(error).splitlines()[-1][:200]}', flush=True)
+            continue
         binaries[name] = binary
     return binaries
 
@@ -151,33 +164,50 @@ def check(programs, names, python, rust, aura, scratch):
     return failures
 
 
-def measure(programs, names, size, repetitions, python, rust, aura, scratch, callgrind):
-    """Time every version of every program; return one record per program."""
+def measure(programs, names, size, repetitions, python, rust, aura, scratch, callgrind,
+            failures=None):
+    """Time every version of every program; return one record per program.
+
+    With a `failures` list, a program that fails is added to it and the rest
+    still run.
+    """
     records = {}
     for name in names:
-        args = programs[name][size]
-        record = {'args': args, 'samples_s': {}, 'stdout': {}}
-        for language, command in commands(name, python, rust, aura).items():
-            samples = []
-            for _ in range(repetitions):
-                stdout, _, elapsed = run_once(command, args, f'{name} ({language})', scratch)
-                samples.append(elapsed)
-                previous = record['stdout'].setdefault(language, stdout)
-                if stdout != previous:
-                    raise BenchmarkError(f'{name} ({language}): output changed between runs')
-            record['samples_s'][language] = samples
-        if callgrind:
-            record['instructions'] = {}
-            for language in ('rust', 'aura'):
-                with tempfile.TemporaryDirectory(dir=scratch) as profile:
-                    prefix = [callgrind, '--tool=callgrind',
-                              f'--callgrind-out-file={pathlib.Path(profile) / "out"}']
-                    _, stderr, _ = run_once(commands(name, python, rust, aura)[language], args,
-                                            f'{name} ({language}, callgrind)', scratch, prefix)
-                record['instructions'][language] = callgrind_instructions(stderr)
-        records[name] = record
-        print(format_row(name, summarize_record(name, record)), flush=True)
+        try:
+            records[name] = measure_program(programs, name, size, repetitions, python, rust, aura,
+                                            scratch, callgrind)
+        except BenchmarkError as error:
+            if failures is None:
+                raise
+            failures.append(f'{name}: {error}')
+            print(f'{name:<20} FAILED: {str(error).splitlines()[0][:200]}', flush=True)
     return records
+
+
+def measure_program(programs, name, size, repetitions, python, rust, aura, scratch, callgrind):
+    """Time every version of one program; print and return its record."""
+    args = programs[name][size]
+    record = {'args': args, 'samples_s': {}, 'stdout': {}}
+    for language, command in commands(name, python, rust, aura).items():
+        samples = []
+        for _ in range(repetitions):
+            stdout, _, elapsed = run_once(command, args, f'{name} ({language})', scratch)
+            samples.append(elapsed)
+            previous = record['stdout'].setdefault(language, stdout)
+            if stdout != previous:
+                raise BenchmarkError(f'{name} ({language}): output changed between runs')
+        record['samples_s'][language] = samples
+    if callgrind:
+        record['instructions'] = {}
+        for language in ('rust', 'aura'):
+            with tempfile.TemporaryDirectory(dir=scratch) as profile:
+                prefix = [callgrind, '--tool=callgrind',
+                          f'--callgrind-out-file={pathlib.Path(profile) / "out"}']
+                _, stderr, _ = run_once(commands(name, python, rust, aura)[language], args,
+                                        f'{name} ({language}, callgrind)', scratch, prefix)
+            record['instructions'][language] = callgrind_instructions(stderr)
+    print(format_row(name, summarize_record(name, record)), flush=True)
+    return record
 
 
 def summarize_record(name, record):
@@ -225,6 +255,8 @@ def main():
     parser.add_argument('--callgrind', action='store_true',
                         help='also count Aura and Rust instructions under valgrind')
     parser.add_argument('--raw-json', type=pathlib.Path)
+    parser.add_argument('--keep-going', action='store_true',
+                        help='time the remaining programs after one fails, then exit 1')
     parser.add_argument('--rust-target-dir', type=pathlib.Path,
                         help='reuse this Cargo target directory (default: a fresh one)')
     parser.add_argument('programs', nargs='*')
@@ -246,7 +278,9 @@ def main():
         (work / 'runs').mkdir()
         profile = CHECK_PROFILE if args.check else TIMING_PROFILE
         rust = build_rust(args.rust_target_dir or work / 'rust-target', profile, names)
-        aura_binaries = build_aura(aura, names, work / 'aura')
+        failures = [] if args.keep_going and not args.check else None
+        aura_binaries = build_aura(aura, names, work / 'aura', failures)
+        names = [name for name in names if name in aura_binaries]
         if args.check:
             failures = check(programs, names, args.python, rust, aura_binaries, work / 'runs')
             if failures:
@@ -255,7 +289,7 @@ def main():
             return
         print(HEADER, flush=True)
         records = measure(programs, names, args.size, args.repetitions, args.python, rust,
-                          aura_binaries, work / 'runs', callgrind)
+                          aura_binaries, work / 'runs', callgrind, failures)
     summary = {name: summarize_record(name, record) for name, record in records.items()}
     if args.raw_json:
         commit = subprocess.check_output(['git', 'rev-parse', 'HEAD'], cwd=ROOT, text=True).strip()
@@ -266,6 +300,8 @@ def main():
                   'repetitions': args.repetitions, 'machine': platform.platform(),
                   'records': records, 'summary': summary}
         args.raw_json.write_text(json.dumps(report, indent=2, sort_keys=True) + '\n')
+    if failures:
+        sys.exit(f'{len(failures)} program(s) failed:\n' + '\n'.join(failures))
 
 
 if __name__ == '__main__':
