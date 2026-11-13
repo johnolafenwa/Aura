@@ -7,6 +7,23 @@ in this file.
 
 ## Unreleased
 
+- `aura build --freestanding -o kernel.o kernel.au` writes one
+  relocatable object that needs no Aura runtime and no operating system,
+  for kernels, firmware, and routines linked into C programs. `--target`
+  picks `x86_64-unknown-none`, `aarch64-unknown-none`, or
+  `riscv64gc-unknown-none-elf`. The program holds fixed-width numbers,
+  `bool`, classes of those, and unions with `None`. A failed check calls
+  `aura_trap`, which the program defines. `aura check --freestanding`
+  reports anything else as `AU2052`. See the Freestanding Builds manual
+  page.
+- New `mem` module: `read_uint32(address)`, `write_uint32(address, value)`
+  and the same for 8, 16, and 64 bits, `volatile_` forms for device
+  registers, atomic load, store, swap, add, and compare-exchange for 32
+  and 64 bits, and `fence()`. Each call is one instruction in native
+  code. Importing it needs `allow_ffi = true`.
+- `export "C" def name(...)` defines a function that C code calls by
+  name. Parameters and the result are scalars, and a `mut` parameter is a
+  C pointer.
 - The `tensor` module has gradients, with PyTorch's names.
   `loss.backward()` adds to the `grad` of each `Parameter`, and an
   optimizer's `step()` runs the loss, the gradients and the new weights

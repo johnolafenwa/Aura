@@ -422,6 +422,68 @@ fn ffi_type_ref_is_raw_pointer(ty: &TypeRef) -> bool {
     )
 }
 
+/// Checks the shape of an `export "C" def`: a plain module-level function
+/// whose parameters and result cross the C boundary as scalars.
+fn validate_exported_function(
+    function: &FunctionDecl,
+    signature: &FunctionSignature,
+    return_type: &Type,
+) -> Result<()> {
+    let name = &function.name;
+    let shape = |what: &str| {
+        Err(Diagnostic::coded_at(
+            "AU2005",
+            function.span,
+            format!("exported function `{name}` cannot {what}"),
+        )
+        .with_help("an `export \"C\"` function is a plain function of scalar parameters that C code can call by its name"))
+    };
+    if !function.type_params.is_empty() {
+        return shape("have type parameters");
+    }
+    if !function.decorators.is_empty() {
+        return shape("have decorators");
+    }
+    if function.view_return.is_some() {
+        return shape("return a view");
+    }
+    if function.params.iter().any(|param| param.default.is_some()) {
+        return shape("have parameter defaults");
+    }
+    for ((param, ty), passing) in function
+        .params
+        .iter()
+        .zip(&signature.params)
+        .zip(&signature.param_passings)
+    {
+        if !ffi_scalar_type(ty) {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                param.span,
+                format!(
+                    "parameter `{}` of exported function `{name}` must be a scalar or a `mut` scalar, found `{}`",
+                    param.name,
+                    match passing {
+                        ReceiverKind::BorrowMut => format!("mut {ty}"),
+                        _ => ty.to_string(),
+                    }
+                ),
+            )
+            .with_help("the scalars are `bool`, `int8` to `int64`, `uint8` to `uint64`, `float32`, and `float64`; a `mut` scalar is a pointer to one in C, and any other address is a `uint64`"));
+        }
+    }
+    if *return_type != Type::Unit && !ffi_scalar_type(return_type) {
+        return Err(Diagnostic::coded_at(
+            "AU2002",
+            function.span,
+            format!(
+                "exported function `{name}` must return a scalar or `None`, found `{return_type}`"
+            ),
+        ));
+    }
+    Ok(())
+}
+
 fn ffi_scalar_type(ty: &Type) -> bool {
     ffi_scalar(ty).is_some()
 }
@@ -3670,6 +3732,9 @@ impl<'a> FunctionChecker<'a> {
             self.canonical_type_names,
             &type_param_scope,
         )?;
+        if function.export.is_some() {
+            validate_exported_function(function, &function_info.signature, &return_type)?;
+        }
         let checker = self
             .with_type_params(type_param_scope.clone(), type_param_bounds)
             .with_return_type(return_type.clone())

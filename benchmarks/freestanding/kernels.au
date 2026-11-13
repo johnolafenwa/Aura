@@ -1,0 +1,79 @@
+# Five routines over machine words, built with `aura build --freestanding`.
+# `kernels.c` and `kernels.rs` hold the same routines.
+
+copy class Body:
+    x: float64
+    y: float64
+    vx: float64
+    vy: float64
+
+def step(body: Body, dt: float64) -> Body:
+    r2 = body.x * body.x + body.y * body.y
+    inverse = 1.0 / (r2 * sqrt(r2))
+    vx = body.vx - body.x * inverse * dt
+    vy = body.vy - body.y * inverse * dt
+    return Body(x=body.x + vx * dt, y=body.y + vy * dt, vx=vx, vy=vy)
+
+export "C" def aura_crc32(count: uint32) -> uint32:
+    mut crc: uint32 = 4294967295
+    mut i: uint32 = 0
+    while i < count:
+        crc = crc ^ (i & 255)
+        mut bit = 0
+        while bit < 8:
+            if crc & 1 == 1:
+                crc = (crc >> 1) ^ 3988292384
+            else:
+                crc = crc >> 1
+            bit = bit + 1
+        i = i + 1
+    return crc ^ 4294967295
+
+export "C" def aura_collatz(limit: uint64) -> uint64:
+    mut total: uint64 = 0
+    mut start: uint64 = 1
+    while start < limit:
+        mut n = start
+        while n != 1:
+            if n % 2 == 0:
+                n = n // 2
+            else:
+                n = 3 * n + 1
+            total = total + 1
+        start = start + 1
+    return total
+
+export "C" def aura_isqrt_sum(limit: uint64) -> uint64:
+    mut total: uint64 = 0
+    mut value: uint64 = 1
+    while value < limit:
+        mut guess = value
+        mut next = (guess + 1) // 2
+        while next < guess:
+            guess = next
+            next = (guess + value // guess) // 2
+        total = total + guess
+        value = value + 1
+    return total
+
+export "C" def aura_gcd_sum(limit: int64) -> int64:
+    mut total: int64 = 0
+    mut a: int64 = 1
+    while a < limit:
+        mut x = a
+        mut y = limit - a
+        while y != 0:
+            rest = x % y
+            x = y
+            y = rest
+        total = total + x
+        a = a + 1
+    return total
+
+export "C" def aura_orbit(steps: int64) -> float64:
+    mut body = Body(x=1.0, y=0.0, vx=0.0, vy=1.0)
+    mut i: int64 = 0
+    while i < steps:
+        body = step(body, 0.001)
+        i = i + 1
+    return body.x * body.x + body.y * body.y

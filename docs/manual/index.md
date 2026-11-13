@@ -92,6 +92,10 @@ scope, terminology, authority, and conformance language.
   device, the CPU or the Metal GPU of a Mac, with the `Array` shape rules,
   one meaning on every device, and whole expressions run as one piece of
   GPU work.
+- [Freestanding Builds](/manual/freestanding): objects with no runtime and
+  no operating system, exported C functions, and the trap hook.
+- [Memory Module](/manual/mem): plain, volatile, and atomic access to
+  integers at a raw address.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.

@@ -267,6 +267,11 @@ pub const DIAGNOSTIC_CODE_REGISTRY: &[DiagnosticCodeInfo] = &[
         title: "invalid trait object use",
     },
     DiagnosticCodeInfo {
+        code: "AU2052",
+        band: "names/types",
+        title: "not available in a freestanding build",
+    },
+    DiagnosticCodeInfo {
         code: "AU2999",
         band: "names/types",
         title: "general compile-time rejection",

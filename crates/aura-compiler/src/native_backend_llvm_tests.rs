@@ -272,6 +272,62 @@ fn use_var_follows_sealed_single_predecessors() {
 }
 
 #[test]
+fn memory_accesses_lower_to_volatile_and_atomic_instructions() {
+    use crate::native_backend::{MemoryAccess, Val};
+    let mut module = module();
+    let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);
+    define(&mut module, "touch", Linkage::Export, &sig, |builder| {
+        let entry = builder.create_block();
+        builder.append_block_params_for_function_params(entry);
+        builder.switch_to_block(entry);
+        let params = builder.block_params(entry);
+        let (address, value) = (params[0], params[1]);
+        let mut access =
+            |access, width, operands: &[Val]| builder.memory_access(access, width, operands);
+        let plain = access(MemoryAccess::Read, types::I16, &[address]).expect("a read");
+        access(MemoryAccess::Write, types::I64, &[address, plain]);
+        let first = access(MemoryAccess::VolatileRead, types::I32, &[address]).expect("a read");
+        let second = access(MemoryAccess::VolatileRead, types::I32, &[address]).expect("a read");
+        access(MemoryAccess::VolatileWrite, types::I8, &[address, first]);
+        access(MemoryAccess::VolatileWrite, types::I8, &[address, second]);
+        let loaded = access(MemoryAccess::AtomicLoad, types::I64, &[address]).expect("a load");
+        access(MemoryAccess::AtomicStore, types::I32, &[address, loaded]);
+        let swapped =
+            access(MemoryAccess::AtomicSwap, types::I32, &[address, value]).expect("a swap");
+        let added =
+            access(MemoryAccess::AtomicAdd, types::I64, &[address, swapped]).expect("an add");
+        let previous = access(
+            MemoryAccess::AtomicCompareExchange,
+            types::I32,
+            &[address, added, value],
+        )
+        .expect("an exchange");
+        assert_eq!(access(MemoryAccess::Fence, types::I64, &[]), None);
+        builder.return_(&[previous]);
+    });
+
+    let ir = ir(&module);
+    for expected in [
+        "load i16, ptr %",
+        "align 1",
+        "load volatile i32, ptr %",
+        "store volatile i8 %",
+        "load atomic i64, ptr %",
+        "seq_cst, align 8",
+        "store atomic i32 %",
+        "atomicrmw xchg ptr %",
+        "atomicrmw add ptr %",
+        "cmpxchg ptr %",
+        "fence seq_cst",
+        "zext i32 %",
+    ] {
+        assert!(ir.contains(expected), "expected `{expected}` in:\n{ir}");
+    }
+    assert_eq!(ir.matches("load volatile i32").count(), 2, "{ir}");
+    assert_eq!(ir.matches("store volatile i8").count(), 2, "{ir}");
+}
+
+#[test]
 fn traps_and_checked_division_reach_llvm_trap() {
     let mut module = module();
     let sig = signature(CallConv::C, &[types::I64, types::I64], &[types::I64]);

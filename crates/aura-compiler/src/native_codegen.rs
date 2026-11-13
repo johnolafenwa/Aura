@@ -4,11 +4,12 @@ use crate::ast::{BinaryOp, ReceiverKind, UnaryOp};
 use crate::diag::Span;
 use crate::ffi::FfiType;
 use crate::mir::{
-    ArithmeticTrap, BasicBlock, CallTarget, CleanupAction, CleanupCallee, Instruction,
+    ArithmeticTrap, AssertKind, BasicBlock, CallTarget, CleanupAction, CleanupCallee, Instruction,
     MethodCandidate, MethodDispatch, MirArg, MirClass, MirConstant, MirEnum, MirExternCall,
     MirFormatPart, MirFunction, MirMapEntry, MirModule, MirReceiverKind, Operand, Rvalue,
     Terminator, NATIVE_LOOP_SAFEPOINT_INTERVAL,
 };
+use crate::native_backend::FreestandingTarget;
 use crate::native_backend::{
     types, AliasClass, Blk, CallConv, DataDescription, DataHandle, DebugEncoding, DebugRecord,
     DebugVariable, DefineError, FloatCC, FuncHandle, FuncRef, FunctionBackend, FunctionSource,
@@ -73,6 +74,34 @@ pub fn emit_host_debug_objects_with_metadata(
     codegen.debug_info = true;
     codegen.module_backend()?.enable_debug_info();
     codegen.emit_units()
+}
+
+/// The relocatable object of a freestanding program for `target`
+/// (ADR-0094): the functions `module`'s exports reach, with no call into
+/// the Aura runtime. `Err` holds the constructs the program uses that
+/// need the runtime, as `AU2052` diagnostics, or one diagnostic for a
+/// failure of the code generator.
+pub fn emit_freestanding_object(
+    module: &MirModule,
+    program_path: &str,
+    program_source: &str,
+    target: FreestandingTarget,
+) -> std::result::Result<Vec<u8>, Vec<crate::diag::Diagnostic>> {
+    let module = freestanding::prepare(module)?;
+    let internal = |error: String| vec![freestanding::emitter_diagnostic(error)];
+    let module = validated_for_emission(&module).map_err(internal)?;
+    let object = NativeCodegen::for_target(&module, program_path, program_source, Some(target))
+        .and_then(NativeCodegen::emit)
+        .map_err(internal)?;
+    freestanding::check_object(&object, &module).map_err(internal)?;
+    Ok(object)
+}
+
+/// The constructs of `module` a freestanding build cannot compile, as
+/// `AU2052` diagnostics. Lower the program with source locations so each
+/// names its line.
+pub fn check_freestanding(module: &MirModule) -> Vec<crate::diag::Diagnostic> {
+    freestanding::prepare(module).err().unwrap_or_default()
 }
 
 /// `module` pruned, resolved, and validated, as the emitter takes it.
@@ -669,6 +698,9 @@ fn function_value_param_types(
 
 struct NativeCodegen<'a> {
     module: &'a MirModule,
+    /// The machine of a freestanding object (ADR-0094), or `None` for a
+    /// host object that links the runtime.
+    freestanding: Option<FreestandingTarget>,
     /// The locals each function states ownership for, by function name.
     explicit_locals: HashMap<String, crate::mir::ownership::ExplicitLocals>,
     reachable_blocks: HashMap<String, HashSet<String>>,
@@ -900,6 +932,17 @@ impl<'a> NativeCodegen<'a> {
         program_path: &str,
         program_source: &str,
     ) -> std::result::Result<Self, String> {
+        Self::for_target(module, program_path, program_source, None)
+    }
+
+    /// Prepares to emit `module` for the host, or for the machine of a
+    /// freestanding object.
+    fn for_target(
+        module: &'a MirModule,
+        program_path: &str,
+        program_source: &str,
+        freestanding: Option<FreestandingTarget>,
+    ) -> std::result::Result<Self, String> {
         let reachable_blocks = validate_module(module)?;
         // A program with no task-start operation cannot have a runnable sibling
         // for a loop to starve. Keep explicit MIR markers for portability, but
@@ -936,7 +979,10 @@ impl<'a> NativeCodegen<'a> {
             }
         }
 
-        let mut object = crate::native_backend::host_module_backend()?;
+        let mut object = match freestanding {
+            Some(target) => crate::native_backend::freestanding_module_backend(target)?,
+            None => crate::native_backend::host_module_backend()?,
+        };
 
         let mut runtime =
             RuntimeTable::try_build(|function| declare_runtime_helper(&mut *object, function))?;
@@ -978,7 +1024,13 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             functions.insert(function.name.clone(), func_id);
-            if leaf_variant(function, &classes) {
+            if freestanding.is_some() {
+                // Every body is frameless, and nothing enters a function
+                // through a thunk.
+                if small_leaf(function) {
+                    object.mark_inline(func_id);
+                }
+            } else if leaf_variant(function, &classes) {
                 let leaf_id = try_or_string_error!(
                     object.declare_function(
                         &mangle_leaf_symbol(&function.name),
@@ -996,31 +1048,34 @@ impl<'a> NativeCodegen<'a> {
                 object.mark_inline(func_id);
             }
             let thunk_signature = thunk_signature();
-            let thunk_id = try_or_string_error!(
-                object.declare_function(
-                    &mangle_thunk_symbol(&function.name),
-                    Linkage::Local,
-                    &thunk_signature,
-                ),
-                "failed to declare function thunk `{}`: {}",
-                function.name
-            );
-            function_thunks.insert(function.name.clone(), thunk_id);
-            let binder_signature = default_binder_signature();
-            let binder_id = try_or_string_error!(
-                object.declare_function(
-                    &mangle_default_binder_symbol(&function.name),
-                    Linkage::Local,
-                    &binder_signature,
-                ),
-                "failed to declare function default binder `{}`: {}",
-                function.name
-            );
-            function_default_binders.insert(function.name.clone(), binder_id);
-            for (cleanup_index, place) in collect_cleanup_places(function, function_reachable)
-                .into_iter()
-                .enumerate()
-            {
+            if freestanding.is_none() {
+                let thunk_id = try_or_string_error!(
+                    object.declare_function(
+                        &mangle_thunk_symbol(&function.name),
+                        Linkage::Local,
+                        &thunk_signature,
+                    ),
+                    "failed to declare function thunk `{}`: {}",
+                    function.name
+                );
+                function_thunks.insert(function.name.clone(), thunk_id);
+                let binder_signature = default_binder_signature();
+                let binder_id = try_or_string_error!(
+                    object.declare_function(
+                        &mangle_default_binder_symbol(&function.name),
+                        Linkage::Local,
+                        &binder_signature,
+                    ),
+                    "failed to declare function default binder `{}`: {}",
+                    function.name
+                );
+                function_default_binders.insert(function.name.clone(), binder_id);
+            }
+            let cleanup_places = match freestanding {
+                Some(_) => Vec::new(),
+                None => collect_cleanup_places(function, function_reachable),
+            };
+            for (cleanup_index, place) in cleanup_places.into_iter().enumerate() {
                 let cleanup_id = try_or_string_error!(
                     object.declare_function(
                         &mangle_cleanup_thunk_symbol(&function.name, &place, cleanup_index),
@@ -1090,7 +1145,10 @@ impl<'a> NativeCodegen<'a> {
         );
         let mut callback_thunks = Vec::new();
         for (index, key) in foreign::module_callbacks(module).into_iter().enumerate() {
-            let (entry, body) = foreign::callback_signatures(&key.1);
+            let (mut entry, body) = foreign::callback_signatures(&key.1);
+            if let Some(target) = freestanding {
+                entry = freestanding::entry_signature(&key.1, target);
+            }
             let symbol = mangle_symbol(&format!("{}_ffi_callback_{index}", key.0));
             let entry_id = try_or_string_error!(
                 object.declare_function(&symbol, Linkage::Local, &entry),
@@ -1106,6 +1164,7 @@ impl<'a> NativeCodegen<'a> {
         }
         Ok(Self {
             module,
+            freestanding,
             explicit_locals: crate::mir::ownership::explicit_locals(module),
             reachable_blocks,
             safepoints_enabled,
@@ -1172,6 +1231,9 @@ impl<'a> NativeCodegen<'a> {
 
     /// Defines every function and data object of the program.
     fn define_program(&mut self) -> std::result::Result<(), String> {
+        if self.freestanding.is_some() {
+            return self.define_freestanding_program();
+        }
         for function in self
             .module
             .functions
@@ -1390,21 +1452,27 @@ impl<'a> NativeCodegen<'a> {
             .source_path
             .as_deref()
             .unwrap_or(&self.program_path);
-        let descriptor = declare_frame_descriptor(
-            builder.module(),
-            &mut self.string_data,
-            &format!("aura_frame_{}", func_id.0),
-            function.span,
-            function_path.as_bytes(),
-            public_function_name.as_bytes(),
-        )?;
-        self.frame_descriptors.push(descriptor);
-        let descriptor = builder.import_data(descriptor);
-        let descriptor = builder.symbol_value(types::I64, descriptor);
+        let descriptor = if self.freestanding.is_some() {
+            // A freestanding function keeps no frame record.
+            builder.iconst(types::I64, 0)
+        } else {
+            let descriptor = declare_frame_descriptor(
+                builder.module(),
+                &mut self.string_data,
+                &format!("aura_frame_{}", func_id.0),
+                function.span,
+                function_path.as_bytes(),
+                public_function_name.as_bytes(),
+            )?;
+            self.frame_descriptors.push(descriptor);
+            let descriptor = builder.import_data(descriptor);
+            builder.symbol_value(types::I64, descriptor)
+        };
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
-        let frameless = leaf || frameless_leaf(function, &self.classes);
+        let frameless =
+            leaf || self.freestanding.is_some() || frameless_leaf(function, &self.classes);
         let (mut body, entered_in_runtime) = if frameless {
             (entry, builder.iconst(types::I64, 0))
         } else {
@@ -1632,6 +1700,12 @@ impl<'a> NativeCodegen<'a> {
             }
             call_slot += 1;
         }
+        if self.freestanding.is_some() {
+            // A write-through sink publishes a `mut` argument for the
+            // runtime's trap-time cleanup. A freestanding call only hands
+            // the updated values back.
+            mutable_param_indices.clear();
+        }
         // The write-through sink of each mutable parameter. A caller hands
         // sinks over through the runtime's frame flags, so a call whose
         // frame was pushed inline has none. The runtime fixes a call's
@@ -1727,6 +1801,10 @@ impl<'a> NativeCodegen<'a> {
             .source_path
             .clone()
             .unwrap_or_else(|| self.program_path.clone());
+        let current_function_path = match self.freestanding {
+            Some(_) => freestanding::trap_path(&current_function_path, &self.program_path),
+            None => current_function_path,
+        };
 
         let lookup_slots = lookups::lookup_payload_slots(function)
             .into_iter()
@@ -2165,6 +2243,8 @@ impl<'a> NativeCodegen<'a> {
             function_writeback_types: self.function_writeback_types.clone(),
             current_function_name,
             current_function_path,
+            freestanding: self.freestanding,
+            checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
             deferred_traps: (frameless
                 && defers_lane_traps(function)
@@ -3529,6 +3609,12 @@ fn direct_reverse_postorder(
 
 struct FunctionCompiler<'a> {
     builder: &'a mut dyn FunctionBackend,
+    /// The machine of a freestanding object, whose checks call the trap
+    /// hook in place of the runtime.
+    freestanding: Option<FreestandingTarget>,
+    /// Whether the range check being emitted is a cast's, which a
+    /// freestanding build reports under its own trap code.
+    checks_cast: bool,
     blocks: HashMap<String, Blk>,
     variables: HashMap<String, Vec<Var>>,
     variable_types: HashMap<String, DirectType>,
@@ -5723,6 +5809,24 @@ impl<'a> FunctionCompiler<'a> {
                 captures,
                 span,
                 kind,
+            } if self.freestanding.is_some() => {
+                // A freestanding build renders no message and no values:
+                // the hook gets the kind of check and where it failed.
+                let _ = (message, captures);
+                let (line, column) = self.span_values(Some(*span));
+                let code = match kind {
+                    AssertKind::Assert => freestanding::TRAP_ASSERT,
+                    _ => freestanding::TRAP_CONTRACT,
+                };
+                self.call_trap_hook(code, line, column);
+                self.builder.trap(TrapCode::User(1));
+                self.layout_scratch.clear();
+            }
+            Terminator::AssertFail {
+                message,
+                captures,
+                span,
+                kind,
             } => {
                 let message = match message {
                     Some(message) => {
@@ -5788,6 +5892,10 @@ impl<'a> FunctionCompiler<'a> {
             // The checker proved this path cannot run (for example the
             // impossible arm of a narrowed module-constant read).
             Terminator::Unreachable => {
+                if self.freestanding.is_some() {
+                    let (line, column) = self.span_values(None);
+                    self.call_trap_hook(freestanding::TRAP_UNREACHABLE, line, column);
+                }
                 self.builder.trap(TrapCode::User(2));
             }
         }
@@ -7038,7 +7146,11 @@ impl<'a> FunctionCompiler<'a> {
         if target.is_narrow_integer() {
             // A `uint64` word above `int64`'s range is read as unsigned, so
             // the range check sees it as large.
-            self.emit_narrow_bounds_check(target, value, source == ScalarKind::Uint64, span)?;
+            self.checks_cast = true;
+            let checked =
+                self.emit_narrow_bounds_check(target, value, source == ScalarKind::Uint64, span);
+            self.checks_cast = false;
+            checked?;
             return Ok(value);
         }
         // `int64` and `uint64` share the 63-bit range and every narrow
@@ -7112,16 +7224,21 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.switch_to_block(slow_block);
         self.builder.seal_block(slow_block);
         self.builder.set_cold_block(slow_block);
-        let source_unsigned = self
-            .builder
-            .iconst(types::I64, i64::from(source == ScalarKind::Uint64));
-        let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
         let (line, column) = self.span_values(span);
-        let inst = self.builder.call(
-            self.runtime[RuntimeFn::CastIntegerToFloat],
-            &[value, source_unsigned, target_kind, line, column],
-        );
-        let slow = inst.results[0];
+        let slow = if self.freestanding.is_some() {
+            let unsigned = source == ScalarKind::Uint64;
+            self.freestanding_wide_integer_to_float(value, unsigned, exact_bits, line, column)
+        } else {
+            let source_unsigned = self
+                .builder
+                .iconst(types::I64, i64::from(source == ScalarKind::Uint64));
+            let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
+            let inst = self.builder.call(
+                self.runtime[RuntimeFn::CastIntegerToFloat],
+                &[value, source_unsigned, target_kind, line, column],
+            );
+            inst.results[0]
+        };
         self.builder.jump(join_block, &[slow]);
 
         self.builder.switch_to_block(join_block);
@@ -7177,12 +7294,18 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.set_cold_block(slow_block);
         let target_kind = self.builder.iconst(types::I64, target.direct_kind_word());
         let (line, column) = self.span_values(span);
-        let inst = self.builder.call(
-            self.runtime[RuntimeFn::CastFloatToInteger],
-            &[value, target_kind, line, column],
-        );
-        let slow = inst.results[0];
-        self.builder.jump(join_block, &[slow]);
+        if self.freestanding.is_some() {
+            // The value is out of range, an infinity, or NaN.
+            self.call_trap_hook(freestanding::TRAP_CAST, line, column);
+            self.builder.trap(TrapCode::IntegerOverflow);
+        } else {
+            let inst = self.builder.call(
+                self.runtime[RuntimeFn::CastFloatToInteger],
+                &[value, target_kind, line, column],
+            );
+            let slow = inst.results[0];
+            self.builder.jump(join_block, &[slow]);
+        }
 
         self.builder.switch_to_block(join_block);
         self.builder.seal_block(join_block);
@@ -7192,6 +7315,9 @@ impl<'a> FunctionCompiler<'a> {
     /// On a trap path of a frameless leaf, pushes the frame record the
     /// function skipped, so the trap's call chain names it.
     fn push_frameless_frame(&mut self) {
+        if self.freestanding.is_some() {
+            return;
+        }
         if let Some(descriptor) = self.frameless_descriptor {
             self.builder
                 .call(self.runtime[RuntimeFn::EnterCall], &[descriptor]);
@@ -7209,7 +7335,7 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(fail_block);
         self.builder.set_cold_block(fail_block);
         self.push_frameless_frame();
-        self.builder.call(self.runtime[function], args);
+        self.call_failure(function, args);
         self.builder.trap(TrapCode::IntegerOverflow);
         self.builder.switch_to_block(continue_block);
         self.builder.seal_block(continue_block);
@@ -7802,28 +7928,37 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.switch_to_block(slow_block);
                 self.builder.seal_block(slow_block);
                 self.builder.set_cold_block(slow_block);
-                let caller_owned = self.layout_scratch.clone();
-                let left = self.ensure_opaque(left)?;
-                let right = self.ensure_opaque(right)?;
-                let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
-                let float_width = self.builder.iconst(types::I64, 0);
                 let (line, column) = self.span_values(span);
-                let inst = self.builder.call(
-                    self.runtime[RuntimeFn::BinaryValue],
-                    &[
-                        opcode,
-                        left.values[0],
-                        right.values[0],
-                        float_width,
-                        line,
-                        column,
-                    ],
-                );
-                let boxed = self.owned_opaque_result(inst.results, direct_type_to_type(&ty));
-                let slow = self.coerce_value(boxed, &ty)?;
-                self.release_temporary_owned_since(&caller_owned);
-                self.layout_scratch = caller_owned;
-                self.builder.jump(join_block, &[slow.values[0]]);
+                if self.freestanding.is_some() {
+                    // The count is out of range, or the shift lost bits.
+                    let shift = self.builder.iconst(types::I64, freestanding::TRAP_SHIFT);
+                    let overflow = self.builder.iconst(types::I64, freestanding::TRAP_OVERFLOW);
+                    let code = self.builder.select(in_range, overflow, shift);
+                    self.call_trap_hook_with(code, line, column);
+                    self.builder.trap(TrapCode::IntegerOverflow);
+                } else {
+                    let caller_owned = self.layout_scratch.clone();
+                    let left = self.ensure_opaque(left)?;
+                    let right = self.ensure_opaque(right)?;
+                    let opcode = self.builder.iconst(types::I64, Self::binary_opcode(op));
+                    let float_width = self.builder.iconst(types::I64, 0);
+                    let inst = self.builder.call(
+                        self.runtime[RuntimeFn::BinaryValue],
+                        &[
+                            opcode,
+                            left.values[0],
+                            right.values[0],
+                            float_width,
+                            line,
+                            column,
+                        ],
+                    );
+                    let boxed = self.owned_opaque_result(inst.results, direct_type_to_type(&ty));
+                    let slow = self.coerce_value(boxed, &ty)?;
+                    self.release_temporary_owned_since(&caller_owned);
+                    self.layout_scratch = caller_owned;
+                    self.builder.jump(join_block, &[slow.values[0]]);
+                }
 
                 self.builder.switch_to_block(join_block);
                 self.builder.seal_block(join_block);
@@ -8153,8 +8288,8 @@ impl<'a> FunctionCompiler<'a> {
         let kind_code = self.builder.iconst(types::I64, kind as i64);
         let op_code = self.builder.iconst(types::I64, op as i64);
         let (line, column) = self.span_values(span);
-        self.builder.call(
-            self.runtime[RuntimeFn::FailIntegerOverflow],
+        self.call_failure(
+            RuntimeFn::FailIntegerOverflow,
             &[kind_code, op_code, left, right, line, column],
         );
         self.builder.trap(TrapCode::IntegerOverflow);
@@ -8183,8 +8318,7 @@ impl<'a> FunctionCompiler<'a> {
         // The runtime runs the registered exits after it records this
         // trap as primary, so a trapping exit cannot replace it.
         let (line, column) = self.span_values(span);
-        self.builder
-            .call(self.runtime[RuntimeFn::FailDivisionByZero], &[line, column]);
+        self.call_failure(RuntimeFn::FailDivisionByZero, &[line, column]);
         self.builder.trap(TrapCode::IntegerDivisionByZero);
         self.builder.seal_block(fail_block);
         self.builder.switch_to_block(continue_block);
@@ -8943,6 +9077,11 @@ impl<'a> FunctionCompiler<'a> {
             | FunctionOp::Sqrt
             | FunctionOp::Round => match self.compile_scalar_math(op, args)? {
                 Some(value) => Ok(value),
+                None if self.freestanding.is_some() => Err(freestanding::refusal(format!(
+                    "`{}` calls `{}` with arguments of kinds it cannot compare or convert in machine words",
+                    self.current_function_name,
+                    RuntimeOp::Function(op).name()
+                ))),
                 None => self.compile_plain_function_op(op, args),
             },
             FunctionOp::ParseInt32 | FunctionOp::ParseInt64 | FunctionOp::ParseFloat64
@@ -9320,6 +9459,9 @@ impl<'a> FunctionCompiler<'a> {
                 )?;
                 return self.coerce_value(text, &target);
             }
+        }
+        if let Some(value) = self.compile_memory_access(name, args)? {
+            return Ok(value);
         }
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
@@ -11840,15 +11982,12 @@ impl<'a> FunctionCompiler<'a> {
         self.push_frameless_frame();
         let (line, column) = self.span_values(span);
         if kind == ScalarKind::Int32 && !unsigned {
-            self.builder.call(
-                self.runtime[RuntimeFn::FailInt32Overflow],
-                &[value, line, column],
-            );
+            self.call_failure(RuntimeFn::FailInt32Overflow, &[value, line, column]);
         } else {
             let unsigned = self.builder.iconst(types::I64, i64::from(unsigned));
             let kind = self.builder.iconst(types::I64, kind.direct_kind_word());
-            self.builder.call(
-                self.runtime[RuntimeFn::FailNarrowOverflow],
+            self.call_failure(
+                RuntimeFn::FailNarrowOverflow,
                 &[value, unsigned, kind, line, column],
             );
         }
@@ -20328,6 +20467,11 @@ mod elements;
 mod enums;
 #[path = "native_codegen_foreign.rs"]
 mod foreign;
+#[path = "native_codegen_freestanding.rs"]
+mod freestanding;
+#[cfg(test)]
+#[path = "native_codegen_freestanding_tests.rs"]
+mod freestanding_tests;
 #[path = "native_codegen_json_literals.rs"]
 mod json_literals;
 #[path = "native_codegen_json_views.rs"]

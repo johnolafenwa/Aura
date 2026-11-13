@@ -326,6 +326,7 @@ fn callable_contract_decl(alias: &crate::ast::TypeAliasDecl) -> Result<FunctionD
         contracts: alias.contracts.clone(),
         spec: false,
         lemma: false,
+        export: None,
     })
 }
 
@@ -1679,6 +1680,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
                     contracts: extern_decl.contracts.clone(),
                     spec: false,
                     lemma: false,
+                    export: None,
                 }),
                 signature: FunctionSignature {
                     params,

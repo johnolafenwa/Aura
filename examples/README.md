@@ -231,6 +231,12 @@ seven real loopback requests.
 The helper modules under `modules/pkg/` support these examples. They are not
 standalone entrypoints.
 
+### `freestanding/`
+
+| Directory | Shows | Prints |
+| --- | --- | --- |
+| `kernel/` | A program for a machine with no operating system: `export "C" def` entry points, serial output and a spin lock through the `mem` module, and an `aura_trap` hook written in Aura. `run.sh riscv64` or `run.sh aarch64` builds it with `aura build --freestanding` and boots it under QEMU. | `p=168`, `c=111`, `r=1000`, `n=100`, `trap 1 main.au:154:13` |
+
 ### `packages/`
 
 Package examples are complete package trees with manifest-rooted entrypoints.
