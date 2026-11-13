@@ -699,7 +699,7 @@ pub struct MirModule {
     /// The native libraries the program's `extern "C"` functions come from,
     /// as its packages' manifests name them. The linker resolves them for a
     /// built program, and the MIR runtime loads them before it runs one.
-    #[serde(default, skip_serializing_if = "ForeignLinkPlan::is_empty")]
+    #[serde(default, skip_serializing_if = "ForeignLinkPlan::is_blank")]
     pub foreign_link: ForeignLinkPlan,
 }
 
@@ -10923,8 +10923,11 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
         push_extern_callback_contract_wrappers(program, &mut functions, top_level.as_ref());
     }
 
+    let mut foreign_link = program.foreign_link.clone();
+    foreign_link.exports = exported_functions(program);
+
     MirModule {
-        foreign_link: program.foreign_link.clone(),
+        foreign_link,
         constants,
         functions,
         classes,
@@ -11095,6 +11098,39 @@ fn lower_constant_initializer(
         return_type: constant.ty.clone(),
         default_return: default_return_operand(&constant.ty),
     })
+}
+
+/// The program's `export "C"` functions by MIR name, in name order: those
+/// of the root module, then those of every imported module.
+fn exported_functions(program: &Program) -> Vec<crate::package::ForeignExport> {
+    // The same walk as `push_imported_module_functions`, so every export
+    // names a function the module holds.
+    fn collect(namespace: &ModuleNamespace, exports: &mut BTreeMap<String, String>) {
+        for (name, function) in &namespace.all_functions {
+            if function.decl.export.is_some() {
+                exports.insert(
+                    imported_module_function_name(&function.module_name, name),
+                    function.decl.name.clone(),
+                );
+            }
+        }
+        for child in namespace.modules.values() {
+            collect(child, exports);
+        }
+    }
+    let mut exports = BTreeMap::new();
+    for function in program.functions.values() {
+        if function.module_name == program.module_name && function.decl.export.is_some() {
+            exports.insert(function.decl.name.clone(), function.decl.name.clone());
+        }
+    }
+    for namespace in program.module_registry.values() {
+        collect(namespace, &mut exports);
+    }
+    exports
+        .into_iter()
+        .map(|(function, symbol)| crate::package::ForeignExport { function, symbol })
+        .collect()
 }
 
 fn push_imported_module_functions(

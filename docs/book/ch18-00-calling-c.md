@@ -752,6 +752,9 @@ whose ownership the checker tracks, so a use after close or a double close is
 a compile error, and whose `drop` function closes the ones you forget. You have also seen where the compiler's help ends, at the
 boundary of the C code itself, and why FFI keeps that boundary small.
 
+The next section goes one step further down:
+[a program with no operating system under it](/book/ch18-01-without-an-operating-system).
+
 That completes the tour of the language and its tools. In
 [Chapter 19](/book/ch19-00-final-project) we put the pieces together in one
 last project: a supervised job runner that runs jobs in parallel with a

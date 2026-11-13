@@ -1,0 +1,156 @@
+"""
+A program for a machine with no operating system. The board's startup
+code calls `kernel_main` with the address of its serial port and of a
+scratch region of memory. Everything here is Aura: the serial output, a
+spin lock, and the hook that reports a failed check.
+
+Build it with `aura build --freestanding`. See `README.md`.
+"""
+
+import mem
+
+
+# The startup code defines this. It never returns.
+extern "C" def power_off() -> None
+
+
+# The startup code gives the serial port's address to a hook that has no
+# other way to learn it.
+extern "C" def console_address() -> uint64
+
+
+# The scratch region holds a lock word and a counter.
+def lock_cell(scratch: uint64) -> uint64:
+    return scratch + 8
+
+
+def counter_cell(scratch: uint64) -> uint64:
+    return scratch + 16
+
+
+def put(uart: uint64, byte: uint8) -> None:
+    mem.volatile_write_uint8(uart, byte)
+
+
+def put_number(uart: uint64, value: uint64) -> None:
+    mut divisor: uint64 = 1
+    while value // divisor >= 10:
+        divisor = divisor * 10
+    mut rest = value
+    while divisor > 0:
+        put(uart, (48 + rest // divisor) as uint8)
+        rest = rest % divisor
+        divisor = divisor // 10
+
+
+def put_line(uart: uint64, label: uint8, value: uint64) -> None:
+    put(uart, label)
+    put(uart, 61)
+    put_number(uart, value)
+    put(uart, 10)
+
+
+def acquire(lock: uint64) -> None:
+    while mem.atomic_compare_exchange_uint32(lock, 0, 1) != 0:
+        pass
+
+
+def release(lock: uint64) -> None:
+    mem.atomic_store_uint32(lock, 0)
+
+
+def count_primes(limit: uint64) -> uint64:
+    mut found: uint64 = 0
+    mut candidate: uint64 = 2
+    while candidate < limit:
+        mut divisor: uint64 = 2
+        mut prime = true
+        while divisor * divisor <= candidate:
+            if candidate % divisor == 0:
+                prime = false
+                break
+            divisor = divisor + 1
+        if prime:
+            found = found + 1
+        candidate = candidate + 1
+    return found
+
+
+def collatz_steps(start: uint64) -> uint64:
+    mut n = start
+    mut steps: uint64 = 0
+    while n != 1:
+        if n % 2 == 0:
+            n = n // 2
+        else:
+            n = 3 * n + 1
+        steps = steps + 1
+    return steps
+
+
+def mean_radius(steps: int64) -> float64:
+    mut x: float64 = 1.0
+    mut y: float64 = 0.0
+    mut total: float64 = 0.0
+    for i in range(steps):
+        next_x = x * 0.8 - y * 0.6
+        y = x * 0.6 + y * 0.8
+        x = next_x
+        total = total + sqrt(x * x + y * y)
+    return total / (steps as float64)
+
+
+# Called for every failed check: prints `trap`, the code, and the position.
+
+
+export "C" def aura_trap(
+    code: uint32,
+    file: uint64,
+    file_length: uint64,
+    line: uint32,
+    column: uint32,
+) -> None:
+    uart = console_address()
+    # "trap "
+    put(uart, 116)
+    put(uart, 114)
+    put(uart, 97)
+    put(uart, 112)
+    put(uart, 32)
+    put_number(uart, code as uint64)
+    put(uart, 32)
+    mut i: uint64 = 0
+    while i < file_length:
+        put(uart, mem.read_uint8(file + i))
+        i = i + 1
+    put(uart, 58)
+    put_number(uart, line as uint64)
+    put(uart, 58)
+    put_number(uart, column as uint64)
+    put(uart, 10)
+    power_off()
+
+export "C" def kernel_main(uart: uint64, scratch: uint64) -> None:
+    lock = lock_cell(scratch)
+    counter = counter_cell(scratch)
+    mem.atomic_store_uint32(lock, 0)
+    mem.atomic_store_uint64(counter, 0)
+
+    # p: the primes below 1000. c: the Collatz steps from 27.
+    put_line(uart, 112, count_primes(1000))
+    put_line(uart, 99, collatz_steps(27))
+    # r: a point turned 1000 times stays on the unit circle.
+    put_line(uart, 114, (mean_radius(1000) * 1000.0) as uint64)
+
+    # n: a counter raised 100 times under the lock.
+    for i in range(100):
+        acquire(lock)
+        mem.atomic_add_uint64(counter, 1)
+        release(lock)
+    put_line(uart, 110, mem.atomic_load_uint64(counter))
+
+    # A failed check reaches `aura_trap`: 255 + 1 does not fit a uint8.
+    mut small: uint8 = (mem.atomic_load_uint64(counter) + 155) as uint8
+    small = small + 1
+    put_line(uart, 63, small as uint64)
+    power_off()

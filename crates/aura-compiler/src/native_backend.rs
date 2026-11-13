@@ -153,6 +153,93 @@ pub(crate) fn host_module_backend() -> Result<Box<dyn ModuleBackend>, String> {
     Ok(Box::new(llvm::LlvmModule::for_host()?))
 }
 
+/// An access the `mem` module makes at a raw address (ADR-0095).
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum MemoryAccess {
+    /// A read the optimizer may move or remove. Any alignment.
+    Read,
+    /// A write the optimizer may move or merge. Any alignment.
+    Write,
+    /// A read that happens exactly once, where the program says.
+    VolatileRead,
+    /// A write that happens exactly once, where the program says.
+    VolatileWrite,
+    AtomicLoad,
+    AtomicStore,
+    /// Stores the value and gives the previous one.
+    AtomicSwap,
+    /// Adds the value, wrapping, and gives the previous one.
+    AtomicAdd,
+    /// Stores the replacement if the cell holds the expected value, and
+    /// gives the previous one either way.
+    AtomicCompareExchange,
+    /// Orders every earlier access before every later one.
+    Fence,
+}
+
+impl MemoryAccess {
+    /// Whether the access gives a value.
+    pub fn has_result(self) -> bool {
+        !matches!(
+            self,
+            Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::Fence
+        )
+    }
+}
+
+/// A machine with no operating system that a freestanding build writes
+/// an object for (ADR-0094).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum FreestandingTarget {
+    X86_64,
+    Aarch64,
+    Riscv64,
+}
+
+impl FreestandingTarget {
+    /// Every target, in the order `--target` lists them.
+    pub const ALL: [Self; 3] = [Self::X86_64, Self::Aarch64, Self::Riscv64];
+
+    /// The name `--target` takes.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64-unknown-none",
+            Self::Aarch64 => "aarch64-unknown-none",
+            Self::Riscv64 => "riscv64gc-unknown-none-elf",
+        }
+    }
+
+    /// The target `name` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.name() == name)
+    }
+
+    /// The target with the architecture of the build machine.
+    pub fn host() -> Option<Self> {
+        Self::of_arch(std::env::consts::ARCH)
+    }
+
+    fn of_arch(arch: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.arch() == arch)
+    }
+
+    /// The architecture, as `std::env::consts::ARCH` spells it.
+    pub fn arch(self) -> &'static str {
+        match self {
+            Self::X86_64 => "x86_64",
+            Self::Aarch64 => "aarch64",
+            Self::Riscv64 => "riscv64",
+        }
+    }
+}
+
+/// The module backend for a freestanding object for `target`.
+pub(crate) fn freestanding_module_backend(
+    target: FreestandingTarget,
+) -> Result<Box<dyn ModuleBackend>, String> {
+    Ok(Box::new(llvm::LlvmModule::for_freestanding(target)?))
+}
+
 /// An SSA value.
 #[derive(Clone, Copy, Debug, Eq, Hash, Ord, PartialEq, PartialOrd)]
 pub(crate) struct Val(pub(crate) u32);
@@ -499,6 +586,12 @@ pub(crate) trait ModuleBackend {
     /// function, into every caller.
     fn mark_inline(&mut self, function: FuncHandle);
 
+    /// Makes `function`, an export, a weak definition: another object's
+    /// definition of the symbol replaces it at link time. Its body is
+    /// compiled as written, so a byte loop stays a loop and never becomes
+    /// a call of the C routine it defines.
+    fn mark_weak_routine(&mut self, function: FuncHandle);
+
     /// Defines `function`, whose body `body` builds. A body that fails
     /// leaves the function undefined.
     fn define_function(
@@ -662,6 +755,17 @@ pub(crate) trait FunctionBackend {
     fn usub_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
     fn smul_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
     fn umul_overflow(&mut self, left: Val, right: Val) -> (Val, Val);
+
+    /// One access of the `mem` module. `operands` are 64-bit words: the
+    /// address, then the access's values. `width` is the integer type the
+    /// access reads or writes. The result, when the access has one, is that
+    /// integer zero-extended to a word.
+    fn memory_access(
+        &mut self,
+        access: MemoryAccess,
+        width: ScalarType,
+        operands: &[Val],
+    ) -> Option<Val>;
 
     fn load(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;
     fn uload8(&mut self, ty: ScalarType, flags: MemFlags, address: Val, offset: i32) -> Val;

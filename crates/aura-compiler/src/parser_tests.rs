@@ -5795,3 +5795,46 @@ fn an_opaque_class_names_its_drop_function() {
         .iter()
         .any(|help| help.contains("drop sqlite3_close")));
 }
+
+#[test]
+fn export_c_marks_an_ordinary_function_and_is_a_word_only_before_an_abi() {
+    let module = crate::parse_source(concat!(
+        "export \"C\" def kernel_main(magic: uint32, info: mut uint64) -> None:\n    pass\n",
+        "public export \"C\" def tick() -> int64:\n    return 1\n",
+        "def plain(export: int64) -> int64:\n    return export\n",
+    ))
+    .expect("an exported function parses");
+    let functions: Vec<&FunctionDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Function(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(functions[0].export.as_deref(), Some("C"));
+    assert_eq!(functions[0].name, "kernel_main");
+    assert!(!functions[0].public && !functions[0].body.is_empty());
+    assert!(functions[1].public && functions[1].export.is_some());
+    assert!(functions[2].export.is_none());
+    // An exported function is no foreign declaration: it needs no FFI
+    // permission.
+    assert!(module.items.iter().all(|item| !item.declares_ffi()));
+    let shape = |function: &FunctionDecl| serde_json::to_value(function).expect("it serializes");
+    assert_eq!(shape(functions[0])["export"], serde_json::json!("C"));
+    assert!(shape(functions[2]).get("export").is_none());
+
+    for (source, expected) in [
+        (
+            "export \"Rust\" def f() -> None:\n    pass\n",
+            "`export` supports only the `\"C\"` ABI",
+        ),
+        (
+            "export \"C\" class Point:\n    x: int32\n",
+            "expected `def` after `export \"C\"`",
+        ),
+    ] {
+        let error = crate::parse_source(source).expect_err("the declaration is malformed");
+        assert!(error.message.contains(expected), "{source}: {error:?}");
+    }
+}

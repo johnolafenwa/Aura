@@ -2,6 +2,23 @@
 
 Last updated: 2026-11-12
 
+## Freestanding builds (complete)
+
+- Target: Batch 12 of the roadmap, approved by John on 2026-11-12. Design
+  in `architecture_docs/28-freestanding-design-checkpoint.md`. Details are
+  in `2026-11-12-freestanding-builds.md`.
+- Done (ADR-0094): `aura build --freestanding` and
+  `aura check --freestanding`, `export "C" def`, the `aura_trap` hook,
+  targets x86-64, AArch64, and RISC-V, `AU2052`, the undefined-symbol
+  backstop, the manual page, and `benchmarks/freestanding`.
+- Done (ADR-0095): the `mem` module for plain, volatile, and atomic
+  access at a raw address, inline in native code, gated by `allow_ffi`.
+- Done: `examples/freestanding/kernel` boots under QEMU on RISC-V and
+  AArch64 with output, a lock, and a trap report all in Aura, and book
+  section 18.2 walks through it.
+- Not scheduled: heap values in a freestanding program, an `unsafe`
+  syntax, inline assembly, x86-64 without SSE, 32-bit targets.
+
 ## Release 0.15.0-preview (complete)
 
 - Released everything merged since 0.14.0 as a technical preview: the

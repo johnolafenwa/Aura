@@ -119,3 +119,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 91. [ADR-0091: Array elements are reached without a copy](0091-array-zero-copy-transport.md) — Accepted; in-place element reads and writes by coordinates, `Array[T]` extern parameters, `load_array` and `store_array`, shared buffers across tasks
 92. [ADR-0092: The `simd` module has `int64` lanes with checked arithmetic](0092-integer-lane-values.md) — Accepted; `I64x2` and `I64x4`, every lane checked and reported as the scalar operation, one joined overflow test for a lane method on AVX2 targets, no `int32` lanes
 93. [ADR-0093: A float `matmul` runs in register tiles and on several threads](0093-matmul-tiles-and-threads.md) — Accepted; same bits, `AURA_ARRAY_THREADS`
+94. [ADR-0094: A freestanding build writes one object that needs no runtime](0094-freestanding-builds.md) — Accepted; `aura build --freestanding`, `export "C" def`, the `aura_trap` hook, three targets, `AU2052`
+95. [ADR-0095: The `mem` module reads and writes raw addresses](0095-mem-module.md) — Accepted; plain, volatile, and atomic access to unsigned integers at a `uint64` address, gated by `allow_ffi`

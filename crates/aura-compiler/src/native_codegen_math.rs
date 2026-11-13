@@ -112,6 +112,11 @@ impl FunctionCompiler<'_> {
                 let root = self.builder.fsqrt(value);
                 self.math_result(root, *kind).map(Some)
             }
+            (FunctionOp::Sqrt, [MathOperand::Float]) => {
+                let value = self.load_math_operand(&args[0].value, ScalarKind::Float64)?;
+                let root = self.builder.fsqrt(value);
+                self.math_result(root, ScalarKind::Float64).map(Some)
+            }
             (FunctionOp::Round, [MathOperand::Local(kind)]) if kind.is_float() => {
                 let value = self.load_math_operand(&args[0].value, *kind)?;
                 let rounded =
@@ -191,8 +196,8 @@ impl FunctionCompiler<'_> {
         let magnitude = self.builder.iconst(types::I64, smallest.wrapping_neg());
         let kind_word = self.builder.iconst(types::I64, kind.direct_kind_word());
         let (line, column) = self.span_values(None);
-        self.builder.call(
-            self.runtime[RuntimeFn::FailNarrowOverflow],
+        self.call_failure(
+            RuntimeFn::FailNarrowOverflow,
             &[magnitude, unsigned, kind_word, line, column],
         );
         self.builder.trap(TrapCode::IntegerOverflow);

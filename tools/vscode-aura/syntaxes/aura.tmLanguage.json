@@ -355,6 +355,24 @@
           }
         },
         {
+          "name": "meta.definition.export.function.aura",
+          "match": "\\b(export)\\s+(\"C\")\\s+(def)\\s+([A-Za-z_][A-Za-z0-9_]*)",
+          "captures": {
+            "1": {
+              "name": "keyword.declaration.export.aura"
+            },
+            "2": {
+              "name": "string.quoted.double.aura"
+            },
+            "3": {
+              "name": "keyword.declaration.function.aura"
+            },
+            "4": {
+              "name": "entity.name.function.aura"
+            }
+          }
+        },
+        {
           "name": "meta.definition.class.aura",
           "match": "\\b(class|enum|trait)\\s+([A-Z][A-Za-z0-9_]*)",
           "captures": {

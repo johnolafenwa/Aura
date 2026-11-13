@@ -39,7 +39,8 @@ rejected.
 ### FFI Opt-In
 
 `allow_ffi = true` is an optional `[package]` field. Its default is `false`.
-It authorizes that package to contain FFI declarations. It grants no
+It authorizes that package to contain FFI declarations and to import the
+[`mem` module](/manual/mem). It grants no
 permission to other packages and does not validate the native code.
 
 When any direct or transitive dependency enables FFI, the root package must

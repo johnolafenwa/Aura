@@ -137,6 +137,7 @@ and promises to explain each later.
 ## 18. Calling C
 
 - 18.1 FFI (`ch18-00-calling-c.md` single page is fine)
+- 18.2 Without an operating system: `export "C"`, freestanding builds, the trap hook, the `mem` module, booting under QEMU
 
 ## 19. Final project: a supervised job runner
 

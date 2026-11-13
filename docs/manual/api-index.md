@@ -174,6 +174,25 @@ evaluation-order, diagnostic, and backend rules.
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
 
+## Memory
+
+[Memory Module](/manual/mem) has the rules for alignment, ordering, and
+undefined behavior. Importing `mem` needs `allow_ffi = true`. `N` is 8, 16,
+32, or 64 for plain and volatile access, and 32 or 64 for atomic access.
+
+| API | Signature | Contract |
+| --- | --- | --- |
+| `mem.read_uintN` | `read_uintN(address: uint64) -> uintN` | The integer at `address`, at any alignment. |
+| `mem.write_uintN` | `write_uintN(address: uint64, value: uintN) -> None` | Stores `value` at `address`, at any alignment. |
+| `mem.volatile_read_uintN` | `volatile_read_uintN(address: uint64) -> uintN` | One read the compiler never merges or drops. |
+| `mem.volatile_write_uintN` | `volatile_write_uintN(address: uint64, value: uintN) -> None` | One write the compiler never merges or drops. |
+| `mem.atomic_load_uintN` | `atomic_load_uintN(address: uint64) -> uintN` | The value of the cell. |
+| `mem.atomic_store_uintN` | `atomic_store_uintN(address: uint64, value: uintN) -> None` | Stores `value` in the cell. |
+| `mem.atomic_swap_uintN` | `atomic_swap_uintN(address: uint64, value: uintN) -> uintN` | Stores `value` and returns the previous value. |
+| `mem.atomic_add_uintN` | `atomic_add_uintN(address: uint64, value: uintN) -> uintN` | Adds `value`, wrapping, and returns the previous value. |
+| `mem.atomic_compare_exchange_uintN` | `atomic_compare_exchange_uintN(address: uint64, expected: uintN, replacement: uintN) -> uintN` | Stores `replacement` if the cell holds `expected`, and returns the previous value. |
+| `mem.fence` | `fence() -> None` | Orders earlier memory accesses before later ones. |
+
 ## Randomness
 
 [Randomness Module](/manual/randomness) specifies the xoshiro256** algorithm,

@@ -53,10 +53,12 @@ pub use mir_runtime::{
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
+pub use native_backend::FreestandingTarget;
 pub use native_backend::{
     set_target_cpu as set_native_target_cpu, target_cpu as native_target_cpu,
     target_cpu_identity as native_target_cpu_identity, target_cpu_names as native_target_cpu_names,
 };
+pub use native_codegen::{check_freestanding, emit_freestanding_object};
 pub use native_codegen::{
     emit_host_debug_objects_with_metadata as emit_host_native_debug_objects_with_metadata,
     emit_host_object as emit_host_native_object,
@@ -116,7 +118,8 @@ pub use sema::{ImportedBinding, ModuleContext, ModuleNamespace, Program};
 use ast::{ImportKind, Item};
 use package::PackageGraph;
 pub use package::{
-    is_offline_mode, is_valid_link_name, set_offline_mode, DependencyUpdateResult, ForeignLinkPlan,
+    is_offline_mode, is_valid_link_name, set_offline_mode, DependencyUpdateResult, ForeignExport,
+    ForeignLinkPlan,
 };
 
 #[cfg(coverage)]
@@ -230,7 +233,7 @@ pub fn check_source(source: &str) -> Result<Program> {
 }
 
 fn reject_source_only_ffi(module: &ast::Module) -> Result<()> {
-    if module.items.iter().any(Item::declares_ffi) {
+    if module.uses_ffi() {
         return Err(Diagnostic::coded(
             "AU2999",
             "FFI declarations require a manifest-rooted Aura package; add `Aura.toml` with `[package] allow_ffi = true` and use a path-based compiler API",
@@ -680,7 +683,7 @@ impl ModuleLoader {
         let display_path = path.display().to_string();
         let module = parse_source(&source)
             .map_err(|error| error.with_render_context(display_path.clone(), source.clone()))?;
-        if module.items.iter().any(Item::declares_ffi) {
+        if module.uses_ffi() {
             match &self.package_graph {
                 Some(graph) => graph.ensure_ffi_allowed_for_path(&path)?,
                 None => {
