@@ -1653,6 +1653,102 @@ true
 }
 
 #[test]
+fn convolution_pooling_and_batch_norm_layers_agree_with_a_reference_and_learn() {
+    // The expected numbers come from the same steps written with numpy.
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Layer, Module, Conv2d, BatchNorm2d, MaxPool2d, AvgPool2d, Flatten, Linear, ReLU, Sequential, AdamW
+
+def ramp(shape: list[int64], scale: float32, device: Device) -> Tensor[float32]:
+    mut count = 1
+    for size in shape:
+        count *= size
+    mut values = list[float32]()
+    mut at = 0
+    while at < count:
+        values.append((((at * 7) % 11) as float32 - 5.0) * scale)
+        at += 1
+    return Tensor[float32].from_array(Array[float32].from_list(values, shape), device)
+
+def close(found: float32, wanted: float32) -> bool:
+    return found > wanted - 0.0001 and found < wanted + 0.0001
+
+def main():
+    device = Device.cpu()
+    x = ramp([2, 3, 5, 4], 0.5, device).requires_grad()
+    w = ramp([4, 3, 3, 3], 0.25, device).requires_grad()
+    y = tensor.conv2d(x, w, 2, 1)
+    print(y.to_array())
+    loss = (y * y).sum()
+    print(loss.item())
+    print(loss.gradient(w).slice(0, 0, 1).to_array())
+    print(loss.gradient(x).sum().item())
+    print(tensor.conv2d(x, w.slice(2, 0, 1).slice(3, 0, 1)).shape())
+    print(MaxPool2d(3, 2, 1).forward(x).slice(0, 0, 1).to_array())
+    print(AvgPool2d(2, 2).forward(x).slice(0, 0, 1).to_array())
+    print(Flatten().forward(x).shape())
+    mut norm = BatchNorm2d(3, device)
+    out = norm.forward(x)
+    print(close(out.mean().item(), 0.0) and close((out * out).mean().item(), 0.999996))
+    print(close(norm.running_mean.value().sum().item(), 0.00125))
+    print(close(norm.running_var.value().sum().item(), 3.4733171))
+    norm.eval()
+    print(close(norm.forward(x).mean().item(), 0.0035022))
+    print(close(norm.running_mean.value().sum().item(), 0.00125))
+    norm.train()
+    norm.forward(x).eval()
+    print(close(norm.running_mean.value().sum().item(), 0.002375))
+    print(norm.parameters().len())
+    print(norm.named_parameters().len())
+    print(norm.state_dict().len())
+    mut model = Sequential([Conv2d(3, 8, 3, 1, 1, 5, device) as dyn Layer, BatchNorm2d(8, device), ReLU(), MaxPool2d(2, 2), Flatten(), Linear(32, 1, 9, device)])
+    images = tensor.randn([32, 3, 4, 4], 1, device)
+    wanted = images.reshape([32, 48]).sum(1, true)
+    mut optimizer = AdamW(model.parameters(), lr=0.01)
+    mut first: float32 = 0.0
+    mut last: float32 = 0.0
+    for step in range(150):
+        gap = model.forward(images) - wanted
+        error = (gap * gap).mean()
+        optimizer.minimize(error)
+        if step == 0:
+            first = error.item()
+        last = error.item()
+    print(last < first * 0.2)
+    model.eval()
+    left = model.forward(images) - wanted
+    print((left * left).mean().item() < first * 0.5)
+    print(model.state_dict().len())
+"#,
+    )
+    .expect("a network of convolutions trains");
+    assert_eq!(
+        output.stdout,
+        "Array[float32](shape=[2, 4, 3, 2], values=[-1.875, -4.125, -5.875, 7.875, 3.125, 4.875, -2.25, 3.375, 4.5, 7.0, 1.75, -5.625, 1.5, 8.125, 2.5, -11.75, -2.375, -1.0, 2.5, -6.375, -0.875, -5.75, 1.75, -4.625, -7.125, -0.25, 2.25, 4.0, 7.75, -6.0, 2.625, -8.5, 7.875, -10.875, 4.125, 6.25, 6.875, -11.25, 1.125, 1.75, -7.75, 10.25, 2.875, 6.625, -7.0, 8.875, -5.875, -0.875])
+1637.3281
+Array[float32](shape=[1, 3, 3, 3], values=[-37.375, 98.0, 4.0, 83.875, 25.0, -143.375, -3.125, -17.875, 43.875, 17.0, 22.0, -114.625, -1.25, -118.125, 109.5, -71.0, 38.75, 38.625, 16.375, -32.0, 62.375, -20.375, 70.125, 29.625, 34.375, 54.125, -109.625])
+-94.5
+[2, 4, 5, 4]
+Array[float32](shape=[1, 3, 3, 2], values=[1.0, 2.5, 1.5, 2.5, 2.0, 2.5, 2.5, 2.5, 2.5, 2.5, 2.5, 2.0, 1.0, 2.5, 1.5, 2.5, 1.5, 2.5])
+Array[float32](shape=[1, 3, 2, 2], values=[-0.625, 0.875, -0.125, 0.0, 0.625, -0.625, -0.25, -0.125, -0.875, 0.625, -0.375, -0.25])
+[2, 60]
+true
+true
+true
+true
+true
+true
+2
+2
+4
+true
+true
+8
+"
+    );
+}
+
+#[test]
 fn a_model_trains_with_backward_and_an_optimizer_step() {
     let output = crate::run_source(
         r#"import tensor

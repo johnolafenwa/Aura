@@ -114,8 +114,9 @@ def conjugate_gradient(side, rounds, device):
 
 
 class Block(nn.Module):
-    def __init__(self, width):
+    def __init__(self, width, heads=4):
         super().__init__()
+        self.heads = heads
         self.norm1 = nn.LayerNorm(width)
         self.query = nn.Linear(width, width)
         self.key = nn.Linear(width, width)
@@ -127,7 +128,7 @@ class Block(nn.Module):
 
     def split(self, x):
         batch, length, width = x.shape
-        return x.view(batch, length, 4, width // 4).transpose(1, 2)
+        return x.view(batch, length, self.heads, width // self.heads).transpose(1, 2)
 
     def forward(self, x):
         batch, length, width = x.shape
@@ -140,11 +141,11 @@ class Block(nn.Module):
 
 
 class Model(nn.Module):
-    def __init__(self, layers, width, words, context):
+    def __init__(self, layers, width, words, context, heads=4):
         super().__init__()
         self.tokens = nn.Embedding(words, width)
         self.places = nn.Embedding(context, width)
-        self.blocks = nn.ModuleList(Block(width) for _ in range(layers))
+        self.blocks = nn.ModuleList(Block(width, heads) for _ in range(layers))
         self.last = nn.LayerNorm(width)
         self.head = nn.Linear(width, words)
 
@@ -179,6 +180,81 @@ def transformer_train(layers, width, steps, device):
         if step == steps:
             loss_now = loss.item()
     print(f"transformer_train {layers}x{width} {now() - start:.0f} {loss_now} {first:.0f}")
+
+
+class Residual(nn.Module):
+    def __init__(self, channels):
+        super().__init__()
+        self.one = nn.Conv2d(channels, channels, 3, 1, 1)
+        self.norm1 = nn.BatchNorm2d(channels)
+        self.two = nn.Conv2d(channels, channels, 3, 1, 1)
+        self.norm2 = nn.BatchNorm2d(channels)
+
+    def forward(self, x):
+        inner = F.relu(self.norm1(self.one(x)))
+        return F.relu(x + self.norm2(self.two(inner)))
+
+
+class Cnn(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.stem = nn.Conv2d(3, 32, 3, 1, 1)
+        self.norm1 = nn.BatchNorm2d(32)
+        self.block = Residual(32)
+        self.widen = nn.Conv2d(32, 64, 3, 1, 1)
+        self.norm2 = nn.BatchNorm2d(64)
+        self.head = nn.Linear(64, 10)
+
+    def forward(self, x):
+        first = self.block(F.relu(self.norm1(self.stem(x))))
+        half = F.max_pool2d(first, 2, 2)
+        second = F.max_pool2d(F.relu(self.norm2(self.widen(half))), 2, 2)
+        return self.head(second.flatten(2).mean(2))
+
+
+def cnn_train(rows, side, steps, device):
+    batch = 64
+    x = torch.randn(rows, 3, side, side, device=device)
+    labels = (x.view(rows, -1) @ torch.randn(3 * side * side, 10, device=device)).argmax(1)
+    model = Cnn().to(device)
+    optimizer = torch.optim.AdamW(model.parameters(), lr=0.001, weight_decay=0.01)
+    start = now()
+    first = 0.0
+    last = 0.0
+    for step in range(steps + 1):
+        at = (step * batch) % (rows - batch + 1)
+        loss = F.cross_entropy(model(x[at : at + batch]), labels[at : at + batch])
+        optimizer.zero_grad(set_to_none=True)
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            last = loss.item()
+            first = now() - start
+            start = now()
+        if step == steps:
+            last = loss.item()
+    print(f"cnn_train {steps} {now() - start:.0f} {last} {first:.0f}")
+
+
+def gpt_infer(layers, width, heads, reps, device):
+    words, context, batch = 50257, 256, 8
+    model = Model(layers, width, words, context, heads).to(device)
+    where = torch.arange(context, device=device)
+    inputs = (torch.rand(batch, context, device=device) * 50257.0).long()
+    start = now()
+    first = 0.0
+    total = 0
+    with torch.no_grad():
+        for rep in range(reps + 1):
+            hidden = model.tokens(inputs) + model.places(where)
+            for block in model.blocks:
+                hidden = block(hidden)
+            final = model.last(hidden[:, context - 1, :])
+            total = model.head(final).argmax(1).sum().item()
+            if rep == 0:
+                first = now() - start
+                start = now()
+    print(f"gpt_infer {layers}x{width} {now() - start:.0f} {total} {first:.0f}")
 
 
 def monte_carlo(paths, reps, device):
@@ -222,6 +298,8 @@ def main():
         conjugate_gradient(128, 20, device)
         transformer_train(1, 32, 3, device)
         monte_carlo(100000, 2, device)
+        cnn_train(256, 8, 3, device)
+        gpt_infer(1, 32, 4, 2, device)
         return
     mlp_train(60000, 500, device)
     mlp_infer(65536, 20, device)
@@ -229,6 +307,8 @@ def main():
     conjugate_gradient(4096, 100, device)
     transformer_train(4, 256, 20, device)
     monte_carlo(10000000, 20, device)
+    cnn_train(4096, 32, 50, device)
+    gpt_infer(12, 768, 12, 10, device)
 
 
 if __name__ == "__main__":

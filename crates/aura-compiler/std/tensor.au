@@ -380,15 +380,32 @@ public class Collector:
     module reads what a collector holds."""
     names: list[str]
     params: list[Parameter[float32]]
+    trained: list[bool]
+    modes: list[Parameter[float32]]
     prefix: str
 
     public def parameter(mut self, name: str, param: Parameter[float32]) -> None:
         """Gathers `param`, a field called `name`."""
+        self.hold(name, param, true)
+
+    public def buffer(mut self, name: str, param: Parameter[float32]) -> None:
+        """Gathers `param`, a field called `name` that the model keeps
+        and saves but no optimizer changes, such as the running mean of
+        a batch norm."""
+        self.hold(name, param, false)
+
+    public def mode(mut self, flag: Parameter[float32]) -> None:
+        """Gathers the flag of a layer that works differently while
+        training: `train()` sets it to one and `eval()` to zero."""
+        self.modes.append(flag.share())
+
+    def hold(mut self, name: str, param: Parameter[float32], trained: bool) -> None:
         if self.prefix == "":
             self.names.append(name.clone())
         else:
             self.names.append(self.prefix + "." + name)
         self.params.append(param.share())
+        self.trained.append(trained)
 
     public def add[M: Module](mut self, name: str, module: M) -> None:
         """Gathers the parameters of `module`, a field called `name`."""
@@ -447,8 +464,16 @@ def load_all(into: Collector, state: dict[str, Tensor[float32]]) -> Result[int64
     return Ok(into.names.len())
 
 
+def set_modes(into: Collector, value: float32) -> None:
+    mut at = 0
+    while at < into.modes.len():
+        view flag = into.modes[at]
+        flag.assign(Tensor[float32].full([1], value, Device.cpu()))
+        at += 1
+
+
 def collected[M: Module](module: M) -> Collector:
-    mut into = Collector(names=list[str](), params=list[Parameter[float32]](), prefix="")
+    mut into = Collector(names=list[str](), params=list[Parameter[float32]](), trained=list[bool](), modes=list[Parameter[float32]](), prefix="")
     module.collect(into)
     return into
 
@@ -464,7 +489,14 @@ public trait Module:
         """The model's parameters, for an optimizer. The model must be
         declared `mut`: handing out its parameters lets them change."""
         into = collected(self)
-        return into.params
+        mut all = list[Parameter[float32]]()
+        mut at = 0
+        while at < into.params.len():
+            if into.trained[at]:
+                view param = into.params[at]
+                all.append(param.share())
+            at += 1
+        return all
 
     def named_parameters(mut self) -> list[(str, Parameter[float32])]:
         """Each parameter with its name, such as `hidden.weight`."""
@@ -472,10 +504,24 @@ public trait Module:
         mut all = list[(str, Parameter[float32])]()
         mut at = 0
         while at < into.names.len():
-            view param = into.params[at]
-            all.append((into.names[at].clone(), param.share()))
+            if into.trained[at]:
+                view param = into.params[at]
+                all.append((into.names[at].clone(), param.share()))
             at += 1
         return all
+
+    def train(mut self) -> None:
+        """Puts every layer of the model in training mode, the mode a
+        layer starts in: a batch norm uses the statistics of each batch
+        and updates its running statistics."""
+        into = collected(self)
+        set_modes(into, 1.0)
+
+    def eval(mut self) -> None:
+        """Puts every layer of the model in evaluation mode: a batch
+        norm uses its running statistics."""
+        into = collected(self)
+        set_modes(into, 0.0)
 
     def state_dict(self) -> dict[str, Tensor[float32]]:
         """The tensor each parameter holds now, by name."""
@@ -797,6 +843,225 @@ impl Module for GELU:
 impl Layer for GELU:
     def forward(self, x: Tensor[float32]) -> Tensor[float32]:
         return x.gelu()
+
+
+def window_count(size: int64, kernel: int64, stride: int64, padding: int64) -> int64:
+    return (size + 2 * padding - kernel) // stride + 1
+
+
+def windows(x: Tensor[float32], kernel_height: int64, kernel_width: int64, stride: int64, padding: int64, fill: float32) -> Tensor[float32]:
+    # The windows of a `[batch, channels, height, width]` tensor, as
+    # `[batch, channels, windows, kernel_height * kernel_width]`. An
+    # element outside the image reads `fill`: one more element that every
+    # image gets after its last.
+    shape = x.shape()
+    height = shape[2]
+    width = shape[3]
+    rows = window_count(height, kernel_height, stride, padding)
+    columns = window_count(width, kernel_width, stride, padding)
+    mut flat = x.reshape([shape[0], shape[1], height * width])
+    if padding > 0:
+        flat = cat([flat, Tensor[float32].full([shape[0], shape[1], 1], fill, x.device())], 2)
+    mut picks = list[int64]()
+    mut row = 0
+    while row < rows:
+        mut column = 0
+        while column < columns:
+            mut i = 0
+            while i < kernel_height:
+                y = row * stride + i - padding
+                mut j = 0
+                while j < kernel_width:
+                    at = column * stride + j - padding
+                    if y < 0 or y >= height or at < 0 or at >= width:
+                        picks.append(height * width)
+                    else:
+                        picks.append(y * width + at)
+                    j += 1
+                i += 1
+            column += 1
+        row += 1
+    count = picks.len()
+    indices = Tensor[int64].from_array(Array[int64].from_list(picks, [count]), x.device())
+    return flat.index_select(2, indices).reshape([shape[0], shape[1], rows * columns, kernel_height * kernel_width])
+
+
+public def conv2d(input: Tensor[float32], weight: Tensor[float32], stride: int64 = 1, padding: int64 = 0) -> Tensor[float32]:
+    """The two-dimensional convolution of `input`, of the shape
+    `[batch, in_channels, height, width]`, with `weight`, of the shape
+    `[out_channels, in_channels, kernel_height, kernel_width]`. `padding`
+    rows and columns of zeros stand on each side of the image."""
+    shape = input.shape()
+    kernel = weight.shape()
+    rows = window_count(shape[2], kernel[2], stride, padding)
+    columns = window_count(shape[3], kernel[3], stride, padding)
+    taps = kernel[1] * kernel[2] * kernel[3]
+    lanes = windows(input, kernel[2], kernel[3], stride, padding, 0.0).permute([0, 2, 1, 3]).reshape([shape[0] * rows * columns, taps])
+    out = lanes.matmul(weight.reshape([kernel[0], taps]).transpose())
+    return out.reshape([shape[0], rows * columns, kernel[0]]).permute([0, 2, 1]).reshape([shape[0], kernel[0], rows, columns])
+
+
+public def max_pool2d(input: Tensor[float32], kernel_size: int64, stride: int64, padding: int64 = 0) -> Tensor[float32]:
+    """The largest element of each `kernel_size` by `kernel_size` window
+    of a `[batch, channels, height, width]` tensor."""
+    shape = input.shape()
+    rows = window_count(shape[2], kernel_size, stride, padding)
+    columns = window_count(shape[3], kernel_size, stride, padding)
+    return windows(input, kernel_size, kernel_size, stride, padding, -340000000000000000000000000000000000000.0).max(3).reshape([shape[0], shape[1], rows, columns])
+
+
+public def avg_pool2d(input: Tensor[float32], kernel_size: int64, stride: int64, padding: int64 = 0) -> Tensor[float32]:
+    """The mean of each `kernel_size` by `kernel_size` window of a
+    `[batch, channels, height, width]` tensor. Padding counts as zeros."""
+    shape = input.shape()
+    rows = window_count(shape[2], kernel_size, stride, padding)
+    columns = window_count(shape[3], kernel_size, stride, padding)
+    return windows(input, kernel_size, kernel_size, stride, padding, 0.0).mean(3).reshape([shape[0], shape[1], rows, columns])
+
+
+public class Conv2d:
+    """`conv2d` with a `weight` and a `bias` for each output channel."""
+    public weight: Parameter[float32]
+    public bias: Parameter[float32]
+    public stride: int64
+    public padding: int64
+
+    public def __init__(self, in_channels: int64, out_channels: int64, kernel_size: int64, stride: int64, padding: int64, seed: int64, device: Device):
+        """A layer with weights spread evenly between plus and minus
+        `1 / sqrt(in_channels * kernel_size * kernel_size)`."""
+        bound = 1.0 / ((in_channels * kernel_size * kernel_size) as float64).sqrt()
+        self.weight = Parameter[float32]((rand([out_channels, in_channels, kernel_size, kernel_size], seed, device) * 2.0 - 1.0) * bound)
+        self.bias = Parameter[float32]((rand([out_channels], seed + 1, device) * 2.0 - 1.0) * bound)
+        self.stride = stride
+        self.padding = padding
+
+
+impl Module for Conv2d:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+
+
+impl Layer for Conv2d:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        weight = self.weight.value()
+        return conv2d(x, weight, self.stride, self.padding) + self.bias.value().reshape([1, weight.shape()[0], 1, 1])
+
+
+public class MaxPool2d:
+    """`max_pool2d` as a layer."""
+    public kernel_size: int64
+    public stride: int64
+    public padding: int64
+
+    public def __init__(self, kernel_size: int64, stride: int64, padding: int64 = 0):
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+
+impl Module for MaxPool2d:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for MaxPool2d:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return max_pool2d(x, self.kernel_size, self.stride, self.padding)
+
+
+public class AvgPool2d:
+    """`avg_pool2d` as a layer."""
+    public kernel_size: int64
+    public stride: int64
+    public padding: int64
+
+    public def __init__(self, kernel_size: int64, stride: int64, padding: int64 = 0):
+        self.kernel_size = kernel_size
+        self.stride = stride
+        self.padding = padding
+
+
+impl Module for AvgPool2d:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for AvgPool2d:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return avg_pool2d(x, self.kernel_size, self.stride, self.padding)
+
+
+public class Flatten:
+    """Each element of a batch as one row: `[batch, ...]` to
+    `[batch, features]`."""
+
+
+impl Module for Flatten:
+    def collect(self, into: mut Collector) -> None:
+        return
+
+
+impl Layer for Flatten:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        return x.reshape([x.shape()[0], -1])
+
+
+public class BatchNorm2d:
+    """Each channel of a `[batch, channels, height, width]` tensor moved
+    to mean zero and deviation one, then scaled by `weight` and moved by
+    `bias`. In training mode the statistics are those of the batch, and
+    `running_mean` and `running_var` move toward them by `momentum`. In
+    evaluation mode the statistics are the running ones."""
+    public weight: Parameter[float32]
+    public bias: Parameter[float32]
+    public running_mean: Parameter[float32]
+    public running_var: Parameter[float32]
+    public eps: float64
+    public momentum: float64
+    training: Parameter[float32]
+
+    public def __init__(self, num_features: int64, device: Device):
+        self.weight = Parameter[float32](Tensor[float32].full([num_features], 1.0, device))
+        self.bias = Parameter[float32](Tensor[float32].zeros([num_features], device))
+        self.running_mean = Parameter[float32](Tensor[float32].zeros([num_features], device))
+        self.running_var = Parameter[float32](Tensor[float32].full([num_features], 1.0, device))
+        self.eps = 0.00001
+        self.momentum = 0.1
+        self.training = Parameter[float32](Tensor[float32].full([1], 1.0, Device.cpu()))
+
+
+impl Module for BatchNorm2d:
+    def collect(self, into: mut Collector) -> None:
+        into.parameter("weight", self.weight)
+        into.parameter("bias", self.bias)
+        into.buffer("running_mean", self.running_mean)
+        into.buffer("running_var", self.running_var)
+        into.mode(self.training)
+
+
+impl Layer for BatchNorm2d:
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        shape = x.shape()
+        channels = shape[1]
+        wide = [1, channels, 1, 1]
+        weight = self.weight.value().reshape(wide)
+        bias = self.bias.value().reshape(wide)
+        if self.training.value().item() < 0.5:
+            mean = self.running_mean.value().detach().reshape(wide)
+            spread = self.running_var.value().detach().reshape(wide)
+            return (x - mean) / (spread + self.eps).sqrt() * weight + bias
+        lanes = [shape[0], channels, shape[2] * shape[3]]
+        mean = x.reshape(lanes).mean(2).mean(0)
+        centered = x - mean.reshape(wide)
+        spread = (centered * centered).reshape(lanes).mean(2).mean(0)
+        count = shape[0] * shape[2] * shape[3]
+        mut unbiased = 1.0
+        if count > 1:
+            unbiased = (count as float64) / ((count - 1) as float64)
+        self.running_mean.assign((self.running_mean.value() * (1.0 - self.momentum) + mean * self.momentum).detach())
+        self.running_var.assign((self.running_var.value() * (1.0 - self.momentum) + spread * (self.momentum * unbiased)).detach())
+        return centered / (spread.reshape(wide) + self.eps).sqrt() * weight + bias
 
 
 public class SGD:

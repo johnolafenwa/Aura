@@ -1,6 +1,6 @@
 import sys
 import tensor
-from tensor import AdamW, Device, Embedding, LayerNorm, Layer, Linear, Module, MultiheadAttention, ReLU, Sequential, Tensor
+from tensor import AdamW, BatchNorm2d, Conv2d, Device, Embedding, LayerNorm, Layer, Linear, Module, MultiheadAttention, ReLU, Sequential, Tensor
 
 
 # Each workload prints `<name> <size> <milliseconds> <result> <first pass
@@ -221,6 +221,121 @@ def transformer_train(
     )
 
 
+class Residual:
+    one: Conv2d
+    norm1: BatchNorm2d
+    two: Conv2d
+    norm2: BatchNorm2d
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        inner = self.norm1.forward(self.one.forward(x)).relu()
+        return (x + self.norm2.forward(self.two.forward(inner))).relu()
+
+
+impl Module for Residual
+
+
+class Cnn:
+    stem: Conv2d
+    norm1: BatchNorm2d
+    block: Residual
+    widen: Conv2d
+    norm2: BatchNorm2d
+    head: Linear
+
+    def forward(self, x: Tensor[float32]) -> Tensor[float32]:
+        first = self.block.forward(self.norm1.forward(self.stem.forward(x)).relu())
+        half = tensor.max_pool2d(first, 2, 2)
+        second = tensor.max_pool2d(self.norm2.forward(self.widen.forward(half)).relu(), 2, 2)
+        shape = second.shape()
+        return self.head.forward(second.reshape([shape[0], shape[1], shape[2] * shape[3]]).mean(2))
+
+
+impl Module for Cnn
+
+
+def cnn_train(rows: int64, side: int64, steps: int64, device: Device) -> None:
+    # A small residual network of convolutions and batch norms learns the
+    # labels a fixed random linear map gives three channel images, in
+    # batches of 64.
+    batch = 64
+    x = tensor.randn([rows, 3, side, side], 40, device)
+    labels = x.reshape([rows, 3 * side * side]).matmul(tensor.randn([3 * side * side, 10], 41, device)).argmax()
+    x.eval()
+    labels.eval()
+    mut model = Cnn(
+        stem=Conv2d(3, 32, 3, 1, 1, 42, device),
+        norm1=BatchNorm2d(32, device),
+        block=Residual(
+            one=Conv2d(32, 32, 3, 1, 1, 44, device),
+            norm1=BatchNorm2d(32, device),
+            two=Conv2d(32, 32, 3, 1, 1, 46, device),
+            norm2=BatchNorm2d(32, device),
+        ),
+        widen=Conv2d(32, 64, 3, 1, 1, 48, device),
+        norm2=BatchNorm2d(64, device),
+        head=Linear(64, 10, 50, device),
+    )
+    mut optimizer = AdamW(model.parameters(), lr=0.001)
+    mut last: float32 = 0.0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for step in range(steps + 1):
+        at = (step * batch) % (rows - batch + 1)
+        logits = model.forward(x.slice(0, at, at + batch))
+        loss = tensor.cross_entropy(logits, labels.slice(0, at, at + batch))
+        optimizer.zero_grad()
+        loss.backward()
+        optimizer.step()
+        if step == 0:
+            last = loss.item()
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+        if step == steps:
+            last = loss.item()
+    print(f"cnn_train {steps} {sys.monotonic_time_ms() - start} {last} {first}")
+
+
+def gpt_infer(layers: int64, width: int64, heads: int64, reps: int64, device: Device) -> None:
+    # A model of the GPT-2 shape with random weights names the next token
+    # of each row of a batch.
+    words = 50257
+    context = 256
+    batch = 8
+    tokens = Embedding(words, width, 60, device)
+    places = Embedding(context, width, 61, device)
+    mut blocks: list[Block] = []
+    for layer in range(layers):
+        blocks.append(
+            Block(
+                norm1=LayerNorm(width, device),
+                mix=MultiheadAttention(width, heads, 70 + layer * 10, device),
+                norm2=LayerNorm(width, device),
+                wide=Linear(width, width * 4, 71 + layer * 10, device),
+                narrow=Linear(width * 4, width, 72 + layer * 10, device),
+            )
+        )
+    last = LayerNorm(width, device)
+    head = Linear(width, words, 62, device)
+    positions = tensor.arange(context, device)
+    inputs = (tensor.rand([batch, context], 63, device) * 50257.0).to_int64()
+    inputs.eval()
+    mut total = 0
+    mut first = 0
+    mut start = sys.monotonic_time_ms()
+    for rep in range(reps + 1):
+        mut hidden = tokens.forward(inputs) + places.forward(positions)
+        for at in range(layers):
+            view block = blocks[at]
+            hidden = block.forward(hidden)
+        final = last.forward(hidden.slice(1, context - 1, context)).reshape([batch, width])
+        total = head.forward(final).argmax().sum().item()
+        if rep == 0:
+            first = sys.monotonic_time_ms() - start
+            start = sys.monotonic_time_ms()
+    print(f"gpt_infer {layers}x{width} {sys.monotonic_time_ms() - start} {total} {first}")
+
+
 def monte_carlo(paths: int64, reps: int64, device: Device) -> None:
     # Prices a European call from the end value of each path.
     spot = 100.0
@@ -260,6 +375,8 @@ def main() -> int32:
         conjugate_gradient(128, 20, device)
         transformer_train(1, 32, 3, device)
         monte_carlo(100000, 2, device)
+        cnn_train(256, 8, 3, device)
+        gpt_infer(1, 32, 4, 2, device)
         return 0
     mlp_train(60000, 500, device)
     mlp_infer(65536, 20, device)
@@ -267,4 +384,6 @@ def main() -> int32:
     conjugate_gradient(4096, 100, device)
     transformer_train(4, 256, 20, device)
     monte_carlo(10000000, 20, device)
+    cnn_train(4096, 32, 50, device)
+    gpt_infer(12, 768, 12, 10, device)
     return 0
