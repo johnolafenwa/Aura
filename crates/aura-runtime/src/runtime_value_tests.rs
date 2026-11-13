@@ -16885,7 +16885,7 @@ fn blocking_service_cancellation_drops_late_results_safely() {
 }
 
 #[test]
-fn tcp_connect_candidates_share_one_timeout_budget() {
+fn tcp_connect_candidates_split_one_timeout_budget() {
     let started = Instant::now();
     let deadline = started + StdDuration::from_millis(100);
     let first: std::net::SocketAddr = "127.0.0.1:1".parse().expect("address should parse");
@@ -16926,8 +16926,8 @@ fn tcp_connect_candidates_share_one_timeout_budget() {
     assert_eq!(connected, "connected");
     assert_eq!(
         observed_budgets,
-        vec![StdDuration::from_millis(100), StdDuration::from_millis(60)],
-        "each candidate must receive only the timeout budget that remains"
+        vec![StdDuration::from_millis(50), StdDuration::from_millis(60)],
+        "each candidate must receive an equal share of the budget that remains, and the last all of it"
     );
 }
 

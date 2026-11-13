@@ -15825,7 +15825,12 @@ where
         ));
     }
 
+    // Each candidate gets an equal share of the time that remains, so one
+    // slow candidate cannot use the whole budget. Windows takes about two
+    // seconds to refuse a loopback address nothing listens on, which is the
+    // first candidate of `localhost` when a server listens on IPv4 only.
     let mut last_error = None;
+    let mut candidates_left = u32::try_from(addresses.len()).unwrap_or(u32::MAX);
     for candidate in addresses {
         let candidate_timeout = match deadline {
             Some(deadline) => {
@@ -15833,10 +15838,11 @@ where
                 if remaining.is_zero() {
                     return Err(timeout_resource_error());
                 }
-                Some(remaining)
+                Some((remaining / candidates_left).max(StdDuration::from_nanos(1)))
             }
             None => None,
         };
+        candidates_left = candidates_left.saturating_sub(1).max(1);
         match connect(candidate, candidate_timeout) {
             Ok(stream) => return Ok(stream),
             Err(error) => last_error = Some(error),
