@@ -118,7 +118,8 @@ fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
 #[test]
 fn run_pass_fixtures_match_expected_stdout() {
     for fixture in fixture_files("run-pass") {
-        let output = run_path_on_large_stack(fixture.clone())
+        let (_adapted, runnable) = host_fixture(&fixture);
+        let output = run_path_on_large_stack(runnable)
             .unwrap_or_else(|error| panic!("{} should run: {}", fixture.display(), error));
         let expected = read_expected(&fixture, "stdout");
         assert_eq!(
@@ -259,6 +260,56 @@ fn run_fail_fixtures_match_expected_diagnostics() {
     }
 }
 
+/// A directory removed when the value drops.
+struct AdaptedFixture(PathBuf);
+
+impl Drop for AdaptedFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The fixture as this host runs it. Windows has no `/bin` and no `/tmp`:
+/// a fixture that names them runs from a copy that names the tools Git for
+/// Windows puts on `PATH` and the host's temporary directory.
+fn host_fixture(fixture: &Path) -> (Option<AdaptedFixture>, PathBuf) {
+    if !cfg!(windows) {
+        return (None, fixture.to_path_buf());
+    }
+    let source = read(fixture);
+    let mut adapted = source.clone();
+    for tool in [
+        "/usr/bin/true",
+        "/bin/echo",
+        "/bin/cat",
+        "/bin/sleep",
+        "/bin/sh",
+    ] {
+        let name = tool.rsplit('/').next().unwrap_or(tool);
+        adapted = adapted.replace(&format!("\"{tool}\""), &format!("\"{name}\""));
+    }
+    let temp = std::env::temp_dir()
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    adapted = adapted.replace("\"/tmp/", &format!("\"{}/", temp.trim_end_matches('/')));
+    if adapted == source {
+        return (None, fixture.to_path_buf());
+    }
+    let directory = std::env::temp_dir().join(format!(
+        "aura-fixture-{}-{}",
+        std::process::id(),
+        fixture
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("fixture")
+    ));
+    fs::create_dir_all(&directory).expect("the adapted fixture directory should be writable");
+    let path = directory.join(fixture.file_name().expect("a fixture has a file name"));
+    fs::write(&path, adapted).expect("the adapted fixture should be writable");
+    (Some(AdaptedFixture(directory)), path)
+}
+
 fn fixture_root() -> PathBuf {
     PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("tests/fixtures")
 }
@@ -313,7 +364,8 @@ fn normalize_newlines(text: &str) -> String {
     }
     text.lines()
         .map(|line| {
-            if line.trim_start().starts_with("-->") {
+            let line_start = line.trim_start();
+            if line_start.starts_with("-->") || line_start.starts_with("= related") {
                 line.replace('\\', "/")
             } else {
                 line.to_string()

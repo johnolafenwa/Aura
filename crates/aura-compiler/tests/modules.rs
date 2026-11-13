@@ -334,7 +334,9 @@ def main() -> int32:
     );
 
     let output = run_path(&main_path).expect("builtin aliases should run");
-    assert_eq!(output.stdout, "a/b\nc/d\n");
+    // `path.join` uses the host's separator.
+    let separator = std::path::MAIN_SEPARATOR;
+    assert_eq!(output.stdout, format!("a{separator}b\nc{separator}d\n"));
 }
 
 #[test]

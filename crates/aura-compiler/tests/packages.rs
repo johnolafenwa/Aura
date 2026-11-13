@@ -894,7 +894,8 @@ edition = "2026"
 [dependencies]
 utility = {{ git = "{}", rev = "-not-a-revision" }}
 "#,
-            dependency.path.display()
+            // Forward slashes, since a backslash starts an escape in TOML.
+            dependency.path.display().to_string().replace('\\', "/")
         ),
     );
 
@@ -916,7 +917,8 @@ edition = "2026"
 [dependencies]
 utility = {{ git = "{}", rev = "abc123" }}
 "#,
-            dependency.path.display()
+            // Forward slashes, since a backslash starts an escape in TOML.
+            dependency.path.display().to_string().replace('\\', "/")
         ),
     );
 

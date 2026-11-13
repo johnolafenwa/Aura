@@ -35,6 +35,28 @@ impl Drop for TempDir {
     }
 }
 
+/// The source as this host runs it. Windows has no `/bin`: CI puts the
+/// tools Git for Windows ships on `PATH`, and its `pwd` prints a Windows
+/// path only with `-W`.
+fn host_source(source: &str) -> String {
+    if !cfg!(windows) {
+        return source.to_string();
+    }
+    let mut source = source.replace("\"/bin/pwd\"", "\"pwd\", \"-W\"");
+    for tool in [
+        "/usr/bin/printenv",
+        "/usr/bin/false",
+        "/bin/echo",
+        "/bin/cat",
+        "/bin/sleep",
+        "/bin/sh",
+    ] {
+        let name = tool.rsplit('/').next().unwrap_or(tool);
+        source = source.replace(&format!("\"{tool}\""), &format!("\"{name}\""));
+    }
+    source
+}
+
 #[cfg(unix)]
 fn wait_for_path(path: &std::path::Path, timeout_ms: u64) -> bool {
     let deadline = std::time::Instant::now() + std::time::Duration::from_millis(timeout_ms);
@@ -161,10 +183,13 @@ def main() -> int32:
 fn builtin_process_module_runs_through_public_api() {
     let temp = TempDir::new("aura-process-run");
     let entry = temp.path().join("main.au");
-    let cwd = fs::canonicalize(temp.path())
+    // Forward slashes, since a backslash starts an escape in Aura text, and
+    // they are what `pwd -W` prints on Windows.
+    let cwd = aura_compiler::host_path::canonicalize(temp.path())
         .expect("temp path should canonicalize")
         .display()
-        .to_string();
+        .to_string()
+        .replace('\\', "/");
     let source = format!(
         r#"import process
 
@@ -293,6 +318,7 @@ def wait_for_sleep_timeout() -> Result[None, process.Error]:
 "#,
         cwd = cwd,
     );
+    let source = host_source(&source);
 
     let output = run_path_with_source(&entry, &source).expect("builtin process module should run");
     assert_eq!(
