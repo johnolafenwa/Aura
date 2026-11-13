@@ -299,6 +299,12 @@ struct History {
 #[derive(Clone)]
 pub struct TensorValue(Arc<TensorNode>);
 
+thread_local! {
+    /// Tensors assigned to a variable while their work still waited. The
+    /// next work that runs on their device computes them.
+    static DEFERRED: std::cell::RefCell<Vec<TensorValue>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl PartialEq for TensorValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -362,6 +368,57 @@ impl TensorValue {
             self.storage()?,
         )
         .tracking(None))
+    }
+
+    /// A watched tensor of this tensor's elements, for a variable to
+    /// hold. Work this tensor waits on, off the Metal device, stays
+    /// waiting and joins the next work that runs on its device, so
+    /// assigning a variable in the middle of a training step does not cut
+    /// the step in two.
+    fn watched_later(&self, name: &str) -> Result<Self> {
+        let depth = self.depth();
+        let floats = matches!(self.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+        if depth == 0 || !floats || self.device() == TensorDevice::Metal {
+            return self.watched(name);
+        }
+        let later = Self::in_state(
+            self.device(),
+            self.dtype(),
+            self.shape().into(),
+            State::Pending(Pending {
+                operation: Operation::Reshape(
+                    self.shape()
+                        .iter()
+                        .map(|&dimension| dimension as i64)
+                        .collect(),
+                ),
+                inputs: vec![self.clone()],
+                depth: depth + 1,
+            }),
+        )
+        .tracking(None);
+        DEFERRED.with(|deferred| deferred.borrow_mut().push(later.clone()));
+        Ok(later)
+    }
+
+    /// The assigned tensors that still wait on `device`, taken off the
+    /// list, apart from `roots`.
+    fn deferred(device: TensorDevice, roots: &[&TensorValue]) -> Vec<TensorValue> {
+        DEFERRED.with(|deferred| {
+            let mut deferred = deferred.borrow_mut();
+            let mut taken = Vec::new();
+            deferred.retain(|node| {
+                if node.is_ready() {
+                    return false;
+                }
+                if node.device() != device || roots.contains(&node) {
+                    return true;
+                }
+                taken.push(node.clone());
+                false
+            });
+            taken
+        })
     }
 
     /// The watched tensor this variable holds now.
@@ -472,11 +529,14 @@ impl TensorValue {
             *self.state() = State::Ready(storage.clone());
             return Ok(storage);
         }
-        let (plan, leaves, held) = Plan::collect_held(&[self]);
+        let deferred = Self::deferred(self.device(), &[self]);
+        let mut roots = vec![self];
+        roots.extend(&deferred);
+        let (plan, leaves, held) = Plan::collect_held(&roots);
         let mut storages = plan.run(self.device(), &leaves)?.into_iter();
         let storage = storages.next().expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
-        for (node, storage) in held.iter().zip(storages) {
+        for (node, storage) in deferred.iter().chain(&held).zip(storages) {
             *node.state() = State::Ready(storage);
         }
         Ok(storage)
@@ -745,6 +805,8 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
             .iter()
             .try_for_each(|node| node.storage().map(|_| ()));
     }
+    let deferred = TensorValue::deferred(device, &waiting);
+    let waiting: Vec<&TensorValue> = waiting.into_iter().chain(&deferred).collect();
     let (plan, leaves, held) = Plan::collect_held(&waiting);
     let storages = plan.run(device, &leaves)?;
     for (node, storage) in waiting.iter().copied().chain(&held).zip(storages) {
@@ -1956,7 +2018,7 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                     ),
                 ));
             }
-            *held = right.watched(name)?;
+            *held = right.watched_later(name)?;
             Ok(Value::Tensor(left.clone()))
         }
         _ => Err(tensor_error(name, "was given an unknown operation")),

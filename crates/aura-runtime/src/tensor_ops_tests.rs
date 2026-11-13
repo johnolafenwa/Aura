@@ -1674,3 +1674,40 @@ fn a_gpu_device_agrees_on_kernels_that_share_a_launch() {
         println!("RAN: kernels that share a launch on a GPU device");
     }
 }
+
+#[test]
+fn a_waiting_tensor_assigned_to_a_variable_runs_with_the_next_work() {
+    deferred(|| {
+        let l = leaves(TensorDevice::Cpu);
+        let variable = node_op(&l.a, 6, &[]).unwrap();
+        let sum = binary(&l.a, &l.b, 0).unwrap();
+        pair_op(&variable, &sum, 4, &[]).unwrap();
+        let held = node_op(&variable, 7, &[]).unwrap();
+        assert!(node(&held).is_tracked() && !node(&held).is_ready());
+        // Other work computes the assigned tensor in the same run.
+        let other = binary(&l.b, &l.two, 2).unwrap();
+        let expected = array(&other);
+        assert!(node(&held).is_ready());
+        assert_eq!(array(&held), array(&sum));
+        assert_eq!(array(&other), expected);
+
+        // So does work on several tensors at once.
+        let next = binary(&l.a, &l.two, 2).unwrap();
+        pair_op(&variable, &next, 4, &[]).unwrap();
+        let held = node_op(&variable, 7, &[]).unwrap();
+        let (one, two) = (
+            binary(&l.a, &l.a, 0).unwrap(),
+            binary(&l.b, &l.b, 0).unwrap(),
+        );
+        evaluate_together(&[node(&one).clone(), node(&two).clone()]).unwrap();
+        assert!(node(&held).is_ready());
+        assert_eq!(array(&held), array(&next));
+
+        // An assigned tensor that is read first runs by itself, and one of a
+        // dtype without gradients is refused as before.
+        let last = binary(&l.b, &l.two, 2).unwrap();
+        pair_op(&variable, &last, 4, &[]).unwrap();
+        assert_eq!(array(&node_op(&variable, 7, &[]).unwrap()), array(&last));
+        assert!(TensorValue::deferred(TensorDevice::Cpu, &[]).is_empty());
+    });
+}
