@@ -63,7 +63,7 @@ fn run_json_path(path: &std::path::Path, backend: &str) -> serde_json::Value {
 }
 
 fn point_span(path: &std::path::Path, line: usize, column: usize) -> serde_json::Value {
-    let path = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    let path = aura_compiler::host_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     serde_json::json!({
         "path": path.display().to_string(),
         "start": {"line": line, "column": column},

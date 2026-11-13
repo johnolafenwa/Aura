@@ -34,6 +34,16 @@ impl TempDir {
 
     fn write(&self, relative: &str, source: &str) -> PathBuf {
         let path = self.path.join(relative);
+        // Windows has no `/bin/sh` and its neighbours; CI puts the ones Git
+        // for Windows ships on `PATH`.
+        let source = if cfg!(windows) {
+            source
+                .replace("\"/bin/sh\"", "\"sh\"")
+                .replace("\"/usr/bin/false\"", "\"false\"")
+                .replace("\"/bin/sleep\"", "\"sleep\"")
+        } else {
+            source.to_string()
+        };
         fs::write(&path, source).expect("failed to write source");
         path
     }
@@ -161,6 +171,11 @@ def main():
 fn supervisor_wait_or_none_reports_events_on_the_direct_backend() {
     let example = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("../../examples/io/process_supervisor.au");
+    let temp = TempDir::new("aura-cov-direct-supervisor");
+    let example = temp.write(
+        "process_supervisor.au",
+        &fs::read_to_string(example).expect("the example should be readable"),
+    );
     let output = run_direct(&example, None);
     assert!(
         output.status.success(),
