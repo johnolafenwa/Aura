@@ -299,6 +299,12 @@ struct History {
 #[derive(Clone)]
 pub struct TensorValue(Arc<TensorNode>);
 
+thread_local! {
+    /// Tensors assigned to a variable while their work still waited. The
+    /// next work that runs on their device computes them.
+    static DEFERRED: std::cell::RefCell<Vec<TensorValue>> = const { std::cell::RefCell::new(Vec::new()) };
+}
+
 impl PartialEq for TensorValue {
     fn eq(&self, other: &Self) -> bool {
         Arc::ptr_eq(&self.0, &other.0)
@@ -362,6 +368,57 @@ impl TensorValue {
             self.storage()?,
         )
         .tracking(None))
+    }
+
+    /// A watched tensor of this tensor's elements, for a variable to
+    /// hold. Work this tensor waits on, off the Metal device, stays
+    /// waiting and joins the next work that runs on its device, so
+    /// assigning a variable in the middle of a training step does not cut
+    /// the step in two.
+    fn watched_later(&self, name: &str) -> Result<Self> {
+        let depth = self.depth();
+        let floats = matches!(self.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
+        if depth == 0 || !floats || self.device() == TensorDevice::Metal {
+            return self.watched(name);
+        }
+        let later = Self::in_state(
+            self.device(),
+            self.dtype(),
+            self.shape().into(),
+            State::Pending(Pending {
+                operation: Operation::Reshape(
+                    self.shape()
+                        .iter()
+                        .map(|&dimension| dimension as i64)
+                        .collect(),
+                ),
+                inputs: vec![self.clone()],
+                depth: depth + 1,
+            }),
+        )
+        .tracking(None);
+        DEFERRED.with(|deferred| deferred.borrow_mut().push(later.clone()));
+        Ok(later)
+    }
+
+    /// The assigned tensors that still wait on `device`, taken off the
+    /// list, apart from `roots`.
+    fn deferred(device: TensorDevice, roots: &[&TensorValue]) -> Vec<TensorValue> {
+        DEFERRED.with(|deferred| {
+            let mut deferred = deferred.borrow_mut();
+            let mut taken = Vec::new();
+            deferred.retain(|node| {
+                if node.is_ready() {
+                    return false;
+                }
+                if node.device() != device || roots.contains(&node) {
+                    return true;
+                }
+                taken.push(node.clone());
+                false
+            });
+            taken
+        })
     }
 
     /// The watched tensor this variable holds now.
@@ -472,11 +529,14 @@ impl TensorValue {
             *self.state() = State::Ready(storage.clone());
             return Ok(storage);
         }
-        let (plan, leaves, held) = Plan::collect_held(&[self]);
+        let deferred = Self::deferred(self.device(), &[self]);
+        let mut roots = vec![self];
+        roots.extend(&deferred);
+        let (plan, leaves, held) = Plan::collect_held(&roots);
         let mut storages = plan.run(self.device(), &leaves)?.into_iter();
         let storage = storages.next().expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
-        for (node, storage) in held.iter().zip(storages) {
+        for (node, storage) in deferred.iter().chain(&held).zip(storages) {
             *node.state() = State::Ready(storage);
         }
         Ok(storage)
@@ -745,6 +805,8 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
             .iter()
             .try_for_each(|node| node.storage().map(|_| ()));
     }
+    let deferred = TensorValue::deferred(device, &waiting);
+    let waiting: Vec<&TensorValue> = waiting.into_iter().chain(&deferred).collect();
     let (plan, leaves, held) = Plan::collect_held(&waiting);
     let storages = plan.run(device, &leaves)?;
     for (node, storage) in waiting.iter().copied().chain(&held).zip(storages) {
@@ -1848,6 +1910,11 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
             operand.set_grad(None);
             Ok(Value::Tensor(operand.clone()))
         }
+        13 => {
+            let name = "tensor::conv2d";
+            let window = parameters::<6>(&args, 2, name)?;
+            window_indices(operand.device(), window, name).map(Value::Tensor)
+        }
         _ => Err(tensor_error(name, "was given an unknown operation")),
     }
 }
@@ -1956,11 +2023,90 @@ pub fn host_tensor_pair_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
                     ),
                 ));
             }
-            *held = right.watched(name)?;
+            *held = right.watched_later(name)?;
             Ok(Value::Tensor(left.clone()))
         }
         _ => Err(tensor_error(name, "was given an unknown operation")),
     }
+}
+
+thread_local! {
+    /// The window indices made so far, by device and window. A network
+    /// asks for the same few on every step.
+    static WINDOWS: std::cell::RefCell<HashMap<(i64, [i64; 6]), TensorValue>> =
+        std::cell::RefCell::new(HashMap::new());
+}
+
+/// How many window index tensors are kept before the list is emptied.
+const KEPT_WINDOWS: usize = 64;
+
+/// For each window of an image, in row order, the places of its elements
+/// in the flattened image. `window` is the image's height and width, the
+/// kernel's height and width, the stride and the padding. A place outside
+/// the image is `height * width`: one past the image's last element.
+fn window_indices(device: TensorDevice, window: [i64; 6], name: &str) -> Result<TensorValue> {
+    let [height, width, kernel_height, kernel_width, stride, padding] = window;
+    if height < 1 || width < 1 || kernel_height < 1 || kernel_width < 1 {
+        return Err(tensor_error(
+            name,
+            "expects an image and a kernel of at least one element",
+        ));
+    }
+    if stride < 1 || padding < 0 {
+        return Err(tensor_error(
+            name,
+            "expects a stride of at least 1 and a padding of at least 0",
+        ));
+    }
+    if kernel_height > height + 2 * padding || kernel_width > width + 2 * padding {
+        return Err(tensor_error(
+            name,
+            format!(
+                "expects a kernel no larger than the padded image: the kernel is {kernel_height} by {kernel_width} and the padded image {} by {}",
+                height + 2 * padding,
+                width + 2 * padding
+            ),
+        ));
+    }
+    let key = (device as i64, window);
+    if let Some(found) = WINDOWS.with(|kept| kept.borrow().get(&key).cloned()) {
+        return Ok(found);
+    }
+    let rows = (height + 2 * padding - kernel_height) / stride + 1;
+    let columns = (width + 2 * padding - kernel_width) / stride + 1;
+    let mut picks = Vec::with_capacity((rows * columns * kernel_height * kernel_width) as usize);
+    for row in 0..rows {
+        for column in 0..columns {
+            for i in 0..kernel_height {
+                let y = row * stride + i - padding;
+                for j in 0..kernel_width {
+                    let x = column * stride + j - padding;
+                    let inside = (0..height).contains(&y) && (0..width).contains(&x);
+                    picks.push(if inside {
+                        y * width + x
+                    } else {
+                        height * width
+                    });
+                }
+            }
+        }
+    }
+    let count = picks.len();
+    let Value::Tensor(made) = place(
+        device,
+        ArrayValue::new(Box::new([count]), ArrayStorage::Int64(picks.into()))?,
+    )?
+    else {
+        unreachable!("placing elements gives a tensor")
+    };
+    WINDOWS.with(|kept| {
+        let mut kept = kept.borrow_mut();
+        if kept.len() >= KEPT_WINDOWS {
+            kept.clear();
+        }
+        kept.insert(key, made.clone());
+    });
+    Ok(made)
 }
 
 /// `tensor::__aura_filled`: a tensor of random floats, or of the integers

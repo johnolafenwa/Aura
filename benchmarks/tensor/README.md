@@ -48,26 +48,30 @@ CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
 
 ### Whole Programs, NVIDIA A40
 
-NVIDIA A40, CUDA 13.2, 2026-11-13. Milliseconds for the timed passes of
-a row, the range of three runs.
+NVIDIA A40, CUDA 13.2, PyTorch 2.8, 2026-11-13. Milliseconds for the
+timed passes of a row, the range of three runs. Other work held the
+pod's processors during these runs (load average about 20), which
+slows the rows that are bound by host time, PyTorch's `mlp_train` most
+of all.
 
 | Program | Aura, CUDA device | PyTorch, CUDA |
 | --- | ---: | ---: |
-| `mlp_train`, 500 steps | 256 to 259 | 887 to 955 |
-| `mlp_infer`, 65,536 rows | 733 to 740 | 894 to 904 |
-| `kmeans`, 200,000 rows | 38 | 68 to 70 |
-| `conjugate_gradient`, 4,096 | 19 to 20 | 19 to 20 |
-| `transformer_train`, 4 layers of 256 | 350 to 359 | 298 to 425 |
-| `monte_carlo`, 10,000,000 paths | 3 to 4 | 21 |
-| `cnn_train`, 50 steps | 441 to 466 | 302 to 323 |
-| `gpt_infer`, 12 layers of 768 | 358 to 402 | 266 to 267 |
+| `mlp_train`, 500 steps | 262 to 271 | 1,162 to 1,584 |
+| `mlp_infer`, 65,536 rows | 741 to 748 | 901 to 904 |
+| `kmeans`, 200,000 rows | 39 | 68 |
+| `conjugate_gradient`, 4,096 | 20 to 21 | 17 to 23 |
+| `transformer_train`, 4 layers of 256 | 339 to 365 | 320 to 347 |
+| `monte_carlo`, 10,000,000 paths | 3 to 4 | 21 to 22 |
+| `cnn_train`, 50 steps | 346 to 372 | 297 to 350 |
+| `gpt_infer`, 12 layers of 768 | 344 to 378 | 269 to 271 |
 
-The two rows behind are the newest. A convolution reads its windows
-with an indexed read and multiplies them in cuBLAS, where PyTorch calls
-cuDNN. The inference row spends 31 of its 36 ms a step waiting for the
-GPU. The loss of `cnn_train` differs in its fourth digit between runs
-on both sides: gradients that add into one element add in an order the
-GPU does not fix.
+`gpt_infer` is the row behind. A profile of both sides shows the matrix
+products level, at about 21 ms of a step each. PyTorch's other kernels
+take 2.6 ms of a step and Aura's 10 ms: PyTorch adds a bias inside the
+product, and runs attention and layer norm as one kernel each, where
+Aura runs 306 kernels a step. The loss of `cnn_train` differs in its
+fourth digit between runs on both sides: gradients that add into one
+element add in an order the GPU does not fix.
 
 ### Single Expressions
 

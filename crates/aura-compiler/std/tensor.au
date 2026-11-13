@@ -862,27 +862,7 @@ def windows(x: Tensor[float32], kernel_height: int64, kernel_width: int64, strid
     mut flat = x.reshape([shape[0], shape[1], height * width])
     if padding > 0:
         flat = cat([flat, Tensor[float32].full([shape[0], shape[1], 1], fill, x.device())], 2)
-    mut picks = list[int64]()
-    mut row = 0
-    while row < rows:
-        mut column = 0
-        while column < columns:
-            mut i = 0
-            while i < kernel_height:
-                y = row * stride + i - padding
-                mut j = 0
-                while j < kernel_width:
-                    at = column * stride + j - padding
-                    if y < 0 or y >= height or at < 0 or at >= width:
-                        picks.append(height * width)
-                    else:
-                        picks.append(y * width + at)
-                    j += 1
-                i += 1
-            column += 1
-        row += 1
-    count = picks.len()
-    indices = Tensor[int64].from_array(Array[int64].from_list(picks, [count]), x.device())
+    indices = Tensor[int64](node=tensor.__aura_node_op(x.node, 13, [height, width, kernel_height, kernel_width, stride, padding]))
     return flat.index_select(2, indices).reshape([shape[0], shape[1], rows * columns, kernel_height * kernel_width])
 
 

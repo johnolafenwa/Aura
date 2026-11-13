@@ -144,3 +144,16 @@ later, on the same tensors (ADR-0097).
   gradients, both poolings and the batch norm agree with the same steps
   in numpy. Two more workload rows, `cnn_train` and `gpt_infer`, in Aura
   and PyTorch.
+- 2026-11-13, after the merge of the convolution layers: an assignment
+  of a waiting tensor to a variable no longer runs its work at once
+  (`watched_later` and the `DEFERRED` list in `tensor_host.rs`), so a
+  `cnn_train` step is one plan and not nine. Window indices come from
+  the runtime (`__aura_node_op` code 13) and are kept by device and
+  window: building them in Aura cost about 0.3 ms for each 32 by 32
+  image. The code generator computes a large elementwise step with two
+  or three readers again in each reader (`RECOMPUTED_*` in
+  `tensor_codegen.rs`). A PyTorch profile of `gpt_infer` on the A40
+  shows matrix products level at about 21 ms a step, and PyTorch's
+  other kernels at 2.6 ms against 11.5 ms here: PyTorch adds the bias
+  inside the product and has one fused kernel each for attention and
+  layer norm.
