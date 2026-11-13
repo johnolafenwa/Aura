@@ -45,12 +45,15 @@ use tungstenite::{
 };
 use url::Url;
 
-#[cfg(unix)]
-use std::os::fd::AsRawFd;
+use crate::host_io::{self, AsRawFd, RawIo};
 #[cfg(unix)]
 use std::os::unix::net::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
+// Windows has Unix domain sockets too, as ordinary sockets under another
+// address family, and this crate gives them the standard library's shape.
 #[cfg(unix)]
 use std::os::unix::process::CommandExt;
+#[cfg(windows)]
+use uds_windows::{UnixListener as StdUnixListener, UnixStream as StdUnixStream};
 
 use crate::bytes_codec::{self, BytesCodecError, BytesDataError, BytesResourceError};
 use crate::diag::{Diagnostic, Result, Span};
@@ -5932,16 +5935,31 @@ struct WebSocketState {
 struct ProcessChildState {
     child: Mutex<Option<StdChild>>,
     waited: Mutex<Option<StdExitStatus>>,
-    process_group_id: Option<i32>,
+    process_group: Option<ProcessGroup>,
     stdin: Option<ProcessPipeValue>,
     stdout: Option<ProcessPipeValue>,
     stderr: Option<ProcessPipeValue>,
 }
 
+/// A child's input pipe as the runtime holds it. Windows cannot wait on a
+/// pipe, so there it is one end of a socket bridged to the pipe.
+#[cfg(unix)]
+type ChildInputPipe = StdChildStdin;
+#[cfg(unix)]
+type ChildOutputPipe = StdChildStdout;
+#[cfg(unix)]
+type ChildErrorPipe = StdChildStderr;
+#[cfg(windows)]
+type ChildInputPipe = crate::pipe_bridge::BridgedPipe;
+#[cfg(windows)]
+type ChildOutputPipe = crate::pipe_bridge::BridgedPipe;
+#[cfg(windows)]
+type ChildErrorPipe = crate::pipe_bridge::BridgedPipe;
+
 enum ProcessPipeKind {
-    Stdin(StdChildStdin),
-    Stdout(StdChildStdout),
-    Stderr(StdChildStderr),
+    Stdin(ChildInputPipe),
+    Stdout(ChildOutputPipe),
+    Stderr(ChildErrorPipe),
 }
 
 struct ProcessPipeState {
@@ -6022,24 +6040,16 @@ pub enum ProcessRestartPolicy {
     Always,
 }
 
-#[cfg(unix)]
 struct UnixListenerState {
     listener: Mutex<Option<StdUnixListener>>,
 }
 
-#[cfg(not(unix))]
-struct UnixListenerState;
-
-#[cfg(unix)]
 struct UnixStreamState {
     stream: Mutex<Option<StdUnixStream>>,
     /// Bytes `read_line` received past its line. Locked only while
     /// `stream` is held.
     read_ahead: Mutex<ReadAheadBuffer>,
 }
-
-#[cfg(not(unix))]
-struct UnixStreamState;
 
 struct TlsListenerState {
     listener: Mutex<Option<StdTcpListener>>,
@@ -6187,8 +6197,8 @@ struct TaskWaitReachability {
 
 #[derive(Clone, Copy)]
 struct FdWaitRegistration {
-    fd: libc::c_int,
-    events: libc::c_short,
+    fd: RawIo,
+    events: i16,
 }
 
 struct LightweightTaskContext {
@@ -9972,13 +9982,12 @@ impl LightweightTaskScheduler {
     }
 
     fn arm_fd_wait(&mut self, key: WaitKey, fd_wait: Option<FdWaitRegistration>) -> io::Result<()> {
-        #[cfg(unix)]
         if let Some(fd_wait) = fd_wait {
             let mut interest = None;
-            if fd_wait.events & (libc::POLLIN | libc::POLLPRI) != 0 {
+            if fd_wait.events & (host_io::POLLIN | host_io::POLLPRI) != 0 {
                 interest = Some(IoInterest::READABLE);
             }
-            if fd_wait.events & libc::POLLOUT != 0 {
+            if fd_wait.events & host_io::POLLOUT != 0 {
                 interest = Some(
                     interest
                         .map(|current| current | IoInterest::WRITABLE)
@@ -9993,8 +10002,6 @@ impl LightweightTaskScheduler {
             })?;
             self.reactor.add_fd(key, fd_wait.fd, interest)?;
         }
-        #[cfg(not(unix))]
-        let _ = (key, fd_wait);
         Ok(())
     }
 
@@ -12997,35 +13004,8 @@ fn ensure_rustls_crypto_provider() {
     });
 }
 
-#[cfg(not(unix))]
-trait ReadTimeoutStream: Read {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()>;
-}
-
-#[cfg(not(unix))]
-impl ReadTimeoutStream for StdTcpStream {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.set_read_timeout(timeout)
-    }
-}
-
-#[cfg(not(unix))]
-impl ReadTimeoutStream for rustls::StreamOwned<ClientConnection, StdTcpStream> {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.sock.set_read_timeout(timeout)
-    }
-}
-
-#[cfg(not(unix))]
-impl ReadTimeoutStream for rustls::StreamOwned<ServerConnection, StdTcpStream> {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.sock.set_read_timeout(timeout)
-    }
-}
-
-#[cfg(unix)]
 fn wait_for_fd_event(
-    fd: i32,
+    fd: RawIo,
     events: i16,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
@@ -13052,113 +13032,40 @@ fn wait_for_fd_event(
             Some(slice) => duration_to_poll_timeout(slice),
             None => -1,
         };
-        let mut descriptor = libc::pollfd {
-            fd,
-            events,
-            revents: 0,
-        };
-        let result = unsafe { libc::poll(&mut descriptor, 1, timeout_ms) };
-        if result > 0 {
-            return Ok(());
-        }
-        if result == 0 {
-            if deadline.is_some() && deadline.is_some_and(|deadline| Instant::now() >= deadline) {
-                return Err(timeout_resource_error());
-            }
-            if deadline.is_none() && cancellation.is_none() {
-                return Err(timeout_resource_error());
-            }
-            continue;
-        }
-        let error = io::Error::last_os_error();
-        if error.kind() == io::ErrorKind::Interrupted {
-            continue;
-        }
-        return Err(error);
-    }
-}
-
-#[cfg(unix)]
-fn wait_for_tls_listener_progress(
-    listener_fd: i32,
-    pending_empty: bool,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<()> {
-    if pending_empty {
-        wait_for_fd_event(listener_fd, libc::POLLIN, deadline, cancellation)
-    } else {
-        let slice = next_wait_slice(deadline, cancellation)?
-            .unwrap_or_else(|| StdDuration::from_millis(50));
-        let wait_deadline = Instant::now().checked_add(slice);
-        match wait_for_fd_event(listener_fd, libc::POLLIN, wait_deadline, cancellation) {
-            Ok(()) => Ok(()),
-            Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(()),
-            Err(error) => Err(error),
-        }
-    }
-}
-
-#[cfg_attr(unix, allow(dead_code))]
-fn non_unix_tls_listener_wait_timeout(
-    pending_empty: bool,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<StdDuration>> {
-    if pending_empty && cancellation.is_none() {
-        match deadline {
-            Some(deadline) => {
-                let now = Instant::now();
-                if now >= deadline {
-                    Err(timeout_resource_error())
-                } else {
-                    Ok(Some(deadline.saturating_duration_since(now)))
+        match host_io::poll_one(fd, events, timeout_ms) {
+            Ok(true) => return Ok(()),
+            Ok(false) => {
+                if deadline.is_some_and(|deadline| Instant::now() >= deadline) {
+                    return Err(timeout_resource_error());
+                }
+                if deadline.is_none() && cancellation.is_none() {
+                    return Err(timeout_resource_error());
                 }
             }
-            None => Ok(None),
-        }
-    } else {
-        next_wait_slice(deadline, cancellation)
-    }
-}
-
-#[cfg(not(unix))]
-fn poll_tls_listener_readable(
-    listener: StdTcpListener,
-    timeout: Option<StdDuration>,
-) -> io::Result<bool> {
-    let mut poll = mio::Poll::new()?;
-    let mut events = mio::Events::with_capacity(1);
-    let mut source = mio::net::TcpListener::from_std(listener);
-    poll.registry()
-        .register(&mut source, mio::Token(0), mio::Interest::READABLE)?;
-    loop {
-        match poll.poll(&mut events, timeout) {
-            Ok(()) => return Ok(!events.is_empty()),
-            Err(error) if error.kind() == io::ErrorKind::Interrupted => continue,
+            Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
             Err(error) => return Err(error),
         }
     }
 }
 
-#[cfg(not(unix))]
 fn wait_for_tls_listener_progress(
-    listener: &StdTcpListener,
+    listener_fd: RawIo,
     pending_empty: bool,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
 ) -> io::Result<()> {
-    let wait_timeout = non_unix_tls_listener_wait_timeout(pending_empty, deadline, cancellation)?;
-    let listener = listener.try_clone()?;
-    let readable = run_blocking_io(
-        move || poll_tls_listener_readable(listener, wait_timeout),
-        cancellation,
-    )?;
-    if readable {
-        return Ok(());
+    if pending_empty {
+        wait_for_fd_event(listener_fd, host_io::POLLIN, deadline, cancellation)
+    } else {
+        let slice = next_wait_slice(deadline, cancellation)?
+            .unwrap_or_else(|| StdDuration::from_millis(50));
+        let wait_deadline = Instant::now().checked_add(slice);
+        match wait_for_fd_event(listener_fd, host_io::POLLIN, wait_deadline, cancellation) {
+            Ok(()) => Ok(()),
+            Err(error) if error.kind() == io::ErrorKind::TimedOut => Ok(()),
+            Err(error) => Err(error),
+        }
     }
-    check_deadline_and_cancellation(deadline, cancellation)?;
-    Ok(())
 }
 
 pub fn io_decode_utf8(bytes: &[u8]) -> io::Result<String> {
@@ -13352,10 +13259,9 @@ fn validate_http_headers(headers: &[(String, String)]) -> io::Result<()> {
     Ok(())
 }
 
-#[cfg(unix)]
 fn read_line_with_fd_deadline<R>(
     reader: &mut R,
-    fd: i32,
+    fd: RawIo,
     readiness_events: i16,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
@@ -13387,7 +13293,6 @@ where
     Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
 }
 
-#[cfg(unix)]
 fn read_line_with_deadline<R>(
     reader: &mut R,
     deadline: Option<Instant>,
@@ -13399,42 +13304,10 @@ where
     read_line_with_fd_deadline(
         reader,
         reader.as_raw_fd(),
-        libc::POLLIN,
+        host_io::POLLIN,
         deadline,
         cancellation,
     )
-}
-
-#[cfg(not(unix))]
-fn read_line_with_deadline<R>(
-    reader: &mut R,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<String>>
-where
-    R: ReadTimeoutStream,
-{
-    let mut buffer = Vec::new();
-    loop {
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        validate_read_line_capacity(buffer.len())?;
-        reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
-        let mut byte = [0u8; 1];
-        match reader.read(&mut byte) {
-            Ok(0) if buffer.is_empty() => return Ok(None),
-            Ok(0) => break,
-            Ok(_) => {
-                buffer.push(byte[0]);
-                if byte[0] == b'\n' {
-                    break;
-                }
-            }
-            Err(error) if is_retryable_network_error(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-
-    Ok(Some(trim_line_endings(io_decode_utf8(&buffer)?)))
 }
 
 /// What a socket's buffered `read_line` received past its line, and whether
@@ -13468,17 +13341,9 @@ impl<R: Read> Read for ReadAhead<'_, R> {
     }
 }
 
-#[cfg(unix)]
 impl<R: AsRawFd> AsRawFd for ReadAhead<'_, R> {
-    fn as_raw_fd(&self) -> std::os::fd::RawFd {
+    fn as_raw_fd(&self) -> RawIo {
         self.stream.as_raw_fd()
-    }
-}
-
-#[cfg(not(unix))]
-impl<R: ReadTimeoutStream> ReadTimeoutStream for ReadAhead<'_, R> {
-    fn set_read_timeout_value(&mut self, timeout: Option<StdDuration>) -> io::Result<()> {
-        self.stream.set_read_timeout_value(timeout)
     }
 }
 
@@ -13486,7 +13351,6 @@ impl<R: ReadTimeoutStream> ReadTimeoutStream for ReadAhead<'_, R> {
 /// for the socket's next read. It returns the same lines and enforces the
 /// same length limit as `read_line_with_deadline`, which reads a byte per
 /// call.
-#[cfg(unix)]
 fn read_line_with_read_ahead<R>(
     stream: &mut R,
     pending: &mut ReadAheadBuffer,
@@ -13500,10 +13364,9 @@ where
     read_line_with_fd_read_ahead(stream, fd, pending, deadline, cancellation)
 }
 
-#[cfg(unix)]
 fn read_line_with_fd_read_ahead<R>(
     stream: &mut R,
-    fd: i32,
+    fd: RawIo,
     buffer: &mut ReadAheadBuffer,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
@@ -13532,7 +13395,7 @@ where
             // The last read took all the socket had, so a read now would
             // only report that it would block. Waiting first is safe: the
             // reactor checks readiness when the wait registers.
-            wait_for_fd_event(fd, libc::POLLIN, deadline, cancellation)?;
+            wait_for_fd_event(fd, host_io::POLLIN, deadline, cancellation)?;
             continue;
         }
         if buffer.chunk.is_empty() {
@@ -13546,37 +13409,16 @@ where
                 buffer.drained = bytes < buffer.chunk.len();
             }
             Err(error) if is_retryable_network_error(&error) => {
-                wait_for_fd_event(fd, libc::POLLIN, deadline, cancellation)?;
+                wait_for_fd_event(fd, host_io::POLLIN, deadline, cancellation)?;
             }
             Err(error) => return Err(error),
         }
     }
 }
 
-#[cfg(not(unix))]
-fn read_line_with_read_ahead<R>(
-    stream: &mut R,
-    pending: &mut ReadAheadBuffer,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<String>>
-where
-    R: ReadTimeoutStream,
-{
-    read_line_with_deadline(
-        &mut ReadAhead {
-            stream,
-            pending: &mut pending.bytes,
-        },
-        deadline,
-        cancellation,
-    )
-}
-
-#[cfg(unix)]
 fn read_exact_with_fd_deadline<R>(
     reader: &mut R,
-    fd: i32,
+    fd: RawIo,
     count: usize,
     readiness_events: i16,
     deadline: Option<Instant>,
@@ -13607,7 +13449,6 @@ where
     Ok(buffer)
 }
 
-#[cfg(unix)]
 fn read_exact_with_deadline<R>(
     reader: &mut R,
     count: usize,
@@ -13621,47 +13462,15 @@ where
         reader,
         reader.as_raw_fd(),
         count,
-        libc::POLLIN,
+        host_io::POLLIN,
         deadline,
         cancellation,
     )
 }
 
-#[cfg(not(unix))]
-fn read_exact_with_deadline<R>(
-    reader: &mut R,
-    count: usize,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Vec<u8>>
-where
-    R: ReadTimeoutStream,
-{
-    validate_requested_read_size("read_exact(...)", count)?;
-    let mut buffer = vec![0u8; count];
-    let mut offset = 0;
-    while offset < count {
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
-        match reader.read(&mut buffer[offset..]) {
-            Ok(0) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::UnexpectedEof,
-                    "stream closed before reading the requested number of bytes",
-                ))
-            }
-            Ok(bytes) => offset += bytes,
-            Err(error) if is_retryable_network_error(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-    Ok(buffer)
-}
-
-#[cfg(unix)]
 fn read_some_with_fd_deadline<R>(
     reader: &mut R,
-    fd: i32,
+    fd: RawIo,
     max_bytes: usize,
     readiness_events: i16,
     deadline: Option<Instant>,
@@ -13688,7 +13497,6 @@ where
     }
 }
 
-#[cfg(unix)]
 fn read_some_with_deadline<R>(
     reader: &mut R,
     max_bytes: usize,
@@ -13702,43 +13510,15 @@ where
         reader,
         reader.as_raw_fd(),
         max_bytes,
-        libc::POLLIN,
+        host_io::POLLIN,
         deadline,
         cancellation,
     )
 }
 
-#[cfg(not(unix))]
-fn read_some_with_deadline<R>(
-    reader: &mut R,
-    max_bytes: usize,
-    deadline: Option<Instant>,
-    cancellation: Option<&CancellationContext>,
-) -> io::Result<Option<Vec<u8>>>
-where
-    R: ReadTimeoutStream,
-{
-    let max_bytes = validate_requested_read_size("read_bytes(...)", max_bytes)?;
-    let mut buffer = vec![0u8; max_bytes.max(1)];
-    loop {
-        check_deadline_and_cancellation(deadline, cancellation)?;
-        reader.set_read_timeout_value(next_wait_slice(deadline, cancellation)?)?;
-        match reader.read(&mut buffer) {
-            Ok(0) => return Ok(None),
-            Ok(bytes) => {
-                buffer.truncate(bytes);
-                return Ok(Some(buffer));
-            }
-            Err(error) if is_retryable_network_error(&error) => continue,
-            Err(error) => return Err(error),
-        }
-    }
-}
-
-#[cfg(unix)]
 fn read_all_with_fd_deadline<R>(
     reader: &mut R,
-    fd: i32,
+    fd: RawIo,
     readiness_events: i16,
     deadline: Option<Instant>,
     cancellation: Option<&CancellationContext>,
@@ -13761,7 +13541,6 @@ where
     Ok(contents)
 }
 
-#[cfg(unix)]
 fn read_all_with_deadline<R>(
     reader: &mut R,
     deadline: Option<Instant>,
@@ -13773,16 +13552,15 @@ where
     read_all_with_fd_deadline(
         reader,
         reader.as_raw_fd(),
-        libc::POLLIN,
+        host_io::POLLIN,
         deadline,
         cancellation,
     )
 }
 
-#[cfg(unix)]
 fn write_all_with_fd_deadline<W>(
     writer: &mut W,
-    fd: i32,
+    fd: RawIo,
     bytes: &[u8],
     readiness_events: i16,
     deadline: Option<Instant>,
@@ -13812,7 +13590,6 @@ where
     Ok(())
 }
 
-#[cfg(unix)]
 fn write_all_with_deadline<W>(
     writer: &mut W,
     bytes: &[u8],
@@ -13826,12 +13603,14 @@ where
         writer,
         writer.as_raw_fd(),
         bytes,
-        libc::POLLOUT,
+        host_io::POLLOUT,
         deadline,
         cancellation,
     )
 }
 
+// Used by tests that need Unix.
+#[cfg_attr(not(unix), allow(dead_code))]
 #[cfg(test)]
 fn load_tls_server_config(
     cert_pem_path: &str,
@@ -13862,6 +13641,8 @@ fn build_tls_server_config(cert_pem: Vec<u8>, key_pem: Vec<u8>) -> io::Result<Ar
 }
 
 #[cfg(test)]
+// Used by tests that need Unix.
+#[cfg_attr(not(unix), allow(dead_code))]
 fn load_tls_root_store(ca_pem_path: Option<&str>) -> io::Result<RootCertStore> {
     let pem = ca_pem_path
         .filter(|path| !path.is_empty())
@@ -14432,7 +14213,6 @@ fn build_http_response_bytes(
     Ok(rendered)
 }
 
-#[cfg(unix)]
 fn unsupported_websocket_transport_error() -> io::Error {
     io::Error::new(
         io::ErrorKind::Unsupported,
@@ -14440,16 +14220,14 @@ fn unsupported_websocket_transport_error() -> io::Error {
     )
 }
 
-#[cfg(unix)]
-fn websocket_raw_fd(socket: &WebSocketStateKind) -> io::Result<i32> {
+fn websocket_raw_fd(socket: &WebSocketStateKind) -> io::Result<RawIo> {
     match socket {
         WebSocketStateKind::Plain(socket) => Ok(socket.get_ref().as_raw_fd()),
         WebSocketStateKind::MaybeTls(socket) => maybe_tls_stream_raw_fd(socket.get_ref()),
     }
 }
 
-#[cfg(unix)]
-fn maybe_tls_stream_raw_fd(stream: &MaybeTlsStream<StdTcpStream>) -> io::Result<i32> {
+fn maybe_tls_stream_raw_fd(stream: &MaybeTlsStream<StdTcpStream>) -> io::Result<RawIo> {
     match stream {
         MaybeTlsStream::Plain(stream) => Ok(stream.as_raw_fd()),
         MaybeTlsStream::Rustls(stream) => Ok(stream.get_ref().as_raw_fd()),
@@ -14464,26 +14242,22 @@ fn websocket_error_to_io(error: tungstenite::Error) -> io::Error {
     }
 }
 
-#[cfg(unix)]
 trait WebSocketHandshakeStream {
-    fn raw_fd(&self) -> io::Result<i32>;
+    fn raw_fd(&self) -> io::Result<RawIo>;
 }
 
-#[cfg(unix)]
 impl WebSocketHandshakeStream for StdTcpStream {
-    fn raw_fd(&self) -> io::Result<i32> {
+    fn raw_fd(&self) -> io::Result<RawIo> {
         Ok(self.as_raw_fd())
     }
 }
 
-#[cfg(unix)]
 impl WebSocketHandshakeStream for MaybeTlsStream<StdTcpStream> {
-    fn raw_fd(&self) -> io::Result<i32> {
+    fn raw_fd(&self) -> io::Result<RawIo> {
         maybe_tls_stream_raw_fd(self)
     }
 }
 
-#[cfg(unix)]
 fn finish_websocket_handshake<Role>(
     mut mid: tungstenite::handshake::MidHandshake<Role>,
     deadline: Option<Instant>,
@@ -14501,7 +14275,7 @@ where
             Err(tungstenite::handshake::HandshakeError::Interrupted(next_mid)) => {
                 wait_for_fd_event(
                     next_mid.get_ref().get_ref().raw_fd()?,
-                    libc::POLLIN | libc::POLLOUT,
+                    host_io::POLLIN | host_io::POLLOUT,
                     deadline,
                     cancellation,
                 )?;
@@ -14514,7 +14288,6 @@ where
     }
 }
 
-#[cfg(unix)]
 fn accept_websocket_stream(
     stream: StdTcpStream,
     deadline: Option<Instant>,
@@ -14543,7 +14316,6 @@ fn accept_websocket_stream(
     Ok(WebSocketStateKind::Plain(Box::new(socket)))
 }
 
-#[cfg(unix)]
 fn connect_websocket_stream(
     stream: StdTcpStream,
     request: tungstenite::http::Request<()>,
@@ -14576,7 +14348,6 @@ fn connect_websocket_stream(
     Ok(WebSocketStateKind::MaybeTls(Box::new(socket)))
 }
 
-#[cfg(unix)]
 fn websocket_set_nonblocking(socket: &mut WebSocketStateKind, enabled: bool) -> io::Result<()> {
     match socket {
         WebSocketStateKind::Plain(socket) => socket.get_mut().set_nonblocking(enabled),
@@ -15008,8 +14779,10 @@ impl ProcessPipeValue {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     fn from_stdin(stdin: StdChildStdin) -> io::Result<Self> {
+        let stdin = crate::pipe_bridge::bridge_writer(stdin)?;
+        stdin.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(ProcessPipeState {
                 pipe: Mutex::new(Some(ProcessPipeKind::Stdin(stdin))),
@@ -15027,8 +14800,10 @@ impl ProcessPipeValue {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     fn from_stdout(stdout: StdChildStdout) -> io::Result<Self> {
+        let stdout = crate::pipe_bridge::bridge_reader(stdout)?;
+        stdout.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(ProcessPipeState {
                 pipe: Mutex::new(Some(ProcessPipeKind::Stdout(stdout))),
@@ -15046,8 +14821,10 @@ impl ProcessPipeValue {
         })
     }
 
-    #[cfg(not(unix))]
+    #[cfg(windows)]
     fn from_stderr(stderr: StdChildStderr) -> io::Result<Self> {
+        let stderr = crate::pipe_bridge::bridge_reader(stderr)?;
+        stderr.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(ProcessPipeState {
                 pipe: Mutex::new(Some(ProcessPipeKind::Stderr(stderr))),
@@ -15068,25 +14845,9 @@ impl ProcessPipeValue {
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         let bytes = match pipe {
             ProcessPipeKind::Stdout(stdout) => read_all_with_deadline(stdout, None, cancellation)?,
             ProcessPipeKind::Stderr(stderr) => read_all_with_deadline(stderr, None, cancellation)?,
-            ProcessPipeKind::Stdin(_) => {
-                return Err(io::Error::new(
-                    io::ErrorKind::InvalidInput,
-                    "cannot read from a process stdin pipe",
-                ))
-            }
-        };
-        #[cfg(not(unix))]
-        let bytes = match pipe {
-            ProcessPipeKind::Stdout(stdout) => {
-                read_all_from_reader(stdout, "process pipe read_all")?
-            }
-            ProcessPipeKind::Stderr(stderr) => {
-                read_all_from_reader(stderr, "process pipe read_all")?
-            }
             ProcessPipeKind::Stdin(_) => {
                 return Err(io::Error::new(
                     io::ErrorKind::InvalidInput,
@@ -15107,7 +14868,6 @@ impl ProcessPipeValue {
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             match pipe {
                 ProcessPipeKind::Stdout(stdout) => {
@@ -15122,15 +14882,6 @@ impl ProcessPipeValue {
                 )),
             }
         }
-        #[cfg(not(unix))]
-        {
-            let _ = deadline;
-            let _ = cancellation;
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "process pipe line reads are only supported on unix in the bootstrap runtime",
-            ))
-        }
     }
 
     pub fn read_bytes(
@@ -15144,7 +14895,6 @@ impl ProcessPipeValue {
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             match pipe {
                 ProcessPipeKind::Stdout(stdout) => {
@@ -15158,16 +14908,6 @@ impl ProcessPipeValue {
                     "cannot read from a process stdin pipe",
                 )),
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = max_bytes;
-            let _ = deadline;
-            let _ = cancellation;
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "process pipe byte reads are only supported on unix in the bootstrap runtime",
-            ))
         }
     }
 
@@ -15191,7 +14931,6 @@ impl ProcessPipeValue {
         let Some(pipe) = pipe.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             match pipe {
                 ProcessPipeKind::Stdin(stdin) => {
@@ -15202,16 +14941,6 @@ impl ProcessPipeValue {
                     "cannot write to a process output pipe",
                 )),
             }
-        }
-        #[cfg(not(unix))]
-        {
-            let _ = bytes;
-            let _ = deadline;
-            let _ = cancellation;
-            Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "process pipe writes are only supported on unix in the bootstrap runtime",
-            ))
         }
     }
 
@@ -15648,15 +15377,35 @@ impl ProcessChildValue {
                 });
             }
         }
-        #[cfg(not(unix))]
+        // The child starts suspended, so it cannot start a process of its
+        // own before it has joined the job.
+        #[cfg(windows)]
         if group {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "process groups are only supported on Unix hosts",
-            ));
+            use std::os::windows::process::CommandExt;
+            builder.creation_flags(crate::windows_process::CREATE_SUSPENDED);
         }
         let mut child = builder.spawn()?;
-        let process_group_id = if group { Some(child.id() as i32) } else { None };
+        #[cfg(unix)]
+        let process_group = group.then(|| ProcessGroup(child.id() as i32));
+        #[cfg(windows)]
+        let process_group = if group {
+            let joined = crate::windows_process::JobGroup::create().and_then(|job| {
+                job.assign(&child)?;
+                crate::windows_process::resume(&child)?;
+                Ok(job)
+            });
+            match joined {
+                Ok(job) => Some(ProcessGroup(job)),
+                Err(error) => {
+                    // A child left suspended would never run or exit.
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(error);
+                }
+            }
+        } else {
+            None
+        };
         let stdin = child
             .stdin
             .take()
@@ -15676,7 +15425,7 @@ impl ProcessChildValue {
             inner: Arc::new(ProcessChildState {
                 child: Mutex::new(Some(child)),
                 waited: Mutex::new(None),
-                process_group_id,
+                process_group,
                 stdin,
                 stdout,
                 stderr,
@@ -15777,8 +15526,8 @@ impl ProcessChildValue {
     }
 
     pub fn kill(&self) -> io::Result<()> {
-        if let Some(process_group_id) = self.inner.process_group_id {
-            return signal_process_group(process_group_id, libc::SIGKILL);
+        if let Some(process_group) = &self.inner.process_group {
+            return process_group.kill();
         }
         let mut child = lock_mutex(&self.inner.child);
         let Some(child) = child.as_mut() else {
@@ -15788,8 +15537,8 @@ impl ProcessChildValue {
     }
 
     pub fn terminate(&self) -> io::Result<()> {
-        if let Some(process_group_id) = self.inner.process_group_id {
-            return signal_process_group(process_group_id, libc::SIGTERM);
+        if let Some(process_group) = &self.inner.process_group {
+            return process_group.terminate();
         }
         let mut child = lock_mutex(&self.inner.child);
         let Some(child) = child.as_mut() else {
@@ -15802,7 +15551,9 @@ impl ProcessChildValue {
             }
             Ok(())
         }
-        #[cfg(not(unix))]
+        // Windows has no request a process can decline, so asking it to
+        // end is the same as ending it.
+        #[cfg(windows)]
         {
             child.kill()
         }
@@ -15852,7 +15603,7 @@ impl ProcessChildValue {
         timeout: Option<StdDuration>,
         cancellation: Option<&CancellationContext>,
     ) -> bool {
-        let Some(process_group_id) = self.inner.process_group_id else {
+        let Some(process_group) = &self.inner.process_group else {
             return true;
         };
         let deadline = match deadline_from_timeout_labeled(timeout, "process group cleanup timeout")
@@ -15861,7 +15612,7 @@ impl ProcessChildValue {
             Err(_) => return false,
         };
         loop {
-            if !process_group_alive(process_group_id) {
+            if !process_group.alive() {
                 return true;
             }
             if cancellation.is_some_and(CancellationContext::is_cancelled) {
@@ -15877,37 +15628,62 @@ impl ProcessChildValue {
     }
 }
 
+/// A child started as the head of its own group, with every process it
+/// starts: a process group on Unix, a job object on Windows.
 #[cfg(unix)]
-fn signal_process_group(process_group_id: i32, signal: libc::c_int) -> io::Result<()> {
-    if unsafe { libc::kill(-process_group_id, signal) } < 0 {
-        let error = io::Error::last_os_error();
-        match error.raw_os_error() {
-            Some(libc::ESRCH) => Ok(()),
-            _ => Err(error),
+struct ProcessGroup(i32);
+#[cfg(windows)]
+struct ProcessGroup(crate::windows_process::JobGroup);
+
+#[cfg(unix)]
+impl ProcessGroup {
+    fn signal(&self, signal: libc::c_int) -> io::Result<()> {
+        if unsafe { libc::kill(-self.0, signal) } < 0 {
+            let error = io::Error::last_os_error();
+            match error.raw_os_error() {
+                Some(libc::ESRCH) => Ok(()),
+                _ => Err(error),
+            }
+        } else {
+            Ok(())
         }
-    } else {
-        Ok(())
+    }
+
+    /// Ends every process of the group at once.
+    fn kill(&self) -> io::Result<()> {
+        self.signal(libc::SIGKILL)
+    }
+
+    /// Asks every process of the group to end.
+    fn terminate(&self) -> io::Result<()> {
+        self.signal(libc::SIGTERM)
+    }
+
+    fn alive(&self) -> bool {
+        if unsafe { libc::kill(-self.0, 0) } == 0 {
+            true
+        } else {
+            io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
+        }
     }
 }
 
-#[cfg(not(unix))]
-fn signal_process_group(_process_group_id: i32, _signal: libc::c_int) -> io::Result<()> {
-    Ok(())
-}
-
-#[cfg(unix)]
-fn process_group_alive(process_group_id: i32) -> bool {
-    if unsafe { libc::kill(-process_group_id, 0) } == 0 {
-        true
-    } else {
-        let error = io::Error::last_os_error();
-        matches!(error.raw_os_error(), Some(libc::EPERM))
+#[cfg(windows)]
+impl ProcessGroup {
+    /// Ends every process of the group at once.
+    fn kill(&self) -> io::Result<()> {
+        self.0.terminate()
     }
-}
 
-#[cfg(not(unix))]
-fn process_group_alive(_process_group_id: i32) -> bool {
-    false
+    /// Windows has no request a process can decline, so asking the group
+    /// to end is the same as ending it.
+    fn terminate(&self) -> io::Result<()> {
+        self.0.terminate()
+    }
+
+    fn alive(&self) -> bool {
+        self.0.alive()
+    }
 }
 
 fn should_restart_process(
@@ -15929,7 +15705,6 @@ fn should_restart_process(
 
 impl TcpListenerValue {
     fn from_std(listener: StdTcpListener) -> io::Result<Self> {
-        #[cfg(unix)]
         listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(TcpListenerState {
@@ -15967,7 +15742,12 @@ impl TcpListenerValue {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
+                    wait_for_fd_event(
+                        listener.as_raw_fd(),
+                        host_io::POLLIN,
+                        deadline,
+                        cancellation,
+                    )?;
                 }
                 Err(error) => return Err(error),
             }
@@ -16062,7 +15842,6 @@ where
 
 impl TcpStreamValue {
     fn from_std(stream: StdTcpStream) -> io::Result<Self> {
-        #[cfg(unix)]
         stream.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(TcpStreamState {
@@ -16085,7 +15864,6 @@ impl TcpStreamValue {
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        #[cfg(unix)]
         if let Ok(candidate) = address.parse::<SocketAddr>() {
             return Self::connect_address_before(candidate, deadline, cancellation);
         }
@@ -16108,18 +15886,19 @@ impl TcpStreamValue {
     /// Connects to a literal socket address without the blocking-I/O pool:
     /// the connect starts nonblocking and the task waits on the reactor for
     /// it to finish. Names still resolve and connect on the pool.
-    #[cfg(unix)]
     fn connect_address_before(
         address: SocketAddr,
         deadline: Option<Instant>,
         cancellation: Option<&CancellationContext>,
     ) -> io::Result<Self> {
-        use std::os::fd::{FromRawFd, IntoRawFd};
-
         check_deadline_and_cancellation(deadline, cancellation)?;
         let stream = mio::net::TcpStream::connect(address)?;
         loop {
-            wait_for_fd_event(stream.as_raw_fd(), libc::POLLOUT, deadline, cancellation)?;
+            #[cfg(unix)]
+            let handle = stream.as_raw_fd();
+            #[cfg(windows)]
+            let handle = std::os::windows::io::AsRawSocket::as_raw_socket(&stream);
+            wait_for_fd_event(handle, host_io::POLLOUT, deadline, cancellation)?;
             if let Some(error) = stream.take_error()? {
                 return Err(error);
             }
@@ -16129,8 +15908,19 @@ impl TcpStreamValue {
                 break;
             }
         }
-        // SAFETY: `into_raw_fd` hands over the only owner of the socket.
-        Self::from_std(unsafe { StdTcpStream::from_raw_fd(stream.into_raw_fd()) })
+        // SAFETY: the handle comes from the only owner of the socket.
+        #[cfg(unix)]
+        let stream = unsafe {
+            use std::os::fd::{FromRawFd, IntoRawFd};
+            StdTcpStream::from_raw_fd(stream.into_raw_fd())
+        };
+        // SAFETY: the handle comes from the only owner of the socket.
+        #[cfg(windows)]
+        let stream = unsafe {
+            use std::os::windows::io::{FromRawSocket, IntoRawSocket};
+            StdTcpStream::from_raw_socket(stream.into_raw_socket())
+        };
+        Self::from_std(stream)
     }
 
     #[cfg(test)]
@@ -16250,7 +16040,6 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             let mut pending = lock_mutex(&self.inner.read_ahead);
             let mut stream = ReadAhead {
@@ -16258,36 +16047,6 @@ impl TcpStreamValue {
                 pending: &mut pending.bytes,
             };
             read_all_with_deadline(&mut stream, deadline_from_timeout(timeout)?, cancellation)
-        }
-        #[cfg(not(unix))]
-        {
-            let mut contents = Vec::new();
-            let deadline = deadline_from_timeout(timeout)?;
-            loop {
-                stream.set_read_timeout(next_wait_slice(deadline, cancellation)?)?;
-                let mut chunk = [0u8; 4096];
-                match stream.read(&mut chunk) {
-                    Ok(0) => break,
-                    Ok(bytes) => {
-                        push_limited_bytes(&mut contents, &chunk[..bytes], "network read_all")?
-                    }
-                    Err(error)
-                        if matches!(
-                            error.kind(),
-                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                        ) =>
-                    {
-                        if let Some(deadline) = deadline {
-                            if Instant::now() >= deadline {
-                                return Err(timeout_resource_error());
-                            }
-                        }
-                        continue;
-                    }
-                    Err(error) => return Err(error),
-                }
-            }
-            Ok(contents)
         }
     }
 
@@ -16372,17 +16131,8 @@ impl TcpStreamValue {
         let Some(stream) = stream.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             write_all_with_deadline(stream, bytes, deadline_from_timeout(timeout)?, cancellation)
-        }
-        #[cfg(not(unix))]
-        {
-            stream.set_write_timeout(next_wait_slice(
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            )?)?;
-            stream.write_all(bytes)
         }
     }
 
@@ -16459,7 +16209,6 @@ impl UdpDatagramValue {
 
 impl UdpSocketValue {
     fn from_std(socket: StdUdpSocket) -> io::Result<Self> {
-        #[cfg(unix)]
         socket.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(UdpSocketState {
@@ -16507,7 +16256,6 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             loop {
                 match socket.send_to(bytes, target) {
@@ -16515,7 +16263,7 @@ impl UdpSocketValue {
                     Err(error) if is_retryable_network_error(&error) => {
                         wait_for_fd_event(
                             socket.as_raw_fd(),
-                            libc::POLLOUT,
+                            host_io::POLLOUT,
                             deadline,
                             cancellation,
                         )?;
@@ -16523,14 +16271,6 @@ impl UdpSocketValue {
                     Err(error) => return Err(normalize_udp_send_error(error)),
                 }
             }
-        }
-        #[cfg(not(unix))]
-        {
-            socket.set_write_timeout(next_wait_slice(deadline, cancellation)?)?;
-            socket
-                .send_to(bytes, target)
-                .map_err(normalize_udp_send_error)?;
-            Ok(())
         }
     }
 
@@ -16544,7 +16284,6 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
@@ -16558,7 +16297,7 @@ impl UdpSocketValue {
                     Err(error) if is_retryable_network_error(&error) => {
                         match wait_for_fd_event(
                             socket.as_raw_fd(),
-                            libc::POLLIN,
+                            host_io::POLLIN,
                             deadline,
                             cancellation,
                         ) {
@@ -16573,30 +16312,6 @@ impl UdpSocketValue {
                 }
             }
         }
-        #[cfg(not(unix))]
-        {
-            socket.set_read_timeout(next_wait_slice(
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            )?)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            match socket.recv(&mut buffer) {
-                Ok(0) => Ok(None),
-                Ok(bytes) => {
-                    buffer.truncate(bytes);
-                    Ok(Some(buffer))
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    Ok(None)
-                }
-                Err(error) => Err(error),
-            }
-        }
     }
 
     pub fn recv_from(
@@ -16609,7 +16324,6 @@ impl UdpSocketValue {
         let Some(socket) = socket.as_mut() else {
             return Err(closed_resource_error());
         };
-        #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout)?;
             let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
@@ -16625,7 +16339,7 @@ impl UdpSocketValue {
                     Err(error) if is_retryable_network_error(&error) => {
                         match wait_for_fd_event(
                             socket.as_raw_fd(),
-                            libc::POLLIN,
+                            host_io::POLLIN,
                             deadline,
                             cancellation,
                         ) {
@@ -16638,32 +16352,6 @@ impl UdpSocketValue {
                     }
                     Err(error) => return Err(error),
                 }
-            }
-        }
-        #[cfg(not(unix))]
-        {
-            socket.set_read_timeout(next_wait_slice(
-                deadline_from_timeout(timeout)?,
-                cancellation,
-            )?)?;
-            let mut buffer = vec![0u8; validate_udp_datagram_limit(max_bytes)?];
-            match socket.recv_from(&mut buffer) {
-                Ok((bytes, address)) => {
-                    buffer.truncate(bytes);
-                    Ok(Some(UdpDatagramValue {
-                        address: address.to_string(),
-                        data: buffer,
-                    }))
-                }
-                Err(error)
-                    if matches!(
-                        error.kind(),
-                        io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                    ) =>
-                {
-                    Ok(None)
-                }
-                Err(error) => Err(error),
             }
         }
     }
@@ -16690,7 +16378,6 @@ impl UdpSocketValue {
     }
 }
 
-#[cfg(unix)]
 impl UnixListenerValue {
     fn from_std(listener: StdUnixListener) -> io::Result<Self> {
         listener.set_nonblocking(true)?;
@@ -16742,7 +16429,12 @@ impl UnixListenerValue {
                         io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
                     ) =>
                 {
-                    wait_for_fd_event(listener.as_raw_fd(), libc::POLLIN, deadline, cancellation)?;
+                    wait_for_fd_event(
+                        listener.as_raw_fd(),
+                        host_io::POLLIN,
+                        deadline,
+                        cancellation,
+                    )?;
                 }
                 Err(error) => return Err(error),
             }
@@ -16755,17 +16447,6 @@ impl UnixListenerValue {
     }
 }
 
-#[cfg(not(unix))]
-impl UnixListenerValue {
-    pub fn bind(_path: &str) -> io::Result<Self> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "unix domain sockets are not supported on this platform",
-        ))
-    }
-}
-
-#[cfg(unix)]
 impl UnixStreamValue {
     fn from_std(stream: StdUnixStream) -> io::Result<Self> {
         stream.set_nonblocking(true)?;
@@ -16790,6 +16471,8 @@ impl UnixStreamValue {
         )
     }
 
+    // Used by tests that need Unix.
+    #[cfg_attr(not(unix), allow(dead_code))]
     #[cfg(test)]
     fn connect_with_operation<C>(
         path: &str,
@@ -16887,20 +16570,6 @@ impl UnixStreamValue {
     }
 }
 
-#[cfg(not(unix))]
-impl UnixStreamValue {
-    pub fn connect(
-        _path: &str,
-        _timeout: Option<StdDuration>,
-        _cancellation: Option<&CancellationContext>,
-    ) -> io::Result<Self> {
-        Err(io::Error::new(
-            io::ErrorKind::Unsupported,
-            "unix domain sockets are not supported on this platform",
-        ))
-    }
-}
-
 impl TlsListenerValue {
     pub fn bind(address: &str, cert_pem_path: &str, key_pem_path: &str) -> io::Result<Self> {
         let address = address.to_string();
@@ -16940,7 +16609,6 @@ impl TlsListenerValue {
         let deadline = deadline_from_timeout(timeout)?;
         let mut pending = VecDeque::new();
         loop {
-            #[cfg(unix)]
             let (listener_fd, accepted) = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
@@ -16964,48 +16632,6 @@ impl TlsListenerValue {
                 }
                 (listener_fd, accepted)
             };
-            #[cfg(unix)]
-            for stream in accepted {
-                let config = self.inner.config.clone();
-                let handshake_deadline = tls_handshake_deadline(deadline)?;
-                pending.push_back(run_protocol_step_before(
-                    move || {
-                        stream.set_nonblocking(true)?;
-                        let connection = ServerConnection::new(config).map_err(io::Error::other)?;
-                        Ok(PendingTlsServerHandshake {
-                            stream: rustls::StreamOwned::new(connection, stream),
-                            deadline: handshake_deadline,
-                        })
-                    },
-                    deadline,
-                    cancellation,
-                )?);
-            }
-            #[cfg(not(unix))]
-            let (wait_listener, accepted) = {
-                let mut listener = lock_mutex(&self.inner.listener);
-                let Some(listener) = listener.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                let wait_listener = listener.try_clone()?;
-                let mut accepted = Vec::new();
-                loop {
-                    match listener.accept() {
-                        Ok((stream, _)) => accepted.push(stream),
-                        Err(error)
-                            if matches!(
-                                error.kind(),
-                                io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
-                            ) =>
-                        {
-                            break;
-                        }
-                        Err(error) => return Err(error),
-                    }
-                }
-                (wait_listener, accepted)
-            };
-            #[cfg(not(unix))]
             for stream in accepted {
                 let config = self.inner.config.clone();
                 let handshake_deadline = tls_handshake_deadline(deadline)?;
@@ -17055,16 +16681,8 @@ impl TlsListenerValue {
                 }
             }
 
-            #[cfg(unix)]
             wait_for_tls_listener_progress(
                 listener_fd,
-                pending.is_empty(),
-                deadline,
-                cancellation,
-            )?;
-            #[cfg(not(unix))]
-            wait_for_tls_listener_progress(
-                &wait_listener,
                 pending.is_empty(),
                 deadline,
                 cancellation,
@@ -17108,15 +16726,12 @@ fn complete_tls_client_handshake(
         match result {
             Ok(_) => {}
             Err(error) if is_retryable_network_error(&error) => {
-                #[cfg(unix)]
                 wait_for_fd_event(
                     stream.sock.as_raw_fd(),
-                    libc::POLLIN | libc::POLLOUT,
+                    host_io::POLLIN | host_io::POLLOUT,
                     deadline,
                     cancellation,
                 )?;
-                #[cfg(not(unix))]
-                return Err(error);
             }
             Err(error) => return Err(error),
         }
@@ -17155,12 +16770,10 @@ fn advance_tls_server_handshake(
 fn finalize_tls_server_stream_for_runtime(
     _stream: &mut rustls::StreamOwned<ServerConnection, StdTcpStream>,
 ) -> io::Result<()> {
-    #[cfg(not(unix))]
-    _stream.sock.set_nonblocking(false)?;
     Ok(())
 }
 
-fn tls_stream_raw_fd(stream: &TlsStreamKind) -> i32 {
+fn tls_stream_raw_fd(stream: &TlsStreamKind) -> RawIo {
     match stream {
         TlsStreamKind::Client(stream) => stream.sock.as_raw_fd(),
         TlsStreamKind::Server(stream) => stream.sock.as_raw_fd(),
@@ -17247,7 +16860,7 @@ fn tls_client_read_some_owned(
             Ok(bytes) => return Ok((stream, Some(bytes))),
             Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
                 stream.sock.as_raw_fd(),
-                libc::POLLIN | libc::POLLOUT,
+                host_io::POLLIN | host_io::POLLOUT,
                 deadline,
                 cancellation,
             )?,
@@ -17287,7 +16900,7 @@ fn write_all_tls_client_owned(
             Ok(count) => written += count,
             Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
                 stream.sock.as_raw_fd(),
-                libc::POLLIN | libc::POLLOUT,
+                host_io::POLLIN | host_io::POLLOUT,
                 deadline,
                 cancellation,
             )?,
@@ -17421,9 +17034,12 @@ impl TlsStreamValue {
                             .map_err(|error| io::Error::new(io::ErrorKind::InvalidData, error));
                     }
                 }
-                Err(error) if is_retryable_network_error(&error) => {
-                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
-                }
+                Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
+                    fd,
+                    host_io::POLLIN | host_io::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?,
                 Err(error) => return Err(error),
             }
         }
@@ -17455,9 +17071,12 @@ impl TlsStreamValue {
                     ));
                 }
                 Ok(bytes) => output.extend_from_slice(&bytes),
-                Err(error) if is_retryable_network_error(&error) => {
-                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
-                }
+                Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
+                    fd,
+                    host_io::POLLIN | host_io::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?,
                 Err(error) => return Err(error),
             }
         }
@@ -17490,9 +17109,12 @@ impl TlsStreamValue {
                     ));
                 }
                 Ok(count) => written += count,
-                Err(error) if is_retryable_network_error(&error) => {
-                    wait_for_fd_event(fd, libc::POLLIN | libc::POLLOUT, deadline, cancellation)?
-                }
+                Err(error) if is_retryable_network_error(&error) => wait_for_fd_event(
+                    fd,
+                    host_io::POLLIN | host_io::POLLOUT,
+                    deadline,
+                    cancellation,
+                )?,
                 Err(error) => return Err(error),
             }
         }
@@ -17533,7 +17155,6 @@ impl HttpListenerValue {
             None,
             current_lightweight_task_cancellation().as_ref(),
         )?;
-        #[cfg(unix)]
         listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(HttpListenerState {
@@ -17549,7 +17170,6 @@ impl HttpListenerValue {
     ) -> io::Result<HttpExchangeValue> {
         let deadline = deadline_from_timeout(timeout)?;
         loop {
-            #[cfg(unix)]
             let stream = {
                 let mut listener = lock_mutex(&self.inner.listener);
                 let Some(listener) = listener.as_mut() else {
@@ -17566,7 +17186,7 @@ impl HttpListenerValue {
                         {
                             wait_for_fd_event(
                                 listener.as_raw_fd(),
-                                libc::POLLIN,
+                                host_io::POLLIN,
                                 deadline,
                                 cancellation,
                             )?;
@@ -17574,14 +17194,6 @@ impl HttpListenerValue {
                         Err(error) => return Err(error),
                     }
                 }
-            };
-            #[cfg(not(unix))]
-            let stream = {
-                let mut listener = lock_mutex(&self.inner.listener);
-                let Some(listener) = listener.as_mut() else {
-                    return Err(closed_resource_error());
-                };
-                TcpStreamValue::from_std(listener.accept()?.0)?
             };
             let mut raw_stream_guard = lock_mutex(&stream.inner.stream);
             let Some(mut raw_stream) = raw_stream_guard.take() else {
@@ -17719,7 +17331,6 @@ impl WebSocketListenerValue {
             None,
             current_lightweight_task_cancellation().as_ref(),
         )?;
-        #[cfg(unix)]
         listener.set_nonblocking(true)?;
         Ok(Self {
             inner: Arc::new(WebSocketListenerState {
@@ -17736,32 +17347,15 @@ impl WebSocketListenerValue {
             };
             listener.try_clone()?
         };
+        // A duplicate of a Windows socket starts in blocking mode.
+        listener.set_nonblocking(true)?;
         let deadline = deadline_from_timeout(timeout)?;
         let cancellation = current_lightweight_task_cancellation();
         loop {
             match listener.accept() {
                 Ok((stream, _)) => {
-                    #[cfg(unix)]
                     let mut state =
                         accept_websocket_stream(stream, deadline, cancellation.as_ref())?;
-                    #[cfg(not(unix))]
-                    let mut state = {
-                        let socket =
-                            match websocket_accept_with_config(stream, Some(websocket_config())) {
-                                Ok(socket) => socket,
-                                Err(tungstenite::handshake::HandshakeError::Interrupted(_)) => {
-                                    return Err(io::Error::new(
-                                        io::ErrorKind::WouldBlock,
-                                        "websocket handshake unexpectedly blocked",
-                                    ));
-                                }
-                                Err(tungstenite::handshake::HandshakeError::Failure(error)) => {
-                                    return Err(websocket_error_to_io(error));
-                                }
-                            };
-                        WebSocketStateKind::Plain(Box::new(socket))
-                    };
-                    #[cfg(unix)]
                     websocket_set_nonblocking(&mut state, true)?;
                     return Ok(WebSocketValue {
                         inner: Arc::new(WebSocketState {
@@ -17779,7 +17373,7 @@ impl WebSocketListenerValue {
                 {
                     wait_for_fd_event(
                         listener.as_raw_fd(),
-                        libc::POLLIN,
+                        host_io::POLLIN,
                         deadline,
                         cancellation.as_ref(),
                     )?;
@@ -17813,7 +17407,6 @@ impl WebSocketValue {
     }
 
     pub fn connect(url: &str, timeout: Option<StdDuration>) -> io::Result<Self> {
-        #[cfg(unix)]
         {
             let deadline = deadline_from_timeout(timeout)?;
             let cancellation = current_lightweight_task_cancellation();
@@ -17861,26 +17454,6 @@ impl WebSocketValue {
                 }),
             })
         }
-
-        #[cfg(not(unix))]
-        {
-            let url = url.to_string();
-            let deadline = deadline_from_timeout(timeout)?;
-            let cancellation = current_lightweight_task_cancellation();
-            let (socket, _) = run_blocking_io_with_deadline(
-                move || tungstenite::connect(url).map_err(websocket_error_to_io),
-                deadline,
-                cancellation.as_ref(),
-            )?;
-            let state = WebSocketStateKind::MaybeTls(Box::new(socket));
-            Ok(Self {
-                inner: Arc::new(WebSocketState {
-                    socket: Mutex::new(Some(state)),
-                    busy: AtomicBool::new(false),
-                    closed: AtomicBool::new(false),
-                }),
-            })
-        }
     }
 
     pub fn send_text(&self, text: &str, timeout: Option<StdDuration>) -> io::Result<()> {
@@ -17910,30 +17483,19 @@ impl WebSocketValue {
                 cancellation.as_ref(),
             )?;
             message = returned_message;
-            #[cfg(unix)]
             let fd = websocket_raw_fd(&returned_socket);
             self.restore_socket_after_step(returned_socket);
             check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
-            #[cfg(unix)]
             let fd = fd?;
             let result = result?;
             match result {
                 Ok(()) => return Ok(()),
                 Err(tungstenite::Error::WriteBufferFull(returned)) => {
                     message = returned;
-                    #[cfg(unix)]
-                    wait_for_fd_event(fd, libc::POLLOUT, deadline, cancellation.as_ref())?;
-                    #[cfg(not(unix))]
-                    return Err(io::Error::new(
-                        io::ErrorKind::WouldBlock,
-                        "websocket write buffer is full",
-                    ));
+                    wait_for_fd_event(fd, host_io::POLLOUT, deadline, cancellation.as_ref())?;
                 }
                 Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
-                    #[cfg(unix)]
-                    wait_for_fd_event(fd, libc::POLLOUT, deadline, cancellation.as_ref())?;
-                    #[cfg(not(unix))]
-                    return Err(error);
+                    wait_for_fd_event(fd, host_io::POLLOUT, deadline, cancellation.as_ref())?;
                 }
                 Err(error) => return Err(websocket_error_to_io(error)),
             }
@@ -17984,11 +17546,9 @@ impl WebSocketValue {
                 deadline,
                 cancellation.as_ref(),
             )?;
-            #[cfg(unix)]
             let fd = websocket_raw_fd(&socket);
             self.restore_socket_after_step(socket);
             check_deadline_and_cancellation(deadline, cancellation.as_ref())?;
-            #[cfg(unix)]
             let fd = fd?;
             let result = result?;
             match result {
@@ -17998,15 +17558,12 @@ impl WebSocketValue {
                     return Ok(None);
                 }
                 Err(tungstenite::Error::Io(error)) if is_retryable_network_error(&error) => {
-                    #[cfg(unix)]
                     wait_for_fd_event(
                         fd,
-                        libc::POLLIN | libc::POLLOUT,
+                        host_io::POLLIN | host_io::POLLOUT,
                         deadline,
                         cancellation.as_ref(),
                     )?;
-                    #[cfg(not(unix))]
-                    continue;
                 }
                 Err(error) => return Err(websocket_error_to_io(error)),
             }

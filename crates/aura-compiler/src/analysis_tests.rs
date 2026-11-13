@@ -1220,7 +1220,7 @@ fn p64_path_analysis_exposes_local_extern_completions_hovers_and_definitions() {
         assert_eq!(
             definition.file_path.as_deref(),
             Some(
-                fs::canonicalize(&main_path)
+                aura_core::host_path::canonicalize(&main_path)
                     .expect("main path should canonicalize")
                     .display()
                     .to_string()
@@ -1314,7 +1314,7 @@ fn p64_path_analysis_exposes_imported_extern_members_and_handle_types() {
         "unexpected diagnostics: {:?}",
         analysis.diagnostics
     );
-    let canonical_native_path = fs::canonicalize(&native_path)
+    let canonical_native_path = aura_core::host_path::canonicalize(&native_path)
         .expect("native module should canonicalize")
         .display()
         .to_string();
@@ -1358,7 +1358,7 @@ fn import_alias_analysis_preserves_visible_names_and_canonical_definitions() {
         ),
     )
     .expect("failed to write imported module");
-    let canonical_math_path = fs::canonicalize(&math_path)
+    let canonical_math_path = aura_core::host_path::canonicalize(&math_path)
         .expect("imported module path should canonicalize")
         .display()
         .to_string();
@@ -5393,10 +5393,11 @@ fn path_aware_analysis_tracks_definitions_for_namespace_imported_symbols() {
     let path = repo_root().join("examples/modules/namespace_import_types.au");
     let source = std::fs::read_to_string(&path).expect("example should exist");
     let analysis = analyze_path_source(&path, &source);
-    let types_path = fs::canonicalize(repo_root().join("examples/modules/pkg/types.au"))
-        .expect("types path should canonicalize")
-        .display()
-        .to_string();
+    let types_path =
+        aura_core::host_path::canonicalize(repo_root().join("examples/modules/pkg/types.au"))
+            .expect("types path should canonicalize")
+            .display()
+            .to_string();
 
     assert!(analysis.diagnostics.is_empty());
     assert!(analysis.occurrences.iter().any(|occurrence| {
@@ -5474,11 +5475,11 @@ fn path_aware_analysis_tracks_imported_function_field_and_trait_method_definitio
     fs::write(&main_path, &source).expect("failed to write main module");
 
     let analysis = analyze_path_source(&main_path, &source);
-    let math_path = fs::canonicalize(&math_path)
+    let math_path = aura_core::host_path::canonicalize(&math_path)
         .expect("math path should canonicalize")
         .display()
         .to_string();
-    let user_path = fs::canonicalize(&user_path)
+    let user_path = aura_core::host_path::canonicalize(&user_path)
         .expect("user path should canonicalize")
         .display()
         .to_string();
@@ -5545,7 +5546,7 @@ def main() -> int32:
     fs::write(&main_path, source).expect("failed to write same-leaf analysis source");
 
     let analysis = analyze_path_source(&main_path, source);
-    let canonical_remote_path = fs::canonicalize(&remote_path)
+    let canonical_remote_path = aura_core::host_path::canonicalize(&remote_path)
         .expect("remote path should canonicalize")
         .display()
         .to_string();
@@ -9557,7 +9558,7 @@ fn module_qualified_and_imported_alias_calls_resolve_in_analysis() {
         ),
     )
     .expect("failed to write imported module");
-    let canonical_shapes_path = fs::canonicalize(&shapes_path)
+    let canonical_shapes_path = aura_core::host_path::canonicalize(&shapes_path)
         .expect("imported module path should canonicalize")
         .display()
         .to_string();
@@ -10030,7 +10031,9 @@ fn editor_keyword_references_keep_imported_declarations_in_their_module() {
         .expect("imported parameter definition");
     assert_eq!(
         declaration.file_path.as_deref(),
-        fs::canonicalize(&dependency).unwrap().to_str()
+        aura_core::host_path::canonicalize(&dependency)
+            .unwrap()
+            .to_str()
     );
     assert!(crate::prepare_rename_path_source(&path, source, 3, 23).is_none());
     assert!(crate::rename_path_source(&path, source, 3, 23, "input").is_none());
@@ -10846,7 +10849,7 @@ fn path_analysis_lists_every_imported_source_file() {
         analysis.diagnostics
     );
     let canonical = |name: &str| {
-        fs::canonicalize(temp.path().join(name))
+        aura_core::host_path::canonicalize(temp.path().join(name))
             .expect("canonical module path")
             .display()
             .to_string()
@@ -10890,7 +10893,7 @@ fn imported_definitions_select_the_declared_name_in_their_source_file() {
         "{:?}",
         analysis.diagnostics
     );
-    let canonical_library = fs::canonicalize(&library_path)
+    let canonical_library = aura_core::host_path::canonicalize(&library_path)
         .expect("canonical library path")
         .display()
         .to_string();

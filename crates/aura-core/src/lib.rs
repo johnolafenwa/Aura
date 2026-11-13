@@ -5,6 +5,7 @@
 //! contains no parser, checker, or code generator.
 
 pub mod diag;
+pub mod host_path;
 pub mod integer;
 pub mod json_text;
 pub mod layout;

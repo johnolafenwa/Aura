@@ -183,6 +183,41 @@ fn aarch64_passes_float_aggregates_in_float_registers() {
 }
 
 #[test]
+fn windows_passes_a_struct_as_one_integer_or_in_memory() {
+    assert_eq!(CAbi::of_target("x86_64", "windows"), Some(CAbi::Win64));
+    assert_eq!(CAbi::of_target("aarch64", "windows"), None);
+    assert_eq!(CAbi::of_target("x86_64", "linux"), Some(CAbi::SysV64));
+    assert_eq!(CAbi::of_target("aarch64", "macos"), Some(CAbi::Aapcs64));
+
+    // Eight bytes of floats still travel in a general register.
+    let pair = scalars("Pair", &[FfiScalar::F32, FfiScalar::F32]);
+    assert_eq!(
+        pair.passing(CAbi::Win64),
+        CPassing::Registers(vec![int(0, 8)])
+    );
+    assert_eq!(
+        pair.argument(CAbi::Win64, 4, 4),
+        Ok(CArgument::Registers(vec![int(0, 8)])),
+        "an argument past the fourth takes its own stack slot"
+    );
+    let small = scalars("Small", &[FfiScalar::I32]);
+    assert_eq!(
+        small.passing(CAbi::Win64),
+        CPassing::Registers(vec![int(0, 4)])
+    );
+    // Sizes that are not 1, 2, 4 or 8 go in memory, by address.
+    for fields in [
+        &[FfiScalar::I32, FfiScalar::I32, FfiScalar::I32][..],
+        &[FfiScalar::F64, FfiScalar::F64][..],
+        &[FfiScalar::I64, FfiScalar::I64, FfiScalar::I64][..],
+    ] {
+        let layout = scalars("Wide", fields);
+        assert_eq!(layout.passing(CAbi::Win64), CPassing::Memory);
+        assert_eq!(layout.argument(CAbi::Win64, 0, 0), Ok(CArgument::Address));
+    }
+}
+
+#[test]
 fn a_struct_description_round_trips_through_serde() {
     let outer = with_struct("Outer", &[I8], scalars("Inner", &[F32, Bool]), &[U64]);
     let text = serde_json::to_string(&outer).expect("a struct serializes");

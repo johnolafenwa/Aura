@@ -857,7 +857,8 @@ fn collect_aura_source_paths(inputs: &[PathBuf]) -> Result<Vec<PathBuf>, String>
                 path.display()
             ));
         }
-        let canonical = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+        let canonical =
+            aura_compiler::host_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
         if !visited_dirs.insert(canonical) {
             return Ok(());
         }
@@ -1133,10 +1134,11 @@ fn test_name_matches_filter(name: &str, filter: Option<&str>) -> bool {
 }
 
 fn normalized_test_display_path(path: &Path) -> String {
-    let absolute = fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    let absolute =
+        aura_compiler::host_path::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
     let display = std::env::current_dir()
         .ok()
-        .and_then(|cwd| fs::canonicalize(cwd).ok())
+        .and_then(|cwd| aura_compiler::host_path::canonicalize(cwd).ok())
         .and_then(|cwd| absolute.strip_prefix(cwd).ok().map(Path::to_path_buf))
         .unwrap_or(absolute);
     display.to_string_lossy().replace('\\', "/")
@@ -2467,9 +2469,7 @@ enum NativeExecutionOutcome {
 
 struct SpawnedNativeBinary {
     child: process::Child,
-    #[cfg(unix)]
     diagnostic_reader: Option<fs::File>,
-    #[cfg(unix)]
     diagnostic_signal_reader: Option<fs::File>,
 }
 
@@ -2703,26 +2703,58 @@ fn spawn_unix_native_binary_without_shell_fallback(
     })
 }
 
-#[cfg(not(unix))]
-fn spawn_native_binary_without_shell_fallback(
-    binary: &Path,
-    program_args: &[String],
-) -> io::Result<process::Child> {
-    process::Command::new(binary).args(program_args).spawn()
-}
-
-#[cfg(not(unix))]
+/// Starts `binary`. With `capture_structured_diagnostics`, the child
+/// inherits the write ends of two pipes and reads their handle values from
+/// its environment; the read ends stay here. `CreateProcess` runs only an
+/// executable image, so there is no shell fallback to avoid.
+#[cfg(windows)]
 fn spawn_native_binary_with_diagnostic_mode(
     binary: &Path,
     program_args: &[String],
-    _capture_structured_diagnostics: bool,
+    capture_structured_diagnostics: bool,
 ) -> io::Result<SpawnedNativeBinary> {
-    spawn_native_binary_without_shell_fallback(binary, program_args)
-        .map(|child| SpawnedNativeBinary { child })
+    use std::os::windows::io::{AsRawHandle, OwnedHandle};
+    use windows_sys::Win32::Foundation::{SetHandleInformation, HANDLE_FLAG_INHERIT};
+
+    let mut command = process::Command::new(binary);
+    // A caller-supplied value for the private channel must never reach a
+    // normal launch, which would write to an unrelated handle.
+    command
+        .args(program_args)
+        .env_remove(aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV)
+        .env_remove(aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV);
+    let mut pipes = Vec::new();
+    if capture_structured_diagnostics {
+        for key in [
+            aura_compiler::INTERNAL_DIAGNOSTIC_FD_ENV,
+            aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV,
+        ] {
+            let (reader, writer) = io::pipe()?;
+            let handle = writer.as_raw_handle();
+            // SAFETY: `handle` is the open write end owned by `writer`.
+            if unsafe { SetHandleInformation(handle, HANDLE_FLAG_INHERIT, HANDLE_FLAG_INHERIT) }
+                == 0
+            {
+                return Err(io::Error::last_os_error());
+            }
+            command.env(key, (handle as isize).to_string());
+            pipes.push((reader, writer));
+        }
+    }
+    let child = command.spawn()?;
+    // Dropping the write ends here leaves the child as their only owner, so
+    // each reader sees the end of its pipe when the child exits.
+    let mut readers = pipes
+        .into_iter()
+        .map(|(reader, _writer)| fs::File::from(OwnedHandle::from(reader)));
+    Ok(SpawnedNativeBinary {
+        child,
+        diagnostic_reader: readers.next(),
+        diagnostic_signal_reader: readers.next(),
+    })
 }
 
 fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<NativeExecutionOutcome> {
-    #[cfg(unix)]
     let diagnostic_reader = spawned.diagnostic_reader.take().map(|reader| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -2736,7 +2768,6 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
             Ok::<_, io::Error>(bytes)
         })
     });
-    #[cfg(unix)]
     let diagnostic_signal_reader = spawned.diagnostic_signal_reader.take().map(|reader| {
         std::thread::spawn(move || {
             let mut bytes = Vec::new();
@@ -2747,92 +2778,77 @@ fn wait_for_native_binary(mut spawned: SpawnedNativeBinary) -> io::Result<Native
 
     let status = spawned.child.wait()?;
 
-    #[cfg(unix)]
-    {
-        let diagnostic_bytes = match diagnostic_reader {
-            Some(reader) => reader
-                .join()
-                .map_err(|_| io::Error::other("the native diagnostic-channel reader panicked"))??,
-            None => Vec::new(),
-        };
-        let signal_bytes = match diagnostic_signal_reader {
-            Some(reader) => reader.join().map_err(|_| {
-                io::Error::other("the native diagnostic signal-channel reader panicked")
-            })??,
-            None => Vec::new(),
-        };
-        if status.code().is_none() {
-            return Err(io::Error::other(
-                "native program terminated by a host signal",
-            ));
-        }
-        if signal_bytes.len() > 1
-            || signal_bytes
-                .first()
-                .is_some_and(|marker| *marker != aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "invalid native diagnostic trap-intent marker",
-            ));
-        }
-        let trap_intended = !signal_bytes.is_empty();
-        if diagnostic_bytes.len() > aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                format!(
-                    "native diagnostic-channel record exceeded the {}-byte limit",
-                    aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
-                ),
-            ));
-        }
-        if status.success() && (trap_intended || !diagnostic_bytes.is_empty()) {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native diagnostic channel was used during a successful exit",
-            ));
-        }
-        if !trap_intended && diagnostic_bytes.is_empty() {
-            return Ok(NativeExecutionOutcome::Exited(
-                status.code().expect("signal exits were rejected above"),
-            ));
-        }
-        if trap_intended && diagnostic_bytes.is_empty() {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native runtime signaled a trap without a diagnostic record",
-            ));
-        }
-        if !trap_intended {
-            return Err(io::Error::new(
-                io::ErrorKind::InvalidData,
-                "native runtime emitted a diagnostic record without signaling a trap",
-            ));
-        }
-        let diagnostic = serde_json::from_slice::<StructuredDiagnostic>(&diagnostic_bytes)
-            .map_err(|error| {
-                io::Error::new(
-                    io::ErrorKind::InvalidData,
-                    format!("invalid native diagnostic-channel record: {error}"),
-                )
-            })?;
-        Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
+    let diagnostic_bytes = match diagnostic_reader {
+        Some(reader) => reader
+            .join()
+            .map_err(|_| io::Error::other("the native diagnostic-channel reader panicked"))??,
+        None => Vec::new(),
+    };
+    let signal_bytes = match diagnostic_signal_reader {
+        Some(reader) => reader.join().map_err(|_| {
+            io::Error::other("the native diagnostic signal-channel reader panicked")
+        })??,
+        None => Vec::new(),
+    };
+    if status.code().is_none() {
+        return Err(io::Error::other(
+            "native program terminated by a host signal",
+        ));
     }
-
-    #[cfg(not(unix))]
+    if signal_bytes.len() > 1
+        || signal_bytes
+            .first()
+            .is_some_and(|marker| *marker != aura_compiler::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER)
     {
-        if status.code().is_none() {
-            return Err(io::Error::new(
-                io::ErrorKind::Other,
-                "native program terminated without an exit status",
-            ));
-        }
-        Ok(NativeExecutionOutcome::Exited(
-            status.code().expect("missing statuses were rejected above"),
-        ))
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "invalid native diagnostic trap-intent marker",
+        ));
     }
+    let trap_intended = !signal_bytes.is_empty();
+    if diagnostic_bytes.len() > aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            format!(
+                "native diagnostic-channel record exceeded the {}-byte limit",
+                aura_compiler::MAX_INTERNAL_DIAGNOSTIC_BYTES
+            ),
+        ));
+    }
+    if status.success() && (trap_intended || !diagnostic_bytes.is_empty()) {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native diagnostic channel was used during a successful exit",
+        ));
+    }
+    if !trap_intended && diagnostic_bytes.is_empty() {
+        return Ok(NativeExecutionOutcome::Exited(
+            status.code().expect("signal exits were rejected above"),
+        ));
+    }
+    if trap_intended && diagnostic_bytes.is_empty() {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native runtime signaled a trap without a diagnostic record",
+        ));
+    }
+    if !trap_intended {
+        return Err(io::Error::new(
+            io::ErrorKind::InvalidData,
+            "native runtime emitted a diagnostic record without signaling a trap",
+        ));
+    }
+    let diagnostic =
+        serde_json::from_slice::<StructuredDiagnostic>(&diagnostic_bytes).map_err(|error| {
+            io::Error::new(
+                io::ErrorKind::InvalidData,
+                format!("invalid native diagnostic-channel record: {error}"),
+            )
+        })?;
+    Ok(NativeExecutionOutcome::Trapped(Box::new(diagnostic)))
 }
 
+#[cfg_attr(not(unix), allow(unused_variables))]
 fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
     #[cfg(unix)]
     if error.raw_os_error() == Some(libc::ENOEXEC) {
@@ -2885,7 +2901,7 @@ fn native_cache_root() -> Option<PathBuf> {
         let explicit = PathBuf::from(explicit);
         (!explicit.as_os_str().is_empty()).then_some(explicit)?
     } else {
-        let home = PathBuf::from(std::env::var_os("HOME")?);
+        let home = PathBuf::from(aura_compiler::host_path::home_dir()?);
         if home.as_os_str().is_empty() {
             return None;
         }
@@ -3030,6 +3046,26 @@ fn acquire_native_build_lock_at(
 
     #[cfg(not(unix))]
     {
+        match file.try_lock() {
+            Ok(()) => {}
+            Err(fs::TryLockError::WouldBlock) => {
+                if let Some(on_wait) = on_wait.as_mut() {
+                    on_wait();
+                }
+                file.lock().map_err(|error| {
+                    format!(
+                        "failed to wait for native build lock `{}`: {error}",
+                        path.display()
+                    )
+                })?;
+            }
+            Err(fs::TryLockError::Error(error)) => {
+                return Err(format!(
+                    "failed to acquire native build lock `{}`: {error}",
+                    path.display()
+                ));
+            }
+        }
         Ok(NativeBuildLock { _file: file })
     }
 }
@@ -3137,11 +3173,34 @@ fn native_process_is_live(pid: u32) -> bool {
         let result = unsafe { libc::kill(pid, 0) };
         result == 0 || io::Error::last_os_error().raw_os_error() == Some(libc::EPERM)
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        windows_process_is_live(pid)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = pid;
         true
     }
+}
+
+/// Reports whether a Windows process with this identifier is still running.
+/// A process that cannot be opened for any reason other than not existing
+/// counts as live, so cleanup never removes what it cannot inspect.
+#[cfg(windows)]
+fn windows_process_is_live(pid: u32) -> bool {
+    use windows_sys::Win32::Foundation::{CloseHandle, ERROR_INVALID_PARAMETER, WAIT_TIMEOUT};
+    use windows_sys::Win32::System::Threading::{
+        OpenProcess, WaitForSingleObject, PROCESS_SYNCHRONIZE,
+    };
+
+    let handle = unsafe { OpenProcess(PROCESS_SYNCHRONIZE, 0, pid) };
+    if handle.is_null() {
+        return io::Error::last_os_error().raw_os_error() != Some(ERROR_INVALID_PARAMETER as i32);
+    }
+    let live = unsafe { WaitForSingleObject(handle, 0) } == WAIT_TIMEOUT;
+    unsafe { CloseHandle(handle) };
+    live
 }
 
 /// Writes `contents` to a new file that only its owner can read. It refuses a
@@ -3328,13 +3387,60 @@ fn runtime_archive_memo_stamp(path: &Path, metadata: &fs::Metadata) -> Option<St
             metadata.ctime_nsec()
         ))
     }
-    #[cfg(not(unix))]
+    #[cfg(windows)]
+    {
+        let _ = metadata;
+        windows_archive_memo_stamp(path)
+    }
+    #[cfg(not(any(unix, windows)))]
     {
         let _ = (path, metadata);
         // Platforms without a stable file-identity/change token rehash rather
         // than reuse a memo that could alias different archive contents.
         None
     }
+}
+
+/// The Windows form of the archive stamp: the volume and file identifiers,
+/// the size, and the creation, write and change times of the open file.
+#[cfg(windows)]
+fn windows_archive_memo_stamp(path: &Path) -> Option<String> {
+    use std::os::windows::io::AsRawHandle;
+    use windows_sys::Win32::Storage::FileSystem::{
+        FileBasicInfo, GetFileInformationByHandle, GetFileInformationByHandleEx,
+        BY_HANDLE_FILE_INFORMATION, FILE_BASIC_INFO,
+    };
+
+    let file = fs::File::open(path).ok()?;
+    let handle = file.as_raw_handle();
+    let mut identity: BY_HANDLE_FILE_INFORMATION = unsafe { std::mem::zeroed() };
+    if unsafe { GetFileInformationByHandle(handle, &mut identity) } == 0 {
+        return None;
+    }
+    let mut times: FILE_BASIC_INFO = unsafe { std::mem::zeroed() };
+    let times_size = u32::try_from(std::mem::size_of::<FILE_BASIC_INFO>()).ok()?;
+    if unsafe {
+        GetFileInformationByHandleEx(
+            handle,
+            FileBasicInfo,
+            std::ptr::from_mut(&mut times).cast(),
+            times_size,
+        )
+    } == 0
+    {
+        return None;
+    }
+    Some(format!(
+        "{}:{}:{}:{}:{}:{}:{}:{}",
+        path.display(),
+        identity.dwVolumeSerialNumber,
+        (u64::from(identity.nFileIndexHigh) << 32) | u64::from(identity.nFileIndexLow),
+        (u64::from(identity.nFileSizeHigh) << 32) | u64::from(identity.nFileSizeLow),
+        times.CreationTime,
+        times.LastWriteTime,
+        times.ChangeTime,
+        identity.nNumberOfLinks
+    ))
 }
 
 fn read_runtime_identity_memo(memo: &Path, stamp: &str) -> Option<NativeRuntimeIdentity> {
@@ -3489,7 +3595,11 @@ fn write_runtime_identity_memo(memo: &Path, stamp: &str, identity: &NativeRuntim
 /// Cached program binaries live under their own directory so the cache can
 /// hold its own bookkeeping without either colliding with a content key.
 const NATIVE_CACHE_PROGRAMS: &str = "programs";
+#[cfg(not(windows))]
 const NATIVE_CACHE_PROGRAM: &str = "program";
+/// Windows starts a program only from a file with an executable extension.
+#[cfg(windows)]
+const NATIVE_CACHE_PROGRAM: &str = "program.exe";
 const NATIVE_CACHE_DIGEST: &str = "program.sha256";
 const NATIVE_CACHE_ENTRY_ID: &str = "entry-id";
 const MAX_NATIVE_CACHE_ARTIFACT_BYTES: u64 = 512 * 1024 * 1024;
@@ -3649,7 +3759,6 @@ fn launch_verified_native_binary(
         ))
     })?;
 
-    #[cfg(unix)]
     let launch_lease = match create_verified_native_launch_lease(&directory) {
         Ok(lease) => lease,
         Err(error) => {
@@ -3714,13 +3823,18 @@ fn launch_verified_native_binary(
     // Clean after exit. Removing an executing Mach-O can cause an otherwise
     // successful child to terminate with status 1 on macOS. Interrupted
     // parents are handled by the bounded stale-launch collector on the next
-    // verified run.
+    // verified run. A Unix child inherits the lease; elsewhere this process
+    // holds it for the life of the child and releases it here, because an
+    // open file can keep its directory from being removed.
+    #[cfg(not(unix))]
+    drop(launch_lease);
     remove_private_native_launch(&private_binary, &directory);
 
     Ok(outcome)
 }
 
 fn create_private_directory(path: &Path) -> io::Result<()> {
+    #[cfg_attr(not(unix), allow(unused_mut))]
     let mut builder = fs::DirBuilder::new();
     #[cfg(unix)]
     {
@@ -3758,6 +3872,22 @@ fn create_verified_native_launch_lease(directory: &Path) -> io::Result<fs::File>
     }
     if unsafe { libc::flock(file.as_raw_fd(), libc::LOCK_EX) } == -1 {
         let error = io::Error::last_os_error();
+        drop(file);
+        let _ = fs::remove_file(&path);
+        return Err(error);
+    }
+    Ok(file)
+}
+
+#[cfg(not(unix))]
+fn create_verified_native_launch_lease(directory: &Path) -> io::Result<fs::File> {
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let file = fs::OpenOptions::new()
+        .read(true)
+        .write(true)
+        .create_new(true)
+        .open(&path)?;
+    if let Err(error) = file.lock() {
         drop(file);
         let _ = fs::remove_file(&path);
         return Err(error);
@@ -3850,7 +3980,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
             continue;
         }
 
-        #[cfg(unix)]
         match acquire_abandoned_verified_native_launch_lease(&path) {
             Ok(VerifiedNativeLaunchLeaseState::Busy) | Err(_) => continue,
             Ok(VerifiedNativeLaunchLeaseState::Acquired(_lease)) => {
@@ -3860,13 +3989,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
                 continue;
             }
             Ok(VerifiedNativeLaunchLeaseState::Missing) => {}
-        }
-        #[cfg(not(unix))]
-        {
-            // The maintained native hosts use the lease path above. On other
-            // targets cleanup is conservative rather than guessing whether an
-            // executable may still be live.
-            continue;
         }
 
         // A lockless directory can only precede lease creation; no child is
@@ -3883,7 +4005,6 @@ fn cleanup_stale_verified_native_directories(root: &Path) {
     }
 }
 
-#[cfg(unix)]
 enum VerifiedNativeLaunchLeaseState {
     Missing,
     Busy,
@@ -3929,6 +4050,31 @@ fn acquire_abandoned_verified_native_launch_lease(
     }
 }
 
+#[cfg(not(unix))]
+fn acquire_abandoned_verified_native_launch_lease(
+    directory: &Path,
+) -> io::Result<VerifiedNativeLaunchLeaseState> {
+    let path = directory.join(VERIFIED_NATIVE_LAUNCH_LEASE);
+    let file = match fs::OpenOptions::new().read(true).write(true).open(&path) {
+        Ok(file) => file,
+        Err(error) if error.kind() == io::ErrorKind::NotFound => {
+            return Ok(VerifiedNativeLaunchLeaseState::Missing);
+        }
+        Err(error) => return Err(error),
+    };
+    if !file.metadata()?.file_type().is_file() {
+        return Err(io::Error::new(
+            io::ErrorKind::PermissionDenied,
+            "verified-native launch lease is not a regular file",
+        ));
+    }
+    match file.try_lock() {
+        Ok(()) => Ok(VerifiedNativeLaunchLeaseState::Acquired(file)),
+        Err(fs::TryLockError::WouldBlock) => Ok(VerifiedNativeLaunchLeaseState::Busy),
+        Err(fs::TryLockError::Error(error)) => Err(error),
+    }
+}
+
 fn verified_native_launch_owner_is_live(name: &str) -> bool {
     #[cfg(unix)]
     {
@@ -3944,8 +4090,10 @@ fn verified_native_launch_owner_is_live(name: &str) -> bool {
     }
     #[cfg(not(unix))]
     {
-        let _ = name;
-        true
+        name.strip_prefix("aura-verified-native-")
+            .and_then(|suffix| suffix.split_once('-').map(|(pid, _)| pid))
+            .and_then(|pid| pid.parse::<u32>().ok())
+            .is_none_or(native_process_is_live)
     }
 }
 
@@ -4365,14 +4513,12 @@ fn handle_verify_command(args: Vec<String>) {
 fn verify_cache_root() -> Option<PathBuf> {
     match std::env::var_os("AURA_CACHE_DIR").filter(|dir| !dir.is_empty()) {
         Some(dir) => Some(PathBuf::from(dir).join("verify")),
-        None => std::env::var_os("HOME")
-            .filter(|home| !home.is_empty())
-            .map(|home| {
-                PathBuf::from(home)
-                    .join(".cache")
-                    .join("aura")
-                    .join("verify")
-            }),
+        None => aura_compiler::host_path::home_dir().map(|home| {
+            PathBuf::from(home)
+                .join(".cache")
+                .join("aura")
+                .join("verify")
+        }),
     }
 }
 
@@ -4721,29 +4867,22 @@ fn link_direct_native_binary(
     // the workspace runtime without changing this build's inputs.
     drop(runtime_lock);
 
-    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
-    let mut command = Command::new(cc);
-    command
-        .args(&temp_objects)
-        .arg(&temp_staticlib)
-        .arg("-o")
-        .arg(output_path);
-    for arg in &native_runtime.native_link_args {
-        command.arg(arg);
-    }
-    match foreign_link_args(&mir.foreign_link, std::env::consts::OS, embed_rpath) {
-        Ok(args) => command.args(args),
+    let mut command = match native_link_command(
+        &temp_objects,
+        &temp_staticlib,
+        output_path,
+        &native_runtime.native_link_args,
+        &mir.foreign_link,
+        debug,
+        embed_rpath,
+    ) {
+        Ok(command) => command,
         Err(error) => {
             let _ = fs::remove_file(&temp_staticlib);
             remove_temp_objects();
             return Err(error);
         }
     };
-    if debug {
-        command.args(debug_binary_link_args(std::env::consts::OS));
-    } else {
-        command.args(user_binary_link_args(std::env::consts::OS));
-    }
 
     let result = command
         .output()
@@ -4756,7 +4895,7 @@ fn link_direct_native_binary(
         } else {
             Err(format!(
                 "direct backend link failed:\n{}",
-                String::from_utf8_lossy(&output.stderr)
+                linker_failure_text(&output.stdout, &output.stderr)
             ))
         }
     });
@@ -4775,6 +4914,191 @@ fn link_direct_native_binary(
         strip_user_binary(output_path)?;
     }
     Ok(runtime_identity)
+}
+
+/// The command that links a program's objects with the runtime library: the
+/// C compiler driver named by `CC`, or `cc`.
+#[cfg(not(windows))]
+fn native_link_command(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+    embed_rpath: bool,
+) -> std::result::Result<Command, String> {
+    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let mut command = Command::new(cc);
+    command
+        .args(objects)
+        .arg(staticlib)
+        .arg("-o")
+        .arg(output_path);
+    for arg in native_link_args {
+        command.arg(arg);
+    }
+    command.args(foreign_link_args(
+        foreign,
+        std::env::consts::OS,
+        embed_rpath,
+    )?);
+    if debug {
+        command.args(debug_binary_link_args(std::env::consts::OS));
+    } else {
+        command.args(user_binary_link_args(std::env::consts::OS));
+    }
+    Ok(command)
+}
+
+/// The command that links a program's objects with the runtime library:
+/// the Microsoft linker, found through the Visual Studio installation with
+/// the library paths of the C runtime and the Windows SDK set. A Windows
+/// program loads a library from its own directory or `PATH`, so there is no
+/// run path to embed.
+#[cfg(windows)]
+fn native_link_command(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+    _embed_rpath: bool,
+) -> std::result::Result<Command, String> {
+    let mut command =
+        find_msvc_tools::find("x86_64-pc-windows-msvc", "link.exe").ok_or_else(|| {
+            "cannot find the Microsoft linker `link.exe`: install the Visual Studio Build Tools \
+             with the \"Desktop development with C++\" workload"
+                .to_string()
+        })?;
+    command.args(msvc_link_args(
+        objects,
+        staticlib,
+        output_path,
+        native_link_args,
+        foreign,
+        debug,
+    )?);
+    // An installed runtime keeps the import libraries it names beside it. A
+    // source checkout finds them in the Cargo registry they were built from.
+    let mut search = Vec::new();
+    search.extend(staticlib.parent().map(Path::to_path_buf));
+    let cargo_home = std::env::var_os("CARGO_HOME")
+        .map(PathBuf::from)
+        .or_else(|| std::env::var_os("USERPROFILE").map(|home| PathBuf::from(home).join(".cargo")));
+    if let Some(cargo_home) = cargo_home {
+        search.extend(windows_import_library_dirs(native_link_args, &cargo_home));
+    }
+    for directory in search {
+        let mut argument = std::ffi::OsString::from("/LIBPATH:");
+        argument.push(directory);
+        command.arg(argument);
+    }
+    Ok(command)
+}
+
+/// The Cargo registry directories that hold the `windows.<version>.lib`
+/// import libraries among `native_link_args`. The Rust `windows-targets`
+/// crates ship those libraries, and the runtime's static library names them
+/// without carrying them.
+#[cfg(any(windows, test))]
+fn windows_import_library_dirs(native_link_args: &[String], cargo_home: &Path) -> Vec<PathBuf> {
+    let Ok(registries) = fs::read_dir(cargo_home.join("registry").join("src")) else {
+        return Vec::new();
+    };
+    let registries = registries
+        .flatten()
+        .map(|entry| entry.path())
+        .collect::<Vec<_>>();
+    let mut directories = Vec::new();
+    for argument in native_link_args {
+        let Some(_version) = argument
+            .strip_prefix("windows.")
+            .and_then(|rest| rest.strip_suffix(".lib"))
+            .filter(|version| {
+                !version.is_empty()
+                    && version
+                        .chars()
+                        .all(|character| character.is_ascii_digit() || character == '.')
+            })
+        else {
+            continue;
+        };
+        // A crate's version can differ from the one in its library's name.
+        for registry in &registries {
+            let Ok(crates) = fs::read_dir(registry) else {
+                continue;
+            };
+            let mut found = crates
+                .flatten()
+                .filter(|entry| {
+                    entry
+                        .file_name()
+                        .to_str()
+                        .is_some_and(|name| name.starts_with("windows_x86_64_msvc-"))
+                })
+                .map(|entry| entry.path().join("lib"))
+                .filter(|directory| directory.join(argument).is_file())
+                .collect::<Vec<_>>();
+            found.sort();
+            for directory in found {
+                if !directories.contains(&directory) {
+                    directories.push(directory);
+                }
+            }
+        }
+    }
+    directories
+}
+
+/// The arguments of a Microsoft linker run: the objects, the runtime
+/// library, the output, the system libraries the runtime names, then each
+/// package library search path and library. A release link drops
+/// unreferenced code; a debug link keeps it, writes a program database, and
+/// links the runtime's `aura_debug_render` in for the debugger.
+#[cfg(any(windows, test))]
+fn msvc_link_args(
+    objects: &[PathBuf],
+    staticlib: &Path,
+    output_path: &Path,
+    native_link_args: &[String],
+    foreign: &aura_compiler::ForeignLinkPlan,
+    debug: bool,
+) -> std::result::Result<Vec<std::ffi::OsString>, String> {
+    let mut args: Vec<std::ffi::OsString> = vec![
+        "/NOLOGO".into(),
+        "/SUBSYSTEM:CONSOLE".into(),
+        // The main thread gets the 8 MiB stack it has on Linux and macOS.
+        // The Windows default is 1 MiB.
+        "/STACK:8388608".into(),
+    ];
+    args.extend(objects.iter().map(|object| object.clone().into_os_string()));
+    args.push(staticlib.as_os_str().to_owned());
+    let mut output = std::ffi::OsString::from("/OUT:");
+    output.push(output_path);
+    args.push(output);
+    args.extend(native_link_args.iter().map(std::ffi::OsString::from));
+    for path in &foreign.library_paths {
+        let mut search = std::ffi::OsString::from("/LIBPATH:");
+        search.push(path);
+        args.push(search);
+    }
+    for name in &foreign.libraries {
+        if !aura_compiler::is_valid_link_name(name) {
+            return Err(format!(
+                "cannot link native library `{}`: the name is not a plain library name",
+                name.escape_default()
+            ));
+        }
+        args.push(format!("{name}.lib").into());
+    }
+    if debug {
+        args.extend(["/DEBUG".into(), "/INCLUDE:aura_debug_render".into()]);
+    } else {
+        args.extend(["/OPT:REF".into(), "/OPT:ICF".into()]);
+    }
+    Ok(args)
 }
 
 /// Runs `dsymutil` on a linked debug build, which writes `<output>.dSYM`
@@ -4820,9 +5144,22 @@ fn native_keep_symbols() -> bool {
     std::env::var_os("AURA_NATIVE_KEEP_SYMBOLS").is_some_and(|value| value == "1")
 }
 
+/// The text a failed linker printed. The Microsoft linker reports its errors
+/// on standard output, so that stream follows standard error.
+fn linker_failure_text(stdout: &[u8], stderr: &[u8]) -> String {
+    let stderr = String::from_utf8_lossy(stderr);
+    let stdout = String::from_utf8_lossy(stdout);
+    [stderr.trim_end(), stdout.trim_end()]
+        .into_iter()
+        .filter(|text| !text.is_empty())
+        .collect::<Vec<_>>()
+        .join("\n")
+}
+
 /// The link arguments of a debug build: no section garbage collection, and
 /// the runtime's `aura_debug_render`, which nothing in the program calls,
 /// linked in for the debugger's formatter.
+#[cfg_attr(windows, allow(dead_code))]
 fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
     match os {
         "macos" => &["-Wl,-u,_aura_debug_render"],
@@ -4835,6 +5172,7 @@ fn debug_binary_link_args(os: &str) -> &'static [&'static str] {
 /// program finds a library there when it starts, then each library, then
 /// each macOS framework. The names are checked again here, so nothing but
 /// a library name follows `-l`.
+#[cfg_attr(windows, allow(dead_code))]
 fn foreign_link_args(
     plan: &aura_compiler::ForeignLinkPlan,
     os: &str,
@@ -4877,6 +5215,7 @@ fn foreign_link_args(
     Ok(args)
 }
 
+#[cfg_attr(windows, allow(dead_code))]
 fn user_binary_link_args(os: &str) -> &'static [&'static str] {
     match os {
         "macos" => &["-Wl,-dead_strip"],
@@ -4891,11 +5230,12 @@ fn temporary_direct_object_path(output_path: &Path, unit: usize) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("aura-output");
     let unique = format!(
-        "aura-direct-object-{}-{}-{}-{}.o",
+        "aura-direct-object-{}-{}-{}-{}.{}",
         file_name,
         std::process::id(),
         system_time_nanos(),
-        unit
+        unit,
+        if cfg!(windows) { "obj" } else { "o" }
     );
     std::env::temp_dir().join(unique)
 }
@@ -4906,10 +5246,11 @@ fn temporary_direct_staticlib_path(output_path: &Path) -> PathBuf {
         .and_then(|name| name.to_str())
         .unwrap_or("aura-output");
     let unique = format!(
-        "aura-direct-runtime-{}-{}-{}.a",
+        "aura-direct-runtime-{}-{}-{}.{}",
         file_name,
         std::process::id(),
-        system_time_nanos()
+        system_time_nanos(),
+        if cfg!(windows) { "lib" } else { "a" }
     );
     std::env::temp_dir().join(unique)
 }
@@ -5150,7 +5491,7 @@ fn parse_static_library_artifact_path(stdout: &[u8]) -> Option<PathBuf> {
             let Some(name) = path.file_name().and_then(|value| value.to_str()) else {
                 continue;
             };
-            if name.starts_with("libaura_runtime") && name.ends_with(".a") {
+            if name.starts_with(RUNTIME_ARCHIVE_STEM) && name.ends_with(RUNTIME_ARCHIVE_SUFFIX) {
                 candidate = Some(path);
             }
         }
@@ -5166,8 +5507,22 @@ fn current_profile() -> &'static str {
     }
 }
 
+/// How the host names the runtime's static library: `libaura_runtime.a`,
+/// or `aura_runtime.lib` on Windows. Cargo puts a hash between the two
+/// parts for the copy under `deps`.
+const RUNTIME_ARCHIVE_STEM: &str = if cfg!(windows) {
+    "aura_runtime"
+} else {
+    "libaura_runtime"
+};
+const RUNTIME_ARCHIVE_SUFFIX: &str = if cfg!(windows) { ".lib" } else { ".a" };
+
 fn static_library_file_name() -> &'static str {
-    "libaura_runtime.a"
+    if cfg!(windows) {
+        "aura_runtime.lib"
+    } else {
+        "libaura_runtime.a"
+    }
 }
 
 #[cfg(test)]
@@ -5211,7 +5566,11 @@ fn resolve_static_library_path_in_target_dir(
         .filter(|path| {
             path.file_name()
                 .and_then(|name| name.to_str())
-                .map(|name| name.starts_with("libaura_runtime-") && name.ends_with(".a"))
+                .map(|name| {
+                    name.strip_prefix(RUNTIME_ARCHIVE_STEM)
+                        .is_some_and(|rest| rest.starts_with('-'))
+                        && name.ends_with(RUNTIME_ARCHIVE_SUFFIX)
+                })
                 .unwrap_or(false)
         })
         .collect::<Vec<_>>();
@@ -5468,9 +5827,10 @@ fn print_version_and_exit() -> ! {
 
 #[cfg(test)]
 mod tests {
+    use super::msvc_link_args;
     use std::fs;
     use std::io;
-    use std::path::PathBuf;
+    use std::path::{Path, PathBuf};
     use std::process::Command;
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
@@ -5577,10 +5937,13 @@ mod tests {
         let target = root.join("target").join("debug");
         let deps = target.join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let primary = target.join("libaura_runtime.a");
+        let primary = target.join(super::static_library_file_name());
         fs::write(&primary, b"primary").expect("primary staticlib should write");
-        fs::write(deps.join("libaura_runtime-old.a"), b"stale hashed archive")
-            .expect("hashed archive should write");
+        fs::write(
+            deps.join(hashed_runtime_archive("old")),
+            b"stale hashed archive",
+        )
+        .expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
             .expect("should resolve runtime library");
@@ -5600,7 +5963,7 @@ mod tests {
         assert!(is_sha256_hex(&runtime_archive_digest(b"")));
     }
 
-    #[cfg(unix)]
+    #[cfg(any(unix, windows))]
     #[test]
     fn runtime_archive_memo_stamp_detects_same_size_same_mtime_replacement() {
         let root = unique_temp_dir("runtime-memo-stamp");
@@ -5612,7 +5975,7 @@ mod tests {
             .modified()
             .expect("first archive should have an mtime");
         let first_stamp = runtime_archive_memo_stamp(&archive, &first_metadata)
-            .expect("Unix archive metadata should have a reliable stamp");
+            .expect("archive metadata should have a reliable stamp");
 
         fs::write(&replacement, b"archive-b").expect("replacement archive should write");
         let replacement_file = fs::OpenOptions::new()
@@ -5632,7 +5995,7 @@ mod tests {
             first_modified
         );
         let second_stamp = runtime_archive_memo_stamp(&archive, &second_metadata)
-            .expect("Unix replacement should have a reliable stamp");
+            .expect("replacement should have a reliable stamp");
         assert_ne!(
             second_stamp, first_stamp,
             "file identity or ctime must invalidate a same-size, same-mtime archive memo"
@@ -6371,7 +6734,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             .expect("bin dir should exist");
         fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
         fs::write(&executable, b"test executable").expect("test executable should write");
-        let staticlib = runtime_dir.join("libaura_runtime.a");
+        let staticlib = runtime_dir.join(super::static_library_file_name());
         fs::write(&staticlib, b"test runtime").expect("test runtime should write");
         fs::write(
             runtime_dir.join("native-link-args.json"),
@@ -6476,7 +6839,7 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("single-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let archive = deps.join("libaura_runtime-only.a");
+        let archive = deps.join(hashed_runtime_archive("only"));
         fs::write(&archive, b"archive").expect("hashed archive should write");
 
         let resolved = resolve_static_library_path(root.clone(), "debug")
@@ -6491,10 +6854,10 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let root = unique_temp_dir("ambiguous-hashed");
         let deps = root.join("target").join("debug").join("deps");
         fs::create_dir_all(&deps).expect("deps dir should exist");
-        let first = deps.join("libaura_runtime-first.a");
+        let first = deps.join(hashed_runtime_archive("first"));
         fs::write(&first, b"first").expect("first archive should write");
         thread::sleep(Duration::from_millis(10));
-        let second = deps.join("libaura_runtime-second.a");
+        let second = deps.join(hashed_runtime_archive("second"));
         fs::write(&second, b"second").expect("second archive should write");
 
         let error = resolve_static_library_path(root.clone(), "debug")
@@ -6508,13 +6871,25 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
         let _ = fs::remove_dir_all(root);
     }
 
+    /// The name Cargo gives the runtime archive under `deps` on this host.
+    fn hashed_runtime_archive(hash: &str) -> String {
+        format!(
+            "{}-{hash}{}",
+            super::RUNTIME_ARCHIVE_STEM,
+            super::RUNTIME_ARCHIVE_SUFFIX
+        )
+    }
+
     #[test]
     fn parse_static_library_artifact_path_prefers_cargo_reported_archive() {
-        let stdout = br#"{"reason":"compiler-artifact","target":{"name":"aura_runtime"},"filenames":["/tmp/libaura_runtime-abc123.rlib","/tmp/libaura_runtime-abc123.a"]}
-{"reason":"compiler-artifact","target":{"name":"other"},"filenames":["/tmp/libother.a"]}"#;
-        let resolved = parse_static_library_artifact_path(stdout)
+        let archive = hashed_runtime_archive("abc123");
+        let stdout = format!(
+            r#"{{"reason":"compiler-artifact","target":{{"name":"aura_runtime"}},"filenames":["/tmp/libaura_runtime-abc123.rlib","/tmp/{archive}"]}}
+{{"reason":"compiler-artifact","target":{{"name":"other"}},"filenames":["/tmp/libother.a","/tmp/other.lib"]}}"#
+        );
+        let resolved = parse_static_library_artifact_path(stdout.as_bytes())
             .expect("cargo artifact output should expose a static archive");
-        assert_eq!(resolved, PathBuf::from("/tmp/libaura_runtime-abc123.a"));
+        assert_eq!(resolved, PathBuf::from(format!("/tmp/{archive}")));
     }
 
     #[test]
@@ -6558,6 +6933,138 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             super::foreign_link_args(&aura_compiler::ForeignLinkPlan::default(), "linux", true),
             Ok(Vec::new())
         );
+    }
+
+    #[test]
+    fn windows_import_library_dirs_find_the_registry_copies_the_runtime_names() {
+        let root = std::env::temp_dir().join(format!(
+            "aura-import-libs-{}-{}",
+            std::process::id(),
+            super::system_time_nanos()
+        ));
+        let library_dir = root
+            .join("registry")
+            .join("src")
+            .join("index.crates.io-0000")
+            .join("windows_x86_64_msvc-0.48.5")
+            .join("lib");
+        std::fs::create_dir_all(&library_dir).expect("registry directory should be created");
+        std::fs::write(library_dir.join("windows.0.48.5.lib"), b"")
+            .expect("import library should be written");
+        let newer_dir = library_dir
+            .parent()
+            .and_then(std::path::Path::parent)
+            .expect("registry directory")
+            .join("windows_x86_64_msvc-0.52.6")
+            .join("lib");
+        std::fs::create_dir_all(&newer_dir).expect("registry directory should be created");
+        std::fs::write(newer_dir.join("windows.0.52.0.lib"), b"")
+            .expect("import library should be written");
+        let args = [
+            "kernel32.lib".to_string(),
+            "windows.0.48.5.lib".to_string(),
+            "windows.0.52.0.lib".to_string(),
+            "windows.0.53.0.lib".to_string(),
+            "windows.evil.lib".to_string(),
+        ];
+        assert_eq!(
+            super::windows_import_library_dirs(&args, &root),
+            vec![library_dir, newer_dir]
+        );
+        assert!(super::windows_import_library_dirs(&args, &root.join("missing")).is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn linker_failure_text_reports_both_output_streams() {
+        assert_eq!(
+            super::linker_failure_text(b"LINK : fatal error LNK1181\r\n", b""),
+            "LINK : fatal error LNK1181"
+        );
+        assert_eq!(
+            super::linker_failure_text(b"note\n", b"ld: error\n"),
+            "ld: error\nnote"
+        );
+    }
+
+    #[test]
+    fn msvc_link_args_order_inputs_output_libraries_and_mode() {
+        let plan = aura_compiler::ForeignLinkPlan {
+            library_paths: vec![PathBuf::from("C:/deps/lib")],
+            libraries: vec!["sqlite3".to_string()],
+            frameworks: vec!["Metal".to_string()],
+            exports: Vec::new(),
+        };
+        let text = |args: Vec<std::ffi::OsString>| {
+            args.into_iter()
+                .map(|arg| arg.to_string_lossy().into_owned())
+                .collect::<Vec<_>>()
+        };
+        let objects = [PathBuf::from("a.obj"), PathBuf::from("b.obj")];
+        let system = ["kernel32.lib".to_string(), "/defaultlib:libcmt".to_string()];
+        let release = msvc_link_args(
+            &objects,
+            Path::new("aura_runtime.lib"),
+            Path::new("out/app.exe"),
+            &system,
+            &plan,
+            false,
+        )
+        .expect("release arguments");
+        assert_eq!(
+            text(release),
+            [
+                "/NOLOGO",
+                "/SUBSYSTEM:CONSOLE",
+                "/STACK:8388608",
+                "a.obj",
+                "b.obj",
+                "aura_runtime.lib",
+                "/OUT:out/app.exe",
+                "kernel32.lib",
+                "/defaultlib:libcmt",
+                "/LIBPATH:C:/deps/lib",
+                "sqlite3.lib",
+                "/OPT:REF",
+                "/OPT:ICF",
+            ]
+        );
+        let debug = msvc_link_args(
+            &objects[..1],
+            Path::new("aura_runtime.lib"),
+            Path::new("app.exe"),
+            &[],
+            &aura_compiler::ForeignLinkPlan::default(),
+            true,
+        )
+        .expect("debug arguments");
+        assert_eq!(
+            text(debug),
+            [
+                "/NOLOGO",
+                "/SUBSYSTEM:CONSOLE",
+                "/STACK:8388608",
+                "a.obj",
+                "aura_runtime.lib",
+                "/OUT:app.exe",
+                "/DEBUG",
+                "/INCLUDE:aura_debug_render",
+            ]
+        );
+        let hostile = aura_compiler::ForeignLinkPlan {
+            libraries: vec!["/DEFAULTLIB:evil".to_string()],
+            ..aura_compiler::ForeignLinkPlan::default()
+        };
+        let error = msvc_link_args(
+            &objects,
+            Path::new("r.lib"),
+            Path::new("o"),
+            &[],
+            &hostile,
+            false,
+        )
+        .expect_err("a name that is a linker option is refused");
+        assert!(error.contains("not a plain library name"), "{error}");
     }
 
     #[test]

@@ -91,8 +91,16 @@ fn resolve_program(name: &str, path: &std::ffi::OsStr) -> Option<PathBuf> {
     if program.components().count() > 1 {
         return program.is_file().then(|| program.to_path_buf());
     }
+    // A Windows program file carries the `.exe` extension the name leaves out.
+    let with_extension = cfg!(windows).then(|| format!("{name}.exe"));
     std::env::split_paths(path)
-        .map(|dir| dir.join(name))
+        .flat_map(|dir| {
+            [
+                Some(dir.join(name)),
+                with_extension.as_ref().map(|name| dir.join(name)),
+            ]
+        })
+        .flatten()
         .find(|candidate| candidate.is_file())
 }
 

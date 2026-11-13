@@ -30,6 +30,11 @@ on:
 permissions:
   contents: read
 
+# A new push to a pull request replaces the run of the push before it.
+concurrency:
+  group: ci-${{ github.event.pull_request.number || github.sha }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: never
 
@@ -104,11 +109,175 @@ jobs:
       - name: Run repo gate
         run: npm run ci
 
+  platform-tests:
+    # Hosts that run the workspace tests without the coverage floors, which
+    # are recorded on x86-64 Linux and arm64 macOS only.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 150
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+          components: clippy, llvm-tools-preview, rustfmt
+
+      - name: Install LLVM's system libraries
+        if: runner.os == 'Linux'
+        # The Linux llvm-config names a static libzstd and libxml2.
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
+
+      - name: Cache LLVM
+        if: runner.os == 'Linux'
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
+      - name: Install Z3
+        run: bash scripts/install-z3.sh
+
+      - name: Run the workspace tests
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked
+
+      - name: Compare the interpreter with native executables
+        run: cargo test --locked -p aura --test backend_parity -- --ignored --test-threads=1 --nocapture
+
+  windows:
+    # Native Windows is being brought up in steps. The runtime's tests run
+    # in full; the compiler and the `aura` command are built, and their
+    # tests and `aura build` follow.
+    runs-on: windows-2025
+    timeout-minutes: 150
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+          components: clippy, llvm-tools-preview, rustfmt
+
+      - name: Put the POSIX commands the tests spawn on PATH
+        # Git for Windows carries `sh`, `echo`, `true` and the rest.
+        run: echo "C:\\Program Files\\Git\\usr\\bin" >> "$GITHUB_PATH"
+
+      - name: Cache LLVM
+        if: ${{ !cancelled() }}
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        if: ${{ !cancelled() }}
+        run: bash scripts/install-llvm.sh
+
+      - name: Install Z3
+        if: ${{ !cancelled() }}
+        run: bash scripts/install-z3.sh 2>&1 | tee "$RUNNER_TEMP/z3-install.log"
+
+      - name: Build the compiler and the aura command
+        if: ${{ !cancelled() }}
+        run: cargo build --locked -p aura 2>&1 | tee "$RUNNER_TEMP/aura-build.log"
+
+      - name: Run a program in the interpreter and as a native executable
+        if: ${{ !cancelled() }}
+        timeout-minutes: 15
+        run: |
+          {
+            target/debug/aura.exe run --backend mir examples/basics/hello_world.au
+            target/debug/aura.exe build -o target/hello_world.exe examples/basics/hello_world.au
+            target/hello_world.exe
+            target/debug/aura.exe run --backend direct examples/control_flow.au
+            target/debug/aura.exe run --backend direct examples/basic_addition.au
+            target/debug/aura.exe run --backend direct examples/agents/retrying_network_worker.au
+          } 2>&1 | tee "$RUNNER_TEMP/smoke.log"
+
+      - name: Run the runtime tests
+        if: ${{ !cancelled() }}
+        # The tests take a few minutes. The limit turns a hung test into a
+        # failure whose log names it.
+        timeout-minutes: 12
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura-core -p aura-runtime 2>&1 | tee "$RUNNER_TEMP/runtime-tests.log"
+
+      - name: Run the aura command's unit tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 20
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura --bin aura 2>&1 | tee "$RUNNER_TEMP/command-tests.log"
+
+      - name: Run the compiler's unit tests
+        if: ${{ !cancelled() }}
+        timeout-minutes: 45
+        env:
+          RUST_MIN_STACK: 33554432
+        run: cargo test --locked -p aura-compiler --lib 2>&1 | tee "$RUNNER_TEMP/compiler-tests.log"
+
+      - name: Package the release archive and run it outside the source tree
+        if: ${{ !cancelled() }}
+        timeout-minutes: 40
+        run: |
+          {
+            cargo build --release --locked -p aura
+            version="$(target/release/aura.exe --version | tr -d '\r' | awk '{ print $2 }')"
+            archive="aura-v$version-x86_64-pc-windows-msvc"
+            scripts/package-cli-windows.sh "$archive"
+            scripts/smoke-cli-archive-windows.sh "$archive.zip"
+            # Install the archive with the PowerShell installer, then build
+            # and run a program with the installed command.
+            mkdir -p "$RUNNER_TEMP/aura-release"
+            cp "$archive.zip" "$RUNNER_TEMP/aura-release/"
+            (cd "$RUNNER_TEMP/aura-release" && sha256sum "$archive.zip" > SHA256SUMS)
+            AURA_INSTALL_RELEASE_TAG="v$version" \
+              AURA_INSTALL_BASE_URL="file:///$(cygpath -m "$RUNNER_TEMP/aura-release")" \
+              AURA_INSTALL_PREFIX="$(cygpath -w "$RUNNER_TEMP/aura-prefix")" \
+              pwsh -NoProfile -File docs/public/install.ps1
+            installed="$RUNNER_TEMP/aura-prefix/bin/aura.exe"
+            "$installed" --version
+            (cd "$RUNNER_TEMP" && "$installed" run --backend direct "$GITHUB_WORKSPACE/examples/basic_addition.au")
+          } 2>&1 | tee "$RUNNER_TEMP/package.log"
+
+      - name: Show where a failed step stopped
+        # The job log is long, so the failures are repeated at its end.
+        if: ${{ failure() }}
+        run: |
+          grep -E "^error|^warning: unused|panicked" -A 12 "$RUNNER_TEMP/aura-build.log" | tail -n 40 || true
+          tail -n 40 "$RUNNER_TEMP/smoke.log" || true
+          grep -E "FAILED|failed|panicked|over 60 seconds|test result" "$RUNNER_TEMP/runtime-tests.log" | tail -n 60 || true
+          grep -E "FAILED|failed|panicked|over 60 seconds|test result|^error" "$RUNNER_TEMP/command-tests.log" | tail -n 60 || true
+          grep -E "FAILED|failed|over 60 seconds|test result|^error" "$RUNNER_TEMP/compiler-tests.log" | tail -n 60 || true
+          grep -E "panicked at" -A 14 "$RUNNER_TEMP/compiler-tests.log" | grep -v "^--$" | cut -c 1-400 | head -n 200 || true
+          grep -vE "^ +Compiling|^warning|^ *$" "$RUNNER_TEMP/package.log" | tail -n 40 || true
+          grep -E "test result" "$RUNNER_TEMP/compiler-tests.log" || true
+          tail -n 15 "$RUNNER_TEMP/z3-install.log" || true
+          command -v z3 || echo "z3 is not on PATH"
+
   native-binaries:
     strategy:
       fail-fast: false
       matrix:
-        os: [ubuntu-24.04, macos-15]
+        os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
 

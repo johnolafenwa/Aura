@@ -31,6 +31,11 @@ tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"
 webpki-roots = "1"
 
+[target.'cfg(windows)'.dependencies]
+uds_windows = "1.1"
+windows-sys = { version = "0.59", features = ["Win32_Foundation",
+    "Win32_Media", "Win32_Networking_WinSock", "Win32_Security", "Win32_System_JobObjects", "Win32_System_LibraryLoader", "Win32_System_ProcessStatus", "Win32_System_Threading"] }
+
 [features]
 # Test hooks and corpora that aura-compiler's tests also use.
 test-support = []

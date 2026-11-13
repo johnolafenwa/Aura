@@ -545,6 +545,32 @@ fn elf_objects_put_every_function_in_its_own_section() {
 }
 
 #[test]
+fn coff_objects_put_every_function_in_its_own_comdat_section() {
+    use object::SectionFlags;
+    const IMAGE_SCN_LNK_COMDAT: u32 = 0x1000;
+    let module = two_function_module();
+    let bytes = object_for_triple(&module, "x86_64-pc-windows-msvc");
+    let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
+    assert_eq!(object.format(), object::BinaryFormat::Coff);
+    let mut sections = Vec::new();
+    for name in ["first", "second"] {
+        let symbol = object
+            .symbol_by_name(name)
+            .unwrap_or_else(|| panic!("the object should define `{name}`"));
+        let index = symbol
+            .section_index()
+            .expect("a defined symbol has a section");
+        let section = object.section_by_index(index).unwrap();
+        let SectionFlags::Coff { characteristics } = section.flags() else {
+            panic!("a COFF section has COFF flags");
+        };
+        assert_ne!(characteristics & IMAGE_SCN_LNK_COMDAT, 0, "{name}");
+        sections.push(index);
+    }
+    assert_ne!(sections[0], sections[1]);
+}
+
+#[test]
 fn mach_o_objects_are_split_by_symbol() {
     use object::FileFlags;
     const MH_SUBSECTIONS_VIA_SYMBOLS: u32 = 0x2000;
@@ -1160,7 +1186,14 @@ fn unit_objects_join_at_link_time_whatever_the_thread_count() {
             .map(|(_, _, scope)| *scope)
             .collect::<Vec<_>>()
     };
-    assert_eq!(defined("entry"), vec![object::SymbolScope::Dynamic]);
+    // COFF has one scope for every external symbol. ELF and Mach-O tell an
+    // exported symbol from a hidden one.
+    let exported = if cfg!(windows) {
+        object::SymbolScope::Linkage
+    } else {
+        object::SymbolScope::Dynamic
+    };
+    assert_eq!(defined("entry"), vec![exported]);
     // Copies are gone: the owner alone defines the small function and the
     // constant data, as hidden symbols the other units reach.
     for name in ["tiny", "table", "counter"] {

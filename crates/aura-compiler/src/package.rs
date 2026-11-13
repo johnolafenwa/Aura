@@ -1606,7 +1606,13 @@ fn materialize_git_checkout(source: &str, rev: &str, checkout_dir: &Path) -> Res
     let parent = checkout_dir
         .parent()
         .expect("git checkout cache paths should have parent directories");
-    let temp_checkout = unique_temp_path(parent, rev)?;
+    // A short name: Windows limits a working directory to 248 characters
+    // and the cache path already holds two hashes.
+    let temp_checkout = parent.join(format!(
+        ".t{}-{}",
+        std::process::id(),
+        TEMP_FILE_COUNTER.fetch_add(1, Ordering::Relaxed)
+    ));
     if temp_checkout.exists() {
         let _ = fs::remove_dir_all(&temp_checkout);
     }
@@ -1691,9 +1697,22 @@ fn configured_git_command(current_dir: Option<&Path>, args: &[String]) -> Comman
     command.env("GIT_ASKPASS", "");
     command.env("SSH_ASKPASS", "");
     command.env("GIT_ALLOW_PROTOCOL", git_allow_protocol_for_args(args));
-    command.env("GIT_CONFIG_COUNT", "1");
     command.env("GIT_CONFIG_KEY_0", "core.symlinks");
     command.env("GIT_CONFIG_VALUE_0", "false");
+    // A checkout holds the bytes the repository holds on every platform:
+    // Git for Windows turns line endings into CRLF by default.
+    command.env("GIT_CONFIG_KEY_1", "core.autocrlf");
+    command.env("GIT_CONFIG_VALUE_1", "false");
+    if cfg!(windows) {
+        // A checkout in the cache sits below two hash-named directories, so
+        // its paths pass the 260 characters Git for Windows allows unless
+        // long paths are on.
+        command.env("GIT_CONFIG_COUNT", "3");
+        command.env("GIT_CONFIG_KEY_2", "core.longpaths");
+        command.env("GIT_CONFIG_VALUE_2", "true");
+    } else {
+        command.env("GIT_CONFIG_COUNT", "2");
+    }
     if let Some(current_dir) = current_dir {
         command.current_dir(current_dir);
     }
@@ -1880,7 +1899,7 @@ fn git_cache_root() -> Result<PathBuf> {
     if let Some(cache_home) = env::var_os("XDG_CACHE_HOME") {
         return Ok(PathBuf::from(cache_home).join("aura").join("git"));
     }
-    if let Some(home) = env::var_os("HOME") {
+    if let Some(home) = aura_core::host_path::home_dir() {
         return Ok(PathBuf::from(home).join(".cache").join("aura").join("git"));
     }
     Err(Diagnostic::new(
@@ -1925,7 +1944,7 @@ fn hash_source_key(source: &str) -> String {
 }
 
 fn canonicalize_dir(path: &Path) -> Result<PathBuf> {
-    fs::canonicalize(path).map_err(|error| {
+    aura_core::host_path::canonicalize(path).map_err(|error| {
         Diagnostic::new(format!(
             "failed to resolve package path `{}`: {}",
             path.display(),
@@ -1935,7 +1954,7 @@ fn canonicalize_dir(path: &Path) -> Result<PathBuf> {
 }
 
 fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
-    if let Ok(canonical) = fs::canonicalize(path) {
+    if let Ok(canonical) = aura_core::host_path::canonicalize(path) {
         return Ok(canonical);
     }
 
@@ -1947,7 +1966,7 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
         existing_ancestor = parent;
     }
 
-    let canonical_ancestor = match fs::canonicalize(existing_ancestor) {
+    let canonical_ancestor = match aura_core::host_path::canonicalize(existing_ancestor) {
         Ok(canonical) => canonical,
         Err(error) => {
             return Err(Diagnostic::new(format!(

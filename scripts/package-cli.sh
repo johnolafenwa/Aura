@@ -7,7 +7,7 @@ if [[ $# -ne 1 ]]; then
 fi
 
 archive_name="$1"
-if [[ ! "$archive_name" =~ ^aura-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-(x86_64-unknown-linux-gnu|x86_64-apple-darwin|aarch64-apple-darwin)$ ]]; then
+if [[ ! "$archive_name" =~ ^aura-v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.-]+)?-(x86_64-unknown-linux-gnu|aarch64-unknown-linux-gnu|x86_64-apple-darwin|aarch64-apple-darwin)$ ]]; then
   echo "invalid release archive name: $archive_name" >&2
   exit 2
 fi

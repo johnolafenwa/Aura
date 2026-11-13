@@ -2760,6 +2760,8 @@ fn mir_nested_array_clone_allocation_failure_is_au4005_and_preserves_source() {
     }
 }
 
+// The program calls `getpid` from the C library by name.
+#[cfg(unix)]
 #[test]
 fn mir_runtime_ffi_calls_process_symbols_and_reports_missing_lookups() {
     let getpid = lower_ffi_runtime_source(
@@ -7445,7 +7447,7 @@ fn mir_runtime_infers_resource_value_types_for_runtime_backed_surfaces() {
 
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf pipe".to_string(),
         ],
@@ -7924,7 +7926,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
 
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf out".to_string(),
         ],
@@ -7970,7 +7972,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
 
     let ok_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "exit 0".to_string(),
         ],
@@ -7993,7 +7995,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
 
     let cat = ProcessChildValue::spawn(
-        vec!["/bin/cat".to_string()],
+        vec![aura_runtime::host_tools::CAT.to_string()],
         None,
         Vec::new(),
         ProcessStdioConfig::Pipe,
@@ -8048,7 +8050,7 @@ fn mir_runtime_resource_member_helpers_cover_io_process_and_network_paths() {
     );
 
     let cat_bytes = ProcessChildValue::spawn(
-        vec!["/bin/cat".to_string()],
+        vec![aura_runtime::host_tools::CAT.to_string()],
         None,
         Vec::new(),
         ProcessStdioConfig::Pipe,
@@ -10603,7 +10605,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
 
     let sleeper = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 5".to_string(),
         ],
@@ -10700,7 +10702,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
 
     let failing = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "exit 7".to_string(),
         ],
@@ -10727,7 +10729,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
 
     let terminable = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 5".to_string(),
         ],
@@ -10777,7 +10779,7 @@ fn mir_runtime_process_child_methods_cover_timeout_cancel_and_error_edges() {
     );
     let cancelled_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 5".to_string(),
         ],
@@ -10852,7 +10854,11 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     );
 
     let eof_child = ProcessChildValue::spawn(
-        vec!["/bin/sh".to_string(), "-c".to_string(), String::new()],
+        vec![
+            aura_runtime::host_tools::SH.to_string(),
+            "-c".to_string(),
+            String::new(),
+        ],
         None,
         Vec::new(),
         ProcessStdioConfig::Null,
@@ -10889,7 +10895,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
 
     let reader_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 0.05".to_string(),
         ],
@@ -10977,7 +10983,7 @@ fn mir_runtime_process_resource_members_cover_completed_errors_and_pipe_edges() 
     let _ = runtime.evaluate_process_child_method(reader_child, "wait", &[], &mut env);
 
     let writer_child = ProcessChildValue::spawn(
-        vec!["/bin/cat".to_string()],
+        vec![aura_runtime::host_tools::CAT.to_string()],
         None,
         Vec::new(),
         ProcessStdioConfig::Pipe,
@@ -11065,12 +11071,12 @@ fn mir_runtime_process_supervisor_methods_cover_start_wait_and_cancel_edges() {
     env.define_typed(
         "exit_command",
         Type::Named("list".to_string(), vec![Type::named("str")]),
-        string_vec_value(&["/bin/sh", "-c", "exit 0"]),
+        string_vec_value(&[aura_runtime::host_tools::SH, "-c", "exit 0"]),
     );
     env.define_typed(
         "sleep_command",
         Type::Named("list".to_string(), vec![Type::named("str")]),
-        string_vec_value(&["/bin/sh", "-c", "sleep 5"]),
+        string_vec_value(&[aura_runtime::host_tools::SH, "-c", "sleep 5"]),
     );
     let stdio_variant = |variant_name: &str| {
         Value::EnumVariant(EnumVariantValue {
@@ -11378,8 +11384,14 @@ def main() -> int32:
             print(error)
             return 3
 "#,
-        temp_root.join("invalid.bin").display(),
-        entries_path.display(),
+        // A backslash starts an escape in an Aura string, and Windows reads
+        // a forward slash as a separator too.
+        temp_root
+            .join("invalid.bin")
+            .display()
+            .to_string()
+            .replace('\\', "/"),
+        entries_path.display().to_string().replace('\\', "/"),
     );
     let output = crate::run_source(&source)
         .unwrap_or_else(|error| panic!("filesystem source should run through MIR: {error}"));
@@ -11414,7 +11426,7 @@ fn mir_runtime_builtin_io_calls_cover_process_filesystem_and_network_paths() {
     env.define_typed(
         "child_cmd",
         Type::Named("list".to_string(), vec![Type::named("str")]),
-        string_vec_value(&["/bin/sh", "-c", "printf child"]),
+        string_vec_value(&[aura_runtime::host_tools::SH, "-c", "printf child"]),
     );
     env.define_typed(
         "cwd",
@@ -12232,7 +12244,11 @@ fn mir_runtime_process_run_builtin_captures_stdio_under_scheduler() {
         env.define_typed(
             "run_cmd",
             Type::Named("list".to_string(), vec![Type::named("str")]),
-            string_vec_value(&["/bin/sh", "-c", "printf out; printf err >&2"]),
+            string_vec_value(&[
+                aura_runtime::host_tools::SH,
+                "-c",
+                "printf out; printf err >&2",
+            ]),
         );
         env.define_typed(
             "cwd",
@@ -12359,7 +12375,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     install_process_env(
         &mut timeout_runtime,
         &mut timeout_env,
-        &["/bin/sh", "-c", "sleep 1"],
+        &[aura_runtime::host_tools::SH, "-c", "sleep 1"],
     );
     expect_process_error_variant(
         call_name(
@@ -12396,7 +12412,7 @@ fn mir_runtime_process_builtins_cover_spawn_timeout_and_cancelled_edges() {
     install_process_env(
         &mut cancelled_runtime,
         &mut cancelled_env,
-        &["/bin/sh", "-c", "sleep 1"],
+        &[aura_runtime::host_tools::SH, "-c", "sleep 1"],
     );
     expect_process_error_variant(
         call_name(
@@ -18905,7 +18921,7 @@ fn mir_runtime_cleanup_and_rvalue_helpers_cover_remaining_error_paths() {
 
     let pipe_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            aura_runtime::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf pipe-cleanup".to_string(),
         ],
@@ -24387,6 +24403,8 @@ def main() -> int32:
     assert!(sequential.recursive_functions.is_none());
 }
 
+// The link plan names the Unix C math library `m`.
+#[cfg(unix)]
 #[test]
 fn mir_runtime_loads_the_link_plan_and_reports_a_library_it_cannot_load() {
     let source = r#"
@@ -24569,6 +24587,8 @@ def main():
     crate::run_source(source).expect("generators close in reverse order at return");
 }
 
+// The program calls `clock_gettime` from the C library by name.
+#[cfg(unix)]
 #[test]
 fn ffi_structs_cross_as_c_bytes_and_come_back_as_instances() {
     use crate::c_layout::{CField, CFieldKind, CStruct};
@@ -24874,6 +24894,8 @@ def main() -> int32:
     assert_eq!(frame, [7]);
 }
 
+// The program calls `posix_memalign` from the C library by name.
+#[cfg(unix)]
 #[test]
 fn ffi_handles_with_a_drop_function_release_their_object() {
     // The C allocator stands in for a library: `free` is the drop function

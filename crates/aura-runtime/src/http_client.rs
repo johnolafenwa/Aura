@@ -51,7 +51,6 @@ struct PoolKey {
 enum Transport {
     Plain(StdTcpStream),
     /// Empty only after a failed step, which loses the stream.
-    #[cfg(unix)]
     Tls(Option<Box<TlsClientStream>>),
 }
 
@@ -66,7 +65,6 @@ impl Transport {
             Transport::Plain(stream) => {
                 read_some_with_deadline(stream, max_bytes, deadline, cancellation)
             }
-            #[cfg(unix)]
             Transport::Tls(slot) => {
                 let stream = slot.take().ok_or_else(closed_resource_error)?;
                 let (stream, bytes) =
@@ -87,7 +85,6 @@ impl Transport {
             Transport::Plain(stream) => {
                 write_all_with_deadline(stream, bytes, deadline, cancellation)
             }
-            #[cfg(unix)]
             Transport::Tls(slot) => {
                 let stream = slot.take().ok_or_else(closed_resource_error)?;
                 let stream = write_all_tls_client_owned(*stream, bytes, deadline, cancellation)?;
@@ -101,27 +98,14 @@ impl Transport {
     /// it or sent bytes no request asked for. Either way it cannot carry
     /// another request.
     fn is_stale(&self) -> bool {
-        #[cfg(unix)]
-        {
-            let fd = match self {
-                Transport::Plain(stream) => stream.as_raw_fd(),
-                Transport::Tls(Some(stream)) => stream.sock.as_raw_fd(),
-                Transport::Tls(None) => return true,
-            };
-            let mut poll = libc::pollfd {
-                fd,
-                events: libc::POLLIN,
-                revents: 0,
-            };
-            // SAFETY: `poll` points at one valid `pollfd`, and a zero
-            // timeout returns at once.
-            let ready = unsafe { libc::poll(&mut poll, 1, 0) };
-            ready != 0
-        }
-        #[cfg(not(unix))]
-        {
-            false
-        }
+        let handle = match self {
+            Transport::Plain(stream) => stream.as_raw_fd(),
+            Transport::Tls(Some(stream)) => stream.sock.as_raw_fd(),
+            Transport::Tls(None) => return true,
+        };
+        // A zero timeout returns at once. A poll the host refuses also
+        // marks the connection stale, since it cannot be trusted.
+        host_io::poll_one(handle, host_io::POLLIN, 0).unwrap_or(true)
     }
 }
 
@@ -273,28 +257,18 @@ fn connect(
         format!("{}:{}", key.host, key.port)
     };
     let transport = if key.tls {
-        #[cfg(unix)]
-        {
-            let stream = TlsStreamValue::connect_before(
-                &address,
-                &key.host,
-                Some(key.ca_pem_path.as_str()),
-                deadline,
-                cancellation,
-            )?;
-            let taken = lock_mutex(&stream.inner.stream).take();
-            let Some(TlsStreamKind::Client(raw)) = taken else {
-                return Err(closed_resource_error());
-            };
-            Transport::Tls(Some(Box::new(raw)))
-        }
-        #[cfg(not(unix))]
-        {
-            return Err(io::Error::new(
-                io::ErrorKind::Unsupported,
-                "HTTPS requests are supported on Aura's Unix preview platforms",
-            ));
-        }
+        let stream = TlsStreamValue::connect_before(
+            &address,
+            &key.host,
+            Some(key.ca_pem_path.as_str()),
+            deadline,
+            cancellation,
+        )?;
+        let taken = lock_mutex(&stream.inner.stream).take();
+        let Some(TlsStreamKind::Client(raw)) = taken else {
+            return Err(closed_resource_error());
+        };
+        Transport::Tls(Some(Box::new(raw)))
     } else {
         let stream = TcpStreamValue::connect_before(&address, deadline, cancellation)?;
         let taken = lock_mutex(&stream.inner.stream).take();

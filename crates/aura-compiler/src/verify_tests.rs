@@ -716,7 +716,6 @@ fn every_run_pass_fixture_verifies_without_an_internal_error() {
 }
 
 /// A directory of stand-in solver scripts for this test.
-#[cfg(unix)]
 fn script_dir(test: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("aura-verify-{test}-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -756,9 +755,20 @@ fn solvers_are_found_by_name_path_and_environment() {
     assert!(error.contains("no SMT solver found"), "{error}");
     let error = smt::SolverCommand::find_in(None, Some("z3"), empty).expect_err("not on PATH");
     assert!(error.contains("was not found"), "{error}");
-    let error =
-        smt::SolverCommand::find_in(Some("/bin/sh"), None, empty).expect_err("not a solver");
+    // Any program that exists and is not a solver: this test's own.
+    let other = std::env::current_exe().expect("test program path");
+    let other = other.to_string_lossy();
+    let error = smt::SolverCommand::find_in(Some(&other), None, empty).expect_err("not a solver");
     assert!(error.contains("not a supported SMT solver"), "{error}");
+    #[cfg(windows)]
+    {
+        // A program on Windows is found by its name with `.exe` added.
+        let dir = script_dir("find");
+        std::fs::write(dir.join("cvc5.exe"), b"").expect("stand-in solver");
+        let found = smt::SolverCommand::find_in(None, None, dir.as_os_str()).expect("cvc5");
+        assert_eq!(found.kind, smt::SolverKind::Cvc5);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
     #[cfg(unix)]
     {
         let dir = script_dir("find");

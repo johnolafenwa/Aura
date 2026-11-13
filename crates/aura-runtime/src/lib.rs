@@ -21,19 +21,29 @@ pub mod c_layout;
 pub mod collection_index;
 pub mod ffi;
 pub mod gzip_codec;
+pub mod host_io;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod host_tools;
 pub mod json_codec;
 pub mod json_tape;
 pub mod list_elements;
 pub mod list_sort;
 mod native_allocator;
 pub mod native_runtime;
+#[cfg(any(windows, test))]
+mod pipe_bridge;
 pub mod randomness;
 pub mod runtime_config;
 pub mod runtime_reactor;
 pub mod runtime_value;
+#[cfg(any(windows, test))]
+mod socket_watcher;
 pub mod text;
 pub mod text_methods;
 pub mod union_runtime;
+#[cfg(windows)]
+mod windows_process;
 
 #[global_allocator]
 static ALLOCATOR: native_allocator::AuraAllocator = native_allocator::AuraAllocator;
