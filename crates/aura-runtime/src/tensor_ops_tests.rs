@@ -1711,3 +1711,119 @@ fn a_waiting_tensor_assigned_to_a_variable_runs_with_the_next_work() {
         assert!(TensorValue::deferred(TensorDevice::Cpu, &[]).is_empty());
     });
 }
+
+#[test]
+fn window_indices_name_each_window_and_are_kept() {
+    let l = leaves(TensorDevice::Cpu);
+    let places = |value: &Value| places(&array(value));
+    // A 2 by 3 image, a 2 by 2 kernel, stride 1, no padding: two windows.
+    let plain = node_op(&l.a, 13, &[2, 3, 2, 2, 1, 0]).unwrap();
+    assert_eq!(places(&plain), [0, 1, 3, 4, 1, 2, 4, 5]);
+    // The same window again is the same tensor.
+    assert_eq!(
+        node(&plain),
+        node(&node_op(&l.b, 13, &[2, 3, 2, 2, 1, 0]).unwrap())
+    );
+    // Padding names the place after the image, 4, and a stride skips.
+    let padded = node_op(&l.a, 13, &[2, 2, 2, 2, 2, 1]).unwrap();
+    assert_eq!(
+        places(&padded),
+        [4, 4, 4, 0, 4, 4, 1, 4, 4, 2, 4, 4, 3, 4, 4, 4]
+    );
+    // The list empties when it is full, and the indices are made again.
+    for width in 0..KEPT_WINDOWS as i64 + 1 {
+        node_op(&l.a, 13, &[1, width + 1, 1, 1, 1, 0]).unwrap();
+    }
+    assert_eq!(
+        places(&node_op(&l.a, 13, &[2, 3, 2, 2, 1, 0]).unwrap()),
+        places(&plain)
+    );
+
+    let message = |parameters: &[i64]| node_op(&l.a, 13, parameters).unwrap_err().message;
+    assert!(message(&[0, 3, 1, 1, 1, 0]).contains("at least one element"));
+    assert!(message(&[2, 3, 0, 1, 1, 0]).contains("at least one element"));
+    assert!(message(&[2, 3, 1, 1, 0, 0]).contains("a stride of at least 1"));
+    assert!(message(&[2, 3, 1, 1, 1, -1]).contains("a padding of at least 0"));
+    assert!(message(&[2, 3, 3, 1, 1, 0]).contains("no larger than the padded image"));
+    assert!(message(&[2, 3, 1, 4, 1, 0]).contains("the kernel is 1 by 4"));
+    assert!(message(&[2, 3, 1]).contains("expects 6 parameters"));
+}
+
+/// The softmax of each row of `x`, built as `std/tensor.au` builds it.
+fn row_softmax(x: &Value, rows: i64) -> Value {
+    let largest = reshape(&reduce(x, 2, Some(1)).unwrap(), &[rows, 1]).unwrap();
+    let powers = unary(&binary(x, &largest, 1).unwrap(), 2).unwrap();
+    let total = reshape(&reduce(&powers, 0, Some(1)).unwrap(), &[rows, 1]).unwrap();
+    binary(&powers, &total, 3).unwrap()
+}
+
+fn wave(count: usize, shape: &[usize], device: TensorDevice) -> Value {
+    let values: Vec<f32> = (0..count)
+        .map(|at| ((at * 37 % 101) as f32 - 50.0) / 16.0)
+        .collect();
+    tensor(float32(&values, shape), device)
+}
+
+#[test]
+fn large_shared_arithmetic_is_computed_again_by_each_reader() {
+    let kernels = |plan: &Plan| {
+        tensor_codegen::generate(plan)
+            .actions
+            .iter()
+            .filter(|action| matches!(action, tensor_codegen::Action::Kernel { .. }))
+            .count()
+    };
+    let expected = array(&row_softmax(
+        &wave(256 * 256, &[256, 256], TensorDevice::Cpu),
+        256,
+    ));
+    deferred(|| {
+        // The powers have two readers and are not written: two kernels
+        // for each reduction of a long lane, and one for the result.
+        let x = wave(256 * 256, &[256, 256], TensorDevice::Cpu);
+        let result = row_softmax(&x, 256);
+        let (plan, storage) = Plan::collect_all(&[node(&result)]);
+        assert_eq!(kernels(&plan), 5);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2300) {
+            close("softmax", &generated[0], &expected);
+        }
+
+        // A small tensor keeps the powers in memory.
+        let small = wave(64 * 64, &[64, 64], TensorDevice::Cpu);
+        let (plan, _) = Plan::collect_all(&[node(&row_softmax(&small, 64))]);
+        assert_eq!(kernels(&plan), 6);
+
+        // So does a step the program keeps, one with more readers, and
+        // one that reads two large buffers.
+        // Each whole sum below is three kernels.
+        let y = wave(256 * 256, &[256, 256], TensorDevice::Cpu);
+        let total =
+            |operand: &Value, code: i64| reduce(&unary(operand, code).unwrap(), 0, None).unwrap();
+        let doubled = binary(&x, &x, 0).unwrap();
+        let (one, two) = (total(&doubled, 2), total(&doubled, 0));
+        let (plan, _) = Plan::collect_all(&[node(&one), node(&two)]);
+        assert_eq!(kernels(&plan), 6);
+        let (plan, _) = Plan::collect_all(&[node(&one), node(&two), node(&doubled)]);
+        assert_eq!(kernels(&plan), 7);
+        let many: Vec<Value> = (0..4).map(|_| total(&doubled, 2)).collect();
+        let many: Vec<&TensorValue> = many.iter().map(node).collect();
+        assert_eq!(kernels(&Plan::collect_all(&many).0), 13);
+        let mixed = binary(&x, &y, 0).unwrap();
+        let (one, two) = (total(&mixed, 2), total(&mixed, 0));
+        let (plan, _) = Plan::collect_all(&[node(&one), node(&two)]);
+        assert_eq!(kernels(&plan), 7);
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_arithmetic_computed_again() {
+    for device in gpus() {
+        let expected = array(&row_softmax(
+            &wave(256 * 256, &[256, 256], TensorDevice::Cpu),
+            256,
+        ));
+        let found = array(&row_softmax(&wave(256 * 256, &[256, 256], device), 256));
+        close("softmax of long rows", &found, &expected);
+        println!("RAN: arithmetic computed again on a GPU device");
+    }
+}

@@ -288,6 +288,16 @@ fn slot_dtype(slot: &Slot) -> ArrayDType {
     }
 }
 
+/// The fewest elements of a step that its readers compute again in place
+/// of reading it from memory.
+const RECOMPUTED_ELEMENTS: usize = 1 << 16;
+
+/// The most steps of arithmetic a reader computes again.
+const RECOMPUTED_STEPS: usize = 8;
+
+/// The most readers that compute a step again.
+const RECOMPUTED_USES: usize = 3;
+
 /// Whether a step computes each element from the operand elements at one
 /// position, so it can be part of a larger kernel.
 fn fuses(operation: &Operation) -> bool {
@@ -352,6 +362,50 @@ impl<'a> Generator<'a> {
                 }
             })
             .collect();
+        // A large, short piece of arithmetic that two or three steps read
+        // is computed again by each of them. Writing it and reading it
+        // back costs more than the arithmetic: a softmax reads its
+        // operand three times and writes once, where it wrote three
+        // times and read five.
+        for index in 0..count {
+            let Slot::Step { operation, .. } = &plan.slots[index] else {
+                continue;
+            };
+            let size = len(slot_shape(&plan.slots[index]));
+            if !matches!(
+                operation,
+                Operation::Binary(_)
+                    | Operation::Unary(_)
+                    | Operation::Compare(_)
+                    | Operation::Where
+                    | Operation::Cast(_)
+            ) || !(2..=RECOMPUTED_USES).contains(&uses[index])
+                || feeds_matmul[index]
+                || plan.outputs.contains(&index)
+                || size < RECOMPUTED_ELEMENTS
+            {
+                continue;
+            }
+            // The steps a reader would run, and the buffers of this size
+            // it would read.
+            let (mut steps, mut large) = (0, Vec::new());
+            let mut waiting = vec![index];
+            while let Some(at) = waiting.pop() {
+                if at != index && materialized[at] {
+                    if len(slot_shape(&plan.slots[at])) >= size && !large.contains(&at) {
+                        large.push(at);
+                    }
+                    continue;
+                }
+                steps += 1;
+                if let Slot::Step { inputs, .. } = &plan.slots[at] {
+                    waiting.extend(inputs);
+                }
+            }
+            if steps <= RECOMPUTED_STEPS && large.len() <= 1 {
+                materialized[index] = false;
+            }
+        }
         // A reshape of memory that exists is that memory, at no cost.
         for index in 0..count {
             if let Slot::Step {
