@@ -118,12 +118,23 @@ const LAST_STAGE: usize = 128;
 /// The shortest lane of a last axis that a group of threads reduces.
 const SPLIT_LANE: usize = 32;
 
-/// The threads that share a lane of `length` elements on a last axis, or
-/// `None` when one thread reduces the lane. Threads beside each other
-/// read memory beside each other, which one thread per lane does not do
-/// when a lane is a long run of memory.
+/// The shortest lane of another axis that a group of threads reduces.
+/// Threads beside each other already read memory beside each other
+/// there, so a group only pays for a lane long enough to keep one thread
+/// busy.
+const SPLIT_STRIDED_LANE: usize = 512;
+
+/// The threads that share a lane of `length` elements `inner` apart, or
+/// `None` when one thread reduces the lane. On a last axis, threads
+/// beside each other then read memory beside each other, which one thread
+/// per lane does not do when a lane is a long run of memory.
 fn lane_parts(inner: usize, length: usize) -> Option<usize> {
-    if inner != 1 || length < SPLIT_LANE {
+    let shortest = if inner == 1 {
+        SPLIT_LANE
+    } else {
+        SPLIT_STRIDED_LANE
+    };
+    if length < shortest {
         return None;
     }
     let mut parts = 8;
@@ -739,7 +750,7 @@ impl<'a> Generator<'a> {
         let first = self.element(slot, operand, "start", &arguments);
         let next = self.element(slot, operand, "(start + k * step)", &arguments);
         let wins = if largest { ">" } else { "<" };
-        if let Some(parts) = lane_parts(inner, length) {
+        if let Some(parts) = lane_parts(inner, length).filter(|_| inner == 1) {
             // Thread `part` of a lane finds the best of the places `part`,
             // `part + parts` and so on, then one thread for each lane
             // picks among what its threads found.
@@ -870,27 +881,33 @@ impl<'a> Generator<'a> {
                     // Thread `part` of a lane reduces the places `part`,
                     // `part + parts` and so on, then one thread for each
                     // lane reduces what its threads wrote.
+                    // Thread `t` is place `t % inner` after the axis,
+                    // part `(t / inner) % parts`, so threads beside each
+                    // other read memory beside each other.
                     let threads = lanes * parts;
-                    let step = combine("acc", &at("(start + k)"));
-                    let join = combine("acc", "in[lane * PARTS + part]");
+                    let step = combine("acc", &at("(start + k * step)"));
+                    let join = combine("acc", "in[base + part * step]");
                     writeln!(
                         self.source,
                         "extern \"C\" __global__ void k{slot}r0({ty}* out{parameters}) {{\n    \
                          long long t = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (t >= {threads}LL) return;\n    \
-                         long long part = t % {parts}LL;\n    \
-                         long long start = (t / {parts}LL) * {length}LL;\n    \
+                         const long long step = {inner}LL;\n    \
+                         long long part = (t / step) % {parts}LL;\n    \
+                         long long start = (t / (step * {parts}LL)) * ({length}LL * step) + t % step;\n    \
                          {ty} acc = {first};\n    \
-                         for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step};\n    \
+                         for (long long k = part + {parts}LL; k < {length}LL; k += {parts}LL) acc = {step_code};\n    \
                          out[t] = acc;\n}}\n\
                          extern \"C\" __global__ void k{slot}({ty}* out, const {ty}* in) {{\n    \
                          long long lane = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
                          if (lane >= {lanes}LL) return;\n    \
-                         const long long PARTS = {parts}LL;\n    \
-                         {ty} acc = in[lane * PARTS];\n    \
-                         for (long long part = 1; part < PARTS; part++) acc = {join};\n    \
+                         const long long step = {inner}LL;\n    \
+                         long long base = (lane / step) * ({parts}LL * step) + lane % step;\n    \
+                         {ty} acc = in[base];\n    \
+                         for (long long part = 1; part < {parts}LL; part++) acc = {join};\n    \
                          out[lane] = {finish};\n}}",
-                        first = at("(start + part)"),
+                        first = at("(start + part * step)"),
+                        step_code = step,
                     )
                     .expect("writing to a string cannot fail");
                     let partial = self.scratch();

@@ -1239,6 +1239,40 @@ fn a_long_last_axis_is_reduced_by_a_group_of_threads_for_each_lane() {
             };
             close(name, &generated, &array(&waiting));
         }
+        // A long lane of another axis is shared too: 600 rows of 5 and
+        // of 2 by 3, with 32 threads for each lane.
+        let values: Vec<f32> = (0..3600)
+            .map(|index| ((index * 37) % 101) as f32 * 0.25 - 12.0)
+            .collect();
+        for (tag, shape, axis, lanes) in [
+            (0, &[600, 5][..], 0, 5),
+            (1, &[2, 600, 3][..], 1, 6),
+            (2, &[600, 5][..], -2, 5),
+        ] {
+            let tall = tensor(float32(&values[..lanes * 600], shape), TensorDevice::Cpu);
+            for reduction in 0..4 {
+                let waiting =
+                    reduce(&binary(&tall, &tall, 2).unwrap(), reduction, Some(axis)).unwrap();
+                let (plan, storage) = Plan::collect(node(&waiting));
+                let program = tensor_codegen::generate(&plan);
+                let threads: Vec<usize> = program
+                    .actions
+                    .iter()
+                    .map(|action| match action {
+                        tensor_codegen::Action::Kernel { threads, .. } => *threads,
+                        _ => panic!("only kernels here"),
+                    })
+                    .collect();
+                assert_eq!(threads, [lanes * 32, lanes]);
+                let Some(generated) =
+                    generated_kernels::run(&plan, &storage, 1150 + tag * 4 + reduction as usize)
+                else {
+                    eprintln!("SKIPPED: this machine has no C++ compiler");
+                    return;
+                };
+                close("a long lane of another axis", &generated, &array(&waiting));
+            }
+        }
         // A short lane and a lane that is not the last axis keep one thread.
         let rows = tensor(wide_rows(), TensorDevice::Cpu);
         for (waiting, lanes) in [
@@ -1514,4 +1548,22 @@ fn a_gpu_device_agrees_on_results_written_beside_another() {
         }
         println!("RAN: results written beside another on a GPU device");
     }
+}
+
+#[test]
+fn node_addresses_hash_to_different_values() {
+    use std::hash::{BuildHasher, Hasher};
+    let hashed = |address: usize| {
+        let mut hasher = PointerHasher::default().build_hasher();
+        hasher.write_usize(address);
+        hasher.finish()
+    };
+    assert_ne!(hashed(0x7f00_1000), hashed(0x7f00_1040));
+    // Bytes hash too, for a key that is not an address.
+    let bytes = |text: &[u8]| {
+        let mut hasher = PointerHasher::default();
+        hasher.write(text);
+        hasher.finish()
+    };
+    assert_ne!(bytes(b"ab"), bytes(b"ba"));
 }
