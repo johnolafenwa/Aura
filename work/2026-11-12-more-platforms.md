@@ -54,12 +54,18 @@ follow.
   interpreter and as a native executable, runs the runtime, command and
   compiler unit tests, packages the archive, runs the archive smoke
   test, and installs the archive with `install.ps1`.
+- CI job `windows-integration (command)`: all 474 integration tests of
+  the `aura` command. Test sources swap Unix tool paths for the bare
+  names Git for Windows puts on `PATH`, and write paths with forward
+  slashes. One test stays Unix only because it compares `pwd` output
+  with a directory path. A cached program that Windows refuses to load
+  (errors 191, 192, 193, 216) is rebuilt.
 - Local: `cargo check --target x86_64-pc-windows-gnu` type-checks the
   Windows code on Linux, and Wine runs the runtime tests.
 
 ## Open
 
-- The compiler's and the command's integration tests do not run on
-  Windows yet.
+- The compiler's integration tests are being brought to green on
+  Windows in the `windows-integration (compiler)` job.
 - No Windows speed measurements: the hosted runner is the only machine.
 - musl Linux and cross-compilation are not started.

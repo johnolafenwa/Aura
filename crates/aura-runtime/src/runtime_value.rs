@@ -261,10 +261,25 @@ where
     })
 }
 
+/// The deadline `duration` after `now`, or `None` when no supported host
+/// can represent it.
+///
+/// The Linux clock counts signed 64-bit seconds and the macOS clock fewer.
+/// The Windows clock counts further, so the shared limit is applied here:
+/// a deadline more than `i64::MAX` seconds after the process first asked
+/// is out of range on every host, never a wait that outlives the machine.
+pub fn host_deadline_after(now: Instant, duration: StdDuration) -> Option<Instant> {
+    static FIRST_USE: std::sync::OnceLock<Instant> = std::sync::OnceLock::new();
+    let limit = StdDuration::new(i64::MAX as u64, 0);
+    let since_first_use = now.saturating_duration_since(*FIRST_USE.get_or_init(|| now));
+    if since_first_use.checked_add(duration)? > limit {
+        return None;
+    }
+    now.checked_add(duration)
+}
+
 fn checked_deadline_after(duration: StdDuration, label: &str) -> io::Result<Instant> {
-    checked_deadline_after_with(Instant::now(), duration, label, |now, duration| {
-        now.checked_add(duration)
-    })
+    checked_deadline_after_with(Instant::now(), duration, label, host_deadline_after)
 }
 
 pub fn nominal_runtime_base_name(name: &str) -> &str {
@@ -8292,12 +8307,12 @@ fn select_runtime_sources(values: Vec<Value>) -> Result<Vec<SelectRuntimeSource>
         .map(|source| match source {
             ValidatedSelectRuntimeSource::Queue(channel) => Ok(SelectRuntimeSource::Queue(channel)),
             ValidatedSelectRuntimeSource::Task(task) => Ok(SelectRuntimeSource::Task(task)),
-            ValidatedSelectRuntimeSource::Deadline(duration) => wait_started
-                .checked_add(duration)
-                .map(SelectRuntimeSource::Deadline)
-                .ok_or_else(|| {
-                    select_runtime_error("select deadline exceeds the host deadline range")
-                }),
+            ValidatedSelectRuntimeSource::Deadline(duration) => {
+                { host_deadline_after(wait_started, duration).map(SelectRuntimeSource::Deadline) }
+                    .ok_or_else(|| {
+                        select_runtime_error("select deadline exceeds the host deadline range")
+                    })
+            }
         })
         .collect()
 }
@@ -12859,9 +12874,7 @@ fn deadline_from_timeout_labeled(
     timeout: Option<StdDuration>,
     label: &str,
 ) -> io::Result<Option<Instant>> {
-    deadline_from_timeout_with(timeout, label, Instant::now(), |now, duration| {
-        now.checked_add(duration)
-    })
+    deadline_from_timeout_with(timeout, label, Instant::now(), host_deadline_after)
 }
 
 fn deadline_from_timeout(timeout: Option<StdDuration>) -> io::Result<Option<Instant>> {
@@ -12920,9 +12933,7 @@ where
 }
 
 fn tls_handshake_deadline(deadline: Option<Instant>) -> io::Result<Option<Instant>> {
-    tls_handshake_deadline_with(deadline, Instant::now(), |now, duration| {
-        now.checked_add(duration)
-    })
+    tls_handshake_deadline_with(deadline, Instant::now(), host_deadline_after)
 }
 
 fn duration_to_poll_timeout(duration: StdDuration) -> libc::c_int {
@@ -15043,9 +15054,7 @@ fn supervisor_restart_schedule(
     now: Instant,
     backoff: StdDuration,
 ) -> SupervisorRestartSchedule {
-    supervisor_restart_schedule_with(name, restart_count, now, backoff, |now, duration| {
-        now.checked_add(duration)
-    })
+    supervisor_restart_schedule_with(name, restart_count, now, backoff, host_deadline_after)
 }
 
 impl ProcessSupervisorValue {
@@ -15816,7 +15825,12 @@ where
         ));
     }
 
+    // Each candidate gets an equal share of the time that remains, so one
+    // slow candidate cannot use the whole budget. Windows takes about two
+    // seconds to refuse a loopback address nothing listens on, which is the
+    // first candidate of `localhost` when a server listens on IPv4 only.
     let mut last_error = None;
+    let mut candidates_left = u32::try_from(addresses.len()).unwrap_or(u32::MAX);
     for candidate in addresses {
         let candidate_timeout = match deadline {
             Some(deadline) => {
@@ -15824,10 +15838,11 @@ where
                 if remaining.is_zero() {
                     return Err(timeout_resource_error());
                 }
-                Some(remaining)
+                Some((remaining / candidates_left).max(StdDuration::from_nanos(1)))
             }
             None => None,
         };
+        candidates_left = candidates_left.saturating_sub(1).max(1);
         match connect(candidate, candidate_timeout) {
             Ok(stream) => return Ok(stream),
             Err(error) => last_error = Some(error),

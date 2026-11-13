@@ -13,6 +13,13 @@ in this file.
   Aura and runs the runtime, compiler and command tests on a Windows
   runner, the release workflow publishes an `x86_64-pc-windows-msvc`
   archive, and `install.ps1` installs it.
+- `net.connect_timeout` and the other connects with a deadline give each
+  resolved address an equal share of the time that remains. A slow first
+  address, such as the IPv6 loopback on Windows when the server listens
+  on IPv4 only, no longer uses the whole timeout.
+- On Windows, a timeout or wait too long for any host clock, such as
+  `Duration.seconds(9223372036854775807)`, is rejected as invalid input
+  as on Linux and macOS, and a damaged cached program is rebuilt.
 - Linux on arm64 is a supported host. CI builds Aura and runs the
   workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
   publishes an `aarch64-unknown-linux-gnu` archive, and the installer

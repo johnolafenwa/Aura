@@ -5958,6 +5958,17 @@ fn duration_helpers_preserve_nanoseconds_rendering_conversions_and_host_limits()
     assert_eq!(too_wide.kind(), io::ErrorKind::InvalidInput);
     assert!(too_wide.to_string().contains("host timer range"));
 
+    // One limit holds on every host: `i64::MAX` seconds after first use.
+    // The Windows clock alone counts further.
+    let now = Instant::now();
+    assert!(super::host_deadline_after(now, StdDuration::from_secs(3600)).is_some());
+    assert!(super::host_deadline_after(now, StdDuration::new(i64::MAX as u64, 1)).is_none());
+    assert!(super::host_deadline_after(now, StdDuration::MAX).is_none());
+    let past_every_host =
+        super::duration_to_host_timer((i64::MAX as i128) * super::NANOS_PER_SECOND, "test timeout")
+            .expect_err("the largest Duration.seconds argument is out of range on every host");
+    assert!(past_every_host.to_string().contains("host deadline range"));
+
     let deadline_overflow =
         super::duration_to_host_timer((u64::MAX as i128) * super::NANOS_PER_SECOND, "test timeout")
             .expect_err(
@@ -16874,7 +16885,7 @@ fn blocking_service_cancellation_drops_late_results_safely() {
 }
 
 #[test]
-fn tcp_connect_candidates_share_one_timeout_budget() {
+fn tcp_connect_candidates_split_one_timeout_budget() {
     let started = Instant::now();
     let deadline = started + StdDuration::from_millis(100);
     let first: std::net::SocketAddr = "127.0.0.1:1".parse().expect("address should parse");
@@ -16915,8 +16926,8 @@ fn tcp_connect_candidates_share_one_timeout_budget() {
     assert_eq!(connected, "connected");
     assert_eq!(
         observed_budgets,
-        vec![StdDuration::from_millis(100), StdDuration::from_millis(60)],
-        "each candidate must receive only the timeout budget that remains"
+        vec![StdDuration::from_millis(50), StdDuration::from_millis(60)],
+        "each candidate must receive an equal share of the budget that remains, and the last all of it"
     );
 }
 

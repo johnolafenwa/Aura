@@ -144,9 +144,10 @@ fn imported_call_and_cross_module_task_frames_keep_their_own_paths() {
         "import helpers.worker\n\ndef relay() -> int32:\n    return helpers.worker.explode()\n\ndef main() -> int32:\n    return relay()\n",
     )
     .expect("sync entry should be written");
-    let canonical_worker_path =
-        fs::canonicalize(&worker_path).expect("worker path should canonicalize");
-    let canonical_sync_path = fs::canonicalize(&sync_path).expect("sync path should canonicalize");
+    let canonical_worker_path = aura_compiler::host_path::canonicalize(&worker_path)
+        .expect("worker path should canonicalize");
+    let canonical_sync_path =
+        aura_compiler::host_path::canonicalize(&sync_path).expect("sync path should canonicalize");
     let sync_error = run_path(&sync_path).expect_err("imported nested call should trap");
     assert_eq!(
         sync_error
@@ -176,7 +177,8 @@ fn imported_call_and_cross_module_task_frames_keep_their_own_paths() {
         "import helpers.worker\n\ndef main() -> int32:\n    with group = TaskGroup():\n        group.start(helpers.worker.explode)\n    return 0\n",
     )
     .expect("task entry should be written");
-    let canonical_task_path = fs::canonicalize(&task_path).expect("task path should canonicalize");
+    let canonical_task_path =
+        aura_compiler::host_path::canonicalize(&task_path).expect("task path should canonicalize");
     let task_error = run_path(&task_path).expect_err("cross-module child should trap");
     assert_eq!(
         task_error.call_frames[0].span.path.as_deref(),

@@ -274,7 +274,18 @@ jobs:
           command -v z3 || echo "z3 is not on PATH"
 
   windows-integration:
-    # The `aura` command's integration suites on native Windows.
+    # The integration suites on native Windows: the `aura` command's, and
+    # the compiler's and the runtime's. Each compiler suite links LLVM, so
+    # the two groups run on separate machines.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - suite: command
+            tests: -p aura --tests
+          - suite: compiler
+            tests: -p aura-compiler -p aura-runtime --test *
+    name: windows-integration (${{ matrix.suite }})
     runs-on: windows-2025
     timeout-minutes: 150
     defaults:
@@ -306,20 +317,27 @@ jobs:
       - name: Install Z3
         run: bash scripts/install-z3.sh
 
-      - name: Run the aura command's integration tests
+      - name: Run the integration tests
         timeout-minutes: 120
         env:
           RUST_MIN_STACK: 33554432
-        run: cargo test --locked -p aura --tests --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/integration-tests.log"
+          # Test programs without debug information stay small enough for
+          # the runner's disk.
+          CARGO_PROFILE_TEST_DEBUG: 0
+          CARGO_PROFILE_DEV_DEBUG: 0
+          SUITE_TESTS: ${{ matrix.tests }}
+        run: |
+          set -f
+          cargo test --locked $SUITE_TESTS --no-fail-fast 2>&1 | tee "$RUNNER_TEMP/integration-tests.log"
 
       - name: Show the failures
         # The job log is long, so the failures are repeated at its end.
         if: ${{ failure() }}
         run: |
           grep -E "^error" -A 12 "$RUNNER_TEMP/integration-tests.log" | head -n 60 || true
-          grep -E "panicked at" -A 8 "$RUNNER_TEMP/integration-tests.log" | grep -v "^--$" | cut -c 1-300 | head -n 150 || true
+          grep -E "panicked at" -A 40 "$RUNNER_TEMP/integration-tests.log" | grep -v "^--$" | cut -c 1-400 | head -n 200 || true
           grep -E "^test .* FAILED|over 60 seconds" "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 | head -n 120 || true
-          grep -E "Running|test result" "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 || true
+          grep -E "test result: FAILED" -B 1 "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 || true
 
   native-binaries:
     strategy:
