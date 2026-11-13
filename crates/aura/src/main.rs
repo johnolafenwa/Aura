@@ -2868,6 +2868,13 @@ fn native_launch_error_invalidates_cache(error: &io::Error) -> bool {
     if error.raw_os_error() == Some(libc::ELIBBAD) {
         return true;
     }
+    // Windows reports a file that is not a usable program image with one
+    // of these codes: ERROR_INVALID_EXE_SIGNATURE, ERROR_EXE_MARKED_INVALID,
+    // ERROR_BAD_EXE_FORMAT and ERROR_EXE_MACHINE_TYPE_MISMATCH.
+    #[cfg(windows)]
+    if matches!(error.raw_os_error(), Some(191 | 192 | 193 | 216)) {
+        return true;
+    }
     false
 }
 
@@ -5835,7 +5842,7 @@ mod tests {
     use std::thread;
     use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-    #[cfg(target_os = "macos")]
+    #[cfg(any(target_os = "macos", windows))]
     use super::native_launch_error_invalidates_cache;
     #[cfg(unix)]
     use super::{
@@ -6193,6 +6200,21 @@ mod tests {
         assert!(missing_schema["error"]
             .as_str()
             .is_some_and(|message| message.contains("client reported `<missing>`")));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn windows_executable_shape_errors_invalidate_native_cache_entries() {
+        for raw_error in [191, 192, 193, 216] {
+            assert!(
+                native_launch_error_invalidates_cache(&io::Error::from_raw_os_error(raw_error)),
+                "Windows executable-format error {raw_error} must rebuild the cache entry"
+            );
+        }
+        // ERROR_ACCESS_DENIED says nothing about the file's shape.
+        assert!(!native_launch_error_invalidates_cache(
+            &io::Error::from_raw_os_error(5)
+        ));
     }
 
     #[cfg(target_os = "macos")]

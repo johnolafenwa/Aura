@@ -266,8 +266,10 @@ fn retry_validates_arguments_before_invoking_the_worker_on_both_backends() {
             &["AU4001", "initial_backoff", "cannot be negative"][..],
         ),
         (
+            // More seconds than any host's timer counts. The largest
+            // `Duration.seconds` argument alone still fits the Windows one.
             "unrepresentable-backoff",
-            "max_attempts=1, initial_backoff=Duration.seconds(9223372036854775807)",
+            "max_attempts=1, initial_backoff=Duration.seconds(9223372036854775807) * 4",
             &["AU4001", "initial_backoff", "host timer range"][..],
         ),
     ];
