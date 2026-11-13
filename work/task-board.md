@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-12
+Last updated: 2026-11-13
 
 ## More platforms: Linux on arm64 and native Windows (in progress)
 
@@ -11,7 +11,10 @@ Last updated: 2026-11-12
   Windows (`x86_64-pc-windows-msvc`) builds, runs the runtime tests,
   links native executables with the Microsoft linker, and has a release
   archive script, an archive smoke test and a PowerShell installer.
-- Open: compiler and command integration tests on Windows, speed
+- Done 2026-11-13: the `aura` command's 474 integration tests pass on
+  Windows in the `windows-integration (command)` CI job.
+- Open: compiler integration tests on Windows (job
+  `windows-integration (compiler)` added, being brought to green), speed
   measurements, musl Linux, cross-compilation.
 
 ## Freestanding builds (complete)
