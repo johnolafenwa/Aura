@@ -256,6 +256,9 @@ jobs:
             installed="$RUNNER_TEMP/aura-prefix/bin/aura.exe"
             "$installed" --version
             (cd "$RUNNER_TEMP" && "$installed" run --backend direct "$GITHUB_WORKSPACE/examples/basic_addition.au")
+            # Build the Chocolatey package from the same archive, install
+            # it, and build and run a program with the installed command.
+            scripts/smoke-chocolatey.sh "$(scripts/package-chocolatey.sh "$archive.zip")"
           } 2>&1 | tee "$RUNNER_TEMP/package.log"
 
       - name: Show where a failed step stopped
@@ -345,7 +348,7 @@ jobs:
       matrix:
         os: [ubuntu-24.04, ubuntu-24.04-arm, macos-15]
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    timeout-minutes: 75
 
     steps:
       - name: Checkout
@@ -379,3 +382,26 @@ jobs:
 
       - name: Check native executable contents and sizes
         run: python3 scripts/check-native-binaries.py
+
+      - name: Package the release archive
+        shell: bash
+        run: |
+          version="$(target/release/aura --version | awk '{ print $2 }')"
+          case "$(uname -s)-$(uname -m)" in
+            Linux-x86_64) target=x86_64-unknown-linux-gnu ;;
+            Linux-aarch64) target=aarch64-unknown-linux-gnu ;;
+            Darwin-arm64) target=aarch64-apple-darwin ;;
+            Darwin-x86_64) target=x86_64-apple-darwin ;;
+          esac
+          scripts/package-cli.sh "aura-v$version-$target"
+          echo "AURA_CI_ARCHIVE=aura-v$version-$target.tar.gz" >> "$GITHUB_ENV"
+
+      - name: Build the Debian package and install it with apt-get
+        if: runner.os == 'Linux'
+        shell: bash
+        run: scripts/smoke-deb.sh "$(scripts/package-deb.sh "$AURA_CI_ARCHIVE")"
+
+      - name: Install the Homebrew formula from a local tap
+        if: runner.os == 'macOS'
+        shell: bash
+        run: scripts/smoke-homebrew.sh "$AURA_CI_ARCHIVE"

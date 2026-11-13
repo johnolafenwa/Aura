@@ -1,0 +1,38 @@
+<?xml version="1.0" encoding="utf-8"?>
+<package xmlns="http://schemas.microsoft.com/packaging/2015/06/nuspec.xsd">
+  <metadata>
+    <id>aura</id>
+    <version>@VERSION@</version>
+    <title>Aura</title>
+    <authors>John Olafenwa</authors>
+    <owners>John Olafenwa</owners>
+    <projectUrl>https://johnolafenwa.github.io/Aura/</projectUrl>
+    <projectSourceUrl>https://github.com/johnolafenwa/Aura</projectSourceUrl>
+    <packageSourceUrl>https://github.com/johnolafenwa/Aura/tree/main/packaging/chocolatey</packageSourceUrl>
+    <docsUrl>https://johnolafenwa.github.io/Aura/install/windows</docsUrl>
+    <bugTrackerUrl>https://github.com/johnolafenwa/Aura/issues</bugTrackerUrl>
+    <licenseUrl>https://github.com/johnolafenwa/Aura/blob/main/LICENSE</licenseUrl>
+    <iconUrl>https://johnolafenwa.github.io/Aura/aura-mark.svg</iconUrl>
+    <releaseNotes>https://github.com/johnolafenwa/Aura/releases/tag/@TAG@</releaseNotes>
+    <requireLicenseAcceptance>false</requireLicenseAcceptance>
+    <tags>aura compiler programming-language cli</tags>
+    <summary>Compiler and tools for the Aura programming language</summary>
+    <description><![CDATA[Aura is a statically typed, compiled programming language with Python-like syntax.
+
+This package installs the `aura` command for x86-64 Windows, together with the native runtime that `aura build` links into programs:
+
+- `aura run` and `aura build` compile a program to a native executable.
+- `aura check`, `aura fmt`, `aura test` and `aura verify` check, format, test and prove programs.
+- `aura lsp` serves the Aura extension for Visual Studio Code.
+
+## Notes
+
+- `aura build` and native `aura run` link programs with the Microsoft linker. Install the Visual Studio Build Tools with the "Desktop development with C++" workload, for example with `choco install visualstudio2022buildtools visualstudio2022-workload-vctools`. `aura check`, `aura fmt`, `aura run --backend mir` and the language server need no linker.
+- Aura is a technical preview, so its versions are prereleases. Install and upgrade with `--pre`.
+- Upgrade with `choco upgrade aura --pre`, not `aura upgrade`.
+]]></description>
+  </metadata>
+  <files>
+    <file src="tools\**" target="tools" />
+  </files>
+</package>

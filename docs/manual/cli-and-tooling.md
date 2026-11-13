@@ -45,7 +45,7 @@ aura check app.au
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
-| `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
+| `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
 | `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.15.0-preview (0123456789ab)`. Source builds print `aura 0.15.0-dev (0123456789ab)`. |

@@ -88,6 +88,12 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## Install With apt Or Homebrew Instead
+
+From the release after 0.15, Aura has an apt repository for Ubuntu and
+Debian and a Homebrew formula. See
+[Install with a package manager](/install/package-managers).
+
 ## Upgrade Aura
 
 ```bash
@@ -98,7 +104,9 @@ aura --version
 `aura upgrade` downloads the current installer and verifies the published
 release checksums. It then replaces the compiler and bundled runtime in the
 same install prefix. If Aura lives in a custom location, set
-`AURA_INSTALL_PREFIX` when you upgrade.
+`AURA_INSTALL_PREFIX` when you upgrade. If apt or Homebrew installed Aura,
+`aura upgrade` prints the package manager's upgrade command, which is the
+one to use.
 
 ## Troubleshooting
 

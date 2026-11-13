@@ -66,6 +66,7 @@ export default defineConfig({
             { text: 'Linux', link: '/install/linux' },
             { text: 'Windows', link: '/install/windows' },
             { text: 'Windows With WSL', link: '/install/windows-wsl' },
+            { text: 'Package Managers', link: '/install/package-managers' },
             { text: 'VS Code Extension', link: '/install/vscode' },
             { text: 'Release Downloads', link: '/downloads' }
           ]

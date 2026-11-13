@@ -23,6 +23,7 @@ For step-by-step instructions, pick a platform guide:
 - [macOS: Apple silicon and Intel](/install/macos)
 - [Linux: Ubuntu 24.04 and compatible x86-64 glibc hosts](/install/linux)
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
+- [Homebrew, apt and Chocolatey, from the release after 0.15](/install/package-managers)
 
 To install by hand, download the archive for your platform from the
 [v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).

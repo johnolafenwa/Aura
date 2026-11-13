@@ -10,6 +10,8 @@ node_modules/
 eval_aura/
 /release/
 /aura-*.tar.gz
+/aura-*.deb
+/aura.*.nupkg
 
 # Byte-compiled / optimized / DLL files
 __pycache__/

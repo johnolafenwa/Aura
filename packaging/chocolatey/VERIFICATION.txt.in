@@ -1,0 +1,31 @@
+VERIFICATION
+Verification is intended to assist the Chocolatey moderators and community
+in verifying that this package's contents are trustworthy.
+
+The author of Aura publishes this package. The files under tools\aura are the
+contents of the Windows archive of the same Aura release, plus the one-line
+file tools\aura\lib\aura\install-manager, which tells `aura upgrade` that
+Chocolatey owns the installation.
+
+To verify them:
+
+1. Download the archive and the checksum list of the release:
+
+   https://github.com/johnolafenwa/Aura/releases/download/@TAG@/@ARCHIVE@
+   https://github.com/johnolafenwa/Aura/releases/download/@TAG@/SHA256SUMS
+
+2. Check the archive against this checksum, which SHA256SUMS also lists:
+
+   Get-FileHash -Algorithm SHA256 @ARCHIVE@
+
+   @SHA256@
+
+3. Extract the archive and compare its files with tools\aura, for example:
+
+   Get-FileHash -Algorithm SHA256 tools\aura\bin\aura.exe
+
+   @AURA_EXE_SHA256@
+
+The GitHub Actions workflow .github/workflows/release.yml of
+https://github.com/johnolafenwa/Aura builds both the archive and this
+package from the tagged source.
