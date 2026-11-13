@@ -1567,3 +1567,92 @@ fn node_addresses_hash_to_different_values() {
     };
     assert_ne!(bytes(b"ab"), bytes(b"ba"));
 }
+
+#[test]
+fn small_kernels_that_do_not_read_each_other_share_a_launch() {
+    let l = leaves(TensorDevice::Cpu);
+    let make = |l: &Leaves| {
+        vec![
+            binary(&l.a, &l.b, 0).unwrap(),
+            binary(&l.a, &l.b, 2).unwrap(),
+            binary(&l.row, &l.row, 0).unwrap(),
+            unary(&l.tall, 1).unwrap(),
+            binary(&l.b, &l.row, 1).unwrap(),
+            binary(&l.counts, &l.counts, 0).unwrap(),
+        ]
+    };
+    let expected: Vec<ArrayValue> = make(&l).iter().map(array).collect();
+    deferred(|| {
+        let kept = make(&l);
+        let roots: Vec<&TensorValue> = kept.iter().map(node).collect();
+        let (plan, storage) = Plan::collect_all(&roots);
+        let program = tensor_codegen::generate(&plan);
+        let [tensor_codegen::Action::Kernel {
+            name,
+            more,
+            inputs,
+            threads,
+            ..
+        }] = &program.actions[..]
+        else {
+            panic!("six small kernels are one launch: {:?}", program.actions);
+        };
+        assert!(name.starts_with('g'));
+        assert_eq!((more.len(), inputs.len(), *threads), (5, 5, 31));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2200) {
+            for (index, expected) in expected.iter().enumerate() {
+                close("a kernel of a shared launch", &generated[index], expected);
+            }
+        }
+
+        // A kernel that reads another's result is launched after it.
+        let sum = binary(&l.a, &l.b, 0).unwrap();
+        let square = binary(&sum, &sum, 2).unwrap();
+        let (plan, storage) = Plan::collect_all(&[node(&sum), node(&square)]);
+        let program = tensor_codegen::generate(&plan);
+        let names: Vec<&str> = program
+            .actions
+            .iter()
+            .map(|action| match action {
+                tensor_codegen::Action::Kernel { name, .. } => name.as_str(),
+                _ => panic!("only kernels here"),
+            })
+            .collect();
+        assert_eq!(names.len(), 2);
+        assert!(names.iter().all(|name| name.starts_with('k')));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2201) {
+            close(
+                "sum",
+                &generated[0],
+                &array(&binary(&l.a, &l.b, 0).unwrap()),
+            );
+        }
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_kernels_that_share_a_launch() {
+    for device in gpus() {
+        let make = |l: &Leaves| {
+            vec![
+                binary(&l.a, &l.b, 0).unwrap(),
+                binary(&l.a, &l.b, 2).unwrap(),
+                binary(&l.row, &l.row, 0).unwrap(),
+                unary(&l.tall, 1).unwrap(),
+                binary(&l.b, &l.row, 1).unwrap(),
+            ]
+        };
+        let expected: Vec<ArrayValue> =
+            make(&leaves(TensorDevice::Cpu)).iter().map(array).collect();
+        let kept = make(&leaves(device));
+        for value in &kept {
+            node_op(value, 8, &[]).unwrap();
+        }
+        node_op(&kept[0], 9, &[]).unwrap();
+        for (value, expected) in kept.iter().zip(&expected) {
+            assert!(node(value).is_ready());
+            close("a kernel of a shared launch", &array(value), expected);
+        }
+        println!("RAN: kernels that share a launch on a GPU device");
+    }
+}

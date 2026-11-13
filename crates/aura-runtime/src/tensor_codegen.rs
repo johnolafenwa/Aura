@@ -144,6 +144,16 @@ fn lane_parts(inner: usize, length: usize) -> Option<usize> {
     Some(parts)
 }
 
+/// The most threads of an elementwise kernel that shares its launch.
+const GROUPED_THREADS: usize = 1 << 20;
+
+/// The most buffers the kernels of one launch name. A CUDA launch passes
+/// at most 4,096 bytes of arguments.
+const GROUPED_POINTERS: usize = 256;
+
+/// The most buffers a host test passes to a kernel one by one.
+pub(crate) const HARNESS_POINTERS: usize = 7;
+
 /// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
 
@@ -258,6 +268,9 @@ struct Generator<'a> {
     /// The results each kernel writes beside its own: steps only that
     /// kernel reads, which the program keeps.
     beside: Vec<Vec<usize>>,
+    /// The places in `actions` of the elementwise kernels, whose launch
+    /// kernels are emitted last.
+    maps: Vec<usize>,
     source: String,
     actions: Vec<Action>,
     buffers: usize,
@@ -413,6 +426,7 @@ impl<'a> Generator<'a> {
             plan,
             materialized,
             beside,
+            maps: Vec::new(),
             source: PREAMBLE.to_string(),
             actions: Vec::new(),
             buffers: count,
@@ -662,17 +676,19 @@ impl<'a> Generator<'a> {
             write!(writes, " out{other}[j] = v{slot}_{other}(j{arguments});")
                 .expect("writing to a string cannot fail");
         }
+        // The body is a function of its own, so that one launch can run
+        // the bodies of several small kernels.
         writeln!(
             self.source,
-            "extern \"C\" __global__ void k{slot}({result}* out{outputs}{parameters}) {{\n    \
-             long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n    \
-             if (j < {count}LL) {{ out[j] = v{slot}_{slot}(j{arguments});{writes} }}\n}}"
+            "AURA_INLINE void b{slot}(long long j, {result}* out{outputs}{parameters}) {{\n    \
+             out[j] = v{slot}_{slot}(j{arguments});{writes}\n}}"
         )
         .expect("writing to a string cannot fail");
         let more = beside
             .iter()
             .map(|&other| (other, count * element_bytes(self.dtype(other))))
             .collect();
+        self.maps.push(self.actions.len());
         self.actions.push(Action::Kernel {
             name: format!("k{slot}"),
             output: slot,
@@ -681,6 +697,148 @@ impl<'a> Generator<'a> {
             inputs: leaves,
             clear: false,
             more,
+        });
+    }
+
+    /// Emits the kernels of the elementwise actions. Small ones that
+    /// follow each other and do not read each other's results share one
+    /// launch: each thread runs the body its index falls in. An optimizer
+    /// step updates every parameter this way in a few launches.
+    fn launch_maps(&mut self) {
+        let maps = std::mem::take(&mut self.maps);
+        let actions = std::mem::take(&mut self.actions);
+        let mut grouped: Vec<Action> = Vec::with_capacity(actions.len());
+        // The actions of the group being gathered, and the buffers they
+        // write.
+        let mut group: Vec<Action> = Vec::new();
+        let mut written: Vec<usize> = Vec::new();
+        let mut pointers = 0;
+        for (index, action) in actions.into_iter().enumerate() {
+            let small = match &action {
+                Action::Kernel {
+                    threads,
+                    inputs,
+                    more,
+                    ..
+                } if maps.contains(&index) && *threads <= GROUPED_THREADS => {
+                    Some((inputs.clone(), 1 + more.len() + inputs.len()))
+                }
+                _ => None,
+            };
+            let joins = small.as_ref().is_some_and(|(inputs, count)| {
+                pointers + count <= GROUPED_POINTERS
+                    && !inputs.iter().any(|input| written.contains(input))
+            });
+            if !joins {
+                self.launch_group(std::mem::take(&mut group), &mut grouped);
+                written.clear();
+                pointers = 0;
+            }
+            match small {
+                Some((_, count)) => {
+                    if let Action::Kernel { output, more, .. } = &action {
+                        written.push(*output);
+                        written.extend(more.iter().map(|(other, _)| *other));
+                    }
+                    pointers += count;
+                    group.push(action);
+                }
+                None if maps.contains(&index) => {
+                    self.launch_group(vec![action], &mut grouped);
+                }
+                None => grouped.push(action),
+            }
+        }
+        self.launch_group(group, &mut grouped);
+        self.actions = grouped;
+    }
+
+    /// Emits one kernel for the elementwise actions of `group` and adds
+    /// its action to `actions`.
+    fn launch_group(&mut self, group: Vec<Action>, actions: &mut Vec<Action>) {
+        let Some(Action::Kernel { output: first, .. }) = group.first() else {
+            return;
+        };
+        let first = *first;
+        let name = if group.len() == 1 {
+            format!("k{first}")
+        } else {
+            format!("g{first}")
+        };
+        let (mut outputs, mut inputs): (Vec<(usize, usize)>, Vec<usize>) = (Vec::new(), Vec::new());
+        let (mut body, mut threads) = (String::new(), 0);
+        for action in &group {
+            let Action::Kernel {
+                output,
+                bytes,
+                threads: count,
+                inputs: read,
+                more,
+                ..
+            } = action
+            else {
+                unreachable!("a group holds kernels")
+            };
+            let mut call = format!("b{output}(j, o{output}");
+            outputs.push((*output, *bytes));
+            for (other, bytes) in more {
+                write!(call, ", o{other}").expect("writing to a string cannot fail");
+                outputs.push((*other, *bytes));
+            }
+            for &input in read {
+                write!(call, ", p{input}").expect("writing to a string cannot fail");
+                if !inputs.contains(&input) {
+                    inputs.push(input);
+                }
+            }
+            writeln!(
+                body,
+                "    if (j < {count}LL) {{ {call}); return; }}\n    j -= {count}LL;"
+            )
+            .expect("writing to a string cannot fail");
+            threads += count;
+        }
+        let parameters: Vec<String> = outputs
+            .iter()
+            .map(|(slot, _)| format!("{}* o{slot}", c_type(self.dtype(*slot))))
+            .chain(
+                inputs
+                    .iter()
+                    .map(|&slot| format!("const {}* p{slot}", c_type(self.dtype(slot)))),
+            )
+            .collect();
+        writeln!(
+            self.source,
+            "extern \"C\" __global__ void {name}({}) {{\n    \
+             long long j = (long long)blockIdx.x * blockDim.x + threadIdx.x;\n{body}}}",
+            parameters.join(", ")
+        )
+        .expect("writing to a string cannot fail");
+        if outputs.len() + inputs.len() > HARNESS_POINTERS {
+            // A test on the host calls a kernel of many buffers through
+            // one array of them.
+            let passed: Vec<String> = outputs
+                .iter()
+                .map(|(slot, _)| c_type(self.dtype(*slot)))
+                .chain(inputs.iter().map(|&slot| c_type(self.dtype(slot))))
+                .enumerate()
+                .map(|(place, ty)| format!("({ty}*)buffers[{place}]"))
+                .collect();
+            writeln!(
+                self.source,
+                "#ifdef AURA_HOST_HARNESS\nextern \"C\" void {name}_all(void** buffers) {{ {name}({}); }}\n#endif",
+                passed.join(", ")
+            )
+            .expect("writing to a string cannot fail");
+        }
+        actions.push(Action::Kernel {
+            name,
+            output: outputs[0].0,
+            bytes: outputs[0].1,
+            threads,
+            inputs,
+            clear: false,
+            more: outputs[1..].to_vec(),
         });
     }
 
@@ -1089,6 +1247,7 @@ impl<'a> Generator<'a> {
                 _ => self.map(slot),
             }
         }
+        self.launch_maps();
         Program {
             source: self.source,
             actions: self.actions,

@@ -128,3 +128,11 @@ later, on the same tensors (ADR-0097).
   reads, of the same shape, is written by that kernel (`more` on
   `Action::Kernel`), so AdamW writes a weight and its two averages in
   one kernel in place of three.
+- After the merge of the first pull request, a transformer step on the
+  A40 was 407 kernels and 99 products, with host 4.8 ms, launch 2.0 ms
+  and GPU 12.4 ms. Follow-up changes: a reduction along any axis shares
+  a lane of 512 or more elements among threads (a bias gradient sums
+  4,096 rows), small elementwise kernels that follow each other and do
+  not read each other share one launch (`launch_maps`, so an optimizer
+  step is a few launches), and collecting a plan clones each waiting
+  node's operation once and hashes node addresses cheaply.
