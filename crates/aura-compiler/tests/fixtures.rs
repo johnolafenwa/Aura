@@ -29,8 +29,8 @@ fn parse_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -57,8 +57,8 @@ fn check_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -84,8 +84,8 @@ fn check_path_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&normalize_workspace_path(&rendered)),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&normalize_workspace_path(&rendered)),
+            normalize_diagnostic(&expected),
             "unexpected diagnostic for {}",
             fixture.display()
         );
@@ -117,17 +117,25 @@ fn python_migration_hint_fixtures_match_expected_messages_and_codes() {
 
 #[test]
 fn run_pass_fixtures_match_expected_stdout() {
+    // Every fixture runs, so one report names all that differ.
+    let mut failures = Vec::new();
     for fixture in fixture_files("run-pass") {
-        let output = run_path_on_large_stack(fixture.clone())
-            .unwrap_or_else(|error| panic!("{} should run: {}", fixture.display(), error));
-        let expected = read_expected(&fixture, "stdout");
-        assert_eq!(
-            normalize_newlines(&output.stdout),
-            normalize_newlines(&expected),
-            "unexpected stdout for {}",
-            fixture.display()
-        );
+        let (_adapted, runnable) = host_fixture(&fixture);
+        let expected = normalize_newlines(&read_expected(&fixture, "stdout"));
+        match run_path_on_large_stack(runnable) {
+            Ok(output) => {
+                let stdout = normalize_newlines(&output.stdout);
+                if stdout != expected {
+                    failures.push(format!(
+                        "unexpected stdout for {}\n  left: {stdout:?}\n right: {expected:?}",
+                        fixture.display()
+                    ));
+                }
+            }
+            Err(error) => failures.push(format!("{} should run: {error}", fixture.display())),
+        }
     }
+    assert!(failures.is_empty(), "{}", failures.join("\n"));
 }
 
 /// A debug build's markers change nothing else: with its `SourceLocation`s
@@ -240,8 +248,8 @@ fn run_fail_fixtures_match_expected_diagnostics() {
         let expected = read_expected(&fixture, "diag");
         let rendered = error.render_with_source(&display_path(&fixture), &source);
         assert_eq!(
-            normalize_newlines(&rendered),
-            normalize_newlines(&expected),
+            normalize_diagnostic(&rendered),
+            normalize_diagnostic(&expected),
             "unexpected runtime diagnostic for {}",
             fixture.display()
         );
@@ -257,6 +265,56 @@ fn run_fail_fixtures_match_expected_diagnostics() {
             );
         }
     }
+}
+
+/// A directory removed when the value drops.
+struct AdaptedFixture(PathBuf);
+
+impl Drop for AdaptedFixture {
+    fn drop(&mut self) {
+        let _ = fs::remove_dir_all(&self.0);
+    }
+}
+
+/// The fixture as this host runs it. Windows has no `/bin` and no `/tmp`:
+/// a fixture that names them runs from a copy that names the tools Git for
+/// Windows puts on `PATH` and the host's temporary directory.
+fn host_fixture(fixture: &Path) -> (Option<AdaptedFixture>, PathBuf) {
+    if !cfg!(windows) {
+        return (None, fixture.to_path_buf());
+    }
+    let source = read(fixture);
+    let mut adapted = source.clone();
+    for tool in [
+        "/usr/bin/true",
+        "/bin/echo",
+        "/bin/cat",
+        "/bin/sleep",
+        "/bin/sh",
+    ] {
+        let name = tool.rsplit('/').next().unwrap_or(tool);
+        adapted = adapted.replace(&format!("\"{tool}\""), &format!("\"{name}\""));
+    }
+    let temp = std::env::temp_dir()
+        .display()
+        .to_string()
+        .replace('\\', "/");
+    adapted = adapted.replace("\"/tmp/", &format!("\"{}/", temp.trim_end_matches('/')));
+    if adapted == source {
+        return (None, fixture.to_path_buf());
+    }
+    let directory = std::env::temp_dir().join(format!(
+        "aura-fixture-{}-{}",
+        std::process::id(),
+        fixture
+            .file_stem()
+            .and_then(|stem| stem.to_str())
+            .unwrap_or("fixture")
+    ));
+    fs::create_dir_all(&directory).expect("the adapted fixture directory should be writable");
+    let path = directory.join(fixture.file_name().expect("a fixture has a file name"));
+    fs::write(&path, adapted).expect("the adapted fixture should be writable");
+    (Some(AdaptedFixture(directory)), path)
 }
 
 fn fixture_root() -> PathBuf {
@@ -278,7 +336,13 @@ fn read(path: &Path) -> String {
         .unwrap_or_else(|error| panic!("failed to read {}: {}", path.display(), error))
 }
 
+/// The expected text beside a fixture. A `<name>.windows.<extension>` file
+/// wins on Windows, for output that spells host paths.
 fn read_expected(path: &Path, extension: &str) -> String {
+    let windows_path = path.with_extension(format!("windows.{extension}"));
+    if cfg!(windows) && windows_path.is_file() {
+        return read(&windows_path);
+    }
     let expected_path = path.with_extension(extension);
     read(&expected_path)
 }
@@ -300,6 +364,18 @@ fn workspace_root() -> PathBuf {
 
 fn normalize_newlines(text: &str) -> String {
     text.replace("\r\n", "\n").trim_end().to_string()
+}
+
+/// A rendered diagnostic in the one spelling the expected files use. On
+/// Windows the paths in it carry backslashes, so both sides of a comparison
+/// are read with forward slashes.
+fn normalize_diagnostic(text: &str) -> String {
+    let text = normalize_newlines(text);
+    if cfg!(windows) {
+        text.replace('\\', "/")
+    } else {
+        text
+    }
 }
 
 fn normalize_workspace_path(text: &str) -> String {

@@ -17461,7 +17461,7 @@ fn checked_timeout_deadline_at(
 ) -> Result<Option<Instant>, Diagnostic> {
     timeout
         .map(|timeout| {
-            now.checked_add(timeout).ok_or_else(|| {
+            crate::runtime_value::host_deadline_after(now, timeout).ok_or_else(|| {
                 Diagnostic::coded("AU4001", format!("{label} exceeds the host deadline range"))
             })
         })

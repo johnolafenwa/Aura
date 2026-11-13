@@ -307,7 +307,7 @@ fn opted_in_package_analysis_exposes_ffi_completions_hovers_and_definitions() {
         "valid opted-in FFI source should analyze cleanly: {:?}",
         analysis.diagnostics
     );
-    let canonical_native_path = fs::canonicalize(&native_path)
+    let canonical_native_path = aura_compiler::host_path::canonicalize(&native_path)
         .expect("native module should canonicalize")
         .display()
         .to_string();

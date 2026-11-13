@@ -22,6 +22,8 @@ Waiting operations usually take `timeout: Duration = ...`. Omitting it means no 
 
 An explicit timeout must be non-negative, fit the host timer range, and give a deadline that can be represented. Otherwise the operation returns `io.Error.InvalidInput`. A deadline overflow never means "no deadline".
 
+When a host name resolves to several addresses, a connect with a deadline tries them in order and gives each an equal share of the time that remains. The last address gets all of it.
+
 Deadlines and cancellation report differently by protocol:
 
 - TCP, Unix, and TLS deadlines return `io.Error.TimedOut`.

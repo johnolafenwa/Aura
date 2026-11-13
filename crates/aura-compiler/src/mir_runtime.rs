@@ -11174,8 +11174,7 @@ fn with_optional_diagnostic_span(mut diagnostic: Diagnostic, span: Option<Span>)
 
 fn runtime_deadline_after_timeout(timeout: Option<StdDuration>) -> Result<Option<Instant>> {
     match timeout {
-        Some(timeout) => Instant::now()
-            .checked_add(timeout)
+        Some(timeout) => crate::runtime_value::host_deadline_after(Instant::now(), timeout)
             .map(Some)
             .ok_or_else(|| {
                 Diagnostic::coded("AU4001", "timeout overflows the MIR runtime deadline range")
