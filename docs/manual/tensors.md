@@ -295,6 +295,12 @@ fields are layers. See [Modules](#modules).
 | `LayerNorm(normalized_shape, device)` | Each lane along the last axis moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. |
 | `MultiheadAttention(embed_dim, num_heads, seed, device)` | Self-attention with several heads over a `[batch, length, width]` tensor. `forward(x, is_causal=false)`. |
 | `MixtureOfExperts(width, hidden, experts, active, seed, device)` | Several two layer networks and a gate. `forward(x)` weights the outputs of each row's `active` highest scoring experts by the softmax of their scores. `weights(x)` gives those weights. Every expert runs on every row. |
+| `Conv2d(in_channels, out_channels, kernel_size, stride, padding, seed, device)` | `conv2d` of a `[batch, channels, height, width]` tensor with `weight`, plus a `bias` for each output channel. `weight` has shape `[out_channels, in_channels, kernel_size, kernel_size]`. |
+| `BatchNorm2d(num_features, device)` | Each channel moved to mean zero and deviation one, then scaled by `weight` and moved by `bias`. See [Training and Evaluation Mode](#training-and-evaluation-mode). |
+| `MaxPool2d(kernel_size, stride, padding=0)`, `AvgPool2d(kernel_size, stride, padding=0)` | The largest element, or the mean, of each window. |
+| `Flatten()` | `[batch, ...]` to `[batch, features]`. |
+| `conv2d(input, weight, stride=1, padding=0)` | The two-dimensional convolution. `padding` rows and columns of zeros stand on each side of the image. |
+| `max_pool2d(input, kernel_size, stride, padding=0)`, `avg_pool2d(input, kernel_size, stride, padding=0)` | The pooling functions. Padding never wins a maximum, and counts as zeros in a mean. |
 | `Sequential(layers: list[dyn Layer])` | The layers applied one after another. |
 | `ReLU()`, `GELU()` | `relu` and `gelu` as layers, for a `Sequential`. |
 | `one_hot(indices, num_classes)` | A mask with one more axis, of length `num_classes`, that holds at the place each index names. |
@@ -412,10 +418,31 @@ gives no second way to a model's weights.
 
 `Layer` is the trait of a module whose `forward` maps one
 `Tensor[float32]` to another. `Linear`, `LayerNorm`, `MixtureOfExperts`,
-`ReLU`, `GELU`, and `Sequential` implement it, and so can a model of
+`Conv2d`, `BatchNorm2d`, `MaxPool2d`, `AvgPool2d`, `Flatten`, `ReLU`,
+`GELU`, and `Sequential` implement it, and so can a model of
 your own. A `Sequential` holds a list of `dyn Layer`. `Embedding` and
 `MultiheadAttention` are modules and not layers, because their `forward`
 takes other arguments.
+
+### Training and Evaluation Mode
+
+A `BatchNorm2d` works in one of two modes. In training mode, the mode it
+starts in, `forward` uses the mean and variance of the batch, and moves
+`running_mean` and `running_var` toward them by `momentum`, which is
+0.1. In evaluation mode, `forward` uses the running statistics.
+
+`model.train()` and `model.eval()` set the mode of every layer of a
+model. Both take `mut self`. `Module` gives them to every model.
+
+The running statistics are saved by `state_dict()` and loaded by
+`load_state_dict()`. They are not parameters: `parameters()` leaves them
+out, so no optimizer changes them. `forward` in training mode updates
+them through a model that is not `mut`. This is the one place a layer
+changes what it holds without a `mut` binding, and the weights still
+follow the rule in [What Can Change](#what-can-change).
+
+A hand-written `collect` names a tensor of this kind with
+`into.buffer(name, param)`, and a mode flag with `into.mode(flag)`.
 
 ### Differences From PyTorch
 
@@ -534,7 +561,9 @@ CI run.
 ## Limits
 
 - No integer division. `Array` has none either.
-- No convolution or pooling yet.
+- Convolution and pooling take square kernels over two dimensions, with
+  one stride and one padding for both. There is no dilation, no groups,
+  and no one- or three-dimensional form.
 - No `float16` tensors. A `float16` file loads as `float32`.
 - One GPU. A tensor does not span devices or machines.
 - No way yet to write your own GPU operation. That is the planned kernel

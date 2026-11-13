@@ -136,3 +136,11 @@ later, on the same tensors (ADR-0097).
   not read each other share one launch (`launch_maps`, so an optimizer
   step is a few launches), and collecting a plan clones each waiting
   node's operation once and hashes node addresses cheaply.
+- 2026-11-13: convolution, pooling and batch norm (ADR-0100). `Conv2d`,
+  `BatchNorm2d`, `MaxPool2d`, `AvgPool2d` and `Flatten` are Aura source
+  in `std/tensor.au` over `index_select`, `matmul` and reductions, so
+  every device runs them. A `Collector` gathers buffers and mode flags,
+  and `Module` has `train()` and `eval()`. The numbers of `conv2d`, its
+  gradients, both poolings and the batch norm agree with the same steps
+  in numpy. Two more workload rows, `cnn_train` and `gpt_infer`, in Aura
+  and PyTorch.

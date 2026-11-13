@@ -34,6 +34,13 @@ in this file.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.
+- The `tensor` module has convolution layers: `Conv2d`, `BatchNorm2d`,
+  `MaxPool2d`, `AvgPool2d` and `Flatten`, with the functions `conv2d`,
+  `max_pool2d` and `avg_pool2d`. They have gradients and run on every
+  device. `Module` has `train()` and `eval()`, which set the mode of a
+  model's batch norms, and a `Collector` gathers the running statistics
+  with `buffer`, so `state_dict()` saves them and no optimizer changes
+  them.
 - The `tensor` module has gradients, with PyTorch's names.
   `loss.backward()` adds to the `grad` of each `Parameter`, and an
   optimizer's `step()` runs the loss, the gradients and the new weights
