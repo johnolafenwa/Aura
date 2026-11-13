@@ -105,7 +105,7 @@ impl LocalSocketWaits {
                 if !fired.contains(&wait.key) {
                     fired.push(wait.key);
                 }
-            } else if now.saturating_duration_since(self.fresh[index].since) >= LOCAL_SOCKET_WAIT {
+            } else if now.saturating_duration_since(self.fresh[index].since) >= experiment_wait() {
                 let wait = self.fresh.remove(index);
                 self.moved.insert(wait.key);
                 if let Err(error) =
@@ -127,6 +127,17 @@ impl LocalSocketWaits {
             watcher.unwatch(handle, key);
         }
     }
+}
+
+// EXPERIMENT ONLY, removed before merge: the local wait from the environment.
+fn experiment_wait() -> Duration {
+    static WAIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *WAIT.get_or_init(|| {
+        std::env::var("AURA_EXPERIMENT_SOCKET_WAIT_US")
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .map_or(LOCAL_SOCKET_WAIT, Duration::from_micros)
+    })
 }
 
 #[derive(Clone)]
