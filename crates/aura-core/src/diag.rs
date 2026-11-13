@@ -1227,7 +1227,10 @@ fn same_source_file(left: &str, right: &str) -> bool {
     {
         return true;
     }
-    match (std::fs::canonicalize(left), std::fs::canonicalize(right)) {
+    match (
+        crate::host_path::canonicalize(left),
+        crate::host_path::canonicalize(right),
+    ) {
         (Ok(left), Ok(right)) => left == right,
         _ => false,
     }

@@ -4,19 +4,19 @@ use super::{
     decode_process_stdio, divmod_numeric_values, finalize_task_execution, float_floor_divmod,
     float_power, flush_buffered_files, flush_buffered_files_at_exit, format_runtime_value,
     io_decode_utf8, io_error, lock_mutex, lookup_found, lookup_missing, may_share_file,
-    next_retry_runtime_backoff, non_unix_tls_listener_wait_timeout, optional_absent,
-    optional_named, optional_present, optional_str_value, parse_format_spec, poll_ready,
-    poll_unavailable, process_error_cancelled, process_error_no_command, process_error_other,
-    process_error_spawn, process_error_timed_out, process_supervisor_event_failed,
-    process_supervisor_wait_cancelled, process_supervisor_wait_event,
-    process_supervisor_wait_timed_out, process_wait_cancelled, process_wait_failed,
-    process_wait_timed_out, queue_receive_cancelled, queue_receive_closed, queue_receive_item,
-    queue_receive_timed_out, recv_for_task_group_iteration, remove_file_checked, render_float,
-    render_float32, result_err, result_ok, round_numeric_value, run_blocking_io,
-    run_lightweight_root_task, run_protocol_step, select_outcome_deadline, select_outcome_queue,
-    select_outcome_task, select_runtime_values, send_error_cancelled, send_error_closed,
-    send_error_full, send_error_timed_out, sleep_with_runtime_scheduler, slice_string_owned,
-    slice_vec_owned, spawn_lightweight_task, spawn_lightweight_task_with_cancellation,
+    next_retry_runtime_backoff, optional_absent, optional_named, optional_present,
+    optional_str_value, parse_format_spec, poll_ready, poll_unavailable, process_error_cancelled,
+    process_error_no_command, process_error_other, process_error_spawn, process_error_timed_out,
+    process_supervisor_event_failed, process_supervisor_wait_cancelled,
+    process_supervisor_wait_event, process_supervisor_wait_timed_out, process_wait_cancelled,
+    process_wait_failed, process_wait_timed_out, queue_receive_cancelled, queue_receive_closed,
+    queue_receive_item, queue_receive_timed_out, recv_for_task_group_iteration,
+    remove_file_checked, render_float, render_float32, result_err, result_ok, round_numeric_value,
+    run_blocking_io, run_lightweight_root_task, run_protocol_step, select_outcome_deadline,
+    select_outcome_queue, select_outcome_task, select_runtime_values, send_error_cancelled,
+    send_error_closed, send_error_full, send_error_timed_out, sleep_with_runtime_scheduler,
+    slice_string_owned, slice_vec_owned, spawn_lightweight_task,
+    spawn_lightweight_task_with_cancellation,
     spawn_lightweight_task_with_cancellation_and_forced_exit_cleanup,
     spawn_lightweight_task_with_stack, task_group_cleanup_should_cancel, task_result_cancelled,
     task_result_error, task_result_ready, task_result_timed_out, try_lock_mutex,
@@ -2776,9 +2776,9 @@ use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 #[cfg(unix)]
 use super::{
     read_all_with_fd_deadline, read_exact_with_fd_deadline, read_line_with_fd_deadline,
-    read_some_with_fd_deadline, write_all_with_fd_deadline, TlsListenerValue, TlsStreamValue,
-    UnixListenerValue, UnixStreamValue,
+    read_some_with_fd_deadline, write_all_with_fd_deadline, UnixListenerValue, UnixStreamValue,
 };
+use super::{TlsListenerValue, TlsStreamValue};
 #[cfg(unix)]
 use std::os::fd::AsRawFd;
 
@@ -4038,9 +4038,11 @@ fn tcp_connect_to_a_literal_address_reports_refusal_from_the_reactor_wait() {
         let probe = std::net::TcpListener::bind("127.0.0.1:0").expect("probe bind");
         probe.local_addr().expect("probe address").port()
     };
+    // Windows retries a refused connection for about two seconds before it
+    // reports the refusal.
     let error = TcpStreamValue::connect(
         &format!("127.0.0.1:{port}"),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
     )
     .expect_err("nothing listens on a port just released");
@@ -4347,9 +4349,6 @@ fn runtime_io_wait_helpers_cover_deadlines_cancellation_and_poll_edges() {
     let expired = Instant::now() - StdDuration::from_millis(1);
     let error = super::next_wait_slice(Some(expired), None)
         .expect_err("expired deadlines should fail immediately");
-    assert_eq!(error.kind(), io::ErrorKind::TimedOut);
-    let error = non_unix_tls_listener_wait_timeout(true, Some(expired), None)
-        .expect_err("empty TLS listener waits should honor expired deadlines");
     assert_eq!(error.kind(), io::ErrorKind::TimedOut);
     #[cfg(unix)]
     {
@@ -6991,7 +6990,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
 
     let failed_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "exit 3".to_string(),
         ],
@@ -7010,7 +7009,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
 
     let timed_out_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 1".to_string(),
         ],
@@ -7030,7 +7029,7 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
 
     let cancelled_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 1".to_string(),
         ],
@@ -7051,11 +7050,10 @@ fn cast_numeric_value_reports_source_types_for_runtime_values() {
     assert_eq!(error.render(), "process.Error.Cancelled");
     cancelled_child.close();
 
-    #[cfg(unix)]
     {
         let grouped_child = ProcessChildValue::spawn(
             vec![
-                "/bin/sh".to_string(),
+                crate::host_tools::SH.to_string(),
                 "-c".to_string(),
                 "sleep 5".to_string(),
             ],
@@ -11202,41 +11200,6 @@ fn condvar_helpers_tolerate_poisoned_wait_guards() {
 }
 
 #[test]
-fn non_unix_tls_listener_wait_timeout_blocks_when_no_handshakes_are_pending() {
-    assert_eq!(
-        non_unix_tls_listener_wait_timeout(true, None, None)
-            .expect("idle non-Unix TLS wait should not fail"),
-        None
-    );
-}
-
-#[test]
-fn non_unix_tls_listener_wait_timeout_uses_full_deadline_when_queue_is_empty() {
-    let deadline = Instant::now() + StdDuration::from_millis(200);
-    let wait = non_unix_tls_listener_wait_timeout(true, Some(deadline), None)
-        .expect("deadline-based non-Unix TLS wait should not fail")
-        .expect("deadline-based wait should produce a timeout");
-    assert!(
-        wait > StdDuration::from_millis(100),
-        "idle wait should use the remaining deadline instead of a fixed slice, got {:?}",
-        wait
-    );
-}
-
-#[test]
-fn non_unix_tls_listener_wait_timeout_keeps_short_slices_when_handshakes_are_pending() {
-    let deadline = Instant::now() + StdDuration::from_millis(200);
-    let wait = non_unix_tls_listener_wait_timeout(false, Some(deadline), None)
-        .expect("pending-handshake non-Unix TLS wait should not fail")
-        .expect("pending-handshake wait should produce a slice");
-    assert!(
-        wait <= StdDuration::from_millis(50),
-        "pending handshakes should still advance on short slices, got {:?}",
-        wait
-    );
-}
-
-#[test]
 fn runtime_scheduler_wakes_sleep_on_cancellation() {
     let parent = CancellationContext::default();
     let group = TaskGroupValue::new(&parent);
@@ -13030,7 +12993,7 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
     group.cancel();
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 1".to_string(),
         ],
@@ -13064,7 +13027,7 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
 
     let killed_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "sleep 10".to_string(),
         ],
@@ -13089,7 +13052,7 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
 
     let completed_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "exit 0".to_string(),
         ],
@@ -13124,10 +13087,9 @@ fn process_child_helpers_cover_empty_command_and_cancellation_edges() {
     completed_child.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn process_completed_values_preserve_output_status_and_check_semantics() {
-    let success = std::process::Command::new("/bin/sh")
+    let success = std::process::Command::new(crate::host_tools::SH)
         .args(["-c", "exit 0"])
         .status()
         .expect("successful status should be observable");
@@ -13151,7 +13113,7 @@ fn process_completed_values_preserve_output_status_and_check_semantics() {
     assert_eq!(completed.stdout_bytes(), b"standard output");
     assert_eq!(completed.stderr_bytes(), b"standard error");
 
-    let failure = std::process::Command::new("/bin/sh")
+    let failure = std::process::Command::new(crate::host_tools::SH)
         .args(["-c", "exit 7"])
         .status()
         .expect("failing status should be observable");
@@ -13181,12 +13143,11 @@ fn process_completed_values_preserve_output_status_and_check_semantics() {
         .contains("process exited with ExitStatus.Exited(7)"));
 }
 
-#[cfg(unix)]
 #[test]
 fn process_stdout_supports_line_then_byte_reads() {
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf 'outline\\nrest'".to_string(),
         ],
@@ -13227,7 +13188,6 @@ fn process_stdout_supports_line_then_byte_reads() {
     child.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
     let empty = ProcessSupervisorValue::new();
@@ -13241,7 +13201,7 @@ fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
         .start(
             "quick".to_string(),
             vec![
-                "/bin/sh".to_string(),
+                crate::host_tools::SH.to_string(),
                 "-c".to_string(),
                 "exit 0".to_string(),
             ],
@@ -13273,7 +13233,7 @@ fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
         .start(
             "slow".to_string(),
             vec![
-                "/bin/sh".to_string(),
+                crate::host_tools::SH.to_string(),
                 "-c".to_string(),
                 "sleep 10".to_string(),
             ],
@@ -13302,12 +13262,11 @@ fn process_supervisor_wait_or_none_and_stop_cover_public_outcomes() {
     running.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn process_pipe_helpers_cover_stderr_reads_and_closed_edges() {
     let child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf 'errline\\nmore' >&2".to_string(),
         ],
@@ -13389,7 +13348,7 @@ fn process_pipe_helpers_cover_stderr_reads_and_closed_edges() {
 fn process_pipe_helpers_cover_read_all_and_pipe_direction_errors() {
     let output_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "printf 'out'; printf 'err' >&2".to_string(),
         ],
@@ -13432,7 +13391,7 @@ fn process_pipe_helpers_cover_read_all_and_pipe_direction_errors() {
 
     let input_child = ProcessChildValue::spawn(
         vec![
-            "/bin/sh".to_string(),
+            crate::host_tools::SH.to_string(),
             "-c".to_string(),
             "cat >/dev/null".to_string(),
         ],
@@ -13575,7 +13534,7 @@ fn supervisor_rejects_zero_backoff_when_restart_is_enabled() {
     let error = supervisor
         .start(
             "flaky".to_string(),
-            vec!["/usr/bin/false".to_string()],
+            vec![crate::host_tools::FALSE.to_string()],
             None,
             Vec::new(),
             ProcessStdioConfig::Null,
@@ -13630,7 +13589,7 @@ fn supervisor_delays_restarts_and_reports_restart_counts() {
         .start(
             "flaky".to_string(),
             vec![
-                "/bin/sh".to_string(),
+                crate::host_tools::SH.to_string(),
                 "-c".to_string(),
                 "exit 1".to_string(),
             ],
@@ -13936,7 +13895,6 @@ fn tcp_udp_http_and_websocket_helpers_cover_timeout_and_protocol_surface() {
     ws_thread.join().expect("websocket thread should join");
 }
 
-#[cfg(unix)]
 #[test]
 fn udp_datagrams_preserve_bytes_and_socket_waits_report_timeout_cancellation_and_close() {
     let timeout = StdDuration::from_secs(2);
@@ -14016,7 +13974,6 @@ fn udp_datagrams_preserve_bytes_and_socket_waits_report_timeout_cancellation_and
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn websocket_cross_type_messages_and_close_state_are_observable() {
     let timeout = StdDuration::from_secs(2);
@@ -14363,17 +14320,26 @@ fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
             .local_addr()
             .map_err(|error| Diagnostic::new(error.to_string()))?;
         let server_body = body.clone();
+        let timer_progressed = Arc::new(AtomicBool::new(false));
+        let timer_progressed_in_server = timer_progressed.clone();
         let server = spawn_lightweight_task_with_stack(SMALL_STACK, move || {
             let exchange = listener
                 .accept(Some(timeout), None)
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
+            // The response waits for the timer task, so the client is still
+            // inside its request when the timer fires. A loopback transfer
+            // can otherwise finish before a one millisecond sleep ends, as
+            // it does on Windows.
+            while !timer_progressed_in_server.load(Ordering::SeqCst) {
+                sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)
+                    .map_err(|error| Diagnostic::new(error.to_string()))?;
+            }
             exchange
                 .respond_bytes(200, &server_body, Vec::new())
                 .map_err(|error| Diagnostic::new(error.to_string()))?;
             Ok(Value::Unit)
         })?;
 
-        let timer_progressed = Arc::new(AtomicBool::new(false));
         let timer_progressed_in_task = timer_progressed.clone();
         let timer = spawn_lightweight_task(move || {
             sleep_with_runtime_scheduler(StdDuration::from_millis(1), None)
@@ -14412,7 +14378,6 @@ fn isolated_http_protocol_roundtrip_fits_forced_256_kib_callers() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn forced_256_kib_websocket_data_serializes_clones_without_blocking_siblings() {
     const SMALL_STACK: usize = 256 * 1024;
@@ -14471,7 +14436,6 @@ fn forced_256_kib_websocket_data_serializes_clones_without_blocking_siblings() {
     server.join().expect("websocket server should join");
 }
 
-#[cfg(unix)]
 #[test]
 fn forced_256_kib_tls_handshake_and_data_preserve_sibling_timer_progress() {
     const SMALL_STACK: usize = 256 * 1024;
@@ -14544,7 +14508,6 @@ fn forced_256_kib_tls_handshake_and_data_preserve_sibling_timer_progress() {
     server.join().expect("TLS server should join");
 }
 
-#[cfg(unix)]
 #[test]
 fn tls_state_is_reusable_after_cancellation_at_a_protocol_step_boundary() {
     let timeout = StdDuration::from_secs(2);
@@ -17186,7 +17149,6 @@ fn http_content_length_validation_rejects_non_identity_transfer_coding() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn tls_and_websocket_validation_fail_before_remote_protocol_io() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0")
@@ -17839,9 +17801,11 @@ fn http_stream_helpers_decode_chunked_requests_and_responses() {
     listener.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
+    // The name `localhost` gives Windows the IPv6 address first, where
+    // nothing listens, and Windows takes about two seconds to report that
+    // refusal before the client tries the IPv4 address.
     let temp = TempDir::new("aura-https-client");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
@@ -17860,14 +17824,14 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     let server = thread::spawn(move || {
         let stream = server_listener
             .accept(
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("TLS server should accept");
         loop {
             let line = stream
                 .read_line(
-                    Some(StdDuration::from_secs(2)),
+                    Some(StdDuration::from_secs(10)),
                     Some(&CancellationContext::default()),
                 )
                 .expect("HTTPS request line should read")
@@ -17879,7 +17843,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         stream
             .write_all(
                 "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nConnection: close\r\n\r\n6\r\nsecure\r\n0\r\n\r\n",
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("HTTPS response should write");
@@ -17890,7 +17854,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
         cert_path.to_str().expect("UTF-8 certificate path"),
     )
@@ -17913,14 +17877,14 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     let server = thread::spawn(move || {
         let stream = server_listener
             .accept(
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("second TLS server should accept");
         loop {
             let line = stream
                 .read_line(
-                    Some(StdDuration::from_secs(2)),
+                    Some(StdDuration::from_secs(10)),
                     Some(&CancellationContext::default()),
                 )
                 .expect("HTTPS request line should read")
@@ -17932,7 +17896,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         stream
             .write_all(
                 "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\nsecure-close",
-                Some(StdDuration::from_secs(2)),
+                Some(StdDuration::from_secs(10)),
                 Some(&CancellationContext::default()),
             )
             .expect("HTTPS response without content length should write");
@@ -17943,7 +17907,7 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
         &format!("https://localhost:{}/", address.rsplit_once(':').unwrap().1),
         "",
         Vec::new(),
-        Some(StdDuration::from_secs(2)),
+        Some(StdDuration::from_secs(10)),
         Some(&CancellationContext::default()),
         cert_path.to_str().expect("UTF-8 certificate path"),
     )
@@ -17957,10 +17921,12 @@ fn https_client_uses_tls_validation_and_decodes_chunked_responses() {
     listener.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn https_client_reports_incomplete_and_oversized_response_framing() {
-    let timeout = StdDuration::from_secs(2);
+    // The name `localhost` gives Windows the IPv6 address first, where
+    // nothing listens, and Windows takes about two seconds to report that
+    // refusal before the client tries the IPv4 address.
+    let timeout = StdDuration::from_secs(10);
     let temp = TempDir::new("aura-https-response-framing");
     let certificate =
         generate_simple_self_signed(vec!["localhost".to_string()]).expect("cert generation");
@@ -18515,7 +18481,6 @@ fn network_resources_use_nonblocking_descriptors_internally() {
     );
 }
 
-#[cfg(unix)]
 #[test]
 fn socket_timeouts_honor_the_requested_budget() {
     let listener = TcpListenerValue::bind("127.0.0.1:0").expect("tcp bind should succeed");
@@ -18697,7 +18662,6 @@ fn unix_and_tls_helpers_cover_local_socket_and_tls_surface() {
     tls_thread.join().expect("tls server thread should join");
 }
 
-#[cfg(unix)]
 #[test]
 fn tls_listener_accept_requires_a_completed_handshake() {
     let temp = TempDir::new("aura-runtime-tls-timeout");
@@ -18738,7 +18702,6 @@ fn tls_listener_accept_requires_a_completed_handshake() {
     listener.close();
 }
 
-#[cfg(unix)]
 #[test]
 fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
     let temp = TempDir::new("aura-runtime-tls-slowloris");
@@ -18823,7 +18786,6 @@ fn tls_listener_accept_skips_timed_out_handshakes_and_accepts_the_next_peer() {
         .expect("tls slowloris server thread should join");
 }
 
-#[cfg(unix)]
 #[test]
 fn tls_listener_accept_is_not_linearly_delayed_by_multiple_stalled_peers() {
     let temp = TempDir::new("aura-runtime-tls-multi-slowloris");
@@ -18950,7 +18912,6 @@ fn websocket_error_mapping_preserves_io_error_kinds() {
     assert_eq!(other.kind(), io::ErrorKind::Other);
 }
 
-#[cfg(unix)]
 #[test]
 fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
     let listener = std::net::TcpListener::bind("127.0.0.1:0").expect("bind websocket test");
@@ -18986,6 +18947,17 @@ fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
     let address = listener.local_addr().expect("rejecting server address");
     let rejecting = thread::spawn(move || {
         let (mut stream, _) = listener.accept().expect("accept websocket client");
+        // Read the whole request first. A socket closed with unread bytes
+        // resets the connection, and on Windows the reset discards the
+        // response before the client reads it.
+        let mut request = Vec::new();
+        let mut byte = [0u8; 1];
+        while !request.ends_with(b"\r\n\r\n") {
+            stream
+                .read_exact(&mut byte)
+                .expect("read handshake request");
+            request.push(byte[0]);
+        }
         stream
             .write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")
             .expect("write handshake rejection");
@@ -19000,7 +18972,6 @@ fn websocket_handshake_rejections_are_observable_on_both_transport_roles() {
     rejecting.join().expect("rejecting server worker");
 }
 
-#[cfg(unix)]
 #[test]
 fn websocket_ipv6_host_header_retains_brackets_and_explicit_port() {
     let parsed = url::Url::parse("ws://[::1]:8042/events").expect("valid IPv6 websocket URL");

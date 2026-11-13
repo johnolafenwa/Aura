@@ -22,6 +22,14 @@ static RECORDER: Mutex<()> = Mutex::new(());
 const MEASURED_STACK_BYTES: usize = 15 * 1024 * 1024 + 64 * 1024;
 const MEASURED_DEPTH: usize = 12;
 
+/// The writable capacity of a stack of `MEASURED_STACK_BYTES`. It is the
+/// request on Unix. Windows takes its guard pages and the thread stack
+/// guarantee out of the request.
+fn measured_capacity() -> usize {
+    let stack = DefaultStack::new(MEASURED_STACK_BYTES).expect("the measured stack allocates");
+    task_stack_bounds(&stack).usable_capacity()
+}
+
 /// Slack the reserve must keep above the worst measured transition: the
 /// failing probe still formats its diagnostic on the same stack, and a
 /// moderately larger interpreter frame must become a diagnostic, not a fault.
@@ -126,7 +134,8 @@ fn measure_shapes() -> Vec<Measurement> {
                 .unwrap_or_else(|error| panic!("{} lowers: {error:?}", shape.name));
             task_stack_observation::start_recording();
             let output = run_mir(&mir);
-            let headrooms = task_stack_observation::stop_recording(MEASURED_STACK_BYTES);
+            let capacity = measured_capacity();
+            let headrooms = task_stack_observation::stop_recording(capacity);
             let output = output.unwrap_or_else(|error| panic!("{} runs: {error:?}", shape.name));
             assert_eq!(
                 output.stdout,
@@ -156,7 +165,7 @@ fn measure_shapes() -> Vec<Measurement> {
                 shape: shape.name,
                 worst_transition,
                 mean_transition,
-                entry_overhead: MEASURED_STACK_BYTES.saturating_sub(headrooms[0]),
+                entry_overhead: capacity.saturating_sub(headrooms[0]),
                 probes: headrooms.len(),
             }
         })

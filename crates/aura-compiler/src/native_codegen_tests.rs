@@ -16527,7 +16527,7 @@ fn debug_source_paths_keep_the_directory_the_program_was_given_by() {
     let linked = directory.join("linked");
     std::fs::create_dir_all(real.join("lib")).expect("create the real directory");
     std::os::unix::fs::symlink(&real, &linked).expect("link the directory");
-    let resolved = std::fs::canonicalize(&real).expect("resolve the real directory");
+    let resolved = aura_core::host_path::canonicalize(&real).expect("resolve the real directory");
     let program = linked.join("app.au").to_string_lossy().into_owned();
 
     let module = resolved.join("lib").join("util.au");

@@ -64,6 +64,7 @@ export default defineConfig({
             { text: 'Choose A Platform', link: '/install/' },
             { text: 'macOS', link: '/install/macos' },
             { text: 'Linux', link: '/install/linux' },
+            { text: 'Windows', link: '/install/windows' },
             { text: 'Windows With WSL', link: '/install/windows-wsl' },
             { text: 'VS Code Extension', link: '/install/vscode' },
             { text: 'Release Downloads', link: '/downloads' }

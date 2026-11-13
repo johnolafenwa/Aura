@@ -56,7 +56,7 @@ scripts/install-llvm.sh
 export LLVM_SYS_221_PREFIX="$HOME/.cache/aura/llvm/22.1.2"
 ```
 
-On Linux x86-64, the script downloads the official LLVM 22.1.2 release
+On Linux, x86-64 or arm64, the script downloads the official LLVM 22.1.2 release
 archive, checks its SHA-256, and keeps only `llvm-config`, the headers,
 and the static libraries, about 360 MB. `llvm-config` also names
 `libzstd` and `libxml2`, so on Ubuntu install `libzstd-dev` and

@@ -1848,17 +1848,23 @@ struct ProgramSourceContext {
 
 static DIRECT_PROGRAM_SOURCE: OnceLock<ProgramSourceContext> = OnceLock::new();
 
+/// How the launching `aura` names a channel it left open for this program:
+/// a file descriptor on Unix, a handle on Windows.
 #[cfg(unix)]
+type RawChannel = RawFd;
+/// How the launching `aura` names a channel it left open for this program:
+/// a file descriptor on Unix, a handle on Windows.
+#[cfg(windows)]
+type RawChannel = isize;
+
 struct InternalDiagnosticChannels {
     data: Option<std::fs::File>,
     signal: Option<std::fs::File>,
 }
 
-#[cfg(unix)]
 static INTERNAL_DIAGNOSTIC_CHANNELS: std::sync::Mutex<Option<InternalDiagnosticChannels>> =
     std::sync::Mutex::new(None);
 
-#[cfg(unix)]
 fn lock_internal_diagnostic_channels(
 ) -> std::sync::MutexGuard<'static, Option<InternalDiagnosticChannels>> {
     INTERNAL_DIAGNOSTIC_CHANNELS
@@ -1885,8 +1891,36 @@ fn inherited_internal_diagnostic_file(fd: RawFd) -> Option<std::fs::File> {
     Some(file)
 }
 
-#[cfg(unix)]
-fn install_internal_diagnostic_channels(data_fd: RawFd, signal_fd: RawFd) {
+#[cfg(windows)]
+fn inherited_internal_diagnostic_file(handle: RawChannel) -> Option<std::fs::File> {
+    use std::os::windows::io::FromRawHandle;
+    use windows_sys::Win32::Foundation::{
+        GetHandleInformation, SetHandleInformation, HANDLE_FLAG_INHERIT,
+    };
+
+    if handle <= 0 {
+        return None;
+    }
+    let raw = handle as *mut std::ffi::c_void;
+    let mut flags = 0;
+    // SAFETY: the call only reads the handle table entry, and fails for a
+    // value that names no open handle.
+    if unsafe { GetHandleInformation(raw, &mut flags) } == 0 {
+        return None;
+    }
+    // SAFETY: the private ABI transfers ownership of each inherited handle
+    // to the runtime during initialization, and the check above rejected a
+    // value that is not an open handle.
+    let file = unsafe { std::fs::File::from_raw_handle(raw) };
+    // A process this program starts must not inherit the channel.
+    // SAFETY: `raw` is the open handle `file` owns.
+    if unsafe { SetHandleInformation(raw, HANDLE_FLAG_INHERIT, 0) } == 0 {
+        return None;
+    }
+    Some(file)
+}
+
+fn install_internal_diagnostic_channels(data_fd: RawChannel, signal_fd: RawChannel) {
     let channels = if data_fd == signal_fd {
         // Never construct two `File` owners for one descriptor. Treat a
         // malformed pair as unavailable while still taking and closing it.
@@ -1904,7 +1938,6 @@ fn install_internal_diagnostic_channels(data_fd: RawFd, signal_fd: RawFd) {
     *lock_internal_diagnostic_channels() = Some(channels);
 }
 
-#[cfg(unix)]
 fn initialize_internal_diagnostic_channels() {
     let data = std::env::var_os(crate::INTERNAL_DIAGNOSTIC_FD_ENV);
     let signal = std::env::var_os(crate::INTERNAL_DIAGNOSTIC_SIGNAL_FD_ENV);
@@ -1922,17 +1955,10 @@ fn initialize_internal_diagnostic_channels() {
     let parse_fd = |value: Option<std::ffi::OsString>| {
         value
             .and_then(|value| value.into_string().ok())
-            .and_then(|value| value.parse::<RawFd>().ok())
+            .and_then(|value| value.parse::<RawChannel>().ok())
             .unwrap_or(-1)
     };
     install_internal_diagnostic_channels(parse_fd(data), parse_fd(signal));
-}
-
-#[cfg(not(unix))]
-fn initialize_internal_diagnostic_channels() {
-    // The direct structured-diagnostic transport is Unix-only. Keep the
-    // initialization call unconditional so generated entry behavior is
-    // platform-independent.
 }
 
 fn current_cancellation() -> CancellationContext {
@@ -5173,7 +5199,6 @@ enum InternalDiagnosticEmission {
     SignaledWithoutRecord,
 }
 
-#[cfg(unix)]
 fn write_internal_structured_diagnostic_to_fd(
     diagnostic: &Diagnostic,
     channel: &mut std::fs::File,
@@ -5194,32 +5219,23 @@ fn write_internal_structured_diagnostic_to_fd(
 }
 
 fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalDiagnosticEmission {
-    #[cfg(unix)]
+    let Some(mut channels) = lock_internal_diagnostic_channels().take() else {
+        return InternalDiagnosticEmission::NoChannel;
+    };
+    let (Some(mut data), Some(mut signal)) = (channels.data.take(), channels.signal.take()) else {
+        return InternalDiagnosticEmission::NoChannel;
+    };
+    if signal
+        .write_all(&[crate::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER])
+        .and_then(|()| signal.flush())
+        .is_err()
     {
-        let Some(mut channels) = lock_internal_diagnostic_channels().take() else {
-            return InternalDiagnosticEmission::NoChannel;
-        };
-        let (Some(mut data), Some(mut signal)) = (channels.data.take(), channels.signal.take())
-        else {
-            return InternalDiagnosticEmission::NoChannel;
-        };
-        if signal
-            .write_all(&[crate::INTERNAL_DIAGNOSTIC_SIGNAL_MARKER])
-            .and_then(|()| signal.flush())
-            .is_err()
-        {
-            return InternalDiagnosticEmission::NoChannel;
-        }
-        if write_internal_structured_diagnostic_to_fd(diagnostic, &mut data).is_ok() {
-            InternalDiagnosticEmission::Emitted
-        } else {
-            InternalDiagnosticEmission::SignaledWithoutRecord
-        }
+        return InternalDiagnosticEmission::NoChannel;
     }
-    #[cfg(not(unix))]
-    {
-        let _ = diagnostic;
-        InternalDiagnosticEmission::NoChannel
+    if write_internal_structured_diagnostic_to_fd(diagnostic, &mut data).is_ok() {
+        InternalDiagnosticEmission::Emitted
+    } else {
+        InternalDiagnosticEmission::SignaledWithoutRecord
     }
 }
 

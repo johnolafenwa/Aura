@@ -21,6 +21,11 @@ use std::collections::{BTreeMap, BTreeSet};
 #[cfg(unix)]
 use std::os::fd::RawFd;
 
+#[cfg(windows)]
+use crate::host_io::RawIo;
+#[cfg(windows)]
+use crate::socket_watcher::SocketWatcher;
+
 const WAKER_TOKEN: Token = Token(0);
 const FIRST_FD_TOKEN: usize = 1;
 static NEXT_REACTOR_ID: AtomicU64 = AtomicU64::new(1);
@@ -277,10 +282,15 @@ pub struct RuntimeReactor {
     key_fds: IdHashMap<WaitKey, BTreeSet<RawFd>>,
     #[cfg(unix)]
     next_fd_token: usize,
+    /// The waits that have a socket with the shared watcher.
+    #[cfg(windows)]
+    watched_keys: IdHashSet<WaitKey>,
 }
 
 impl RuntimeReactor {
     pub fn new() -> io::Result<Self> {
+        #[cfg(windows)]
+        crate::windows_process::use_fine_timer_resolution();
         let poll = Poll::new()?;
         let inbox = Arc::new(ReactorInbox {
             id: NEXT_REACTOR_ID.fetch_add(1, Ordering::Relaxed),
@@ -311,6 +321,8 @@ impl RuntimeReactor {
             key_fds: IdHashMap::default(),
             #[cfg(unix)]
             next_fd_token: FIRST_FD_TOKEN,
+            #[cfg(windows)]
+            watched_keys: IdHashSet::default(),
         })
     }
 
@@ -692,7 +704,36 @@ impl RuntimeReactor {
                 return Err(error);
             }
         }
+        #[cfg(windows)]
+        if self.watched_keys.remove(&key) {
+            SocketWatcher::global()?.unwatch(&self.handle(), key);
+        }
         Ok(())
+    }
+
+    /// Wakes `key` once `socket` has `interest`, an error, or a closed
+    /// peer. The shared watcher thread polls the socket and reports through
+    /// this reactor's inbox.
+    #[cfg(windows)]
+    pub fn add_fd(&mut self, key: WaitKey, socket: RawIo, interest: IoInterest) -> io::Result<()> {
+        if !self.is_waiting(key) {
+            return Ok(());
+        }
+        if interest.0 == 0 || interest.0 & !0b11 != 0 {
+            return Err(io::Error::new(
+                io::ErrorKind::InvalidInput,
+                "runtime reactor requires readable and/or writable interest",
+            ));
+        }
+        let mut events = 0;
+        if interest.contains(IoInterest::READABLE) {
+            events |= crate::host_io::POLLIN;
+        }
+        if interest.contains(IoInterest::WRITABLE) {
+            events |= crate::host_io::POLLOUT;
+        }
+        self.watched_keys.insert(key);
+        SocketWatcher::global()?.watch(socket, events, self.handle(), key)
     }
 
     #[cfg(unix)]

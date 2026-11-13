@@ -5,6 +5,7 @@ mod builtin_sources;
 pub(crate) use aura_runtime::bytes_codec;
 pub mod call;
 pub use aura_core::diag;
+pub use aura_core::host_path;
 pub use aura_runtime::c_layout;
 pub use aura_runtime::ffi;
 pub mod format;
@@ -992,7 +993,7 @@ fn absolutize(path: &Path) -> PathBuf {
             Err(_) => path.to_path_buf(),
         }
     };
-    if let Ok(canonical) = fs::canonicalize(&absolute) {
+    if let Ok(canonical) = aura_core::host_path::canonicalize(&absolute) {
         return canonical;
     }
 
@@ -1004,7 +1005,7 @@ fn absolutize(path: &Path) -> PathBuf {
         existing_ancestor = parent;
     }
 
-    let Ok(canonical_ancestor) = fs::canonicalize(existing_ancestor) else {
+    let Ok(canonical_ancestor) = aura_core::host_path::canonicalize(existing_ancestor) else {
         return absolute;
     };
     let Ok(suffix) = absolute.strip_prefix(existing_ancestor) else {
@@ -1086,7 +1087,7 @@ fn checked_module_path(package_root: &Path, module_path: &[String]) -> Result<Pa
 }
 
 fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
-    if let Ok(canonical) = fs::canonicalize(path) {
+    if let Ok(canonical) = aura_core::host_path::canonicalize(path) {
         return Ok(canonical);
     }
 
@@ -1098,7 +1099,7 @@ fn canonicalize_if_exists(path: &Path) -> Result<PathBuf> {
         existing_ancestor = parent;
     }
 
-    let canonical_ancestor = match fs::canonicalize(existing_ancestor) {
+    let canonical_ancestor = match aura_core::host_path::canonicalize(existing_ancestor) {
         Ok(canonical) => canonical,
         Err(error) => {
             return Err(Diagnostic::new(format!(

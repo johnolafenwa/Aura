@@ -1,10 +1,14 @@
 #!/usr/bin/env bash
 # Installs the static LLVM libraries that the `llvm` cargo feature links.
 #
-# On Linux, downloads the official LLVM release archive, checks its SHA-256
+# On Linux, x86-64 or arm64, downloads the official LLVM release archive, checks its SHA-256
 # before extracting anything, and keeps only what llvm-sys needs:
 # llvm-config, the LLVM and LLVM-C headers, and the static libLLVM and
 # libPolly archives.
+#
+# On Windows x86-64, under Git Bash, downloads the official MSVC archive
+# the same way and keeps llvm-config.exe, the headers and the static LLVM
+# .lib files.
 #
 # On macOS, arm64 or x86-64, installs Homebrew's llvm@22 instead. The
 # official macOS archive's static libraries hold LLVM bitcode, which Apple's
@@ -43,10 +47,23 @@ if not any(tag in files for tag in usable):
 '
 }
 
+exe=""
+libraries=("lib/libLLVM*.a" "lib/libPolly*.a")
+
 case "$(uname -s)-$(uname -m)" in
+  MINGW*-x86_64 | MSYS*-x86_64)
+    archive="clang+llvm-${version}-x86_64-pc-windows-msvc.tar.xz"
+    sha256=6550bcc308bf972f7f956001b73f6478da3d22f1ebd4b01653c978a6c7ff3698
+    exe=".exe"
+    libraries=("lib/LLVM*.lib")
+    ;;
   Linux-x86_64)
     archive="LLVM-${version}-Linux-X64.tar.xz"
     sha256=ff32497b6801267ee427bc69cdaeecfb2d19578af8c2a942e864c45215f9a2ac
+    ;;
+  Linux-aarch64 | Linux-arm64)
+    archive="LLVM-${version}-Linux-ARM64.tar.xz"
+    sha256=cf2e84d965a95954971cafc71d18c0eb38e723c3ac7276286fd5636df4374b3a
     ;;
   Darwin-arm64 | Darwin-x86_64)
     check_bottle
@@ -96,7 +113,36 @@ sha256_of() {
   fi
 }
 
-if [ -x "$prefix/bin/llvm-config" ] && [ "$("$prefix/bin/llvm-config" --version)" = "$version" ]; then
+# Copies the Windows SDK import libraries LLVM names, such as psapi.lib,
+# next to LLVM's own. Aura links the static C runtime on Windows, and
+# llvm-sys then asks rustc for LLVM's system libraries as static libraries.
+# rustc finds those only in its search directories, which include LLVM's
+# library directory and not the SDK's.
+copy_windows_system_libraries() {
+  local root=$1 sdk="" candidate library
+  for candidate in "/c/Program Files (x86)/Windows Kits/10/Lib"/*/um/x64; do
+    if [ -f "$candidate/psapi.lib" ]; then
+      sdk=$candidate
+    fi
+  done
+  if [ -z "$sdk" ]; then
+    echo "install-llvm.sh: cannot find the Windows SDK libraries; install the Visual Studio Build Tools with the Windows SDK" >&2
+    exit 1
+  fi
+  for library in $("$root/bin/llvm-config.exe" --system-libs --link-static | tr -d '\r'); do
+    library=${library#-l}
+    library=${library%.lib}.lib
+    if [ -f "$sdk/$library" ]; then
+      cp "$sdk/$library" "$root/lib/$library"
+    fi
+  done
+  # LLVM also names a static libxml2, which the archive does not hold. Only
+  # LLVM's manifest merger uses it, and Aura links no code that reaches it,
+  # so an archive with no members answers the name.
+  printf '!<arch>\n' > "$root/lib/xml2s.lib"
+}
+
+if [ -x "$prefix/bin/llvm-config$exe" ] && [ "$("$prefix/bin/llvm-config$exe" --version)" = "$version" ]; then
   echo "LLVM ${version} is already installed in ${prefix}"
 else
   work=$(mktemp -d)
@@ -116,19 +162,25 @@ else
     wildcards=(--wildcards)
   fi
   mkdir "$work/extract"
-  tar -xJf "$work/$archive" -C "$work/extract" ${wildcards[@]+"${wildcards[@]}"} \
-    "$top/bin/llvm-config" \
-    "$top/include/llvm" \
-    "$top/include/llvm-c" \
-    "$top/lib/libLLVM*.a" \
-    "$top/lib/libPolly*.a"
+  members=("$top/bin/llvm-config$exe" "$top/include/llvm" "$top/include/llvm-c")
+  for library in "${libraries[@]}"; do
+    members+=("$top/$library")
+  done
+  tar -xJf "$work/$archive" -C "$work/extract" ${wildcards[@]+"${wildcards[@]}"} "${members[@]}"
   rm "$work/$archive"
+  if [ -n "$exe" ]; then
+    copy_windows_system_libraries "$work/extract/$top"
+  fi
   rm -rf "$prefix"
   mkdir -p "$(dirname "$prefix")"
   mv "$work/extract/$top" "$prefix"
   echo "Installed LLVM ${version} in ${prefix}"
 fi
 
+if [ -n "$exe" ]; then
+  # cargo is a Windows program and reads a Windows path.
+  prefix=$(cygpath -m "$prefix")
+fi
 echo "export LLVM_SYS_221_PREFIX=${prefix}"
 if [ -n "${GITHUB_ENV:-}" ]; then
   echo "LLVM_SYS_221_PREFIX=${prefix}" >> "$GITHUB_ENV"

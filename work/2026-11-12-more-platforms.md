@@ -1,0 +1,65 @@
+# More platforms: Linux on arm64 and native Windows
+
+Date: 2026-11-12. John asked for the "more platforms" roadmap item. There
+is no Windows machine, so Windows is developed and tested on GitHub's
+hosted `windows-2025` runner only.
+
+## Goal
+
+Support Linux on arm64 and native x86-64 Windows: build, tests in CI, a
+release archive, and an installer. musl Linux and cross-compilation
+follow.
+
+## Work completed
+
+### Linux on arm64
+
+- CI job `platform-tests` builds Aura and runs the workspace tests on
+  `ubuntu-24.04-arm`. `native-binaries` and the release workflow build an
+  `aarch64-unknown-linux-gnu` archive, and `install.sh` selects it.
+- `scripts/install-llvm.sh` installs the pinned LLVM 22.1.2 archive for
+  arm64.
+
+### Native Windows
+
+- Target `x86_64-pc-windows-msvc`. `.cargo/config.toml` links the C
+  runtime statically, so `aura.exe` loads only system DLLs.
+- LLVM: the official `clang+llvm-22.1.2-x86_64-pc-windows-msvc` archive.
+  With a static C runtime `llvm-sys` links LLVM's system libraries as
+  static libraries, so the installer copies the Windows SDK import
+  libraries into LLVM's library directory and writes an empty
+  `xml2s.lib`, which the archive names and does not ship.
+- Runtime: process spawning, the diagnostic channel between `aura run`
+  and the program (inheritable pipe handles), Win64 struct passing for
+  foreign calls, and a 1 ms timer period. A duplicated listener socket
+  starts in blocking mode on Windows and is set non-blocking again.
+- Code generation: COFF objects put each function in its own COMDAT
+  section so the linker can drop unused ones.
+- `aura build` and `aura run` link with `link.exe`, located with
+  `find-msvc-tools`. The linker reports errors on standard output. The
+  runtime's static library names `windows.<version>.lib` import
+  libraries from the Rust `windows-targets` crates. A source checkout
+  finds them in the Cargo registry. A release archive carries them
+  beside `aura_runtime.lib`.
+- The build lock, the launch lease and stale launch cleanup use
+  `File::lock`. The runtime archive stamp uses the volume and file
+  identifiers and the change time of the open file.
+- `scripts/package-cli-windows.sh` writes the `.zip` archive,
+  `scripts/smoke-cli-archive-windows.sh` runs it outside the checkout
+  with no Cargo, and `docs/public/install.ps1` installs it.
+
+## Verification
+
+- CI job `windows`: builds `aura.exe`, runs a program in the
+  interpreter and as a native executable, runs the runtime, command and
+  compiler unit tests, packages the archive, runs the archive smoke
+  test, and installs the archive with `install.ps1`.
+- Local: `cargo check --target x86_64-pc-windows-gnu` type-checks the
+  Windows code on Linux, and Wine runs the runtime tests.
+
+## Open
+
+- The compiler's and the command's integration tests do not run on
+  Windows yet.
+- No Windows speed measurements: the hosted runner is the only machine.
+- musl Linux and cross-compilation are not started.
