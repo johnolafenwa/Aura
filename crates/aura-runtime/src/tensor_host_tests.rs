@@ -741,6 +741,7 @@ mod generated_kernels {
     use super::*;
     use tensor_codegen::{Action, BLOCK_THREADS};
 
+    #[cfg(unix)]
     const HARNESS: &str = r#"
 #include <cmath>
 #include <math.h>
@@ -810,8 +811,21 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
         ArrayValue::new(shape.into(), storage).unwrap()
     }
 
+    /// The harness builds a shared object and opens it with `dlopen`, so it
+    /// runs on Unix hosts only.
+    #[cfg(not(unix))]
+    fn compile(_source: &str, _tag: usize) -> Option<*mut std::ffi::c_void> {
+        None
+    }
+
+    #[cfg(not(unix))]
+    fn function(_library: *mut std::ffi::c_void, name: &str) -> *mut std::ffi::c_void {
+        unreachable!("no kernel library is built on this host, so `{name}` is never looked up")
+    }
+
     /// Compiles `source` for the CPU, or `None` on a machine with no C++
     /// compiler.
+    #[cfg(unix)]
     fn compile(source: &str, tag: usize) -> Option<*mut std::ffi::c_void> {
         let directory =
             std::env::temp_dir().join(format!("aura-tensor-kernels-{}-{tag}", std::process::id()));
@@ -844,6 +858,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
         Some(library)
     }
 
+    #[cfg(unix)]
     fn function(library: *mut std::ffi::c_void, name: &str) -> *mut std::ffi::c_void {
         let name = std::ffi::CString::new(name).unwrap();
         // SAFETY: `library` is open and `name` is NUL-terminated.
