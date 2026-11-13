@@ -1,4 +1,4 @@
-error[AU2046]: only `json.Codec` can be derived; `impl Display for ...` needs a body
+error[AU2046]: only `json.Codec` and `tensor.Module` can be derived; `impl Display for ...` needs a body
  --> crates/aura-compiler/tests/fixtures/check-fail/json_derive_requires_body.au:5:1
   |
 5 | impl Display for Point

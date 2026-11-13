@@ -3651,6 +3651,240 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("pattern"), borrowed("text")],
     },
     DynamicHostAbi {
+        name: "tensor::__aura_device_available",
+        params: &[borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_from_array_i32",
+        params: &[borrowed("values"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_from_array_i64",
+        params: &[borrowed("values"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_from_array_f32",
+        params: &[borrowed("values"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_from_array_f64",
+        params: &[borrowed("values"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_from_array_bool",
+        params: &[borrowed("values"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_array_i32",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_array_i64",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_array_f32",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_array_f64",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_array_bool",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_item_i32",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_item_i64",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_item_f32",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_item_f64",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_item_bool",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_full_i32",
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_full_i64",
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_full_f32",
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_full_f64",
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_full_bool",
+        params: &[
+            borrowed("shape"),
+            borrowed("value"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_shape",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_len",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_device",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_binary",
+        params: &[borrowed("left"), borrowed("right"), borrowed("operation")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_unary",
+        params: &[borrowed("node"), borrowed("operation")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_compare",
+        params: &[borrowed("left"), borrowed("right"), borrowed("operation")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_where",
+        params: &[
+            borrowed("mask"),
+            borrowed("when_true"),
+            borrowed("when_false"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_reduce",
+        params: &[
+            borrowed("node"),
+            borrowed("reduction"),
+            borrowed("axis"),
+            borrowed("has_axis"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_matmul",
+        params: &[borrowed("left"), borrowed("right")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_reshape",
+        params: &[borrowed("node"), borrowed("shape")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_permute",
+        params: &[borrowed("node"), borrowed("axes")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_cast",
+        params: &[borrowed("node"), borrowed("dtype")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_to_device",
+        params: &[borrowed("node"), borrowed("device")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_eval",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_share",
+        params: &[borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_scalar_like_f64",
+        params: &[borrowed("node"), borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_scalar_like_i64",
+        params: &[borrowed("node"), borrowed("value")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_node_op",
+        params: &[
+            borrowed("node"),
+            borrowed("operation"),
+            borrowed("parameters"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_pair_op",
+        params: &[
+            borrowed("left"),
+            borrowed("right"),
+            borrowed("operation"),
+            borrowed("parameters"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_names",
+        params: &[borrowed("path")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_load",
+        params: &[
+            borrowed("path"),
+            borrowed("name"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_put",
+        params: &[borrowed("path"), borrowed("name"), borrowed("node")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_weights_write",
+        params: &[borrowed("path")],
+    },
+    DynamicHostAbi {
+        name: "tensor::__aura_filled",
+        params: &[
+            borrowed("shape"),
+            borrowed("fill"),
+            borrowed("seed"),
+            borrowed("dtype"),
+            borrowed("device"),
+        ],
+    },
+    DynamicHostAbi {
         name: "http::__aura_send",
         params: &[
             borrowed("method"),
@@ -5116,6 +5350,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::HttpListener(_) => "net.HttpListener".to_string(),
         Value::HttpExchange(_) => "net.HttpExchange".to_string(),
         Value::HttpResponse(_) => "http.Stream".to_string(),
+        Value::Tensor(_) => "tensor.Node".to_string(),
         Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
         Value::WebSocket(_) => "net.WebSocket".to_string(),
         Value::UnixListener(_) => "net.UnixListener".to_string(),
@@ -5180,6 +5415,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::HttpListener(_) => Type::named("net.HttpListener"),
         Value::HttpExchange(_) => Type::named("net.HttpExchange"),
         Value::HttpResponse(_) => Type::named("http.Stream"),
+        Value::Tensor(_) => Type::named("tensor.Node"),
         Value::WebSocketListener(_) => Type::named("net.WebSocketListener"),
         Value::WebSocket(_) => Type::named("net.WebSocket"),
         Value::UnixListener(_) => Type::named("net.UnixListener"),
@@ -13972,6 +14208,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::HttpListener(_) => expected == "net.HttpListener",
             Value::HttpExchange(_) => expected == "net.HttpExchange",
             Value::HttpResponse(_) => expected == "http.Stream",
+            Value::Tensor(_) => expected == "tensor.Node",
             Value::WebSocketListener(_) => expected == "net.WebSocketListener",
             Value::WebSocket(_) => expected == "net.WebSocket",
             Value::UnixListener(_) => expected == "net.UnixListener",
@@ -15645,6 +15882,51 @@ host_builtin_entries! {
     owned "time::__aura_parsed_seconds" => aura_host_time_parsed_seconds(crate::runtime_value::time_host::host_time_parsed_seconds);
     owned "time::__aura_parsed_nanos" => aura_host_time_parsed_nanos(crate::runtime_value::time_host::host_time_parsed_nanos);
     owned "time::__aura_parsed_offset" => aura_host_time_parsed_offset(crate::runtime_value::time_host::host_time_parsed_offset);
+    borrowed "tensor::__aura_device_available" => aura_host_tensor_device_available(|args| direct_http("tensor::__aura_device_available", crate::runtime_value::tensor_host::host_tensor_device_available, args));
+    borrowed "tensor::__aura_from_array_i32" => aura_host_tensor_from_array_i32(|args| direct_http("tensor::__aura_from_array_i32", crate::runtime_value::tensor_host::host_tensor_from_array, args));
+    borrowed "tensor::__aura_from_array_i64" => aura_host_tensor_from_array_i64(|args| direct_http("tensor::__aura_from_array_i64", crate::runtime_value::tensor_host::host_tensor_from_array, args));
+    borrowed "tensor::__aura_from_array_f32" => aura_host_tensor_from_array_f32(|args| direct_http("tensor::__aura_from_array_f32", crate::runtime_value::tensor_host::host_tensor_from_array, args));
+    borrowed "tensor::__aura_from_array_f64" => aura_host_tensor_from_array_f64(|args| direct_http("tensor::__aura_from_array_f64", crate::runtime_value::tensor_host::host_tensor_from_array, args));
+    borrowed "tensor::__aura_from_array_bool" => aura_host_tensor_from_array_bool(|args| direct_http("tensor::__aura_from_array_bool", crate::runtime_value::tensor_host::host_tensor_from_array, args));
+    borrowed "tensor::__aura_to_array_i32" => aura_host_tensor_to_array_i32(|args| direct_http("tensor::__aura_to_array_i32", crate::runtime_value::tensor_host::host_tensor_to_array, args));
+    borrowed "tensor::__aura_to_array_i64" => aura_host_tensor_to_array_i64(|args| direct_http("tensor::__aura_to_array_i64", crate::runtime_value::tensor_host::host_tensor_to_array, args));
+    borrowed "tensor::__aura_to_array_f32" => aura_host_tensor_to_array_f32(|args| direct_http("tensor::__aura_to_array_f32", crate::runtime_value::tensor_host::host_tensor_to_array, args));
+    borrowed "tensor::__aura_to_array_f64" => aura_host_tensor_to_array_f64(|args| direct_http("tensor::__aura_to_array_f64", crate::runtime_value::tensor_host::host_tensor_to_array, args));
+    borrowed "tensor::__aura_to_array_bool" => aura_host_tensor_to_array_bool(|args| direct_http("tensor::__aura_to_array_bool", crate::runtime_value::tensor_host::host_tensor_to_array, args));
+    borrowed "tensor::__aura_item_i32" => aura_host_tensor_item_i32(|args| direct_http("tensor::__aura_item_i32", crate::runtime_value::tensor_host::host_tensor_item, args));
+    borrowed "tensor::__aura_item_i64" => aura_host_tensor_item_i64(|args| direct_http("tensor::__aura_item_i64", crate::runtime_value::tensor_host::host_tensor_item, args));
+    borrowed "tensor::__aura_item_f32" => aura_host_tensor_item_f32(|args| direct_http("tensor::__aura_item_f32", crate::runtime_value::tensor_host::host_tensor_item, args));
+    borrowed "tensor::__aura_item_f64" => aura_host_tensor_item_f64(|args| direct_http("tensor::__aura_item_f64", crate::runtime_value::tensor_host::host_tensor_item, args));
+    borrowed "tensor::__aura_item_bool" => aura_host_tensor_item_bool(|args| direct_http("tensor::__aura_item_bool", crate::runtime_value::tensor_host::host_tensor_item, args));
+    borrowed "tensor::__aura_full_i32" => aura_host_tensor_full_i32(|args| direct_http("tensor::__aura_full_i32", crate::runtime_value::tensor_host::host_tensor_full, args));
+    borrowed "tensor::__aura_full_i64" => aura_host_tensor_full_i64(|args| direct_http("tensor::__aura_full_i64", crate::runtime_value::tensor_host::host_tensor_full, args));
+    borrowed "tensor::__aura_full_f32" => aura_host_tensor_full_f32(|args| direct_http("tensor::__aura_full_f32", crate::runtime_value::tensor_host::host_tensor_full, args));
+    borrowed "tensor::__aura_full_f64" => aura_host_tensor_full_f64(|args| direct_http("tensor::__aura_full_f64", crate::runtime_value::tensor_host::host_tensor_full, args));
+    borrowed "tensor::__aura_full_bool" => aura_host_tensor_full_bool(|args| direct_http("tensor::__aura_full_bool", crate::runtime_value::tensor_host::host_tensor_full, args));
+    borrowed "tensor::__aura_shape" => aura_host_tensor_shape(|args| direct_http("tensor::__aura_shape", crate::runtime_value::tensor_host::host_tensor_shape, args));
+    borrowed "tensor::__aura_len" => aura_host_tensor_len(|args| direct_http("tensor::__aura_len", crate::runtime_value::tensor_host::host_tensor_len, args));
+    borrowed "tensor::__aura_device" => aura_host_tensor_device(|args| direct_http("tensor::__aura_device", crate::runtime_value::tensor_host::host_tensor_device, args));
+    borrowed "tensor::__aura_binary" => aura_host_tensor_binary(|args| direct_http("tensor::__aura_binary", crate::runtime_value::tensor_host::host_tensor_binary, args));
+    borrowed "tensor::__aura_unary" => aura_host_tensor_unary(|args| direct_http("tensor::__aura_unary", crate::runtime_value::tensor_host::host_tensor_unary, args));
+    borrowed "tensor::__aura_compare" => aura_host_tensor_compare(|args| direct_http("tensor::__aura_compare", crate::runtime_value::tensor_host::host_tensor_compare, args));
+    borrowed "tensor::__aura_where" => aura_host_tensor_where(|args| direct_http("tensor::__aura_where", crate::runtime_value::tensor_host::host_tensor_where, args));
+    borrowed "tensor::__aura_reduce" => aura_host_tensor_reduce(|args| direct_http("tensor::__aura_reduce", crate::runtime_value::tensor_host::host_tensor_reduce, args));
+    borrowed "tensor::__aura_matmul" => aura_host_tensor_matmul(|args| direct_http("tensor::__aura_matmul", crate::runtime_value::tensor_host::host_tensor_matmul, args));
+    borrowed "tensor::__aura_reshape" => aura_host_tensor_reshape(|args| direct_http("tensor::__aura_reshape", crate::runtime_value::tensor_host::host_tensor_reshape, args));
+    borrowed "tensor::__aura_permute" => aura_host_tensor_permute(|args| direct_http("tensor::__aura_permute", crate::runtime_value::tensor_host::host_tensor_permute, args));
+    borrowed "tensor::__aura_cast" => aura_host_tensor_cast(|args| direct_http("tensor::__aura_cast", crate::runtime_value::tensor_host::host_tensor_cast, args));
+    borrowed "tensor::__aura_to_device" => aura_host_tensor_to_device(|args| direct_http("tensor::__aura_to_device", crate::runtime_value::tensor_host::host_tensor_to_device, args));
+    borrowed "tensor::__aura_eval" => aura_host_tensor_eval(|args| direct_http("tensor::__aura_eval", crate::runtime_value::tensor_host::host_tensor_eval, args));
+    borrowed "tensor::__aura_share" => aura_host_tensor_share(|args| direct_http("tensor::__aura_share", crate::runtime_value::tensor_host::host_tensor_share, args));
+    borrowed "tensor::__aura_scalar_like_f64" => aura_host_tensor_scalar_like_f64(|args| direct_http("tensor::__aura_scalar_like_f64", crate::runtime_value::tensor_host::host_tensor_scalar_like, args));
+    borrowed "tensor::__aura_scalar_like_i64" => aura_host_tensor_scalar_like_i64(|args| direct_http("tensor::__aura_scalar_like_i64", crate::runtime_value::tensor_host::host_tensor_scalar_like, args));
+    borrowed "tensor::__aura_node_op" => aura_host_tensor_node_op(|args| direct_http("tensor::__aura_node_op", crate::runtime_value::tensor_host::host_tensor_node_op, args));
+    borrowed "tensor::__aura_pair_op" => aura_host_tensor_pair_op(|args| direct_http("tensor::__aura_pair_op", crate::runtime_value::tensor_host::host_tensor_pair_op, args));
+    borrowed "tensor::__aura_filled" => aura_host_tensor_filled(|args| direct_http("tensor::__aura_filled", crate::runtime_value::tensor_host::host_tensor_filled, args));
+    borrowed "tensor::__aura_weights_names" => aura_host_tensor_weights_names(|args| direct_http("tensor::__aura_weights_names", crate::runtime_value::tensor_host::host_tensor_weights_names, args));
+    borrowed "tensor::__aura_weights_load" => aura_host_tensor_weights_load(|args| direct_http("tensor::__aura_weights_load", crate::runtime_value::tensor_host::host_tensor_weights_load, args));
+    borrowed "tensor::__aura_weights_put" => aura_host_tensor_weights_put(|args| direct_http("tensor::__aura_weights_put", crate::runtime_value::tensor_host::host_tensor_weights_put, args));
+    borrowed "tensor::__aura_weights_write" => aura_host_tensor_weights_write(|args| direct_http("tensor::__aura_weights_write", crate::runtime_value::tensor_host::host_tensor_weights_write, args));
     borrowed "http::__aura_send" => aura_host_http_send(|args| direct_http("http::__aura_send", crate::runtime_value::http_client::host_http_send, args));
     borrowed "http::__aura_read_chunk" => aura_host_http_read_chunk(|args| direct_http("http::__aura_read_chunk", crate::runtime_value::http_client::host_http_read_chunk, args));
     borrowed "http::__aura_read_line" => aura_host_http_read_line(|args| direct_http("http::__aura_read_line", crate::runtime_value::http_client::host_http_read_line, args));

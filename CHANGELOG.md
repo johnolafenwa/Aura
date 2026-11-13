@@ -24,6 +24,86 @@ in this file.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.
+- The `tensor` module has gradients, with PyTorch's names.
+  `loss.backward()` adds to the `grad` of each `Parameter`, and an
+  optimizer's `step()` runs the loss, the gradients and the new weights
+  as one piece of GPU work and clears the gradients it used.
+  `result.gradient(of)` gives a gradient as a value. A `Tensor` never
+  changes and a `Parameter` does, and the compiler keeps the rule that
+  the weights of a model not declared `mut` never change:
+  `parameters()`, `step()` and `zero_grad()` take `mut self`, and a
+  `Parameter` cannot be copied (ADR-0098).
+- `tensor.Module` is the trait of a model, in the place of PyTorch's
+  `nn.Module`. A model names its fields in `collect` and gets
+  `parameters()`, `named_parameters()`, `state_dict()` and
+  `load_state_dict()`. `tensor.Sequential` applies a list of layers, with
+  `ReLU` and `GELU` as layers. The `mut` rule holds through all of them.
+- `impl Module for Net` with no body asks the compiler to write
+  `collect` from the class's fields: each `Parameter[float32]`, each
+  module, and each list of modules. A field that holds weights in a
+  shape it cannot walk is an error, `AU2046`, not a weight left out
+  (ADR-0099).
+- A default method of an imported trait can name private items of the
+  trait's own module. It was checked and compiled in the importing
+  module before, where those names did not resolve.
+- A training loop on a CUDA device that slices a new batch each step no
+  longer compiles new kernels for each batch. A training step of a deep
+  network runs as one piece of GPU work: a chain of waiting operations
+  was cut every 128 operations and is now cut every 8,192. Long chains
+  of tensors are collected and freed without recursion.
+- The CUDA device reuses the memory of a value inside one piece of work
+  once nothing later reads it, copies the numbers of an expression to
+  the device in one copy, and keeps freed memory for the next step.
+- `AURA_TENSOR_TRACE=1` writes to standard error each piece of CUDA
+  work with the host time before it, its slowest actions, each read into
+  host memory, and each operation that ran in host memory.
+  `AURA_TENSOR_TRACE=2` writes one line for each and does not slow the
+  run.
+- New tensor operations: `slice`, `index_select`, `index_add`, `cat`,
+  `expand`, `argmax`, `argmin`, `tanh`, `sigmoid`, `erf`, `gelu`,
+  `softmax`, `log_softmax`, and `dim` and `keepdim` on the reductions.
+  `rand`, `randn` and `dropout` make random numbers on the device, the
+  same for a seed on every device.
+- The `tensor` module has the layers of a transformer, written in Aura:
+  `Linear`, `Embedding`, `LayerNorm`, `MultiheadAttention`,
+  `scaled_dot_product_attention`, `cross_entropy`, and the optimizers
+  `SGD` and `AdamW`.
+- `tensor.MixtureOfExperts` is a layer of several networks and a gate
+  that keeps each row's highest scoring experts. `one_hot`,
+  `top_indices` and `top_mask` pick the largest elements of each lane.
+- Fixed: a method of an imported class can name, in a local variable's
+  type, a class of its own module that the importing program does not
+  import.
+- `tensor.save`, `weight_names`, `load_float32` and `load_int64` write
+  and read safetensors files.
+- New `tensor` module. `Tensor[T]` holds numbers on a device and computes
+  there: `Device.cpu()` on every platform, `Device.metal()`, the GPU of a
+  Mac, and `Device.cuda()`, an NVIDIA GPU on Linux. A program moves data in with `Tensor[float32].from_array(values,
+  device)` and out with `to_array()`, and in between uses `+`, `-`, `*`,
+  `/`, comparisons, `choose`, `sum`, `min`, `max`, `mean`, `matmul`,
+  `reshape`, `transpose`, and the elementwise maths members, with the
+  `Array` shape rules. Every operation means the same on every device:
+  integers and masks are equal, and floats agree to a few units in the
+  last place. A GPU device runs the whole expression behind a tensor as
+  one piece of work when the program reads it: through MPSGraph on Metal,
+  and as one generated kernel, compiled at run time, on CUDA. Metal has
+  no `float64`, which is error `AU4007` there, never a silent narrowing. A program
+  that does not import `tensor` loads no GPU framework (ADR-0097).
+- Tensor operators take a number on either side: `x * 2.0`, `1 - x`. The
+  number takes the tensor's dtype. `relu`, `clamp`, and `powf` are
+  members.
+- A program carries the Aura-source part of a builtin module only when
+  it imports that module. A program that imported `json` carried the
+  function names and frame descriptors of `regex`, `time`, `http`, and
+  `simd` as well, which made its executable larger.
+- Fixed: a generic implementation such as `impl[T] Scale[T] for float64`
+  now satisfies the bound `Scale[int32]`. A type parameter that the
+  implemented type does not fix takes the argument the bound names.
+- Fixed: an associated call through a trait on a generic class with its
+  type arguments written, such as `Box[float32].make(...)`, ran the
+  implementation for another type argument when the trait was implemented
+  for several, and failed to build with `AU4001` when the class was
+  imported from another module.
 
 ## VS Code extension 0.15.0 — 2026-11-12
 

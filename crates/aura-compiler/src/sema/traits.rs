@@ -1427,9 +1427,36 @@ impl<'a> FunctionChecker<'a> {
             return true;
         }
         self.trait_impls_in_scope().any(|trait_impl| {
-            let Some(substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
+            let Some(mut substitutions) = self.trait_impl_substitutions(trait_impl, ty) else {
                 return false;
             };
+            // `impl[T] Scale[T] for float64` implements `Scale[X]` for
+            // every `X`: a type parameter the implemented type does not
+            // fix takes the argument the bound asks for.
+            if trait_impl.trait_args.len() == bound.trait_args.len() {
+                let free = trait_impl
+                    .type_params
+                    .iter()
+                    .filter(|name| !substitutions.contains_key(*name))
+                    .cloned()
+                    .collect::<BTreeSet<_>>();
+                if !free.is_empty() {
+                    let mut extended = substitutions.clone();
+                    let fits = trait_impl.trait_args.iter().zip(&bound.trait_args).all(
+                        |(pattern, wanted)| {
+                            type_pattern_matches(
+                                &substitute_type(pattern, &substitutions),
+                                wanted,
+                                &free,
+                                &mut extended,
+                            )
+                        },
+                    );
+                    if fits {
+                        substitutions = extended;
+                    }
+                }
+            }
             let implemented = self.resolved_trait_bound_for_impl(trait_impl, &substitutions);
             self.trait_bound_closure(&implemented, ty)
                 .into_iter()

@@ -612,12 +612,15 @@ fn check_pipeline(module: Module, context: ModuleContext) -> Result<Program> {
     let mut context = context;
     let generators = super::generators::expand(&mut module, &mut context)?;
     let decorated = super::decorators::expand(&mut module)?;
+    let modules = super::tensor_derive::expand(&mut module, &mut context)?;
     let derived = super::json_derive::expand(&mut module, &mut context)?;
     super::assoc_bounds::expand(&mut module, &mut context);
     super::iterator_loops::check_with_iterator_loops(module, context, |module, context| {
         super::property_reads::check_with_property_reads(module, context, check_with_context_once)
     })
-    .map_err(|error| generators.map_error(decorated.map_error(derived.map_error(error))))
+    .map_err(|error| {
+        generators.map_error(decorated.map_error(derived.map_error(modules.map_error(error))))
+    })
 }
 
 fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Program> {
@@ -2391,6 +2394,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
 
             for (trait_name, trait_info) in &program.traits {
+                // An imported trait's default bodies were checked in their
+                // own module, where the names in them resolve.
+                if trait_info.module_name != program.module_name {
+                    continue;
+                }
                 let trait_type_param_scope = type_param_scope(&trait_info.decl.type_params);
                 let self_placeholder = Type::TypeParam("Self".to_string());
                 for (method_name, method) in &trait_info.methods {
@@ -2467,6 +2475,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             }
 
             for (class_name, class) in &program.classes {
+                // An imported class's methods were checked in their own
+                // module, where the names in their bodies resolve.
+                if class.module_name != program.module_name {
+                    continue;
+                }
                 for (method_name, method) in &class.methods {
                     let sink = Rc::new(RefCell::new(BTreeSet::new()));
                     let equality_sink = Rc::new(RefCell::new(BTreeSet::new()));

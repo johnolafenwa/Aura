@@ -9691,7 +9691,7 @@ fn lowerer_trait_and_member_type_helpers_cover_trait_bounds_and_variants() {
         .trait_method_for_receiver(&Type::named("User"), "name")
         .is_some());
     assert!(lowerer
-        .trait_impl_method_for_class_name("User", "name")
+        .trait_impl_method_for_class_name("User", &[], "name")
         .is_some());
 
     let lookup_string = Type::Named("Lookup".to_string(), vec![Type::named("str")]);

@@ -18,6 +18,26 @@ Last updated: 2026-11-12
   section 18.2 walks through it.
 - Not scheduled: heap values in a freestanding program, an `unsafe`
   syntax, inline assembly, x86-64 without SSE, 32-bit targets.
+## GPU tensors (in progress)
+
+- Target: tensors on a GPU for real machine learning work, training and
+  inference, checked against PyTorch on an NVIDIA A40 and an Apple M2
+  Pro: automatic differentiation, transformer and mixture-of-experts
+  support, convolution, mixed precision, optimisers, weights on disk.
+- Done: the `tensor` module with CPU, Metal, and CUDA devices, operators
+  with a number on either side, benchmarks beside PyTorch, indexed
+  operations, device random numbers, automatic differentiation,
+  variables, safetensors files, and the transformer layers with SGD and
+  AdamW. A small transformer trains on the CPU device in the tests.
+- Verification: runtime and compiler library tests pass on Linux. The
+  new CUDA kernels pass the CPU emulation and are not yet run on the
+  A40. The Metal device runs the new operations in host memory.
+- Also done: stacked `matmul` in one cuBLAS call, a mixture-of-experts
+  layer with top-k picks, and six workload programs beside PyTorch in
+  `benchmarks/tensor/workloads.au`.
+- Remaining: the A40 and Mac runs, Metal support for the new operations, convolution and pooling,
+  `float16`, and the whole-program benchmarks listed in
+  `2026-11-12-gpu-tensors.md`.
 
 ## Release 0.15.0-preview (complete)
 
@@ -45,6 +65,34 @@ Last updated: 2026-11-12
 - Open: an older child still waits 250 microseconds before another
   worker may take it, by design. Two children cost about 0.3 to 0.5 ms
   more per round than one.
+
+## Array v2 (complete)
+
+- Target: the four items John approved on 2026-11-11: views and shape
+  operations, broadcasting with axis reductions and elementwise math,
+  matrix products beyond two dimensions, and zero-copy transport. Tensor
+  and device interop is deferred until John decides on it. Details are in
+  `2026-11-11-array-v2.md`.
+- Done: item 1. Arrays share reference-counted storage and copy on write
+  (ADR-0088). An index takes a coordinate or a slice per axis, with
+  steps. `reshape`, `flatten`, `transpose`, `permute`, and slice
+  assignment work on both backends.
+- Done: item 2 (ADR-0089). Arrays of one dtype broadcast. Reductions take
+  an axis. `abs`, `minimum`, `maximum`, the `float64` math members,
+  `as Array[T]`, `to_float`, the comparison members, and `Array[bool]`
+  masks with `choose` work on both backends. Arithmetic reads views in
+  place, selection updates run in place, and a temporary lends its
+  buffer.
+- Done: item 3 (ADR-0090). `matmul` multiplies stacks of matrices over
+  leading dimensions that broadcast.
+- Done: item 4 (ADR-0091). Compiled code reads and writes `grid[i, j]` in
+  place and reads an Array's layout once per loop. An `extern "C"`
+  parameter of type `Array[T]` is a pointer to the elements. The `simd`
+  lane classes have `load_array` and `store_array`. Tasks share an
+  Array's buffer through `clone()`.
+- Verification: the runtime and compiler unit tests, the fixtures, the
+  FFI acceptance test, and `benchmarks/array_elements` on both backends.
+- Remaining: none in scope. Follow-up candidates are in the work note.
 
 ## Array v2 (complete)
 

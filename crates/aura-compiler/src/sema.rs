@@ -66,6 +66,7 @@ pub(crate) use decorators::{DECORATED_PREFIX, UNDECORATED_PREFIX};
 mod json_derive;
 pub(crate) use json_derive::GENERATED_LINE_OFFSET;
 mod program;
+mod tensor_derive;
 #[cfg(test)]
 pub(crate) use program::FAST_FALLBACKS;
 pub(crate) use program::INITIALIZER_NAME;
@@ -13003,6 +13004,7 @@ impl<'a> FunctionChecker<'a> {
                                 | ("net", "HttpListener")
                                 | ("net", "HttpExchange")
                                 | ("http", "Stream")
+                                | ("tensor", "Node")
                                 | ("net", "WebSocketListener")
                                 | ("net", "WebSocket")
                                 | ("net", "UnixListener")

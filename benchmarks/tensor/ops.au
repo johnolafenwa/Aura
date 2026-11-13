@@ -1,0 +1,94 @@
+import sys
+from tensor import Device, Tensor
+
+
+def ramp(n: int64, scale: float64) -> Array[float32]:
+    mut values: list[float64] = []
+    for i in range(n):
+        values.append((i % 1000).to_float() * scale + 1.0)
+    return Array[float64].from_list(values, [n]) as Array[float32]
+
+
+def grid(side: int64, scale: float64, device: Device) -> Tensor[float32]:
+    # A side by side grid made by broadcasting a row against a column.
+    row = Tensor[float32].from_array(ramp(side, scale), device)
+    column = Tensor[float32].from_array(ramp(side, 0.5), device).reshape([side, 1])
+    grid = row * column
+    grid.eval()
+    return grid
+
+
+def elementwise(side: int64, reps: int64, device: Device) -> None:
+    x = grid(side, 0.25, device)
+    y = grid(side, 0.125, device)
+    mut acc: float32 = 0.0
+    # Each row runs once before its timed passes. That first pass carries
+    # the costs paid once for an expression, such as compiling it for the
+    # device, and its time is the last column.
+    mut start = sys.monotonic_time_ms()
+    (x + y).eval()
+    mut first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        z = x + y
+        z.eval()
+    print(f"add {side * side} {sys.monotonic_time_ms() - start} {(x + y).sum().item()} {first}")
+
+    start = sys.monotonic_time_ms()
+    (x * y + x).sqrt().eval()
+    first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        z = (x * y + x).sqrt()
+        z.eval()
+    print(
+        f"mul_add_sqrt {side * side} {sys.monotonic_time_ms() - start} {(x * y + x).sqrt().sum().item()} {first}"
+    )
+
+    start = sys.monotonic_time_ms()
+    warm = (x * y).sum().item()
+    first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        acc = acc + (x * y).sum().item()
+    print(f"mul_sum {side * side} {sys.monotonic_time_ms() - start} {acc} {first}")
+
+    start = sys.monotonic_time_ms()
+    (x.sin() * y.cos()).abs().maximum(y.log()).eval()
+    first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        z = (x.sin() * y.cos()).abs().maximum(y.log())
+        z.eval()
+    print(
+        f"sin_cos_log_max {side * side} {sys.monotonic_time_ms() - start} {(x.sin() * y.cos()).abs().maximum(y.log()).max().item()} {first}"
+    )
+
+
+def products(side: int64, reps: int64, device: Device) -> None:
+    a = grid(side, 0.001, device)
+    b = grid(side, 0.002, device)
+    mut start = sys.monotonic_time_ms()
+    warm = a.matmul(b).max().item()
+    first = sys.monotonic_time_ms() - start
+    start = sys.monotonic_time_ms()
+    mut acc: float32 = 0.0
+    for rep in range(reps):
+        acc = acc + a.matmul(b).max().item()
+    print(f"matmul {side}x{side} {sys.monotonic_time_ms() - start} {acc} {first}")
+
+
+def main() -> int32:
+    args = sys.args()
+    mut device = Device.cpu()
+    if args.len() > 0 and args[0] == "gpu":
+        device = Device.default()
+        if not device.is_gpu():
+            print("this machine has no GPU device")
+            return 1
+    print(f"device {device.name()}")
+    elementwise(32, 2000, device)
+    elementwise(4096, 20, device)
+    products(64, 500, device)
+    products(1024, 10, device)
+    return 0
