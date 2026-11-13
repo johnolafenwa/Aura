@@ -34,6 +34,13 @@ impl TempDir {
 
     fn write(&self, relative: &str, source: &str) -> PathBuf {
         let path = self.path.join(relative);
+        // Windows has no `/bin/sh`; CI puts the one Git for Windows ships
+        // on `PATH`.
+        let source = if cfg!(windows) {
+            source.replace("\"/bin/sh\"", "\"sh\"")
+        } else {
+            source.to_string()
+        };
         fs::write(&path, source).expect("failed to write source");
         path
     }

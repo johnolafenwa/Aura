@@ -410,7 +410,11 @@ impl TempDir {
                 .expect("system time should be after unix epoch")
                 .as_nanos()
         );
-        let path = std::env::temp_dir().join(unique);
+        // The temporary directory's long name: Windows hands out a short
+        // alias, and Aura reports the resolved path.
+        let base = aura_compiler::host_path::canonicalize(std::env::temp_dir())
+            .expect("the temporary directory should resolve");
+        let path = base.join(unique);
         fs::create_dir_all(&path).expect("failed to create temp dir");
         Self { path }
     }
@@ -427,7 +431,7 @@ impl Drop for TempDir {
 }
 
 fn assert_default_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
-    let fixture = repo_root().join(example);
+    let (_adapted, fixture) = host_example(example);
     let output_dir = TempDir::new("aura-build-auto-full");
     let output_path = output_dir.path().join(binary_name);
 
@@ -528,7 +532,7 @@ fn command_output_with_timeout(
 }
 
 fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected_stdout: &str) {
-    let fixture = repo_root().join(example);
+    let (_adapted, fixture) = host_example(example);
     let output_dir = TempDir::new("aura-build-direct-full");
     let output_path = output_dir.path().join(binary_name);
 
@@ -562,10 +566,66 @@ fn assert_direct_backend_example_runs(example: &str, binary_name: &str, expected
     assert_eq!(String::from_utf8_lossy(&run.stdout), expected_stdout);
 }
 
+/// `path` as the text of an Aura string literal. A Windows path is written
+/// with forward slashes, which Windows accepts and which need no escapes.
+fn aura_path(path: &Path) -> String {
+    path.display().to_string().replace('\\', "/")
+}
+
+/// `source` with the Unix tool paths and the `/tmp` directory it names
+/// replaced by this host's. A Unix host has them, so the text is unchanged
+/// there. On Windows the tools come from `PATH`, where CI puts the ones
+/// Git for Windows ships.
+fn host_source(source: &str) -> String {
+    if cfg!(unix) {
+        return source.to_string();
+    }
+    let mut source = source.to_string();
+    for tool in [
+        "/usr/bin/env",
+        "/usr/bin/printenv",
+        "/usr/bin/false",
+        "/usr/bin/true",
+        "/bin/echo",
+        "/bin/cat",
+        "/bin/sleep",
+        "/bin/pwd",
+        "/bin/sh",
+    ] {
+        let name = tool.rsplit('/').next().expect("a tool path has a name");
+        source = source.replace(&format!("\"{tool}\""), &format!("\"{name}\""));
+    }
+    source.replace(
+        "\"/tmp/",
+        &format!(
+            "\"{}/",
+            aura_path(&std::env::temp_dir()).trim_end_matches('/')
+        ),
+    )
+}
+
+/// The example at `relative` in the repository. When it names Unix tools
+/// or `/tmp` and this host has neither, a copy that names this host's goes
+/// into a temporary directory, which the first field keeps alive.
+fn host_example(relative: &str) -> (Option<TempDir>, PathBuf) {
+    let path = repo_root().join(relative);
+    let source = fs::read_to_string(&path).expect("the example should be readable");
+    let adapted = host_source(&source);
+    if adapted == source {
+        return (None, path);
+    }
+    let temp = TempDir::new("aura-host-example");
+    let copy = temp
+        .path()
+        .join(path.file_name().expect("an example has a file name"));
+    fs::write(&copy, adapted).expect("failed to write the adapted example");
+    (Some(temp), copy)
+}
+
 fn write_temp_source(prefix: &str, source: &str) -> (TempDir, PathBuf) {
     let temp = TempDir::new(prefix);
     let source_path = temp.path().join("main.au");
-    fs::write(&source_path, source).expect("failed to write temporary Aura source");
+    fs::write(&source_path, host_source(source)).expect("failed to write temporary Aura source");
     (temp, source_path)
 }
 
@@ -4857,7 +4917,7 @@ def main() -> int32:
             print(err)
             return 1
 "#,
-        body_path = body_path.display()
+        body_path = aura_path(&body_path)
     );
     assert_run_and_direct_source_stdout("aura-http-raised-response-cap", &source, "200\n2000000\n");
 }
@@ -5045,10 +5105,9 @@ fn compile_commands_emit_the_shared_structured_diagnostic_schema() {
         assert_eq!(diagnostic["code"], "AU2001", "{command_name}");
         assert_eq!(diagnostic["severity"], "error", "{command_name}");
         assert_eq!(diagnostic["message"], "unknown name `missing`");
-        assert!(diagnostic["primary_span"]["path"]
-            .as_str()
-            .unwrap()
-            .ends_with("/main.au"));
+        assert!(
+            Path::new(diagnostic["primary_span"]["path"].as_str().unwrap()).ends_with("main.au")
+        );
         assert_eq!(diagnostic["primary_span"]["start"]["line"], 2);
         assert!(diagnostic["secondary_spans"].is_array());
         assert!(diagnostic["notes"].is_array());
@@ -5410,7 +5469,7 @@ fn native_run_cache_verifies_artifacts_rebuilds_invalid_entries_and_keys_on_the_
         "cache published a staged name: {after_cold:?}"
     );
     let cached_entry = cache.path().join("programs").join(&after_cold[0]);
-    let cached_binary = cached_entry.join("program");
+    let cached_binary = cached_entry.join(format!("program{}", std::env::consts::EXE_SUFFIX));
     let cached_digest = cached_entry.join("program.sha256");
     assert!(
         cached_binary.is_file(),
@@ -9323,6 +9382,15 @@ fn build_debug_keeps_dwarf_and_the_debugger_renderer() {
         let run = generated_binary(&output_path).output().unwrap();
         assert_eq!(String::from_utf8_lossy(&run.stdout), "5\n[a, b]\n");
 
+        if cfg!(windows) {
+            // The Microsoft linker writes the debug information to a
+            // program database beside the executable.
+            assert!(
+                output_path.with_extension("pdb").is_file(),
+                "the debug build writes a program database"
+            );
+            continue;
+        }
         let binary = fs::read(&output_path).unwrap();
         assert!(
             contains(&binary, b"aura_debug_render"),
@@ -10092,7 +10160,7 @@ fn build_with_direct_backend_caps_fs_read_to_string_and_read_bytes() {
     let source_path = temp.path().join("main.au");
     let source = format!(
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
-        path = file_path.display()
+        path = aura_path(&file_path)
     );
     fs::write(&source_path, source).expect("write Aura source");
     let output_path = temp.path().join("out");
@@ -10136,7 +10204,7 @@ fn run_caps_fs_read_to_string_and_read_bytes() {
     let source_path = temp.path().join("main.au");
     let source = format!(
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-string\")\n        case Result.Err(error):\n            print(error)\n    match fs.read_bytes(\"{path}\"):\n        case Result.Ok(_):\n            print(\"unexpected-bytes\")\n        case Result.Err(error):\n            print(error)\n    return 0\n",
-        path = file_path.display()
+        path = aura_path(&file_path)
     );
     fs::write(&source_path, source).expect("write Aura source");
 
@@ -10166,7 +10234,7 @@ fn run_and_direct_filesystem_read_to_string_accepts_above_retired_cap() {
         .expect("size sparse file above retired cap");
     let source = format!(
         "import fs\n\ndef main() -> int32:\n    match fs.read_to_string(\"{path}\"):\n        case Result.Ok(text):\n            print(text.byte_len())\n            return 0\n        case Result.Err(error):\n            print(error)\n            return 1\n",
-        path = file_path.display()
+        path = aura_path(&file_path)
     );
 
     assert_run_and_direct_source_stdout("aura-raised-file-read-cap", &source, "67108865\n");
@@ -12323,7 +12391,7 @@ fn run_executes_file_io_example() {
 
 #[test]
 fn run_executes_bytes_file_io_example() {
-    let fixture = repo_root().join("examples/io/bytes_file_io.au");
+    let (_adapted, fixture) = host_example("examples/io/bytes_file_io.au");
     let output = Command::new(aura_bin())
         .arg("run")
         .arg(&fixture)
@@ -12343,9 +12411,10 @@ fn run_executes_bytes_file_io_example() {
 
 #[test]
 fn run_and_direct_backends_run_atomic_save_example() {
+    let (_adapted, example) = host_example("examples/io/atomic_save.au");
     let output = Command::new(aura_bin())
         .arg("run")
-        .arg(repo_root().join("examples/io/atomic_save.au"))
+        .arg(&example)
         .output()
         .expect("failed to run aura run on atomic save example");
     assert!(
@@ -12471,9 +12540,10 @@ def main() -> int32:
 #[test]
 fn run_and_direct_backends_run_read_lines_example() {
     let expected = "4 lines, 9 words\nthe quick brown fox\n24\n3\ntrue\n";
+    let (_adapted, example) = host_example("examples/io/read_lines.au");
     let output = Command::new(aura_bin())
         .arg("run")
-        .arg(repo_root().join("examples/io/read_lines.au"))
+        .arg(&example)
         .output()
         .expect("failed to run aura run on read lines example");
     assert!(
@@ -13197,7 +13267,7 @@ def main() -> int32:
             print(error)
             return 1
 "#,
-        path = file_path.display()
+        path = aura_path(&file_path)
     );
 
     let (_build, run) = build_and_run_direct_source("aura-cli-direct-advanced-io-net", &source);
@@ -14636,6 +14706,9 @@ def main() -> int32:
     assert_run_and_direct_source_stdout("aura-fs-write-empty-bytes", source, "ok\n");
 }
 
+// The program runs `pwd` and compares its output with a directory path,
+// and Windows has no `pwd` that prints a Windows path.
+#[cfg(unix)]
 #[test]
 fn direct_backend_build_supports_process_module_surface() {
     let temp = TempDir::new("aura-cli-direct-process");
@@ -15788,7 +15861,7 @@ fn aura_test_lifecycle_order_is_observable_through_external_side_effects() {
     let temp = TempDir::new("aura-test-lifecycle-side-effects");
     let source_path = temp.path().join("lifecycle.au");
     let trace_path = temp.path().join("trace.txt");
-    let trace = trace_path.display();
+    let trace = aura_path(&trace_path);
     fs::write(
         &source_path,
         format!(

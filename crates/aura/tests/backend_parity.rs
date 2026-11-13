@@ -3,6 +3,13 @@ use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
+/// The file name of the runtime's static library on this host.
+const RUNTIME_ARCHIVE: &str = if cfg!(windows) {
+    "aura_runtime.lib"
+} else {
+    "libaura_runtime.a"
+};
+
 fn aura_bin() -> &'static str {
     env!("CARGO_BIN_EXE_aura")
 }
@@ -135,7 +142,7 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
             filenames.iter().find_map(|filename| {
                 let filename = filename.as_str()?;
                 filename
-                    .ends_with("libaura_runtime.a")
+                    .ends_with(RUNTIME_ARCHIVE)
                     .then(|| PathBuf::from(filename))
             })
         })
@@ -146,9 +153,9 @@ fn packaged_test_aura(temp: &TempDir) -> PathBuf {
     let runtime_dir = prefix.join("lib/aura");
     fs::create_dir_all(&bin_dir).expect("packaged bin dir should exist");
     fs::create_dir_all(&runtime_dir).expect("packaged runtime dir should exist");
-    let packaged = bin_dir.join("aura");
+    let packaged = bin_dir.join(format!("aura{}", std::env::consts::EXE_SUFFIX));
     fs::copy(aura_bin(), &packaged).expect("test aura should copy into package layout");
-    fs::copy(runtime_archive, runtime_dir.join("libaura_runtime.a"))
+    fs::copy(runtime_archive, runtime_dir.join(RUNTIME_ARCHIVE))
         .expect("debug native runtime should copy into package layout");
     fs::write(
         runtime_dir.join("native-link-args.json"),
@@ -165,7 +172,8 @@ fn packaged_parity_aura_uses_cargo_reported_runtime_archive() {
     assert!(packaged.is_file());
     assert!(
         temp.path
-            .join("toolchain/lib/aura/libaura_runtime.a")
+            .join("toolchain/lib/aura")
+            .join(RUNTIME_ARCHIVE)
             .is_file(),
         "the Cargo-reported runtime archive should be copied into the test toolchain"
     );
