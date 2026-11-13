@@ -1,7 +1,7 @@
 use std::fs;
-use std::io::Write;
 #[cfg(unix)]
-use std::io::{BufRead, BufReader, Read};
+use std::io::{BufRead, BufReader};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -475,7 +475,6 @@ fn wait_with_timeout(
     }
 }
 
-#[cfg(unix)]
 fn command_output_with_timeout(
     mut command: Command,
     timeout: std::time::Duration,
