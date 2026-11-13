@@ -17596,8 +17596,9 @@ def main():
 /// installs a pinned Z3, so a missing one there fails the test.
 fn smt_solver_available() -> bool {
     let found = ["z3", "cvc5"].iter().any(|name| {
+        let name = format!("{name}{}", std::env::consts::EXE_SUFFIX);
         std::env::var_os("PATH")
-            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(name).is_file()))
+            .is_some_and(|paths| std::env::split_paths(&paths).any(|dir| dir.join(&name).is_file()))
     }) || std::env::var_os("AURA_SMT_SOLVER").is_some();
     assert!(
         found || std::env::var_os("CI").is_none(),
