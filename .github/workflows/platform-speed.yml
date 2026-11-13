@@ -1,0 +1,75 @@
+name: Platform speed
+
+# Times the cross-language programs (Aura, Rust, Python) on each hosted
+# platform. It gates nothing: hosted runners are shared machines, so the
+# ratios on one runner are the result, not the milliseconds across runners.
+
+on:
+  workflow_dispatch:
+  pull_request:
+    paths:
+      - .github/workflows/platform-speed.yml
+      - scripts/bench-cross-language.py
+      - scripts/benchmark_process.py
+
+permissions:
+  contents: read
+
+concurrency:
+  group: platform-speed-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: never
+
+jobs:
+  cross-language:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 180
+    defaults:
+      run:
+        shell: bash
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+
+      - name: Install LLVM's system libraries
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libzstd-dev libxml2-dev
+
+      - name: Cache LLVM
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
+      - name: Build the release aura command
+        run: cargo build --release --locked -p aura
+
+      - name: Time the cross-language programs
+        run: |
+          python="$(command -v python3 || command -v python)"
+          "$python" --version
+          set +e
+          "$python" scripts/bench-cross-language.py --keep-going 2>&1 | tee "$RUNNER_TEMP/speed.txt"
+          status=${PIPESTATUS[0]}
+          {
+            echo "### Cross-language programs on ${{ matrix.os }}"
+            echo '```'
+            cat "$RUNNER_TEMP/speed.txt"
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+          exit "$status"
