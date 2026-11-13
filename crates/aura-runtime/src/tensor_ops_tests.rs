@@ -820,12 +820,47 @@ fn tensors_are_saved_and_loaded_as_safetensors() {
     assert!(load("a", ArrayDType::Float32)
         .unwrap_err()
         .contains("is not a safetensors file"));
+    let with_header = |header: &str| {
+        let mut bytes = (header.len() as u64).to_le_bytes().to_vec();
+        bytes.extend_from_slice(header.as_bytes());
+        std::fs::write(&path, bytes).unwrap();
+    };
+    with_header("not json");
+    assert!(load("a", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("has a header that is not JSON"));
+    with_header(r#"{"a":{"dtype":"F32","shape":[2],"data_offsets":[0,8]}}"#);
+    assert!(load("a", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("describes tensor `a` wrongly"));
+    with_header(r#"{"a":{"dtype":"F32","shape":[2]}}"#);
+    assert!(load("a", ArrayDType::Float32)
+        .unwrap_err()
+        .contains("describes tensor `a` wrongly"));
     let missing = text(directory.join("none.safetensors").to_str().unwrap());
     assert!(
         outcome(host_tensor_weights_names(vec![missing], None).unwrap())
             .unwrap_err()
             .contains("cannot open")
     );
+    let nowhere = text(
+        directory
+            .join("none")
+            .join("model.safetensors")
+            .to_str()
+            .unwrap(),
+    );
+    host_tensor_weights_put(vec![nowhere.clone(), text("a"), l.a.clone()], None).unwrap();
+    assert!(
+        outcome(host_tensor_weights_write(vec![nowhere], None).unwrap())
+            .unwrap_err()
+            .contains("cannot write")
+    );
+    assert!(
+        host_tensor_weights_load(vec![path_text.clone(), text("a"), int(99), int(0)], None)
+            .is_err()
+    );
+    assert!(host_tensor_filled(vec![ints(&[2]), int(0), int(1), int(99), int(0)], None).is_err());
     put("twice", &l.a);
     put("twice", &l.b);
     assert!(

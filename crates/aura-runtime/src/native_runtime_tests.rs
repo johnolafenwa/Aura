@@ -2238,6 +2238,56 @@ fn every_host_builtin_entry_checks_its_argument_count() {
 }
 
 #[test]
+fn every_tensor_host_entry_reaches_its_host_function() {
+    let mut reached = 0;
+    for (name, entry) in super::HOST_BUILTIN_ENTRIES {
+        if !name.starts_with("tensor::") {
+            continue;
+        }
+        let entry = *entry;
+        let count = super::dynamic_host_abi(name)
+            .unwrap_or_else(|| panic!("`{name}` has no argument list"))
+            .params
+            .len();
+        // A bool is no argument of a tensor function, so each one reports
+        // the argument it could not use.
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let arguments: Vec<*mut OpaqueValue> =
+                    (0..count).map(|_| bool_value(true)).collect();
+                let value = direct_host_builtin_call_entry(entry, &arguments);
+                unsafe {
+                    release_value(value);
+                    for argument in arguments {
+                        release_value(argument);
+                    }
+                }
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("a tensor function rejects bool arguments");
+        assert!(
+            error.message.contains("tensor"),
+            "`{name}` reported `{}`",
+            error.message
+        );
+        reached += 1;
+    }
+    assert!(reached >= 45, "{reached} tensor entries");
+}
+
+fn direct_host_builtin_call_entry(
+    entry: extern "C-unwind" fn(*mut i64, i64) -> *mut OpaqueValue,
+    arguments: &[*mut OpaqueValue],
+) -> *mut OpaqueValue {
+    let buffer = super::aura_direct_arg_buffer_new(arguments.len() as i64);
+    for (index, argument) in arguments.iter().copied().enumerate() {
+        super::aura_direct_arg_buffer_store(buffer, index as i64, argument as i64);
+    }
+    entry(buffer, arguments.len() as i64)
+}
+
+#[test]
 fn direct_host_arg_buffer_reports_metadata_and_storage_contract_violations() {
     fn assert_au4001(error: Diagnostic, message: &str) {
         assert_eq!(error.code, "AU4001");
