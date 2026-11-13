@@ -379,6 +379,7 @@ impl<'a> Generator<'a> {
                     | Operation::Compare(_)
                     | Operation::Where
                     | Operation::Cast(_)
+                    | Operation::Reshape(_)
             ) || !(2..=RECOMPUTED_USES).contains(&uses[index])
                 || feeds_matmul[index]
                 || plan.outputs.contains(&index)

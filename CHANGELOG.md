@@ -34,6 +34,13 @@ in this file.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.
+- Tensor work on a GPU is cut into fewer pieces. A tensor assigned to a
+  parameter while its work still waits, such as the running statistics
+  of a batch norm, runs with the next work on its device. The window
+  indices of a convolution are kept between calls. A large, short piece
+  of arithmetic that two or three steps read, such as the middle of a
+  softmax or the input of a `gelu`, is computed by each reader and not
+  written to memory.
 - The `tensor` module has convolution layers: `Conv2d`, `BatchNorm2d`,
   `MaxPool2d`, `AvgPool2d` and `Flatten`, with the functions `conv2d`,
   `max_pool2d` and `avg_pool2d`. They have gradients and run on every

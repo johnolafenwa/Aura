@@ -1827,3 +1827,69 @@ fn a_gpu_device_agrees_on_arithmetic_computed_again() {
         println!("RAN: arithmetic computed again on a GPU device");
     }
 }
+
+/// A linear layer, `gelu` as `std/tensor.au` builds it, and a second
+/// product, over a `[4, 64, 512]` hidden tensor.
+fn gelu_between_products(device: TensorDevice, one_sign: bool) -> Value {
+    let x = wave(256 * 64, &[256, 64], device);
+    let weight = wave(64 * 512, &[64, 512], device);
+    let bias = wave(512, &[512], device);
+    let narrow = wave(64 * 512, &[512, 64], device);
+    // Squares make the second product add terms of one sign, so the
+    // order of the additions changes less of the result.
+    let squared = |value: Value| match one_sign {
+        true => binary(&value, &value, 2).unwrap(),
+        false => value,
+    };
+    let (x, weight, narrow) = (squared(x), squared(weight), squared(narrow));
+    let scalar = |like: &Value, value: f64| {
+        host_tensor_scalar_like(vec![like.clone(), Value::Float(value)], None).unwrap()
+    };
+    let flat = binary(
+        &host_tensor_matmul(vec![x, weight], None).unwrap(),
+        &bias,
+        0,
+    )
+    .unwrap();
+    let hidden = reshape(&flat, &[4, 64, 512]).unwrap();
+    let scaled = binary(&hidden, &scalar(&hidden, 0.001), 2).unwrap();
+    let raised = binary(&unary(&scaled, 67).unwrap(), &scalar(&hidden, 1.0), 0).unwrap();
+    let halved = binary(&hidden, &scalar(&hidden, 0.5), 2).unwrap();
+    let activated = binary(&halved, &raised, 2).unwrap();
+    host_tensor_matmul(vec![reshape(&activated, &[-1, 512]).unwrap(), narrow], None).unwrap()
+}
+
+#[test]
+fn a_reshape_with_two_readers_is_computed_again_by_each() {
+    let expected = array(&gelu_between_products(TensorDevice::Cpu, true));
+    deferred(|| {
+        // The bias sum is read through a reshape by both halves of the
+        // `gelu`. One kernel between the two products computes it all.
+        let result = gelu_between_products(TensorDevice::Cpu, false);
+        let (plan, _) = Plan::collect_all(&[node(&result)]);
+        let kernels = tensor_codegen::generate(&plan)
+            .actions
+            .iter()
+            .filter(|action| matches!(action, tensor_codegen::Action::Kernel { .. }))
+            .count();
+        assert_eq!(kernels, 1);
+        let result = gelu_between_products(TensorDevice::Cpu, true);
+        let (plan, storage) = Plan::collect_all(&[node(&result)]);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2301) {
+            close("gelu between products", &generated[0], &expected);
+        }
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_a_reshape_computed_again() {
+    for device in gpus() {
+        let expected = array(&gelu_between_products(TensorDevice::Cpu, true));
+        close(
+            "gelu between products",
+            &array(&gelu_between_products(device, true)),
+            &expected,
+        );
+        println!("RAN: a reshape computed again on a GPU device");
+    }
+}
