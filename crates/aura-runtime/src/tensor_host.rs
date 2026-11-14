@@ -1479,6 +1479,11 @@ fn float64_error(device: TensorDevice) -> Diagnostic {
     )
 }
 
+/// A leaf in host memory of at most this many bytes goes to the CUDA
+/// device together with the other such leaves of its run, as one copy.
+#[cfg(target_os = "linux")]
+pub(crate) const SMALL_LEAF_BYTES: usize = 4096;
+
 /// A tensor of `elements` on `device`, in the device's own memory when it
 /// has one.
 fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
@@ -1487,6 +1492,14 @@ fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
     }
     #[cfg(target_os = "linux")]
     if device == TensorDevice::Cuda && !elements.is_empty() {
+        // A small tensor, such as the counts a mask is made from, stays
+        // in host memory. A run copies the small leaves of its plan
+        // together and keeps the copy, where a copy made here would
+        // wait for the kernels launched so far.
+        let bytes = elements.len() * tensor_codegen::element_bytes(elements.dtype());
+        if bytes <= SMALL_LEAF_BYTES {
+            return Ok(Value::Tensor(TensorValue::host(device, elements)));
+        }
         let buffer = tensor_cuda::Buffer::from_array(&elements)?;
         return Ok(Value::Tensor(TensorValue::ready(
             device,

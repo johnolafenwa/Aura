@@ -428,9 +428,7 @@ fn storage_bytes(storage: &ArrayStorage) -> &[u8] {
     }
 }
 
-/// A leaf in host memory of at most this many bytes is copied to the
-/// device together with the other such leaves of its run, as one copy.
-const MAX_STAGED_LEAF_BYTES: usize = 256;
+use super::tensor_host::SMALL_LEAF_BYTES as MAX_STAGED_LEAF_BYTES;
 
 /// CUDA device memory.
 pub(crate) struct Buffer {
