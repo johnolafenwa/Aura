@@ -171,4 +171,12 @@ them. It also writes a line for each read into host memory and for each
 operation that ran in host memory. `AURA_TENSOR_TRACE=1` adds the
 slowest actions of each piece of work, and waits for the device after
 every action to time it, so that run is slower. `AURA_TENSOR_TRACE=all`
-lists every action in place of the slowest.
+lists every action in place of the slowest. Before each piece of work
+the program reads, a `program=` line gives the time the program took to
+build it. The host time on the line after it is then the time to collect
+the plan.
+
+`AURA_TENSOR_EARLY_DEPTH` sets how deep the waiting work of a matrix
+product's operands is before the product starts it on the GPU. The
+default is 32, and `0` makes all work wait until the program reads a
+result.

@@ -67,6 +67,12 @@ in this file.
 - `export "C" def name(...)` defines a function that C code calls by
   name. Parameters and the result are scalars, and a `mut` parameter is a
   C pointer.
+- The CUDA device computes a layer norm or a softmax in one kernel: a
+  block of threads reduces a lane and writes the result, where five
+  kernels ran before. A matrix product whose operands wait on 32 or more
+  operations starts that work on the GPU when it is made, so the GPU is
+  busy while the program builds the rest of a pass.
+  `AURA_TENSOR_EARLY_DEPTH` sets that depth, and `0` turns it off.
 - Tensor work on a GPU is cut into fewer pieces. A tensor assigned to a
   parameter while its work still waits, such as the running statistics
   of a batch norm, runs with the next work on its device. The window
