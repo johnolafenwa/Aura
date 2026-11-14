@@ -41,7 +41,9 @@ Last updated: 2026-11-13
   job.
 - Done: memory routines for musl programs (`aura-mem`): musl builds run
   0.94x to 1.09x the glibc build's time, down from 1.05x to 1.8x.
-- Open: target runtime libraries in the release archives.
+- Done: target packs (`aura-<tag>-target-<target>.tar.gz`) built and run
+  in CI and the release workflow, `install.sh --target`, and a build
+  identity check on installed packs.
 
 ## Freestanding builds (complete)
 

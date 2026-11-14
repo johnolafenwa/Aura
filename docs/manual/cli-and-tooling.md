@@ -202,10 +202,23 @@ aura build --target aarch64-unknown-linux-gnu -o app-arm64 app.au
   `gcc-aarch64-linux-gnu` or `gcc-x86-64-linux-gnu`. `AURA_TARGET_CC`
   names another driver. A musl target needs no musl compiler.
 - Each target has its own Aura runtime library, in
-  `lib/aura/targets/<target>` of the installation. A source checkout
-  builds it with Cargo: add the Rust target of the same name with
-  `rustup target add`, and see `scripts/cross-target-env.sh` for the C
-  compilers the build needs.
+  `lib/aura/targets/<target>` of the installation. A target pack holds
+  it, and the installer adds the pack of each target it is given:
+
+  ```bash
+  curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+  ```
+
+  The installer also replaces the packs already installed, so
+  `aura upgrade` keeps them in step with the compiler. Releases from the
+  one after 0.15 have target packs.
+- An Aura installed with apt takes a pack from the release page:
+  `sudo tar -xzf aura-<tag>-target-<target>.tar.gz -C /usr --strip-components=1`.
+  A pack belongs to one build of `aura`. `aura build --target` refuses a
+  pack of another build and names both.
+- A source checkout builds the target's runtime library with Cargo: add
+  the Rust target of the same name with `rustup target add`, and see
+  `scripts/cross-target-env.sh` for the C compilers the build needs.
 - `--target-cpu` takes the CPU names of the target's architecture.
   `native` names the build machine's CPU and is refused with `--target`.
 - The build machine's own target is an ordinary build.

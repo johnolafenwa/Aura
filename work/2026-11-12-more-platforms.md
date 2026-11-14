@@ -164,9 +164,33 @@ local wait:
 
 ## Open
 
-- Release archives hold no target runtime libraries yet: target packs
-  and an install step are next.
 - arm64 musl speed is unmeasured: the cloud machine runs arm64 programs
   only under emulation.
-- The musl target of the other architecture is not in CI: no packaged C
-  compiler builds its runtime library. It joins CI with the target packs.
+- arm64 hosts build x86-64 musl programs only in principle: the
+  `target-packs` jobs run the x86-64 CLI. The arm64 CLI is covered for
+  its own musl target and the x86-64 glibc target.
+
+## Target packs
+
+- A target pack is `aura-<tag>-target-<target>.tar.gz` and unpacks over a
+  prefix: everything is in `lib/aura/targets/<target>`. It holds the
+  runtime library, `native-link-args.json`, `aura-version`, the license,
+  and for musl the start files, `libc.a`, `libunwind.a` and their
+  notices (`packaging/targets/MUSL-NOTICES.md`).
+- `scripts/package-target.sh` builds a pack on a Linux machine of the
+  target's architecture. The glibc pack repackages the release runtime
+  library; the musl pack builds the runtime library for the target.
+  A pack is about 30 MB, which is why the CLI archives do not hold them.
+- `aura-version` is the `aura --version` line of the build. `aura build
+  --target` refuses a pack whose line differs from its own.
+- `install.sh --target <name>` installs packs and replaces every pack
+  already under the prefix, so an upgrade does not leave a runtime
+  library of the earlier release.
+- `scripts/smoke-target-packs.sh` unpacks a CLI archive and packs outside
+  the source tree, builds the packaged examples for each target with no
+  Cargo, checks the ELF header, runs the programs (arm64 under QEMU) and
+  checks that a pack of another build is refused.
+- CI: `native-binaries` on both Linux runners makes both packs, runs the
+  musl one and uploads them; `target-packs` runs the x86-64 CLI with the
+  other three targets. The release workflow does the same in `cli` and
+  `target_packs`, and `publish` waits for `target_packs`.

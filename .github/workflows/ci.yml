@@ -444,6 +444,28 @@ jobs:
           scripts/package-cli.sh "aura-v$version-$target"
           echo "AURA_CI_ARCHIVE=aura-v$version-$target.tar.gz" >> "$GITHUB_ENV"
 
+      # What `aura build --target` links for this architecture's Linux
+      # targets (ADR-0101). The musl pack builds the runtime library again.
+      - name: Package the target packs and build with the musl one
+        if: runner.os == 'Linux'
+        shell: bash
+        run: |
+          sudo apt-get install -y musl-tools
+          rustup target add "$(uname -m)-unknown-linux-musl"
+          prefix="${AURA_CI_ARCHIVE%-$(uname -m)-unknown-linux-gnu.tar.gz}-target-$(uname -m)-unknown-linux"
+          scripts/package-target.sh "$prefix-gnu"
+          scripts/package-target.sh "$prefix-musl"
+          scripts/smoke-target-packs.sh "$AURA_CI_ARCHIVE" "$prefix-musl.tar.gz"
+
+      - name: Upload the archive and target packs
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: target-packs-${{ runner.arch }}
+          path: aura-v*.tar.gz
+          retention-days: 1
+          if-no-files-found: error
+
       - name: Build the Debian package and install it with apt-get
         if: runner.os == 'Linux'
         shell: bash
@@ -453,3 +475,35 @@ jobs:
         if: runner.os == 'macOS'
         shell: bash
         run: scripts/smoke-homebrew.sh "$AURA_CI_ARCHIVE"
+
+  # The x86-64 CLI builds for every Linux target it has no runtime library
+  # for, with the packs both Linux runners made, and the arm64 programs run
+  # under emulation.
+  target-packs:
+    needs: native-binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Download the archives and target packs
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: target-packs-*
+          path: packs
+          merge-multiple: true
+
+      - name: Install the arm64 link driver and emulator
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+
+      - name: Build and run programs for the other Linux targets
+        shell: bash
+        run: |
+          archive="$(ls packs/aura-v*-x86_64-unknown-linux-gnu.tar.gz | grep -v -- -target-)"
+          scripts/smoke-target-packs.sh \
+            "$archive" \
+            packs/aura-v*-target-x86_64-unknown-linux-musl.tar.gz \
+            packs/aura-v*-target-aarch64-unknown-linux-gnu.tar.gz \
+            packs/aura-v*-target-aarch64-unknown-linux-musl.tar.gz

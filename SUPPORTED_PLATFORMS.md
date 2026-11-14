@@ -33,8 +33,15 @@ On a Linux host, `aura build --target` builds programs for
 program is fully static and runs on Alpine and in empty containers. CI
 builds and runs a program for the musl target of each Linux runner's
 architecture and for the glibc target of the other architecture, the
-latter under the QEMU user-mode emulator. The 0.15 archives hold no
-target runtime libraries, so on 0.15 the option needs a source checkout.
+latter under the QEMU user-mode emulator.
+
+An installed `aura` reads a target's runtime library from a target
+pack, a release asset named `aura-<tag>-target-<target>.tar.gz`. Each
+release from the one after 0.15 has a pack for each of the four targets,
+and `install.sh --target <target>` installs one. CI and the release
+workflow build a program for every target with the x86-64 archive and the
+packs, and run the arm64 ones under emulation. The 0.15 release has no
+packs, so on 0.15 the option needs a source checkout.
 
 ## Unsupported Hosts
 

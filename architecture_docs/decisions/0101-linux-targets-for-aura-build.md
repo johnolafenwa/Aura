@@ -65,6 +65,17 @@ machine it runs on, and a linker that reads that machine's objects.
   `--discard-all`. Global symbols stay, as in an ordinary build.
 - **`aura run`, `aura test` and the native run cache are unchanged.** They
   build for the build machine.
+- **A release carries one target pack per target.** The pack
+  `aura-<tag>-target-<target>.tar.gz` unpacks over an installation
+  prefix and holds `lib/aura/targets/<target>`: the runtime library, its
+  link arguments, and for musl the start files, `libc.a` and
+  `libunwind.a` with their notices. A pack is about 30 MB, so the CLI
+  archives do not hold them. `install.sh --target <target>` installs a
+  pack and replaces the packs already under the prefix.
+- **A pack belongs to one build of `aura`.** It holds the build's
+  `aura --version` line in `aura-version`, and `aura build --target`
+  refuses a pack whose line differs from its own. A runtime library of
+  another build may not hold the functions the compiler calls.
 
 ## Consequences
 

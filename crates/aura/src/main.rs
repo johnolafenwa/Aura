@@ -5549,13 +5549,26 @@ fn resolve_installed_target_runtime_artifacts(
                 .join(target.name())
         })
         .unwrap_or_default();
-    resolve_runtime_artifacts_in(&runtime_dir)?.ok_or_else(|| {
+    let artifacts = resolve_runtime_artifacts_in(&runtime_dir)?.ok_or_else(|| {
         format!(
-            "this Aura installation has no runtime library for `{}`: expected `{}`",
+            "this Aura installation has no runtime library for `{}`: expected `{}`; install the target pack of this release (see `aura build --target` in the manual)",
             target.name(),
             runtime_dir.join(static_library_file_name()).display()
         )
-    })
+    })?;
+    // A target pack names the `aura` it was built with. A runtime library
+    // of another build does not hold the functions this compiler calls.
+    if let Ok(pack_version) = fs::read_to_string(runtime_dir.join("aura-version")) {
+        let own_version = version_line();
+        if pack_version.trim() != own_version {
+            return Err(format!(
+                "the installed target pack for `{}` is from `{}` and this is `{own_version}`: install the target pack of this release",
+                target.name(),
+                pack_version.trim()
+            ));
+        }
+    }
+    Ok(artifacts)
 }
 
 fn resolve_installed_runtime_artifacts_from_executable(
@@ -6128,13 +6141,18 @@ fn print_command_usage_and_exit(command: &str) -> ! {
     process::exit(0);
 }
 
-fn print_version_and_exit() -> ! {
-    write_stdout(&format!(
-        "aura {}-{} ({})\n",
+/// What `aura --version` prints, without the line end.
+fn version_line() -> String {
+    format!(
+        "aura {}-{} ({})",
         env!("CARGO_PKG_VERSION"),
         env!("AURA_BUILD_CHANNEL"),
         env!("AURA_BUILD_COMMIT")
-    ));
+    )
+}
+
+fn print_version_and_exit() -> ! {
+    write_stdout(&format!("{}\n", version_line()));
     process::exit(0);
 }
 
@@ -7236,6 +7254,29 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             .expect("the target runtime should resolve");
         assert_eq!(artifacts.staticlib, staticlib);
         assert_eq!(artifacts.native_link_args, vec!["-lc"]);
+
+        // A pack names the `aura` it was built with.
+        fs::write(
+            runtime_dir.join("aura-version"),
+            format!("{}\n", super::version_line()),
+        )
+        .expect("pack version should write");
+        super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .expect("a pack of this build should resolve");
+        fs::write(
+            runtime_dir.join("aura-version"),
+            "aura 0.1.0-preview (000000000000)\n",
+        )
+        .expect("pack version should write");
+        let error = super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .err()
+            .expect("a pack of another build should be refused");
+        assert!(
+            error.starts_with(
+                "the installed target pack for `x86_64-unknown-linux-musl` is from `aura 0.1.0-preview (000000000000)` and this is `aura "
+            ),
+            "{error}"
+        );
         let _ = fs::remove_dir_all(root);
     }
 

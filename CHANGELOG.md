@@ -37,6 +37,11 @@ in this file.
   another architecture links with `<arch>-linux-gnu-gcc` (ADR-0101).
   A musl program copies and compares memory with the runtime's own
   routines and runs within a tenth of the glibc build's time.
+- Releases carry a target pack for each `aura build --target` target,
+  `aura-<tag>-target-<target>.tar.gz`, with the runtime library and, for
+  musl, the C library the link reads. `install.sh --target <target>`
+  installs a pack and replaces the packs already installed, and
+  `aura build --target` refuses a pack that another build of `aura` made.
 - On Windows, a task that waits on a socket first polls it on its own
   worker thread for 50 microseconds before it hands the wait to the
   shared watcher thread. A reply that arrives in that time costs no

@@ -90,7 +90,9 @@ def native_link_args(cargo_output: str) -> list[str]:
 
 
 def main() -> None:
-    target = Path(os.environ["ARCHIVE_ROOT"]) / "lib/aura/native-link-args.json"
+    # A target pack names the directory; a CLI archive names its root.
+    directory = os.environ.get("LINK_ARGS_DIR") or Path(os.environ["ARCHIVE_ROOT"]) / "lib/aura"
+    target = Path(directory) / "native-link-args.json"
     target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(
         json.dumps(native_link_args(os.environ["NATIVE_STATIC_LIBS"])) + "\n",
