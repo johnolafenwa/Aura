@@ -543,7 +543,7 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("id: source", self.workflow)
-        self.assertEqual(self.workflow.count(immutable_ref), 2)
+        self.assertEqual(self.workflow.count(immutable_ref), 3)
         self.assertIn("needs: [release_identity, cli, tools]", self.workflow)
         self.assertIn(
             "if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",

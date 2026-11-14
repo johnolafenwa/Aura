@@ -28,7 +28,7 @@
     "test:bench-scalable-runtime": "python3 -m unittest scripts/test_bench_scalable_runtime.py",
     "test:bench-numeric-arrays": "python3 -m unittest scripts/test_bench_numeric_arrays.py",
     "test:bench-release-performance": "python3 -m unittest scripts/test_bench_release_performance.py",
-    "test:release-packaging": "python3 -m unittest scripts/test_release_packaging.py",
+    "test:release-packaging": "python3 -m unittest scripts/test_release_packaging.py scripts/test_package_managers.py",
     "test:release-metadata": "python3 -m unittest scripts/test_release_metadata.py scripts/test_generate_llms.py",
     "test:identity": "python3 -m unittest scripts/test_aura_identity.py",
     "check:format": "cargo fmt --all --check",

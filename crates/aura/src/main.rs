@@ -501,7 +501,33 @@ fn validate_and_build_curl_args(
     Ok(args)
 }
 
+/// The command that upgrades an Aura installed by a package manager.
+///
+/// A Homebrew, apt or Chocolatey package leaves `lib/aura/install-manager`
+/// beside the runtime, holding the manager's name. The package manager owns
+/// those files, so `aura upgrade` must not replace them with the installer.
+fn package_manager_upgrade_hint(prefix: &Path) -> Option<(&'static str, &'static str)> {
+    let marker =
+        fs::read_to_string(prefix.join("lib").join("aura").join("install-manager")).ok()?;
+    match marker.trim() {
+        "homebrew" => Some(("Homebrew", "brew upgrade aura")),
+        "apt" => Some((
+            "apt",
+            "sudo apt-get update && sudo apt-get install --only-upgrade aura",
+        )),
+        "chocolatey" => Some(("Chocolatey", "choco upgrade aura --pre")),
+        _ => None,
+    }
+}
+
 fn run_upgrade() -> Result<(), String> {
+    if let Some((manager, command)) =
+        active_install_prefix().and_then(|prefix| package_manager_upgrade_hint(&prefix))
+    {
+        return Err(format!(
+            "this copy of Aura was installed with {manager}; upgrade it with `{command}`"
+        ));
+    }
     let installer_url = std::env::var("AURA_UPGRADE_INSTALLER_URL")
         .unwrap_or_else(|_| DEFAULT_UPGRADE_INSTALLER_URL.to_string());
     let workspace = create_upgrade_workspace()
@@ -7159,6 +7185,38 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
             take_target_cpu(args(&["app.au", "--target-cpu"]), None),
             Err("`--target-cpu` needs a CPU name".to_string())
         );
+    }
+
+    #[test]
+    fn upgrade_defers_to_the_package_manager_that_installed_aura() {
+        let prefix = std::env::temp_dir().join(format!(
+            "aura-install-manager-test-{}-{}",
+            std::process::id(),
+            super::system_time_nanos()
+        ));
+        let runtime_dir = prefix.join("lib").join("aura");
+        fs::create_dir_all(&runtime_dir).expect("runtime directory should be created");
+        assert_eq!(super::package_manager_upgrade_hint(&prefix), None);
+        for (marker, expected) in [
+            ("homebrew\n", Some(("Homebrew", "brew upgrade aura"))),
+            (
+                "apt\n",
+                Some((
+                    "apt",
+                    "sudo apt-get update && sudo apt-get install --only-upgrade aura",
+                )),
+            ),
+            (
+                "chocolatey\r\n",
+                Some(("Chocolatey", "choco upgrade aura --pre")),
+            ),
+            ("something else\n", None),
+        ] {
+            fs::write(runtime_dir.join("install-manager"), marker)
+                .expect("marker should be written");
+            assert_eq!(super::package_manager_upgrade_hint(&prefix), expected);
+        }
+        fs::remove_dir_all(&prefix).expect("test prefix should be removed");
     }
 
     #[test]

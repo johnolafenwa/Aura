@@ -2,6 +2,20 @@
 
 Last updated: 2026-11-13
 
+## Homebrew, apt and Chocolatey packages (built, publishing waits on John)
+
+- Target: John's 2026-11-13 ask for Homebrew, Chocolatey and apt-get
+  installs. Details are in `2026-11-13-package-managers.md`.
+- Done: the formula, the Debian package and signed apt repository, the
+  Chocolatey package, the Release workflow jobs, CI install checks for
+  all three, the install guide, and `aura upgrade` deferring to the
+  package manager.
+- Open: John creates the tap repository `johnolafenwa/homebrew-aura` and
+  the secrets `HOMEBREW_TAP_TOKEN`, `CHOCOLATEY_API_KEY` and
+  `APT_SIGNING_KEY`. The first packages ship with the release after 0.15.
+  That release's version sweep should reword "from the release after
+  0.15" in the install guides.
+
 ## More platforms: Linux on arm64 and native Windows (in progress)
 
 - Target: John's "more platforms" item. Windows has no local machine and

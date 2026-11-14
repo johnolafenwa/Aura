@@ -107,7 +107,7 @@ jobs:
             os: windows-2025
             archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -185,6 +185,32 @@ jobs:
         with:
           name: ${{ matrix.archive }}
           path: ${{ matrix.archive }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
+          if-no-files-found: error
+
+      - name: Build and install the Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: |
+          package="$(scripts/package-deb.sh "$ARCHIVE_NAME.tar.gz")"
+          scripts/smoke-deb.sh "$package"
+
+      - name: Build and install the Chocolatey package
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: |
+          package="$(scripts/package-chocolatey.sh "$ARCHIVE_NAME.zip")"
+          scripts/smoke-chocolatey.sh "$package"
+
+      - name: Upload the Debian or Chocolatey package
+        if: runner.os != 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.archive }}-package
+          path: ${{ runner.os == 'Windows' && 'aura.*.nupkg' || 'aura-*.deb' }}
           if-no-files-found: error
 
   tools:
@@ -421,3 +447,110 @@ jobs:
       - name: Skip Open VSX publish
         if: env.HAS_OVSX_TOKEN != 'true'
         run: echo "::notice::OVSX_TOKEN is not configured; skipping Open VSX publish."
+
+  # The three package managers. Each step that publishes outside this
+  # repository needs a secret, and skips with a notice when it is absent.
+  publish-homebrew:
+    name: Publish the Homebrew formula
+    needs: [release_identity, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      HOMEBREW_TAP: johnolafenwa/homebrew-aura
+      HAS_HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+          persist-credentials: false
+
+      - name: Write the formula from the published checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+          python3 scripts/render-homebrew-formula.py --tag "$RELEASE_TAG" \
+            --sha256sums "$RUNNER_TEMP/SHA256SUMS" --output "$RUNNER_TEMP/aura.rb"
+          ruby -c "$RUNNER_TEMP/aura.rb"
+
+      - name: Push the formula to the tap
+        if: env.HAS_HOMEBREW_TAP_TOKEN == 'true'
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          tap="$RUNNER_TEMP/tap"
+          git clone --depth 1 "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/$HOMEBREW_TAP.git" "$tap"
+          mkdir -p "$tap/Formula"
+          cp "$RUNNER_TEMP/aura.rb" "$tap/Formula/aura.rb"
+          cd "$tap"
+          git add Formula/aura.rb
+          if git diff --cached --quiet; then
+            echo "::notice::The tap already holds the formula for $RELEASE_TAG."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "aura ${RELEASE_TAG#v}"
+          git push origin HEAD
+
+      - name: Skip the tap push
+        if: env.HAS_HOMEBREW_TAP_TOKEN != 'true'
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not configured; skipping the Homebrew tap push."
+
+  publish-chocolatey:
+    name: Publish the Chocolatey package
+    needs: publish
+    runs-on: windows-2025
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      HAS_CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY != '' }}
+
+    steps:
+      - name: Push the package to the Chocolatey community repository
+        if: env.HAS_CHOCOLATEY_API_KEY == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "aura.${RELEASE_TAG#v}.nupkg" --pattern SHA256SUMS --dir .
+          grep -F "aura.${RELEASE_TAG#v}.nupkg" SHA256SUMS | sha256sum -c -
+          choco push "aura.${RELEASE_TAG#v}.nupkg" --source https://push.chocolatey.org/ \
+            --api-key "$CHOCOLATEY_API_KEY" --limit-output
+
+      - name: Skip the Chocolatey push
+        if: env.HAS_CHOCOLATEY_API_KEY != 'true'
+        run: echo "::notice::CHOCOLATEY_API_KEY is not configured; skipping the Chocolatey push."
+
+  publish-apt:
+    name: Publish the apt repository
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      actions: write
+
+    steps:
+      # The Docs workflow builds the apt repository from the newest release's
+      # Debian packages and deploys it with the site.
+      - name: Start a site deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main

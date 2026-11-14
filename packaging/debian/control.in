@@ -1,0 +1,17 @@
+Package: aura
+Version: @VERSION@
+Architecture: @ARCHITECTURE@
+Maintainer: John Olafenwa <35049820+johnolafenwa@users.noreply.github.com>
+Installed-Size: @INSTALLED_SIZE@
+Depends: libc6 (>= 2.39), libstdc++6, zlib1g, libzstd1
+Recommends: gcc, libc6-dev
+Section: devel
+Priority: optional
+Homepage: https://johnolafenwa.github.io/Aura/
+Description: Compiler and tools for the Aura programming language
+ Aura is a statically typed, compiled language with Python-like syntax.
+ This package holds the `aura` command and the native runtime that
+ `aura build` links into programs.
+ .
+ `aura build` and native `aura run` need a C compiler and linker, which the
+ recommended gcc and libc6-dev packages provide.
