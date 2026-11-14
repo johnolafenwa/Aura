@@ -998,6 +998,7 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                     columns,
                     pairs,
                     swapped,
+                    spread,
                 } => {
                     assert!(!double, "the test products are float32");
                     let read = |buffer: &[u8], index: usize| {
@@ -1022,7 +1023,10 @@ extern "C" void aura_thread(unsigned block, unsigned thread) {
                                     sum += read(&buffers[*left], left_at + left_place)
                                         * read(&buffers[*right], right_at + right_place);
                                 }
-                                let at = (product * rows * columns + row * columns + column) * 4;
+                                let at = match spread {
+                                    Some((step, starts)) => starts[product] + row * step + column,
+                                    None => product * rows * columns + row * columns + column,
+                                } * 4;
                                 made[at..at + 4].copy_from_slice(&sum.to_ne_bytes());
                             }
                         }

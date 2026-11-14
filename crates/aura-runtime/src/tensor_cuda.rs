@@ -101,6 +101,42 @@ struct Api {
         c_int,
     ) -> Status,
     #[allow(clippy::type_complexity)]
+    cublasSgemmBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasDgemmBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
     cublasSgemmStridedBatched: unsafe extern "C" fn(
         *mut c_void,
         c_int,
@@ -238,6 +274,8 @@ impl Api {
             cublasCreate_v2: load!(cublas, cublasCreate_v2),
             cublasSgemm_v2: load!(cublas, cublasSgemm_v2),
             cublasDgemm_v2: load!(cublas, cublasDgemm_v2),
+            cublasSgemmBatched: load!(cublas, cublasSgemmBatched),
+            cublasDgemmBatched: load!(cublas, cublasDgemmBatched),
             cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
             cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
         })
@@ -785,6 +823,23 @@ fn report(plan: &Plan, traced: &Traced, timings: &mut [(String, std::time::Durat
 /// few kilobytes at most.
 const MAX_KEPT_CONSTANTS: usize = 512;
 
+/// The device copy of `staged`, kept between runs by its bytes.
+fn kept_constant(runtime: &Runtime, staged: &[u8]) -> Result<Arc<Buffer>> {
+    let mut constants = runtime
+        .constants
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(whole) = constants.get(staged) {
+        return Ok(Arc::clone(whole));
+    }
+    if constants.len() >= MAX_KEPT_CONSTANTS {
+        constants.clear();
+    }
+    let whole = Arc::new(Buffer::from_bytes(staged)?);
+    constants.insert(staged.to_vec(), Arc::clone(&whole));
+    Ok(whole)
+}
+
 /// The most compiled plans kept.
 const MAX_COMPILED_PLANS: usize = 256;
 
@@ -850,23 +905,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         // loop, so their copy on the device is kept. A copy waits for
         // the kernels launched so far, which would stop a run started
         // early from running beside the program.
-        let whole = {
-            let mut constants = runtime
-                .constants
-                .lock()
-                .unwrap_or_else(std::sync::PoisonError::into_inner);
-            match constants.get(&staged) {
-                Some(whole) => Arc::clone(whole),
-                None => {
-                    if constants.len() >= MAX_KEPT_CONSTANTS {
-                        constants.clear();
-                    }
-                    let whole = Arc::new(Buffer::from_bytes(&staged)?);
-                    constants.insert(staged.clone(), Arc::clone(&whole));
-                    whole
-                }
-            }
-        };
+        let whole = kept_constant(runtime, &staged)?;
         for (index, offset, bytes) in parts {
             buffers[index] = Some(Arc::new(Buffer::part(&whole, offset, bytes)));
         }
@@ -878,6 +917,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             .pointer
     };
     let mut outcome = Ok(());
+    // The address tables of batched products, kept until the run ends.
+    let mut tables: Vec<Arc<Buffer>> = Vec::new();
     runtime.pool().running += 1;
     for (index, action) in compiled.program.actions.iter().enumerate() {
         let action_began = std::time::Instant::now();
@@ -940,6 +981,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 columns,
                 pairs,
                 swapped,
+                spread,
             } => Buffer::new(*bytes).and_then(|made| {
                 let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
                 let element = if *double { 8 } else { 4 };
@@ -964,7 +1006,83 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 let right_shared = pairs.iter().all(|pair| pair.1 == 0);
                 let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
                 let tall = rows as usize * count;
-                if count > 1
+                if let Some((step, starts)) = spread {
+                    // The products go beside each other in wider rows,
+                    // so each has its own place: one batched call takes
+                    // the address of every matrix. The addresses repeat
+                    // from run to run, since the pool hands out the same
+                    // buffers, and their copy on the device is kept.
+                    let mut addresses = Vec::with_capacity(count * 24);
+                    let place = |base: DevicePointer, offset: usize| {
+                        (base + (offset * element) as DevicePointer).to_ne_bytes()
+                    };
+                    for pair in pairs {
+                        addresses.extend(place(right, pair.1));
+                    }
+                    for pair in pairs {
+                        addresses.extend(place(left, pair.0));
+                    }
+                    for &start in starts {
+                        addresses.extend(place(made.pointer, start));
+                    }
+                    match kept_constant(runtime, &addresses) {
+                        Ok(table) => {
+                            let each = (count * 8) as DevicePointer;
+                            let (a, b, c) = (
+                                table.pointer,
+                                table.pointer + each,
+                                table.pointer + 2 * each,
+                            );
+                            // SAFETY: each address is a whole matrix
+                            // inside its buffer, and the rows of a product
+                            // are `step` elements apart in the result.
+                            status = unsafe {
+                                if *double {
+                                    (api.cublasDgemmBatched)(
+                                        runtime.cublas,
+                                        right_op,
+                                        left_op,
+                                        columns,
+                                        rows,
+                                        inner,
+                                        &1.0,
+                                        a,
+                                        right_step,
+                                        b,
+                                        left_step,
+                                        &0.0,
+                                        c,
+                                        *step as c_int,
+                                        count as c_int,
+                                    )
+                                } else {
+                                    (api.cublasSgemmBatched)(
+                                        runtime.cublas,
+                                        right_op,
+                                        left_op,
+                                        columns,
+                                        rows,
+                                        inner,
+                                        &1.0,
+                                        a,
+                                        right_step,
+                                        b,
+                                        left_step,
+                                        &0.0,
+                                        c,
+                                        *step as c_int,
+                                        count as c_int,
+                                    )
+                                }
+                            };
+                            tables.push(table);
+                        }
+                        Err(error) => {
+                            buffers[*output] = Some(Arc::new(made));
+                            return Err(error);
+                        }
+                    }
+                } else if count > 1
                     && left_stacked
                     && right_shared
                     && !swapped.0

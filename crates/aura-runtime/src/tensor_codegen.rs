@@ -56,6 +56,11 @@ pub(crate) enum Action {
         /// Whether the left and the right buffer hold each matrix with
         /// its rows and columns swapped, so no kernel copies a transpose.
         swapped: (bool, bool),
+        /// When the readers of the products want them beside each other
+        /// in wider rows, as the heads of an attention are merged: the
+        /// elements from one row of a product to the next, and the
+        /// element each product starts at. No kernel then moves them.
+        spread: Option<(usize, Vec<usize>)>,
     },
     /// Buffer `output` is buffer `input`: a reshape of memory that
     /// exists moves no element.
@@ -315,6 +320,9 @@ struct Generator<'a> {
     lanes: Vec<Vec<(usize, usize)>>,
     /// Whether a slot lives only inside a kernel of `lanes`.
     in_lane: Vec<bool>,
+    /// For a reshape that merges the heads of stacked products, the
+    /// product that writes it in place.
+    spread: Vec<Option<usize>>,
     /// The slots the kernel being emitted holds as one value for a lane.
     held: Vec<usize>,
     /// The places in `actions` of the elementwise kernels, whose launch
@@ -531,8 +539,57 @@ impl<'a> Generator<'a> {
                 beside[owner].push(index);
             }
         }
+        // Products whose only reader swaps the two middle axes and
+        // reshapes, as an attention merges its heads, write the merged
+        // rows themselves.
+        let mut spread = vec![None; count];
+        for index in 0..count {
+            let Slot::Step {
+                operation: Operation::Permute(axes),
+                inputs,
+                ..
+            } = &plan.slots[index]
+            else {
+                continue;
+            };
+            let product = inputs[0];
+            let stacked = matches!(&plan.slots[product], Slot::Step { operation: Operation::Matmul, shape, .. }
+                if shape.len() == 4);
+            if !(stacked
+                && axes.iter().map(|&axis| axis as usize).eq([0, 2, 1, 3])
+                && uses[product] == 1
+                && uses[index] == 1
+                && !materialized[index]
+                && !plan.outputs.contains(&product)
+                && !plan.outputs.contains(&index))
+            {
+                continue;
+            }
+            let mut reader = user[index];
+            loop {
+                if !matches!(
+                    &plan.slots[reader],
+                    Slot::Step {
+                        operation: Operation::Reshape(_),
+                        ..
+                    }
+                ) {
+                    break;
+                }
+                if materialized[reader] {
+                    spread[reader] = Some(product);
+                    materialized[product] = false;
+                    break;
+                }
+                if uses[reader] != 1 || plan.outputs.contains(&reader) {
+                    break;
+                }
+                reader = user[reader];
+            }
+        }
         let (lanes, in_lane) = Self::lane_kernels(plan, &materialized, &beside);
         Self {
+            spread,
             plan,
             materialized,
             beside,
@@ -1737,9 +1794,15 @@ impl<'a> Generator<'a> {
         }
     }
 
-    fn matmul(&mut self, slot: usize, left: usize, right: usize) {
+    /// The products of the step `product` into the buffer of `slot`:
+    /// the step itself, or the reshape that merges its heads.
+    fn matmul(&mut self, slot: usize, product: usize) {
+        let Slot::Step { inputs, .. } = &self.plan.slots[product] else {
+            unreachable!("a product is a step")
+        };
+        let (left, right) = (inputs[0], inputs[1]);
         let (left_shape, right_shape, shape) =
-            (self.shape(left), self.shape(right), self.shape(slot));
+            (self.shape(left), self.shape(right), self.shape(product));
         let (rows, inner) = (
             left_shape[left_shape.len() - 2],
             left_shape[left_shape.len() - 1],
@@ -1756,7 +1819,17 @@ impl<'a> Generator<'a> {
                 )
             })
             .collect();
-        let dtype = self.dtype(slot);
+        let dtype = self.dtype(product);
+        // Merged heads: product `head` of stack `batch` starts `head`
+        // matrices into the rows of its stack, which are all the heads
+        // wide.
+        let spread = (slot != product).then(|| {
+            let (heads, width) = (shape[1], shape[1] * columns);
+            let offsets = (0..len(lead))
+                .map(|at| (at / heads) * rows * width + (at % heads) * columns)
+                .collect();
+            (width, offsets)
+        });
         let stored = |side: usize| Self::transpose_of(self.plan, &self.materialized, side);
         let swapped = (stored(left).is_some(), stored(right).is_some());
         let (left, right) = (stored(left).unwrap_or(left), stored(right).unwrap_or(right));
@@ -1771,6 +1844,7 @@ impl<'a> Generator<'a> {
             columns,
             pairs,
             swapped,
+            spread,
         });
     }
 
@@ -1787,10 +1861,14 @@ impl<'a> Generator<'a> {
             }
             match operation {
                 _ if !self.lanes[slot].is_empty() => self.lane(slot),
+                _ if self.spread[slot].is_some() => {
+                    let product = self.spread[slot].expect("checked above");
+                    self.matmul(slot, product);
+                }
                 Operation::Reduce { reduction, axis } => {
                     self.reduce(slot, *reduction, *axis, inputs[0]);
                 }
-                Operation::Matmul => self.matmul(slot, inputs[0], inputs[1]),
+                Operation::Matmul => self.matmul(slot, slot),
                 Operation::IndexAdd { axis, size } => {
                     self.index_add(slot, *axis, *size, inputs[0], inputs[1]);
                 }

@@ -2185,3 +2185,76 @@ fn a_gpu_device_agrees_on_a_reshape_computed_again() {
         println!("RAN: a reshape computed again on a GPU device");
     }
 }
+
+/// The products of an attention with their heads merged, as
+/// `std/tensor.au` writes them: `[2, 3, 8, 4]` products, the two middle
+/// axes swapped, then rows of all three heads, into a last product.
+fn merged_heads(device: TensorDevice) -> Value {
+    let weights = wave(2 * 3 * 8 * 8, &[2, 3, 8, 8], device);
+    let values = wave(2 * 3 * 8 * 4, &[2, 3, 8, 4], device);
+    let mixed = host_tensor_matmul(vec![weights, values], None).unwrap();
+    let merged = reshape(&permute(&mixed, &[0, 2, 1, 3]).unwrap(), &[2, 8, 12]).unwrap();
+    let flat = reshape(&merged, &[-1, 12]).unwrap();
+    host_tensor_matmul(vec![flat, wave(12 * 5, &[12, 5], device)], None).unwrap()
+}
+
+#[test]
+fn stacked_products_write_their_merged_heads_in_place() {
+    let cpu = TensorDevice::Cpu;
+    let expected = array(&merged_heads(cpu));
+    deferred(|| {
+        let result = merged_heads(cpu);
+        let (plan, storage) = Plan::collect_all(&[node(&result)]);
+        let actions = tensor_codegen::generate(&plan).actions;
+        // No kernel moves the heads: the first product writes the rows
+        // the second reads.
+        assert!(actions
+            .iter()
+            .all(|action| !matches!(action, tensor_codegen::Action::Kernel { .. })));
+        let spread: Vec<_> = actions
+            .iter()
+            .filter_map(|action| match action {
+                tensor_codegen::Action::Matmul { spread, .. } => Some(spread.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(spread, [Some((12, vec![0, 4, 8, 96, 100, 104])), None]);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2430) {
+            close("merged heads", &generated[0], &expected);
+        }
+
+        // Heads the program also reads are written as they are.
+        let mixed = host_tensor_matmul(
+            vec![
+                wave(2 * 3 * 8 * 8, &[2, 3, 8, 8], cpu),
+                wave(2 * 3 * 8 * 4, &[2, 3, 8, 4], cpu),
+            ],
+            None,
+        )
+        .unwrap();
+        let merged = reshape(&permute(&mixed, &[0, 2, 1, 3]).unwrap(), &[2, 8, 12]).unwrap();
+        let (plan, _) = Plan::collect_all(&[node(&merged), node(&mixed)]);
+        assert!(tensor_codegen::generate(&plan)
+            .actions
+            .iter()
+            .all(|action| !matches!(
+                action,
+                tensor_codegen::Action::Matmul {
+                    spread: Some(_),
+                    ..
+                }
+            )));
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_merged_heads() {
+    for device in gpus() {
+        close(
+            "merged heads",
+            &array(&merged_heads(device)),
+            &array(&merged_heads(TensorDevice::Cpu)),
+        );
+        println!("RAN: merged heads written in place on a GPU device");
+    }
+}
