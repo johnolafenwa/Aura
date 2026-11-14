@@ -1859,15 +1859,6 @@ fn a_product_starts_deep_waiting_operands_before_it_is_read() {
         assert!(!node(&left).is_ready() && !node(&right).is_ready());
         assert!(!node(&shallow).is_ready());
 
-        // Operands with gradients wait: their backward pass shares the
-        // work.
-        let mut tracked = node_op(&wave(16, &[4, 4], TensorDevice::Cpu), 4, &[]).unwrap();
-        for _ in 0..EARLY_DEPTH {
-            tracked = binary(&tracked, &wave(16, &[4, 4], TensorDevice::Cpu), 0).unwrap();
-        }
-        let waits = product(&tracked, &right);
-        assert!(!node(&tracked).is_ready() && !node(&waits).is_ready());
-
         // A deep operand runs when the product is made, with the other
         // operand. Of a transposed operand, the memory the product reads
         // in place runs, and the transpose waits.
@@ -1888,6 +1879,35 @@ fn a_product_starts_deep_waiting_operands_before_it_is_read() {
         assert!(!node(&waiting).is_ready());
         start_operands(&[node(&waiting)], 1).unwrap();
         assert!(node(&waiting).is_ready());
+
+        // While work with gradients waits, nothing starts early: the
+        // backward pass shares the work.
+        let weight = node_op(&wave(16, &[4, 4], TensorDevice::Cpu), 4, &[]).unwrap();
+        let tracked = binary(&weight, &wave(16, &[4, 4], TensorDevice::Cpu), 0).unwrap();
+        assert!(node(&tracked).is_tracked() && !node(&tracked).is_ready());
+        let deep = chain(TensorDevice::Cpu, EARLY_DEPTH);
+        let held_back = product(&deep, &right);
+        assert!(!node(&deep).is_ready());
+        // A run the program waits for ends that.
+        array(&held_back);
+        array(&tracked);
+        let deep = chain(TensorDevice::Cpu, EARLY_DEPTH);
+        product(&deep, &right);
+        assert!(node(&deep).is_ready());
+
+        // With gradients off, a result of a tracked tensor is not
+        // tracked, so a model that only predicts starts early.
+        node_op(&weight, 14, &[0]).unwrap();
+        let plain = binary(&weight, &wave(16, &[4, 4], TensorDevice::Cpu), 0).unwrap();
+        assert!(!node(&plain).is_tracked());
+        let deep = chain(TensorDevice::Cpu, EARLY_DEPTH);
+        product(&deep, &weight);
+        assert!(node(&deep).is_ready());
+        assert!(node_op(&weight, 14, &[]).is_err());
+        node_op(&weight, 14, &[1]).unwrap();
+        let again = binary(&weight, &wave(16, &[4, 4], TensorDevice::Cpu), 0).unwrap();
+        assert!(node(&again).is_tracked());
+        array(&again);
     });
 }
 

@@ -537,6 +537,7 @@ impl TensorValue {
         let mut roots = vec![self];
         roots.extend(&deferred);
         let (plan, leaves, held) = Plan::collect_held(&roots);
+        TRACKED_WAITS.with(|waits| waits.set(false));
         let mut storages = plan.run(self.device(), &leaves)?.into_iter();
         let storage = storages.next().expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
@@ -812,6 +813,9 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
     let deferred = TensorValue::deferred(device, &waiting);
     let waiting: Vec<&TensorValue> = waiting.into_iter().chain(&deferred).collect();
     let (plan, leaves, held) = Plan::collect_held(&waiting);
+    if !runs_early() {
+        TRACKED_WAITS.with(|waits| waits.set(false));
+    }
     let storages = plan.run(device, &leaves)?;
     for (node, storage) in waiting.iter().copied().chain(&held).zip(storages) {
         *node.state() = State::Ready(storage);
@@ -1319,12 +1323,13 @@ pub(crate) fn runs_early() -> bool {
 /// steps deep or more. A product reads its operands from memory, so
 /// they are written in any case, and the device computes them while the
 /// program builds the work that follows. Without this, the device is
-/// idle until the program reads a result. Operands with gradients wait.
+/// idle until the program reads a result. Nothing starts early while
+/// work with gradients waits.
 fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
     // Work with gradients stays one plan: its backward pass shares
     // most of the forward one.
     if depth == 0
-        || inputs.iter().any(|input| input.is_tracked())
+        || TRACKED_WAITS.with(std::cell::Cell::get)
         || inputs.iter().all(|input| input.depth() < depth)
     {
         return Ok(());
@@ -1410,14 +1415,50 @@ thread_local! {
     static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
+/// Whether operations record gradients: `tensor.set_grad_enabled`. One
+/// setting serves the whole program.
+#[cfg(not(test))]
+static GRADIENTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(test)]
+thread_local! {
+    /// Each test thread has its own setting, so tests run side by side.
+    static GRADIENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn gradients_enabled() -> bool {
+    #[cfg(not(test))]
+    return GRADIENTS.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    GRADIENTS.with(std::cell::Cell::get)
+}
+
+fn set_gradients_enabled(enabled: bool) {
+    #[cfg(not(test))]
+    GRADIENTS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    GRADIENTS.with(|gradients| gradients.set(enabled));
+}
+
+thread_local! {
+    /// Whether a waiting tensor with gradients was made since the last
+    /// run the program waited for. While one may wait, no product
+    /// starts its operands early: the backward pass shares the work.
+    static TRACKED_WAITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The new tensor `node`, tracked when it is a float tensor computed from
 /// a tracked one.
 fn recorded(node: TensorValue, operation: Operation, inputs: &[&TensorValue]) -> TensorValue {
     let float = matches!(node.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
     if float
         && RECORDING.with(std::cell::Cell::get)
+        && gradients_enabled()
         && inputs.iter().any(|input| input.is_tracked())
     {
+        if !node.is_ready() {
+            TRACKED_WAITS.with(|waits| waits.set(true));
+        }
         node.tracking(Some(History {
             operation,
             inputs: inputs.iter().map(|&input| input.clone()).collect(),
@@ -1981,6 +2022,11 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
         11 => tensor_grad::kept_gradient(operand).map(Value::Tensor),
         12 => {
             operand.set_grad(None);
+            Ok(Value::Tensor(operand.clone()))
+        }
+        14 => {
+            let [enabled] = parameters::<1>(&args, 2, "tensor::set_grad_enabled")?;
+            set_gradients_enabled(enabled != 0);
             Ok(Value::Tensor(operand.clone()))
         }
         13 => {

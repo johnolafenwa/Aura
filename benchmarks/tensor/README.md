@@ -179,4 +179,4 @@ the plan.
 `AURA_TENSOR_EARLY_DEPTH` sets how deep the waiting work of a matrix
 product's operands is before the product starts it on the GPU. The
 default is 32, and `0` makes all work wait until the program reads a
-result. Work with gradients always waits.
+result. Nothing starts early while work that records gradients waits.

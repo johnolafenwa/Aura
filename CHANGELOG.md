@@ -70,10 +70,14 @@ in this file.
 - The CUDA device computes a layer norm or a softmax in one kernel: a
   block of threads reduces a lane and writes the result, where five
   kernels ran before. A matrix product whose operands wait on 32 or more
-  operations without gradients starts that work on the GPU when it is
-  made, so the GPU is busy while the program builds the rest of a pass.
-  `AURA_TENSOR_EARLY_DEPTH` sets that depth, and `0` turns it off. The
-  small numbers of an expression stay on the GPU between runs.
+  operations starts that work on the GPU when it is made, so the GPU is
+  busy while the program builds the rest of a pass. This holds while no
+  work that records gradients waits. `AURA_TENSOR_EARLY_DEPTH` sets
+  that depth, and `0` turns it off. The small numbers of an expression
+  stay on the GPU between runs.
+- `tensor.set_grad_enabled(false)` turns the recording of gradients off
+  for the whole program, for a model that only predicts, and
+  `tensor.set_grad_enabled(true)` turns it on again.
 - Tensor work on a GPU is cut into fewer pieces. A tensor assigned to a
   parameter while its work still waits, such as the running statistics
   of a batch norm, runs with the next work on its device. The window
