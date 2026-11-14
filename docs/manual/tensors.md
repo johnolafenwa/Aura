@@ -496,7 +496,8 @@ pays that cost on its first pass only.
 A matrix product whose operands wait on a chain of 32 or more operations
 starts that work when the product is made. The GPU computes it while
 the program builds the operations that follow, so a deep model keeps
-the GPU busy from the start of a pass.
+the GPU busy from the start of a pass. Operands with gradients wait for
+the program to read a result.
 
 A chain of more than 8,192 waiting operations runs when it reaches that
 length, so a loop that never reads a result cannot grow without bound.

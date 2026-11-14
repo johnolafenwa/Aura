@@ -157,3 +157,25 @@ later, on the same tensors (ADR-0097).
   other kernels at 2.6 ms against 11.5 ms here: PyTorch adds the bias
   inside the product and has one fused kernel each for attention and
   layer norm.
+- 2026-11-14, closing the `gpt_infer` gap (John: "close the gap"). On
+  the restarted A40 pod, main gave 338 to 362 ms against PyTorch's 271
+  to 273. Changes: `Generator::lane_kernels` and `lane` in
+  `tensor_codegen.rs` emit one kernel for an elementwise step and the
+  reductions of its own lanes, with a block of threads for each lane
+  and the partial results in shared memory. The host harness runs the
+  phases of a block one after another through the `AURA_PHASE` macros.
+  A step that reshapes read is no longer computed again by each of
+  them: the three linear layers of an attention each computed the layer
+  norm before. `RECOMPUTED_STEPS` is 16, so the powers of a masked
+  softmax are not written. A local count for two layers at width 512
+  went from 45 kernels to 24.
+- A callgrind profile of the program side of a step shows about 15
+  million instructions over about 1,800 runtime calls, with no single
+  hot spot: host calls, field reads and instance creation. So a product
+  starts its deep operands early (`start_operands` in `tensor_host.rs`)
+  and the CUDA device does not wait for that run. The first A40 run of
+  this showed two faults: each early run copied its small constants
+  with a blocking copy, which waited for the GPU, and training rows ran
+  2 to 6 times slower. The constants are now kept on the device by
+  their bytes (`Runtime::constants`), and operands with gradients do
+  not start early.

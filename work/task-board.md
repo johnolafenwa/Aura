@@ -80,6 +80,8 @@ Last updated: 2026-11-13
   `benchmarks/tensor/workloads.au`.
 - Done 2026-11-13: convolution, pooling and batch norm layers
   (ADR-0100), and the `cnn_train` and `gpt_infer` workload rows.
+- Done 2026-11-14: one CUDA kernel for a layer norm or a softmax, and
+  an early start of a product's operands. A40 timings pending.
 - Remaining: the Mac runs, Metal support for the new operations,
   `float16`, and the whole-program benchmarks listed in
   `2026-11-12-gpu-tensors.md`.
