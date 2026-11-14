@@ -529,6 +529,10 @@ impl TensorValue {
             *self.state() = State::Ready(storage.clone());
             return Ok(storage);
         }
+        if trace_level() > 0 && self.device().is_gpu() {
+            // The run's own line then reports the time to collect the plan.
+            eprintln!("aura tensor: program={:.2}ms", trace_gap());
+        }
         let deferred = Self::deferred(self.device(), &[self]);
         let mut roots = vec![self];
         roots.extend(&deferred);
@@ -1282,6 +1286,67 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
     }
 }
 
+/// The depth of waiting work at which a product starts its operands
+/// when `AURA_TENSOR_EARLY_DEPTH` does not set one.
+const EARLY_DEPTH: usize = 32;
+
+/// The depth `setting`, the value of `AURA_TENSOR_EARLY_DEPTH`, asks
+/// for. Zero turns early starts off.
+fn early_depth_from(setting: Option<&str>) -> usize {
+    setting
+        .and_then(|setting| setting.parse().ok())
+        .unwrap_or(EARLY_DEPTH)
+}
+
+fn early_depth() -> usize {
+    static DEPTH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DEPTH
+        .get_or_init(|| early_depth_from(std::env::var("AURA_TENSOR_EARLY_DEPTH").ok().as_deref()))
+}
+
+thread_local! {
+    /// Whether the plan being run was started early: the device runs it
+    /// while the program goes on, and nothing waits for it.
+    static EARLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the run under way is one a product started early.
+pub(crate) fn runs_early() -> bool {
+    EARLY.with(std::cell::Cell::get)
+}
+
+/// Starts the waiting work of a product's operands when it is `depth`
+/// steps deep or more. A product reads its operands from memory, so
+/// they are written in any case, and the device computes them while the
+/// program builds the work that follows. Without this, the device is
+/// idle until the program reads a result.
+fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
+    if depth == 0 || inputs.iter().all(|input| input.depth() < depth) {
+        return Ok(());
+    }
+    let roots: Vec<TensorValue> = inputs
+        .iter()
+        .filter_map(|input| match &*input.state() {
+            State::Ready(_) => None,
+            // A product reads the transpose of memory in place, so the
+            // memory to write is the operand of the transpose.
+            State::Pending(pending)
+                if tensor_codegen::swaps_matrix(
+                    &pending.operation,
+                    pending.inputs[0].shape().len(),
+                ) =>
+            {
+                Some(pending.inputs[0].clone())
+            }
+            State::Pending(_) => Some((*input).clone()),
+        })
+        .collect();
+    EARLY.with(|early| early.set(true));
+    let outcome = evaluate_together(&roots);
+    EARLY.with(|early| early.set(false));
+    outcome
+}
+
 /// The tensor `operation` gives over `inputs`, which are on one device. A
 /// GPU device keeps the operation to run with the ones after it. The CPU
 /// device, and a GPU device whose library lacks the operation, run it now.
@@ -1289,6 +1354,9 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
     let device = inputs[0].device();
     if defers(device) {
         if let Some((dtype, shape)) = planned_result(&operation, inputs) {
+            if matches!(operation, Operation::Matmul) && device != TensorDevice::Metal {
+                start_operands(inputs, early_depth())?;
+            }
             let depth = 1 + inputs.iter().map(|input| input.depth()).max().unwrap_or(0);
             let node = TensorValue::in_state(
                 device,

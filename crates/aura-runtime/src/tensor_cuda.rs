@@ -441,9 +441,12 @@ impl Drop for Buffer {
         drop(pool);
         if runtime.enter().is_ok() {
             // SAFETY: `pointer` is an allocation this value owns, and no
-            // kernel is running on it: a run waits for its kernels before
-            // it drops a buffer.
-            unsafe { (runtime.api.cuMemFree_v2)(self.pointer) };
+            // kernel is running on it after the wait: a run started
+            // early can still be reading the buffer.
+            unsafe {
+                (runtime.api.cuCtxSynchronize)();
+                (runtime.api.cuMemFree_v2)(self.pointer);
+            }
         }
     }
 }
@@ -1126,14 +1129,22 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         }
     }
     let launched = began.elapsed();
-    // The kernels run after the launch returns. Wait for them before any
-    // buffer of this run is dropped or read.
-    // SAFETY: the context is current on this thread.
-    let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
+    // The kernels run after the launch returns. A run started early
+    // leaves them running: every later launch, copy and wait on this
+    // device comes after them. Any other run waits here, before the
+    // program reads a result, and the traces that time each action wait
+    // for every run.
+    let waits = !super::tensor_host::runs_early() || (trace > 0 && trace != 2);
+    let finished = if waits {
+        // SAFETY: the context is current on this thread.
+        check(unsafe { (api.cuCtxSynchronize)() }, "finish a run")
+    } else {
+        Ok(())
+    };
     let freed = {
         let mut pool = runtime.pool();
         pool.running -= 1;
-        if pool.running == 0 {
+        if pool.running == 0 && waits {
             pool.trim(MAX_POOLED_BYTES)
         } else {
             Vec::new()

@@ -339,7 +339,7 @@ fn fuses(operation: &Operation) -> bool {
 
 /// Whether `operation` over an operand of `rank` axes swaps the last two
 /// axes and keeps the rest.
-fn swaps_matrix(operation: &Operation, rank: usize) -> bool {
+pub(crate) fn swaps_matrix(operation: &Operation, rank: usize) -> bool {
     let Operation::Permute(axes) = operation else {
         return false;
     };

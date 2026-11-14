@@ -1829,6 +1829,59 @@ fn a_gpu_device_agrees_on_arithmetic_computed_again() {
     }
 }
 
+#[test]
+fn a_product_starts_deep_waiting_operands_before_it_is_read() {
+    assert_eq!(early_depth_from(None), EARLY_DEPTH);
+    assert_eq!(early_depth_from(Some("12")), 12);
+    assert_eq!(early_depth_from(Some("0")), 0);
+    assert_eq!(early_depth_from(Some("deep")), EARLY_DEPTH);
+    assert!(!runs_early());
+    // `steps` additions of a matrix to itself.
+    let chain = |device: TensorDevice, steps: usize| {
+        let mut value = wave(16, &[4, 4], device);
+        for _ in 0..steps {
+            value = binary(&value, &wave(16, &[4, 4], device), 0).unwrap();
+        }
+        value
+    };
+    let product = |left: &Value, right: &Value| {
+        host_tensor_matmul(vec![left.clone(), right.clone()], None).unwrap()
+    };
+    let turned = |value: &Value| permute(value, &[1, 0]);
+    let expected = array(&product(
+        &chain(TensorDevice::Cpu, EARLY_DEPTH),
+        &turned(&chain(TensorDevice::Cpu, 3)).unwrap(),
+    ));
+    deferred(|| {
+        // Shallow operands wait for the product to be read.
+        let (left, right) = (chain(TensorDevice::Cpu, 3), chain(TensorDevice::Cpu, 3));
+        let shallow = product(&left, &right);
+        assert!(!node(&left).is_ready() && !node(&right).is_ready());
+        assert!(!node(&shallow).is_ready());
+
+        // A deep operand runs when the product is made, with the other
+        // operand. Of a transposed operand, the memory the product reads
+        // in place runs, and the transpose waits.
+        let deep = chain(TensorDevice::Cpu, EARLY_DEPTH);
+        let plain = chain(TensorDevice::Cpu, 3);
+        let swapped = turned(&plain).unwrap();
+        let made = product(&deep, &swapped);
+        assert!(node(&deep).is_ready() && node(&plain).is_ready());
+        assert!(!node(&swapped).is_ready() && !node(&made).is_ready());
+        assert!(!runs_early());
+        assert_eq!(array(&made), expected);
+
+        // Operands that are ready start nothing, and a depth of zero
+        // turns early starts off.
+        start_operands(&[node(&deep), node(&plain)], 1).unwrap();
+        let waiting = chain(TensorDevice::Cpu, 3);
+        start_operands(&[node(&waiting)], 0).unwrap();
+        assert!(!node(&waiting).is_ready());
+        start_operands(&[node(&waiting)], 1).unwrap();
+        assert!(node(&waiting).is_ready());
+    });
+}
+
 /// A layer norm over the last axis of `x`, as `std/tensor.au` builds it.
 fn lane_norm(x: &Value, kept: &[i64], weight: &Value, bias: &Value) -> Value {
     let mean = |value: &Value| reshape(&reduce(value, 3, Some(-1)).unwrap(), kept).unwrap();
