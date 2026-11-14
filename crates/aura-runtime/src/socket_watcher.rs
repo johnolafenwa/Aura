@@ -140,6 +140,17 @@ fn experiment_wait() -> Duration {
     })
 }
 
+// EXPERIMENT ONLY, removed before merge.
+pub fn experiment_slice() -> Duration {
+    static SLICE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
+    *SLICE.get_or_init(|| {
+        std::env::var("AURA_EXPERIMENT_SOCKET_SLICE_US")
+            .ok()
+            .and_then(|text| text.parse().ok())
+            .map_or(Duration::ZERO, Duration::from_micros)
+    })
+}
+
 #[derive(Clone)]
 struct Watch {
     socket: RawIo,

@@ -67,9 +67,11 @@ jobs:
           "$python" --version
           set +e
           : > "$RUNNER_TEMP/speed.txt"
-          for wait in 0 50 200 1000 0 200; do
-            echo "== local socket wait $wait us" | tee -a "$RUNNER_TEMP/speed.txt"
-            AURA_EXPERIMENT_SOCKET_WAIT_US=$wait "$python" scripts/bench-cross-language.py --keep-going http_api kv_server pubsub_broker http_stream 2>&1 | tee -a "$RUNNER_TEMP/speed.txt"
+          for pair in 50:0 50:10 300:10 1000:10 1000:30 2000:20 50:10 1000:10 300:30; do
+            wait=${pair%%:*}
+            slice=${pair##*:}
+            echo "== local socket wait $wait us, poll every $slice us" | tee -a "$RUNNER_TEMP/speed.txt"
+            AURA_EXPERIMENT_SOCKET_WAIT_US=$wait AURA_EXPERIMENT_SOCKET_SLICE_US=$slice "$python" scripts/bench-cross-language.py --keep-going http_api kv_server pubsub_broker http_stream 2>&1 | tee -a "$RUNNER_TEMP/speed.txt"
           done
           status=0
           {
