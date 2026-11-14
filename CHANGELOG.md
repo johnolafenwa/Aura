@@ -28,6 +28,10 @@ in this file.
 - On Windows, a timeout or wait too long for any host clock, such as
   `Duration.seconds(9223372036854775807)`, is rejected as invalid input
   as on Linux and macOS, and a damaged cached program is rebuilt.
+- On Windows, a task that waits on a socket first polls it on its own
+  worker thread for 50 microseconds before it hands the wait to the
+  shared watcher thread. A reply that arrives in that time costs no
+  thread wake-up, which speeds up request and reply traffic.
 - Linux on arm64 is a supported host. CI builds Aura and runs the
   workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
   publishes an `aarch64-unknown-linux-gnu` archive, and the installer

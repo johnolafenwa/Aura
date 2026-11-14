@@ -11,6 +11,8 @@ on:
       - .github/workflows/platform-speed.yml
       - scripts/bench-cross-language.py
       - scripts/benchmark_process.py
+      - crates/aura-runtime/src/socket_watcher.rs
+      - crates/aura-runtime/src/runtime_reactor.rs
 
 permissions:
   contents: read

@@ -66,10 +66,50 @@ follow.
 - Local: `cargo check --target x86_64-pc-windows-gnu` type-checks the
   Windows code on Linux, and Wine runs the runtime tests.
 
+## Speed
+
+The `Platform speed` workflow times the cross-language programs on
+hosted runners. Compare ratios within one runner, not milliseconds
+across runners. First run, on main `7af5cf1`:
+
+- Linux arm64 tracks x86-64 Linux on every program.
+- Windows compute programs are level with or ahead of Linux against
+  Rust. The slowest are `lzw_compress` (5.0x Rust) and `markdown_render`
+  (4.9x).
+- Windows loopback network programs are behind: `kv_server` 4911 ms
+  (0.91x Python, 1.5x Rust), `pubsub_broker` 5816 ms (0.97x, 1.6x),
+  `http_api` 1545 ms (0.62x, 1.2x). On Linux the same programs run at
+  0.3x to 0.6x of Rust. Cause: every socket wait went through the shared
+  watcher thread, three thread wake-ups per wait.
+- `template_render` is slower than Python on every host (1.17x to
+  1.46x). It is not a platform matter.
+
+Socket waits on Windows now start on the reactor's own thread
+(`LocalSocketWaits` in `socket_watcher.rs`): the reactor polls a new
+wait with a zero-timeout `WSAPoll` for 50 microseconds and only then
+moves it to the watcher thread. Tests for it run on every host.
+
+Measured on one Windows runner, Aura milliseconds and the ratio to Rust,
+with the wait handed to the watcher at once and with the 50 microsecond
+local wait:
+
+| Program | At once | 50 microseconds |
+| --- | --- | --- |
+| `http_api` | 1398 to 1556, 1.6x to 1.7x | 1240 to 1435, 1.4x to 1.5x |
+| `kv_server` | 1505 to 1557, 0.8x | 799 to 939, 0.4x to 0.5x |
+| `pubsub_broker` | 4347 to 4373, 2.0x | 1157 to 1286, 0.5x to 0.6x |
+| `http_stream` | 1337 to 1343, 1.5x | 1035 to 1045, 1.1x to 1.2x |
+
+- A 200 microsecond local wait made `http_api` slower (2062 to 2815 ms,
+  2.4x to 3.2x): each request opens a connection, a loopback connect
+  takes about that long, and a wait that outlasts the local time pays for
+  it and then for the watcher. 1000 microseconds gave 1429 ms.
+- A pause between the local polls made every program slower, the more
+  the longer the pause.
+- `http_api` stays at 1.4x of Rust and 0.74x to 0.80x of Python. Its
+  waits are connects and accepts that outlast the local wait and still go
+  through the watcher thread.
+
 ## Open
 
-- Speed on Windows and Linux arm64 is being measured by the `Platform
-  speed` workflow, which times the cross-language programs on hosted
-  runners.
-- No Windows speed measurements: the hosted runner is the only machine.
 - musl Linux and cross-compilation are not started.

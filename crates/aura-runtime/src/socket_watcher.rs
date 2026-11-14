@@ -24,10 +24,114 @@ use std::net::UdpSocket;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::thread;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use crate::host_io::{self, AsRawFd, RawIo};
 use crate::runtime_reactor::{ReactorHandle, WaitKey};
+
+/// How long a socket wait stays with its own reactor before it moves to
+/// the watcher thread. A reply on a busy connection arrives inside this,
+/// and a wait answered here costs no thread wake-up at all. A wait that
+/// outlasts it pays for the time spent here and then for the watcher, so
+/// the time is short: on a hosted Windows runner 50 microseconds sped up
+/// every loopback program measured, and 200 slowed the one whose waits
+/// are connects, which take about that long.
+pub const LOCAL_SOCKET_WAIT: Duration = Duration::from_micros(50);
+
+struct LocalWait {
+    key: WaitKey,
+    socket: RawIo,
+    events: i16,
+    since: Instant,
+}
+
+/// One reactor's socket waits.
+///
+/// A new wait is first polled by the reactor's own thread. A wait that is
+/// still quiet after [`LOCAL_SOCKET_WAIT`] moves to the shared watcher, so
+/// the reactor's thread never scans a long list of idle sockets and is free
+/// to sleep.
+#[derive(Default)]
+pub struct LocalSocketWaits {
+    fresh: Vec<LocalWait>,
+    /// The keys with at least one watch on the watcher thread.
+    moved: std::collections::HashSet<WaitKey>,
+    entries: Vec<host_io::PollEntry>,
+}
+
+impl LocalSocketWaits {
+    /// Whether any wait is still polled by the reactor's own thread.
+    pub fn is_empty(&self) -> bool {
+        self.fresh.is_empty()
+    }
+
+    pub fn add(&mut self, key: WaitKey, socket: RawIo, events: i16, now: Instant) {
+        self.fresh.push(LocalWait {
+            key,
+            socket,
+            events,
+            since: now,
+        });
+    }
+
+    /// Returns the keys whose socket has a result now, and moves every
+    /// other wait older than [`LOCAL_SOCKET_WAIT`] to `watcher`.
+    pub fn poll(
+        &mut self,
+        now: Instant,
+        watcher: &SocketWatcher,
+        handle: &ReactorHandle,
+    ) -> io::Result<Vec<WaitKey>> {
+        if self.fresh.is_empty() {
+            return Ok(Vec::new());
+        }
+        self.entries.clear();
+        self.entries.extend(
+            self.fresh
+                .iter()
+                .map(|wait| host_io::poll_entry(wait.socket, wait.events)),
+        );
+        let polled = loop {
+            match host_io::poll(&mut self.entries, 0) {
+                Err(error) if error.kind() == io::ErrorKind::Interrupted => {}
+                other => break other,
+            }
+        };
+        let mut fired = Vec::new();
+        let mut index = 0;
+        let mut moved = Ok(());
+        for position in 0..self.entries.len() {
+            // A poll the host refused wakes every waiter, which retries
+            // its own operation and reports that socket's error.
+            let has_result = polled.is_err() || self.entries[position].revents != 0;
+            if has_result {
+                let wait = self.fresh.remove(index);
+                if !fired.contains(&wait.key) {
+                    fired.push(wait.key);
+                }
+            } else if now.saturating_duration_since(self.fresh[index].since) >= LOCAL_SOCKET_WAIT {
+                let wait = self.fresh.remove(index);
+                self.moved.insert(wait.key);
+                if let Err(error) =
+                    watcher.watch(wait.socket, wait.events, handle.clone(), wait.key)
+                {
+                    moved = Err(error);
+                }
+            } else {
+                index += 1;
+            }
+        }
+        moved.map(|()| fired)
+    }
+
+    /// Drops every wait of `key`, here and on `watcher`.
+    pub fn remove(&mut self, key: WaitKey, watcher: &SocketWatcher, handle: &ReactorHandle) {
+        self.fresh.retain(|wait| wait.key != key);
+        if self.moved.remove(&key) {
+            watcher.unwatch(handle, key);
+        }
+    }
+}
 
 #[derive(Clone)]
 struct Watch {
