@@ -243,6 +243,16 @@ fn len(shape: &[usize]) -> usize {
 /// `j` of `shape`.
 fn coordinate(shape: &[usize], axis: usize) -> String {
     let stride = strides(shape)[axis];
+    // A GPU divides 32-bit integers several times faster than 64-bit
+    // ones, and the index of a tensor of fewer than 2^32 elements fits.
+    if len(shape) <= u32::MAX as usize {
+        return match (stride, axis) {
+            (1, 0) => "j".to_string(),
+            (1, _) => format!("((unsigned)j % {}u)", shape[axis]),
+            (_, 0) => format!("((unsigned)j / {stride}u)"),
+            _ => format!("(((unsigned)j / {stride}u) % {}u)", shape[axis]),
+        };
+    }
     match (stride, axis) {
         (1, 0) => "j".to_string(),
         (1, _) => format!("(j % {}LL)", shape[axis]),
