@@ -104,15 +104,19 @@ AURA_INLINE double aura_unit_d(long long seed, unsigned long long index) {
 #define AURA_LANE if (threadIdx.x != 0) return;
 #define AURA_PHASE(CALL) for (int t = 0; t < 256; t++) { CALL; }
 #define AURA_LAST(CALL) for (int t = 0; t < 256; t++) { CALL; }
-#define AURA_HELD(TYPE, NAME) TYPE NAME[256];
-#define AURA_HOLD(NAME) (&NAME[t])
+#define AURA_WARP_LANE(LANES) if (threadIdx.x & 31) return; \
+    const long long lane = (long long)blockIdx.x * 8 + (threadIdx.x >> 5); \
+    if (lane >= LANES) return;
+#define AURA_WARP_PHASE(CALL) for (int t = 0; t < 32; t++) { CALL; }
 #else
 #define AURA_SHARED __shared__
 #define AURA_LANE const int t = threadIdx.x;
 #define AURA_PHASE(CALL) CALL; __syncthreads();
 #define AURA_LAST(CALL) CALL;
-#define AURA_HELD(TYPE, NAME) TYPE NAME;
-#define AURA_HOLD(NAME) (&NAME)
+#define AURA_WARP_LANE(LANES) const int t = threadIdx.x & 31; \
+    const long long lane = (long long)blockIdx.x * 8 + (threadIdx.x >> 5); \
+    if (lane >= LANES) return;
+#define AURA_WARP_PHASE(CALL) CALL; __syncwarp();
 #endif
 AURA_INLINE float aura_normal_f(long long seed, unsigned long long index) {
     float first = aura_unit_f(seed, 2 * index), second = aura_unit_f(seed, 2 * index + 1);
@@ -179,6 +183,10 @@ pub(crate) const HARNESS_POINTERS: usize = 7;
 
 /// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
+/// The threads of a warp, which takes a lane of at most `WARP_LANE`
+/// elements.
+const WARP_THREADS: usize = 32;
+const WARP_LANE: usize = 256;
 
 /// The C expressions that split the linear index `j` around an axis whose
 /// lanes have `length` elements `inner` apart: the lane number before the
@@ -1047,7 +1055,12 @@ impl<'a> Generator<'a> {
         let length = shape[shape.len() - 1];
         let count = len(shape);
         let lanes = count / length;
-        let active = length.min(BLOCK_THREADS);
+        // A short lane takes one warp, and a block holds eight lanes:
+        // the threads of a warp wait for each other at no cost, where
+        // a block of threads pays for each wait.
+        let warp = length <= WARP_LANE;
+        let width = if warp { WARP_THREADS } else { BLOCK_THREADS };
+        let active = length.min(width);
         let folded = active.min(BLOCK_FOLD);
         let result = c_type(self.dtype(slot));
         // A result that divides the operand of the last reduction by
@@ -1104,12 +1117,7 @@ impl<'a> Generator<'a> {
             let mut first = self.element(slot, operand, "(start + t)", &arguments);
             let mut next = self.element(slot, operand, "(start + k)", &arguments);
             let kept = in_place.is_some() && place + 1 == reductions.len();
-            // A lane no longer than a block gives each thread one
-            // element, which the thread holds and does not write twice.
-            let (written, passed) = if kept && length <= BLOCK_THREADS {
-                first = format!("(hold[0] = {first})");
-                (format!(", {ty}* hold"), ", AURA_HOLD(r)")
-            } else if kept {
+            let (written, passed) = if kept {
                 first = format!("(out[start + t] = {first})");
                 next = format!("(out[start + k] = {next})");
                 (format!(", {ty}* out"), ", out")
@@ -1134,23 +1142,41 @@ impl<'a> Generator<'a> {
                  {ty} acc = part[0];\n    \
                  for (int k = 1; k < {folded}; k++) acc = {join};\n    \
                  kept[0] = {finish};\n}}",
-                block = BLOCK_THREADS,
+                block = width,
                 fold = BLOCK_FOLD,
                 step = combine(&next),
                 join = combine("part[k]"),
             )
             .expect("writing to a string cannot fail");
-            writeln!(
-                shared,
-                "    AURA_SHARED {ty} q{place}[{block}]; AURA_SHARED {ty} p{through}[1];",
-                block = BLOCK_THREADS,
-            )
-            .expect("writing to a string cannot fail");
+            if warp {
+                // Each warp of the block has its own part of the
+                // shared arrays.
+                writeln!(
+                    shared,
+                    "    AURA_SHARED {ty} Q{place}[{block}]; AURA_SHARED {ty} P{through}[8];\n    \
+                     {ty}* q{place} = Q{place} + (threadIdx.x & 224); \
+                     {ty}* p{through} = P{through} + (threadIdx.x >> 5);",
+                    block = BLOCK_THREADS,
+                )
+                .expect("writing to a string cannot fail");
+            } else {
+                writeln!(
+                    shared,
+                    "    AURA_SHARED {ty} q{place}[{block}]; AURA_SHARED {ty} p{through}[1];",
+                    block = BLOCK_THREADS,
+                )
+                .expect("writing to a string cannot fail");
+            }
             writeln!(
                 body,
-                "    AURA_PHASE(l{slot}_{place}a(t, lane, q{place}{passed}{arguments}))\n    \
-                 AURA_PHASE(l{slot}_{place}b(t, q{place}))\n    \
-                 AURA_PHASE(l{slot}_{place}c(t, q{place}, p{through}))",
+                "    {phase}(l{slot}_{place}a(t, lane, q{place}{passed}{arguments}))\n    \
+                 {phase}(l{slot}_{place}b(t, q{place}))\n    \
+                 {phase}(l{slot}_{place}c(t, q{place}, p{through}))",
+                phase = if warp {
+                    "AURA_WARP_PHASE"
+                } else {
+                    "AURA_PHASE"
+                },
             )
             .expect("writing to a string cannot fail");
         }
@@ -1161,37 +1187,34 @@ impl<'a> Generator<'a> {
             .filter(|leaf| !self.in_lane[*leaf])
             .collect();
         let (kernel_parameters, _) = self.signature(&inputs);
-        let holds = in_place.is_some() && length <= BLOCK_THREADS;
         let value = match (in_place, reductions.last()) {
             (Some(code), Some(&(_, through))) => binary(
                 code,
                 self.dtype(slot),
-                if holds { "hold[0]" } else { "out[start + k]" },
+                "out[start + k]",
                 &format!("p{through}[0]"),
             ),
             _ => format!("v{slot}_{slot}(start + k{arguments})"),
         };
-        let (held, hold, holding) = if holds {
-            (
-                format!("    AURA_HELD({result}, r)\n"),
-                format!(", {result}* hold"),
-                ", AURA_HOLD(r)",
-            )
+        let (enter, last) = if warp {
+            (format!("AURA_WARP_LANE({lanes}LL)"), "AURA_WARP_PHASE")
         } else {
-            (String::new(), String::new(), "")
+            (
+                "AURA_LANE\n    const long long lane = blockIdx.x;".to_string(),
+                "AURA_LAST",
+            )
         };
         writeln!(
             self.source,
-            "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{hold}{parameters}) {{\n    \
+            "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{parameters}) {{\n    \
              const long long start = lane * {length}LL;\n    \
              for (long long k = t; k < {length}LL; k += {block}LL) \
              out[start + k] = {value};\n}}\n\
              extern \"C\" __global__ void k{slot}({result}* out{kernel_parameters}) {{\n    \
-             AURA_LANE\n    \
-             const long long lane = blockIdx.x;\n\
-             {shared}{held}{body}    \
-             AURA_LAST(l{slot}_w(t, lane, out{holding}{arguments}))\n}}",
-            block = BLOCK_THREADS,
+             {enter}\n\
+             {shared}{body}    \
+             {last}(l{slot}_w(t, lane, out{arguments}))\n}}",
+            block = width,
         )
         .expect("writing to a string cannot fail");
         let name = format!("k{slot}");
@@ -1203,7 +1226,7 @@ impl<'a> Generator<'a> {
             name,
             output: slot,
             bytes: count * element_bytes(self.dtype(slot)),
-            threads: lanes * BLOCK_THREADS,
+            threads: lanes * width,
             inputs,
             clear: false,
             more: Vec::new(),
