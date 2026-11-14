@@ -86,8 +86,29 @@ across runners. First run, on main `7af5cf1`:
 
 Socket waits on Windows now start on the reactor's own thread
 (`LocalSocketWaits` in `socket_watcher.rs`): the reactor polls a new
-wait with a zero-timeout `WSAPoll` for 200 microseconds and only then
+wait with a zero-timeout `WSAPoll` for 50 microseconds and only then
 moves it to the watcher thread. Tests for it run on every host.
+
+Measured on one Windows runner, Aura milliseconds and the ratio to Rust,
+with the wait handed to the watcher at once and with the 50 microsecond
+local wait:
+
+| Program | At once | 50 microseconds |
+| --- | --- | --- |
+| `http_api` | 1398 to 1556, 1.6x to 1.7x | 1240 to 1435, 1.4x to 1.5x |
+| `kv_server` | 1505 to 1557, 0.8x | 799 to 939, 0.4x to 0.5x |
+| `pubsub_broker` | 4347 to 4373, 2.0x | 1157 to 1286, 0.5x to 0.6x |
+| `http_stream` | 1337 to 1343, 1.5x | 1035 to 1045, 1.1x to 1.2x |
+
+- A 200 microsecond local wait made `http_api` slower (2062 to 2815 ms,
+  2.4x to 3.2x): each request opens a connection, a loopback connect
+  takes about that long, and a wait that outlasts the local time pays for
+  it and then for the watcher. 1000 microseconds gave 1429 ms.
+- A pause between the local polls made every program slower, the more
+  the longer the pause.
+- `http_api` stays at 1.4x of Rust and 0.74x to 0.80x of Python. Its
+  waits are connects and accepts that outlast the local wait and still go
+  through the watcher thread.
 
 ## Open
 

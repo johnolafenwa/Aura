@@ -415,13 +415,7 @@ impl RuntimeReactor {
                     #[cfg(windows)]
                     if !self.socket_waits.is_empty() {
                         self.poll_mio_once(Some(Duration::ZERO))?;
-                        // EXPERIMENT ONLY: pause between socket polls.
-                        let slice = crate::socket_watcher::experiment_slice();
-                        let paused = Instant::now();
-                        while self.ready.is_empty()
-                            && !self.inbox.signaled.load(Ordering::Acquire)
-                            && paused.elapsed() < slice
-                        {
+                        if self.ready.is_empty() && !self.inbox.signaled.load(Ordering::Acquire) {
                             std::hint::spin_loop();
                         }
                         continue;

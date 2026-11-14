@@ -21,7 +21,7 @@ in this file.
   `Duration.seconds(9223372036854775807)`, is rejected as invalid input
   as on Linux and macOS, and a damaged cached program is rebuilt.
 - On Windows, a task that waits on a socket first polls it on its own
-  worker thread for 200 microseconds before it hands the wait to the
+  worker thread for 50 microseconds before it hands the wait to the
   shared watcher thread. A reply that arrives in that time costs no
   thread wake-up, which speeds up request and reply traffic.
 - Linux on arm64 is a supported host. CI builds Aura and runs the

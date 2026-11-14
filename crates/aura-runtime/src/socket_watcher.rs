@@ -30,9 +30,13 @@ use crate::host_io::{self, AsRawFd, RawIo};
 use crate::runtime_reactor::{ReactorHandle, WaitKey};
 
 /// How long a socket wait stays with its own reactor before it moves to
-/// the watcher thread. A reply on a busy connection arrives well inside
-/// this, and a wait answered here costs no thread wake-up at all.
-pub const LOCAL_SOCKET_WAIT: Duration = Duration::from_micros(200);
+/// the watcher thread. A reply on a busy connection arrives inside this,
+/// and a wait answered here costs no thread wake-up at all. A wait that
+/// outlasts it pays for the time spent here and then for the watcher, so
+/// the time is short: on a hosted Windows runner 50 microseconds sped up
+/// every loopback program measured, and 200 slowed the one whose waits
+/// are connects, which take about that long.
+pub const LOCAL_SOCKET_WAIT: Duration = Duration::from_micros(50);
 
 struct LocalWait {
     key: WaitKey,
@@ -105,7 +109,7 @@ impl LocalSocketWaits {
                 if !fired.contains(&wait.key) {
                     fired.push(wait.key);
                 }
-            } else if now.saturating_duration_since(self.fresh[index].since) >= experiment_wait() {
+            } else if now.saturating_duration_since(self.fresh[index].since) >= LOCAL_SOCKET_WAIT {
                 let wait = self.fresh.remove(index);
                 self.moved.insert(wait.key);
                 if let Err(error) =
@@ -127,28 +131,6 @@ impl LocalSocketWaits {
             watcher.unwatch(handle, key);
         }
     }
-}
-
-// EXPERIMENT ONLY, removed before merge: the local wait from the environment.
-fn experiment_wait() -> Duration {
-    static WAIT: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *WAIT.get_or_init(|| {
-        std::env::var("AURA_EXPERIMENT_SOCKET_WAIT_US")
-            .ok()
-            .and_then(|text| text.parse().ok())
-            .map_or(LOCAL_SOCKET_WAIT, Duration::from_micros)
-    })
-}
-
-// EXPERIMENT ONLY, removed before merge.
-pub fn experiment_slice() -> Duration {
-    static SLICE: std::sync::OnceLock<Duration> = std::sync::OnceLock::new();
-    *SLICE.get_or_init(|| {
-        std::env::var("AURA_EXPERIMENT_SOCKET_SLICE_US")
-            .ok()
-            .and_then(|text| text.parse().ok())
-            .map_or(Duration::ZERO, Duration::from_micros)
-    })
 }
 
 #[derive(Clone)]
