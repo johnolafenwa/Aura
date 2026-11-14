@@ -218,7 +218,7 @@ jobs:
         timeout-minutes: 12
         env:
           RUST_MIN_STACK: 33554432
-        run: cargo test --locked -p aura-core -p aura-runtime 2>&1 | tee "$RUNNER_TEMP/runtime-tests.log"
+        run: cargo test --locked -p aura-core -p aura-mem -p aura-runtime 2>&1 | tee "$RUNNER_TEMP/runtime-tests.log"
 
       - name: Run the aura command's unit tests
         if: ${{ !cancelled() }}
@@ -341,6 +341,54 @@ jobs:
           grep -E "panicked at" -A 40 "$RUNNER_TEMP/integration-tests.log" | grep -v "^--$" | cut -c 1-400 | head -n 200 || true
           grep -E "^test .* FAILED|over 60 seconds" "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 | head -n 120 || true
           grep -E "test result: FAILED" -B 1 "$RUNNER_TEMP/integration-tests.log" | cut -c 1-160 || true
+
+  cross-targets:
+    # `aura build --target` (ADR-0101): each Linux runner builds and runs a
+    # program for the musl target of its own architecture and for the
+    # glibc target of the other architecture, the latter under QEMU.
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      CARGO_PROFILE_DEV_DEBUG: 0
+      CARGO_PROFILE_TEST_DEBUG: 0
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@fa04a1451ff1842e2626ccb99004d0195b455a88
+        with:
+          toolchain: 1.95.0
+          targets: x86_64-unknown-linux-gnu,aarch64-unknown-linux-gnu,x86_64-unknown-linux-musl,aarch64-unknown-linux-musl
+
+      - name: Install LLVM's system libraries and the target toolchains
+        run: |
+          case "$(uname -m)" in
+            x86_64) cross=gcc-aarch64-linux-gnu ;;
+            *) cross=gcc-x86-64-linux-gnu ;;
+          esac
+          sudo apt-get update
+          sudo apt-get install -y libzstd-dev libxml2-dev musl-tools qemu-user-static "$cross"
+
+      - name: Cache LLVM
+        uses: actions/cache@27d5ce7f107fe9357f9df03efb73ab90386fccae # v5.0.5
+        with:
+          path: ~/.cache/aura/llvm/22.1.2
+          key: llvm-22.1.2-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/install-llvm.sh') }}
+
+      - name: Install LLVM
+        run: bash scripts/install-llvm.sh
+
+      - name: Build and run programs for the other targets
+        run: |
+          eval "$(scripts/cross-target-env.sh)"
+          echo "targets: $AURA_TEST_CROSS_TARGETS"
+          cargo test --locked -p aura --test cross_targets
 
   native-binaries:
     strategy:

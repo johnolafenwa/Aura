@@ -6,7 +6,7 @@ cd "$ROOT_DIR"
 
 # `tensor_metal.rs` and `tensor_cuda.rs` call a GPU, which the hosted CI
 # machines do not have. Their tests run on a machine with one.
-IGNORE_REGEX='crates/aura-(compiler|core|runtime)/src/.*_tests\.rs$|crates/aura-runtime/src/array_kernel_corpus\.rs$|crates/aura-runtime/src/tensor_(metal|cuda)\.rs$|crates/aura/.*'
+IGNORE_REGEX='crates/aura-(compiler|core|mem|runtime)/src/.*_tests\.rs$|crates/aura-runtime/src/array_kernel_corpus\.rs$|crates/aura-runtime/src/tensor_(metal|cuda)\.rs$|crates/aura/.*'
 
 cargo llvm-cov clean --workspace
 RUST_MIN_STACK=33554432 cargo llvm-cov \

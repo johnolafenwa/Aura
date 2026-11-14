@@ -1879,3 +1879,29 @@ fn optimized_ir_is_written_beside_the_named_prefix() {
     assert!(error.starts_with("failed to write LLVM IR"), "{error}");
     std::fs::remove_dir_all(&directory).expect("the directory should be removed");
 }
+
+#[test]
+fn hosted_targets_name_their_triple_and_architecture() {
+    use crate::native_backend::HostedTarget;
+
+    let module = two_function_module();
+    for target in HostedTarget::ALL {
+        assert_eq!(HostedTarget::parse(target.name()), Some(target));
+        assert_eq!(target.is_musl(), target.name().ends_with("-musl"));
+        assert!(target.name().starts_with(target.arch()));
+        let triple = super::triple_for(Some(target));
+        assert_eq!(triple.as_str().to_string_lossy(), target.name());
+        let bytes = object_for_triple(&module, target.name());
+        let object = object::File::parse(bytes.as_slice()).expect("the object should parse");
+        let architecture = match target.arch() {
+            "x86_64" => object::Architecture::X86_64,
+            _ => object::Architecture::Aarch64,
+        };
+        assert_eq!(object.architecture(), architecture, "{}", target.name());
+        assert_eq!(object.format(), object::BinaryFormat::Elf);
+    }
+    assert_eq!(HostedTarget::parse("x86_64-unknown-none"), None);
+    // No test sets a hosted target, so objects are for the build machine.
+    assert_eq!(crate::native_backend::hosted_target(), None);
+    assert_eq!(crate::native_backend::target_arch(), std::env::consts::ARCH);
+}

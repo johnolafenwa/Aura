@@ -36,7 +36,12 @@ Last updated: 2026-11-13
   programs are level with Linux against Rust.
 - In progress: Windows network programs, 1.2x to 1.6x of Rust. Socket
   waits now start on the reactor's own thread.
-- Open: musl Linux, cross-compilation.
+- Done: `aura build --target` for x86-64 and arm64 Linux, glibc and
+  static musl, from a Linux host (ADR-0101), with the `cross-targets` CI
+  job.
+- Done: memory routines for musl programs (`aura-mem`): musl builds run
+  0.94x to 1.09x the glibc build's time, down from 1.05x to 1.8x.
+- Open: target runtime libraries in the release archives.
 
 ## Freestanding builds (complete)
 

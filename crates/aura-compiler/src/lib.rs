@@ -54,7 +54,10 @@ pub use mir_runtime::{
     run_serialized_mir, run_with_stdout_sink as run_mir_with_stdout_sink,
     run_with_stdout_sink_and_program_args as run_mir_with_stdout_sink_and_program_args, StdoutSink,
 };
-pub use native_backend::FreestandingTarget;
+pub use native_backend::{
+    hosted_target, set_hosted_target, target_arch as native_target_arch, FreestandingTarget,
+    HostedTarget,
+};
 pub use native_backend::{
     set_target_cpu as set_native_target_cpu, target_cpu as native_target_cpu,
     target_cpu_identity as native_target_cpu_identity, target_cpu_names as native_target_cpu_names,

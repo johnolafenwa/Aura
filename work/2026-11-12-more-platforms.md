@@ -110,6 +110,63 @@ local wait:
   waits are connects and accepts that outlast the local wait and still go
   through the watcher thread.
 
+## Building for other Linux machines (ADR-0101)
+
+`aura build --target <name>` builds for `x86_64-unknown-linux-gnu`,
+`aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl` and
+`aarch64-unknown-linux-musl` from a Linux host.
+
+- Compiler: `HostedTarget` and a process-wide `set_hosted_target`, which
+  the host triple, the foreign-call convention, the target CPU names and
+  the lane-check choice read. No lib test sets it, since other tests emit
+  objects at the same time.
+- Command: `--target` on `aura build`. The runtime library comes from
+  `lib/aura/targets/<target>` of an installation or from Cargo in a
+  checkout. The link driver is `AURA_TARGET_CC`, `CC` or `cc` for the
+  build machine's architecture, and `<arch>-linux-gnu-gcc` for the other.
+- musl: the link passes `-static -no-pie -nostdlib -nostartfiles` and
+  names `crt1.o`, `crti.o`, `crtbegin.o`, `crtend.o`, `crtn.o`, `libc.a`
+  and `libunwind.a` from the Rust toolchain's `self-contained` directory
+  for the target. The runtime library and the C library are one linker
+  group: musl's `printf` calls soft-float routines the runtime library
+  holds.
+- Building the runtime library for a musl target needs a musl C compiler
+  for `ring` and `libffi`. `musl-gcc` has no kernel headers, so
+  `scripts/cross-target-env.sh` points it at a directory of links.
+- Tests: `crates/aura/tests/cross_targets.rs` builds a program with
+  tasks, a loopback socket, files, the clock and float formatting, and
+  runs it, under `qemu-<arch>-static` for the other architecture. CI job
+  `cross-targets` runs it on both Linux runners for the musl target of
+  the runner's architecture and the glibc target of the other.
+- Checked by hand on x86-64: all four targets build and run, the arm64
+  ones under QEMU.
+- Found by timing release builds: a failed check aborted a musl program
+  with "failed to initiate panic", since the static link had no
+  `.eh_frame_hdr`; `sys.args()` was empty; and an arm64 musl debug build
+  needed `-lgcc`. The test program now takes arguments and the test runs
+  it once with none, which fails a bounds check.
+- The arm64 musl runtime library cannot be built on x86-64 with the
+  glibc cross compiler: `libffi` then names `__isoc23_sscanf`. It is
+  built on arm64 with `musl-gcc`.
+- Speed on x86-64, release builds, best of five, glibc then musl in
+  milliseconds: `binary_trees` 129 and 136, `json_roundtrip` 254 and 457,
+  `kv_server` 472 and 541, `task_pool` 238 and 328, `word_freq` 412 and
+  611, `sort_records` 306 and 411, `http_api` 155 and 183. Callgrind
+  counts the same instructions for both builds of `json_roundtrip`. The
+  time is in musl's `memcpy` (`rep movsq`) and `memcmp` (a byte loop).
+- New crate `aura-mem` (`no_std`, `no_builtins`) defines `memcpy`,
+  `memmove`, `memcmp` and `bcmp` for musl targets (copies on x86-64
+  only). Its tests run the routines by their Rust names on every host.
+  With it, best of seven, glibc then musl in milliseconds:
+  `binary_trees` 132 and 123, `json_roundtrip` 242 and 264, `kv_server`
+  462 and 455, `task_pool` 245 and 236, `word_freq` 397 and 382,
+  `sort_records` 299 and 302, `http_api` 149 and 160.
+
 ## Open
 
-- musl Linux and cross-compilation are not started.
+- Release archives hold no target runtime libraries yet: target packs
+  and an install step are next.
+- arm64 musl speed is unmeasured: the cloud machine runs arm64 programs
+  only under emulation.
+- The musl target of the other architecture is not in CI: no packaged C
+  compiler builds its runtime library. It joins CI with the target packs.

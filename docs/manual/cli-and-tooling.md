@@ -31,6 +31,7 @@ aura check app.au
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
 | `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
+| `aura build --target name -o path file.au` | Build a native binary for another Linux machine. See [Building for Another Machine](#building-for-another-machine). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
@@ -167,6 +168,50 @@ A debug build runs slower than a normal one. A union, a callable, and a
 class with a field that is itself more than one word are not shown yet. A
 value whose last use has passed has already been released, so it reads
 `<unset>` or null.
+
+### Building for Another Machine
+
+On a Linux host, `aura build --target <name>` builds a program for a Linux
+machine other than the build machine:
+
+| Target | Program |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | x86-64, linked against glibc. |
+| `aarch64-unknown-linux-gnu` | arm64, linked against glibc. |
+| `x86_64-unknown-linux-musl` | x86-64, fully static. |
+| `aarch64-unknown-linux-musl` | arm64, fully static. |
+
+```bash
+aura build --target x86_64-unknown-linux-musl -o app app.au
+aura build --target aarch64-unknown-linux-gnu -o app-arm64 app.au
+```
+
+- A musl program holds its C library and names no dynamic linker. It runs
+  on any Linux kernel of its architecture: Alpine, a glibc distribution,
+  or a container image with nothing else in it.
+- A musl program runs about as fast as the glibc build of the same
+  source. On x86-64 the cross-language programs measured take 0.94 to
+  1.09 times as long. The runtime copies and compares memory with its own
+  routines, because musl's are slow.
+- A musl program reads its arguments from `/proc/self/cmdline`.
+- A musl program cannot load a shared library when it runs. Native
+  libraries that packages name under `[ffi]` must be static.
+- The link runs a C compiler driver. A target of the build machine's
+  architecture uses `CC` or `cc`. A target of another architecture uses
+  `<arch>-linux-gnu-gcc`, which Ubuntu installs with
+  `gcc-aarch64-linux-gnu` or `gcc-x86-64-linux-gnu`. `AURA_TARGET_CC`
+  names another driver. A musl target needs no musl compiler.
+- Each target has its own Aura runtime library, in
+  `lib/aura/targets/<target>` of the installation. A source checkout
+  builds it with Cargo: add the Rust target of the same name with
+  `rustup target add`, and see `scripts/cross-target-env.sh` for the C
+  compilers the build needs.
+- `--target-cpu` takes the CPU names of the target's architecture.
+  `native` names the build machine's CPU and is refused with `--target`.
+- The build machine's own target is an ordinary build.
+- An unknown name, a freestanding target name, or a host that is not
+  Linux ends the command with exit status 2.
+- `aura run` and `aura test` always build for the build machine.
 
 ### Target CPU
 

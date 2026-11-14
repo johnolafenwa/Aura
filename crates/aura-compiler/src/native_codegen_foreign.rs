@@ -439,7 +439,8 @@ enum ForeignWriteback {
 
 /// The convention foreign calls follow on the machine being built for.
 fn foreign_abi(freestanding: Option<FreestandingTarget>) -> std::result::Result<CAbi, String> {
-    let arch = freestanding.map_or(std::env::consts::ARCH, FreestandingTarget::arch);
+    let arch =
+        freestanding.map_or_else(crate::native_backend::target_arch, FreestandingTarget::arch);
     CAbi::of_arch(arch).ok_or(format!(
         "direct backend cannot pass a C struct by value on `{arch}`"
     ))

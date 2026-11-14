@@ -28,6 +28,15 @@ in this file.
 - On Windows, a timeout or wait too long for any host clock, such as
   `Duration.seconds(9223372036854775807)`, is rejected as invalid input
   as on Linux and macOS, and a damaged cached program is rebuilt.
+- `aura build --target <name>` builds a program for another Linux
+  machine from a Linux host: `x86_64-unknown-linux-gnu`,
+  `aarch64-unknown-linux-gnu`, and the fully static
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, which run
+  on Alpine and in empty containers. A musl build needs no musl compiler:
+  it links the C library that ships with the runtime library. A target of
+  another architecture links with `<arch>-linux-gnu-gcc` (ADR-0101).
+  A musl program copies and compares memory with the runtime's own
+  routines and runs within a tenth of the glibc build's time.
 - On Windows, a task that waits on a socket first polls it on its own
   worker thread for 50 microseconds before it hands the wait to the
   shared watcher thread. A reply that arrives in that time costs no
