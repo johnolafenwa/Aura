@@ -179,3 +179,16 @@ later, on the same tensors (ADR-0097).
   2 to 6 times slower. The constants are now kept on the device by
   their bytes (`Runtime::constants`), and operands with gradients do
   not start early.
+- Later A40 runs of 2026-11-14: a blocking copy to the device and a
+  `cuMemFree` both wait for queued kernels, so they stall the program
+  while an early run is in flight. Small tensors (4,096 bytes and
+  under, the causal mask's `arange` among them) now stay in host memory
+  on the CUDA device, and the buffer pool keeps a quarter of the device
+  or 2 GiB. `tensor.set_grad_enabled(false)` matches PyTorch's
+  `no_grad` in the inference rows. Kernels index with 32-bit arithmetic
+  when the tensor has fewer than 2^32 elements. Result at c4774cc:
+  `gpt_infer` 289 to 292 ms against PyTorch's 267 to 271 (313 with the
+  early start off), 124 kernels and 97 products a step, products 22.8
+  ms and kernels 6.8 ms. Training rows are unchanged. On the pod three
+  runtime tests outside the tensor module fail for reasons of the
+  machine (file descriptor limit, overlay file system).

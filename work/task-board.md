@@ -81,7 +81,9 @@ Last updated: 2026-11-13
 - Done 2026-11-13: convolution, pooling and batch norm layers
   (ADR-0100), and the `cnn_train` and `gpt_infer` workload rows.
 - Done 2026-11-14: one CUDA kernel for a layer norm or a softmax, and
-  an early start of a product's operands. A40 timings pending.
+  an early start of a product's operands, `tensor.set_grad_enabled`.
+  `gpt_infer` on the A40 went from 338 to 362 ms to 289 to 292 ms
+  against PyTorch's 267 to 271.
 - Remaining: the Mac runs, Metal support for the new operations,
   `float16`, and the whole-program benchmarks listed in
   `2026-11-12-gpu-tensors.md`.
