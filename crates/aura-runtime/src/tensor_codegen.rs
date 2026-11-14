@@ -188,6 +188,20 @@ pub(crate) const HARNESS_POINTERS: usize = 7;
 
 /// Threads in one block of a kernel launch.
 pub(crate) const BLOCK_THREADS: usize = 256;
+/// The kernel that writes the address of every matrix of a batched
+/// product: three tables of `count` byte offsets, each added to the
+/// start of its buffer. The device makes the table, since a copy from
+/// the host would wait for the kernels already launched.
+pub(crate) const ADDRESSES_KERNEL: &str = "aura_addresses";
+const ADDRESSES: &str = "extern \"C\" __global__ void aura_addresses(unsigned long long* out, \
+const unsigned long long* offsets, unsigned long long a, unsigned long long b, \
+unsigned long long c, unsigned long long count) {
+    unsigned long long j = (unsigned long long)blockIdx.x * blockDim.x + threadIdx.x;
+    if (j >= 3 * count) return;
+    out[j] = (j < count ? a : j < 2 * count ? b : c) + offsets[j];
+}
+";
+
 /// The threads of a warp, which takes a lane of at most `WARP_LANE`
 /// elements.
 const WARP_THREADS: usize = 32;
@@ -1830,6 +1844,9 @@ impl<'a> Generator<'a> {
                 .collect();
             (width, offsets)
         });
+        if spread.is_some() && !self.source.contains(ADDRESSES) {
+            self.source.push_str(ADDRESSES);
+        }
         let stored = |side: usize| Self::transpose_of(self.plan, &self.materialized, side);
         let swapped = (stored(left).is_some(), stored(right).is_some());
         let (left, right) = (stored(left).unwrap_or(left), stored(right).unwrap_or(right));

@@ -749,14 +749,21 @@ impl Compiled {
         };
         let mut functions = HashMap::new();
         for action in &program.actions {
-            if let Action::Kernel { name, .. } = action {
-                let symbol = CString::new(name.as_str()).expect("a kernel name has no NUL byte");
+            let name = match action {
+                Action::Kernel { name, .. } => Some(name.as_str()),
+                Action::Matmul {
+                    spread: Some(_), ..
+                } => Some(tensor_codegen::ADDRESSES_KERNEL),
+                _ => None,
+            };
+            if let Some(name) = name {
+                let symbol = CString::new(name).expect("a kernel name has no NUL byte");
                 let mut function = std::ptr::null_mut();
                 // SAFETY: `module` is loaded and `symbol` is NUL-terminated.
                 let status =
                     unsafe { (api.cuModuleGetFunction)(&mut function, module, symbol.as_ptr()) };
                 check(status, "find a compiled kernel")?;
-                functions.insert(name.clone(), function as usize);
+                functions.insert(name.to_string(), function as usize);
             }
         }
         let finished = tensor_codegen::finished_buffers(&program, plan);
@@ -917,7 +924,8 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             .pointer
     };
     let mut outcome = Ok(());
-    // The address tables of batched products, kept until the run ends.
+    // The address tables of batched products, kept until the last
+    // action is launched.
     let mut tables: Vec<Arc<Buffer>> = Vec::new();
     runtime.pool().running += 1;
     for (index, action) in compiled.program.actions.iter().enumerate() {
@@ -1009,23 +1017,57 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 if let Some((step, starts)) = spread {
                     // The products go beside each other in wider rows,
                     // so each has its own place: one batched call takes
-                    // the address of every matrix. The addresses repeat
-                    // from run to run, since the pool hands out the same
-                    // buffers, and their copy on the device is kept.
-                    let mut addresses = Vec::with_capacity(count * 24);
-                    let place = |base: DevicePointer, offset: usize| {
-                        (base + (offset * element) as DevicePointer).to_ne_bytes()
-                    };
+                    // the address of every matrix. The offsets are the
+                    // same on every run and their copy on the device is
+                    // kept; a kernel adds the buffers of this run.
+                    let mut offsets = Vec::with_capacity(count * 24);
+                    let place = |offset: usize| ((offset * element) as u64).to_ne_bytes();
                     for pair in pairs {
-                        addresses.extend(place(right, pair.1));
+                        offsets.extend(place(pair.1));
                     }
                     for pair in pairs {
-                        addresses.extend(place(left, pair.0));
+                        offsets.extend(place(pair.0));
                     }
                     for &start in starts {
-                        addresses.extend(place(made.pointer, start));
+                        offsets.extend(place(start));
                     }
-                    match kept_constant(runtime, &addresses) {
+                    let table = kept_constant(runtime, &offsets).and_then(|offsets| {
+                        let table = Buffer::new(count * 24)?;
+                        let mut arguments: [u64; 6] = [
+                            table.pointer,
+                            offsets.pointer,
+                            right,
+                            left,
+                            made.pointer,
+                            count as u64,
+                        ];
+                        let mut addresses: Vec<*mut c_void> = arguments
+                            .iter_mut()
+                            .map(|argument| std::ptr::from_mut(argument).cast())
+                            .collect();
+                        // SAFETY: the kernel takes these six 64-bit
+                        // arguments, and both tables hold `3 * count`
+                        // entries.
+                        let status = unsafe {
+                            (api.cuLaunchKernel)(
+                                compiled.functions[tensor_codegen::ADDRESSES_KERNEL] as *mut c_void,
+                                (3 * count).div_ceil(BLOCK_THREADS).max(1) as c_uint,
+                                1,
+                                1,
+                                BLOCK_THREADS as c_uint,
+                                1,
+                                1,
+                                0,
+                                std::ptr::null_mut(),
+                                addresses.as_mut_ptr(),
+                                std::ptr::null_mut(),
+                            )
+                        };
+                        check(status, "launch a kernel")?;
+                        tables.push(offsets);
+                        Ok(Arc::new(table))
+                    });
+                    match table {
                         Ok(table) => {
                             let each = (count * 8) as DevicePointer;
                             let (a, b, c) = (
