@@ -205,3 +205,17 @@ later, on the same tensors (ADR-0097).
   against 270 to 271. Left: the split and merge of attention heads are
   four 6 MB copies a layer (about 1.6 ms a step) that cuBLAS could read
   in place with a row stride of the full width.
+- A standalone cuBLAS test on the A40: `cublasSgemmBatched` over the
+  address of each matrix reads and writes heads in rows of the full
+  width at the speed of the contiguous call (0.113 against 0.112 ms),
+  where 8 or 12 strided calls cost 2 to 4 times as much. A product with
+  `beta = 1` costs 4% more, and filling the bias first costs what the
+  separate add does, so a bias inside the product gains nothing.
+  Stacked products whose only reader merges heads now write the merged
+  rows (`spread` on `Action::Matmul`): 113 kernels a step. The address
+  table is made by a kernel from offsets kept on the device, because a
+  host copy of it stalled launches by up to 5 ms when the pool handed a
+  run other buffers than the run before. Result at 977708d: `gpt_infer`
+  274 to 277 ms against 270 to 272. The split of queries, keys and
+  values stays a kernel each: it adds the bias in the same pass, so
+  reading them in place saves nothing without a cheaper bias.

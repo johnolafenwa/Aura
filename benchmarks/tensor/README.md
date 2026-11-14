@@ -63,16 +63,19 @@ of all.
 | `transformer_train`, 4 layers of 256 | 318 to 334 | 323 to 387 |
 | `monte_carlo`, 10,000,000 paths | 4 | 21 |
 | `cnn_train`, 50 steps | 319 to 339 | 290 to 343 |
-| `gpt_infer`, 12 layers of 768 | 276 to 279 | 270 to 271 |
+| `gpt_infer`, 12 layers of 768 | 274 to 277 | 270 to 272 |
 
-`gpt_infer` is the row behind, by about 0.7 ms of a 28 ms step. The
+`gpt_infer` is the row behind, by about 0.5 ms of a 28 ms step. The
 matrix products take the same time on both sides, 23 ms of a step. A
 layer norm and a softmax are one kernel each, at PyTorch's time for
 each, and the operands of a product start on the GPU while the program
 builds the rest of the step, which is worth about 23 ms of the row
-(`AURA_TENSOR_EARLY_DEPTH=0` turns it off). What is left is four
-copies in each layer that move the heads of an attention beside each
-other and back: PyTorch's attention kernel reads them in place. The loss of `cnn_train`
+(`AURA_TENSOR_EARLY_DEPTH=0` turns it off). The products of an
+attention write its merged heads in place. What is left is three
+copies in each layer that put the heads of the queries, keys and
+values beside each other, which PyTorch's attention kernel reads in
+place, and that kernel itself, which is one pass where Aura runs two
+products and a softmax. The loss of `cnn_train`
 differs in its fourth digit between runs on both sides: gradients that
 add into one element add in an order the GPU does not fix.
 
