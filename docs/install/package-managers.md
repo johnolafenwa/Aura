@@ -1,7 +1,8 @@
 # Install Aura With A Package Manager
 
-Aura has packages for Homebrew, apt and Chocolatey. They ship from the
-release after 0.15. On 0.15, use the installer in the
+Aura has packages for Homebrew, apt and Chocolatey. They are built and
+tested with every change, but they are not published yet, so the commands
+on this page do not work today. Until they are, use the installer in the
 [platform guides](/install/).
 
 A package installs the same `aura` command and native runtime as the

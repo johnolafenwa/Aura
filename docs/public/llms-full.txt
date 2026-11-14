@@ -413,7 +413,7 @@ For step-by-step instructions, pick a platform guide:
 - [macOS: Apple silicon and Intel](/install/macos)
 - [Linux: Ubuntu 24.04 and compatible x86-64 glibc hosts](/install/linux)
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
-- [Homebrew, apt and Chocolatey, from the release after 0.15](/install/package-managers)
+- [Homebrew, apt and Chocolatey, not published yet](/install/package-managers)
 
 To install by hand, download the archive for your platform from the
 [v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).
@@ -475,8 +475,8 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.15 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
-From the release after 0.15, Aura also installs with Homebrew, apt and
-Chocolatey. See [Install with a package manager](/install/package-managers).
+Packages for Homebrew, apt and Chocolatey are built but not published
+yet. See [Install with a package manager](/install/package-managers).
 
 Every guide follows the same three steps.
 
@@ -649,8 +649,8 @@ aura build -o hello hello.au
 
 ## Install With apt Or Homebrew Instead
 
-From the release after 0.15, Aura has an apt repository for Ubuntu and
-Debian and a Homebrew formula. See
+Packages for apt on Ubuntu and Debian and for Homebrew are built but not
+published yet. See
 [Install with a package manager](/install/package-managers).
 
 ## Upgrade Aura
@@ -799,8 +799,9 @@ aura build -o hello hello.au
 
 ## Install With Homebrew Instead
 
-From the release after 0.15, `brew install johnolafenwa/aura/aura` installs
-the same files under the Homebrew prefix. See
+A Homebrew formula is built but not published yet. Once it is,
+`brew install johnolafenwa/aura/aura` installs the same files under the
+Homebrew prefix. See
 [Install with a package manager](/install/package-managers#homebrew).
 
 ## Upgrade Aura
@@ -843,8 +844,9 @@ Continue with the [VS Code extension guide](/install/vscode) or
 
 # Install Aura With A Package Manager
 
-Aura has packages for Homebrew, apt and Chocolatey. They ship from the
-release after 0.15. On 0.15, use the installer in the
+Aura has packages for Homebrew, apt and Chocolatey. They are built and
+tested with every change, but they are not published yet, so the commands
+on this page do not work today. Until they are, use the installer in the
 [platform guides](/install/).
 
 A package installs the same `aura` command and native runtime as the
@@ -1343,8 +1345,8 @@ and proofs elsewhere.
 
 ## Install With Chocolatey Instead
 
-`choco install aura --pre` installs the same files as a Chocolatey
-package. See
+A Chocolatey package is built but not published yet. Once it is,
+`choco install aura --pre` installs the same files. See
 [Install with a package manager](/install/package-managers#chocolatey).
 
 ## Differences From Linux And macOS

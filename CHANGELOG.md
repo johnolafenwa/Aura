@@ -7,10 +7,11 @@ in this file.
 
 ## Unreleased
 
-- Aura installs with Homebrew (`brew install johnolafenwa/aura/aura`),
+- Aura has packages for Homebrew (`brew install johnolafenwa/aura/aura`),
   apt (`sudo apt-get install aura`, from the repository at
   `https://johnolafenwa.github.io/Aura/apt`) and Chocolatey
-  (`choco install aura --pre`). The release workflow builds a Debian
+  (`choco install aura --pre`). They are not published to the three
+  package managers yet. The release workflow builds a Debian
   package for x86-64 and arm64 and a Chocolatey package, installs each
   one before it publishes, and attaches them to the GitHub Release. When
   Aura was installed by one of the three, `aura upgrade` prints that
