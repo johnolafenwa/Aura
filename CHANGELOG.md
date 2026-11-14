@@ -74,7 +74,8 @@ in this file.
   busy while the program builds the rest of a pass. This holds while no
   work that records gradients waits. `AURA_TENSOR_EARLY_DEPTH` sets
   that depth, and `0` turns it off. The small numbers of an expression
-  stay on the GPU between runs.
+  stay on the GPU between runs, and the device keeps freed buffers of up
+  to a quarter of its memory for the next pass.
 - `tensor.set_grad_enabled(false)` turns the recording of gradients off
   for the whole program, for a model that only predicts, and
   `tensor.set_grad_enabled(true)` turns it on again.

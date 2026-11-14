@@ -28,6 +28,7 @@ struct Api {
     cuCtxSetCurrent: unsafe extern "C" fn(*mut c_void) -> Status,
     cuCtxSynchronize: unsafe extern "C" fn() -> Status,
     cuMemAlloc_v2: unsafe extern "C" fn(*mut DevicePointer, usize) -> Status,
+    cuMemGetInfo_v2: unsafe extern "C" fn(*mut usize, *mut usize) -> Status,
     cuMemFree_v2: unsafe extern "C" fn(DevicePointer) -> Status,
     cuMemcpyHtoD_v2: unsafe extern "C" fn(DevicePointer, *const c_void, usize) -> Status,
     cuMemsetD8_v2: unsafe extern "C" fn(DevicePointer, u8, usize) -> Status,
@@ -218,6 +219,7 @@ impl Api {
             cuCtxSetCurrent: load!(driver, cuCtxSetCurrent),
             cuCtxSynchronize: load!(driver, cuCtxSynchronize),
             cuMemAlloc_v2: load!(driver, cuMemAlloc_v2),
+            cuMemGetInfo_v2: load!(driver, cuMemGetInfo_v2),
             cuMemFree_v2: load!(driver, cuMemFree_v2),
             cuMemcpyHtoD_v2: load!(driver, cuMemcpyHtoD_v2),
             cuMemsetD8_v2: load!(driver, cuMemsetD8_v2),
@@ -282,9 +284,16 @@ impl Pool {
     }
 }
 
-/// The most memory the pool keeps between runs. A buffer dropped beyond
-/// it is freed.
-const MAX_POOLED_BYTES: usize = 2 << 30;
+/// The least memory the pool may keep between runs.
+const MIN_POOLED_BYTES: usize = 2 << 30;
+
+/// The most memory the pool keeps between runs on a device with `total`
+/// bytes: a quarter of it. A pass of a model then finds the buffers of
+/// the pass before it, and the rest of the device stays free for other
+/// programs.
+fn pooled_bytes(total: usize) -> usize {
+    (total / 4).max(MIN_POOLED_BYTES)
+}
 
 /// A compiled plan: the kernels by name and the actions that run them.
 struct Compiled {
@@ -309,6 +318,8 @@ struct Runtime {
     /// The small host leaves of earlier runs on the device, by their
     /// staged bytes.
     constants: Mutex<HashMap<Vec<u8>, Arc<Buffer>>>,
+    /// The most bytes the pool keeps between runs.
+    pooled: usize,
 }
 
 // SAFETY: the driver API and the context may be used from any thread, and
@@ -353,7 +364,12 @@ impl Runtime {
         let mut compiler = (0, 0);
         // SAFETY: both pointers are to live integers.
         unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) };
+        let (mut free, mut total) = (0_usize, 0_usize);
+        // SAFETY: both pointers are to live integers, and the context is
+        // current. A failed call leaves the total at zero.
+        unsafe { (api.cuMemGetInfo_v2)(&mut free, &mut total) };
         Some(Self {
+            pooled: pooled_bytes(total),
             api,
             context,
             cublas,
@@ -436,22 +452,12 @@ impl Drop for Buffer {
         if self.part_of.is_some() {
             return;
         }
+        // The pool keeps every dropped buffer. Freeing one here would
+        // wait for the kernels launched so far, in the middle of the
+        // program. The run the program next waits for trims the pool.
         let mut pool = runtime.pool();
-        if pool.running > 0 || pool.bytes + self.bytes <= MAX_POOLED_BYTES {
-            pool.bytes += self.bytes;
-            pool.free.entry(self.bytes).or_default().push(self.pointer);
-            return;
-        }
-        drop(pool);
-        if runtime.enter().is_ok() {
-            // SAFETY: `pointer` is an allocation this value owns, and no
-            // kernel is running on it after the wait: a run started
-            // early can still be reading the buffer.
-            unsafe {
-                (runtime.api.cuCtxSynchronize)();
-                (runtime.api.cuMemFree_v2)(self.pointer);
-            }
-        }
+        pool.bytes += self.bytes;
+        pool.free.entry(self.bytes).or_default().push(self.pointer);
     }
 }
 
@@ -1173,7 +1179,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         let mut pool = runtime.pool();
         pool.running -= 1;
         if pool.running == 0 && waits {
-            pool.trim(MAX_POOLED_BYTES)
+            pool.trim(runtime.pooled)
         } else {
             Vec::new()
         }
@@ -1213,6 +1219,13 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pool_keeps_a_quarter_of_a_device_and_two_gibibytes_at_least() {
+        assert_eq!(pooled_bytes(48 << 30), 12 << 30);
+        assert_eq!(pooled_bytes(4 << 30), MIN_POOLED_BYTES);
+        assert_eq!(pooled_bytes(0), MIN_POOLED_BYTES);
+    }
 
     #[test]
     fn a_kernel_image_is_kept_under_a_name_made_from_its_source_and_compiler() {
