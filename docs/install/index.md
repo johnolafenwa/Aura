@@ -11,8 +11,8 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.15 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
 
-From the release after 0.15, Aura also installs with Homebrew, apt and
-Chocolatey. See [Install with a package manager](/install/package-managers).
+Packages for Homebrew, apt and Chocolatey are built but not published
+yet. See [Install with a package manager](/install/package-managers).
 
 Every guide follows the same three steps.
 
