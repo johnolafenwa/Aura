@@ -192,3 +192,16 @@ later, on the same tensors (ADR-0097).
   ms and kernels 6.8 ms. Training rows are unchanged. On the pod three
   runtime tests outside the tensor module fail for reasons of the
   machine (file descriptor limit, overlay file system).
+- A PyTorch profile of one `gpt_infer` step on the A40 (25.5 ms of GPU
+  time): linear layers 20.6 ms, one fused attention kernel a layer 2.2
+  ms, GELU 1.1, adds 0.8, layer norm 0.6. Aura's products cost the
+  same. Its softmax kernel cost 0.19 ms against PyTorch's 0.09: a block
+  of 256 threads for a lane of 256 elements pays for six
+  `__syncthreads`. Holding the element in the thread changed nothing,
+  so the cost was the waits and not memory. A lane of at most 256
+  elements now takes one warp, eight lanes to a block, with
+  `__syncwarp` between phases (`WARP_LANE` in `tensor_codegen.rs`): the
+  softmax is 0.10 ms. Result at 7a01a6c: `gpt_infer` 276 to 279 ms
+  against 270 to 271. Left: the split and merge of attention heads are
+  four 6 MB copies a layer (about 1.6 ms a step) that cuBLAS could read
+  in place with a row stride of the full width.

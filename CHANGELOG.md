@@ -70,7 +70,7 @@ in this file.
   C pointer.
 - The CUDA device computes a layer norm or a softmax in one kernel: a
   block of threads reduces a lane and writes the result, where five
-  kernels ran before. A matrix product whose operands wait on 32 or more
+  kernels ran before. A lane of at most 256 elements takes one warp. A matrix product whose operands wait on 32 or more
   operations starts that work on the GPU when it is made, so the GPU is
   busy while the program builds the rest of a pass. This holds while no
   work that records gradients waits. `AURA_TENSOR_EARLY_DEPTH` sets
