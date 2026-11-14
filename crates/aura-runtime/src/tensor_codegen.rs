@@ -320,7 +320,7 @@ fn slot_dtype(slot: &Slot) -> ArrayDType {
 const RECOMPUTED_ELEMENTS: usize = 1 << 16;
 
 /// The most steps of arithmetic a reader computes again.
-const RECOMPUTED_STEPS: usize = 8;
+const RECOMPUTED_STEPS: usize = 16;
 
 /// The most readers that compute a step again.
 const RECOMPUTED_USES: usize = 3;
@@ -363,6 +363,7 @@ impl<'a> Generator<'a> {
         let count = plan.slots.len();
         let mut uses = vec![0_usize; count];
         let mut feeds_matmul = vec![false; count];
+        let mut reshaped = vec![false; count];
         for slot in &plan.slots {
             if let Slot::Step {
                 operation, inputs, ..
@@ -371,6 +372,7 @@ impl<'a> Generator<'a> {
                 for &input in inputs {
                     uses[input] += 1;
                     feeds_matmul[input] |= matches!(operation, Operation::Matmul);
+                    reshaped[input] |= matches!(operation, Operation::Reshape(_));
                 }
             }
         }
@@ -409,6 +411,9 @@ impl<'a> Generator<'a> {
                     | Operation::Reshape(_)
             ) || !(2..=RECOMPUTED_USES).contains(&uses[index])
                 || feeds_matmul[index]
+                // A reader that only reshapes the step would write a
+                // copy of it, where a reshape of memory is free.
+                || reshaped[index]
                 || plan.outputs.contains(&index)
                 || size < RECOMPUTED_ELEMENTS
             {
@@ -555,68 +560,108 @@ impl<'a> Generator<'a> {
             let Some(&length) = shape.last() else {
                 continue;
             };
+            let reshapes_memory =
+                matches!(operation, Operation::Reshape(_)) && materialized[inputs[0]];
             if !materialized[index]
                 || !fuses(operation)
-                || matches!(operation, Operation::Reshape(_))
+                || reshapes_memory
                 || !beside[index].is_empty()
                 || length < BLOCK_LANE
             {
                 continue;
             }
-            let mut kept: Vec<usize> = shape.clone();
-            *kept.last_mut().expect("the shape has a last axis") = 1;
+            let size = len(shape);
+            let lanes_here = size / length;
+            // Whether `slot` has the lanes of `index`: the same elements
+            // in the same order with the same last axis, or one element
+            // for each lane.
+            let whole = |slot: usize| {
+                let shape = slot_shape(&plan.slots[slot]);
+                len(shape) == size && shape.last() == Some(&length)
+            };
+            let one_each = |slot: usize| {
+                let shape = slot_shape(&plan.slots[slot]);
+                len(shape) == lanes_here && shape.last() == Some(&1)
+            };
             // The reduction a kernel of `index` can hold, read through
-            // `slot`: one of the last axis of a tensor of this shape, kept
-            // as an axis of length one.
+            // `slot`: one of the last axis of a tensor with these lanes,
+            // kept as an axis of length one, with the reshapes between.
             let held = |slot: usize| {
-                let Slot::Step {
-                    operation: Operation::Reshape(_),
-                    inputs,
-                    shape: reshaped,
-                    ..
-                } = &plan.slots[slot]
-                else {
-                    return None;
-                };
-                let Slot::Step {
-                    operation:
+                let mut between = Vec::new();
+                let mut at = slot;
+                loop {
+                    let Slot::Step {
+                        operation, inputs, ..
+                    } = &plan.slots[at]
+                    else {
+                        return None;
+                    };
+                    let alone = users[at].len() == 1 || at == slot;
+                    if !one_each(at) && !matches!(operation, Operation::Reduce { .. })
+                        || plan.outputs.contains(&at)
+                        || !alone
+                    {
+                        return None;
+                    }
+                    match operation {
+                        Operation::Reshape(_) => {
+                            between.push(at);
+                            at = inputs[0];
+                        }
                         Operation::Reduce {
                             reduction,
                             axis: Some(axis),
-                        },
-                    inputs: operands,
-                    dtype,
-                    ..
-                } = &plan.slots[inputs[0]]
-                else {
-                    return None;
-                };
-                let last = *axis == -1 || *axis == shape.len() as i64 - 1;
-                (last
-                    && (0..=3).contains(reduction)
-                    && is_float(dtype_of(*dtype))
-                    && *reshaped == kept
-                    && slot_shape(&plan.slots[operands[0]]) == shape.as_slice()
-                    && users[inputs[0]].len() == 1
-                    && !plan.outputs.contains(&slot)
-                    && !plan.outputs.contains(&inputs[0]))
-                .then_some(inputs[0])
+                        } => {
+                            let operand = slot_shape(&plan.slots[inputs[0]]);
+                            let last = *axis == -1 || *axis == operand.len() as i64 - 1;
+                            let fits = last
+                                && (0..=3).contains(reduction)
+                                && is_float(slot_dtype(&plan.slots[at]))
+                                && whole(inputs[0])
+                                && !between.is_empty();
+                            return fits.then_some((at, between));
+                        }
+                        _ => return None,
+                    }
+                }
+            };
+            // The steps between this one and a held reduction keep the
+            // lanes: arithmetic and reshapes over whole lanes or over
+            // one element for each.
+            let keeps_lanes = |slot: usize| {
+                matches!(
+                    &plan.slots[slot],
+                    Slot::Step { operation, .. } if matches!(
+                        operation,
+                        Operation::Binary(_)
+                            | Operation::Unary(_)
+                            | Operation::Compare(_)
+                            | Operation::Where
+                            | Operation::Cast(_)
+                            | Operation::Reshape(_)
+                    )
+                ) && (whole(slot) || one_each(slot))
             };
             let mut found: Vec<(usize, usize)> = Vec::new();
+            let mut aliases: Vec<usize> = Vec::new();
             let mut seen = vec![index];
             let mut waiting: Vec<usize> = inputs.clone();
             while let Some(at) = waiting.pop() {
                 if seen.contains(&at) {
                     continue;
                 }
-                seen.push(at);
                 let Slot::Step { inputs, .. } = &plan.slots[at] else {
                     continue;
                 };
                 if !materialized[at] {
-                    waiting.extend(inputs);
-                } else if let Some(reduction) = held(at) {
+                    if keeps_lanes(at) {
+                        seen.push(at);
+                        waiting.extend(inputs);
+                    }
+                } else if let Some((reduction, between)) = held(at) {
+                    seen.push(at);
                     found.push((reduction, at));
+                    aliases.extend(between);
                     let Slot::Step { inputs, .. } = &plan.slots[reduction] else {
                         unreachable!("a reduction is a step")
                     };
@@ -627,16 +672,19 @@ impl<'a> Generator<'a> {
             let inside = |slot: usize| slot == index || found.iter().any(|&(r, _)| r == slot);
             let only_here = found.iter().all(|&(_, through)| {
                 let mut waiting = users[through].clone();
-                let mut seen = Vec::new();
+                let mut walked = Vec::new();
                 while let Some(at) = waiting.pop() {
-                    if seen.contains(&at) {
+                    if walked.contains(&at) {
                         continue;
                     }
-                    seen.push(at);
+                    walked.push(at);
                     if inside(at) {
                         continue;
                     }
-                    if materialized[at] || users[at].is_empty() {
+                    // A reader outside this kernel, or one that moves
+                    // elements between lanes, needs the reduction in
+                    // memory.
+                    if materialized[at] || !seen.contains(&at) {
                         return false;
                     }
                     waiting.extend(&users[at]);
@@ -647,9 +695,11 @@ impl<'a> Generator<'a> {
                 continue;
             }
             found.sort_unstable();
-            for &(reduction, through) in &found {
+            for &(reduction, _) in &found {
                 in_lane[reduction] = true;
-                in_lane[through] = true;
+            }
+            for &alias in &aliases {
+                in_lane[alias] = true;
             }
             lanes[index] = found;
         }

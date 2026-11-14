@@ -306,6 +306,9 @@ struct Runtime {
     /// Held for a whole run: the cuBLAS handle serves one thread at a
     /// time.
     compiled: Mutex<HashMap<Plan, Compiled>>,
+    /// The small host leaves of earlier runs on the device, by their
+    /// staged bytes.
+    constants: Mutex<HashMap<Vec<u8>, Arc<Buffer>>>,
 }
 
 // SAFETY: the driver API and the context may be used from any thread, and
@@ -357,6 +360,7 @@ impl Runtime {
             compiler,
             pool: Mutex::default(),
             compiled: Mutex::default(),
+            constants: Mutex::default(),
         })
     }
 
@@ -773,6 +777,10 @@ fn report(plan: &Plan, traced: &Traced, timings: &mut [(String, std::time::Durat
     }
 }
 
+/// The most staged sets of small leaves kept on the device. Each is a
+/// few kilobytes at most.
+const MAX_KEPT_CONSTANTS: usize = 512;
+
 /// The most compiled plans kept.
 const MAX_COMPILED_PLANS: usize = 256;
 
@@ -834,7 +842,27 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         }
     }
     if !parts.is_empty() {
-        let whole = Arc::new(Buffer::from_bytes(&staged)?);
+        // The numbers of an expression are the same on every pass of a
+        // loop, so their copy on the device is kept. A copy waits for
+        // the kernels launched so far, which would stop a run started
+        // early from running beside the program.
+        let whole = {
+            let mut constants = runtime
+                .constants
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            match constants.get(&staged) {
+                Some(whole) => Arc::clone(whole),
+                None => {
+                    if constants.len() >= MAX_KEPT_CONSTANTS {
+                        constants.clear();
+                    }
+                    let whole = Arc::new(Buffer::from_bytes(&staged)?);
+                    constants.insert(staged.clone(), Arc::clone(&whole));
+                    whole
+                }
+            }
+        };
         for (index, offset, bytes) in parts {
             buffers[index] = Some(Arc::new(Buffer::part(&whole, offset, bytes)));
         }

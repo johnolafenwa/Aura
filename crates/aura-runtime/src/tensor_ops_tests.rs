@@ -1859,6 +1859,15 @@ fn a_product_starts_deep_waiting_operands_before_it_is_read() {
         assert!(!node(&left).is_ready() && !node(&right).is_ready());
         assert!(!node(&shallow).is_ready());
 
+        // Operands with gradients wait: their backward pass shares the
+        // work.
+        let mut tracked = node_op(&wave(16, &[4, 4], TensorDevice::Cpu), 4, &[]).unwrap();
+        for _ in 0..EARLY_DEPTH {
+            tracked = binary(&tracked, &wave(16, &[4, 4], TensorDevice::Cpu), 0).unwrap();
+        }
+        let waits = product(&tracked, &right);
+        assert!(!node(&tracked).is_ready() && !node(&waits).is_ready());
+
         // A deep operand runs when the product is made, with the other
         // operand. Of a transposed operand, the memory the product reads
         // in place runs, and the transpose waits.
@@ -1957,8 +1966,101 @@ fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
     });
 }
 
+/// A softmax whose largest element is read through two reshapes, as
+/// `std/tensor.au` builds it, over a `[2, 4, 64, 128]` tensor.
+fn stacked_softmax(device: TensorDevice) -> Value {
+    let x = wave(2 * 4 * 64 * 128, &[2, 4, 64, 128], device);
+    let kept = |value: &Value| reshape(&reduce(value, 2, Some(-1)).unwrap(), &[2, 4, 64, 1]);
+    let largest = reshape(&kept(&x).unwrap(), &[2, 4, 64, 1]).unwrap();
+    let powers = unary(&binary(&x, &largest, 1).unwrap(), 2).unwrap();
+    let total = reshape(&reduce(&powers, 0, Some(-1)).unwrap(), &[2, 4, 64, 1]).unwrap();
+    binary(&powers, &total, 3).unwrap()
+}
+
+#[test]
+fn a_lane_kernel_reads_through_reshapes_and_feeds_products() {
+    let count = |plan: &Plan| {
+        let (mut kernels, mut products) = (0, 0);
+        for action in tensor_codegen::generate(plan).actions {
+            match action {
+                tensor_codegen::Action::Kernel { .. } => kernels += 1,
+                tensor_codegen::Action::Matmul { .. } => products += 1,
+                tensor_codegen::Action::Alias { .. } => {}
+            }
+        }
+        (kernels, products)
+    };
+    // A layer norm over `[8, 32, 256]`, flattened for a product.
+    let normed = |device: TensorDevice| {
+        let x = wave(8 * 32 * 256, &[8, 32, 256], device);
+        let (weight, bias) = (wave(256, &[256], device), wave(256, &[256], device));
+        lane_norm(&x, &[8, 32, 1], &weight, &bias)
+    };
+    let flat = |value: &Value| reshape(value, &[-1, 256]).unwrap();
+    let product = |left: &Value, device: TensorDevice| {
+        host_tensor_matmul(vec![left.clone(), wave(256 * 4, &[256, 4], device)], None).unwrap()
+    };
+    let cpu = TensorDevice::Cpu;
+    let expected = array(&flat(&normed(cpu)));
+    let expected_softmax = array(&stacked_softmax(cpu));
+    deferred(|| {
+        // One reshape reads the layer norm: the kernel writes the
+        // flattened lanes.
+        // The lanes are compared before the product, whose additions
+        // run in another order on each device.
+        let lanes = flat(&normed(cpu));
+        let result = product(&lanes, cpu);
+        let (plan, _) = Plan::collect_all(&[node(&result)]);
+        assert_eq!(count(&plan), (1, 1));
+        let (plan, storage) = Plan::collect_all(&[node(&result), node(&lanes)]);
+        assert_eq!(count(&plan), (1, 1));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2420) {
+            close("layer norm into a product", &generated[1], &expected);
+        }
+
+        // Two reshapes read it: it is written once and both are that
+        // memory.
+        let shared = normed(cpu);
+        let (one, two) = (product(&flat(&shared), cpu), product(&flat(&shared), cpu));
+        let (plan, _) = Plan::collect_all(&[node(&one), node(&two)]);
+        assert_eq!(count(&plan), (1, 2));
+        let (plan, storage) = Plan::collect_all(&[node(&one), node(&two), node(&shared)]);
+        assert_eq!(count(&plan), (1, 2));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2421) {
+            close(
+                "layer norm into two products",
+                &generated[2],
+                &array(&normed(cpu)),
+            );
+        }
+
+        // Reshapes between a reduction and its reader are no memory.
+        let (plan, storage) = Plan::collect_all(&[node(&stacked_softmax(cpu))]);
+        assert_eq!(count(&plan), (1, 0));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2422) {
+            close("softmax through reshapes", &generated[0], &expected_softmax);
+        }
+
+        // A reader that moves elements between lanes needs the
+        // reduction in memory.
+        let x = wave(256 * 256, &[256, 256], cpu);
+        let largest = reshape(&reduce(&x, 2, Some(1)).unwrap(), &[256, 1]).unwrap();
+        let moved = binary(&x, &largest, 1).unwrap();
+        let turned = binary(&moved, &permute(&moved, &[1, 0]).unwrap(), 0).unwrap();
+        let (plan, _) = Plan::collect_all(&[node(&turned)]);
+        assert_eq!(count(&plan), (3, 0));
+    });
+}
+
 #[test]
 fn a_gpu_device_agrees_on_a_lane_reduced_inside_one_kernel() {
+    for device in gpus() {
+        close(
+            "softmax through reshapes",
+            &array(&stacked_softmax(device)),
+            &array(&stacked_softmax(TensorDevice::Cpu)),
+        );
+    }
     for device in gpus() {
         for (rows, length) in [(96, 700), (256, 256), (700, 100)] {
             let expected = array(&lane_norm_of(rows, length, TensorDevice::Cpu));

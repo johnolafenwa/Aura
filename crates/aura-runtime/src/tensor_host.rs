@@ -1319,9 +1319,14 @@ pub(crate) fn runs_early() -> bool {
 /// steps deep or more. A product reads its operands from memory, so
 /// they are written in any case, and the device computes them while the
 /// program builds the work that follows. Without this, the device is
-/// idle until the program reads a result.
+/// idle until the program reads a result. Operands with gradients wait.
 fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
-    if depth == 0 || inputs.iter().all(|input| input.depth() < depth) {
+    // Work with gradients stays one plan: its backward pass shares
+    // most of the forward one.
+    if depth == 0
+        || inputs.iter().any(|input| input.is_tracked())
+        || inputs.iter().all(|input| input.depth() < depth)
+    {
         return Ok(());
     }
     let roots: Vec<TensorValue> = inputs
