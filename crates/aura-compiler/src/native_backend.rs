@@ -75,7 +75,7 @@ fn target_cpu_names_for(arch: &str) -> Vec<&'static str> {
 
 /// The CPU names host objects can be compiled for on this host.
 pub fn target_cpu_names() -> Vec<&'static str> {
-    target_cpu_names_for(std::env::consts::ARCH)
+    target_cpu_names_for(target_arch())
 }
 
 /// Compiles every later host object for the CPU `name`: `generic`, the
@@ -83,6 +83,12 @@ pub fn target_cpu_names() -> Vec<&'static str> {
 /// every instruction the build machine's CPU has; and a level such as
 /// `x86-64-v3` uses that level's instructions.
 pub fn set_target_cpu(name: &str) -> Result<(), String> {
+    if name == "native" && hosted_target().is_some() {
+        return Err(
+            "target CPU `native` names the build machine's CPU and does not apply with `--target`"
+                .to_string(),
+        );
+    }
     let names = target_cpu_names();
     let Some(known) = names.iter().find(|known| **known == name) else {
         return Err(format!(
@@ -133,9 +139,7 @@ pub(crate) fn joins_lane_checks() -> bool {
     if JOINED_LANE_CHECKS.with(std::cell::Cell::get) {
         return true;
     }
-    lane_checks_join_on(std::env::consts::ARCH, target_cpu(), || {
-        llvm::host_cpu_identity()
-    })
+    lane_checks_join_on(target_arch(), target_cpu(), llvm::host_cpu_identity)
 }
 
 pub(crate) fn lane_checks_join_on(arch: &str, cpu: &str, host: impl FnOnce() -> String) -> bool {
@@ -185,6 +189,80 @@ impl MemoryAccess {
             Self::Write | Self::VolatileWrite | Self::AtomicStore | Self::Fence
         )
     }
+}
+
+/// A Linux machine other than the build machine that `aura build
+/// --target` writes a program for (ADR-0101).
+#[derive(Clone, Copy, Debug, Eq, Hash, PartialEq)]
+pub enum HostedTarget {
+    X86_64LinuxGnu,
+    Aarch64LinuxGnu,
+    X86_64LinuxMusl,
+    Aarch64LinuxMusl,
+}
+
+static HOSTED_TARGET: std::sync::RwLock<Option<HostedTarget>> = std::sync::RwLock::new(None);
+
+impl HostedTarget {
+    /// Every target, in the order `--target` lists them.
+    pub const ALL: [Self; 4] = [
+        Self::X86_64LinuxGnu,
+        Self::Aarch64LinuxGnu,
+        Self::X86_64LinuxMusl,
+        Self::Aarch64LinuxMusl,
+    ];
+
+    /// The name `--target` takes, which is also the LLVM triple and the
+    /// Rust target the runtime library is built for.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::X86_64LinuxGnu => "x86_64-unknown-linux-gnu",
+            Self::Aarch64LinuxGnu => "aarch64-unknown-linux-gnu",
+            Self::X86_64LinuxMusl => "x86_64-unknown-linux-musl",
+            Self::Aarch64LinuxMusl => "aarch64-unknown-linux-musl",
+        }
+    }
+
+    /// The target `name` names.
+    pub fn parse(name: &str) -> Option<Self> {
+        Self::ALL.into_iter().find(|target| target.name() == name)
+    }
+
+    /// The architecture, as `std::env::consts::ARCH` spells it.
+    pub fn arch(self) -> &'static str {
+        match self {
+            Self::X86_64LinuxGnu | Self::X86_64LinuxMusl => "x86_64",
+            Self::Aarch64LinuxGnu | Self::Aarch64LinuxMusl => "aarch64",
+        }
+    }
+
+    /// Whether programs for the target link the musl C library, and so
+    /// link statically.
+    pub fn is_musl(self) -> bool {
+        matches!(self, Self::X86_64LinuxMusl | Self::Aarch64LinuxMusl)
+    }
+}
+
+/// Compiles every later host object for `target` in place of the build
+/// machine. `None` goes back to the build machine.
+pub fn set_hosted_target(target: Option<HostedTarget>) {
+    *HOSTED_TARGET
+        .write()
+        .unwrap_or_else(std::sync::PoisonError::into_inner) = target;
+}
+
+/// The machine host objects are compiled for when it is not the build
+/// machine.
+pub fn hosted_target() -> Option<HostedTarget> {
+    *HOSTED_TARGET
+        .read()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+}
+
+/// The architecture host objects are compiled for, as
+/// `std::env::consts::ARCH` spells it.
+pub fn target_arch() -> &'static str {
+    hosted_target().map_or(std::env::consts::ARCH, HostedTarget::arch)
 }
 
 /// A machine with no operating system that a freestanding build writes

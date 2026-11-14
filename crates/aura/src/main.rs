@@ -230,6 +230,7 @@ fn main() {
                 .into_iter()
                 .filter(|arg| arg != "--remove-proved-checks")
                 .collect();
+            let remaining = apply_build_target(remaining);
             let remaining = apply_target_cpu(remaining);
             let (output_path, debug, embed_rpath, input_args) = parse_build_args(remaining);
             let input = read_input(&mut input_args.into_iter());
@@ -295,8 +296,11 @@ fn main() {
                     match build {
                         Ok(()) => {
                             eprintln!(
-                                "aura: built `{}` with direct backend{}",
+                                "aura: built `{}` with direct backend{}{}",
                                 output_path.display(),
+                                aura_compiler::hosted_target()
+                                    .map(|target| format!(" for {}", target.name()))
+                                    .unwrap_or_default(),
                                 if debug { " (debug)" } else { "" }
                             );
                         }
@@ -2169,6 +2173,85 @@ fn apply_target_cpu(args: Vec<String>) -> Vec<String> {
         },
     );
     match requested {
+        Ok(rest) => rest,
+        Err(error) => {
+            eprintln!("aura: {error}");
+            process::exit(2);
+        }
+    }
+}
+
+/// The target `args` asks for, and `args` without the option: `--target
+/// <name>` or `--target=<name>`. `Err` holds the option's usage when it
+/// has no name.
+fn take_build_target(
+    args: Vec<String>,
+) -> std::result::Result<(Option<String>, Vec<String>), String> {
+    let mut requested = None;
+    let mut rest = Vec::with_capacity(args.len());
+    let mut args = args.into_iter();
+    while let Some(argument) = args.next() {
+        if argument == "--target" {
+            let name = args
+                .next()
+                .ok_or_else(|| "`--target` needs a target name".to_string())?;
+            requested = Some(name);
+        } else if let Some(name) = argument.strip_prefix("--target=") {
+            requested = Some(name.to_string());
+        } else {
+            rest.push(argument);
+        }
+    }
+    Ok((requested, rest))
+}
+
+/// The machine `aura build --target <name>` builds for on a host with
+/// `host_os` and `host_arch` (ADR-0101). `None` is the build machine
+/// itself.
+fn resolve_build_target(
+    name: &str,
+    host_os: &str,
+    host_arch: &str,
+) -> std::result::Result<Option<aura_compiler::HostedTarget>, String> {
+    let Some(target) = aura_compiler::HostedTarget::parse(name) else {
+        if aura_compiler::FreestandingTarget::parse(name).is_some() {
+            return Err(format!(
+                "`{name}` is a freestanding target; pass `--freestanding` to build for it"
+            ));
+        }
+        return Err(format!(
+            "unknown target `{name}`; the targets are {}",
+            aura_compiler::HostedTarget::ALL
+                .iter()
+                .map(|target| format!("`{}`", target.name()))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ));
+    };
+    if host_os != "linux" {
+        return Err(format!(
+            "`--target {name}` builds a Linux program and needs a Linux host"
+        ));
+    }
+    if target.arch() == host_arch && !target.is_musl() {
+        return Ok(None);
+    }
+    Ok(Some(target))
+}
+
+/// Builds this process's native code for the machine `--target` names,
+/// and returns `args` without the option. An unknown name ends the
+/// process.
+fn apply_build_target(args: Vec<String>) -> Vec<String> {
+    let resolved = take_build_target(args).and_then(|(requested, rest)| match requested {
+        Some(name) => resolve_build_target(&name, std::env::consts::OS, std::env::consts::ARCH)
+            .map(|target| {
+                aura_compiler::set_hosted_target(target);
+                rest
+            }),
+        None => Ok(rest),
+    });
+    match resolved {
         Ok(rest) => rest,
         Err(error) => {
             eprintln!("aura: {error}");
@@ -4863,8 +4946,11 @@ fn link_direct_native_binary(
     let archive_stamp_after = fs::metadata(&native_runtime.staticlib)
         .ok()
         .and_then(|metadata| runtime_archive_memo_stamp(&native_runtime.staticlib, &metadata));
-    let stable_archive_stamp =
-        archive_stamp_before.filter(|before| archive_stamp_after.as_ref() == Some(before));
+    // The identity memo describes the build machine's archive, which a
+    // `--target` build does not read.
+    let stable_archive_stamp = archive_stamp_before
+        .filter(|before| archive_stamp_after.as_ref() == Some(before))
+        .filter(|_| aura_compiler::hosted_target().is_none());
     // Return the identity of the exact bytes staged for this link. A Cargo
     // refresh can replace the workspace archive after pre-build lookup, so
     // storing under the earlier identity would make the immediate warm run
@@ -4961,15 +5047,33 @@ fn native_link_command(
     debug: bool,
     embed_rpath: bool,
 ) -> std::result::Result<Command, String> {
-    let cc = std::env::var_os("CC").unwrap_or_else(|| "cc".into());
+    let target = aura_compiler::hosted_target();
+    let cc = match target {
+        Some(target) => target_link_driver(target)?,
+        None => std::env::var_os("CC").unwrap_or_else(|| "cc".into()),
+    };
     let mut command = Command::new(cc);
-    command
-        .args(objects)
-        .arg(staticlib)
-        .arg("-o")
-        .arg(output_path);
+    let musl = target.and_then(musl_support_dir);
+    if let Some(directory) = &musl {
+        command.args(MUSL_LINK_MODE);
+        command.args(MUSL_START_OBJECTS.map(|name| directory.join(name)));
+    }
+    command.args(objects).arg("-o").arg(output_path);
+    command.args(target_link_args(target, debug, native_keep_symbols()));
+    if let Some(directory) = &musl {
+        // The C library calls compiler support routines that the runtime
+        // library holds, so the linker reads the two as one group.
+        command.arg("-L").arg(directory).arg("-Wl,--start-group");
+    }
+    command.arg(staticlib);
     for arg in native_link_args {
         command.arg(arg);
+    }
+    if let Some(directory) = &musl {
+        // C objects in the runtime library call the compiler's support
+        // library, which `-nostdlib` leaves out.
+        command.arg("-lgcc").arg("-Wl,--end-group");
+        command.args(MUSL_END_OBJECTS.map(|name| directory.join(name)));
     }
     command.args(foreign_link_args(
         foreign,
@@ -5158,7 +5262,10 @@ fn user_binary_strip_command(path: &Path) -> Command {
 }
 
 fn strip_user_binary(path: &Path) -> std::result::Result<(), String> {
-    if native_keep_symbols() || !matches!(std::env::consts::OS, "macos" | "linux") {
+    if native_keep_symbols()
+        || !matches!(std::env::consts::OS, "macos" | "linux")
+        || aura_compiler::hosted_target().is_some()
+    {
         return Ok(());
     }
     let output = user_binary_strip_command(path)
@@ -5257,6 +5364,79 @@ fn user_binary_link_args(os: &str) -> &'static [&'static str] {
     }
 }
 
+/// A musl program is linked without the driver's own C library and start
+/// files: the ones in the musl support directory take their place. The
+/// unwinder finds a frame's unwind table through the `.eh_frame_hdr`
+/// program header, which a driver leaves out of a static link.
+#[cfg_attr(windows, allow(dead_code))]
+const MUSL_LINK_MODE: [&str; 5] = [
+    "-static",
+    "-no-pie",
+    "-nostdlib",
+    "-nostartfiles",
+    "-Wl,--eh-frame-hdr",
+];
+#[cfg_attr(windows, allow(dead_code))]
+const MUSL_START_OBJECTS: [&str; 3] = ["crt1.o", "crti.o", "crtbegin.o"];
+#[cfg_attr(windows, allow(dead_code))]
+const MUSL_END_OBJECTS: [&str; 2] = ["crtend.o", "crtn.o"];
+
+/// The directory with the musl C library, its start files and
+/// `libunwind.a` for a musl `target`: beside the runtime library of an
+/// installed `aura`, or in the Rust toolchain of a source checkout.
+#[cfg_attr(windows, allow(dead_code))]
+fn musl_support_dir(target: aura_compiler::HostedTarget) -> Option<PathBuf> {
+    if !target.is_musl() {
+        return None;
+    }
+    let executable = std::env::current_exe().ok()?;
+    let installed = executable.parent().and_then(Path::parent).map(|prefix| {
+        prefix
+            .join("lib")
+            .join("aura")
+            .join("targets")
+            .join(target.name())
+    });
+    if let Some(installed) = installed.filter(|directory| directory.is_dir()) {
+        return Some(installed);
+    }
+    let output = Command::new("rustc")
+        .current_dir(repo_root())
+        .args(["--print", "sysroot"])
+        .output()
+        .ok()
+        .filter(|output| output.status.success())?;
+    let sysroot = String::from_utf8(output.stdout).ok()?;
+    Some(
+        Path::new(sysroot.trim())
+            .join("lib")
+            .join("rustlib")
+            .join(target.name())
+            .join("lib")
+            .join("self-contained"),
+    )
+}
+
+/// The link arguments only a `--target` build takes. The linker strips
+/// the program, since the build machine's `strip` may not read another
+/// architecture.
+#[cfg_attr(windows, allow(dead_code))]
+fn target_link_args(
+    target: Option<aura_compiler::HostedTarget>,
+    debug: bool,
+    keep_symbols: bool,
+) -> Vec<&'static str> {
+    let mut args = Vec::new();
+    if target.is_none() {
+        return args;
+    }
+    if !debug && !keep_symbols {
+        args.push("-Wl,--strip-debug");
+        args.push("-Wl,--discard-all");
+    }
+    args
+}
+
 fn temporary_direct_object_path(output_path: &Path, unit: usize) -> PathBuf {
     let file_name = output_path
         .file_name()
@@ -5311,17 +5491,21 @@ struct NativeRuntimeArtifacts {
 fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifacts, String> {
     let executable = std::env::current_exe()
         .map_err(|error| format!("failed to locate the running aura executable: {}", error))?;
+    let target = aura_compiler::hosted_target();
     if let Some(installed) = resolve_installed_runtime_artifacts_from_executable(&executable)? {
-        return Ok(installed);
+        let Some(target) = target else {
+            return Ok(installed);
+        };
+        return resolve_installed_target_runtime_artifacts(&executable, target);
     }
 
     let staticlib = build_native_runtime_staticlib()?
         .or_else(|| {
-            resolve_static_library_path_in_target_dir(
-                native_runtime_target_dir(),
-                current_profile(),
-            )
-            .ok()
+            let mut target_dir = native_runtime_target_dir();
+            if let Some(target) = target {
+                target_dir.push(target.name());
+            }
+            resolve_static_library_path_in_target_dir(target_dir, current_profile()).ok()
         })
         .ok_or_else(|| {
             format!(
@@ -5348,13 +5532,59 @@ fn ensure_native_runtime_artifacts() -> std::result::Result<NativeRuntimeArtifac
     })
 }
 
+/// The runtime library an installed `aura` holds for `target`, in
+/// `lib/aura/targets/<target>` beside the build machine's own.
+fn resolve_installed_target_runtime_artifacts(
+    executable: &Path,
+    target: aura_compiler::HostedTarget,
+) -> std::result::Result<NativeRuntimeArtifacts, String> {
+    let runtime_dir = executable
+        .parent()
+        .and_then(Path::parent)
+        .map(|prefix| {
+            prefix
+                .join("lib")
+                .join("aura")
+                .join("targets")
+                .join(target.name())
+        })
+        .unwrap_or_default();
+    let artifacts = resolve_runtime_artifacts_in(&runtime_dir)?.ok_or_else(|| {
+        format!(
+            "this Aura installation has no runtime library for `{}`: expected `{}`; install the target pack of this release (see `aura build --target` in the manual)",
+            target.name(),
+            runtime_dir.join(static_library_file_name()).display()
+        )
+    })?;
+    // A target pack names the `aura` it was built with. A runtime library
+    // of another build does not hold the functions this compiler calls.
+    if let Ok(pack_version) = fs::read_to_string(runtime_dir.join("aura-version")) {
+        let own_version = version_line();
+        if pack_version.trim() != own_version {
+            return Err(format!(
+                "the installed target pack for `{}` is from `{}` and this is `{own_version}`: install the target pack of this release",
+                target.name(),
+                pack_version.trim()
+            ));
+        }
+    }
+    Ok(artifacts)
+}
+
 fn resolve_installed_runtime_artifacts_from_executable(
     executable: &Path,
 ) -> std::result::Result<Option<NativeRuntimeArtifacts>, String> {
     let Some(prefix) = executable.parent().and_then(Path::parent) else {
         return Ok(None);
     };
-    let runtime_dir = prefix.join("lib").join("aura");
+    resolve_runtime_artifacts_in(&prefix.join("lib").join("aura"))
+}
+
+/// The runtime library and its link manifest in `runtime_dir`, or `None`
+/// when the directory holds neither.
+fn resolve_runtime_artifacts_in(
+    runtime_dir: &Path,
+) -> std::result::Result<Option<NativeRuntimeArtifacts>, String> {
     let staticlib = runtime_dir.join(static_library_file_name());
     let manifest = runtime_dir.join("native-link-args.json");
     let staticlib_exists = staticlib.is_file();
@@ -5418,6 +5648,7 @@ fn build_native_runtime_staticlib() -> std::result::Result<Option<PathBuf>, Stri
     if current_profile() == "release" {
         command.arg("--release");
     }
+    configure_runtime_cargo_target(&mut command);
 
     let output = command
         .output()
@@ -5450,6 +5681,7 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
     if current_profile() == "release" {
         command.arg("--release");
     }
+    configure_runtime_cargo_target(&mut command);
     command.arg("--").arg("--print").arg("native-static-libs");
 
     let output = command
@@ -5463,6 +5695,67 @@ fn query_native_runtime_link_args() -> std::result::Result<Vec<String>, String> 
     }
 
     parse_native_static_libs(&String::from_utf8_lossy(&output.stderr))
+}
+
+/// Points a Cargo build of the runtime at the `--target` machine. The C
+/// sources among the runtime's dependencies of a glibc target are compiled
+/// with the driver that links the program, unless the environment names
+/// another. A musl target needs a musl C compiler, which Cargo's build
+/// scripts find by their own rules.
+fn configure_runtime_cargo_target(command: &mut Command) {
+    let Some(target) = aura_compiler::hosted_target() else {
+        return;
+    };
+    command.arg("--target").arg(target.name());
+    let variable = format!("CC_{}", target.name().replace('-', "_"));
+    if !target.is_musl() && std::env::var_os(&variable).is_none() {
+        if let Ok(driver) = target_link_driver(target) {
+            command.env(variable, driver);
+        }
+    }
+}
+
+/// The C compiler driver that links programs for `target`:
+/// `AURA_TARGET_CC` when set, or else `CC` or `cc` for the build
+/// machine's architecture and `<arch>-linux-gnu-gcc` for another. A musl
+/// program links against the C library the runtime ships, so the driver
+/// of a glibc toolchain serves it too.
+fn target_link_driver(
+    target: aura_compiler::HostedTarget,
+) -> std::result::Result<std::ffi::OsString, String> {
+    find_target_link_driver(
+        target,
+        std::env::var_os("AURA_TARGET_CC"),
+        std::env::var_os("CC"),
+        std::env::var_os("PATH"),
+        std::env::consts::ARCH,
+    )
+}
+
+fn find_target_link_driver(
+    target: aura_compiler::HostedTarget,
+    named: Option<std::ffi::OsString>,
+    host_cc: Option<std::ffi::OsString>,
+    path: Option<std::ffi::OsString>,
+    host_arch: &str,
+) -> std::result::Result<std::ffi::OsString, String> {
+    if let Some(named) = named.filter(|named| !named.is_empty()) {
+        return Ok(named);
+    }
+    if target.arch() == host_arch {
+        return Ok(host_cc.unwrap_or_else(|| "cc".into()));
+    }
+    let name = format!("{}-linux-gnu-gcc", target.arch());
+    let found = path.as_deref().is_some_and(|path| {
+        std::env::split_paths(path).any(|directory| directory.join(&name).is_file())
+    });
+    if found {
+        return Ok(name.into());
+    }
+    Err(format!(
+        "cannot find a C compiler for `{}`: install `{name}` or name one in `AURA_TARGET_CC`",
+        target.name()
+    ))
 }
 
 fn configure_native_runtime_cargo(command: &mut Command, coverage_active: bool) {
@@ -5784,8 +6077,8 @@ fn usage_text() -> &'static str {
        or: aura <ast|ast-json|mir|analyze> <file.au>\n\
        or: aura <check|run|ast|ast-json|mir|analyze> --stdin <virtual-path>\n\
        or: aura run [--backend mir|direct|auto] [--target-cpu <name>] [--offline] <file.au> [-- <program-args>...]\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
-       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] <file.au>\n\
+       or: aura build -o <output> [--backend auto|direct] [--debug] [--no-rpath] [--remove-proved-checks] [--target <name>] [--target-cpu <name>] [--offline] [--format human|json] --stdin <virtual-path>\n\
        or: aura build -o <output> --freestanding [--target <name>] [--remove-proved-checks] [--format human|json] <file.au>\n\
        or: aura check --freestanding [--format human|json] <file.au>\n\
        or: aura complete --line <n> --character <n> [--trigger .] <file.au>\n\
@@ -5848,13 +6141,18 @@ fn print_command_usage_and_exit(command: &str) -> ! {
     process::exit(0);
 }
 
-fn print_version_and_exit() -> ! {
-    write_stdout(&format!(
-        "aura {}-{} ({})\n",
+/// What `aura --version` prints, without the line end.
+fn version_line() -> String {
+    format!(
+        "aura {}-{} ({})",
         env!("CARGO_PKG_VERSION"),
         env!("AURA_BUILD_CHANNEL"),
         env!("AURA_BUILD_COMMIT")
-    ));
+    )
+}
+
+fn print_version_and_exit() -> ! {
+    write_stdout(&format!("{}\n", version_line()));
     process::exit(0);
 }
 
@@ -6771,6 +7069,215 @@ printf 'native-static-libs: -lc\\033[0m -lm\\n' >&2\n",
                 vec!["-lc", "-lm"]
             );
         }
+    }
+
+    #[test]
+    fn build_target_option_is_taken_from_the_arguments() {
+        let args = |list: &[&str]| list.iter().map(|arg| arg.to_string()).collect::<Vec<_>>();
+        assert_eq!(
+            super::take_build_target(args(&["--target", "x86_64-unknown-linux-musl", "app.au"])),
+            Ok((
+                Some("x86_64-unknown-linux-musl".to_string()),
+                args(&["app.au"])
+            ))
+        );
+        assert_eq!(
+            super::take_build_target(args(&["app.au", "--target=aarch64-unknown-linux-gnu"])),
+            Ok((
+                Some("aarch64-unknown-linux-gnu".to_string()),
+                args(&["app.au"])
+            ))
+        );
+        assert_eq!(
+            super::take_build_target(args(&["app.au"])),
+            Ok((None, args(&["app.au"])))
+        );
+        assert_eq!(
+            super::take_build_target(args(&["app.au", "--target"])),
+            Err("`--target` needs a target name".to_string())
+        );
+    }
+
+    #[test]
+    fn build_targets_resolve_against_the_build_machine() {
+        use aura_compiler::HostedTarget;
+        let resolve = super::resolve_build_target;
+        assert_eq!(
+            resolve("x86_64-unknown-linux-musl", "linux", "x86_64"),
+            Ok(Some(HostedTarget::X86_64LinuxMusl))
+        );
+        assert_eq!(
+            resolve("aarch64-unknown-linux-gnu", "linux", "x86_64"),
+            Ok(Some(HostedTarget::Aarch64LinuxGnu))
+        );
+        // The build machine's own target is an ordinary build.
+        assert_eq!(
+            resolve("x86_64-unknown-linux-gnu", "linux", "x86_64"),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("aarch64-unknown-linux-gnu", "linux", "aarch64"),
+            Ok(None)
+        );
+        assert_eq!(
+            resolve("x86_64-unknown-linux-gnu", "macos", "x86_64"),
+            Err(
+                "`--target x86_64-unknown-linux-gnu` builds a Linux program and needs a Linux host"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            resolve("x86_64-unknown-none", "linux", "x86_64"),
+            Err(
+                "`x86_64-unknown-none` is a freestanding target; pass `--freestanding` to build for it"
+                    .to_string()
+            )
+        );
+        assert_eq!(
+            resolve("sparc-sun-solaris", "linux", "x86_64"),
+            Err("unknown target `sparc-sun-solaris`; the targets are \
+                 `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, \
+                 `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`"
+                .to_string())
+        );
+    }
+
+    #[test]
+    fn target_link_driver_is_named_or_follows_the_architecture() {
+        use aura_compiler::HostedTarget;
+        let root = unique_temp_dir("target-link-driver");
+        let tools = root.join("tools");
+        fs::create_dir_all(&tools).expect("tool dir should exist");
+        fs::write(tools.join("aarch64-linux-gnu-gcc"), b"driver").expect("driver should write");
+        let path = std::env::join_paths([root.join("empty"), tools]).expect("paths should join");
+        let find = super::find_target_link_driver;
+        // The build machine's own architecture links with its C compiler.
+        assert_eq!(
+            find(HostedTarget::X86_64LinuxMusl, None, None, None, "x86_64"),
+            Ok("cc".into())
+        );
+        assert_eq!(
+            find(
+                HostedTarget::X86_64LinuxMusl,
+                None,
+                Some("clang".into()),
+                None,
+                "x86_64"
+            ),
+            Ok("clang".into())
+        );
+        for target in [
+            HostedTarget::Aarch64LinuxGnu,
+            HostedTarget::Aarch64LinuxMusl,
+        ] {
+            assert_eq!(
+                find(
+                    target,
+                    None,
+                    Some("clang".into()),
+                    Some(path.clone()),
+                    "x86_64"
+                ),
+                Ok("aarch64-linux-gnu-gcc".into())
+            );
+        }
+        assert_eq!(
+            find(
+                HostedTarget::Aarch64LinuxGnu,
+                Some("/opt/cross/bin/cc".into()),
+                None,
+                None,
+                "x86_64"
+            ),
+            Ok("/opt/cross/bin/cc".into())
+        );
+        assert_eq!(
+            find(
+                HostedTarget::X86_64LinuxGnu,
+                Some("".into()),
+                None,
+                Some(path),
+                "aarch64"
+            ),
+            Err(
+                "cannot find a C compiler for `x86_64-unknown-linux-gnu`: install \
+                 `x86_64-linux-gnu-gcc` or name one in `AURA_TARGET_CC`"
+                    .to_string()
+            )
+        );
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn target_builds_strip_in_the_linker() {
+        use aura_compiler::HostedTarget;
+        let args = super::target_link_args;
+        assert!(args(None, false, false).is_empty());
+        for target in [HostedTarget::X86_64LinuxMusl, HostedTarget::Aarch64LinuxGnu] {
+            assert_eq!(
+                args(Some(target), false, false),
+                ["-Wl,--strip-debug", "-Wl,--discard-all"]
+            );
+            assert!(args(Some(target), true, false).is_empty());
+            assert!(args(Some(target), false, true).is_empty());
+        }
+        assert_eq!(super::musl_support_dir(HostedTarget::Aarch64LinuxGnu), None);
+    }
+
+    #[test]
+    fn installed_target_runtime_resolves_beside_the_host_runtime() {
+        use aura_compiler::HostedTarget;
+        let root = unique_temp_dir("installed-target-runtime");
+        let executable = root.join("bin").join("aura");
+        let target = HostedTarget::X86_64LinuxMusl;
+        let error = super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .err()
+            .expect("a missing target runtime should be reported");
+        assert!(
+            error.starts_with(
+                "this Aura installation has no runtime library for `x86_64-unknown-linux-musl`: expected `"
+            ),
+            "{error}"
+        );
+
+        let runtime_dir = root
+            .join("lib")
+            .join("aura")
+            .join("targets")
+            .join(target.name());
+        fs::create_dir_all(&runtime_dir).expect("runtime dir should exist");
+        let staticlib = runtime_dir.join(super::static_library_file_name());
+        fs::write(&staticlib, b"test runtime").expect("test runtime should write");
+        fs::write(runtime_dir.join("native-link-args.json"), br#"["-lc"]"#)
+            .expect("runtime manifest should write");
+        let artifacts = super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .expect("the target runtime should resolve");
+        assert_eq!(artifacts.staticlib, staticlib);
+        assert_eq!(artifacts.native_link_args, vec!["-lc"]);
+
+        // A pack names the `aura` it was built with.
+        fs::write(
+            runtime_dir.join("aura-version"),
+            format!("{}\n", super::version_line()),
+        )
+        .expect("pack version should write");
+        super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .expect("a pack of this build should resolve");
+        fs::write(
+            runtime_dir.join("aura-version"),
+            "aura 0.1.0-preview (000000000000)\n",
+        )
+        .expect("pack version should write");
+        let error = super::resolve_installed_target_runtime_artifacts(&executable, target)
+            .err()
+            .expect("a pack of another build should be refused");
+        assert!(
+            error.starts_with(
+                "the installed target pack for `x86_64-unknown-linux-musl` is from `aura 0.1.0-preview (000000000000)` and this is `aura "
+            ),
+            "{error}"
+        );
+        let _ = fs::remove_dir_all(root);
     }
 
     #[test]

@@ -187,6 +187,35 @@ jobs:
           path: ${{ matrix.archive }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
           if-no-files-found: error
 
+      # What `aura build --target` links for this architecture's Linux
+      # targets (ADR-0101). The musl pack builds the runtime library again.
+      - name: Package the target packs
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          sudo apt-get install -y musl-tools
+          rustup target add "$(uname -m)-unknown-linux-musl"
+          scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-gnu"
+          scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl"
+
+      - name: Smoke test the musl target pack outside the source tree
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: scripts/smoke-target-packs.sh "$ARCHIVE_NAME.tar.gz" "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl.tar.gz"
+
+      - name: Upload the target packs
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.archive }}-targets
+          path: aura-*-target-*.tar.gz
+          if-no-files-found: error
+
       - name: Build and install the Debian package
         if: runner.os == 'Linux'
         shell: bash
@@ -212,6 +241,41 @@ jobs:
           name: ${{ matrix.archive }}-package
           path: ${{ runner.os == 'Windows' && 'aura.*.nupkg' || 'aura-*.deb' }}
           if-no-files-found: error
+
+  target_packs:
+    name: Target packs across architectures
+    needs: [release_identity, cli]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+
+      - name: Download the Linux archives and target packs
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: aura-*-unknown-linux-gnu*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Install the arm64 link driver and emulator
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+
+      # The x86-64 CLI builds for every target it has no runtime library
+      # for, and the arm64 programs run under emulation.
+      - name: Smoke test the target packs with the x86-64 CLI
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          scripts/smoke-target-packs.sh \
+            "release-assets/aura-$RELEASE_TAG-x86_64-unknown-linux-gnu.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-x86_64-unknown-linux-musl.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-aarch64-unknown-linux-gnu.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-aarch64-unknown-linux-musl.tar.gz"
 
   tools:
     name: VS Code extension and docs
@@ -287,7 +351,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [release_identity, cli, tools]
+    needs: [release_identity, cli, target_packs, tools]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10

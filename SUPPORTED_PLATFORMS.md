@@ -25,13 +25,31 @@ tools, and `aura.exe` links the C runtime statically, so it loads only
 system DLLs. The 0.15 release has no native Windows archive. On 0.15, run
 the Linux x86-64 archive inside WSL 2.
 
+## Building for Another Linux Machine
+
+On a Linux host, `aura build --target` builds programs for
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`. A musl
+program is fully static and runs on Alpine and in empty containers. CI
+builds and runs a program for the musl target of each Linux runner's
+architecture and for the glibc target of the other architecture, the
+latter under the QEMU user-mode emulator.
+
+An installed `aura` reads a target's runtime library from a target
+pack, a release asset named `aura-<tag>-target-<target>.tar.gz`. Each
+release from the one after 0.15 has a pack for each of the four targets,
+and `install.sh --target <target>` installs one. CI and the release
+workflow build a program for every target with the x86-64 archive and the
+packs, and run the arm64 ones under emulation. The 0.15 release has no
+packs, so on 0.15 the option needs a source checkout.
+
 ## Unsupported Hosts
 
 The 0.15 preview archives do not support:
 
 - Windows on ARM
-- musl Linux
-- cross-compilation
+- musl Linux as a host. `aura` itself needs glibc
+- cross-compilation to macOS or Windows
 - other architectures
 
 Source builds on those hosts are experimental. They have no CI, runtime-link

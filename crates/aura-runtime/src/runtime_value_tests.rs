@@ -21151,3 +21151,14 @@ fn tls_stream_enforces_stream_read_size_and_line_limits() {
     let _ = fs::remove_file(&cert_path);
     let _ = fs::remove_file(&key_path);
 }
+
+#[test]
+fn kernel_command_line_gives_the_arguments_after_the_program_name() {
+    let args = super::command_line_args;
+    assert_eq!(args(b"./app\0first\0second arg\0"), ["first", "second arg"]);
+    // An empty argument is kept, and the last NUL ends the last argument.
+    assert_eq!(args(b"./app\0\0x\0"), ["", "x"]);
+    assert_eq!(args(b"./app\0"), Vec::<String>::new());
+    assert_eq!(args(b""), Vec::<String>::new());
+    assert_eq!(args(b"./app\0caf\xff\0"), ["caf\u{fffd}"]);
+}

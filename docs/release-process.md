@@ -47,6 +47,19 @@ namespace.
 Tokens belong only in GitHub Actions secrets. Never pass them to local
 packaging commands or commit them to files.
 
+## Target Packs
+
+Each release carries four target packs,
+`aura-<tag>-target-<target>.tar.gz`, one for each target of
+`aura build --target`. A pack holds what an installed `aura` links for
+that target. The `cli` job of each Linux runner builds the two packs of
+its architecture with `scripts/package-target.sh` and runs a program
+built with the musl one. The `target_packs` job then unpacks the x86-64
+archive with the other three packs, builds the packaged examples for each
+target, and runs them, the arm64 ones under the QEMU user-mode emulator.
+`publish` waits for it, and the packs are listed in `SHA256SUMS` with the
+archives.
+
 ## Package Managers
 
 Each release builds a Debian package for x86-64 and arm64 and a Chocolatey

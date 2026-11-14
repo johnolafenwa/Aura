@@ -63,10 +63,15 @@ dependencies = [
 ]
 
 [[package]]
+name = "aura-mem"
+version = "0.15.0"
+
+[[package]]
 name = "aura-runtime"
 version = "0.15.0"
 dependencies = [
  "aura-core",
+ "aura-mem",
  "base64",
  "cc",
  "corosensei",

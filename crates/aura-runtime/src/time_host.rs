@@ -619,6 +619,9 @@ pub(crate) fn local_offset_minutes(unix_seconds: i64) -> i64 {
     #[cfg(unix)]
     {
         // Every instant a `DateTime` holds fits a 64-bit `time_t`.
+        // The `libc` crate marks the musl `time_t` deprecated ahead of a
+        // change of its width, which this cast follows.
+        #[allow(deprecated)]
         let instant = unix_seconds as libc::time_t;
         // SAFETY: `localtime_r` writes only the `tm` it is given and reads
         // the time zone database under libc's own lock.

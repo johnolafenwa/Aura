@@ -1,0 +1,11 @@
+[package]
+name = "aura-mem"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+rust-version.workspace = true
+description = "Memory copy and compare routines for Aura programs linked against musl"
+
+[lib]
+# The routines are tested through their Rust names on every host.
+doctest = false

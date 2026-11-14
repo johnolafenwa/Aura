@@ -631,6 +631,14 @@ fn set_section(function: FunctionValue<'_>, section: &str) {
 /// The LLVM triple of the host. On macOS it names the deployment target
 /// rustc builds the runtime for, so the linker sees one minimum version.
 fn host_triple() -> TargetTriple {
+    triple_for(super::hosted_target())
+}
+
+/// The LLVM triple of `target`, or of the build machine for `None`.
+fn triple_for(target: Option<super::HostedTarget>) -> TargetTriple {
+    if let Some(target) = target {
+        return TargetTriple::create(target.name());
+    }
     match (std::env::consts::ARCH, std::env::consts::OS) {
         ("x86_64", "linux") => TargetTriple::create("x86_64-unknown-linux-gnu"),
         ("aarch64", "linux") => TargetTriple::create("aarch64-unknown-linux-gnu"),
@@ -651,6 +659,14 @@ fn host_target_machine_at(level: OptimizationLevel) -> Result<TargetMachine, Str
         .get_or_init(|| Target::initialize_native(&InitializationConfig::default()))
         .clone()
         .map_err(|error| format!("failed to initialize the LLVM host target: {error}"))?;
+    if super::hosted_target().is_some() {
+        static CROSS_INITIALIZED: OnceLock<()> = OnceLock::new();
+        CROSS_INITIALIZED.get_or_init(|| {
+            let config = InitializationConfig::default();
+            Target::initialize_x86(&config);
+            Target::initialize_aarch64(&config);
+        });
+    }
     target_machine_at(&host_triple(), level)
 }
 

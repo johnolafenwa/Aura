@@ -35,6 +35,15 @@ The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
 and `SHA256SUMS`. It rejects the archive if the checksum does not match, and
 otherwise installs under `~/.local`.
 
+To build programs for another Linux target with `aura build --target`,
+name the target and the installer adds its target pack:
+
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+```
+
+Target packs are in the releases from the one after 0.15.
+
 ## 4. Add Aura To Bash
 
 Add `~/.local/bin` to your login environment. You only need to do this once:
