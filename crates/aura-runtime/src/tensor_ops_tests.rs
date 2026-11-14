@@ -1778,20 +1778,21 @@ fn large_shared_arithmetic_is_computed_again_by_each_reader() {
         256,
     ));
     deferred(|| {
-        // The powers have two readers and are not written: two kernels
-        // for each reduction of a long lane, and one for the result.
+        // The powers have two readers and are not written, and one
+        // kernel reduces each lane twice and writes the result.
         let x = wave(256 * 256, &[256, 256], TensorDevice::Cpu);
         let result = row_softmax(&x, 256);
         let (plan, storage) = Plan::collect_all(&[node(&result)]);
-        assert_eq!(kernels(&plan), 5);
+        assert_eq!(kernels(&plan), 1);
         if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2300) {
             close("softmax", &generated[0], &expected);
         }
 
-        // A small tensor keeps the powers in memory.
+        // A small tensor keeps the powers in memory: one kernel writes
+        // them and one the result.
         let small = wave(64 * 64, &[64, 64], TensorDevice::Cpu);
         let (plan, _) = Plan::collect_all(&[node(&row_softmax(&small, 64))]);
-        assert_eq!(kernels(&plan), 6);
+        assert_eq!(kernels(&plan), 2);
 
         // So does a step the program keeps, one with more readers, and
         // one that reads two large buffers.
@@ -1825,6 +1826,93 @@ fn a_gpu_device_agrees_on_arithmetic_computed_again() {
         let found = array(&row_softmax(&wave(256 * 256, &[256, 256], device), 256));
         close("softmax of long rows", &found, &expected);
         println!("RAN: arithmetic computed again on a GPU device");
+    }
+}
+
+/// A layer norm over the last axis of `x`, as `std/tensor.au` builds it.
+fn lane_norm(x: &Value, kept: &[i64], weight: &Value, bias: &Value) -> Value {
+    let mean = |value: &Value| reshape(&reduce(value, 3, Some(-1)).unwrap(), kept).unwrap();
+    let centered = binary(x, &mean(x), 1).unwrap();
+    let spread = mean(&binary(&centered, &centered, 2).unwrap());
+    let eps = host_tensor_scalar_like(vec![spread.clone(), Value::Float(0.00001)], None).unwrap();
+    let deviation = unary(&binary(&spread, &eps, 0).unwrap(), 0).unwrap();
+    let scaled = binary(&binary(&centered, &deviation, 3).unwrap(), weight, 2).unwrap();
+    binary(&scaled, bias, 0).unwrap()
+}
+
+/// The inputs of `lane_norm` over `[rows, length]` on `device`.
+fn lane_norm_of(rows: usize, length: usize, device: TensorDevice) -> Value {
+    let x = wave(rows * length, &[rows, length], device);
+    let (weight, bias) = (
+        wave(length, &[length], device),
+        wave(length, &[length], device),
+    );
+    lane_norm(&x, &[rows as i64, 1], &weight, &bias)
+}
+
+#[test]
+fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
+    let actions = |plan: &Plan| {
+        tensor_codegen::generate(plan)
+            .actions
+            .iter()
+            .filter(|action| !matches!(action, tensor_codegen::Action::Alias { .. }))
+            .count()
+    };
+    // Lanes longer than a block, a whole block, and shorter than one,
+    // whose length no thread count divides.
+    for (tag, (rows, length)) in [(96, 700), (256, 256), (700, 100)].into_iter().enumerate() {
+        let expected = array(&lane_norm_of(rows, length, TensorDevice::Cpu));
+        deferred(|| {
+            let result = lane_norm_of(rows, length, TensorDevice::Cpu);
+            let (plan, storage) = Plan::collect_all(&[node(&result)]);
+            assert_eq!(actions(&plan), 1, "{rows} lanes of {length}");
+            if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2400 + tag) {
+                close("layer norm", &generated[0], &expected);
+            }
+        });
+    }
+    let expected = array(&row_softmax(
+        &wave(300 * 300, &[300, 300], TensorDevice::Cpu),
+        300,
+    ));
+    deferred(|| {
+        // The largest element and the sum use their own folds.
+        let x = wave(300 * 300, &[300, 300], TensorDevice::Cpu);
+        let (plan, storage) = Plan::collect_all(&[node(&row_softmax(&x, 300))]);
+        assert_eq!(actions(&plan), 1);
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2410) {
+            close("softmax", &generated[0], &expected);
+        }
+
+        // A reduction the program keeps, or that another kernel reads,
+        // has memory of its own, and so does one of a short lane.
+        let x = wave(256 * 256, &[256, 256], TensorDevice::Cpu);
+        let largest = reshape(&reduce(&x, 2, Some(1)).unwrap(), &[256, 1]).unwrap();
+        let moved = binary(&x, &largest, 1).unwrap();
+        let (plan, _) = Plan::collect_all(&[node(&moved)]);
+        assert_eq!(actions(&plan), 1);
+        let (plan, _) = Plan::collect_all(&[node(&moved), node(&largest)]);
+        assert_eq!(actions(&plan), 3);
+        let again = binary(&largest, &largest, 0).unwrap();
+        let (plan, _) = Plan::collect_all(&[node(&moved), node(&again)]);
+        assert_eq!(actions(&plan), 3);
+        let short = wave(4096 * 32, &[4096, 32], TensorDevice::Cpu);
+        let largest = reshape(&reduce(&short, 2, Some(1)).unwrap(), &[4096, 1]).unwrap();
+        let (plan, _) = Plan::collect_all(&[node(&binary(&short, &largest, 1).unwrap())]);
+        assert_eq!(actions(&plan), 3);
+    });
+}
+
+#[test]
+fn a_gpu_device_agrees_on_a_lane_reduced_inside_one_kernel() {
+    for device in gpus() {
+        for (rows, length) in [(96, 700), (256, 256), (700, 100)] {
+            let expected = array(&lane_norm_of(rows, length, TensorDevice::Cpu));
+            let found = array(&lane_norm_of(rows, length, device));
+            close("layer norm of lanes", &found, &expected);
+        }
+        println!("RAN: a lane reduced inside one kernel on a GPU device");
     }
 }
 

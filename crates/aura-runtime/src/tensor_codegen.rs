@@ -99,6 +99,17 @@ AURA_INLINE float aura_unit_f(long long seed, unsigned long long index) {
 AURA_INLINE double aura_unit_d(long long seed, unsigned long long index) {
     return (double)(aura_bits(seed, index) >> 11) * 1.1102230246251565e-16;
 }
+#ifdef AURA_HOST_HARNESS
+#define AURA_SHARED
+#define AURA_LANE if (threadIdx.x != 0) return;
+#define AURA_PHASE(CALL) for (int t = 0; t < 256; t++) { CALL; }
+#define AURA_LAST(CALL) for (int t = 0; t < 256; t++) { CALL; }
+#else
+#define AURA_SHARED __shared__
+#define AURA_LANE const int t = threadIdx.x;
+#define AURA_PHASE(CALL) CALL; __syncthreads();
+#define AURA_LAST(CALL) CALL;
+#endif
 AURA_INLINE float aura_normal_f(long long seed, unsigned long long index) {
     float first = aura_unit_f(seed, 2 * index), second = aura_unit_f(seed, 2 * index + 1);
     return sqrtf(-2.0f * logf(1.0f - first)) * cosf(6.283185307179586f * second);
@@ -143,6 +154,14 @@ fn lane_parts(inner: usize, length: usize) -> Option<usize> {
     }
     Some(parts)
 }
+
+/// The shortest lane that one block of threads computes whole: its
+/// reductions and the arithmetic that reads them.
+const BLOCK_LANE: usize = 64;
+
+/// The partial results one thread folds in the second stage of a
+/// reduction inside a block.
+const BLOCK_FOLD: usize = 16;
 
 /// The most threads of an elementwise kernel that shares its launch.
 const GROUPED_THREADS: usize = 1 << 20;
@@ -268,6 +287,14 @@ struct Generator<'a> {
     /// The results each kernel writes beside its own: steps only that
     /// kernel reads, which the program keeps.
     beside: Vec<Vec<usize>>,
+    /// For an elementwise step whose kernel also reduces its lanes, the
+    /// reductions in plan order: each the reduction and the slot the
+    /// kernel reads it through.
+    lanes: Vec<Vec<(usize, usize)>>,
+    /// Whether a slot lives only inside a kernel of `lanes`.
+    in_lane: Vec<bool>,
+    /// The slots the kernel being emitted holds as one value for a lane.
+    held: Vec<usize>,
     /// The places in `actions` of the elementwise kernels, whose launch
     /// kernels are emitted last.
     maps: Vec<usize>,
@@ -477,15 +504,156 @@ impl<'a> Generator<'a> {
                 beside[owner].push(index);
             }
         }
+        let (lanes, in_lane) = Self::lane_kernels(plan, &materialized, &beside);
         Self {
             plan,
             materialized,
             beside,
+            lanes,
+            in_lane,
+            held: Vec::new(),
             maps: Vec::new(),
             source: PREAMBLE.to_string(),
             actions: Vec::new(),
             buffers: count,
         }
+    }
+
+    /// Finds the elementwise steps that read reductions of their own
+    /// lanes, as a layer norm reads the mean and the spread of a lane and
+    /// a softmax its largest element and its sum. One kernel computes
+    /// such a step: a block of threads takes a lane, reduces it, and
+    /// writes the result, with no memory for the reductions in between.
+    fn lane_kernels(
+        plan: &Plan,
+        materialized: &[bool],
+        beside: &[Vec<usize>],
+    ) -> (Vec<Vec<(usize, usize)>>, Vec<bool>) {
+        let count = plan.slots.len();
+        let mut users = vec![Vec::new(); count];
+        for (index, slot) in plan.slots.iter().enumerate() {
+            if let Slot::Step { inputs, .. } = slot {
+                for &input in inputs {
+                    if !users[input].contains(&index) {
+                        users[input].push(index);
+                    }
+                }
+            }
+        }
+        let mut lanes = vec![Vec::new(); count];
+        let mut in_lane = vec![false; count];
+        for index in 0..count {
+            let Slot::Step {
+                operation,
+                inputs,
+                shape,
+                ..
+            } = &plan.slots[index]
+            else {
+                continue;
+            };
+            let Some(&length) = shape.last() else {
+                continue;
+            };
+            if !materialized[index]
+                || !fuses(operation)
+                || matches!(operation, Operation::Reshape(_))
+                || !beside[index].is_empty()
+                || length < BLOCK_LANE
+            {
+                continue;
+            }
+            let mut kept: Vec<usize> = shape.clone();
+            *kept.last_mut().expect("the shape has a last axis") = 1;
+            // The reduction a kernel of `index` can hold, read through
+            // `slot`: one of the last axis of a tensor of this shape, kept
+            // as an axis of length one.
+            let held = |slot: usize| {
+                let Slot::Step {
+                    operation: Operation::Reshape(_),
+                    inputs,
+                    shape: reshaped,
+                    ..
+                } = &plan.slots[slot]
+                else {
+                    return None;
+                };
+                let Slot::Step {
+                    operation:
+                        Operation::Reduce {
+                            reduction,
+                            axis: Some(axis),
+                        },
+                    inputs: operands,
+                    dtype,
+                    ..
+                } = &plan.slots[inputs[0]]
+                else {
+                    return None;
+                };
+                let last = *axis == -1 || *axis == shape.len() as i64 - 1;
+                (last
+                    && (0..=3).contains(reduction)
+                    && is_float(dtype_of(*dtype))
+                    && *reshaped == kept
+                    && slot_shape(&plan.slots[operands[0]]) == shape.as_slice()
+                    && users[inputs[0]].len() == 1
+                    && !plan.outputs.contains(&slot)
+                    && !plan.outputs.contains(&inputs[0]))
+                .then_some(inputs[0])
+            };
+            let mut found: Vec<(usize, usize)> = Vec::new();
+            let mut seen = vec![index];
+            let mut waiting: Vec<usize> = inputs.clone();
+            while let Some(at) = waiting.pop() {
+                if seen.contains(&at) {
+                    continue;
+                }
+                seen.push(at);
+                let Slot::Step { inputs, .. } = &plan.slots[at] else {
+                    continue;
+                };
+                if !materialized[at] {
+                    waiting.extend(inputs);
+                } else if let Some(reduction) = held(at) {
+                    found.push((reduction, at));
+                    let Slot::Step { inputs, .. } = &plan.slots[reduction] else {
+                        unreachable!("a reduction is a step")
+                    };
+                    waiting.push(inputs[0]);
+                }
+            }
+            // Every kernel that reads a held reduction is this one.
+            let inside = |slot: usize| slot == index || found.iter().any(|&(r, _)| r == slot);
+            let only_here = found.iter().all(|&(_, through)| {
+                let mut waiting = users[through].clone();
+                let mut seen = Vec::new();
+                while let Some(at) = waiting.pop() {
+                    if seen.contains(&at) {
+                        continue;
+                    }
+                    seen.push(at);
+                    if inside(at) {
+                        continue;
+                    }
+                    if materialized[at] || users[at].is_empty() {
+                        return false;
+                    }
+                    waiting.extend(&users[at]);
+                }
+                true
+            });
+            if found.is_empty() || !only_here {
+                continue;
+            }
+            found.sort_unstable();
+            for &(reduction, through) in &found {
+                in_lane[reduction] = true;
+                in_lane[through] = true;
+            }
+            lanes[index] = found;
+        }
+        (lanes, in_lane)
     }
 
     fn shape(&self, slot: usize) -> &'a [usize] {
@@ -537,7 +705,9 @@ impl<'a> Generator<'a> {
     /// The C expression for the element of `slot` at the linear index the
     /// expression `index` gives, inside kernel `kernel`.
     fn element(&self, kernel: usize, slot: usize, index: &str, arguments: &str) -> String {
-        if self.materialized[slot] {
+        if self.held.contains(&slot) {
+            format!("p{slot}[0]")
+        } else if self.materialized[slot] {
             format!("p{slot}[{index}]")
         } else {
             format!("v{kernel}_{slot}({index}{arguments})")
@@ -755,6 +925,174 @@ impl<'a> Generator<'a> {
         });
     }
 
+    /// Emits `{name}_all`, which a test on the host calls with one array
+    /// of buffers when a kernel takes many.
+    fn all_buffers(&mut self, name: &str, types: &[&str]) {
+        if types.len() <= HARNESS_POINTERS {
+            return;
+        }
+        let passed: Vec<String> = types
+            .iter()
+            .enumerate()
+            .map(|(place, ty)| format!("({ty}*)buffers[{place}]"))
+            .collect();
+        writeln!(
+            self.source,
+            "#ifdef AURA_HOST_HARNESS\nextern \"C\" void {name}_all(void** buffers) {{ {name}({}); }}\n#endif",
+            passed.join(", ")
+        )
+        .expect("writing to a string cannot fail");
+    }
+
+    /// One kernel for the elementwise step `slot` and the reductions of
+    /// its lanes in `self.lanes[slot]`. A block of threads takes one lane.
+    /// For each reduction in turn, every thread reduces the elements a
+    /// block apart from its own, a few threads fold what the block wrote,
+    /// and thread zero keeps the result for the block. Then the threads
+    /// write the lane of the result.
+    fn lane(&mut self, slot: usize) {
+        let reductions = self.lanes[slot].clone();
+        let operand_of = |generator: &Self, reduction: usize| match &generator.plan.slots[reduction]
+        {
+            Slot::Step { inputs, .. } => inputs[0],
+            Slot::Leaf { .. } => unreachable!("a reduction is a step"),
+        };
+        let mut leaves = Vec::new();
+        self.kernel_leaves(slot, &mut leaves);
+        for &(reduction, _) in &reductions {
+            for leaf in self.operand_leaves(operand_of(self, reduction)) {
+                if !leaves.contains(&leaf) {
+                    leaves.push(leaf);
+                }
+            }
+        }
+        leaves.sort_unstable();
+        self.held = reductions.iter().map(|&(_, through)| through).collect();
+        let mut done = Vec::new();
+        for &(reduction, _) in &reductions {
+            let operand = operand_of(self, reduction);
+            if !self.materialized[operand] {
+                self.emit_value(slot, operand, &leaves, &mut done);
+            }
+        }
+        self.materialized[slot] = false;
+        self.emit_value(slot, slot, &leaves, &mut done);
+        self.materialized[slot] = true;
+        let (parameters, arguments) = self.signature(&leaves);
+        let shape = self.shape(slot);
+        let length = shape[shape.len() - 1];
+        let count = len(shape);
+        let lanes = count / length;
+        let active = length.min(BLOCK_THREADS);
+        let folded = active.min(BLOCK_FOLD);
+        let result = c_type(self.dtype(slot));
+        let (mut shared, mut body) = (String::new(), String::new());
+        for (place, &(reduction, through)) in reductions.iter().enumerate() {
+            let Slot::Step {
+                operation:
+                    Operation::Reduce {
+                        reduction: code, ..
+                    },
+                ..
+            } = &self.plan.slots[reduction]
+            else {
+                unreachable!("a lane holds reductions")
+            };
+            let dtype = self.dtype(reduction);
+            let ty = c_type(dtype);
+            let suffix = if dtype == ArrayDType::Float64 {
+                "d"
+            } else {
+                "f"
+            };
+            let combine = |value: &str| match code {
+                1 => format!("aura_min_{suffix}(acc, {value})"),
+                2 => format!("aura_max_{suffix}(acc, {value})"),
+                _ => format!("acc + {value}"),
+            };
+            let finish = if *code == 3 {
+                format!("acc / ({ty}){length}")
+            } else {
+                "acc".to_string()
+            };
+            let operand = operand_of(self, reduction);
+            let first = self.element(slot, operand, "(start + t)", &arguments);
+            let next = self.element(slot, operand, "(start + k)", &arguments);
+            writeln!(
+                self.source,
+                "AURA_INLINE void l{slot}_{place}a(int t, long long lane, {ty}* part{parameters}) {{\n    \
+                 if (t >= {active}) return;\n    \
+                 const long long start = lane * {length}LL;\n    \
+                 {ty} acc = {first};\n    \
+                 for (long long k = t + {block}LL; k < {length}LL; k += {block}LL) acc = {step};\n    \
+                 part[t] = acc;\n}}\n\
+                 AURA_INLINE void l{slot}_{place}b(int t, {ty}* part) {{\n    \
+                 if (t >= {folded}) return;\n    \
+                 {ty} acc = part[t];\n    \
+                 for (int k = t + {fold}; k < {active}; k += {fold}) acc = {join};\n    \
+                 part[t] = acc;\n}}\n\
+                 AURA_INLINE void l{slot}_{place}c(int t, const {ty}* part, {ty}* kept) {{\n    \
+                 if (t != 0) return;\n    \
+                 {ty} acc = part[0];\n    \
+                 for (int k = 1; k < {folded}; k++) acc = {join};\n    \
+                 kept[0] = {finish};\n}}",
+                block = BLOCK_THREADS,
+                fold = BLOCK_FOLD,
+                step = combine(&next),
+                join = combine("part[k]"),
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                shared,
+                "    AURA_SHARED {ty} q{place}[{block}]; AURA_SHARED {ty} p{through}[1];",
+                block = BLOCK_THREADS,
+            )
+            .expect("writing to a string cannot fail");
+            writeln!(
+                body,
+                "    AURA_PHASE(l{slot}_{place}a(t, lane, q{place}{arguments}))\n    \
+                 AURA_PHASE(l{slot}_{place}b(t, q{place}))\n    \
+                 AURA_PHASE(l{slot}_{place}c(t, q{place}, p{through}))",
+            )
+            .expect("writing to a string cannot fail");
+        }
+        self.held.clear();
+        let inputs: Vec<usize> = leaves
+            .iter()
+            .copied()
+            .filter(|leaf| !self.in_lane[*leaf])
+            .collect();
+        let (kernel_parameters, _) = self.signature(&inputs);
+        writeln!(
+            self.source,
+            "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{parameters}) {{\n    \
+             const long long start = lane * {length}LL;\n    \
+             for (long long k = t; k < {length}LL; k += {block}LL) \
+             out[start + k] = v{slot}_{slot}(start + k{arguments});\n}}\n\
+             extern \"C\" __global__ void k{slot}({result}* out{kernel_parameters}) {{\n    \
+             AURA_LANE\n    \
+             const long long lane = blockIdx.x;\n\
+             {shared}{body}    \
+             AURA_LAST(l{slot}_w(t, lane, out{arguments}))\n}}",
+            block = BLOCK_THREADS,
+        )
+        .expect("writing to a string cannot fail");
+        let name = format!("k{slot}");
+        let types: Vec<&str> = std::iter::once(result)
+            .chain(inputs.iter().map(|&leaf| c_type(self.dtype(leaf))))
+            .collect();
+        self.all_buffers(&name, &types);
+        self.actions.push(Action::Kernel {
+            name,
+            output: slot,
+            bytes: count * element_bytes(self.dtype(slot)),
+            threads: lanes * BLOCK_THREADS,
+            inputs,
+            clear: false,
+            more: Vec::new(),
+        });
+    }
+
     /// Emits the kernels of the elementwise actions. Small ones that
     /// follow each other and do not read each other's results share one
     /// launch: each thread runs the body its index falls in. An optimizer
@@ -905,23 +1243,12 @@ impl<'a> Generator<'a> {
             parameters.join(", ")
         )
         .expect("writing to a string cannot fail");
-        if outputs.len() + inputs.len() > HARNESS_POINTERS {
-            // A test on the host calls a kernel of many buffers through
-            // one array of them.
-            let passed: Vec<String> = outputs
-                .iter()
-                .map(|(slot, _)| c_type(self.dtype(*slot)))
-                .chain(inputs.iter().map(|&slot| c_type(self.dtype(slot))))
-                .enumerate()
-                .map(|(place, ty)| format!("({ty}*)buffers[{place}]"))
-                .collect();
-            writeln!(
-                self.source,
-                "#ifdef AURA_HOST_HARNESS\nextern \"C\" void {name}_all(void** buffers) {{ {name}({}); }}\n#endif",
-                passed.join(", ")
-            )
-            .expect("writing to a string cannot fail");
-        }
+        let types: Vec<&str> = outputs
+            .iter()
+            .map(|(slot, _)| c_type(self.dtype(*slot)))
+            .chain(inputs.iter().map(|&slot| c_type(self.dtype(slot))))
+            .collect();
+        self.all_buffers(&name, &types);
         actions.push(Action::Kernel {
             name,
             output: outputs[0].0,
@@ -1315,10 +1642,11 @@ impl<'a> Generator<'a> {
             else {
                 continue;
             };
-            if !self.materialized[slot] {
+            if !self.materialized[slot] || self.in_lane[slot] {
                 continue;
             }
             match operation {
+                _ if !self.lanes[slot].is_empty() => self.lane(slot),
                 Operation::Reduce { reduction, axis } => {
                     self.reduce(slot, *reduction, *axis, inputs[0]);
                 }
