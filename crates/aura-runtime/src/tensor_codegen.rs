@@ -104,11 +104,15 @@ AURA_INLINE double aura_unit_d(long long seed, unsigned long long index) {
 #define AURA_LANE if (threadIdx.x != 0) return;
 #define AURA_PHASE(CALL) for (int t = 0; t < 256; t++) { CALL; }
 #define AURA_LAST(CALL) for (int t = 0; t < 256; t++) { CALL; }
+#define AURA_HELD(TYPE, NAME) TYPE NAME[256];
+#define AURA_HOLD(NAME) (&NAME[t])
 #else
 #define AURA_SHARED __shared__
 #define AURA_LANE const int t = threadIdx.x;
 #define AURA_PHASE(CALL) CALL; __syncthreads();
 #define AURA_LAST(CALL) CALL;
+#define AURA_HELD(TYPE, NAME) TYPE NAME;
+#define AURA_HOLD(NAME) (&NAME)
 #endif
 AURA_INLINE float aura_normal_f(long long seed, unsigned long long index) {
     float first = aura_unit_f(seed, 2 * index), second = aura_unit_f(seed, 2 * index + 1);
@@ -1100,7 +1104,12 @@ impl<'a> Generator<'a> {
             let mut first = self.element(slot, operand, "(start + t)", &arguments);
             let mut next = self.element(slot, operand, "(start + k)", &arguments);
             let kept = in_place.is_some() && place + 1 == reductions.len();
-            let (written, passed) = if kept {
+            // A lane no longer than a block gives each thread one
+            // element, which the thread holds and does not write twice.
+            let (written, passed) = if kept && length <= BLOCK_THREADS {
+                first = format!("(hold[0] = {first})");
+                (format!(", {ty}* hold"), ", AURA_HOLD(r)")
+            } else if kept {
                 first = format!("(out[start + t] = {first})");
                 next = format!("(out[start + k] = {next})");
                 (format!(", {ty}* out"), ", out")
@@ -1152,26 +1161,36 @@ impl<'a> Generator<'a> {
             .filter(|leaf| !self.in_lane[*leaf])
             .collect();
         let (kernel_parameters, _) = self.signature(&inputs);
+        let holds = in_place.is_some() && length <= BLOCK_THREADS;
         let value = match (in_place, reductions.last()) {
             (Some(code), Some(&(_, through))) => binary(
                 code,
                 self.dtype(slot),
-                "out[start + k]",
+                if holds { "hold[0]" } else { "out[start + k]" },
                 &format!("p{through}[0]"),
             ),
             _ => format!("v{slot}_{slot}(start + k{arguments})"),
         };
+        let (held, hold, holding) = if holds {
+            (
+                format!("    AURA_HELD({result}, r)\n"),
+                format!(", {result}* hold"),
+                ", AURA_HOLD(r)",
+            )
+        } else {
+            (String::new(), String::new(), "")
+        };
         writeln!(
             self.source,
-            "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{parameters}) {{\n    \
+            "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{hold}{parameters}) {{\n    \
              const long long start = lane * {length}LL;\n    \
              for (long long k = t; k < {length}LL; k += {block}LL) \
              out[start + k] = {value};\n}}\n\
              extern \"C\" __global__ void k{slot}({result}* out{kernel_parameters}) {{\n    \
              AURA_LANE\n    \
              const long long lane = blockIdx.x;\n\
-             {shared}{body}    \
-             AURA_LAST(l{slot}_w(t, lane, out{arguments}))\n}}",
+             {shared}{held}{body}    \
+             AURA_LAST(l{slot}_w(t, lane, out{holding}{arguments}))\n}}",
             block = BLOCK_THREADS,
         )
         .expect("writing to a string cannot fail");

@@ -1993,11 +1993,19 @@ fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
 /// A softmax whose largest element is read through two reshapes, as
 /// `std/tensor.au` builds it, over a `[2, 4, 64, 128]` tensor.
 fn stacked_softmax(device: TensorDevice) -> Value {
-    let x = wave(2 * 4 * 64 * 128, &[2, 4, 64, 128], device);
-    let kept = |value: &Value| reshape(&reduce(value, 2, Some(-1)).unwrap(), &[2, 4, 64, 1]);
-    let largest = reshape(&kept(&x).unwrap(), &[2, 4, 64, 1]).unwrap();
+    stacked_softmax_of(64, 128, device)
+}
+
+/// The same softmax with lanes of `length` elements. A lane longer than
+/// a block of threads is divided in place; a shorter one is held by its
+/// threads.
+fn stacked_softmax_of(rows: usize, length: usize, device: TensorDevice) -> Value {
+    let rows_i = rows as i64;
+    let x = wave(2 * 4 * rows * length, &[2, 4, rows, length], device);
+    let kept = |value: &Value| reshape(&reduce(value, 2, Some(-1)).unwrap(), &[2, 4, rows_i, 1]);
+    let largest = reshape(&kept(&x).unwrap(), &[2, 4, rows_i, 1]).unwrap();
     let powers = unary(&binary(&x, &largest, 1).unwrap(), 2).unwrap();
-    let total = reshape(&reduce(&powers, 0, Some(-1)).unwrap(), &[2, 4, 64, 1]).unwrap();
+    let total = reshape(&reduce(&powers, 0, Some(-1)).unwrap(), &[2, 4, rows_i, 1]).unwrap();
     binary(&powers, &total, 3).unwrap()
 }
 
@@ -2027,6 +2035,7 @@ fn a_lane_kernel_reads_through_reshapes_and_feeds_products() {
     let cpu = TensorDevice::Cpu;
     let expected = array(&flat(&normed(cpu)));
     let expected_softmax = array(&stacked_softmax(cpu));
+    let expected_long = array(&stacked_softmax_of(32, 700, cpu));
     deferred(|| {
         // One reshape reads the layer norm: the kernel writes the
         // flattened lanes.
@@ -2064,6 +2073,12 @@ fn a_lane_kernel_reads_through_reshapes_and_feeds_products() {
         if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2422) {
             close("softmax through reshapes", &generated[0], &expected_softmax);
         }
+        // Lanes longer than a block of threads are divided in place.
+        let (plan, storage) = Plan::collect_all(&[node(&stacked_softmax_of(32, 700, cpu))]);
+        assert_eq!(count(&plan), (1, 0));
+        if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2423) {
+            close("softmax of long lanes", &generated[0], &expected_long);
+        }
 
         // A reader that moves elements between lanes needs the
         // reduction in memory.
@@ -2083,6 +2098,11 @@ fn a_gpu_device_agrees_on_a_lane_reduced_inside_one_kernel() {
             "softmax through reshapes",
             &array(&stacked_softmax(device)),
             &array(&stacked_softmax(TensorDevice::Cpu)),
+        );
+        close(
+            "softmax of long lanes",
+            &array(&stacked_softmax_of(32, 700, device)),
+            &array(&stacked_softmax_of(32, 700, TensorDevice::Cpu)),
         );
     }
     for device in gpus() {
