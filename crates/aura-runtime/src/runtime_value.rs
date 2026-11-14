@@ -18845,9 +18845,28 @@ fn host_string_map_value(entries: BTreeMap<String, String>) -> Value {
 }
 
 pub fn host_process_args() -> Vec<String> {
+    // A musl program's `main` is not Rust's, and Rust's standard library
+    // learns the arguments of such a program only from glibc. The kernel
+    // keeps them too.
+    #[cfg(all(target_os = "linux", target_env = "musl"))]
+    if let Ok(command_line) = std::fs::read("/proc/self/cmdline") {
+        return command_line_args(&command_line);
+    }
     std::env::args_os()
         .skip(1)
         .map(|argument| argument.to_string_lossy().into_owned())
+        .collect()
+}
+
+/// The arguments after the program name in the kernel's record of a
+/// command line, where a NUL byte ends each argument.
+#[cfg_attr(not(all(target_os = "linux", target_env = "musl")), allow(dead_code))]
+fn command_line_args(command_line: &[u8]) -> Vec<String> {
+    let command_line = command_line.strip_suffix(&[0]).unwrap_or(command_line);
+    command_line
+        .split(|byte| *byte == 0)
+        .skip(1)
+        .map(|argument| String::from_utf8_lossy(argument).into_owned())
         .collect()
 }
 

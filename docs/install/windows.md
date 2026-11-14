@@ -81,6 +81,12 @@ Aura keeps built programs, proofs and git dependencies under
 `%USERPROFILE%\.cache\aura`. Set `AURA_CACHE_DIR` to keep built programs
 and proofs elsewhere.
 
+## Install With Chocolatey Instead
+
+`choco install aura --pre` installs the same files as a Chocolatey
+package. See
+[Install with a package manager](/install/package-managers#chocolatey).
+
 ## Differences From Linux And macOS
 
 - A program's executable has the `.exe` extension, and `aura build --debug`

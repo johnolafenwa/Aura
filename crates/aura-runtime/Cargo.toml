@@ -10,6 +10,7 @@ crate-type = ["rlib", "staticlib"]
 
 [dependencies]
 aura-core = { path = "../aura-core" }
+aura-mem = { path = "../aura-mem" }
 base64 = "0.22"
 corosensei = "0.3.3"
 flate2 = { version = "1.1.11", default-features = false, features = ["zlib-rs"] }

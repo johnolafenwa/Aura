@@ -24,7 +24,7 @@ use std::os::fd::RawFd;
 #[cfg(windows)]
 use crate::host_io::RawIo;
 #[cfg(windows)]
-use crate::socket_watcher::SocketWatcher;
+use crate::socket_watcher::{LocalSocketWaits, SocketWatcher};
 
 const WAKER_TOKEN: Token = Token(0);
 const FIRST_FD_TOKEN: usize = 1;
@@ -282,9 +282,12 @@ pub struct RuntimeReactor {
     key_fds: IdHashMap<WaitKey, BTreeSet<RawFd>>,
     #[cfg(unix)]
     next_fd_token: usize,
-    /// The waits that have a socket with the shared watcher.
+    /// The waits that have a socket, polled here while fresh and by the
+    /// shared watcher after that.
     #[cfg(windows)]
     watched_keys: IdHashSet<WaitKey>,
+    #[cfg(windows)]
+    socket_waits: LocalSocketWaits,
 }
 
 impl RuntimeReactor {
@@ -323,6 +326,8 @@ impl RuntimeReactor {
             next_fd_token: FIRST_FD_TOKEN,
             #[cfg(windows)]
             watched_keys: IdHashSet::default(),
+            #[cfg(windows)]
+            socket_waits: LocalSocketWaits::default(),
         })
     }
 
@@ -405,6 +410,16 @@ impl RuntimeReactor {
                     self.wait_briefly(wait)?;
                 }
                 _ => {
+                    // A fresh socket wait is answered on this thread or
+                    // moved to the watcher before this thread may sleep.
+                    #[cfg(windows)]
+                    if !self.socket_waits.is_empty() {
+                        self.poll_mio_once(Some(Duration::ZERO))?;
+                        if self.ready.is_empty() && !self.inbox.signaled.load(Ordering::Acquire) {
+                            std::hint::spin_loop();
+                        }
+                        continue;
+                    }
                     if !self.begin_blocking_poll() {
                         continue;
                     }
@@ -467,9 +482,9 @@ impl RuntimeReactor {
         {
             !self.key_fds.is_empty()
         }
-        #[cfg(not(unix))]
+        #[cfg(windows)]
         {
-            false
+            !self.socket_waits.is_empty()
         }
     }
 
@@ -527,6 +542,16 @@ impl RuntimeReactor {
         for (token, readable, writable, error) in fd_events {
             self.dispatch_fd_event(token, readable, writable, error);
         }
+        #[cfg(windows)]
+        if !self.socket_waits.is_empty() {
+            let handle = self.handle();
+            let fired =
+                self.socket_waits
+                    .poll(Instant::now(), SocketWatcher::global()?, &handle)?;
+            for key in fired {
+                self.mark_ready(key);
+            }
+        }
         Ok(())
     }
 
@@ -566,6 +591,10 @@ impl RuntimeReactor {
     pub fn spin_for_notification_or(&self, budget: Duration, mut stop: impl FnMut() -> bool) {
         #[cfg(unix)]
         if !self.key_fds.is_empty() {
+            return;
+        }
+        #[cfg(windows)]
+        if !self.socket_waits.is_empty() {
             return;
         }
         if budget.is_zero() {
@@ -706,14 +735,17 @@ impl RuntimeReactor {
         }
         #[cfg(windows)]
         if self.watched_keys.remove(&key) {
-            SocketWatcher::global()?.unwatch(&self.handle(), key);
+            let handle = self.handle();
+            self.socket_waits
+                .remove(key, SocketWatcher::global()?, &handle);
         }
         Ok(())
     }
 
     /// Wakes `key` once `socket` has `interest`, an error, or a closed
-    /// peer. The shared watcher thread polls the socket and reports through
-    /// this reactor's inbox.
+    /// peer. This thread polls the socket while the wait is fresh; after
+    /// that the shared watcher thread polls it and reports through this
+    /// reactor's inbox.
     #[cfg(windows)]
     pub fn add_fd(&mut self, key: WaitKey, socket: RawIo, interest: IoInterest) -> io::Result<()> {
         if !self.is_waiting(key) {
@@ -733,7 +765,8 @@ impl RuntimeReactor {
             events |= crate::host_io::POLLOUT;
         }
         self.watched_keys.insert(key);
-        SocketWatcher::global()?.watch(socket, events, self.handle(), key)
+        self.socket_waits.add(key, socket, events, Instant::now());
+        Ok(())
     }
 
     #[cfg(unix)]
@@ -1458,6 +1491,84 @@ mod tests {
 
         assert_eq!(result, 42);
         assert_eq!(calls, 2);
+    }
+
+    fn socket_pair() -> (std::net::TcpStream, std::net::TcpStream) {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let client = std::net::TcpStream::connect(listener.local_addr().unwrap()).unwrap();
+        let (server, _) = listener.accept().unwrap();
+        (client, server)
+    }
+
+    #[test]
+    fn a_socket_wait_wakes_when_data_is_already_on_its_way() {
+        use crate::host_io::AsRawFd;
+        use std::io::Write;
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let (mut client, server) = socket_pair();
+        let key = WaitKey(1, 1);
+        reactor.begin_wait(key).unwrap();
+        client.write_all(b"x").unwrap();
+        reactor
+            .add_fd(key, server.as_raw_fd(), IoInterest::READABLE)
+            .unwrap();
+        assert_eq!(reactor.poll(Some(Duration::from_secs(10))).unwrap(), [key]);
+        assert!(!reactor.is_waiting(key));
+    }
+
+    #[test]
+    fn a_quiet_socket_wait_sleeps_and_wakes_when_data_arrives_later() {
+        use crate::host_io::AsRawFd;
+        use std::io::Write;
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let (mut client, server) = socket_pair();
+        let key = WaitKey(1, 1);
+        reactor.begin_wait(key).unwrap();
+        reactor
+            .add_fd(key, server.as_raw_fd(), IoInterest::READABLE)
+            .unwrap();
+        assert!(reactor
+            .poll(Some(Duration::from_millis(30)))
+            .unwrap()
+            .is_empty());
+        let writer = thread::spawn(move || {
+            thread::sleep(Duration::from_millis(30));
+            client.write_all(b"x").unwrap();
+            client
+        });
+        assert_eq!(reactor.poll(Some(Duration::from_secs(10))).unwrap(), [key]);
+        drop(writer.join().unwrap());
+    }
+
+    #[test]
+    fn a_cancelled_socket_wait_never_wakes() {
+        use crate::host_io::AsRawFd;
+        use std::io::Write;
+        let mut reactor = RuntimeReactor::new().unwrap();
+        let (mut client, server) = socket_pair();
+        let fresh = WaitKey(1, 1);
+        let quiet = WaitKey(2, 1);
+        reactor.begin_wait(quiet).unwrap();
+        reactor
+            .add_fd(quiet, server.as_raw_fd(), IoInterest::READABLE)
+            .unwrap();
+        // Long enough for the quiet wait to leave the reactor's own thread
+        // on a host that hands it to a watcher.
+        assert!(reactor
+            .poll(Some(Duration::from_millis(30)))
+            .unwrap()
+            .is_empty());
+        reactor.cancel_wait(quiet).unwrap();
+        reactor.begin_wait(fresh).unwrap();
+        reactor
+            .add_fd(fresh, server.as_raw_fd(), IoInterest::READABLE)
+            .unwrap();
+        reactor.cancel_wait(fresh).unwrap();
+        client.write_all(b"x").unwrap();
+        assert!(reactor
+            .poll(Some(Duration::from_millis(50)))
+            .unwrap()
+            .is_empty());
     }
 
     #[cfg(unix)]

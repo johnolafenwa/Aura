@@ -35,6 +35,15 @@ The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
 and `SHA256SUMS`. It rejects the archive if the checksum does not match, and
 otherwise installs under `~/.local`.
 
+To build programs for another Linux target with `aura build --target`,
+name the target and the installer adds its target pack:
+
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+```
+
+Target packs are in the releases from the one after 0.15.
+
 ## 4. Add Aura To Bash
 
 Add `~/.local/bin` to your login environment. You only need to do this once:
@@ -88,6 +97,12 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## Install With apt Or Homebrew Instead
+
+From the release after 0.15, Aura has an apt repository for Ubuntu and
+Debian and a Homebrew formula. See
+[Install with a package manager](/install/package-managers).
+
 ## Upgrade Aura
 
 ```bash
@@ -98,7 +113,9 @@ aura --version
 `aura upgrade` downloads the current installer and verifies the published
 release checksums. It then replaces the compiler and bundled runtime in the
 same install prefix. If Aura lives in a custom location, set
-`AURA_INSTALL_PREFIX` when you upgrade.
+`AURA_INSTALL_PREFIX` when you upgrade. If apt or Homebrew installed Aura,
+`aura upgrade` prints the package manager's upgrade command, which is the
+one to use.
 
 ## Troubleshooting
 

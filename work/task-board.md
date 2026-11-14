@@ -2,6 +2,20 @@
 
 Last updated: 2026-11-13
 
+## Homebrew, apt and Chocolatey packages (built, publishing waits on John)
+
+- Target: John's 2026-11-13 ask for Homebrew, Chocolatey and apt-get
+  installs. Details are in `2026-11-13-package-managers.md`.
+- Done: the formula, the Debian package and signed apt repository, the
+  Chocolatey package, the Release workflow jobs, CI install checks for
+  all three, the install guide, and `aura upgrade` deferring to the
+  package manager.
+- Open: John creates the tap repository `johnolafenwa/homebrew-aura` and
+  the secrets `HOMEBREW_TAP_TOKEN`, `CHOCOLATEY_API_KEY` and
+  `APT_SIGNING_KEY`. The first packages ship with the release after 0.15.
+  That release's version sweep should reword "from the release after
+  0.15" in the install guides.
+
 ## More platforms: Linux on arm64 and native Windows (in progress)
 
 - Target: John's "more platforms" item. Windows has no local machine and
@@ -13,9 +27,23 @@ Last updated: 2026-11-13
   archive script, an archive smoke test and a PowerShell installer.
 - Done 2026-11-13: the `aura` command's 474 integration tests pass on
   Windows in the `windows-integration (command)` CI job.
-- Open: compiler integration tests on Windows (job
-  `windows-integration (compiler)` added, being brought to green), speed
-  measurements, musl Linux, cross-compilation.
+- Done 2026-11-13: the compiler's and runtime's 60 integration suites
+  pass on Windows in the `windows-integration (compiler)` CI job. Two
+  Windows bugs fixed on the way: an endless wait on a huge timeout, and a
+  connect to `localhost` that used its whole deadline on the first address.
+- Done: speed measured on Windows and Linux arm64 with the `Platform
+  speed` workflow. Linux arm64 tracks x86-64 Linux. Windows compute
+  programs are level with Linux against Rust.
+- In progress: Windows network programs, 1.2x to 1.6x of Rust. Socket
+  waits now start on the reactor's own thread.
+- Done: `aura build --target` for x86-64 and arm64 Linux, glibc and
+  static musl, from a Linux host (ADR-0101), with the `cross-targets` CI
+  job.
+- Done: memory routines for musl programs (`aura-mem`): musl builds run
+  0.94x to 1.09x the glibc build's time, down from 1.05x to 1.8x.
+- Done: target packs (`aura-<tag>-target-<target>.tar.gz`) built and run
+  in CI and the release workflow, `install.sh --target`, and a build
+  identity check on installed packs.
 
 ## Freestanding builds (complete)
 

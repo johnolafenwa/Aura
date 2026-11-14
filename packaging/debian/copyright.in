@@ -1,0 +1,10 @@
+Format: https://www.debian.org/doc/packaging-manuals/copyright-format/1.0/
+Upstream-Name: Aura
+Upstream-Contact: https://github.com/johnolafenwa/Aura/issues
+Source: https://github.com/johnolafenwa/Aura
+
+Files: *
+Copyright: 2026 John Olafenwa
+License: Expat
+
+License: Expat

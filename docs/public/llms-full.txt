@@ -413,6 +413,7 @@ For step-by-step instructions, pick a platform guide:
 - [macOS: Apple silicon and Intel](/install/macos)
 - [Linux: Ubuntu 24.04 and compatible x86-64 glibc hosts](/install/linux)
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
+- [Homebrew, apt and Chocolatey, from the release after 0.15](/install/package-managers)
 
 To install by hand, download the archive for your platform from the
 [v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).
@@ -473,6 +474,9 @@ native runtime. Pick the guide for the operating system where `aura` will run:
 | Ubuntu 24.04 or compatible glibc Linux, x86-64 | `x86_64-unknown-linux-gnu` | [Install on Linux](/install/linux) |
 | Windows 11, x86-64 | `x86_64-pc-windows-msvc`, from the release after 0.15 | [Install on Windows](/install/windows) |
 | Windows 11, x86-64 | Linux archive inside WSL 2 | [Install on Windows with WSL](/install/windows-wsl) |
+
+From the release after 0.15, Aura also installs with Homebrew, apt and
+Chocolatey. See [Install with a package manager](/install/package-managers).
 
 Every guide follows the same three steps.
 
@@ -581,6 +585,15 @@ The installer selects `x86_64-unknown-linux-gnu` and downloads the archive
 and `SHA256SUMS`. It rejects the archive if the checksum does not match, and
 otherwise installs under `~/.local`.
 
+To build programs for another Linux target with `aura build --target`,
+name the target and the installer adds its target pack:
+
+```bash
+curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+```
+
+Target packs are in the releases from the one after 0.15.
+
 ## 4. Add Aura To Bash
 
 Add `~/.local/bin` to your login environment. You only need to do this once:
@@ -634,6 +647,12 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## Install With apt Or Homebrew Instead
+
+From the release after 0.15, Aura has an apt repository for Ubuntu and
+Debian and a Homebrew formula. See
+[Install with a package manager](/install/package-managers).
+
 ## Upgrade Aura
 
 ```bash
@@ -644,7 +663,9 @@ aura --version
 `aura upgrade` downloads the current installer and verifies the published
 release checksums. It then replaces the compiler and bundled runtime in the
 same install prefix. If Aura lives in a custom location, set
-`AURA_INSTALL_PREFIX` when you upgrade.
+`AURA_INSTALL_PREFIX` when you upgrade. If apt or Homebrew installed Aura,
+`aura upgrade` prints the package manager's upgrade command, which is the
+one to use.
 
 ## Troubleshooting
 
@@ -776,6 +797,12 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## Install With Homebrew Instead
+
+From the release after 0.15, `brew install johnolafenwa/aura/aura` installs
+the same files under the Homebrew prefix. See
+[Install with a package manager](/install/package-managers#homebrew).
+
 ## Upgrade Aura
 
 To upgrade the installed CLI and runtime to the current published preview:
@@ -786,7 +813,8 @@ aura --version
 ```
 
 `aura upgrade` keeps the active install prefix. It uses the same verified
-installer as a fresh installation.
+installer as a fresh installation. If Homebrew installed Aura, it prints
+`brew upgrade aura`, the command to use.
 
 ## Troubleshooting
 
@@ -807,6 +835,125 @@ Run `uname -m`. Aura publishes macOS archives only for `arm64` and `x86_64`.
 
 Run `xcode-select -p`. If it fails, install or repair the Xcode command-line
 tools before you use `aura build` or `--backend direct`.
+
+Continue with the [VS Code extension guide](/install/vscode) or
+[Hello, world](/book/ch01-02-hello-world).
+
+## Source: docs/install/package-managers.md
+
+# Install Aura With A Package Manager
+
+Aura has packages for Homebrew, apt and Chocolatey. They ship from the
+release after 0.15. On 0.15, use the installer in the
+[platform guides](/install/).
+
+A package installs the same `aura` command and native runtime as the
+installer. The package manager owns the files, so upgrade and remove Aura
+through it. `aura upgrade` prints the command to use.
+
+| Package manager | Hosts | Install |
+| --- | --- | --- |
+| [Homebrew](#homebrew) | macOS 15 on Apple silicon and Intel, glibc Linux on x86-64 and arm64 | `brew install johnolafenwa/aura/aura` |
+| [apt](#apt) | Ubuntu 24.04 or later and Debian 13 or later, on x86-64 and arm64 | `sudo apt-get install aura` |
+| [Chocolatey](#chocolatey) | Windows 11 on x86-64 | `choco install aura --pre` |
+
+## Homebrew
+
+```bash
+brew install johnolafenwa/aura/aura
+aura --version
+```
+
+The formula lives in the `johnolafenwa/homebrew-aura` tap, and `brew`
+adds the tap on first use. It downloads the release archive for the host
+and checks it against the SHA-256 checksum in the formula.
+
+`aura build` and native `aura run` link programs with the system C
+compiler. On macOS, install the Xcode command-line tools with
+`xcode-select --install`. On Linux, install `build-essential` or your
+distribution's equivalent.
+
+To upgrade or remove Aura:
+
+```bash
+brew upgrade aura
+brew uninstall aura
+```
+
+## apt
+
+Add Aura's signing key and repository once:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y curl ca-certificates
+curl -fsSL https://johnolafenwa.github.io/Aura/apt/aura-archive-keyring.gpg |
+  sudo tee /usr/share/keyrings/aura-archive-keyring.gpg >/dev/null
+echo "deb [signed-by=/usr/share/keyrings/aura-archive-keyring.gpg] https://johnolafenwa.github.io/Aura/apt stable main" |
+  sudo tee /etc/apt/sources.list.d/aura.list >/dev/null
+```
+
+Then install Aura:
+
+```bash
+sudo apt-get update
+sudo apt-get install -y aura
+aura --version
+```
+
+The package installs `/usr/bin/aura`, the runtime under `/usr/lib/aura`,
+and the examples under `/usr/share/aura/examples`. It recommends `gcc` and
+`libc6-dev`, which `aura build` and native `aura run` link programs with,
+so apt installs them too unless you pass `--no-install-recommends`.
+
+The repository holds the newest release. Its package needs glibc 2.39 or
+later, which Ubuntu 24.04 and Debian 13 have.
+
+To upgrade or remove Aura:
+
+```bash
+sudo apt-get update && sudo apt-get install --only-upgrade aura
+sudo apt-get remove aura
+```
+
+### Install One Package File
+
+Each release also carries its Debian packages as files, named like
+`aura-v0.16.0-preview-amd64.deb` and `aura-v0.16.0-preview-arm64.deb`.
+To install one without adding the repository, download it from the
+[releases page](https://github.com/johnolafenwa/Aura/releases) and run:
+
+```bash
+sudo apt-get install ./aura-v0.16.0-preview-amd64.deb
+```
+
+## Chocolatey
+
+In an administrator PowerShell:
+
+```powershell
+choco install aura --pre
+aura --version
+```
+
+Aura is a technical preview, so its versions are prereleases and
+Chocolatey needs `--pre` to see them. The package carries the files of the
+Windows release archive and downloads nothing else.
+
+`aura build` and native `aura run` link programs with the Microsoft
+linker. If the machine does not have the Visual Studio C++ build tools,
+install them too:
+
+```powershell
+choco install visualstudio2022buildtools visualstudio2022-workload-vctools
+```
+
+To upgrade or remove Aura:
+
+```powershell
+choco upgrade aura --pre
+choco uninstall aura
+```
 
 Continue with the [VS Code extension guide](/install/vscode) or
 [Hello, world](/book/ch01-02-hello-world).
@@ -1193,6 +1340,12 @@ running the installer.
 Aura keeps built programs, proofs and git dependencies under
 `%USERPROFILE%\.cache\aura`. Set `AURA_CACHE_DIR` to keep built programs
 and proofs elsewhere.
+
+## Install With Chocolatey Instead
+
+`choco install aura --pre` installs the same files as a Chocolatey
+package. See
+[Install with a package manager](/install/package-managers#chocolatey).
 
 ## Differences From Linux And macOS
 
@@ -3179,6 +3332,7 @@ aura check app.au
 | `aura build --remove-proved-checks -o path file.au` | Build a native binary without the bounds, overflow, divisor, and `assert` checks `aura verify` proves can never fail. See [Verification](/manual/verification#trust). |
 | `aura build --freestanding [--target name] -o path.o file.au` | Write one relocatable object with no dependency on the Aura runtime or an operating system. See [Freestanding Builds](/manual/freestanding). |
 | `aura check --freestanding file.au` | Type-check, then report what a freestanding build cannot compile. |
+| `aura build --target name -o path file.au` | Build a native binary for another Linux machine. See [Building for Another Machine](#building-for-another-machine). |
 | `aura build --target-cpu native -o path file.au` | Build a native binary for the instruction set of this machine's CPU. See [Target CPU](#target-cpu). |
 | `aura --offline <command> ...` | Run a package-aware command without network git access. `AURA_OFFLINE=1` sets the same mode. |
 | `aura ast file.au` | Print the syntax tree. |
@@ -3193,7 +3347,7 @@ aura check app.au
 | `aura doc [--out DIR] [--json] [paths...]` | Check each source and write one API page per module, in Markdown or JSON. See [Docstrings And API Docs](/manual/docstrings#generated-api-docs). |
 | `aura test [-k substring] [--format json] [--timeout-ms N] [paths...]` | Discover package-aware `.au` tests, select canonical case names, and report one result per case. Defaults to `tests/` and a 30-second per-case timeout. |
 | `aura verify [--solver PATH] [--timeout MS] [--function NAME] [--no-cache] [--format json] file.au` | Prove with an SMT solver that the program's contracts, arithmetic, and list indexes cannot fail. See [Verification](/manual/verification). |
-| `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. |
+| `aura upgrade` | Download and run the verified installer to replace the compiler and bundled runtime with the latest published release. When Homebrew, apt or Chocolatey installed Aura, print that package manager's upgrade command. |
 | `aura lsp` | Run the persistent JSON-lines compiler service used by the language server. |
 | `aura help` / `aura --help` | Print usage. |
 | `aura version` / `aura --version` | Print the build channel and 12-hex-digit source commit. Release archives print `aura 0.15.0-preview (0123456789ab)`. Source builds print `aura 0.15.0-dev (0123456789ab)`. |
@@ -3315,6 +3469,63 @@ A debug build runs slower than a normal one. A union, a callable, and a
 class with a field that is itself more than one word are not shown yet. A
 value whose last use has passed has already been released, so it reads
 `<unset>` or null.
+
+### Building for Another Machine
+
+On a Linux host, `aura build --target <name>` builds a program for a Linux
+machine other than the build machine:
+
+| Target | Program |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | x86-64, linked against glibc. |
+| `aarch64-unknown-linux-gnu` | arm64, linked against glibc. |
+| `x86_64-unknown-linux-musl` | x86-64, fully static. |
+| `aarch64-unknown-linux-musl` | arm64, fully static. |
+
+```bash
+aura build --target x86_64-unknown-linux-musl -o app app.au
+aura build --target aarch64-unknown-linux-gnu -o app-arm64 app.au
+```
+
+- A musl program holds its C library and names no dynamic linker. It runs
+  on any Linux kernel of its architecture: Alpine, a glibc distribution,
+  or a container image with nothing else in it.
+- A musl program runs about as fast as the glibc build of the same
+  source. On x86-64 the cross-language programs measured take 0.94 to
+  1.09 times as long. The runtime copies and compares memory with its own
+  routines, because musl's are slow.
+- A musl program reads its arguments from `/proc/self/cmdline`.
+- A musl program cannot load a shared library when it runs. Native
+  libraries that packages name under `[ffi]` must be static.
+- The link runs a C compiler driver. A target of the build machine's
+  architecture uses `CC` or `cc`. A target of another architecture uses
+  `<arch>-linux-gnu-gcc`, which Ubuntu installs with
+  `gcc-aarch64-linux-gnu` or `gcc-x86-64-linux-gnu`. `AURA_TARGET_CC`
+  names another driver. A musl target needs no musl compiler.
+- Each target has its own Aura runtime library, in
+  `lib/aura/targets/<target>` of the installation. A target pack holds
+  it, and the installer adds the pack of each target it is given:
+
+  ```bash
+  curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+  ```
+
+  The installer also replaces the packs already installed, so
+  `aura upgrade` keeps them in step with the compiler. Releases from the
+  one after 0.15 have target packs.
+- An Aura installed with apt takes a pack from the release page:
+  `sudo tar -xzf aura-<tag>-target-<target>.tar.gz -C /usr --strip-components=1`.
+  A pack belongs to one build of `aura`. `aura build --target` refuses a
+  pack of another build and names both.
+- A source checkout builds the target's runtime library with Cargo: add
+  the Rust target of the same name with `rustup target add`, and see
+  `scripts/cross-target-env.sh` for the C compilers the build needs.
+- `--target-cpu` takes the CPU names of the target's architecture.
+  `native` names the build machine's CPU and is refused with `--target`.
+- The build machine's own target is an ordinary build.
+- An unknown name, a freestanding target name, or a host that is not
+  Linux ends the command with exit status 2.
+- `aura run` and `aura test` always build for the build machine.
 
 ### Target CPU
 

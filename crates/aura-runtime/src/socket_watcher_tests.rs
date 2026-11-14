@@ -195,3 +195,82 @@ fn watches_added_in_quick_succession_each_fire() {
         assert!(poll_until(&mut reactor, key), "round {round} never fired");
     }
 }
+
+#[test]
+fn a_fresh_wait_is_answered_by_the_reactor_thread_without_the_watcher() {
+    let watcher = SocketWatcher::start().unwrap();
+    let reactor = RuntimeReactor::new().unwrap();
+    let (mut client, server) = pair();
+    let key = WaitKey(20, 1);
+    let mut waits = LocalSocketWaits::default();
+    let start = Instant::now();
+    waits.add(key, server.as_raw_fd(), host_io::POLLIN, start);
+    assert!(!waits.is_empty());
+    assert!(waits
+        .poll(start, &watcher, &reactor.handle())
+        .unwrap()
+        .is_empty());
+    client.write_all(b"x").unwrap();
+    let deadline = Instant::now() + Duration::from_secs(10);
+    loop {
+        // The clock stays at `start`, so the wait never ages.
+        let fired = waits.poll(start, &watcher, &reactor.handle()).unwrap();
+        if fired == [key] {
+            break;
+        }
+        assert!(Instant::now() < deadline, "the wait did not fire");
+    }
+    assert!(waits.is_empty());
+    assert_eq!(watcher.watch_count(), 0);
+}
+
+#[test]
+fn a_wait_that_stays_quiet_moves_to_the_watcher() {
+    let watcher = SocketWatcher::start().unwrap();
+    let mut reactor = RuntimeReactor::new().unwrap();
+    let (mut client, server) = pair();
+    let key = WaitKey(21, 1);
+    reactor.begin_wait(key).unwrap();
+    let mut waits = LocalSocketWaits::default();
+    let start = Instant::now();
+    waits.add(key, server.as_raw_fd(), host_io::POLLIN, start);
+    let fired = waits
+        .poll(start + LOCAL_SOCKET_WAIT, &watcher, &reactor.handle())
+        .unwrap();
+    assert!(fired.is_empty());
+    assert!(waits.is_empty());
+    assert_eq!(watcher.watch_count(), 1);
+    client.write_all(b"x").unwrap();
+    assert!(poll_until(&mut reactor, key));
+}
+
+#[test]
+fn removing_a_wait_drops_it_wherever_it_lives() {
+    let watcher = SocketWatcher::start().unwrap();
+    let reactor = RuntimeReactor::new().unwrap();
+    let (_client, server) = pair();
+    let (_other_client, other) = pair();
+    let fresh = WaitKey(22, 1);
+    let quiet = WaitKey(23, 1);
+    let mut waits = LocalSocketWaits::default();
+    let start = Instant::now();
+    waits.add(quiet, other.as_raw_fd(), host_io::POLLIN, start);
+    waits.add(
+        fresh,
+        server.as_raw_fd(),
+        host_io::POLLIN,
+        start + LOCAL_SOCKET_WAIT,
+    );
+    waits
+        .poll(start + LOCAL_SOCKET_WAIT, &watcher, &reactor.handle())
+        .unwrap();
+    assert!(!waits.is_empty());
+    assert_eq!(watcher.watch_count(), 1);
+    waits.remove(fresh, &watcher, &reactor.handle());
+    assert!(waits.is_empty());
+    assert_eq!(watcher.watch_count(), 1);
+    waits.remove(quiet, &watcher, &reactor.handle());
+    assert_eq!(watcher.watch_count(), 0);
+    // A key that was never added is not an error.
+    waits.remove(WaitKey(24, 1), &watcher, &reactor.handle());
+}

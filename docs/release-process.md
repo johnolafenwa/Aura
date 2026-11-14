@@ -47,6 +47,68 @@ namespace.
 Tokens belong only in GitHub Actions secrets. Never pass them to local
 packaging commands or commit them to files.
 
+## Target Packs
+
+Each release carries four target packs,
+`aura-<tag>-target-<target>.tar.gz`, one for each target of
+`aura build --target`. A pack holds what an installed `aura` links for
+that target. The `cli` job of each Linux runner builds the two packs of
+its architecture with `scripts/package-target.sh` and runs a program
+built with the musl one. The `target_packs` job then unpacks the x86-64
+archive with the other three packs, builds the packaged examples for each
+target, and runs them, the arm64 ones under the QEMU user-mode emulator.
+`publish` waits for it, and the packs are listed in `SHA256SUMS` with the
+archives.
+
+## Package Managers
+
+Each release builds a Debian package for x86-64 and arm64 and a Chocolatey
+package. The Release workflow installs each one on its runner before it
+uploads it, and attaches them to the GitHub Release. Three jobs then
+publish to the package managers. `packaging/README.md` describes the
+files.
+
+| Job | Publishes | Needs |
+| --- | --- | --- |
+| `publish-homebrew` | `Formula/aura.rb` to the tap repository `johnolafenwa/homebrew-aura` | The tap repository, and the secret `HOMEBREW_TAP_TOKEN` |
+| `publish-chocolatey` | `aura.<version>.nupkg` to the Chocolatey community repository | The secret `CHOCOLATEY_API_KEY` |
+| `publish-apt` | Starts the Docs workflow, which builds the apt repository into the site at `/Aura/apt` | The secret `APT_SIGNING_KEY` |
+
+If a secret is absent, its job prints a notice and succeeds, as the
+extension registries do. Set each one up once:
+
+- **Homebrew.** Create the public repository `johnolafenwa/homebrew-aura`
+  with a README. Create a fine-grained personal access token limited to
+  that repository with read and write access to its contents, and store
+  it as `HOMEBREW_TAP_TOKEN`.
+- **Chocolatey.** Create an account at `community.chocolatey.org`, copy
+  the API key from the account page, and store it as
+  `CHOCOLATEY_API_KEY`. The first version of a package waits for a
+  moderator, so `choco install aura --pre` can lag the release by days.
+  Later versions pass the automated checks first and are usually listed
+  sooner.
+- **apt.** Create a signing key with no passphrase and store the private
+  half as `APT_SIGNING_KEY`:
+
+  ```bash
+  export GNUPGHOME="$(mktemp -d)"
+  gpg --batch --passphrase '' --quick-generate-key \
+    'Aura apt repository <35049820+johnolafenwa@users.noreply.github.com>' ed25519 sign never
+  gpg --armor --export-secret-keys | gh secret set APT_SIGNING_KEY --repo johnolafenwa/Aura
+  ```
+
+  Keep a copy of the private key somewhere safe before you delete
+  `$GNUPGHOME`. Users trust the public half, so a new key means every
+  user must download the keyring again.
+
+The apt repository holds the Debian packages of the newest release that
+has them. Every deployment of the site rebuilds it from the release
+assets, after checking them against the release's `SHA256SUMS`. To
+rebuild it by hand, run `gh workflow run docs.yml --ref main`.
+
+To publish packages for a release whose jobs skipped, add the secret and
+re-run the skipped jobs of that release's workflow run.
+
 ## Local Extension Verification
 
 From the repository root:

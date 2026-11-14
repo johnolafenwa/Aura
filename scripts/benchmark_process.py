@@ -153,6 +153,35 @@ def owned_process_group(
         reap_process_group(process, label)
 
 
+def run_windows_process_tree(
+    command: Sequence[str],
+    label: str,
+    *,
+    timeout: Optional[float] = None,
+    **kwargs: object,
+) -> subprocess.CompletedProcess:
+    """Run one workload on Windows, which has no process groups to signal.
+
+    A workload that outlives its timeout is ended with its descendants by
+    `taskkill /T`.
+    """
+
+    process = subprocess.Popen(list(command), shell=False, **kwargs)
+    try:
+        stdout, stderr = process.communicate(timeout=timeout)
+    except BaseException:
+        subprocess.run(
+            ["taskkill", "/F", "/T", "/PID", str(process.pid)],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL,
+            check=False,
+        )
+        process.wait()
+        close_process_streams(process)
+        raise
+    return subprocess.CompletedProcess(list(command), process.returncode, stdout, stderr)
+
+
 def run_process_group(
     command: Sequence[str],
     label: str,
@@ -162,6 +191,8 @@ def run_process_group(
 ) -> subprocess.CompletedProcess:
     """Run one workload while retaining descendant-cleanup ownership."""
 
+    if os.name == "nt":
+        return run_windows_process_tree(command, label, timeout=timeout, **kwargs)
     with owned_process_group(command, label, **kwargs) as process:
         stdout, stderr = process.communicate(timeout=timeout)
         return subprocess.CompletedProcess(

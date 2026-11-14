@@ -65,6 +65,15 @@ jobs:
           VITEPRESS_BASE: /Aura/
         run: npm run docs:build
 
+      # https://johnolafenwa.github.io/Aura/apt serves the Debian packages of
+      # the newest release that has them.
+      - name: Add the apt repository
+        if: github.event_name != 'pull_request'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          APT_SIGNING_KEY: ${{ secrets.APT_SIGNING_KEY }}
+        run: scripts/publish-apt-repository.sh docs/.vitepress/dist/apt
+
       - name: Upload Pages artifact
         if: github.event_name != 'pull_request'
         uses: actions/upload-pages-artifact@7b1f4a764d45c48632c6b24a0339c27f5614fb0b # v4

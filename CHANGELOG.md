@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- Aura installs with Homebrew (`brew install johnolafenwa/aura/aura`),
+  apt (`sudo apt-get install aura`, from the repository at
+  `https://johnolafenwa.github.io/Aura/apt`) and Chocolatey
+  (`choco install aura --pre`). The release workflow builds a Debian
+  package for x86-64 and arm64 and a Chocolatey package, installs each
+  one before it publishes, and attaches them to the GitHub Release. When
+  Aura was installed by one of the three, `aura upgrade` prints that
+  package manager's upgrade command and leaves its files alone.
 - Aura runs natively on x86-64 Windows. `aura.exe` checks, formats and
   runs programs, and `aura build` writes a native `.exe` linked with the
   Microsoft linker from the Visual Studio C++ build tools. CI builds
@@ -20,6 +28,24 @@ in this file.
 - On Windows, a timeout or wait too long for any host clock, such as
   `Duration.seconds(9223372036854775807)`, is rejected as invalid input
   as on Linux and macOS, and a damaged cached program is rebuilt.
+- `aura build --target <name>` builds a program for another Linux
+  machine from a Linux host: `x86_64-unknown-linux-gnu`,
+  `aarch64-unknown-linux-gnu`, and the fully static
+  `x86_64-unknown-linux-musl` and `aarch64-unknown-linux-musl`, which run
+  on Alpine and in empty containers. A musl build needs no musl compiler:
+  it links the C library that ships with the runtime library. A target of
+  another architecture links with `<arch>-linux-gnu-gcc` (ADR-0101).
+  A musl program copies and compares memory with the runtime's own
+  routines and runs within a tenth of the glibc build's time.
+- Releases carry a target pack for each `aura build --target` target,
+  `aura-<tag>-target-<target>.tar.gz`, with the runtime library and, for
+  musl, the C library the link reads. `install.sh --target <target>`
+  installs a pack and replaces the packs already installed, and
+  `aura build --target` refuses a pack that another build of `aura` made.
+- On Windows, a task that waits on a socket first polls it on its own
+  worker thread for 50 microseconds before it hands the wait to the
+  shared watcher thread. A reply that arrives in that time costs no
+  thread wake-up, which speeds up request and reply traffic.
 - Linux on arm64 is a supported host. CI builds Aura and runs the
   workspace tests on an arm64 Ubuntu 24.04 runner, the release workflow
   publishes an `aarch64-unknown-linux-gnu` archive, and the installer

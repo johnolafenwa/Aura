@@ -107,7 +107,7 @@ jobs:
             os: windows-2025
             archive: aura-${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}-x86_64-pc-windows-msvc
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+    timeout-minutes: 60
 
     steps:
       - name: Checkout
@@ -187,6 +187,96 @@ jobs:
           path: ${{ matrix.archive }}.${{ runner.os == 'Windows' && 'zip' || 'tar.gz' }}
           if-no-files-found: error
 
+      # What `aura build --target` links for this architecture's Linux
+      # targets (ADR-0101). The musl pack builds the runtime library again.
+      - name: Package the target packs
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          sudo apt-get install -y musl-tools
+          rustup target add "$(uname -m)-unknown-linux-musl"
+          scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-gnu"
+          scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl"
+
+      - name: Smoke test the musl target pack outside the source tree
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: scripts/smoke-target-packs.sh "$ARCHIVE_NAME.tar.gz" "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl.tar.gz"
+
+      - name: Upload the target packs
+        if: runner.os == 'Linux'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.archive }}-targets
+          path: aura-*-target-*.tar.gz
+          if-no-files-found: error
+
+      - name: Build and install the Debian package
+        if: runner.os == 'Linux'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: |
+          package="$(scripts/package-deb.sh "$ARCHIVE_NAME.tar.gz")"
+          scripts/smoke-deb.sh "$package"
+
+      - name: Build and install the Chocolatey package
+        if: runner.os == 'Windows'
+        shell: bash
+        env:
+          ARCHIVE_NAME: ${{ matrix.archive }}
+        run: |
+          package="$(scripts/package-chocolatey.sh "$ARCHIVE_NAME.zip")"
+          scripts/smoke-chocolatey.sh "$package"
+
+      - name: Upload the Debian or Chocolatey package
+        if: runner.os != 'macOS'
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: ${{ matrix.archive }}-package
+          path: ${{ runner.os == 'Windows' && 'aura.*.nupkg' || 'aura-*.deb' }}
+          if-no-files-found: error
+
+  target_packs:
+    name: Target packs across architectures
+    needs: [release_identity, cli]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+
+      - name: Download the Linux archives and target packs
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          pattern: aura-*-unknown-linux-gnu*
+          path: release-assets
+          merge-multiple: true
+
+      - name: Install the arm64 link driver and emulator
+        run: sudo apt-get update && sudo apt-get install -y gcc-aarch64-linux-gnu qemu-user-static
+
+      # The x86-64 CLI builds for every target it has no runtime library
+      # for, and the arm64 programs run under emulation.
+      - name: Smoke test the target packs with the x86-64 CLI
+        shell: bash
+        env:
+          RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+        run: |
+          scripts/smoke-target-packs.sh \
+            "release-assets/aura-$RELEASE_TAG-x86_64-unknown-linux-gnu.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-x86_64-unknown-linux-musl.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-aarch64-unknown-linux-gnu.tar.gz" \
+            "release-assets/aura-$RELEASE_TAG-target-aarch64-unknown-linux-musl.tar.gz"
+
   tools:
     name: VS Code extension and docs
     needs: release_identity
@@ -261,7 +351,7 @@ jobs:
 
   publish:
     name: Publish GitHub Release
-    needs: [release_identity, cli, tools]
+    needs: [release_identity, cli, target_packs, tools]
     if: ${{ github.event_name == 'push' || inputs.publish }}
     runs-on: ubuntu-24.04
     timeout-minutes: 10
@@ -421,3 +511,110 @@ jobs:
       - name: Skip Open VSX publish
         if: env.HAS_OVSX_TOKEN != 'true'
         run: echo "::notice::OVSX_TOKEN is not configured; skipping Open VSX publish."
+
+  # The three package managers. Each step that publishes outside this
+  # repository needs a secret, and skips with a notice when it is absent.
+  publish-homebrew:
+    name: Publish the Homebrew formula
+    needs: [release_identity, publish]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+
+    permissions:
+      contents: read
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      HOMEBREW_TAP: johnolafenwa/homebrew-aura
+      HAS_HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN != '' }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          ref: ${{ needs.release_identity.outputs.implementation_commit }}
+          persist-credentials: false
+
+      - name: Write the formula from the published checksums
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern SHA256SUMS --dir "$RUNNER_TEMP"
+          python3 scripts/render-homebrew-formula.py --tag "$RELEASE_TAG" \
+            --sha256sums "$RUNNER_TEMP/SHA256SUMS" --output "$RUNNER_TEMP/aura.rb"
+          ruby -c "$RUNNER_TEMP/aura.rb"
+
+      - name: Push the formula to the tap
+        if: env.HAS_HOMEBREW_TAP_TOKEN == 'true'
+        shell: bash
+        env:
+          HOMEBREW_TAP_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
+        run: |
+          tap="$RUNNER_TEMP/tap"
+          git clone --depth 1 "https://x-access-token:$HOMEBREW_TAP_TOKEN@github.com/$HOMEBREW_TAP.git" "$tap"
+          mkdir -p "$tap/Formula"
+          cp "$RUNNER_TEMP/aura.rb" "$tap/Formula/aura.rb"
+          cd "$tap"
+          git add Formula/aura.rb
+          if git diff --cached --quiet; then
+            echo "::notice::The tap already holds the formula for $RELEASE_TAG."
+            exit 0
+          fi
+          git -c user.name="github-actions[bot]" \
+            -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            commit -m "aura ${RELEASE_TAG#v}"
+          git push origin HEAD
+
+      - name: Skip the tap push
+        if: env.HAS_HOMEBREW_TAP_TOKEN != 'true'
+        run: echo "::notice::HOMEBREW_TAP_TOKEN is not configured; skipping the Homebrew tap push."
+
+  publish-chocolatey:
+    name: Publish the Chocolatey package
+    needs: publish
+    runs-on: windows-2025
+    timeout-minutes: 15
+
+    permissions:
+      contents: read
+
+    env:
+      RELEASE_TAG: ${{ github.event_name == 'workflow_dispatch' && inputs.release_tag || github.ref_name }}
+      HAS_CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY != '' }}
+
+    steps:
+      - name: Push the package to the Chocolatey community repository
+        if: env.HAS_CHOCOLATEY_API_KEY == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          CHOCOLATEY_API_KEY: ${{ secrets.CHOCOLATEY_API_KEY }}
+        run: |
+          gh release download "$RELEASE_TAG" --repo "$GITHUB_REPOSITORY" \
+            --pattern "aura.${RELEASE_TAG#v}.nupkg" --pattern SHA256SUMS --dir .
+          grep -F "aura.${RELEASE_TAG#v}.nupkg" SHA256SUMS | sha256sum -c -
+          choco push "aura.${RELEASE_TAG#v}.nupkg" --source https://push.chocolatey.org/ \
+            --api-key "$CHOCOLATEY_API_KEY" --limit-output
+
+      - name: Skip the Chocolatey push
+        if: env.HAS_CHOCOLATEY_API_KEY != 'true'
+        run: echo "::notice::CHOCOLATEY_API_KEY is not configured; skipping the Chocolatey push."
+
+  publish-apt:
+    name: Publish the apt repository
+    needs: publish
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+
+    permissions:
+      actions: write
+
+    steps:
+      # The Docs workflow builds the apt repository from the newest release's
+      # Debian packages and deploys it with the site.
+      - name: Start a site deployment
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh workflow run docs.yml --repo "$GITHUB_REPOSITORY" --ref main

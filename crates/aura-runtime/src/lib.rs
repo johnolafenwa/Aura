@@ -45,6 +45,11 @@ pub mod union_runtime;
 #[cfg(windows)]
 mod windows_process;
 
+// On a musl target this crate defines `memcpy` and its relatives, and a
+// static library holds a dependency's symbols only if the dependency is
+// named.
+use aura_mem as _;
+
 #[global_allocator]
 static ALLOCATOR: native_allocator::AuraAllocator = native_allocator::AuraAllocator;
 

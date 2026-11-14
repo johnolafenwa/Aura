@@ -88,6 +88,12 @@ aura build -o hello hello.au
 ./hello
 ```
 
+## Install With Homebrew Instead
+
+From the release after 0.15, `brew install johnolafenwa/aura/aura` installs
+the same files under the Homebrew prefix. See
+[Install with a package manager](/install/package-managers#homebrew).
+
 ## Upgrade Aura
 
 To upgrade the installed CLI and runtime to the current published preview:
@@ -98,7 +104,8 @@ aura --version
 ```
 
 `aura upgrade` keeps the active install prefix. It uses the same verified
-installer as a fresh installation.
+installer as a fresh installation. If Homebrew installed Aura, it prints
+`brew upgrade aura`, the command to use.
 
 ## Troubleshooting
 

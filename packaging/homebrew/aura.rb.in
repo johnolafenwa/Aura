@@ -1,0 +1,58 @@
+# Written by scripts/render-homebrew-formula.py for each release. Edit the
+# template in packaging/homebrew/aura.rb.in of johnolafenwa/Aura, not this file.
+class Aura < Formula
+  desc "Compiler and tools for the Aura programming language"
+  homepage "https://johnolafenwa.github.io/Aura/"
+  version "@VERSION@"
+  license "MIT"
+
+  on_macos do
+    on_arm do
+      url "@BASE_URL@/aura-@TAG@-aarch64-apple-darwin.tar.gz"
+      sha256 "@SHA256_AARCH64_APPLE_DARWIN@"
+    end
+    on_intel do
+      url "@BASE_URL@/aura-@TAG@-x86_64-apple-darwin.tar.gz"
+      sha256 "@SHA256_X86_64_APPLE_DARWIN@"
+    end
+  end
+
+  on_linux do
+    on_arm do
+      url "@BASE_URL@/aura-@TAG@-aarch64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA256_AARCH64_UNKNOWN_LINUX_GNU@"
+    end
+    on_intel do
+      url "@BASE_URL@/aura-@TAG@-x86_64-unknown-linux-gnu.tar.gz"
+      sha256 "@SHA256_X86_64_UNKNOWN_LINUX_GNU@"
+    end
+  end
+
+  def install
+    bin.install "bin/aura"
+    # `aura` looks for its runtime in ../lib/aura beside its own directory.
+    (lib/"aura").install Dir["lib/aura/*"]
+    # Tells `aura upgrade` that Homebrew owns these files.
+    (lib/"aura/install-manager").write "homebrew\n"
+    pkgshare.install "examples"
+    doc.install "README.md", "AURA_CLI_README.md"
+  end
+
+  def caveats
+    text = "`aura build` and native `aura run` link programs with the system C compiler.\n"
+    on_macos do
+      text += "Install the Xcode command-line tools for it:\n  xcode-select --install\n"
+    end
+    on_linux do
+      text += "On Debian or Ubuntu, install it with:\n  sudo apt-get install build-essential\n"
+    end
+    text
+  end
+
+  test do
+    assert_match version.to_s, shell_output("#{bin}/aura --version")
+    example = pkgshare/"examples/basic_addition.au"
+    assert_equal "16\n", shell_output("#{bin}/aura run --backend mir #{example}")
+    assert_match "brew upgrade aura", shell_output("#{bin}/aura upgrade 2>&1", 1)
+  end
+end

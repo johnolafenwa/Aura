@@ -543,8 +543,8 @@ class ReleaseWorkflowTests(unittest.TestCase):
             self.workflow,
         )
         self.assertIn("id: source", self.workflow)
-        self.assertEqual(self.workflow.count(immutable_ref), 2)
-        self.assertIn("needs: [release_identity, cli, tools]", self.workflow)
+        self.assertEqual(self.workflow.count(immutable_ref), 4)
+        self.assertIn("needs: [release_identity, cli, target_packs, tools]", self.workflow)
         self.assertIn(
             "if: ${{ github.event_name == 'workflow_dispatch' && inputs.publish }}",
             self.workflow,
@@ -803,6 +803,228 @@ class WindowsArchiveTests(unittest.TestCase):
         # line starts everything.
         self.assertEqual(installer.rstrip("\n").splitlines()[-1], "Install-Aura")
         self.assertEqual(installer.count("\nInstall-Aura\n"), 1)
+
+
+class TargetPackTests(unittest.TestCase):
+    """What `aura build --target` links from an installation (ADR-0101)."""
+
+    TARGET_PACK_SCRIPT = REPO_ROOT / "scripts" / "package-target.sh"
+    TARGET_SMOKE_SCRIPT = REPO_ROOT / "scripts" / "smoke-target-packs.sh"
+    TAG = "v0.15.0-preview"
+
+    def run_script(self, *command: str, **options) -> subprocess.CompletedProcess:
+        return subprocess.run(
+            list(command),
+            cwd=options.pop("cwd", REPO_ROOT),
+            text=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
+            timeout=30,
+            check=False,
+            **options,
+        )
+
+    def test_pack_script_rejects_other_names_before_it_builds(self) -> None:
+        for name in (
+            "../escape",
+            "aura-v0.15.0-preview-x86_64-unknown-linux-musl",
+            "aura-v0.15.0-preview-target-x86_64-apple-darwin",
+            "aura-v0.15.0-preview-target-riscv64gc-unknown-linux-gnu",
+        ):
+            with self.subTest(name=name):
+                result = self.run_script("bash", str(self.TARGET_PACK_SCRIPT), name)
+                self.assertEqual(result.returncode, 2)
+                self.assertIn("invalid target pack name", result.stderr)
+
+    def test_pack_holds_the_runtime_its_link_files_and_the_build_identity(self) -> None:
+        script = self.TARGET_PACK_SCRIPT.read_text(encoding="utf-8")
+        for contract in (
+            'target_root="$pack_root/lib/aura/targets/$target"',
+            '--target "$target" -- --print native-static-libs',
+            'cp "target/$target/release/libaura_runtime.a" "$target_root/libaura_runtime.a"',
+            "for file in crt1.o crti.o crtbegin.o crtend.o crtn.o libc.a libunwind.a; do",
+            'cp packaging/targets/MUSL-NOTICES.md "$target_root/NOTICES.md"',
+            'LINK_ARGS_DIR="$target_root"',
+            'target/release/aura --version > "$target_root/aura-version"',
+            # Everything is under the target's directory, so a pack unpacks
+            # over any prefix.
+            'cp LICENSE "$target_root/LICENSE"',
+            'tar -czf "$pack_name.tar.gz" -C release "$pack_name"',
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, script)
+        notices = (REPO_ROOT / "packaging" / "targets" / "MUSL-NOTICES.md").read_text(
+            encoding="utf-8"
+        )
+        self.assertIn("Permission is hereby granted, free of charge", notices)
+        self.assertIn("Apache License 2.0 with LLVM Exceptions", notices)
+
+    def test_link_args_are_written_into_a_named_directory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-pack-link-args-") as temp:
+            directory = Path(temp) / "lib" / "aura" / "targets" / "x"
+            result = self.run_script(
+                "python3",
+                str(LINK_ARG_WRITER),
+                env={
+                    **os.environ,
+                    "ARCHIVE_ROOT": temp,
+                    "LINK_ARGS_DIR": str(directory),
+                    "NATIVE_STATIC_LIBS": "note: native-static-libs: -lunwind -lc\n",
+                },
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(
+                json.loads((directory / "native-link-args.json").read_text(encoding="utf-8")),
+                ["-lunwind", "-lc"],
+            )
+            self.assertFalse((Path(temp) / "lib" / "aura" / "native-link-args.json").exists())
+
+    def write_release(self, root: Path, host: str, packs: dict[str, bytes]) -> Path:
+        """A release directory with the host archive and the named packs."""
+        release = root / "release"
+        release.mkdir()
+        staging = root / "staging"
+        archive_name = f"aura-{self.TAG}-{host}"
+        archive_root = staging / archive_name
+        (archive_root / "bin").mkdir(parents=True)
+        (archive_root / "lib" / "aura").mkdir(parents=True)
+        binary = archive_root / "bin" / "aura"
+        binary.write_text("#!/bin/sh\necho aura-installer-test\n", encoding="utf-8")
+        binary.chmod(0o755)
+        (archive_root / "lib" / "aura" / "libaura_runtime.a").write_bytes(b"host runtime")
+        (archive_root / "lib" / "aura" / "native-link-args.json").write_text("[]\n", encoding="utf-8")
+        names = [archive_name]
+        for target, runtime in packs.items():
+            pack_name = f"aura-{self.TAG}-target-{target}"
+            target_root = staging / pack_name / "lib" / "aura" / "targets" / target
+            target_root.mkdir(parents=True)
+            (target_root / "libaura_runtime.a").write_bytes(runtime)
+            (target_root / "native-link-args.json").write_text("[]\n", encoding="utf-8")
+            (target_root / "LICENSE").write_text("MIT\n", encoding="utf-8")
+            names.append(pack_name)
+        sums = []
+        for name in names:
+            archive = release / f"{name}.tar.gz"
+            with tarfile.open(archive, "w:gz") as handle:
+                handle.add(staging / name, arcname=name)
+            sums.append(f"{hashlib.sha256(archive.read_bytes()).hexdigest()}  {archive.name}\n")
+        (release / "SHA256SUMS").write_text("".join(sums), encoding="utf-8")
+        return release
+
+    def install(self, root: Path, release: Path, *arguments: str) -> subprocess.CompletedProcess:
+        return self.run_script(
+            "sh",
+            str(INSTALL_SCRIPT),
+            *arguments,
+            cwd=root,
+            env={
+                **os.environ,
+                "AURA_INSTALL_BASE_URL": release.as_uri(),
+                "AURA_INSTALL_PREFIX": str(root / "prefix"),
+            },
+        )
+
+    def linux_targets(self) -> tuple[str, str, str]:
+        machine = platform.machine().lower()
+        if platform.system() != "Linux" or machine not in {"x86_64", "amd64", "aarch64", "arm64"}:
+            self.skipTest("target packs install on Linux")
+        arch = "x86_64" if machine in {"x86_64", "amd64"} else "aarch64"
+        other = "aarch64" if arch == "x86_64" else "x86_64"
+        return (
+            f"{arch}-unknown-linux-gnu",
+            f"{arch}-unknown-linux-musl",
+            f"{other}-unknown-linux-gnu",
+        )
+
+    def test_installer_adds_named_packs_and_replaces_the_ones_already_there(self) -> None:
+        host, musl, other = self.linux_targets()
+        with tempfile.TemporaryDirectory(prefix="aura-install-packs-") as temp:
+            root = Path(temp)
+            release = self.write_release(root, host, {musl: b"musl runtime", other: b"other runtime"})
+            targets = root / "prefix" / "lib" / "aura" / "targets"
+            # A pack an earlier release installed, with a file this one lacks.
+            (targets / other).mkdir(parents=True)
+            (targets / other / "libaura_runtime.a").write_bytes(b"stale")
+            (targets / other / "left-over").write_bytes(b"stale")
+
+            result = self.install(root, release, "--target", musl, "--target", host)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual((targets / musl / "libaura_runtime.a").read_bytes(), b"musl runtime")
+            self.assertEqual((targets / other / "libaura_runtime.a").read_bytes(), b"other runtime")
+            self.assertFalse((targets / other / "left-over").exists())
+            # The build machine's own target is the installation itself.
+            self.assertFalse((targets / host).exists())
+            self.assertFalse((root / "prefix" / "LICENSE").exists())
+            self.assertIn(f"Downloading the target pack for {musl}", result.stdout)
+
+    def test_installer_refuses_unknown_targets_and_tampered_packs(self) -> None:
+        host, musl, _ = self.linux_targets()
+        with tempfile.TemporaryDirectory(prefix="aura-install-packs-") as temp:
+            root = Path(temp)
+            release = self.write_release(root, host, {musl: b"musl runtime"})
+            for arguments, message in (
+                (("--target", "riscv64gc-unknown-linux-gnu"), "no target pack is available"),
+                (("--target",), "--target needs a target name"),
+                (("--prefix", "/tmp"), "unknown option"),
+            ):
+                with self.subTest(arguments=arguments):
+                    result = self.install(root, release, *arguments)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(message, result.stderr)
+
+            pack = release / f"aura-{self.TAG}-target-{musl}.tar.gz"
+            pack.write_bytes(pack.read_bytes() + b"tampered")
+            result = self.install(root, release, "--target", musl)
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("checksum verification failed", result.stderr)
+            self.assertFalse((root / "prefix" / "lib" / "aura" / "targets" / musl).exists())
+
+    def test_smoke_script_refuses_files_that_are_not_target_packs(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="aura-pack-smoke-") as temp:
+            root = Path(temp)
+            host, _, _ = self.linux_targets()
+            release = self.write_release(root, host, {})
+            archive = release / f"aura-{self.TAG}-{host}.tar.gz"
+            result = self.run_script("bash", str(self.TARGET_SMOKE_SCRIPT), str(archive))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("usage:", result.stderr)
+            result = self.run_script(
+                "bash", str(self.TARGET_SMOKE_SCRIPT), str(archive), str(archive)
+            )
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("not a target pack", result.stderr)
+            own = release / f"aura-{self.TAG}-target-{host}.tar.gz"
+            shutil.copy(archive, own)
+            result = self.run_script("bash", str(self.TARGET_SMOKE_SCRIPT), str(archive), str(own))
+            self.assertEqual(result.returncode, 2)
+            self.assertIn("this machine's own target", result.stderr)
+
+    def test_release_and_ci_build_and_run_every_pack(self) -> None:
+        release = RELEASE_WORKFLOW.read_text(encoding="utf-8")
+        ci = CI_WORKFLOW.read_text(encoding="utf-8")
+        cli = release[release.index("  cli:\n"):release.index("  target_packs:\n")]
+        for contract in (
+            'scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-gnu"\n',
+            'scripts/package-target.sh "aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl"\n',
+            'scripts/smoke-target-packs.sh "$ARCHIVE_NAME.tar.gz" '
+            '"aura-$RELEASE_TAG-target-$(uname -m)-unknown-linux-musl.tar.gz"\n',
+            "name: ${{ matrix.archive }}-targets\n",
+        ):
+            with self.subTest(contract=contract):
+                self.assertIn(contract, cli)
+        across = release[release.index("  target_packs:\n"):release.index("  tools:\n")]
+        for target in (
+            "x86_64-unknown-linux-musl",
+            "aarch64-unknown-linux-gnu",
+            "aarch64-unknown-linux-musl",
+        ):
+            with self.subTest(target=target):
+                self.assertIn(f'"release-assets/aura-$RELEASE_TAG-target-{target}.tar.gz"', across)
+                self.assertIn(f"packs/aura-v*-target-{target}.tar.gz", ci)
+        # Nothing is published before the packs of both architectures ran.
+        self.assertIn("needs: [release_identity, cli, target_packs, tools]", release)
+        self.assertIn("  target-packs:\n    needs: native-binaries\n", ci)
+        self.assertIn('scripts/smoke-target-packs.sh "$AURA_CI_ARCHIVE" "$prefix-musl.tar.gz"', ci)
 
 
 class InstalledArchiveSmokeTests(unittest.TestCase):

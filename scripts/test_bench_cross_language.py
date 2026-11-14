@@ -35,6 +35,28 @@ class CrossLanguageBenchmarkTests(unittest.TestCase):
             self.assertEqual(len(program['check']), len(program['bench']), name)
             self.assertEqual(program['check'].count(bench.WORKDIR), program['bench'].count(bench.WORKDIR))
 
+    def test_measure_keeps_going_past_a_failed_program_only_when_given_a_failure_list(self):
+        def measure_program(_programs, name, *_rest):
+            if name == 'broken':
+                raise bench.BenchmarkError('broken (aura) exited 1:\nboom')
+            return {'name': name}
+
+        original = bench.measure_program
+        bench.measure_program = measure_program
+        try:
+            failures = []
+            records = bench.measure({}, ['broken', 'fine'], 'check', 1, 'python', {}, {}, None, None,
+                                    failures)
+            self.assertEqual(records, {'fine': {'name': 'fine'}})
+            self.assertEqual(failures, ['broken: broken (aura) exited 1:\nboom'])
+            with self.assertRaises(bench.BenchmarkError):
+                bench.measure({}, ['broken', 'fine'], 'check', 1, 'python', {}, {}, None, None)
+        finally:
+            bench.measure_program = original
+
+    def test_binaries_carry_the_host_executable_suffix(self):
+        self.assertEqual(bench.EXE, '.exe' if bench.os.name == 'nt' else '')
+
     def test_workdir_placeholder_is_replaced(self):
         self.assertEqual(bench.expand_args(['10', '{workdir}'], '/tmp/run'), ['10', '/tmp/run'])
         self.assertEqual(bench.expand_args(['10'], '/tmp/run'), ['10'])
