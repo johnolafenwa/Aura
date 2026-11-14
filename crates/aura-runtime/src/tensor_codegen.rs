@@ -1036,6 +1036,27 @@ impl<'a> Generator<'a> {
         let active = length.min(BLOCK_THREADS);
         let folded = active.min(BLOCK_FOLD);
         let result = c_type(self.dtype(slot));
+        // A result that divides the operand of the last reduction by
+        // that reduction, as a softmax does, is computed once: the
+        // threads write the operand into the result as they reduce it,
+        // and the last phase divides it in place.
+        let in_place = reductions.last().and_then(|&(reduction, through)| {
+            let operand = operand_of(self, reduction);
+            match &self.plan.slots[slot] {
+                Slot::Step {
+                    operation: Operation::Binary(code),
+                    inputs,
+                    ..
+                } if inputs[..] == [operand, through]
+                    && !self.materialized[operand]
+                    && self.dtype(slot) == self.dtype(reduction)
+                    && self.shape(slot) == self.shape(operand) =>
+                {
+                    Some(*code)
+                }
+                _ => None,
+            }
+        });
         let (mut shared, mut body) = (String::new(), String::new());
         for (place, &(reduction, through)) in reductions.iter().enumerate() {
             let Slot::Step {
@@ -1066,11 +1087,19 @@ impl<'a> Generator<'a> {
                 "acc".to_string()
             };
             let operand = operand_of(self, reduction);
-            let first = self.element(slot, operand, "(start + t)", &arguments);
-            let next = self.element(slot, operand, "(start + k)", &arguments);
+            let mut first = self.element(slot, operand, "(start + t)", &arguments);
+            let mut next = self.element(slot, operand, "(start + k)", &arguments);
+            let kept = in_place.is_some() && place + 1 == reductions.len();
+            let (written, passed) = if kept {
+                first = format!("(out[start + t] = {first})");
+                next = format!("(out[start + k] = {next})");
+                (format!(", {ty}* out"), ", out")
+            } else {
+                (String::new(), "")
+            };
             writeln!(
                 self.source,
-                "AURA_INLINE void l{slot}_{place}a(int t, long long lane, {ty}* part{parameters}) {{\n    \
+                "AURA_INLINE void l{slot}_{place}a(int t, long long lane, {ty}* part{written}{parameters}) {{\n    \
                  if (t >= {active}) return;\n    \
                  const long long start = lane * {length}LL;\n    \
                  {ty} acc = {first};\n    \
@@ -1100,7 +1129,7 @@ impl<'a> Generator<'a> {
             .expect("writing to a string cannot fail");
             writeln!(
                 body,
-                "    AURA_PHASE(l{slot}_{place}a(t, lane, q{place}{arguments}))\n    \
+                "    AURA_PHASE(l{slot}_{place}a(t, lane, q{place}{passed}{arguments}))\n    \
                  AURA_PHASE(l{slot}_{place}b(t, q{place}))\n    \
                  AURA_PHASE(l{slot}_{place}c(t, q{place}, p{through}))",
             )
@@ -1113,12 +1142,21 @@ impl<'a> Generator<'a> {
             .filter(|leaf| !self.in_lane[*leaf])
             .collect();
         let (kernel_parameters, _) = self.signature(&inputs);
+        let value = match (in_place, reductions.last()) {
+            (Some(code), Some(&(_, through))) => binary(
+                code,
+                self.dtype(slot),
+                "out[start + k]",
+                &format!("p{through}[0]"),
+            ),
+            _ => format!("v{slot}_{slot}(start + k{arguments})"),
+        };
         writeln!(
             self.source,
             "AURA_INLINE void l{slot}_w(int t, long long lane, {result}* out{parameters}) {{\n    \
              const long long start = lane * {length}LL;\n    \
              for (long long k = t; k < {length}LL; k += {block}LL) \
-             out[start + k] = v{slot}_{slot}(start + k{arguments});\n}}\n\
+             out[start + k] = {value};\n}}\n\
              extern \"C\" __global__ void k{slot}({result}* out{kernel_parameters}) {{\n    \
              AURA_LANE\n    \
              const long long lane = blockIdx.x;\n\

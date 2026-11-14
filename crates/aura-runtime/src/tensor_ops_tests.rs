@@ -1963,6 +1963,10 @@ fn one_kernel_reduces_each_lane_and_writes_the_arithmetic_that_reads_it() {
         let x = wave(300 * 300, &[300, 300], TensorDevice::Cpu);
         let (plan, storage) = Plan::collect_all(&[node(&row_softmax(&x, 300))]);
         assert_eq!(actions(&plan), 1);
+        // The powers are written while they are summed and divided in
+        // place, so each is computed once.
+        let source = tensor_codegen::generate(&plan).source;
+        assert!(source.contains("out[start + k] = (out[start + k] / p"));
         if let Some(generated) = generated_kernels::run_all(&plan, &storage, 2410) {
             close("softmax", &generated[0], &expected);
         }
