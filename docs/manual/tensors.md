@@ -64,6 +64,11 @@ looks for them in the loader's path and under `CUDA_HOME`, `CUDA_PATH`,
 and `/usr/local/cuda`. Building Aura or an Aura program needs no CUDA
 toolkit. The device uses the first GPU.
 
+Aura requires no particular CUDA version. It opens the libraries of CUDA
+13, 12, or 11, the newest it finds, and `Device.cuda()` is `None` when it
+finds none. It is tested with CUDA 13.2 and driver 595.91 on an A40. CUDA
+11 and 12 have the functions Aura calls but have not been run.
+
 There is no Windows GPU device yet. The CPU device runs every program
 there.
 

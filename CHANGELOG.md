@@ -7,15 +7,50 @@ in this file.
 
 ## Unreleased
 
-- Aura has packages for Homebrew (`brew install johnolafenwa/aura/aura`),
-  apt (`sudo apt-get install aura`, from the repository at
-  `https://johnolafenwa.github.io/Aura/apt`) and Chocolatey
-  (`choco install aura --pre`). They are not published to the three
-  package managers yet. The release workflow builds a Debian
-  package for x86-64 and arm64 and a Chocolatey package, installs each
-  one before it publishes, and attaches them to the GitHub Release. When
-  Aura was installed by one of the three, `aura upgrade` prints that
-  package manager's upgrade command and leaves its files alone.
+## VS Code extension 0.16.0 — 2026-11-15
+
+- Bundles language server 0.16.0. The semantic interface version stays 20.
+- `export "C" def` is highlighted as a function definition, and the
+  outline lists an exported function when `aura lsp` cannot start.
+
+## 0.16.0 — 2026-11-15 (technical preview)
+
+Aura 0.16.0 adds GPU tensors, runs natively on Windows and on Linux on
+arm64, builds programs for other Linux machines, and builds freestanding
+objects for kernels and firmware. The new `tensor` module holds numbers
+on a device, `Device.cpu()`, `Device.metal()` on a Mac, or
+`Device.cuda()` on an NVIDIA GPU on Linux, and every operation means the
+same on each. It has gradients with PyTorch's names, `tensor.Module`
+models that the compiler can collect from a class's fields, the layers
+of a transformer and of a convolutional network, the optimizers `SGD`
+and `AdamW`, and safetensors files. On an NVIDIA A40, the eight programs
+of [`benchmarks/tensor`](benchmarks/tensor/README.md) run level with or
+ahead of PyTorch 2.8 on CUDA: training a small network takes 251 to 259
+ms against 838 to 1,567, a transformer training run 318 to 334 ms
+against 323 to 387, and GPT-2 sized inference 274 to 277 ms against 270
+to 272. The CUDA device requires no particular CUDA version. It needs an
+NVIDIA driver, NVRTC, and cuBLAS at run time, and it is tested with CUDA
+13.2. CUDA 11 and 12 have the functions it calls but have not been run.
+The Metal device has not been timed on the programs that train.
+The release has an `x86_64-pc-windows-msvc` archive with a PowerShell
+installer, `install.ps1`, and an `aarch64-unknown-linux-gnu` archive
+that `install.sh` selects. `aura build --target` builds a program for
+x86-64 or arm64 Linux, with glibc or as a fully static musl executable
+that runs on Alpine and in empty containers, and each release carries a
+target pack for each of the four targets. `aura build --freestanding`
+writes one relocatable object that needs no runtime and no operating
+system, for x86-64, AArch64, and RISC-V, with `export "C" def` for
+functions that C calls and the new `mem` module for reads and writes at
+an address and for atomics.
+The semantic interface stays 20, and the native cache format stays
+`v10`.
+
+- Packages for Homebrew, apt, and Chocolatey are built but not published
+  yet, so no package manager installs this release. The release workflow
+  builds a Debian package for x86-64 and arm64 and a Chocolatey package,
+  installs each one, and attaches them to the GitHub Release. When Aura
+  was installed by a package manager, `aura upgrade` prints that package
+  manager's upgrade command and leaves its files alone.
 - Aura runs natively on x86-64 Windows. `aura.exe` checks, formats and
   runs programs, and `aura build` writes a native `.exe` linked with the
   Microsoft linker from the Visual Studio C++ build tools. CI builds

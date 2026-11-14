@@ -191,7 +191,7 @@ diagnostic-grade.
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.038 s | 0.008 s |
 | `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.048 s | 0.048 s |
 | `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.110 s | 0.018 s |
-| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.15 s | 0.007 s |
+| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.150 s | 0.007 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
 in `benchmarks/runtime_values/`, and `scripts/bench-runtime-values.py` runs
