@@ -12,9 +12,9 @@ Last updated: 2026-11-13
   package manager.
 - Open: John creates the tap repository `johnolafenwa/homebrew-aura` and
   the secrets `HOMEBREW_TAP_TOKEN`, `CHOCOLATEY_API_KEY` and
-  `APT_SIGNING_KEY`. The first packages ship with the release after 0.15.
-  That release's version sweep should reword "from the release after
-  0.15" in the install guides.
+  `APT_SIGNING_KEY`. On 2026-11-14 John said the 0.16 release skips the packages for
+  now, so the install guides say they are not published yet. Reword them
+  in the release that first publishes.
 
 ## More platforms: Linux on arm64 and native Windows (in progress)
 

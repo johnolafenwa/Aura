@@ -83,8 +83,8 @@ and proofs elsewhere.
 
 ## Install With Chocolatey Instead
 
-`choco install aura --pre` installs the same files as a Chocolatey
-package. See
+A Chocolatey package is built but not published yet. Once it is,
+`choco install aura --pre` installs the same files. See
 [Install with a package manager](/install/package-managers#chocolatey).
 
 ## Differences From Linux And macOS

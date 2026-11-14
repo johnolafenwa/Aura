@@ -99,8 +99,8 @@ aura build -o hello hello.au
 
 ## Install With apt Or Homebrew Instead
 
-From the release after 0.15, Aura has an apt repository for Ubuntu and
-Debian and a Homebrew formula. See
+Packages for apt on Ubuntu and Debian and for Homebrew are built but not
+published yet. See
 [Install with a package manager](/install/package-managers).
 
 ## Upgrade Aura

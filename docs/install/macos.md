@@ -90,8 +90,9 @@ aura build -o hello hello.au
 
 ## Install With Homebrew Instead
 
-From the release after 0.15, `brew install johnolafenwa/aura/aura` installs
-the same files under the Homebrew prefix. See
+A Homebrew formula is built but not published yet. Once it is,
+`brew install johnolafenwa/aura/aura` installs the same files under the
+Homebrew prefix. See
 [Install with a package manager](/install/package-managers#homebrew).
 
 ## Upgrade Aura
