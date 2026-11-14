@@ -157,3 +157,65 @@ later, on the same tensors (ADR-0097).
   other kernels at 2.6 ms against 11.5 ms here: PyTorch adds the bias
   inside the product and has one fused kernel each for attention and
   layer norm.
+- 2026-11-14, closing the `gpt_infer` gap (John: "close the gap"). On
+  the restarted A40 pod, main gave 338 to 362 ms against PyTorch's 271
+  to 273. Changes: `Generator::lane_kernels` and `lane` in
+  `tensor_codegen.rs` emit one kernel for an elementwise step and the
+  reductions of its own lanes, with a block of threads for each lane
+  and the partial results in shared memory. The host harness runs the
+  phases of a block one after another through the `AURA_PHASE` macros.
+  A step that reshapes read is no longer computed again by each of
+  them: the three linear layers of an attention each computed the layer
+  norm before. `RECOMPUTED_STEPS` is 16, so the powers of a masked
+  softmax are not written. A local count for two layers at width 512
+  went from 45 kernels to 24.
+- A callgrind profile of the program side of a step shows about 15
+  million instructions over about 1,800 runtime calls, with no single
+  hot spot: host calls, field reads and instance creation. So a product
+  starts its deep operands early (`start_operands` in `tensor_host.rs`)
+  and the CUDA device does not wait for that run. The first A40 run of
+  this showed two faults: each early run copied its small constants
+  with a blocking copy, which waited for the GPU, and training rows ran
+  2 to 6 times slower. The constants are now kept on the device by
+  their bytes (`Runtime::constants`), and operands with gradients do
+  not start early.
+- Later A40 runs of 2026-11-14: a blocking copy to the device and a
+  `cuMemFree` both wait for queued kernels, so they stall the program
+  while an early run is in flight. Small tensors (4,096 bytes and
+  under, the causal mask's `arange` among them) now stay in host memory
+  on the CUDA device, and the buffer pool keeps a quarter of the device
+  or 2 GiB. `tensor.set_grad_enabled(false)` matches PyTorch's
+  `no_grad` in the inference rows. Kernels index with 32-bit arithmetic
+  when the tensor has fewer than 2^32 elements. Result at c4774cc:
+  `gpt_infer` 289 to 292 ms against PyTorch's 267 to 271 (313 with the
+  early start off), 124 kernels and 97 products a step, products 22.8
+  ms and kernels 6.8 ms. Training rows are unchanged. On the pod three
+  runtime tests outside the tensor module fail for reasons of the
+  machine (file descriptor limit, overlay file system).
+- A PyTorch profile of one `gpt_infer` step on the A40 (25.5 ms of GPU
+  time): linear layers 20.6 ms, one fused attention kernel a layer 2.2
+  ms, GELU 1.1, adds 0.8, layer norm 0.6. Aura's products cost the
+  same. Its softmax kernel cost 0.19 ms against PyTorch's 0.09: a block
+  of 256 threads for a lane of 256 elements pays for six
+  `__syncthreads`. Holding the element in the thread changed nothing,
+  so the cost was the waits and not memory. A lane of at most 256
+  elements now takes one warp, eight lanes to a block, with
+  `__syncwarp` between phases (`WARP_LANE` in `tensor_codegen.rs`): the
+  softmax is 0.10 ms. Result at 7a01a6c: `gpt_infer` 276 to 279 ms
+  against 270 to 271. Left: the split and merge of attention heads are
+  four 6 MB copies a layer (about 1.6 ms a step) that cuBLAS could read
+  in place with a row stride of the full width.
+- A standalone cuBLAS test on the A40: `cublasSgemmBatched` over the
+  address of each matrix reads and writes heads in rows of the full
+  width at the speed of the contiguous call (0.113 against 0.112 ms),
+  where 8 or 12 strided calls cost 2 to 4 times as much. A product with
+  `beta = 1` costs 4% more, and filling the bias first costs what the
+  separate add does, so a bias inside the product gains nothing.
+  Stacked products whose only reader merges heads now write the merged
+  rows (`spread` on `Action::Matmul`): 113 kernels a step. The address
+  table is made by a kernel from offsets kept on the device, because a
+  host copy of it stalled launches by up to 5 ms when the pool handed a
+  run other buffers than the run before. Result at 977708d: `gpt_infer`
+  274 to 277 ms against 270 to 272. The split of queries, keys and
+  values stays a kernel each: it adds the bias in the same pass, so
+  reading them in place saves nothing without a cheaper bias.

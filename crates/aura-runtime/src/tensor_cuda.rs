@@ -28,6 +28,7 @@ struct Api {
     cuCtxSetCurrent: unsafe extern "C" fn(*mut c_void) -> Status,
     cuCtxSynchronize: unsafe extern "C" fn() -> Status,
     cuMemAlloc_v2: unsafe extern "C" fn(*mut DevicePointer, usize) -> Status,
+    cuMemGetInfo_v2: unsafe extern "C" fn(*mut usize, *mut usize) -> Status,
     cuMemFree_v2: unsafe extern "C" fn(DevicePointer) -> Status,
     cuMemcpyHtoD_v2: unsafe extern "C" fn(DevicePointer, *const c_void, usize) -> Status,
     cuMemsetD8_v2: unsafe extern "C" fn(DevicePointer, u8, usize) -> Status,
@@ -97,6 +98,42 @@ struct Api {
         c_int,
         *const f64,
         DevicePointer,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasSgemmBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f32,
+        DevicePointer,
+        c_int,
+        c_int,
+    ) -> Status,
+    #[allow(clippy::type_complexity)]
+    cublasDgemmBatched: unsafe extern "C" fn(
+        *mut c_void,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
+        DevicePointer,
+        c_int,
+        *const f64,
+        DevicePointer,
+        c_int,
         c_int,
     ) -> Status,
     #[allow(clippy::type_complexity)]
@@ -218,6 +255,7 @@ impl Api {
             cuCtxSetCurrent: load!(driver, cuCtxSetCurrent),
             cuCtxSynchronize: load!(driver, cuCtxSynchronize),
             cuMemAlloc_v2: load!(driver, cuMemAlloc_v2),
+            cuMemGetInfo_v2: load!(driver, cuMemGetInfo_v2),
             cuMemFree_v2: load!(driver, cuMemFree_v2),
             cuMemcpyHtoD_v2: load!(driver, cuMemcpyHtoD_v2),
             cuMemsetD8_v2: load!(driver, cuMemsetD8_v2),
@@ -236,6 +274,8 @@ impl Api {
             cublasCreate_v2: load!(cublas, cublasCreate_v2),
             cublasSgemm_v2: load!(cublas, cublasSgemm_v2),
             cublasDgemm_v2: load!(cublas, cublasDgemm_v2),
+            cublasSgemmBatched: load!(cublas, cublasSgemmBatched),
+            cublasDgemmBatched: load!(cublas, cublasDgemmBatched),
             cublasSgemmStridedBatched: load!(cublas, cublasSgemmStridedBatched),
             cublasDgemmStridedBatched: load!(cublas, cublasDgemmStridedBatched),
         })
@@ -282,9 +322,16 @@ impl Pool {
     }
 }
 
-/// The most memory the pool keeps between runs. A buffer dropped beyond
-/// it is freed.
-const MAX_POOLED_BYTES: usize = 2 << 30;
+/// The least memory the pool may keep between runs.
+const MIN_POOLED_BYTES: usize = 2 << 30;
+
+/// The most memory the pool keeps between runs on a device with `total`
+/// bytes: a quarter of it. A pass of a model then finds the buffers of
+/// the pass before it, and the rest of the device stays free for other
+/// programs.
+fn pooled_bytes(total: usize) -> usize {
+    (total / 4).max(MIN_POOLED_BYTES)
+}
 
 /// A compiled plan: the kernels by name and the actions that run them.
 struct Compiled {
@@ -306,6 +353,11 @@ struct Runtime {
     /// Held for a whole run: the cuBLAS handle serves one thread at a
     /// time.
     compiled: Mutex<HashMap<Plan, Compiled>>,
+    /// The small host leaves of earlier runs on the device, by their
+    /// staged bytes.
+    constants: Mutex<HashMap<Vec<u8>, Arc<Buffer>>>,
+    /// The most bytes the pool keeps between runs.
+    pooled: usize,
 }
 
 // SAFETY: the driver API and the context may be used from any thread, and
@@ -350,13 +402,19 @@ impl Runtime {
         let mut compiler = (0, 0);
         // SAFETY: both pointers are to live integers.
         unsafe { (api.nvrtcVersion)(&mut compiler.0, &mut compiler.1) };
+        let (mut free, mut total) = (0_usize, 0_usize);
+        // SAFETY: both pointers are to live integers, and the context is
+        // current. A failed call leaves the total at zero.
+        unsafe { (api.cuMemGetInfo_v2)(&mut free, &mut total) };
         Some(Self {
+            pooled: pooled_bytes(total),
             api,
             context,
             cublas,
             compiler,
             pool: Mutex::default(),
             compiled: Mutex::default(),
+            constants: Mutex::default(),
         })
     }
 
@@ -408,9 +466,7 @@ fn storage_bytes(storage: &ArrayStorage) -> &[u8] {
     }
 }
 
-/// A leaf in host memory of at most this many bytes is copied to the
-/// device together with the other such leaves of its run, as one copy.
-const MAX_STAGED_LEAF_BYTES: usize = 256;
+use super::tensor_host::SMALL_LEAF_BYTES as MAX_STAGED_LEAF_BYTES;
 
 /// CUDA device memory.
 pub(crate) struct Buffer {
@@ -432,19 +488,12 @@ impl Drop for Buffer {
         if self.part_of.is_some() {
             return;
         }
+        // The pool keeps every dropped buffer. Freeing one here would
+        // wait for the kernels launched so far, in the middle of the
+        // program. The run the program next waits for trims the pool.
         let mut pool = runtime.pool();
-        if pool.running > 0 || pool.bytes + self.bytes <= MAX_POOLED_BYTES {
-            pool.bytes += self.bytes;
-            pool.free.entry(self.bytes).or_default().push(self.pointer);
-            return;
-        }
-        drop(pool);
-        if runtime.enter().is_ok() {
-            // SAFETY: `pointer` is an allocation this value owns, and no
-            // kernel is running on it: a run waits for its kernels before
-            // it drops a buffer.
-            unsafe { (runtime.api.cuMemFree_v2)(self.pointer) };
-        }
+        pool.bytes += self.bytes;
+        pool.free.entry(self.bytes).or_default().push(self.pointer);
     }
 }
 
@@ -700,14 +749,21 @@ impl Compiled {
         };
         let mut functions = HashMap::new();
         for action in &program.actions {
-            if let Action::Kernel { name, .. } = action {
-                let symbol = CString::new(name.as_str()).expect("a kernel name has no NUL byte");
+            let name = match action {
+                Action::Kernel { name, .. } => Some(name.as_str()),
+                Action::Matmul {
+                    spread: Some(_), ..
+                } => Some(tensor_codegen::ADDRESSES_KERNEL),
+                _ => None,
+            };
+            if let Some(name) = name {
+                let symbol = CString::new(name).expect("a kernel name has no NUL byte");
                 let mut function = std::ptr::null_mut();
                 // SAFETY: `module` is loaded and `symbol` is NUL-terminated.
                 let status =
                     unsafe { (api.cuModuleGetFunction)(&mut function, module, symbol.as_ptr()) };
                 check(status, "find a compiled kernel")?;
-                functions.insert(name.clone(), function as usize);
+                functions.insert(name.to_string(), function as usize);
             }
         }
         let finished = tensor_codegen::finished_buffers(&program, plan);
@@ -768,6 +824,27 @@ fn report(plan: &Plan, traced: &Traced, timings: &mut [(String, std::time::Durat
             eprintln!("aura tensor:   {:.2}ms {label}", millis(*time));
         }
     }
+}
+
+/// The most staged sets of small leaves kept on the device. Each is a
+/// few kilobytes at most.
+const MAX_KEPT_CONSTANTS: usize = 512;
+
+/// The device copy of `staged`, kept between runs by its bytes.
+fn kept_constant(runtime: &Runtime, staged: &[u8]) -> Result<Arc<Buffer>> {
+    let mut constants = runtime
+        .constants
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    if let Some(whole) = constants.get(staged) {
+        return Ok(Arc::clone(whole));
+    }
+    if constants.len() >= MAX_KEPT_CONSTANTS {
+        constants.clear();
+    }
+    let whole = Arc::new(Buffer::from_bytes(staged)?);
+    constants.insert(staged.to_vec(), Arc::clone(&whole));
+    Ok(whole)
 }
 
 /// The most compiled plans kept.
@@ -831,7 +908,11 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         }
     }
     if !parts.is_empty() {
-        let whole = Arc::new(Buffer::from_bytes(&staged)?);
+        // The numbers of an expression are the same on every pass of a
+        // loop, so their copy on the device is kept. A copy waits for
+        // the kernels launched so far, which would stop a run started
+        // early from running beside the program.
+        let whole = kept_constant(runtime, &staged)?;
         for (index, offset, bytes) in parts {
             buffers[index] = Some(Arc::new(Buffer::part(&whole, offset, bytes)));
         }
@@ -843,6 +924,9 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
             .pointer
     };
     let mut outcome = Ok(());
+    // The address tables of batched products, kept until the last
+    // action is launched.
+    let mut tables: Vec<Arc<Buffer>> = Vec::new();
     runtime.pool().running += 1;
     for (index, action) in compiled.program.actions.iter().enumerate() {
         let action_began = std::time::Instant::now();
@@ -905,6 +989,7 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 columns,
                 pairs,
                 swapped,
+                spread,
             } => Buffer::new(*bytes).and_then(|made| {
                 let (left, right) = (pointer(&buffers, *left), pointer(&buffers, *right));
                 let element = if *double { 8 } else { 4 };
@@ -929,7 +1014,117 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
                 let right_shared = pairs.iter().all(|pair| pair.1 == 0);
                 let right_stacked = stepped(|pair| pair.1, (inner * columns) as usize);
                 let tall = rows as usize * count;
-                if count > 1
+                if let Some((step, starts)) = spread {
+                    // The products go beside each other in wider rows,
+                    // so each has its own place: one batched call takes
+                    // the address of every matrix. The offsets are the
+                    // same on every run and their copy on the device is
+                    // kept; a kernel adds the buffers of this run.
+                    let mut offsets = Vec::with_capacity(count * 24);
+                    let place = |offset: usize| ((offset * element) as u64).to_ne_bytes();
+                    for pair in pairs {
+                        offsets.extend(place(pair.1));
+                    }
+                    for pair in pairs {
+                        offsets.extend(place(pair.0));
+                    }
+                    for &start in starts {
+                        offsets.extend(place(start));
+                    }
+                    let table = kept_constant(runtime, &offsets).and_then(|offsets| {
+                        let table = Buffer::new(count * 24)?;
+                        let mut arguments: [u64; 6] = [
+                            table.pointer,
+                            offsets.pointer,
+                            right,
+                            left,
+                            made.pointer,
+                            count as u64,
+                        ];
+                        let mut addresses: Vec<*mut c_void> = arguments
+                            .iter_mut()
+                            .map(|argument| std::ptr::from_mut(argument).cast())
+                            .collect();
+                        // SAFETY: the kernel takes these six 64-bit
+                        // arguments, and both tables hold `3 * count`
+                        // entries.
+                        let status = unsafe {
+                            (api.cuLaunchKernel)(
+                                compiled.functions[tensor_codegen::ADDRESSES_KERNEL] as *mut c_void,
+                                (3 * count).div_ceil(BLOCK_THREADS).max(1) as c_uint,
+                                1,
+                                1,
+                                BLOCK_THREADS as c_uint,
+                                1,
+                                1,
+                                0,
+                                std::ptr::null_mut(),
+                                addresses.as_mut_ptr(),
+                                std::ptr::null_mut(),
+                            )
+                        };
+                        check(status, "launch a kernel")?;
+                        tables.push(offsets);
+                        Ok(Arc::new(table))
+                    });
+                    match table {
+                        Ok(table) => {
+                            let each = (count * 8) as DevicePointer;
+                            let (a, b, c) = (
+                                table.pointer,
+                                table.pointer + each,
+                                table.pointer + 2 * each,
+                            );
+                            // SAFETY: each address is a whole matrix
+                            // inside its buffer, and the rows of a product
+                            // are `step` elements apart in the result.
+                            status = unsafe {
+                                if *double {
+                                    (api.cublasDgemmBatched)(
+                                        runtime.cublas,
+                                        right_op,
+                                        left_op,
+                                        columns,
+                                        rows,
+                                        inner,
+                                        &1.0,
+                                        a,
+                                        right_step,
+                                        b,
+                                        left_step,
+                                        &0.0,
+                                        c,
+                                        *step as c_int,
+                                        count as c_int,
+                                    )
+                                } else {
+                                    (api.cublasSgemmBatched)(
+                                        runtime.cublas,
+                                        right_op,
+                                        left_op,
+                                        columns,
+                                        rows,
+                                        inner,
+                                        &1.0,
+                                        a,
+                                        right_step,
+                                        b,
+                                        left_step,
+                                        &0.0,
+                                        c,
+                                        *step as c_int,
+                                        count as c_int,
+                                    )
+                                }
+                            };
+                            tables.push(table);
+                        }
+                        Err(error) => {
+                            buffers[*output] = Some(Arc::new(made));
+                            return Err(error);
+                        }
+                    }
+                } else if count > 1
                     && left_stacked
                     && right_shared
                     && !swapped.0
@@ -1126,15 +1321,23 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
         }
     }
     let launched = began.elapsed();
-    // The kernels run after the launch returns. Wait for them before any
-    // buffer of this run is dropped or read.
-    // SAFETY: the context is current on this thread.
-    let finished = check(unsafe { (api.cuCtxSynchronize)() }, "finish a run");
+    // The kernels run after the launch returns. A run started early
+    // leaves them running: every later launch, copy and wait on this
+    // device comes after them. Any other run waits here, before the
+    // program reads a result, and the traces that time each action wait
+    // for every run.
+    let waits = !super::tensor_host::runs_early() || (trace > 0 && trace != 2);
+    let finished = if waits {
+        // SAFETY: the context is current on this thread.
+        check(unsafe { (api.cuCtxSynchronize)() }, "finish a run")
+    } else {
+        Ok(())
+    };
     let freed = {
         let mut pool = runtime.pool();
         pool.running -= 1;
-        if pool.running == 0 {
-            pool.trim(MAX_POOLED_BYTES)
+        if pool.running == 0 && waits {
+            pool.trim(runtime.pooled)
         } else {
             Vec::new()
         }
@@ -1174,6 +1377,13 @@ pub(crate) fn run(plan: &Plan, leaves: &[Storage]) -> Result<Vec<Storage>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn the_pool_keeps_a_quarter_of_a_device_and_two_gibibytes_at_least() {
+        assert_eq!(pooled_bytes(48 << 30), 12 << 30);
+        assert_eq!(pooled_bytes(4 << 30), MIN_POOLED_BYTES);
+        assert_eq!(pooled_bytes(0), MIN_POOLED_BYTES);
+    }
 
     #[test]
     fn a_kernel_image_is_kept_under_a_name_made_from_its_source_and_compiler() {

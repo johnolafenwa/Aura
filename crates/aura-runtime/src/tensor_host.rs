@@ -529,10 +529,15 @@ impl TensorValue {
             *self.state() = State::Ready(storage.clone());
             return Ok(storage);
         }
+        if trace_level() > 0 && self.device().is_gpu() {
+            // The run's own line then reports the time to collect the plan.
+            eprintln!("aura tensor: program={:.2}ms", trace_gap());
+        }
         let deferred = Self::deferred(self.device(), &[self]);
         let mut roots = vec![self];
         roots.extend(&deferred);
         let (plan, leaves, held) = Plan::collect_held(&roots);
+        TRACKED_WAITS.with(|waits| waits.set(false));
         let mut storages = plan.run(self.device(), &leaves)?.into_iter();
         let storage = storages.next().expect("a plan gives its result");
         *self.state() = State::Ready(storage.clone());
@@ -808,6 +813,9 @@ fn evaluate_together(nodes: &[TensorValue]) -> Result<()> {
     let deferred = TensorValue::deferred(device, &waiting);
     let waiting: Vec<&TensorValue> = waiting.into_iter().chain(&deferred).collect();
     let (plan, leaves, held) = Plan::collect_held(&waiting);
+    if !runs_early() {
+        TRACKED_WAITS.with(|waits| waits.set(false));
+    }
     let storages = plan.run(device, &leaves)?;
     for (node, storage) in waiting.iter().copied().chain(&held).zip(storages) {
         *node.state() = State::Ready(storage);
@@ -1282,6 +1290,73 @@ fn apply(operation: &Operation, inputs: &[&ArrayValue]) -> Result<ArrayValue> {
     }
 }
 
+/// The depth of waiting work at which a product starts its operands
+/// when `AURA_TENSOR_EARLY_DEPTH` does not set one.
+const EARLY_DEPTH: usize = 32;
+
+/// The depth `setting`, the value of `AURA_TENSOR_EARLY_DEPTH`, asks
+/// for. Zero turns early starts off.
+fn early_depth_from(setting: Option<&str>) -> usize {
+    setting
+        .and_then(|setting| setting.parse().ok())
+        .unwrap_or(EARLY_DEPTH)
+}
+
+fn early_depth() -> usize {
+    static DEPTH: std::sync::OnceLock<usize> = std::sync::OnceLock::new();
+    *DEPTH
+        .get_or_init(|| early_depth_from(std::env::var("AURA_TENSOR_EARLY_DEPTH").ok().as_deref()))
+}
+
+thread_local! {
+    /// Whether the plan being run was started early: the device runs it
+    /// while the program goes on, and nothing waits for it.
+    static EARLY: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Whether the run under way is one a product started early.
+pub(crate) fn runs_early() -> bool {
+    EARLY.with(std::cell::Cell::get)
+}
+
+/// Starts the waiting work of a product's operands when it is `depth`
+/// steps deep or more. A product reads its operands from memory, so
+/// they are written in any case, and the device computes them while the
+/// program builds the work that follows. Without this, the device is
+/// idle until the program reads a result. Nothing starts early while
+/// work with gradients waits.
+fn start_operands(inputs: &[&TensorValue], depth: usize) -> Result<()> {
+    // Work with gradients stays one plan: its backward pass shares
+    // most of the forward one.
+    if depth == 0
+        || TRACKED_WAITS.with(std::cell::Cell::get)
+        || inputs.iter().all(|input| input.depth() < depth)
+    {
+        return Ok(());
+    }
+    let roots: Vec<TensorValue> = inputs
+        .iter()
+        .filter_map(|input| match &*input.state() {
+            State::Ready(_) => None,
+            // A product reads the transpose of memory in place, so the
+            // memory to write is the operand of the transpose.
+            State::Pending(pending)
+                if tensor_codegen::swaps_matrix(
+                    &pending.operation,
+                    pending.inputs[0].shape().len(),
+                ) =>
+            {
+                Some(pending.inputs[0].clone())
+            }
+            State::Pending(_) => Some((*input).clone()),
+        })
+        .collect();
+    EARLY.with(|early| early.set(true));
+    let outcome = evaluate_together(&roots);
+    EARLY.with(|early| early.set(false));
+    outcome
+}
+
 /// The tensor `operation` gives over `inputs`, which are on one device. A
 /// GPU device keeps the operation to run with the ones after it. The CPU
 /// device, and a GPU device whose library lacks the operation, run it now.
@@ -1289,6 +1364,9 @@ fn operate(operation: Operation, inputs: &[&TensorValue]) -> Result<Value> {
     let device = inputs[0].device();
     if defers(device) {
         if let Some((dtype, shape)) = planned_result(&operation, inputs) {
+            if matches!(operation, Operation::Matmul) && device != TensorDevice::Metal {
+                start_operands(inputs, early_depth())?;
+            }
             let depth = 1 + inputs.iter().map(|input| input.depth()).max().unwrap_or(0);
             let node = TensorValue::in_state(
                 device,
@@ -1337,14 +1415,50 @@ thread_local! {
     static RECORDING: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
 }
 
+/// Whether operations record gradients: `tensor.set_grad_enabled`. One
+/// setting serves the whole program.
+#[cfg(not(test))]
+static GRADIENTS: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(true);
+
+#[cfg(test)]
+thread_local! {
+    /// Each test thread has its own setting, so tests run side by side.
+    static GRADIENTS: std::cell::Cell<bool> = const { std::cell::Cell::new(true) };
+}
+
+fn gradients_enabled() -> bool {
+    #[cfg(not(test))]
+    return GRADIENTS.load(std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    GRADIENTS.with(std::cell::Cell::get)
+}
+
+fn set_gradients_enabled(enabled: bool) {
+    #[cfg(not(test))]
+    GRADIENTS.store(enabled, std::sync::atomic::Ordering::Relaxed);
+    #[cfg(test)]
+    GRADIENTS.with(|gradients| gradients.set(enabled));
+}
+
+thread_local! {
+    /// Whether a waiting tensor with gradients was made since the last
+    /// run the program waited for. While one may wait, no product
+    /// starts its operands early: the backward pass shares the work.
+    static TRACKED_WAITS: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
 /// The new tensor `node`, tracked when it is a float tensor computed from
 /// a tracked one.
 fn recorded(node: TensorValue, operation: Operation, inputs: &[&TensorValue]) -> TensorValue {
     let float = matches!(node.dtype(), ArrayDType::Float32 | ArrayDType::Float64);
     if float
         && RECORDING.with(std::cell::Cell::get)
+        && gradients_enabled()
         && inputs.iter().any(|input| input.is_tracked())
     {
+        if !node.is_ready() {
+            TRACKED_WAITS.with(|waits| waits.set(true));
+        }
         node.tracking(Some(History {
             operation,
             inputs: inputs.iter().map(|&input| input.clone()).collect(),
@@ -1365,6 +1479,11 @@ fn float64_error(device: TensorDevice) -> Diagnostic {
     )
 }
 
+/// A leaf in host memory of at most this many bytes goes to the CUDA
+/// device together with the other such leaves of its run, as one copy.
+#[cfg(target_os = "linux")]
+pub(crate) const SMALL_LEAF_BYTES: usize = 4096;
+
 /// A tensor of `elements` on `device`, in the device's own memory when it
 /// has one.
 fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
@@ -1373,6 +1492,14 @@ fn place(device: TensorDevice, elements: ArrayValue) -> Result<Value> {
     }
     #[cfg(target_os = "linux")]
     if device == TensorDevice::Cuda && !elements.is_empty() {
+        // A small tensor, such as the counts a mask is made from, stays
+        // in host memory. A run copies the small leaves of its plan
+        // together and keeps the copy, where a copy made here would
+        // wait for the kernels launched so far.
+        let bytes = elements.len() * tensor_codegen::element_bytes(elements.dtype());
+        if bytes <= SMALL_LEAF_BYTES {
+            return Ok(Value::Tensor(TensorValue::host(device, elements)));
+        }
         let buffer = tensor_cuda::Buffer::from_array(&elements)?;
         return Ok(Value::Tensor(TensorValue::ready(
             device,
@@ -1908,6 +2035,11 @@ pub fn host_tensor_node_op(args: Vec<Value>, _: Option<&[String]>) -> Result<Val
         11 => tensor_grad::kept_gradient(operand).map(Value::Tensor),
         12 => {
             operand.set_grad(None);
+            Ok(Value::Tensor(operand.clone()))
+        }
+        14 => {
+            let [enabled] = parameters::<1>(&args, 2, "tensor::set_grad_enabled")?;
+            set_gradients_enabled(enabled != 0);
             Ok(Value::Tensor(operand.clone()))
         }
         13 => {

@@ -49,6 +49,7 @@ def mlp_infer(rows: int64, reps: int64, device: Device) -> None:
     three = Linear(2048, 10, 8, device)
     mut total = 0
     mut first = 0
+    tensor.set_grad_enabled(false)
     mut start = sys.monotonic_time_ms()
     for rep in range(reps + 1):
         labels = three.forward(two.forward(one.forward(x).relu()).relu()).argmax()
@@ -56,6 +57,7 @@ def mlp_infer(rows: int64, reps: int64, device: Device) -> None:
         if rep == 0:
             first = sys.monotonic_time_ms() - start
             start = sys.monotonic_time_ms()
+    tensor.set_grad_enabled(true)
     print(f"mlp_infer {rows} {sys.monotonic_time_ms() - start} {total} {first}")
 
 
@@ -322,6 +324,7 @@ def gpt_infer(layers: int64, width: int64, heads: int64, reps: int64, device: De
     inputs.eval()
     mut total = 0
     mut first = 0
+    tensor.set_grad_enabled(false)
     mut start = sys.monotonic_time_ms()
     for rep in range(reps + 1):
         mut hidden = tokens.forward(inputs) + places.forward(positions)
@@ -333,6 +336,7 @@ def gpt_infer(layers: int64, width: int64, heads: int64, reps: int64, device: De
         if rep == 0:
             first = sys.monotonic_time_ms() - start
             start = sys.monotonic_time_ms()
+    tensor.set_grad_enabled(true)
     print(f"gpt_infer {layers}x{width} {sys.monotonic_time_ms() - start} {total} {first}")
 
 

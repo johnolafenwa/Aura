@@ -1541,6 +1541,36 @@ def main():
 }
 
 #[test]
+fn the_gradient_switch_leaves_gradients_on_when_asked() {
+    let output = crate::run_source(
+        r#"import tensor
+from tensor import Device, Tensor, Linear, Layer
+
+def main():
+    device = Device.cpu()
+    layer = Linear(2, 1, 3, device)
+    x = Tensor[float32].from_array(Array[float32].from_list([1.0, 2.0], [1, 2]), device)
+    before = layer.forward(x).sum().item()
+    # The setting serves the whole process, and other tests in it take
+    # gradients, so this one only turns them on. The runtime tests turn
+    # them off.
+    tensor.set_grad_enabled(true)
+    print(before == layer.forward(x).sum().item())
+    weights = Tensor[float32].from_array(Array[float32].from_list([1.0, 2.0], [2]), device).requires_grad()
+    loss = (weights * weights).sum()
+    print(loss.gradient(weights).to_array())
+"#,
+    )
+    .expect("a program sets the gradient switch");
+    assert_eq!(
+        output.stdout,
+        "true
+Array[float32](shape=[2], values=[2.0, 4.0])
+"
+    );
+}
+
+#[test]
 fn a_small_transformer_learns_with_the_tensor_layers() {
     let output = crate::run_source(
         r#"import tensor

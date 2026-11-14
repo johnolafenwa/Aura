@@ -48,30 +48,36 @@ CPU=1 bash benchmarks/tensor/run_workloads.sh    # the CPU sides as well
 
 ### Whole Programs, NVIDIA A40
 
-NVIDIA A40, CUDA 13.2, PyTorch 2.8, 2026-11-13. Milliseconds for the
-timed passes of a row, the range of three runs. Other work held the
-pod's processors during these runs (load average about 20), which
+NVIDIA A40, CUDA 13.2, PyTorch 2.8, 2026-11-14. Milliseconds for the
+timed passes of a row, the range of the runs with compiled kernels. Other work held the
+pod's processors during these runs (load average 10 to 17), which
 slows the rows that are bound by host time, PyTorch's `mlp_train` most
 of all.
 
 | Program | Aura, CUDA device | PyTorch, CUDA |
 | --- | ---: | ---: |
-| `mlp_train`, 500 steps | 262 to 271 | 1,162 to 1,584 |
-| `mlp_infer`, 65,536 rows | 741 to 748 | 901 to 904 |
-| `kmeans`, 200,000 rows | 39 | 68 |
-| `conjugate_gradient`, 4,096 | 20 to 21 | 17 to 23 |
-| `transformer_train`, 4 layers of 256 | 339 to 365 | 320 to 347 |
-| `monte_carlo`, 10,000,000 paths | 3 to 4 | 21 to 22 |
-| `cnn_train`, 50 steps | 346 to 372 | 297 to 350 |
-| `gpt_infer`, 12 layers of 768 | 344 to 378 | 269 to 271 |
+| `mlp_train`, 500 steps | 251 to 259 | 838 to 1,567 |
+| `mlp_infer`, 65,536 rows | 739 to 746 | 904 to 906 |
+| `kmeans`, 200,000 rows | 38 to 39 | 68 |
+| `conjugate_gradient`, 4,096 | 19 to 20 | 20 |
+| `transformer_train`, 4 layers of 256 | 318 to 334 | 323 to 387 |
+| `monte_carlo`, 10,000,000 paths | 4 | 21 |
+| `cnn_train`, 50 steps | 319 to 339 | 290 to 343 |
+| `gpt_infer`, 12 layers of 768 | 274 to 277 | 270 to 272 |
 
-`gpt_infer` is the row behind. A profile of both sides shows the matrix
-products level, at about 21 ms of a step each. PyTorch's other kernels
-take 2.6 ms of a step and Aura's 10 ms: PyTorch adds a bias inside the
-product, and runs attention and layer norm as one kernel each, where
-Aura runs 306 kernels a step. The loss of `cnn_train` differs in its
-fourth digit between runs on both sides: gradients that add into one
-element add in an order the GPU does not fix.
+`gpt_infer` is the row behind, by about 0.5 ms of a 28 ms step. The
+matrix products take the same time on both sides, 23 ms of a step. A
+layer norm and a softmax are one kernel each, at PyTorch's time for
+each, and the operands of a product start on the GPU while the program
+builds the rest of the step, which is worth about 23 ms of the row
+(`AURA_TENSOR_EARLY_DEPTH=0` turns it off). The products of an
+attention write its merged heads in place. What is left is three
+copies in each layer that put the heads of the queries, keys and
+values beside each other, which PyTorch's attention kernel reads in
+place, and that kernel itself, which is one pass where Aura runs two
+products and a softmax. The loss of `cnn_train`
+differs in its fourth digit between runs on both sides: gradients that
+add into one element add in an order the GPU does not fix.
 
 ### Single Expressions
 
@@ -171,4 +177,12 @@ them. It also writes a line for each read into host memory and for each
 operation that ran in host memory. `AURA_TENSOR_TRACE=1` adds the
 slowest actions of each piece of work, and waits for the device after
 every action to time it, so that run is slower. `AURA_TENSOR_TRACE=all`
-lists every action in place of the slowest.
+lists every action in place of the slowest. Before each piece of work
+the program reads, a `program=` line gives the time the program took to
+build it. The host time on the line after it is then the time to collect
+the plan.
+
+`AURA_TENSOR_EARLY_DEPTH` sets how deep the waiting work of a matrix
+product's operands is before the product starts it on the GPU. The
+default is 32, and `0` makes all work wait until the program reads a
+result. Nothing starts early while work that records gradients waits.

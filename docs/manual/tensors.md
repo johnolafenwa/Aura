@@ -267,6 +267,21 @@ storage: it never changes what `forward` computes.
 | `copy_(mut self, value: Tensor[T])` | Replaces the tensor the parameter holds, for example with loaded weights, and clears `grad`. |
 | `evaluate(tensors)` | A module function. Runs the work of a list of tensors as one piece, so an expression several of them share is computed once. |
 
+### Turning Gradients Off
+
+`tensor.set_grad_enabled(false)` stops the recording of gradients for
+the whole program, and `tensor.set_grad_enabled(true)` starts it again.
+While it is off, a result computed from a parameter has no gradient.
+Turn it off around a model that only predicts, as PyTorch's `no_grad()`
+does. The model then keeps no record of its steps, and a GPU device
+starts its work earlier. See [When the Work Runs](#when-the-work-runs).
+
+```aura fragment
+tensor.set_grad_enabled(false)
+labels = model.forward(x).argmax()
+tensor.set_grad_enabled(true)
+```
+
 ### Gradients Add Up, and a Step Uses Them
 
 Each `backward()` adds to `grad`, as in PyTorch, so a loop can call it
@@ -493,7 +508,14 @@ Aura compiles each distinct expression for the GPU once and keeps it. A
 loop that evaluates the same expression over tensors of the same shapes
 pays that cost on its first pass only.
 
-A chain of more than 128 waiting operations runs when it reaches that
+A matrix product whose operands wait on a chain of 32 or more operations
+starts that work when the product is made. The GPU computes it while
+the program builds the operations that follow, so a deep model keeps
+the GPU busy from the start of a pass. Nothing starts early while work
+that records gradients waits, so turn gradients off for a model that
+only predicts.
+
+A chain of more than 8,192 waiting operations runs when it reaches that
 length, so a loop that never reads a result cannot grow without bound.
 
 The results do not depend on when the work runs.

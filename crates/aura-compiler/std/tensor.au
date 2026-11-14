@@ -1227,6 +1227,16 @@ public def randn(shape: list[int64], seed: int64, device: Device) -> Tensor[floa
     return Tensor[float32](node=tensor.__aura_filled(shape, 1, seed, 2, device.kind))
 
 
+public def set_grad_enabled(mode: bool) -> None:
+    """Turns the recording of gradients on or off for the whole program.
+    While it is off, a result computed from a parameter has no gradient,
+    as inside `torch.no_grad()`."""
+    mut flag = 0
+    if mode:
+        flag = 1
+    tensor.__aura_node_op(tensor.__aura_filled([1], 2, 0, 1, Device.cpu().kind), 14, [flag])
+
+
 public def arange(count: int64, device: Device) -> Tensor[int64]:
     """The integers from zero up to, and not including, `count`."""
     return Tensor[int64](node=tensor.__aura_filled([count], 2, 0, 1, device.kind))
