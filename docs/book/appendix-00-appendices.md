@@ -22,5 +22,9 @@ extension with its language server and debugger.
 diagnostics you are most likely to meet while learning, each with a small
 program that triggers it and the usual fix.
 
+[Appendix F](/book/appendix-06-windows) is for readers working in PowerShell
+on native Windows. It translates the shell commands the book's listings
+use, and says which chapters lean on Unix tools.
+
 The [Manual](/manual/) remains the complete reference. When an appendix
 simplifies a rule, it links to the Manual page that has the full contract.

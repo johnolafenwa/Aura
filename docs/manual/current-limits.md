@@ -284,7 +284,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ## Tooling
 
-- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows the native `run` needs that linker too. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
+- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows `run --backend direct` needs that linker too; plain `run` does not. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
 - `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
