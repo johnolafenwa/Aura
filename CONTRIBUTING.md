@@ -92,6 +92,6 @@ solver on `PATH`, the verifier tests skip locally; under CI they fail.
 
 | Workflow | What it does |
 | --- | --- |
-| `.github/workflows/ci.yml` | Runs the repository gate on Linux and macOS. |
+| `.github/workflows/ci.yml` | Runs the repository gate on Linux, macOS, and Windows. |
 | `.github/workflows/docs.yml` | Builds the VitePress book and deploys it to GitHub Pages from `main`. |
-| `.github/workflows/release.yml` | Builds Linux and macOS CLI archives, packages the VS Code extension and docs, and publishes them for pushed `v*` tags. Manual runs only build by default. Publishing needs an explicit opt-in. |
+| `.github/workflows/release.yml` | Builds Linux, macOS, and Windows CLI archives, packages the VS Code extension and docs, and publishes them for pushed `v*` tags. Manual runs only build by default. Publishing needs an explicit opt-in. |

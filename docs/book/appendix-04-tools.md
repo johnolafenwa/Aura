@@ -231,8 +231,9 @@ binary you want:
 AURA_LSP_AURA_PATH="$HOME/tools/aura/bin/aura" code .
 ```
 
-On Windows with WSL, install both the `aura` CLI and the extension inside
-WSL. Open the project from the WSL terminal with `code .`, and install the
+With a native Windows install, the extension runs in the ordinary VS Code
+window and finds `aura.exe` on `PATH`. If you installed Aura inside WSL
+instead, install both the `aura` CLI and the extension inside WSL. Open the project from the WSL terminal with `code .`, and install the
 extension with **Install in WSL** in that remote window. An extension running
 on the Windows side cannot reliably reach a compiler inside Linux.
 

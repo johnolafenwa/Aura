@@ -706,7 +706,7 @@ The gate checks:
 - Clippy, with warnings treated as errors
 - repository hygiene
 
-GitHub Actions runs the repository gate on Linux and macOS. The release
+GitHub Actions runs the repository gate on Linux, macOS, and Windows. The release
 workflow publishes `v*` tag builds as GitHub Release assets. These include the
 platform CLI archives, the packaged VS Code extension, and a static docs
 archive.

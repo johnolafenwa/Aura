@@ -398,16 +398,22 @@ extension, reference manual, and source all ship from the
 
 ## Aura CLI
 
-Install the current preview with one command. This works on a supported macOS
-or Linux host, including x86-64 Ubuntu 24.04 inside Windows WSL 2. On
-Windows itself, follow the [Windows guide](/install/windows):
+Install the current preview with one command. On a supported macOS or Linux
+host, including x86-64 Ubuntu 24.04 inside Windows WSL 2:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+On x86-64 Windows 11, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
 The installer downloads the matching release archive and verifies it against
-the published `SHA256SUMS`. It installs Aura under `~/.local` by default. Set
+the published `SHA256SUMS`. It installs Aura under `~/.local` by default, or
+under `%LOCALAPPDATA%\Programs\Aura` on Windows. Set
 `AURA_INSTALL_PREFIX` to choose another prefix.
 
 For step-by-step instructions, pick a platform guide:
@@ -693,9 +699,10 @@ sudo apt install -y coreutils
 
 ### The archive will not start on the distribution
 
-The published Linux binary targets x86-64 glibc systems. Check the
+The published Linux binaries target x86-64 and arm64 glibc systems. Check the
 architecture with `uname -m` and the C library with `ldd --version`. Alpine
-Linux and other musl systems are not in the current distribution matrix.
+Linux and other musl systems cannot run `aura` itself. To build a program
+for them, use `aura build --target` on a glibc host.
 
 `aura` links LLVM statically, and it also loads `libstdc++.so.6`,
 `libz.so.1`, and `libzstd.so.1`. Ubuntu installs all three by default. To
@@ -1029,11 +1036,18 @@ code --install-extension ./aura-language.vsix
 By default, VS Code does not update extensions installed from a VSIX. To
 upgrade, install the next release's VSIX by hand.
 
+## Install On Windows
+
+With a [native Windows install](/install/windows) of Aura, install the
+extension in the ordinary VS Code window with any method above. It finds
+`aura.exe` on `PATH`.
+
 ## Install In WSL
 
-The Aura extension and the `aura` CLI must both run in the Windows Subsystem
-for Linux (WSL) environment. An extension installed only in the local Windows
-extension host cannot reliably reach the Linux compiler server.
+If you installed Aura inside the Windows Subsystem for Linux (WSL), the
+extension and the `aura` CLI must both run there. An extension installed
+only in the local Windows extension host cannot reliably reach the Linux
+compiler server.
 
 1. Complete [Install Aura On Windows With WSL](/install/windows-wsl).
 2. From the Ubuntu terminal, open the project with `code .`.
@@ -1253,13 +1267,16 @@ aura --version
 ```
 
 If these commands fail, restore the `PATH` export from step 4 and restart the
-WSL VS Code window. Do not install a Windows copy of Aura. The current
-compiler ships only as the Linux binary running inside WSL.
+WSL VS Code window. A [native Windows install](/install/windows) of Aura
+does not help here: the extension in a WSL window needs the Linux `aura`
+inside WSL.
 
 ### Windows on ARM
 
-The current Aura release has no Linux ARM64 archive. Windows-on-ARM WSL hosts
-are not supported in this preview.
+Windows on ARM is not a supported host in this preview. There is no native
+Windows ARM archive, and CI has no Windows-on-ARM runner. The release does
+have a Linux arm64 archive, so the Linux install may work inside WSL 2 on
+such a machine, but it is not tested there.
 
 ## Source: docs/install/windows.md
 
@@ -4010,7 +4027,7 @@ The gate checks:
 - Clippy, with warnings treated as errors
 - repository hygiene
 
-GitHub Actions runs the repository gate on Linux and macOS. The release
+GitHub Actions runs the repository gate on Linux, macOS, and Windows. The release
 workflow publishes `v*` tag builds as GitHub Release assets. These include the
 platform CLI archives, the packaged VS Code extension, and a static docs
 archive.
@@ -27862,7 +27879,7 @@ in Aura.
 
 To follow along you need the `aura` command. The
 [installation guide](/install/) has instructions for macOS, Linux, and
-Windows through WSL, and [Chapter 1](/book/ch01-00-getting-started) walks
+Windows, and [Chapter 1](/book/ch01-00-getting-started) walks
 through the same steps with a little more explanation. The source for Aura
 and for this book lives at
 [github.com/johnolafenwa/Aura](https://github.com/johnolafenwa/Aura), in the
@@ -27966,7 +27983,7 @@ write our first few programs. By the end you will have `aura` on your path,
 you will have run a program three different ways, and you will have a package
 with its own tests that you can open in an editor.
 
-We will install Aura on macOS, Linux, or Windows through WSL. Then we will
+We will install Aura on macOS, Linux, or Windows. Then we will
 write the traditional program that prints `Hello, world!`, first as a
 one-line script and then with an explicit `main` function, and turn it into a
 native executable. Finally we will use `aura new` to create a package, which
@@ -27987,18 +28004,20 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.16 is a technical preview, and the set of platforms it ships for is
-small. Release archives exist for these hosts:
+Aura 0.16 is a technical preview. Release archives exist for these hosts:
 
 | Platform | Release archive |
 | --- | --- |
 | macOS 15 on Apple silicon | `aarch64-apple-darwin` |
 | macOS 15 on Intel | `x86_64-apple-darwin` |
 | Ubuntu 24.04 or another glibc-based Linux, x86-64 | `x86_64-unknown-linux-gnu` |
-| Windows 11, x86-64 | the Linux archive, inside WSL 2 |
+| Ubuntu 24.04 or another glibc-based Linux, arm64 | `aarch64-unknown-linux-gnu` |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc` |
 
-There is no native Windows build, no Linux ARM64 build, and no build for
-musl-based distributions such as Alpine. If your machine is not in the table,
+On Windows you can also run the Linux archive inside WSL 2. There is no
+build for Windows on ARM, and `aura` itself does not run on musl-based
+distributions such as Alpine, although `aura build --target` can build
+programs for them. If your machine is not in the table,
 you can still build Aura from source, which we cover at the end of this
 section, but you are outside the set of hosts the project tests on.
 
@@ -28065,19 +28084,42 @@ $ source ~/.zshrc
 The first line makes the change permanent for new terminals, and the second
 applies it to the terminal you have open now.
 
+### Windows
+
+Aura runs natively on x86-64 Windows 11. In PowerShell, one command
+downloads the Windows archive, checks it against `SHA256SUMS`, and installs
+it under `%LOCALAPPDATA%\Programs\Aura`:
+
+```console
+> irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+Then add the `bin` directory to your user `PATH`:
+
+```console
+> $bin = "$env:LOCALAPPDATA\Programs\Aura\bin"
+> [Environment]::SetEnvironmentVariable('Path', "$bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+> $env:PATH = "$bin;$env:PATH"
+```
+
+The [Windows guide](/install/windows) has the details. The commands in this
+book are written for a macOS or Linux shell. In PowerShell the `aura`
+commands are the same, a built program is named with `.exe`, and a few
+shell commands such as `mkdir -p` have PowerShell spellings.
+
 ### Windows with WSL 2
 
-Aura does not run natively on Windows. On a Windows 11 machine, you install
-Ubuntu under the Windows Subsystem for Linux and use the Linux release inside
-it. From an administrator PowerShell, install Ubuntu 24.04:
+You can also install Ubuntu under the Windows Subsystem for Linux and use
+the Linux release inside it. Then every command in this book works exactly
+as printed. From an administrator PowerShell, install Ubuntu 24.04:
 
 ```console
 > wsl --install -d Ubuntu-24.04
 ```
 
 Restart if Windows asks you to, launch **Ubuntu 24.04 LTS** from the Start
-menu, and create a Linux user when it prompts you. From then on, run every
-command in this book in the Ubuntu terminal, not in PowerShell. Follow the
+menu, and create a Linux user when it prompts you. From then on, run the
+commands in this book in the Ubuntu terminal, not in PowerShell. Follow the
 Linux steps above inside Ubuntu, and keep your projects under your Linux home
 directory (for example `~/projects`) rather than under `/mnt/c`, so that file
 permissions and other filesystem behavior match what Linux tools expect.
@@ -28122,6 +28164,11 @@ On Ubuntu, including Ubuntu under WSL, install `build-essential`:
 ```console
 $ sudo apt install -y build-essential
 ```
+
+On Windows, install the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+with the **Desktop development with C++** workload. On Windows, `aura run`
+uses that linker too, so install it before the next section.
 
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.
@@ -28202,8 +28249,10 @@ $ mkdir -p ~/projects/hello_world
 $ cd ~/projects/hello_world
 ```
 
-If you are on Windows, run these commands in the Ubuntu terminal of WSL, as
-described in the [previous section](/book/ch01-01-installation).
+If you are on Windows with WSL, run these commands in the Ubuntu terminal,
+as described in the [previous section](/book/ch01-01-installation). In
+PowerShell on a native install, use `mkdir ~\projects\hello_world` and
+`cd ~\projects\hello_world` instead.
 
 ## Writing and running a script
 
@@ -28762,9 +28811,9 @@ $ code --install-extension JohnOlafenwa.vscode-aura-lang
 
 Editors that use the Open VSX registry, such as VSCodium, have the same
 extension; with VSCodium, use `codium --install-extension` with the same name.
-On Windows, open the project from the Ubuntu terminal with `code .` and
-install the extension into the **WSL: Ubuntu** window, so that the extension
-runs on the same side as `aura`.
+If you installed Aura inside WSL, open the project from the Ubuntu terminal
+with `code .` and install the extension into the **WSL: Ubuntu** window, so
+that the extension runs on the same side as `aura`.
 
 The extension has very little logic of its own. It starts `aura lsp`, a
 long-running mode of the same `aura` tool, and asks it about the files you
@@ -56969,8 +57018,9 @@ binary you want:
 AURA_LSP_AURA_PATH="$HOME/tools/aura/bin/aura" code .
 ```
 
-On Windows with WSL, install both the `aura` CLI and the extension inside
-WSL. Open the project from the WSL terminal with `code .`, and install the
+With a native Windows install, the extension runs in the ordinary VS Code
+window and finds `aura.exe` on `PATH`. If you installed Aura inside WSL
+instead, install both the `aura` CLI and the extension inside WSL. Open the project from the WSL terminal with `code .`, and install the
 extension with **Install in WSL** in that remote window. An extension running
 on the Windows side cannot reliably reach a compiler inside Linux.
 

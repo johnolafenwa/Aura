@@ -5,18 +5,20 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.16 is a technical preview, and the set of platforms it ships for is
-small. Release archives exist for these hosts:
+Aura 0.16 is a technical preview. Release archives exist for these hosts:
 
 | Platform | Release archive |
 | --- | --- |
 | macOS 15 on Apple silicon | `aarch64-apple-darwin` |
 | macOS 15 on Intel | `x86_64-apple-darwin` |
 | Ubuntu 24.04 or another glibc-based Linux, x86-64 | `x86_64-unknown-linux-gnu` |
-| Windows 11, x86-64 | the Linux archive, inside WSL 2 |
+| Ubuntu 24.04 or another glibc-based Linux, arm64 | `aarch64-unknown-linux-gnu` |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc` |
 
-There is no native Windows build, no Linux ARM64 build, and no build for
-musl-based distributions such as Alpine. If your machine is not in the table,
+On Windows you can also run the Linux archive inside WSL 2. There is no
+build for Windows on ARM, and `aura` itself does not run on musl-based
+distributions such as Alpine, although `aura build --target` can build
+programs for them. If your machine is not in the table,
 you can still build Aura from source, which we cover at the end of this
 section, but you are outside the set of hosts the project tests on.
 
@@ -83,19 +85,42 @@ $ source ~/.zshrc
 The first line makes the change permanent for new terminals, and the second
 applies it to the terminal you have open now.
 
+### Windows
+
+Aura runs natively on x86-64 Windows 11. In PowerShell, one command
+downloads the Windows archive, checks it against `SHA256SUMS`, and installs
+it under `%LOCALAPPDATA%\Programs\Aura`:
+
+```console
+> irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+Then add the `bin` directory to your user `PATH`:
+
+```console
+> $bin = "$env:LOCALAPPDATA\Programs\Aura\bin"
+> [Environment]::SetEnvironmentVariable('Path', "$bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+> $env:PATH = "$bin;$env:PATH"
+```
+
+The [Windows guide](/install/windows) has the details. The commands in this
+book are written for a macOS or Linux shell. In PowerShell the `aura`
+commands are the same, a built program is named with `.exe`, and a few
+shell commands such as `mkdir -p` have PowerShell spellings.
+
 ### Windows with WSL 2
 
-Aura does not run natively on Windows. On a Windows 11 machine, you install
-Ubuntu under the Windows Subsystem for Linux and use the Linux release inside
-it. From an administrator PowerShell, install Ubuntu 24.04:
+You can also install Ubuntu under the Windows Subsystem for Linux and use
+the Linux release inside it. Then every command in this book works exactly
+as printed. From an administrator PowerShell, install Ubuntu 24.04:
 
 ```console
 > wsl --install -d Ubuntu-24.04
 ```
 
 Restart if Windows asks you to, launch **Ubuntu 24.04 LTS** from the Start
-menu, and create a Linux user when it prompts you. From then on, run every
-command in this book in the Ubuntu terminal, not in PowerShell. Follow the
+menu, and create a Linux user when it prompts you. From then on, run the
+commands in this book in the Ubuntu terminal, not in PowerShell. Follow the
 Linux steps above inside Ubuntu, and keep your projects under your Linux home
 directory (for example `~/projects`) rather than under `/mnt/c`, so that file
 permissions and other filesystem behavior match what Linux tools expect.
@@ -140,6 +165,11 @@ On Ubuntu, including Ubuntu under WSL, install `build-essential`:
 ```console
 $ sudo apt install -y build-essential
 ```
+
+On Windows, install the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+with the **Desktop development with C++** workload. On Windows, `aura run`
+uses that linker too, so install it before the next section.
 
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.

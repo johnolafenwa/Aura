@@ -4,7 +4,7 @@ import { withBase } from 'vitepress'
 const guides = [
   { label: 'Install on macOS', href: withBase('/install/macos') },
   { label: 'Install on Linux', href: withBase('/install/linux') },
-  { label: 'Install on Windows', href: withBase('/install/windows-wsl') },
+  { label: 'Install on Windows', href: withBase('/install/windows') },
   { label: 'Install VS Code Extension', href: withBase('/install/vscode') }
 ]
 </script>
