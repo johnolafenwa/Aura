@@ -70,14 +70,14 @@
     "body": [
       "public extern \"C\" def ${1:name}(${2}) -> ${3:int32}"
     ],
-    "description": "Aura FFI v0 C function declaration"
+    "description": "Aura FFI C function declaration"
   },
   "Extern C opaque handle": {
     "prefix": "externhandle",
     "body": [
       "public extern \"C\" opaque class ${1:Handle}"
     ],
-    "description": "Aura FFI v0 opaque C handle declaration"
+    "description": "Aura FFI opaque C handle declaration"
   },
   "If": {
     "prefix": "if",

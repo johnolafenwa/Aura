@@ -19,12 +19,14 @@ The stamp uses the first commit source that applies:
 A dirty or Git-free build shows `local-uncommitted-checkout`. It never invents
 a commit or writes a self-referential hash into this source page.
 
-The Learn track teaches Aura as a story. A future book may build a longer
-learning sequence from this material. This reference defines the facts that
-all such teaching material must preserve.
+[The Aura Programming Language](/book/) teaches Aura one program at a time.
+This reference defines the facts that the book and all other teaching
+material must preserve.
 
 Start with [Language Specification](/manual/language-specification) for
 scope, terminology, authority, and conformance language.
+[Status And Compatibility](/manual/status-and-compatibility) summarizes the
+maintained surface by area and states how it may change.
 
 ## Language Reference
 
@@ -45,7 +47,8 @@ scope, terminology, authority, and conformance language.
   and `str` slicing, member access, literals, conditional expressions,
   membership and comparison chains, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops,
-  imports, `with`, `pass`, assertions, and top-level execution.
+  iterators and generator functions, imports, `with`, `pass`, assertions, and
+  top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
   unpacking and patterns, whole-source ownership, constant indexing, and
   recursive equality.
@@ -62,15 +65,17 @@ scope, terminology, authority, and conformance language.
 - [Closures](/manual/closures): contextual expression lambdas, by-value
   captures, repeated read-only calls, consuming single-use calls, and
   structural Transfer.
-- [Foreign Function Interface (FFI) v0](/manual/ffi): explicit package
+- [Foreign Function Interface (FFI)](/manual/ffi): explicit package
   authorization, bodyless C declarations, fixed-width scalars, pointer-length
-  views, opaque handles, and the native safety boundary.
+  views, C strings, out-parameters, array pointers, C structs, callbacks,
+  opaque handles, and the native safety boundary.
 - [Classes](/manual/classes): fields, constructors, methods, receivers,
   associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads,
   exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait
-  declarations, impls, bounds, dispatch, and current restrictions.
+  declarations, impls, bounds, associated types, `dyn Trait` trait objects,
+  dispatch, and current restrictions.
 - [Ownership And Borrowing](/manual/ownership-and-borrowing): moves, copies,
   clones, shared borrows, mutable borrows, field moves, and task boundaries.
 - [Execution Model](/manual/execution-model): evaluation order, entry
@@ -85,13 +90,14 @@ scope, terminology, authority, and conformance language.
 - [Numeric Arrays](/manual/numeric-arrays): row-major `Array[T]`
   with four numeric dtypes, slices and reshapes that share storage, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
-- [SIMD Module](/manual/simd): lane values of two, four, or eight floats
-  that native code keeps in vector registers, with loads and stores over
+- [SIMD Module](/manual/simd): lane values of two, four, or eight floats, or
+  two or four `int64` values, that native code keeps in vector registers, with loads and stores over
   lists and results that are the same on every machine.
 - [Tensor Module](/manual/tensors): `Tensor[T]` values that live on a
-  device, the CPU or the Metal GPU of a Mac, with the `Array` shape rules,
-  one meaning on every device, and whole expressions run as one piece of
-  GPU work.
+  device, the CPU, the Metal GPU of a Mac, or an NVIDIA GPU through CUDA on
+  Linux, with the `Array` shape rules, one meaning on every device, whole
+  expressions run as one piece of GPU work, gradients, layers, and
+  optimizers.
 - [Freestanding Builds](/manual/freestanding): objects with no runtime and
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
@@ -111,7 +117,8 @@ scope, terminology, authority, and conformance language.
 - [HTTP Module](/manual/http): the HTTP client, with streamed bodies,
   server-sent events, redirects, kept connections, and decompression.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
-  exact number classification, deterministic dumping, and resource limits.
+  exact number classification, deterministic dumping, derived typed codecs
+  and schemas, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact
   sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure
   integers and bytes.
@@ -130,7 +137,10 @@ scope, terminology, authority, and conformance language.
 - [Packages](/manual/packages): manifests, package roots, import resolution,
   lockfiles, and editor analysis behavior.
 - [CLI And Tooling](/manual/cli-and-tooling): `aura` commands, diagnostics,
-  analysis JSON, completions, and build modes.
+  analysis JSON, completions, build modes, debug builds, and builds for
+  other Linux targets.
+- [Docstrings And API Docs](/manual/docstrings): where a docstring goes,
+  how editors and `aura doc` present it, and its size limits.
 - [API Index](/manual/api-index): every maintained builtin function, method,
   enum, and module type in one place.
 - [Diagnostics](/manual/diagnostics): compile-time and runtime categories,

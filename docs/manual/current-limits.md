@@ -47,7 +47,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
+- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -113,7 +113,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. The [`tensor` module](/manual/tensors) has gradients and GPU devices. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
 - Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
@@ -137,7 +137,6 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
 - The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
-- The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
@@ -233,7 +232,6 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.16 contract.
-- Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
 ### Time
@@ -286,7 +284,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ## Tooling
 
-- `build` requires a host C compiler. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
+- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows the native `run` needs that linker too. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
 - `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
@@ -298,17 +296,17 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Test discovery is based on the name prefix. Test annotations are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread. The timed-out program may continue host side effects until the process exits.
 - One docstring is limited to 65,536 UTF-8 bytes, and one module's public documentation to 4,194,304 bytes. Exceeding either is `AU2042`. Enum variants, `impl` blocks, and local bindings have no documentation. `aura doc` writes Markdown or JSON, not HTML.
-- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.
+- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection.
 
 ### Native Artifact Profile
 
 - The workspace release profile builds the shipped compiler executable with optimization level 3, fat link-time optimization (LTO), one codegen unit, no debug data, and symbol stripping.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
-- Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
-- After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
+- Built user executables link with `-Wl,-dead_strip` on macOS, `-Wl,--gc-sections` on Linux, or `/OPT:REF` and `/OPT:ICF` on Windows.
+- After linking on macOS or Linux, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced, except in a `aura build --debug` build, which keeps it.
-- The host toolchain must provide `strip` as well as `cc`.
-- User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
+- On macOS and Linux the host toolchain must provide `strip` as well as `cc`.
+- User executables link `libaura_runtime.a`, or `aura_runtime.lib` on Windows, which contains the runtime and none of the compiler.
 
 ## Design Record
 

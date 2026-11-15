@@ -70,6 +70,11 @@ LLVM from source takes hours. It also prints an
 `LLVM_SYS_SYSTEM_LIBRARY_DIRS` setting that makes the build link
 Homebrew's static `libzstd.a`, so `aura` loads no Homebrew library.
 
+On Windows x86-64, run the script under Git Bash. It downloads the official
+LLVM 22.1.2 MSVC archive and copies the Windows SDK import libraries that
+LLVM names next to LLVM's own, so the Visual Studio Build Tools with the
+Windows SDK must be installed first.
+
 `scripts/check-aura-libraries.py target/release/aura` lists the libraries
 an `aura` loads, and fails on one outside the system set. The release
 workflow and the native binaries CI job run it.

@@ -1,7 +1,7 @@
 # Freestanding Builds Design Checkpoint
 
-Status: **Steps 1 and 2 accepted 2026-11-12 as ADR-0094 and ADR-0095.**
-Step 3 proceeds on the defaults below. The choice marked "owner's call"
+Status: **Steps 1 and 2 accepted 2026-11-12 as ADR-0094 and ADR-0095, and
+shipped in Aura 0.16.0.** Step 3 proceeded on the defaults below. The choice marked "owner's call"
 in section F stays open to change until release.
 
 A freestanding build compiles Aura code for a machine with no operating

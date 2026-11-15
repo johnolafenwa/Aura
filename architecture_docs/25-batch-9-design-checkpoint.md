@@ -1,8 +1,8 @@
 # Batch 9 Design Checkpoint: Iterators And Generators
 
-Status: **Proposed 2026-11-01.** The defaults below are recommendations for
-the owner to ratify. Implementation starts on the defaults, since each step
-is reversible until a release ships it.
+Status: **Proposed 2026-11-01, implemented on these defaults, and shipped in
+Aura 0.13.0.** The text below is the proposal as written: the defaults were
+recommendations for the owner to ratify, and implementation started on them.
 
 This checkpoint settles the details that
 [ADR-0054](decisions/0054-generators-and-iterator-protocol.md) left open.

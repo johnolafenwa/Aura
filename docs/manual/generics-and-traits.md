@@ -128,7 +128,7 @@ Obligations travel with the callable:
 - Imported functions and methods keep the resulting contract.
 - The same rules apply to ordinary, inherent, associated, task-target, trait, operator, and `From` calls.
 
-There is no source annotation for this obligation in Aura 0.9.
+There is no source annotation for this obligation in Aura 0.16.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected with `AU3007`. A concrete type whose clone safety cannot be proved is also rejected, conservatively. Moving, removing, receiving, or rearranging one owned value does not produce a clone and adds no obligation.
 
@@ -1117,7 +1117,7 @@ trait Ord[Rhs]:
 Some operators never use traits:
 
 - `and` and `or` do not dispatch through traits.
-- Builtin `==` and `!=` do not use an equality trait in Aura 0.9. This includes recursive structural tuple equality, which a trait implementation cannot override.
+- Builtin `==` and `!=` do not use an equality trait in Aura 0.16. This includes recursive structural tuple equality, which a trait implementation cannot override.
 - Builtin operations take precedence wherever their concrete value rule applies.
 
 An operator that selects a trait method also enforces that method's substituted clone-safety obligations.
