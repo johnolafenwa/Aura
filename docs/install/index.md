@@ -18,13 +18,20 @@ yet. See [Install with a package manager](/install/package-managers).
 Every guide follows the same three steps.
 
 1. Run the installer. It detects the supported archive, verifies its SHA-256
-   checksum, and installs under `~/.local`.
+   checksum, and installs under `~/.local`, or under
+   `%LOCALAPPDATA%\Programs\Aura` on Windows.
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-2. Add `~/.local/bin` to `PATH`.
+On Windows, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+2. Add the `bin` directory, `~/.local/bin` on macOS and Linux, to `PATH`.
 
 3. Verify the result in the same terminal:
 
@@ -75,6 +82,8 @@ native execution and `aura build` also need a host C toolchain:
 
 - macOS: Xcode command-line tools
 - Ubuntu and WSL: `build-essential`
+- Windows: the Visual Studio Build Tools with the **Desktop development with
+  C++** workload
 
 Each platform guide gives the exact commands.
 

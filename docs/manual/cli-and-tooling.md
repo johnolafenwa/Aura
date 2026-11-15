@@ -134,7 +134,8 @@ accepted and select the same backend. A file without a `main` function or
 top-level statements fails with `AU2999`, because it has no entry point.
 
 An installed release archive finds its native runtime relative to `bin/aura`,
-under `lib/aura`. It needs only a host C compiler for the final link. A binary
+under `lib/aura`. It needs only a host C compiler for the final link, or on
+Windows the Microsoft linker from the Visual Studio C++ build tools. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
 
@@ -292,12 +293,14 @@ compiler metadata. It does not strip the runtime archive's linkable symbols or
 change the default MIR execution mode.
 
 Every build except a [debug build](#debug-builds) requests unused-section
-removal: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux. After a
-successful link, Aura runs `strip -S -x` on the user executable. This removes
-debug and local symbols but keeps globals for process-global FFI.
+removal: `-Wl,-dead_strip` on macOS, `-Wl,--gc-sections` on Linux, and
+`/OPT:REF` with `/OPT:ICF` on Windows. After a successful link on macOS or
+Linux, Aura runs `strip -S -x` on the user executable. This removes debug and
+local symbols but keeps globals for process-global FFI. A Windows build and a
+`--target` build have no strip step.
 
-- The host C toolchain must supply `strip`. Missing or failing stripping is a
-  build error.
+- On macOS and Linux the host C toolchain must supply `strip`. Missing or
+  failing stripping is a build error.
 - Aura's embedded source metadata keeps typed call frames, task ancestry, and
   source-located traps. Native debugger symbol information is reduced.
 - No separate debug companion artifact is emitted, except the `.dSYM` of a
@@ -392,7 +395,7 @@ that would collide or change binding. No lexical rename fallback is used.
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON.
 
 - The `analyze` and `complete` shapes on this page are maintained tooling
-  contracts for Aura 0.3.
+  contracts for Aura 0.16.
 - `ast`, `ast-json`, and `mir` expose compiler inspection data for people and
   tests. Their exact formatting and internal node and block shape are not a
   stable cross-version serialization API.
@@ -706,7 +709,7 @@ The gate checks:
 - Clippy, with warnings treated as errors
 - repository hygiene
 
-GitHub Actions runs the repository gate on Linux and macOS. The release
+GitHub Actions runs the repository gate on Linux, macOS, and Windows. The release
 workflow publishes `v*` tag builds as GitHub Release assets. These include the
 platform CLI archives, the packaged VS Code extension, and a static docs
 archive.
@@ -1013,8 +1016,8 @@ MIR-specific frame-note masking.
 
 ## Limits And Implementation-Defined Behavior
 
-- Native linking requires a supported host C compiler and the installed Aura
-  runtime layout described above.
+- Native linking requires a supported host C compiler, or the Microsoft linker
+  on Windows, and the installed Aura runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
 - The formatter has one fixed style and no configuration.
@@ -1029,14 +1032,13 @@ graph, source-size, recursion, runtime, and backend limits.
 ## Status
 
 The commands and contracts this page documents as maintained are implemented
-in Aura 0.3. CLI, compiler, LSP, extension, backend-parity, and
+in Aura 0.16. CLI, compiler, LSP, extension, backend-parity, and
 repository-gate tests cover them. `analyze`, `complete`, and diagnostic schema
 version `1` are maintained tooling contracts. Internal AST and MIR layouts are
 deliberately unstable.
 
 Aura 0.16 has no package registry, no publishing and installation workflow, no
-Windows support, no configurable formatter, and no annotation-based test
-discovery. Its maintained execution engines are the MIR runtime and the direct
+configurable formatter, and no annotation-based test discovery. Its maintained execution engines are the MIR runtime and the direct
 native backend.
 
 Design record:

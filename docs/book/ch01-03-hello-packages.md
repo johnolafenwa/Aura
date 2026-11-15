@@ -305,9 +305,9 @@ $ code --install-extension JohnOlafenwa.vscode-aura-lang
 
 Editors that use the Open VSX registry, such as VSCodium, have the same
 extension; with VSCodium, use `codium --install-extension` with the same name.
-On Windows, open the project from the Ubuntu terminal with `code .` and
-install the extension into the **WSL: Ubuntu** window, so that the extension
-runs on the same side as `aura`.
+If you installed Aura inside WSL, open the project from the Ubuntu terminal
+with `code .` and install the extension into the **WSL: Ubuntu** window, so
+that the extension runs on the same side as `aura`.
 
 The extension has very little logic of its own. It starts `aura lsp`, a
 long-running mode of the same `aura` tool, and asks it about the files you

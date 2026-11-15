@@ -16,6 +16,21 @@ Last updated: 2026-11-15
 - Found and not fixed: nine gaps listed in the note, the largest being the
   speed of plain `aura run` on long host loops and of the CPU device.
 
+## Documentation audit against 0.16 (complete)
+
+- Target: John's 2026-11-15 ask, after he read "Aura does not run natively
+  on Windows" in the book: bring every user-facing text up to date with
+  0.16. Details are in `2026-11-15-docs-audit-0.16.md`.
+- Done: the Windows and platform pages (#294), then the Manual, the book,
+  the README files, the architecture guide index, the extension snippets,
+  and the `llms.txt` generator.
+- Verification: 204 printed errors and 146 printed outputs in the docs
+  compared with the released 0.16.0 compiler, `check_doc_examples.py`, the
+  generator tests, and the docs build.
+- Left alone: compiler messages that still say "FFI v0", the dated status
+  lines of older design checkpoints, and the chapter measurements in the
+  book made with 0.11.
+
 ## Release 0.16.0-preview (complete)
 
 - Target: John's 2026-11-14 ask for the 0.16.0 preview. Details are in

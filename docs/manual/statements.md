@@ -288,7 +288,7 @@ Maintained iterable forms include:
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
 | `for value in source:` | Consumes an `iter.IntoIterator[T]` implementation through `source.into_iter()` and yields each owned item. |
 
-`for value in mut set:` is not supported in Aura 0.3.
+`for value in mut set:` is not supported in Aura 0.16.
 
 When an iterable yields tuples, the loop form decides the ownership of each non-copy tuple leaf:
 
@@ -878,6 +878,6 @@ No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression statements, `return`, `assert`, conditionals, loops, `match`, scoped cleanup, `pass`, imports, and top-level execution in entry modules are implemented as described. Tuple targets for assignment and loops are implemented.
 
-Class and collection destructuring, loop `else`, exception statements, `yield`, `raise`, `async`, and nested declarations are not available. `try` is an expression over `Result`.
+Class and collection destructuring, loop `else`, exception statements, `raise`, `async`, and nested declarations are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
 
 Design record: the loop ownership modes are those accepted in ADR-0006. One-time iterable selection is the accepted ADR-0017 rule. Tuple assignment and loop targets follow Accepted ADR-0026.

@@ -16,8 +16,10 @@ $ mkdir -p ~/projects/hello_world
 $ cd ~/projects/hello_world
 ```
 
-If you are on Windows, run these commands in the Ubuntu terminal of WSL, as
-described in the [previous section](/book/ch01-01-installation).
+If you are on Windows with WSL, run these commands in the Ubuntu terminal,
+as described in the [previous section](/book/ch01-01-installation). In
+PowerShell on a native install, use `mkdir ~\projects\hello_world` and
+`cd ~\projects\hello_world` instead.
 
 ## Writing and running a script
 

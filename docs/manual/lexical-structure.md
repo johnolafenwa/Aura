@@ -96,6 +96,14 @@ only in a defined context:
 | `None` | The unit value, or the absence member of an expected `T \| None` union. |
 | `set` | Names the builtin set type and its constructor. |
 | `lambda` | Introduces a lambda at the start of an expression. It stays an identifier token in member and named-argument positions. |
+| `view` | Begins a view binding, `view name = place`, and a view result type. |
+| `type` | Begins a type alias at module level. |
+| `is` | Forms `value is None` and `value is not None`. |
+| `dyn` | Begins a trait object type when a trait name follows it. |
+| `yield` | Begins a yield statement in a generator function. |
+| `export` | Begins `export "C" def`, a function that C code calls. |
+| `spec` | Begins `spec def`, a function used only in contracts. |
+| `requires`, `ensures`, `invariant`, `decreases` | Begin a contract clause at the top of a function, loop, or class body. |
 | `_` | The wildcard in a match pattern. Elsewhere it is an identifier spelling subject to static rules. |
 
 ## Comments

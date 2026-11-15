@@ -1,6 +1,6 @@
 # Aura full documentation
 
-> Build-derived from the maintained Aura README, website, Manual, and book.
+> Build-derived from the maintained Aura README, supported platforms list, website, Manual, and book.
 
 ## Source: README.md
 
@@ -43,6 +43,12 @@ or macOS arm64:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+On Windows x64, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
 To upgrade the compiler and bundled runtime of an existing install, run:
 
 ```bash
@@ -67,11 +73,12 @@ access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
 The long-term goal is a general-purpose systems language for every kind of
 software: applications, services, databases, language runtimes, embedded
-software, operating systems, and device drivers. A first
+software, operating systems, and device drivers. A
 [freestanding build](docs/manual/freestanding.md) compiles code over
-numbers and plain classes with no runtime. Low-level memory facilities,
-hardware interfaces, and the platform controls that scope needs are not
-implemented yet. [Why Aura](docs/positioning.md)
+numbers and plain classes with no runtime, and the
+[`mem` module](docs/manual/mem.md) reads and writes device registers. Heap
+values in freestanding code, inline assembly, and portable layout controls
+are not implemented yet. [Why Aura](docs/positioning.md)
 explains the project direction.
 
 ## Documentation
@@ -87,10 +94,16 @@ explains the project direction.
   backend, and output format.
 - [Concurrency](docs/manual/concurrency.md): tasks, queues, the scheduler, and
   its environment settings.
+- [Tensors](docs/manual/tensors.md): `Tensor[T]` on the CPU, Metal, and CUDA,
+  with gradients, layers, and optimizers.
+- [FFI](docs/manual/ffi.md): calling C libraries from an Aura package.
+- [Contracts](docs/manual/contracts.md) and
+  [Verification](docs/manual/verification.md): conditions checked at run time
+  and proved by `aura verify`.
 - [Performance](docs/manual/performance.md): current measurements and the
   optimization roadmap.
-- [ML systems roadmap](docs/ml_systems_support_plan.md): planned support for ML
-  systems work.
+- [ML systems design notes](docs/ml_systems_support_plan.md): the earlier
+  design document for ML systems work.
 
 ## Monorepo layout
 
@@ -100,6 +113,9 @@ explains the project direction.
 | `tools/` | Editor integrations and other developer tools |
 | `package.json` | npm workspace manifest for the repository's tools |
 | `examples/` | Categorized sample Aura programs |
+| `benchmarks/` | Benchmark programs, baselines in other languages, and recorded results |
+| `scripts/` | Build, release, benchmark, and repository check scripts |
+| `packaging/` | Homebrew, Debian, and Chocolatey package definitions |
 | `docs/` | VitePress site: the book (`docs/book/`), the Manual, install guides, and supporting documents |
 | `architecture_docs/` | Architecture guides and component deep dives for the current implementation |
 | `work/` | Task board and implementation notes |
@@ -113,7 +129,9 @@ Each component has its own README:
 - `crates/aura-core`: semantic types, diagnostics, and integer helpers
   shared by the compiler and the native runtime.
 - `crates/aura-runtime`: the native runtime that executables link, with
-  runtime values, the scheduler, host builtins, codecs, and FFI.
+  runtime values, the scheduler, host builtins, codecs, tensors, and FFI.
+- `crates/aura-mem`: the memory copy and compare routines that musl programs
+  link.
 - `tools/vscode-aura`: the VS Code extension for syntax highlighting and the
   language client.
 - `tools/aura-language-server`: the Aura Language Server Protocol
@@ -136,6 +154,77 @@ The extension starts the compiler's `aura lsp` service, so `aura` must be on
 `PATH`, or `AURA_LSP_AURA_PATH` must name it. To build and install the
 extension from this checkout, follow
 [tools/vscode-aura/INSTALL.md](tools/vscode-aura/INSTALL.md).
+
+## Source: SUPPORTED_PLATFORMS.md
+
+# Supported Platforms
+
+Aura 0.16 is a technical preview. It supports these hosts:
+
+| Host | Architecture | CI | Release archive | Native `aura build` |
+| --- | --- | --- | --- | --- |
+| Ubuntu 24.04 / compatible glibc Linux | x86-64 | Yes | Yes | Yes, with a host C compiler |
+| Ubuntu 24.04 / compatible glibc Linux | arm64 | Yes, tests without the coverage floors | Yes | Yes, with a host C compiler |
+| macOS 15 | x86-64 | Release smoke | Yes | Yes, with Xcode command-line tools |
+| macOS 15 | Apple silicon | Yes | Yes | Yes, with Xcode command-line tools |
+| Windows 11 | x86-64 | Yes, runtime, compiler and command tests without the coverage floors | Yes | Yes, with the Visual Studio C++ build tools |
+| Windows 11 with WSL 2 and Ubuntu 24.04 | x86-64 | Inherits Linux behavior. No dedicated WSL runner | Use the Linux archive inside WSL | Yes, with `build-essential` inside WSL |
+
+## Libraries `aura` Loads
+
+The `aura` compiler links LLVM statically. On Linux it also loads
+`libstdc++.so.6`, `libz.so.1`, and `libzstd.so.1`, which every supported
+glibc distribution installs. On macOS it loads only system libraries.
+
+## Windows
+
+The native Windows target is `x86_64-pc-windows-msvc`. `aura build` and
+`aura run` link with the Microsoft linker from the Visual Studio C++ build
+tools, and `aura.exe` links the C runtime statically, so it loads only
+system DLLs. On a machine without those build tools, run the Linux x86-64
+archive inside WSL 2.
+
+## Building for Another Linux Machine
+
+On a Linux host, `aura build --target` builds programs for
+`x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`,
+`x86_64-unknown-linux-musl`, and `aarch64-unknown-linux-musl`. A musl
+program is fully static and runs on Alpine and in empty containers. CI
+builds and runs a program for the musl target of each Linux runner's
+architecture and for the glibc target of the other architecture, the
+latter under the QEMU user-mode emulator.
+
+An installed `aura` reads a target's runtime library from a target
+pack, a release asset named `aura-<tag>-target-<target>.tar.gz`. Each
+release has a pack for each of the four targets, and
+`install.sh --target <target>` installs one. CI and the release workflow
+build a program for every target with the x86-64 archive and the packs,
+and run the arm64 ones under emulation.
+
+## Unsupported Hosts
+
+The 0.16 preview archives do not support:
+
+- Windows on ARM
+- musl Linux as a host. `aura` itself needs glibc
+- cross-compilation to macOS or Windows
+- other architectures
+
+Source builds on those hosts are experimental. They have no CI, runtime-link
+manifests, or packaged-archive smoke tests.
+
+## Development Toolchain
+
+| Tool | Pinned version |
+| --- | --- |
+| Rust | 1.95.0 |
+| LLVM | 22.1.2 on Linux and Windows, Homebrew `llvm@22` on macOS |
+| Cargo LLVM coverage | 0.8.4 |
+| Node.js | 22.14.0 |
+| npm | 11.4.2 |
+
+`rust-toolchain.toml` and `package.json` hold the pins, and
+`scripts/install-llvm.sh` holds the LLVM one.
 
 ## Source: docs/index.md
 
@@ -202,8 +291,12 @@ visible in the code:
 - **Concurrency has a scope.** A `TaskGroup` owns its child tasks. Leaving the
   scope joins them, cancels stragglers, and loses nothing.
 - **The standard library covers infrastructure.** Files, processes, TCP,
-  HTTP, WebSockets, TLS, queues, retries, and supervisors follow the same
-  ownership and failure rules as the rest of the language.
+  HTTP, WebSockets, TLS, JSON, regular expressions, queues, retries, and
+  supervisors follow the same ownership and failure rules as the rest of the
+  language.
+- **Numbers run where the hardware is.** `Array` and the `simd` module
+  compute on the CPU, and the `tensor` module runs the same program on the
+  CPU, on the Metal GPU of a Mac, or on an NVIDIA GPU.
 
 ## Long-Term Direction
 
@@ -213,8 +306,10 @@ language runtimes, embedded software, operating systems, and device drivers.
 
 Aura 0.16 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
-tooling. Later releases will add freestanding compilation, low-level memory
-access, hardware interfaces, portable layout controls, cross-compilation, and
+tooling. It also has the first low-level pieces: freestanding compilation
+with no runtime, memory access at an address, a C foreign function interface,
+and builds for other Linux machines. Later releases will add heap values in
+freestanding code, inline assembly, portable layout controls, and
 specialized runtime profiles.
 
 ## Start Building
@@ -298,8 +393,10 @@ language runtimes, embedded software, operating systems, and device drivers.
 
 Aura 0.16 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
-tooling. Later releases will add freestanding compilation, low-level memory
-access, hardware interfaces, portable layout controls, cross-compilation, and
+tooling. It also has the first low-level pieces: freestanding compilation
+with no runtime, memory access at an address, a C foreign function interface,
+and builds for other Linux machines. Later releases will add heap values in
+freestanding code, inline assembly, portable layout controls, and
 specialized runtime profiles.
 
 ## Familiar Source, Strong Guarantees
@@ -330,8 +427,9 @@ Its ownership documentation gives each value one owner and defines
 
 Aura 0.16 centers on the application control plane around models and agents.
 That covers scoped child tasks, transferable messages, typed I/O and process
-failures, timeouts, retries, and supervision. GPU programming, heterogeneous
-hardware, and interoperability with Python libraries are future areas for
+failures, timeouts, retries, and supervision. Its `tensor` module runs tensor programs on the CPU, on Metal,
+and on CUDA through the vendor libraries. Writing GPU kernels in Aura, other
+accelerators, and interoperability with Python libraries are future areas for
 Aura.
 
 ### Nim
@@ -384,8 +482,9 @@ later releases.
 
 Aura 0.16 is an executable technical preview. It includes the language, the
 native compiler, the ownership model, the structured task runtime, numeric
-arrays, control-plane modules, package tooling, the Manual, and the editor
-extension. The [Current Limits](/manual/current-limits) chapter lists the
+arrays, tensors on CPU and GPU devices, a C foreign function interface,
+contracts and `aura verify`, control-plane modules, package tooling, the
+Manual, the book, and the editor extension. The [Current Limits](/manual/current-limits) chapter lists the
 exact boundaries of that surface.
 
 ## Source: docs/downloads.md
@@ -398,16 +497,22 @@ extension, reference manual, and source all ship from the
 
 ## Aura CLI
 
-Install the current preview with one command. This works on a supported macOS
-or Linux host, including x86-64 Ubuntu 24.04 inside Windows WSL 2. On
-Windows itself, follow the [Windows guide](/install/windows):
+Install the current preview with one command. On a supported macOS or Linux
+host, including x86-64 Ubuntu 24.04 inside Windows WSL 2:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+On x86-64 Windows 11, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
 The installer downloads the matching release archive and verifies it against
-the published `SHA256SUMS`. It installs Aura under `~/.local` by default. Set
+the published `SHA256SUMS`. It installs Aura under `~/.local` by default, or
+under `%LOCALAPPDATA%\Programs\Aura` on Windows. Set
 `AURA_INSTALL_PREFIX` to choose another prefix.
 
 For step-by-step instructions, pick a platform guide:
@@ -486,13 +591,20 @@ yet. See [Install with a package manager](/install/package-managers).
 Every guide follows the same three steps.
 
 1. Run the installer. It detects the supported archive, verifies its SHA-256
-   checksum, and installs under `~/.local`.
+   checksum, and installs under `~/.local`, or under
+   `%LOCALAPPDATA%\Programs\Aura` on Windows.
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
-2. Add `~/.local/bin` to `PATH`.
+On Windows, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+2. Add the `bin` directory, `~/.local/bin` on macOS and Linux, to `PATH`.
 
 3. Verify the result in the same terminal:
 
@@ -543,6 +655,8 @@ native execution and `aura build` also need a host C toolchain:
 
 - macOS: Xcode command-line tools
 - Ubuntu and WSL: `build-essential`
+- Windows: the Visual Studio Build Tools with the **Desktop development with
+  C++** workload
 
 Each platform guide gives the exact commands.
 
@@ -693,9 +807,10 @@ sudo apt install -y coreutils
 
 ### The archive will not start on the distribution
 
-The published Linux binary targets x86-64 glibc systems. Check the
+The published Linux binaries target x86-64 and arm64 glibc systems. Check the
 architecture with `uname -m` and the C library with `ldd --version`. Alpine
-Linux and other musl systems are not in the current distribution matrix.
+Linux and other musl systems cannot run `aura` itself. To build a program
+for them, use `aura build --target` on a glibc host.
 
 `aura` links LLVM statically, and it also loads `libstdc++.so.6`,
 `libz.so.1`, and `libzstd.so.1`. Ubuntu installs all three by default. To
@@ -1029,11 +1144,18 @@ code --install-extension ./aura-language.vsix
 By default, VS Code does not update extensions installed from a VSIX. To
 upgrade, install the next release's VSIX by hand.
 
+## Install On Windows
+
+With a [native Windows install](/install/windows) of Aura, install the
+extension in the ordinary VS Code window with any method above. It finds
+`aura.exe` on `PATH`.
+
 ## Install In WSL
 
-The Aura extension and the `aura` CLI must both run in the Windows Subsystem
-for Linux (WSL) environment. An extension installed only in the local Windows
-extension host cannot reliably reach the Linux compiler server.
+If you installed Aura inside the Windows Subsystem for Linux (WSL), the
+extension and the `aura` CLI must both run there. An extension installed
+only in the local Windows extension host cannot reliably reach the Linux
+compiler server.
 
 1. Complete [Install Aura On Windows With WSL](/install/windows-wsl).
 2. From the Ubuntu terminal, open the project with `code .`.
@@ -1253,13 +1375,16 @@ aura --version
 ```
 
 If these commands fail, restore the `PATH` export from step 4 and restart the
-WSL VS Code window. Do not install a Windows copy of Aura. The current
-compiler ships only as the Linux binary running inside WSL.
+WSL VS Code window. A [native Windows install](/install/windows) of Aura
+does not help here: the extension in a WSL window needs the Linux `aura`
+inside WSL.
 
 ### Windows on ARM
 
-The current Aura release has no Linux ARM64 archive. Windows-on-ARM WSL hosts
-are not supported in this preview.
+Windows on ARM is not a supported host in this preview. There is no native
+Windows ARM archive, and CI has no Windows-on-ARM runner. The release does
+have a Linux arm64 archive, so the Linux install may work inside WSL 2 on
+such a machine, but it is not tested there.
 
 ## Source: docs/install/windows.md
 
@@ -1379,12 +1504,14 @@ The stamp uses the first commit source that applies:
 A dirty or Git-free build shows `local-uncommitted-checkout`. It never invents
 a commit or writes a self-referential hash into this source page.
 
-The Learn track teaches Aura as a story. A future book may build a longer
-learning sequence from this material. This reference defines the facts that
-all such teaching material must preserve.
+[The Aura Programming Language](/book/) teaches Aura one program at a time.
+This reference defines the facts that the book and all other teaching
+material must preserve.
 
 Start with [Language Specification](/manual/language-specification) for
 scope, terminology, authority, and conformance language.
+[Status And Compatibility](/manual/status-and-compatibility) summarizes the
+maintained surface by area and states how it may change.
 
 ## Language Reference
 
@@ -1405,7 +1532,8 @@ scope, terminology, authority, and conformance language.
   and `str` slicing, member access, literals, conditional expressions,
   membership and comparison chains, `match` expressions, `try`, and f-strings.
 - [Statements](/manual/statements): bindings, assignment, control flow, loops,
-  imports, `with`, `pass`, assertions, and top-level execution.
+  iterators and generator functions, imports, `with`, `pass`, assertions, and
+  top-level execution.
 - [Tuples](/manual/tuples): fixed structural values and types, recursive
   unpacking and patterns, whole-source ownership, constant indexing, and
   recursive equality.
@@ -1422,15 +1550,17 @@ scope, terminology, authority, and conformance language.
 - [Closures](/manual/closures): contextual expression lambdas, by-value
   captures, repeated read-only calls, consuming single-use calls, and
   structural Transfer.
-- [Foreign Function Interface (FFI) v0](/manual/ffi): explicit package
+- [Foreign Function Interface (FFI)](/manual/ffi): explicit package
   authorization, bodyless C declarations, fixed-width scalars, pointer-length
-  views, opaque handles, and the native safety boundary.
+  views, C strings, out-parameters, array pointers, C structs, callbacks,
+  opaque handles, and the native safety boundary.
 - [Classes](/manual/classes): fields, constructors, methods, receivers,
   associated methods, resources, and mutation.
 - [Enums And Pattern Matching](/manual/enums-and-match): variants, payloads,
   exhaustiveness, literal patterns, short-form variants, and match value flow.
 - [Generics And Traits](/manual/generics-and-traits): type parameters, trait
-  declarations, impls, bounds, dispatch, and current restrictions.
+  declarations, impls, bounds, associated types, `dyn Trait` trait objects,
+  dispatch, and current restrictions.
 - [Ownership And Borrowing](/manual/ownership-and-borrowing): moves, copies,
   clones, shared borrows, mutable borrows, field moves, and task boundaries.
 - [Execution Model](/manual/execution-model): evaluation order, entry
@@ -1445,13 +1575,14 @@ scope, terminology, authority, and conformance language.
 - [Numeric Arrays](/manual/numeric-arrays): row-major `Array[T]`
   with four numeric dtypes, slices and reshapes that share storage, reductions, native
   kernels, and explicit checked, wrapping, and saturating integer arithmetic.
-- [SIMD Module](/manual/simd): lane values of two, four, or eight floats
-  that native code keeps in vector registers, with loads and stores over
+- [SIMD Module](/manual/simd): lane values of two, four, or eight floats, or
+  two or four `int64` values, that native code keeps in vector registers, with loads and stores over
   lists and results that are the same on every machine.
 - [Tensor Module](/manual/tensors): `Tensor[T]` values that live on a
-  device, the CPU or the Metal GPU of a Mac, with the `Array` shape rules,
-  one meaning on every device, and whole expressions run as one piece of
-  GPU work.
+  device, the CPU, the Metal GPU of a Mac, or an NVIDIA GPU through CUDA on
+  Linux, with the `Array` shape rules, one meaning on every device, whole
+  expressions run as one piece of GPU work, gradients, layers, and
+  optimizers.
 - [Freestanding Builds](/manual/freestanding): objects with no runtime and
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
@@ -1471,7 +1602,8 @@ scope, terminology, authority, and conformance language.
 - [HTTP Module](/manual/http): the HTTP client, with streamed bodies,
   server-sent events, redirects, kept connections, and decompression.
 - [JSON Module](/manual/json): recursive JSON values, typed parse errors,
-  exact number classification, deterministic dumping, and resource limits.
+  exact number classification, deterministic dumping, derived typed codecs
+  and schemas, and resource limits.
 - [Randomness Module](/manual/randomness): deterministic seeded streams, exact
   sequence compatibility, unbiased ranges, in-place shuffle, and OS-secure
   integers and bytes.
@@ -1490,7 +1622,10 @@ scope, terminology, authority, and conformance language.
 - [Packages](/manual/packages): manifests, package roots, import resolution,
   lockfiles, and editor analysis behavior.
 - [CLI And Tooling](/manual/cli-and-tooling): `aura` commands, diagnostics,
-  analysis JSON, completions, and build modes.
+  analysis JSON, completions, build modes, debug builds, and builds for
+  other Linux targets.
+- [Docstrings And API Docs](/manual/docstrings): where a docstring goes,
+  how editors and `aura doc` present it, and its size limits.
 - [API Index](/manual/api-index): every maintained builtin function, method,
   enum, and module type in one place.
 - [Diagnostics](/manual/diagnostics): compile-time and runtime categories,
@@ -2767,8 +2902,7 @@ Aura 0.16 does not provide:
 - other text encodings
 - URL-safe or unpadded base64
 - streaming codecs or incremental hashing
-- HMAC or password hashing
-- constant-time digest comparison
+- password hashing, or a hash other than SHA-256
 - a separate mutable byte buffer type
 - implicit text conversion
 
@@ -3295,7 +3429,7 @@ Implemented:
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, properties, and destructor hooks. Do not infer them from accepted class syntax.
+Not implemented: inheritance, property setters, and destructor hooks. Do not infer them from accepted class syntax.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 
@@ -3439,7 +3573,8 @@ accepted and select the same backend. A file without a `main` function or
 top-level statements fails with `AU2999`, because it has no entry point.
 
 An installed release archive finds its native runtime relative to `bin/aura`,
-under `lib/aura`. It needs only a host C compiler for the final link. A binary
+under `lib/aura`. It needs only a host C compiler for the final link, or on
+Windows the Microsoft linker from the Visual Studio C++ build tools. A binary
 built from a source checkout falls back to Cargo-built runtime artifacts, for
 contributor convenience.
 
@@ -3597,12 +3732,14 @@ compiler metadata. It does not strip the runtime archive's linkable symbols or
 change the default MIR execution mode.
 
 Every build except a [debug build](#debug-builds) requests unused-section
-removal: `-Wl,-dead_strip` on macOS and `-Wl,--gc-sections` on Linux. After a
-successful link, Aura runs `strip -S -x` on the user executable. This removes
-debug and local symbols but keeps globals for process-global FFI.
+removal: `-Wl,-dead_strip` on macOS, `-Wl,--gc-sections` on Linux, and
+`/OPT:REF` with `/OPT:ICF` on Windows. After a successful link on macOS or
+Linux, Aura runs `strip -S -x` on the user executable. This removes debug and
+local symbols but keeps globals for process-global FFI. A Windows build and a
+`--target` build have no strip step.
 
-- The host C toolchain must supply `strip`. Missing or failing stripping is a
-  build error.
+- On macOS and Linux the host C toolchain must supply `strip`. Missing or
+  failing stripping is a build error.
 - Aura's embedded source metadata keeps typed call frames, task ancestry, and
   source-located traps. Native debugger symbol information is reduced.
 - No separate debug companion artifact is emitted, except the `.dSYM` of a
@@ -3697,7 +3834,7 @@ that would collide or change binding. No lexical rename fallback is used.
 `ast-json`, `analyze`, `complete`, and `lsp` emit JSON.
 
 - The `analyze` and `complete` shapes on this page are maintained tooling
-  contracts for Aura 0.3.
+  contracts for Aura 0.16.
 - `ast`, `ast-json`, and `mir` expose compiler inspection data for people and
   tests. Their exact formatting and internal node and block shape are not a
   stable cross-version serialization API.
@@ -4010,7 +4147,7 @@ The gate checks:
 - Clippy, with warnings treated as errors
 - repository hygiene
 
-GitHub Actions runs the repository gate on Linux and macOS. The release
+GitHub Actions runs the repository gate on Linux, macOS, and Windows. The release
 workflow publishes `v*` tag builds as GitHub Release assets. These include the
 platform CLI archives, the packaged VS Code extension, and a static docs
 archive.
@@ -4317,8 +4454,8 @@ MIR-specific frame-note masking.
 
 ## Limits And Implementation-Defined Behavior
 
-- Native linking requires a supported host C compiler and the installed Aura
-  runtime layout described above.
+- Native linking requires a supported host C compiler, or the Microsoft linker
+  on Windows, and the installed Aura runtime layout described above.
 - `ast`, `ast-json`, and `mir` are inspection formats, not stable
   serialization APIs.
 - The formatter has one fixed style and no configuration.
@@ -4333,14 +4470,13 @@ graph, source-size, recursion, runtime, and backend limits.
 ## Status
 
 The commands and contracts this page documents as maintained are implemented
-in Aura 0.3. CLI, compiler, LSP, extension, backend-parity, and
+in Aura 0.16. CLI, compiler, LSP, extension, backend-parity, and
 repository-gate tests cover them. `analyze`, `complete`, and diagnostic schema
 version `1` are maintained tooling contracts. Internal AST and MIR layouts are
 deliberately unstable.
 
 Aura 0.16 has no package registry, no publishing and installation workflow, no
-Windows support, no configurable formatter, and no annotation-based test
-discovery. Its maintained execution engines are the MIR runtime and the direct
+configurable formatter, and no annotation-based test discovery. Its maintained execution engines are the MIR runtime and the direct
 native backend.
 
 Design record:
@@ -7540,9 +7676,9 @@ Retry delays stay bounded by the host timer range described in
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aura 0.3.
+Aura 0.16.
 
-Nested TOML data models, derived codecs, telemetry exporters, metric labels,
+Nested TOML data models, typed TOML codecs, telemetry exporters, metric labels,
 scoped tracing spans, and richer HTTP header representations are unavailable.
 Any mention of them describes possible future direction, not accepted language
 behavior.
@@ -7605,7 +7741,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
 - `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and HMAC are not implemented.
+- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -7671,7 +7807,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 - Numeric `Array[T]` is CPU-only and row-major. It is specialized only by `int32`, `int64`, `float32`, `float64`, or `bool`.
 - Shape is runtime metadata. Rank is at least one, and zero dimensions are allowed.
-- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
+- Arrays of one dtype broadcast. There is no mixed promotion, no `==` or ordering operator (comparisons are members that return `Array[bool]`), no math member on `float32`, and no `for` iteration, autograd, accelerator placement, or distributed storage. The [`tensor` module](/manual/tensors) has gradients and GPU devices. A foreign function takes an Array as a pointer for the length of one call and cannot keep it.
 - Slices, `reshape`, `transpose`, `permute`, and `clone()` share the source's elements. A write to an Array that shares its elements copies them first.
 - Maintained NumPy comparisons record exact post-reboot workloads and provenance.
 - Shape elements, coordinates, and element counts use `int64`. Practical Array size is bounded by address space, allocation limits, element size, and available memory.
@@ -7695,7 +7831,6 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
 - The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
-- The interpreter loads libraries and looks up symbols on Unix-family hosts only.
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
@@ -7791,7 +7926,6 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - TLS APIs require PEM certificate and key assets.
 - The `http` client supports HTTP/1.1 over `http://` and validated `https://`, with streamed bodies, redirects, kept connections, gzip and deflate decoding, and a custom CA file. HTTP/2, proxies, cookies, and streamed request bodies are not implemented.
 - The high-level dictionary header model cannot preserve repeated equal field names losslessly. When the wire message repeats a header name, conversion may expose duplicate equal dictionary keys. Repeated headers are not a lossless 0.16 contract.
-- Unix domain sockets require a Unix host.
 - `WebSocketListener` has no explicit `close()` method. WebSocket cancellation and error propagation are not fully aligned with TCP and UDP.
 
 ### Time
@@ -7844,7 +7978,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ## Tooling
 
-- `build` requires a host C compiler. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
+- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows the native `run` needs that linker too. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
 - `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
@@ -7856,17 +7990,17 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 - Test discovery is based on the name prefix. Test annotations are not implemented.
 - A timed-out `aura test` stops waiting but cannot terminate its worker thread. The timed-out program may continue host side effects until the process exits.
 - One docstring is limited to 65,536 UTF-8 bytes, and one module's public documentation to 4,194,304 bytes. Exceeding either is `AU2042`. Enum variants, `impl` blocks, and local bindings have no documentation. `aura doc` writes Markdown or JSON, not HTML.
-- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection in 0.3.
+- Recursive `aura fmt` and `aura test` traversal follows directory symlinks without cycle detection.
 
 ### Native Artifact Profile
 
 - The workspace release profile builds the shipped compiler executable with optimization level 3, fat link-time optimization (LTO), one codegen unit, no debug data, and symbol stripping.
 - Panic unwinding stays enabled. The runtime archive keeps linkable symbols.
-- Built user executables link with `-Wl,-dead_strip` on macOS or `-Wl,--gc-sections` on Linux.
-- After linking, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
+- Built user executables link with `-Wl,-dead_strip` on macOS, `-Wl,--gc-sections` on Linux, or `/OPT:REF` and `/OPT:ICF` on Windows.
+- After linking on macOS or Linux, `strip -S -x` removes debug and local symbols while keeping the globals that process-global FFI needs.
 - Source locations, typed Aura call frames, and task ancestry are embedded runtime metadata and stay available. Native symbol and debugger information is reduced, except in a `aura build --debug` build, which keeps it.
-- The host toolchain must provide `strip` as well as `cc`.
-- User executables link `libaura_runtime.a`, which contains the runtime and none of the compiler.
+- On macOS and Linux the host toolchain must provide `strip` as well as `cc`.
+- User executables link `libaura_runtime.a`, or `aura_runtime.lib` on Windows, which contains the runtime and none of the compiler.
 
 ## Design Record
 
@@ -10392,7 +10526,7 @@ Process cancellation and close operations signal or terminate according to the p
 
 ## Runtime Limits
 
-The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.3. [Current Limits](/manual/current-limits) collects them. An implementation MUST reject or return a typed error when a limit is exceeded. It must not allocate without bound, and it must not hang indefinitely where the API supplies a deadline.
+The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.16. [Current Limits](/manual/current-limits) collects them. An implementation MUST reject or return a typed error when a limit is exceeded. It must not allocate without bound, and it must not hang indefinitely where the API supplies a deadline.
 
 ## Determinism
 
@@ -10852,7 +10986,7 @@ with a bare `None`, or with a value of one of its member types, under the
 [union rule](#union-equality). The comparison does not narrow the operand.
 Unit `None == None` is `true`, and unit `None != None` is `false`.
 
-Builtin equality does not use an equality operator trait in Aura 0.3.
+Builtin equality does not use an equality operator trait in Aura 0.16.
 
 ### Tuple Equality
 
@@ -12468,10 +12602,9 @@ store and a load for each field. A callback costs about 4 ns more
 than a C function pointer, for the frame that guards the C caller against
 a failure.
 
-Library loading and symbol lookup in the interpreter are implemented on
-Unix-family hosts. On other hosts, a call there fails with the runtime
-boundary diagnostic. Aura does not silently select a different ABI. The
-declaration must still name the host's actual C symbol.
+The interpreter loads libraries and looks up symbols on Linux, macOS, and
+Windows. Aura does not silently select a different ABI. The declaration must
+still name the host's actual C symbol.
 
 ## Limits And Implementation-Defined Behavior
 
@@ -12514,7 +12647,7 @@ Implemented:
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
+Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
 other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 
@@ -13832,7 +13965,7 @@ Obligations travel with the callable:
 - Imported functions and methods keep the resulting contract.
 - The same rules apply to ordinary, inherent, associated, task-target, trait, operator, and `From` calls.
 
-There is no source annotation for this obligation in Aura 0.9.
+There is no source annotation for this obligation in Aura 0.16.
 
 When a type is concrete, a substitution containing `random.Rng` is rejected with `AU3007`. A concrete type whose clone safety cannot be proved is also rejected, conservatively. Moving, removing, receiving, or rearranging one owned value does not produce a clone and adds no obligation.
 
@@ -14793,7 +14926,7 @@ trait Ord[Rhs]:
 Some operators never use traits:
 
 - `and` and `or` do not dispatch through traits.
-- Builtin `==` and `!=` do not use an equality trait in Aura 0.9. This includes recursive structural tuple equality, which a trait implementation cannot override.
+- Builtin `==` and `!=` do not use an equality trait in Aura 0.16. This includes recursive structural tuple equality, which a trait implementation cannot override.
 - Builtin operations take precedence wherever their concrete value rule applies.
 
 An operator that selects a trait method also enforces that method's substituted clone-safety obligations.
@@ -15014,7 +15147,7 @@ Higher-kinded types, general subtyping, and arbitrary blanket implementation tar
 
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.3. The grammar is
+This chapter defines the complete source grammar of Aura 0.16. The grammar is
 normative once the lexer has formed tokens.
 [Static Semantics](/manual/static-semantics) defines the static restrictions
 the grammar does not express, such as types, visibility, ownership,
@@ -16264,7 +16397,7 @@ instead of risking host stack exhaustion:
 | One comprehension | A 128th combined `for` clause or `if` filter is rejected |
 | F-string interpolation brace nesting | 128 |
 
-These are observable implementation limits of Aura 0.3. Inputs that exceed
+These are observable implementation limits of Aura 0.16. Inputs that exceed
 them must be rejected cleanly.
 
 ## Syntax Not In Aura 0.16
@@ -17448,8 +17581,7 @@ maintained language:
 1. This specification states the intended rule.
 2. Compiler fixtures and regression tests make the rule executable.
 3. The compiler, runtime, CLI, and language server implement the rule.
-4. Categorized examples and Learn chapters teach the rule without extending
-   it.
+4. Categorized examples and the book teach the rule without extending it.
 
 A disagreement between the Manual, the tests, and the implementation is a
 project defect. It must be resolved deliberately. Undocumented behavior does
@@ -17550,8 +17682,8 @@ Read the normative core in this order:
    [Current Limits](/manual/current-limits), and
    [Conformance](/manual/conformance)
 
-The Learn track and a future book may reorder concepts for teaching, but they
-MUST not contradict these rules.
+The book may reorder concepts for teaching, but it MUST not contradict these
+rules.
 
 ## Source: docs/manual/lexical-structure.md
 
@@ -17653,6 +17785,14 @@ only in a defined context:
 | `None` | The unit value, or the absence member of an expected `T \| None` union. |
 | `set` | Names the builtin set type and its constructor. |
 | `lambda` | Introduces a lambda at the start of an expression. It stays an identifier token in member and named-argument positions. |
+| `view` | Begins a view binding, `view name = place`, and a view result type. |
+| `type` | Begins a type alias at module level. |
+| `is` | Forms `value is None` and `value is not None`. |
+| `dyn` | Begins a trait object type when a trait name follows it. |
+| `yield` | Begins a yield statement in a generator function. |
+| `export` | Begins `export "C" def`, a function that C code calls. |
+| `spec` | Begins `spec def`, a function used only in contracts. |
+| `requires`, `ensures`, `invariant`, `decreases` | Begin a contract clause at the top of a function, loop, or class body. |
 | `_` | The wildcard in a match pattern. Elsewhere it is an identifier spelling subject to static rules. |
 
 ## Comments
@@ -18800,7 +18940,7 @@ The `net` module provides networking resources that cooperate with Aura's task s
 - UDP sockets and datagrams
 - HTTP listeners and exchanges
 - WebSocket listeners and sockets
-- Unix domain sockets on Unix hosts
+- Unix domain sockets
 - TLS listeners and streams
 
 ```aura
@@ -18853,7 +18993,7 @@ If cancellation or expiry happens before the pool accepts the work, the work is 
 | `net.websocket_listen` | `websocket_listen(address: str) -> Result[net.WebSocketListener, io.Error]` | Binds a WebSocket listener. |
 | `net.websocket_connect` | `websocket_connect(url: str) -> Result[net.WebSocket, io.Error]` | Connects to a WebSocket URL. |
 | `net.websocket_connect_timeout` | `websocket_connect_timeout(url: str, timeout: Duration) -> Result[net.WebSocket, io.Error]` | Connects to a WebSocket URL with a deadline. |
-| `net.unix_listen` | `unix_listen(path: str) -> Result[net.UnixListener, io.Error]` | Binds a Unix domain socket path on Unix hosts. |
+| `net.unix_listen` | `unix_listen(path: str) -> Result[net.UnixListener, io.Error]` | Binds a Unix domain socket path. |
 | `net.unix_connect` | `unix_connect(path: str) -> Result[net.UnixStream, io.Error]` | Connects to a Unix domain socket path. |
 | `net.unix_connect_timeout` | `unix_connect_timeout(path: str, timeout: Duration) -> Result[net.UnixStream, io.Error]` | Connects to a Unix domain socket path with a deadline. |
 | `net.tls_listen` | `tls_listen(address: str, cert_pem_path: str, key_pem_path: str) -> Result[net.TlsListener, io.Error]` | Binds a TLS listener with PEM certificate and key files. |
@@ -18975,7 +19115,7 @@ and deflate bodies.
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[str, io.Error]` | Returns the bound local address. |
 
-`net.WebSocketListener` has no `close()` member in Aura 0.3. Dropping its value releases it. You cannot use it as a user-defined `with` resource yet. This is a known limitation of the resource API.
+`net.WebSocketListener` has no `close()` member in Aura 0.16. Dropping its value releases it. You cannot use it as a user-defined `with` resource yet. This is a known limitation of the resource API.
 
 `net.WebSocket`:
 
@@ -18996,7 +19136,7 @@ Use text receive when the payload must be valid UTF-8. Use byte receive otherwis
 
 ## Unix Domain Sockets
 
-The Unix socket APIs are available on Unix hosts.
+The Unix socket APIs are available on Linux, macOS, and Windows.
 
 `net.UnixListener`:
 
@@ -19133,7 +19273,7 @@ An invariant failure that escapes the typed boundary uses the general runtime re
 
 ## Backend Support
 
-The MIR runtime and the direct native backend implement the TCP, UDP, HTTP, WebSocket, and TLS APIs. MIR is the compiler's mid-level intermediate representation. Both backends implement Unix domain sockets on maintained Unix hosts. Both must match on timeout accounting, typed error mapping, read caps, protocol parsing, ownership, and cleanup.
+The MIR runtime and the direct native backend implement the TCP, UDP, HTTP, WebSocket, and TLS APIs. MIR is the compiler's mid-level intermediate representation. Both backends implement Unix domain sockets. Both must match on timeout accounting, typed error mapping, read caps, protocol parsing, ownership, and cleanup.
 
 Address selection, DNS answers, socket options that the host libraries choose, and exact host error messages can differ by machine. The high-level HTTPS client uses the same platform-independent Web PKI root policy in both backends.
 
@@ -19153,7 +19293,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 - The HTTP parser cap covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap.
 - The string-dictionary header type is not lossless for repeated fields. It can currently produce duplicate equal keys internally.
 - WebSocket listeners cannot be closed. WebSocket cancellation coverage is incomplete. WebSocket close discards host close errors.
-- Unix sockets are unavailable on non-Unix hosts. `unix_listen` does not replace a path that is not a socket.
+- `unix_listen` does not replace a path that is not a socket.
 
 These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs. The limits of the HTTP client are in the [`http` module](/manual/http#limits).
 
@@ -20116,7 +20256,7 @@ Shared-borrow and `own` parameters can have defaults. An omitted shared default 
 - list elements and dictionary entries, including a field or tuple projection inside an element, such as `users[i].name`
 - list ranges, such as `values[1:3]`, which lend a `Span[T]`. See [Collections](/manual/collections#span-t).
 
-Set elements, Queue receives, Range values, and computed temporaries do not have view identity in Aura 0.3.
+Set elements, Queue receives, Range values, and computed temporaries do not have view identity in Aura 0.16.
 
 A source is evaluated once. An element or entry selector is read when the view is created, and its bounds or presence is checked there with `AU4003`. The view keeps naming that slot afterwards.
 
@@ -20677,7 +20817,7 @@ rejected.
 | --- | --- |
 | `name` | Must match `[A-Za-z_][A-Za-z0-9_]*`. It is also the dependency import identifier. Hyphenated names are invalid, even though `version` allows `-`. |
 | `version` | Must begin with an ASCII digit. The rest may contain only ASCII letters, digits, `.`, `-`, or `+`. |
-| `edition` | Must be exactly `"2026"` in Aura 0.3. |
+| `edition` | Must be exactly `"2026"` in Aura 0.16. |
 
 ### FFI Opt-In
 
@@ -20743,7 +20883,7 @@ traversal cannot escape that root, including through canonicalized filesystem
 paths. Cyclic source imports are rejected.
 
 Imported modules contribute declarations, not runtime initialization. Their
-top-level executable statements do not run on import in Aura 0.3.
+top-level executable statements do not run on import in Aura 0.16.
 [Names And Scopes](/manual/names-and-scopes#imports) specifies visibility and
 import binding.
 
@@ -24466,7 +24606,7 @@ Maintained iterable forms include:
 | `for value in mut iterator:` | Borrows a mutable `iter.Iterator[T]` place and yields each owned item, leaving the iterator usable afterwards. |
 | `for value in source:` | Consumes an `iter.IntoIterator[T]` implementation through `source.into_iter()` and yields each owned item. |
 
-`for value in mut set:` is not supported in Aura 0.3.
+`for value in mut set:` is not supported in Aura 0.16.
 
 When an iterable yields tuples, the loop form decides the ownership of each non-copy tuple leaf:
 
@@ -25044,7 +25184,7 @@ No statement evaluation order is implementation-defined.
 
 Bindings, assignments, expression statements, `return`, `assert`, conditionals, loops, `match`, scoped cleanup, `pass`, imports, and top-level execution in entry modules are implemented as described. Tuple targets for assignment and loops are implemented.
 
-Class and collection destructuring, loop `else`, exception statements, `yield`, `raise`, `async`, and nested declarations are not available. `try` is an expression over `Result`.
+Class and collection destructuring, loop `else`, exception statements, `raise`, `async`, and nested declarations are not available. `yield` is a statement only inside a [generator function](#generator-functions). `try` is an expression over `Result`.
 
 Design record: the loop ownership modes are those accepted in ADR-0006. One-time iterable selection is the accepted ADR-0017 rule. Tuple assignment and loop targets follow Accepted ADR-0026.
 
@@ -25446,7 +25586,7 @@ Substituted unions are renormalized. A generic body is checked once under its sy
 - `is None` on a bare `V` is a runtime test.
 - `case V` is rejected with `AU2013`.
 
-**Method defaults.** Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted. A signature-only trait method has no body after its terminating newline.
+**Method defaults.** Trait and implementation methods cannot declare default ordinary parameters in Aura 0.16. Trait default method bodies are permitted. A signature-only trait method has no body after its terminating newline.
 
 **Clone-safety obligations.** A clone-producing operation over unresolved generic types infers clone-safety obligations on the declared parameters that contribute to it. Calls propagate those obligations to a fixed point and discharge them after substitution. The contract applies equally to ordinary, imported, inherent, associated, bounded trait, operator, task-target, and `From` calls. A concrete type that contains non-cloneable `random.Rng` state, or whose safety cannot be proved, is rejected with `AU3007`.
 
@@ -25557,7 +25697,7 @@ The maintained language contract consists of:
 1. the normative Language Specification and Manual
 2. compiler fixtures and CLI/LSP regression tests as executable conformance evidence
 3. the compiler, runtime, CLI, and language server as conforming implementations
-4. categorized examples and Learn chapters as teaching material
+4. categorized examples and the book as teaching material
 
 LSP is the Language Server Protocol. The Manual and the executable suite are expected to agree. A divergence is a project defect, not an alternate language rule.
 
@@ -25653,6 +25793,26 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Arrays of one dtype broadcast, slices and shape members are views, and comparison members give `Array[bool]` masks. There is no mixed promotion, equality operator, autograd, or accelerator placement.
 - `mean()` returns `float64` for every dtype. Integer Array `/` is rejected, following the integer-division rule.
 
+### Iterators, Generators, And Trait Objects
+
+- `for` consumes any `iter.Iterator[T]` or `iter.IntoIterator[T]` implementation. A function that declares `-> Generator[T]` and uses `yield` is a generator function. See [Statements](/manual/statements#iterator-iteration).
+- A trait may declare associated types, written `Self.Name`.
+- `dyn Trait` is a trait object: a value of any type that implements the trait, called through the trait's methods. See [Generics And Traits](/manual/generics-and-traits).
+
+### Contracts And Verification
+
+- `requires`, `ensures`, `invariant`, and `decreases` clauses are checked at run time and fail with `AU4009`. See [Contracts](/manual/contracts).
+- `aura verify` proves with an SMT solver that contracts, arithmetic, and indexes cannot fail. See [Verification](/manual/verification).
+
+### Tensors And SIMD
+
+- The `tensor` module has `Tensor[T]` values on the CPU, on the Metal GPU of a Mac, or on an NVIDIA GPU through CUDA on Linux, with gradients, layers, and optimizers. See [Tensor Module](/manual/tensors).
+- The `simd` module has fixed-width lane values of `float64`, `float32`, and `int64`. See [SIMD Module](/manual/simd).
+
+### Freestanding Builds
+
+- `aura build --freestanding` compiles fixed-width numbers, `bool`, classes of those, and unions with `None` to one object that needs no runtime. The `mem` module reads and writes integers at an address. See [Freestanding Builds](/manual/freestanding).
+
 ### Integer And Math Operations
 
 - Integer literals support decimal separators and hexadecimal, binary, and octal bases.
@@ -25734,7 +25894,9 @@ See [Execution Model](/manual/execution-model) and [Current Limits](/manual/curr
 
 ## Platform And Distribution Support
 
-Release archives target glibc Linux x86-64 and macOS x86-64/Apple silicon. Each archive includes the native runtime and linker manifest used by `aura build`. Cargo and the Aura source checkout are not runtime dependencies of an installed archive. A host C compiler is still required.
+Release archives target glibc Linux on x86-64 and arm64, macOS on x86-64 and Apple silicon, and Windows on x86-64. Each archive includes the native runtime and linker manifest used by `aura build`. Cargo and the Aura source checkout are not runtime dependencies of an installed archive. A host C compiler is still required, or on Windows the Microsoft linker from the Visual Studio C++ build tools.
+
+On a Linux host, `aura build --target` builds programs for glibc and musl Linux on x86-64 and arm64. `aura build --freestanding` writes an object with no runtime for x86-64, AArch64, and RISC-V. [CLI And Tooling](/manual/cli-and-tooling) and [Freestanding Builds](/manual/freestanding) describe both.
 
 See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned toolchain.
 
@@ -27877,7 +28039,7 @@ in Aura.
 
 To follow along you need the `aura` command. The
 [installation guide](/install/) has instructions for macOS, Linux, and
-Windows through WSL, and [Chapter 1](/book/ch01-00-getting-started) walks
+Windows, and [Chapter 1](/book/ch01-00-getting-started) walks
 through the same steps with a little more explanation. The source for Aura
 and for this book lives at
 [github.com/johnolafenwa/Aura](https://github.com/johnolafenwa/Aura), in the
@@ -27981,7 +28143,7 @@ write our first few programs. By the end you will have `aura` on your path,
 you will have run a program three different ways, and you will have a package
 with its own tests that you can open in an editor.
 
-We will install Aura on macOS, Linux, or Windows through WSL. Then we will
+We will install Aura on macOS, Linux, or Windows. Then we will
 write the traditional program that prints `Hello, world!`, first as a
 one-line script and then with an explicit `main` function, and turn it into a
 native executable. Finally we will use `aura new` to create a package, which
@@ -28002,18 +28164,20 @@ together with a small native runtime that it links into the programs you
 build. There is no separate interpreter, package manager, or language server
 to install: the one `aura` binary does all of those jobs.
 
-Aura 0.16 is a technical preview, and the set of platforms it ships for is
-small. Release archives exist for these hosts:
+Aura 0.16 is a technical preview. Release archives exist for these hosts:
 
 | Platform | Release archive |
 | --- | --- |
 | macOS 15 on Apple silicon | `aarch64-apple-darwin` |
 | macOS 15 on Intel | `x86_64-apple-darwin` |
 | Ubuntu 24.04 or another glibc-based Linux, x86-64 | `x86_64-unknown-linux-gnu` |
-| Windows 11, x86-64 | the Linux archive, inside WSL 2 |
+| Ubuntu 24.04 or another glibc-based Linux, arm64 | `aarch64-unknown-linux-gnu` |
+| Windows 11, x86-64 | `x86_64-pc-windows-msvc` |
 
-There is no native Windows build, no Linux ARM64 build, and no build for
-musl-based distributions such as Alpine. If your machine is not in the table,
+On Windows you can also run the Linux archive inside WSL 2. There is no
+build for Windows on ARM, and `aura` itself does not run on musl-based
+distributions such as Alpine, although `aura build --target` can build
+programs for them. If your machine is not in the table,
 you can still build Aura from source, which we cover at the end of this
 section, but you are outside the set of hosts the project tests on.
 
@@ -28080,19 +28244,42 @@ $ source ~/.zshrc
 The first line makes the change permanent for new terminals, and the second
 applies it to the terminal you have open now.
 
+### Windows
+
+Aura runs natively on x86-64 Windows 11. In PowerShell, one command
+downloads the Windows archive, checks it against `SHA256SUMS`, and installs
+it under `%LOCALAPPDATA%\Programs\Aura`:
+
+```console
+> irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
+Then add the `bin` directory to your user `PATH`:
+
+```console
+> $bin = "$env:LOCALAPPDATA\Programs\Aura\bin"
+> [Environment]::SetEnvironmentVariable('Path', "$bin;" + [Environment]::GetEnvironmentVariable('Path', 'User'), 'User')
+> $env:PATH = "$bin;$env:PATH"
+```
+
+The [Windows guide](/install/windows) has the details. The commands in this
+book are written for a macOS or Linux shell. In PowerShell the `aura`
+commands are the same, a built program is named with `.exe`, and a few
+shell commands such as `mkdir -p` have PowerShell spellings.
+
 ### Windows with WSL 2
 
-Aura does not run natively on Windows. On a Windows 11 machine, you install
-Ubuntu under the Windows Subsystem for Linux and use the Linux release inside
-it. From an administrator PowerShell, install Ubuntu 24.04:
+You can also install Ubuntu under the Windows Subsystem for Linux and use
+the Linux release inside it. Then every command in this book works exactly
+as printed. From an administrator PowerShell, install Ubuntu 24.04:
 
 ```console
 > wsl --install -d Ubuntu-24.04
 ```
 
 Restart if Windows asks you to, launch **Ubuntu 24.04 LTS** from the Start
-menu, and create a Linux user when it prompts you. From then on, run every
-command in this book in the Ubuntu terminal, not in PowerShell. Follow the
+menu, and create a Linux user when it prompts you. From then on, run the
+commands in this book in the Ubuntu terminal, not in PowerShell. Follow the
 Linux steps above inside Ubuntu, and keep your projects under your Linux home
 directory (for example `~/projects`) rather than under `/mnt/c`, so that file
 permissions and other filesystem behavior match what Linux tools expect.
@@ -28137,6 +28324,11 @@ On Ubuntu, including Ubuntu under WSL, install `build-essential`:
 ```console
 $ sudo apt install -y build-essential
 ```
+
+On Windows, install the
+[Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
+with the **Desktop development with C++** workload. On Windows, `aura run`
+uses that linker too, so install it before the next section.
 
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.
@@ -28217,8 +28409,10 @@ $ mkdir -p ~/projects/hello_world
 $ cd ~/projects/hello_world
 ```
 
-If you are on Windows, run these commands in the Ubuntu terminal of WSL, as
-described in the [previous section](/book/ch01-01-installation).
+If you are on Windows with WSL, run these commands in the Ubuntu terminal,
+as described in the [previous section](/book/ch01-01-installation). In
+PowerShell on a native install, use `mkdir ~\projects\hello_world` and
+`cd ~\projects\hello_world` instead.
 
 ## Writing and running a script
 
@@ -28777,9 +28971,9 @@ $ code --install-extension JohnOlafenwa.vscode-aura-lang
 
 Editors that use the Open VSX registry, such as VSCodium, have the same
 extension; with VSCodium, use `codium --install-extension` with the same name.
-On Windows, open the project from the Ubuntu terminal with `code .` and
-install the extension into the **WSL: Ubuntu** window, so that the extension
-runs on the same side as `aura`.
+If you installed Aura inside WSL, open the project from the Ubuntu terminal
+with `code .` and install the extension into the **WSL: Ubuntu** window, so
+that the extension runs on the same side as `aura`.
 
 The extension has very little logic of its own. It starts `aura lsp`, a
 long-running mode of the same `aura` tool, and asks it about the files you
@@ -37365,7 +37559,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `str`
+error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `str`
  --> src/main.au:3:5
   |
 3 |     for ch in word:
@@ -37805,7 +37999,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `dict[str, int64]`
+error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `dict[str, int64]`
  --> src/main.au:3:5
   |
 3 |     for name in grades:
@@ -38232,7 +38426,7 @@ names` or `for name in own names` inside the brackets is a syntax error
 
 Python lets you drop the brackets inside a function call, as in `sum(score *
 2 for score in scores)`, to make a *generator expression* that produces
-values one at a time. Aura has no generators:
+values one at a time. Aura has no generator expressions:
 
 ```aura check-fail:AU2005
 def main():
@@ -38251,7 +38445,9 @@ error[AU2005]: generator expressions are unavailable; use an eager owned list co
 
 Add the brackets, `sum([s * 2 for s in scores])`, and you get a list
 comprehension, which builds the whole list first. For the collection sizes in
-most programs that's fine.
+most programs that's fine. When the values really should come one at a time,
+write a generator function with `yield`, which
+[Chapter 10](/book/ch10-04-iterators-and-generators) covers.
 
 ## Reducing a collection to one value
 
@@ -38816,9 +39012,8 @@ error[AU2002]: Array arithmetic requires scalar dtype `float64`, found `int64`
 ```
 
 Write the number as a float literal, `5.0`, or convert the binding with
-`bonus.to_float()`. Be careful with integer literals in particular. At the
-time of writing, `a + 5` on a `float64` array gets past `aura check` and
-then traps when it runs:
+`bonus.to_float()`. A bare literal is different from a binding: it has no
+type of its own yet, so `a + 5` takes the array's dtype and works:
 
 ```aura
 def main():
@@ -38828,17 +39023,8 @@ def main():
 
 ```console
 $ aura run src/main.au
-error[AU4007]: array float64 storage requires float64 scalar at flat index 0, found 5
- --> src/main.au:3:11
-  |
-3 |     print(a + 5)
-  |           ^
-  = note: Aura call chain (innermost first): main at 1:1
+Array[float64](shape=[2, 2], values=[5.0, 5.0, 5.0, 5.0])
 ```
-
-That's a compiler bug, not a rule; the checker ought to reject it with
-`AU2002`, as it does for the `int64` binding. Until it's fixed, write
-`5.0`.
 
 Integer arrays don't support `/` at all, for the same reason integers don't:
 it's unclear whether you want floor division or a fraction.
@@ -41895,7 +42081,7 @@ because a list of strings says nothing about which type to parse into. As with
 `parse_all[int64]` is rejected until someone writes `impl Parse for int64`.
 
 Calling an associated method through a type parameter has a few restrictions in
-Aura 0.12. The call has to be in a module-level function, not in a method, and
+Aura 0.16. The call has to be in a module-level function, not in a method, and
 a function that makes it can't be started directly as a task. The
 [Manual](/manual/generics-and-traits) lists them.
 
@@ -61671,6 +61857,8 @@ although doing so tends to confuse readers.
 - `is` appears only in `value is None` and `value is not None`. Aura has no
   identity comparison between arbitrary values, so `a is b` is a syntax error.
 - `lambda` starts an anonymous function: `lambda n: n + 1`.
+- `yield` hands one value to the caller inside a generator function, a
+  function that returns `Generator[T]` (Chapter 10).
 - `view` creates a named alias for a place without moving or copying it:
   `view first = names[0]`, or `view mut` for a writable alias.
 - `type` declares a type alias at module level:
@@ -61682,10 +61870,10 @@ although doing so tends to confuse readers.
 ## Words Aura does not reserve
 
 If you come from Python, you may reach for words that Aura does not treat as
-keywords at all: `null`, `yield`, `async`, `await`, `del`, `global`,
+keywords at all: `null`, `async`, `await`, `del`, `global`,
 `nonlocal`, `raise`, `except`, and `finally`. They are plain identifiers, so
 the error you get depends on how you used them. `x = null` is reported as an
-unknown name (`AU2001`). `raise ValueError("x")` and `yield 1` read to the
+unknown name (`AU2001`). `raise ValueError("x")` reads to the
 parser as a name followed by more tokens than a statement can hold, so you get
 `AU1101: expected Newline` pointing right after the word. `try:` followed by
 `except` gets a targeted `AU2005` message that points you at `Result` and
@@ -62447,8 +62635,9 @@ binary you want:
 AURA_LSP_AURA_PATH="$HOME/tools/aura/bin/aura" code .
 ```
 
-On Windows with WSL, install both the `aura` CLI and the extension inside
-WSL. Open the project from the WSL terminal with `code .`, and install the
+With a native Windows install, the extension runs in the ordinary VS Code
+window and finds `aura.exe` on `PATH`. If you installed Aura inside WSL
+instead, install both the `aura` CLI and the extension inside WSL. Open the project from the WSL terminal with `code .`, and install the
 extension with **Install in WSL** in that remote window. An extension running
 on the Windows side cannot reliably reach a compiler inside Linux.
 

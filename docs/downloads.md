@@ -6,16 +6,22 @@ extension, reference manual, and source all ship from the
 
 ## Aura CLI
 
-Install the current preview with one command. This works on a supported macOS
-or Linux host, including x86-64 Ubuntu 24.04 inside Windows WSL 2. On
-Windows itself, follow the [Windows guide](/install/windows):
+Install the current preview with one command. On a supported macOS or Linux
+host, including x86-64 Ubuntu 24.04 inside Windows WSL 2:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+On x86-64 Windows 11, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
 The installer downloads the matching release archive and verifies it against
-the published `SHA256SUMS`. It installs Aura under `~/.local` by default. Set
+the published `SHA256SUMS`. It installs Aura under `~/.local` by default, or
+under `%LOCALAPPDATA%\Programs\Aura` on Windows. Set
 `AURA_INSTALL_PREFIX` to choose another prefix.
 
 For step-by-step instructions, pick a platform guide:

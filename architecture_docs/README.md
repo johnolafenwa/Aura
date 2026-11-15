@@ -42,7 +42,24 @@ flowchart LR
 14. [13-end-to-end-walkthrough.md](13-end-to-end-walkthrough.md)
 15. [14-priority-roadmap.md](14-priority-roadmap.md)
 16. [15-backend-boundary.md](15-backend-boundary.md)
-17. [16-batch-1-design-checkpoint.md](16-batch-1-design-checkpoint.md) — Ratified; phase 1 records and implementation in progress
+17. [16-batch-1-design-checkpoint.md](16-batch-1-design-checkpoint.md)
+
+The remaining chapters are design checkpoints and notes. Each records the
+decisions taken before a piece of work started, so its status line gives the
+date of that decision, not the state of the implementation today.
+
+- [17-batch-2-3-design-checkpoint.md](17-batch-2-3-design-checkpoint.md): collection access, initialization, and resource management
+- [18-batch-4-design-checkpoint.md](18-batch-4-design-checkpoint.md): everyday syntax and API usability
+- [19-batch-5-design-checkpoint.md](19-batch-5-design-checkpoint.md): lean native binaries
+- [20-batch-7a-design-checkpoint.md](20-batch-7a-design-checkpoint.md): runtime value performance
+- [21-batch-6-design-checkpoint.md](21-batch-6-design-checkpoint.md): typed agent APIs and serialization
+- [22-batch-7-design-checkpoint.md](22-batch-7-design-checkpoint.md): the LLVM backend and native performance
+- [23-verification-design-checkpoint.md](23-verification-design-checkpoint.md): contracts and static proof
+- [24-typed-layouts-design-note.md](24-typed-layouts-design-note.md): typed native layouts
+- [25-batch-9-design-checkpoint.md](25-batch-9-design-checkpoint.md): iterators and generators
+- [26-batch-8-design-checkpoint.md](26-batch-8-design-checkpoint.md): the multicore runtime
+- [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
+- [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

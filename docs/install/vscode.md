@@ -61,11 +61,18 @@ code --install-extension ./aura-language.vsix
 By default, VS Code does not update extensions installed from a VSIX. To
 upgrade, install the next release's VSIX by hand.
 
+## Install On Windows
+
+With a [native Windows install](/install/windows) of Aura, install the
+extension in the ordinary VS Code window with any method above. It finds
+`aura.exe` on `PATH`.
+
 ## Install In WSL
 
-The Aura extension and the `aura` CLI must both run in the Windows Subsystem
-for Linux (WSL) environment. An extension installed only in the local Windows
-extension host cannot reliably reach the Linux compiler server.
+If you installed Aura inside the Windows Subsystem for Linux (WSL), the
+extension and the `aura` CLI must both run there. An extension installed
+only in the local Windows extension host cannot reliably reach the Linux
+compiler server.
 
 1. Complete [Install Aura On Windows With WSL](/install/windows-wsl).
 2. From the Ubuntu terminal, open the project with `code .`.

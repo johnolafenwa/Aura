@@ -704,10 +704,9 @@ store and a load for each field. A callback costs about 4 ns more
 than a C function pointer, for the frame that guards the C caller against
 a failure.
 
-Library loading and symbol lookup in the interpreter are implemented on
-Unix-family hosts. On other hosts, a call there fails with the runtime
-boundary diagnostic. Aura does not silently select a different ABI. The
-declaration must still name the host's actual C symbol.
+The interpreter loads libraries and looks up symbols on Linux, macOS, and
+Windows. Aura does not silently select a different ABI. The declaration must
+still name the host's actual C symbol.
 
 ## Limits And Implementation-Defined Behavior
 
@@ -750,7 +749,7 @@ Implemented:
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
-Reserved or unavailable: closures as callbacks, raw pointers, variadics, returned views,
+Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
 other nullable shapes, unions, and arrays of structs. Aura does not infer them
 from current syntax.
 

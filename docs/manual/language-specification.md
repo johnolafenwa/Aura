@@ -80,8 +80,7 @@ maintained language:
 1. This specification states the intended rule.
 2. Compiler fixtures and regression tests make the rule executable.
 3. The compiler, runtime, CLI, and language server implement the rule.
-4. Categorized examples and Learn chapters teach the rule without extending
-   it.
+4. Categorized examples and the book teach the rule without extending it.
 
 A disagreement between the Manual, the tests, and the implementation is a
 project defect. It must be resolved deliberately. Undocumented behavior does
@@ -182,5 +181,5 @@ Read the normative core in this order:
    [Current Limits](/manual/current-limits), and
    [Conformance](/manual/conformance)
 
-The Learn track and a future book may reorder concepts for teaching, but they
-MUST not contradict these rules.
+The book may reorder concepts for teaching, but it MUST not contradict these
+rules.

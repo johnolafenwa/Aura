@@ -1,8 +1,10 @@
 # Aura ML Infrastructure Support Plan
 
-Status: the control-plane baseline and contiguous numeric `Array` subset are
-implemented. Other sections describe design objectives outside the current
-language contract.
+Status: this is a design document from before the `tensor` module. The
+control-plane baseline, numeric `Array`, and device tensors with gradients on
+the CPU, Metal, and CUDA are implemented, and the Manual describes them. The
+other sections describe design objectives outside the current language
+contract, and some links point to pages that the book has replaced.
 
 This document describes the path for making Aura a strong language for ML
 infrastructure, agent runtimes, and the control plane around models. It covers

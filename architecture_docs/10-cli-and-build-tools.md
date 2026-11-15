@@ -21,12 +21,19 @@ The main command groups are:
 - `check`
 - `run`
 - `build`
+- `test`
+- `fmt`
+- `doc`
+- `verify`
+- `new`
+- `lsp`
 - `ast`
 - `ast-json`
 - `mir`
 - `analyze`
-- `complete`
+- `complete`, `signature-help`, `references`, `prepare-rename`, and `rename`
 - `deps update`
+- `upgrade`
 
 ## Command dispatch
 
@@ -113,7 +120,7 @@ Every build uses the direct backend. Aura:
    object per codegen unit
 3. ensures the Aura runtime static library exists
 4. writes temporary object/runtime files, the objects in unit order
-5. invokes the host C compiler/linker
+5. invokes the host C compiler/linker, or the Microsoft linker on Windows
 6. produces the final executable
 
 Batch 5 removed the earlier MIR-runtime launcher fallback. A program the

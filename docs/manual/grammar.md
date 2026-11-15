@@ -1,6 +1,6 @@
 # Grammar
 
-This chapter defines the complete source grammar of Aura 0.3. The grammar is
+This chapter defines the complete source grammar of Aura 0.16. The grammar is
 normative once the lexer has formed tokens.
 [Static Semantics](/manual/static-semantics) defines the static restrictions
 the grammar does not express, such as types, visibility, ownership,
@@ -1250,7 +1250,7 @@ instead of risking host stack exhaustion:
 | One comprehension | A 128th combined `for` clause or `if` filter is rejected |
 | F-string interpolation brace nesting | 128 |
 
-These are observable implementation limits of Aura 0.3. Inputs that exceed
+These are observable implementation limits of Aura 0.16. Inputs that exceed
 them must be rejected cleanly.
 
 ## Syntax Not In Aura 0.16

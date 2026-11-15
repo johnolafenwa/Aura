@@ -138,9 +138,10 @@ sudo apt install -y coreutils
 
 ### The archive will not start on the distribution
 
-The published Linux binary targets x86-64 glibc systems. Check the
+The published Linux binaries target x86-64 and arm64 glibc systems. Check the
 architecture with `uname -m` and the C library with `ldd --version`. Alpine
-Linux and other musl systems are not in the current distribution matrix.
+Linux and other musl systems cannot run `aura` itself. To build a program
+for them, use `aura build --target` on a glibc host.
 
 `aura` links LLVM statically, and it also loads `libstdc++.so.6`,
 `libz.so.1`, and `libzstd.so.1`. Ubuntu installs all three by default. To

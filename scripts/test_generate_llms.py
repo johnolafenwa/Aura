@@ -18,6 +18,7 @@ class GenerateLlmsTests(unittest.TestCase):
             root = Path(directory)
             (root / "README.md").write_text("# Aura\n\nRoot pitch.\n", encoding="utf-8")
             for relative, body in {
+                "SUPPORTED_PLATFORMS.md": "# Supported Platforms\n\nHost list.\n",
                 "docs/index.md": "---\nlayout: home\n---\n\n# Home\n\nLanding pitch.\n",
                 "docs/install/index.md": "# Install\n\nInstallation entry.\n",
                 "docs/install/linux.md": "# Linux\n\nLinux setup.\n",
@@ -38,11 +39,16 @@ class GenerateLlmsTests(unittest.TestCase):
                 path.write_text(body, encoding="utf-8")
 
             sources = generate_llms.discover_sources(root)
+            self.assertIn(
+                "(https://github.com/johnolafenwa/Aura/blob/main/SUPPORTED_PLATFORMS.md)",
+                generate_llms.render_outputs(root)["llms.txt"],
+            )
 
             self.assertEqual(
                 [source.relative.as_posix() for source in sources],
                 [
                     "README.md",
+                    "SUPPORTED_PLATFORMS.md",
                     "docs/index.md",
                     "docs/install/index.md",
                     "docs/install/linux.md",

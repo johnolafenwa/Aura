@@ -343,9 +343,8 @@ error[AU2002]: Array arithmetic requires scalar dtype `float64`, found `int64`
 ```
 
 Write the number as a float literal, `5.0`, or convert the binding with
-`bonus.to_float()`. Be careful with integer literals in particular. At the
-time of writing, `a + 5` on a `float64` array gets past `aura check` and
-then traps when it runs:
+`bonus.to_float()`. A bare literal is different from a binding: it has no
+type of its own yet, so `a + 5` takes the array's dtype and works:
 
 ```aura
 def main():
@@ -355,17 +354,8 @@ def main():
 
 ```console
 $ aura run src/main.au
-error[AU4007]: array float64 storage requires float64 scalar at flat index 0, found 5
- --> src/main.au:3:11
-  |
-3 |     print(a + 5)
-  |           ^
-  = note: Aura call chain (innermost first): main at 1:1
+Array[float64](shape=[2, 2], values=[5.0, 5.0, 5.0, 5.0])
 ```
-
-That's a compiler bug, not a rule; the checker ought to reject it with
-`AU2002`, as it does for the `int64` binding. Until it's fixed, write
-`5.0`.
 
 Integer arrays don't support `/` at all, for the same reason integers don't:
 it's unclear whether you want floor division or a fraction.

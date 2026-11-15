@@ -6,7 +6,7 @@ The `net` module provides networking resources that cooperate with Aura's task s
 - UDP sockets and datagrams
 - HTTP listeners and exchanges
 - WebSocket listeners and sockets
-- Unix domain sockets on Unix hosts
+- Unix domain sockets
 - TLS listeners and streams
 
 ```aura
@@ -59,7 +59,7 @@ If cancellation or expiry happens before the pool accepts the work, the work is 
 | `net.websocket_listen` | `websocket_listen(address: str) -> Result[net.WebSocketListener, io.Error]` | Binds a WebSocket listener. |
 | `net.websocket_connect` | `websocket_connect(url: str) -> Result[net.WebSocket, io.Error]` | Connects to a WebSocket URL. |
 | `net.websocket_connect_timeout` | `websocket_connect_timeout(url: str, timeout: Duration) -> Result[net.WebSocket, io.Error]` | Connects to a WebSocket URL with a deadline. |
-| `net.unix_listen` | `unix_listen(path: str) -> Result[net.UnixListener, io.Error]` | Binds a Unix domain socket path on Unix hosts. |
+| `net.unix_listen` | `unix_listen(path: str) -> Result[net.UnixListener, io.Error]` | Binds a Unix domain socket path. |
 | `net.unix_connect` | `unix_connect(path: str) -> Result[net.UnixStream, io.Error]` | Connects to a Unix domain socket path. |
 | `net.unix_connect_timeout` | `unix_connect_timeout(path: str, timeout: Duration) -> Result[net.UnixStream, io.Error]` | Connects to a Unix domain socket path with a deadline. |
 | `net.tls_listen` | `tls_listen(address: str, cert_pem_path: str, key_pem_path: str) -> Result[net.TlsListener, io.Error]` | Binds a TLS listener with PEM certificate and key files. |
@@ -181,7 +181,7 @@ and deflate bodies.
 | `accept` | `accept(timeout: Duration = ...) -> Result[net.WebSocket, io.Error]` | Waits for the next WebSocket connection. |
 | `local_addr` | `local_addr() -> Result[str, io.Error]` | Returns the bound local address. |
 
-`net.WebSocketListener` has no `close()` member in Aura 0.3. Dropping its value releases it. You cannot use it as a user-defined `with` resource yet. This is a known limitation of the resource API.
+`net.WebSocketListener` has no `close()` member in Aura 0.16. Dropping its value releases it. You cannot use it as a user-defined `with` resource yet. This is a known limitation of the resource API.
 
 `net.WebSocket`:
 
@@ -202,7 +202,7 @@ Use text receive when the payload must be valid UTF-8. Use byte receive otherwis
 
 ## Unix Domain Sockets
 
-The Unix socket APIs are available on Unix hosts.
+The Unix socket APIs are available on Linux, macOS, and Windows.
 
 `net.UnixListener`:
 
@@ -339,7 +339,7 @@ An invariant failure that escapes the typed boundary uses the general runtime re
 
 ## Backend Support
 
-The MIR runtime and the direct native backend implement the TCP, UDP, HTTP, WebSocket, and TLS APIs. MIR is the compiler's mid-level intermediate representation. Both backends implement Unix domain sockets on maintained Unix hosts. Both must match on timeout accounting, typed error mapping, read caps, protocol parsing, ownership, and cleanup.
+The MIR runtime and the direct native backend implement the TCP, UDP, HTTP, WebSocket, and TLS APIs. MIR is the compiler's mid-level intermediate representation. Both backends implement Unix domain sockets. Both must match on timeout accounting, typed error mapping, read caps, protocol parsing, ownership, and cleanup.
 
 Address selection, DNS answers, socket options that the host libraries choose, and exact host error messages can differ by machine. The high-level HTTPS client uses the same platform-independent Web PKI root policy in both backends.
 
@@ -359,7 +359,7 @@ Address selection, DNS answers, socket options that the host libraries choose, a
 - The HTTP parser cap covers the start line, headers, transfer framing, trailers, and body. Outbound HTTP writers have no separate size cap.
 - The string-dictionary header type is not lossless for repeated fields. It can currently produce duplicate equal keys internally.
 - WebSocket listeners cannot be closed. WebSocket cancellation coverage is incomplete. WebSocket close discards host close errors.
-- Unix sockets are unavailable on non-Unix hosts. `unix_listen` does not replace a path that is not a socket.
+- `unix_listen` does not replace a path that is not a socket.
 
 These are absent from the HTTP server: HTTP/2 and lossless repeated-header APIs. The limits of the HTTP client are in the [`http` module](/manual/http#limits).
 

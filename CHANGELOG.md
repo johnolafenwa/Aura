@@ -12,6 +12,14 @@ in this file.
   data, neural networks, a transformer trained from scratch, running GPT-2
   from its published weights, and GPUs and PyTorch.
 
+- Documentation: the book, the install guides, the Manual, and the README
+  described the hosts and features of older releases in places. They said
+  that Aura does not run natively on Windows, that there is no Linux arm64
+  build, that `yield`, class properties, and HMAC are unavailable, and that
+  Unix sockets and interpreter FFI need a Unix host. They now match 0.16.
+  The Tensor Module page is in the Manual sidebar, and `llms.txt` lists the
+  supported platforms page.
+
 ## VS Code extension 0.16.0 — 2026-11-15
 
 - Bundles language server 0.16.0. The semantic interface version stays 20.

@@ -113,6 +113,8 @@ although doing so tends to confuse readers.
 - `is` appears only in `value is None` and `value is not None`. Aura has no
   identity comparison between arbitrary values, so `a is b` is a syntax error.
 - `lambda` starts an anonymous function: `lambda n: n + 1`.
+- `yield` hands one value to the caller inside a generator function, a
+  function that returns `Generator[T]` (Chapter 10).
 - `view` creates a named alias for a place without moving or copying it:
   `view first = names[0]`, or `view mut` for a writable alias.
 - `type` declares a type alias at module level:
@@ -124,10 +126,10 @@ although doing so tends to confuse readers.
 ## Words Aura does not reserve
 
 If you come from Python, you may reach for words that Aura does not treat as
-keywords at all: `null`, `yield`, `async`, `await`, `del`, `global`,
+keywords at all: `null`, `async`, `await`, `del`, `global`,
 `nonlocal`, `raise`, `except`, and `finally`. They are plain identifiers, so
 the error you get depends on how you used them. `x = null` is reported as an
-unknown name (`AU2001`). `raise ValueError("x")` and `yield 1` read to the
+unknown name (`AU2001`). `raise ValueError("x")` reads to the
 parser as a name followed by more tokens than a statement can hold, so you get
 `AU1101: expected Newline` pointing right after the word. `try:` followed by
 `except` gets a targeted `AU2005` message that points you at `Result` and

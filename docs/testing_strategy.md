@@ -157,7 +157,7 @@ compiler production code:
 
 GitHub Actions mirrors the local gate:
 
-- CI runs on Linux and macOS.
+- CI runs on Linux x86-64 and arm64, macOS, and Windows.
 - The docs workflow builds the VitePress book and deploys it to GitHub Pages.
 - The release workflow builds platform CLI archives, the VS Code extension,
   and the static docs archive for GitHub Releases.
@@ -165,7 +165,7 @@ GitHub Actions mirrors the local gate:
 ### Hosted Runner Reliability
 
 Local and hosted gates complement each other. A local green gate cannot prove
-environment-conditional Linux or macOS behavior. Work is not complete until
+environment-conditional Linux, macOS, or Windows behavior. Work is not complete until
 you have inspected the latest GitHub Actions runs with `gh run list`.
 
 **Timing tests.** Some tests pass only if an operation finishes under a

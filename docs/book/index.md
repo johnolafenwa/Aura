@@ -104,7 +104,7 @@ in Aura.
 
 To follow along you need the `aura` command. The
 [installation guide](/install/) has instructions for macOS, Linux, and
-Windows through WSL, and [Chapter 1](/book/ch01-00-getting-started) walks
+Windows, and [Chapter 1](/book/ch01-00-getting-started) walks
 through the same steps with a little more explanation. The source for Aura
 and for this book lives at
 [github.com/johnolafenwa/Aura](https://github.com/johnolafenwa/Aura), in the

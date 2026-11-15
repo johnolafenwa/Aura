@@ -85,7 +85,13 @@ def _book_markdown(directory: Path) -> Iterable[Path]:
 
 def discover_sources(root: Path) -> List[Source]:
     candidates: List[Path] = []
-    for relative in ("README.md", "docs/index.md", "docs/positioning.md", "docs/downloads.md"):
+    for relative in (
+        "README.md",
+        "SUPPORTED_PLATFORMS.md",
+        "docs/index.md",
+        "docs/positioning.md",
+        "docs/downloads.md",
+    ):
         path = root / relative
         if path.is_file():
             candidates.append(path)
@@ -125,8 +131,9 @@ def _public_url(relative: Path) -> str:
     parts = list(relative.parts)
     if parts == ["README.md"]:
         return "https://github.com/johnolafenwa/Aura#readme"
-    if parts[:1] == ["docs"]:
-        parts = parts[1:]
+    if parts[:1] != ["docs"]:
+        return f"https://github.com/johnolafenwa/Aura/blob/main/{relative.as_posix()}"
+    parts = parts[1:]
     if parts[-1] == "index.md":
         parts = parts[:-1]
     else:
@@ -137,7 +144,7 @@ def _public_url(relative: Path) -> str:
 
 def _summary(sources: List[Source]) -> str:
     groups = [
-        ("Project", lambda source: source.relative == Path("README.md") or source.relative.parent == Path("docs")),
+        ("Project", lambda source: source.relative.parent in (Path("."), Path("docs"))),
         ("Install Aura", lambda source: source.relative.parts[:2] == ("docs", "install")),
         ("Language Manual", lambda source: source.relative.parts[:2] == ("docs", "manual")),
         ("The Aura Programming Language", lambda source: source.relative.parts[:2] == ("docs", "book")),
@@ -145,7 +152,7 @@ def _summary(sources: List[Source]) -> str:
     lines = [
         "# Aura",
         "",
-        "> Aura is a compiled, statically typed programming language with Python-inspired syntax, deterministic ownership, native execution, and no garbage collector. Its current focus includes reliable applications, agents, and ML infrastructure; its long-term goal is a general-purpose systems language for every type of software, including operating systems and device drivers.",
+        "> Aura is a compiled, statically typed programming language with Python-inspired syntax, deterministic ownership, native execution, and no garbage collector. Its current focus includes reliable applications, agents, and ML infrastructure; its long-term goal is a general-purpose systems language for every type of software, including operating systems and device drivers. It runs natively on Linux, macOS, and Windows. Its library covers files, processes, networking, HTTP, JSON, regular expressions, time, numeric arrays, SIMD, and tensors on the CPU, Metal, and CUDA, and the language has a C foreign function interface, contracts with static verification, and freestanding builds.",
         "",
     ]
     for heading, predicate in groups:
@@ -165,7 +172,7 @@ def _full(sources: List[Source]) -> str:
     lines = [
         "# Aura full documentation",
         "",
-        "> Build-derived from the maintained Aura README, website, Manual, and book.",
+        "> Build-derived from the maintained Aura README, supported platforms list, website, Manual, and book.",
         "",
     ]
     for source in sources:

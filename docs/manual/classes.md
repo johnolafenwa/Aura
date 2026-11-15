@@ -508,7 +508,7 @@ Implemented:
 
 Views cannot be stored in class fields or other owned aggregates.
 
-Not implemented: inheritance, properties, and destructor hooks. Do not infer them from accepted class syntax.
+Not implemented: inheritance, property setters, and destructor hooks. Do not infer them from accepted class syntax.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the constructor evaluation order on both backends.
 

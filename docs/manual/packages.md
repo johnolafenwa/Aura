@@ -34,7 +34,7 @@ rejected.
 | --- | --- |
 | `name` | Must match `[A-Za-z_][A-Za-z0-9_]*`. It is also the dependency import identifier. Hyphenated names are invalid, even though `version` allows `-`. |
 | `version` | Must begin with an ASCII digit. The rest may contain only ASCII letters, digits, `.`, `-`, or `+`. |
-| `edition` | Must be exactly `"2026"` in Aura 0.3. |
+| `edition` | Must be exactly `"2026"` in Aura 0.16. |
 
 ### FFI Opt-In
 
@@ -100,7 +100,7 @@ traversal cannot escape that root, including through canonicalized filesystem
 paths. Cyclic source imports are rejected.
 
 Imported modules contribute declarations, not runtime initialization. Their
-top-level executable statements do not run on import in Aura 0.3.
+top-level executable statements do not run on import in Aura 0.16.
 [Names And Scopes](/manual/names-and-scopes#imports) specifies visibility and
 import binding.
 
