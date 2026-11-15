@@ -1,8 +1,8 @@
 # Install Aura On Linux
 
-The Aura 0.15 preview supports x86-64 Ubuntu 24.04 and compatible Linux
-distributions that use glibc. The release has no Linux ARM64 or musl
-archives.
+The Aura 0.16 preview supports Ubuntu 24.04 and compatible Linux
+distributions that use glibc, on x86-64 and arm64. The release has no
+archive for a musl host such as Alpine.
 
 ## 1. Confirm The Host
 
@@ -11,7 +11,8 @@ uname -s
 uname -m
 ```
 
-On a supported host, the output is `Linux`, then `x86_64` or `amd64`.
+On a supported host, the output is `Linux`, then `x86_64`, `amd64`,
+`aarch64`, or `arm64`.
 
 ## 2. Install Download And Verification Tools
 
@@ -42,8 +43,6 @@ name the target and the installer adds its target pack:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
 ```
 
-Target packs are in the releases from the one after 0.15.
-
 ## 4. Add Aura To Bash
 
 Add `~/.local/bin` to your login environment. You only need to do this once:
@@ -64,7 +63,7 @@ command -v aura
 aura --version
 ```
 
-The version begins with `aura 0.15.0-preview`.
+The version begins with `aura 0.16.0-preview`.
 
 ## 6. Run A Program
 

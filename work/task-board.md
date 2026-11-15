@@ -1,6 +1,17 @@
 # Task Board
 
-Last updated: 2026-11-13
+Last updated: 2026-11-15
+
+## Release 0.16.0-preview (in progress)
+
+- Target: John's 2026-11-14 ask for the 0.16.0 preview. Details are in
+  `2026-11-15-v0.16.0-preview-release.md`.
+- Done: version sweep, changelog sections, the CUDA version statement,
+  the reworded platform and install pages, measurements against the
+  published 0.15.0 archive, and the host function table order.
+- Open: merge PR #292, push the `v0.16.0-preview` tag from John's
+  checkout after he approves it, confirm the Release run and the
+  extension publish. The packages are not published in this release.
 
 ## Homebrew, apt and Chocolatey packages (built, publishing waits on John)
 

@@ -30,7 +30,8 @@ reads. The compiler enforces both.
 
 ## Install
 
-Install the Aura 0.15 technical preview on Linux x64, macOS x64, or macOS arm64:
+Install the Aura 0.16 technical preview on Linux x64, Linux arm64, macOS x64,
+or macOS arm64:
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -44,7 +45,8 @@ aura upgrade
 
 Step-by-step guides cover
 [macOS](https://johnolafenwa.github.io/Aura/install/macos),
-[Linux](https://johnolafenwa.github.io/Aura/install/linux), and
+[Linux](https://johnolafenwa.github.io/Aura/install/linux),
+[Windows](https://johnolafenwa.github.io/Aura/install/windows), and
 [Windows through WSL 2](https://johnolafenwa.github.io/Aura/install/windows-wsl).
 The [VS Code guide](https://johnolafenwa.github.io/Aura/install/vscode) covers
 Marketplace, Open VSX, VSIX, and WSL remote installation.
@@ -53,7 +55,7 @@ pinned tools.
 
 ## What Aura Is For
 
-Aura 0.15 targets applications for agents, ML infrastructure, and the control
+Aura 0.16 targets applications for agents, ML infrastructure, and the control
 planes around models. Before a program runs, the compiler checks types,
 access, mutation, ownership transfer, resource cleanup, and task boundaries.
 

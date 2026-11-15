@@ -191,7 +191,7 @@ diagnostic-grade.
 | `set_insert_contains`: 20,000 inserts, 200,000 `in` tests | 24.69 s | 0.038 s | 0.008 s |
 | `int_list_sum`: `for` over 100,000 `int64` values, 20 times | 1.96 s | 0.048 s | 0.048 s |
 | `string_list_scan`: 10,000 `str` compared, 100 times | 1.60 s | 0.110 s | 0.018 s |
-| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.15 s | 0.007 s |
+| `record_field_reads`: `doc.get("age")` on 5,000 dicts, 20 times | 0.80 s | 0.150 s | 0.007 s |
 
 Before is `5f68c34`. After is the Batch 7a runtime changes. The programs live
 in `benchmarks/runtime_values/`, and `scripts/bench-runtime-values.py` runs
@@ -577,6 +577,26 @@ that rose in 0.14.0. Both compilers measured in the same four passes on
 `stream_io`, `regex_scan`, `date_time`, and `http_stream`. Aura is faster
 than Python on all four and takes 1.5 to 3.3 times Rust's time. All 34
 take 15.6 seconds, against 56.1 for Python and 10.8 for Rust.
+
+Aura 0.16.0 adds GPU tensors, Windows, Linux on arm64, builds for other
+Linux targets, and freestanding builds, and changes no code that these
+programs run. Both compilers measured in the same four passes on 14
+November 2026, median of twenty runs. The container was less busy than
+on 12 November, so both columns are lower than the 0.15.0 column above:
+
+| Measure | Aura 0.15.0 | Aura 0.16.0 |
+| --- | ---: | ---: |
+| All 34 programs, wall time | 11.9 s | 12.1 s |
+| Median Aura / Rust, wall time | 2.8x | 2.8x |
+| Median Aura / Python 3.13, wall time | 0.35x | 0.36x |
+| Programs faster than Python | 31 | 32 |
+| Programs above 8x Rust | 0 | 0 |
+| Instructions, all 34 programs | 104.7 billion | 104.7 billion |
+
+The two releases run the same instructions, and their times differ by
+what the container adds. Aura is still slower than Python on `file_io`
+and `template_render`, and `csv_aggregate` is level with it. All 34 take
+12.1 seconds, against 45.0 for Python and 8.7 for Rust.
 
 ### Per-Call Attribution
 

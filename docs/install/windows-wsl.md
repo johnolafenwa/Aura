@@ -1,9 +1,8 @@
 # Install Aura On Windows With WSL
 
-The 0.15 release has no native Windows executable, and the
-[native Windows install](/install/windows) starts with the release after
-it. On an x86-64 Windows 11 machine, you can install and run the Linux
-release inside Windows Subsystem for Linux 2
+Aura has a [native Windows install](/install/windows), which needs the
+Microsoft C++ build tools. On an x86-64 Windows 11 machine, you can also
+install and run the Linux release inside Windows Subsystem for Linux 2
 (WSL 2) with Ubuntu 24.04. The CLI, compiler runtime, your projects, and the
 VS Code language server all run inside WSL 2.
 

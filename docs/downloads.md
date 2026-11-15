@@ -1,13 +1,14 @@
 # Downloads
 
-Aura 0.15.0 is a technical preview. The compiler, command-line tools, editor
+Aura 0.16.0 is a technical preview. The compiler, command-line tools, editor
 extension, reference manual, and source all ship from the
 [Aura GitHub repository](https://github.com/johnolafenwa/Aura).
 
 ## Aura CLI
 
 Install the current preview with one command. This works on a supported macOS
-or Linux host, including x86-64 Ubuntu 24.04 inside Windows WSL 2:
+or Linux host, including x86-64 Ubuntu 24.04 inside Windows WSL 2. On
+Windows itself, follow the [Windows guide](/install/windows):
 
 ```bash
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
@@ -21,14 +22,15 @@ For step-by-step instructions, pick a platform guide:
 
 - [Installation overview](/install/)
 - [macOS: Apple silicon and Intel](/install/macos)
-- [Linux: Ubuntu 24.04 and compatible x86-64 glibc hosts](/install/linux)
+- [Linux: Ubuntu 24.04 and compatible glibc hosts, x86-64 and arm64](/install/linux)
+- [Windows 11, x86-64](/install/windows)
 - [Windows 11 through Ubuntu on WSL 2](/install/windows-wsl)
 - [Homebrew, apt and Chocolatey, not published yet](/install/package-managers)
 
 To install by hand, download the archive for your platform from the
-[v0.15.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.15.0-preview).
-Each release includes Linux x64, macOS x64, and macOS arm64 archives and a
-`SHA256SUMS` manifest.
+[v0.16.0-preview release](https://github.com/johnolafenwa/Aura/releases/tag/v0.16.0-preview).
+Each release includes Linux x64, Linux arm64, macOS x64, macOS arm64, and
+Windows x64 archives and a `SHA256SUMS` manifest.
 
 Extract the archive, add its `bin` directory to `PATH`, and verify the
 installation:
@@ -45,7 +47,7 @@ Install **Aura Programming Language** from either public extension registry:
 - [Open VSX](https://open-vsx.org/extension/JohnOlafenwa/vscode-aura-lang)
 
 Both registries carry the same package, with the plain extension version
-`0.15.0`. The extension needs the `aura` executable on `PATH`. Its semantic
+`0.16.0`. The extension needs the `aura` executable on `PATH`. Its semantic
 editor features run through the `aura lsp` server that the compiler provides.
 
 To install from a terminal:
@@ -55,7 +57,7 @@ code --install-extension JohnOlafenwa.vscode-aura-lang
 ```
 
 To install by hand, download
-[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.15.0-preview/aura-language.vsix)
+[`aura-language.vsix`](https://github.com/johnolafenwa/Aura/releases/download/v0.16.0-preview/aura-language.vsix)
 from the GitHub Release. Then run **Extensions: Install from VSIX...** in
 VS Code.
 
