@@ -2,16 +2,17 @@
 
 Last updated: 2026-11-15
 
-## Release 0.16.0-preview (in progress)
+## Release 0.16.0-preview (complete)
 
 - Target: John's 2026-11-14 ask for the 0.16.0 preview. Details are in
   `2026-11-15-v0.16.0-preview-release.md`.
-- Done: version sweep, changelog sections, the CUDA version statement,
-  the reworded platform and install pages, measurements against the
-  published 0.15.0 archive, and the host function table order.
-- Open: merge PR #292, push the `v0.16.0-preview` tag from John's
-  checkout after he approves it, confirm the Release run and the
-  extension publish. The packages are not published in this release.
+- Done: PR #292 merged as `91218b26`, tag `v0.16.0-preview` pushed on
+  2026-11-15, Release run `43695720872` green, five archives, four target
+  packs and extension 0.16.0 published. The packages are built and
+  attached but not published.
+- Follow-up: find a host function's entry once per call, keep the tensor
+  free code out of programs that use no tensor, and renew the extension
+  publishing token before 2026-12-01.
 
 ## Homebrew, apt and Chocolatey packages (built, publishing waits on John)
 
