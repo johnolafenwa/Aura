@@ -209,8 +209,12 @@ degree 11 step 3000: training 0.0033 held-out 0.0944
 ```
 
 This one takes about twenty seconds, because it trains three models for
-3,000 steps each. The optimizer is `AdamW`, which we'll come to below. Read the
-three blocks of output as three stories.
+3,000 steps each. When a program's wait starts to bother you, run it with
+`aura run --backend direct src/main.au`, which compiles it to machine code
+first, as [Chapter 17](/book/ch17-01-run-and-build) described. The output
+is the same and the wait is shorter, often several times shorter. The optimizer is
+`AdamW`, which we'll come to below. Read the three blocks of output as
+three stories.
 
 The straight line, degree 1, stops improving almost at once, with a
 training loss of 0.17 and a held-out loss of 0.22. Both are poor. A line

@@ -2,6 +2,20 @@
 
 Last updated: 2026-11-15
 
+## Book chapters on tensors and machine learning (complete)
+
+- Target: John's 2026-11-15 ask for "very strong ml and tensor programming
+  content" in the book, with GPT-2 inference. Details are in
+  `2026-11-15-book-ml-chapters.md`.
+- Done: chapters 21 to 26: tensors, learning from data, neural networks, a
+  transformer trained from scratch, GPT-2 from the published weights, and
+  devices and speed.
+- Verification: every listing with output run with the released 0.16.0
+  compiler on the CPU device, the tokenizer compared with the reference on
+  313 texts, and `check_doc_examples.py`. Nothing was run on a GPU.
+- Found and not fixed: nine gaps listed in the note, the largest being the
+  speed of plain `aura run` on long host loops and of the CPU device.
+
 ## Release 0.16.0-preview (complete)
 
 - Target: John's 2026-11-14 ask for the 0.16.0 preview. Details are in

@@ -167,25 +167,25 @@ the narrow layer `c_proj`. `Gpt2` has the token embedding `wte`, the
 position embedding `wpe`, the list of blocks `h`, and the last norm
 `ln_f`. There are four real differences.
 
-**One layer for queries, keys, and values.** `c_attn` produces 2,304
+The first is one layer for queries, keys, and values. `c_attn` produces 2,304
 numbers for each position, and `forward` cuts them into three runs of 768
 with `slice` along the last axis. Each third is then split into 12 heads
 as before.
 
-**The built-in attention.** In Chapter 24 we wrote out the scores, the
+The second is the built-in attention. In Chapter 24 we wrote out the scores, the
 mask, and the softmax. `tensor.scaled_dot_product_attention` computes
 exactly those lines, and its last argument, `true`, asks for the causal
 mask. Having written it once by hand, we can use the library version
 knowing what it does.
 
-**A different `gelu`.** GPT-2 was trained with an approximation of `gelu`
+The third is a different `gelu`. GPT-2 was trained with an approximation of it
 built from `tanh`. The exact function, which `x.gelu()` computes, differs
 from it by less than a thousandth, but the weights were trained
 with the approximation, so we use it too. `gelu_new` is that formula
 written with tensor arithmetic. This is a general point about running
 someone else's model: small numerical choices are part of the model.
 
-**No head.** The last line of `next_scores` multiplies the final vector
+The fourth is the missing head. The last line of `next_scores` multiplies the final vector
 by `self.wte.weight.value().transpose()`: the token embedding table,
 turned on its side, as we predicted from the file. One more saving is
 possible here because we are not training. The model computes a vector

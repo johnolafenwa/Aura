@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- Documentation: the book has six new chapters on machine learning with
+  the `tensor` module. They cover tensors and gradients, learning from
+  data, neural networks, a transformer trained from scratch, running GPT-2
+  from its published weights, and GPUs and PyTorch.
+
 ## VS Code extension 0.16.0 — 2026-11-15
 
 - Bundles language server 0.16.0. The semantic interface version stays 20.

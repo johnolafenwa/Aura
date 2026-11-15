@@ -16,7 +16,7 @@ that look like a play, with speaker names, line breaks, and mostly real
 words. Watching it get there is the best way we know to see what these
 models do.
 
-The chapter has four parts. First we turn text into numbers a model can
+First we turn text into numbers a model can
 read and build the simplest model that predicts text at all, so that we
 have a number to beat. Then we build *attention*, the one new idea in a
 transformer, by hand. Then we assemble the whole model and train it. Last
