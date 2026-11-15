@@ -42,6 +42,11 @@ writes one relocatable object that needs no runtime and no operating
 system, for x86-64, AArch64, and RISC-V, with `export "C" def` for
 functions that C calls and the new `mem` module for reads and writes at
 an address and for atomics.
+Measured against 0.15.0 on the Linux measurement host, the 34
+cross-language programs run the same instructions (104.7 billion) and
+take 12.1 seconds against 11.9, a difference the busy host accounts
+for. Linux hello world is 1,135,576 bytes, against 1,117,088, because
+every program now links the code that frees a tensor value.
 The semantic interface stays 20, and the native cache format stays
 `v10`.
 

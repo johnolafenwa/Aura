@@ -3677,6 +3677,84 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
         params: &[borrowed("pattern"), borrowed("text")],
     },
     DynamicHostAbi {
+        name: "http::__aura_send",
+        params: &[
+            borrowed("method"),
+            borrowed("url"),
+            borrowed("headers"),
+            borrowed("text"),
+            borrowed("body"),
+            borrowed("timeout"),
+            borrowed("read_timeout"),
+            borrowed("max_redirects"),
+            borrowed("flags"),
+            borrowed("ca_file"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_chunk",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_line",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_lines",
+        params: &[borrowed("stream"), borrowed("max_lines")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_event",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_all",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_read_text",
+        params: &[borrowed("stream"), borrowed("max_bytes")],
+    },
+    DynamicHostAbi {
+        name: "http::__aura_close",
+        params: &[borrowed("stream")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_split",
+        params: &[borrowed("pattern"), borrowed("text")],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_replace",
+        params: &[
+            borrowed("pattern"),
+            borrowed("text"),
+            borrowed("replacement"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "regex::__aura_replace_all",
+        params: &[
+            borrowed("pattern"),
+            borrowed("text"),
+            borrowed("replacement"),
+        ],
+    },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_resume",
+        params: &[borrowed("handle")],
+    },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_take",
+        params: &[borrowed("handle")],
+    },
+    DynamicHostAbi {
+        name: "iter::__aura_generator_close",
+        params: &[borrowed("handle")],
+    },
+    // The tensor builtins come last. A lookup scans this table from the top
+    // for each argument of a host call, and a tensor operation does far more
+    // work per call than the builtins above. Add new modules below them.
+    DynamicHostAbi {
         name: "tensor::__aura_device_available",
         params: &[borrowed("device")],
     },
@@ -3909,81 +3987,6 @@ pub const DYNAMIC_HOST_ABI: &[DynamicHostAbi] = &[
             borrowed("dtype"),
             borrowed("device"),
         ],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_send",
-        params: &[
-            borrowed("method"),
-            borrowed("url"),
-            borrowed("headers"),
-            borrowed("text"),
-            borrowed("body"),
-            borrowed("timeout"),
-            borrowed("read_timeout"),
-            borrowed("max_redirects"),
-            borrowed("flags"),
-            borrowed("ca_file"),
-        ],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_chunk",
-        params: &[borrowed("stream"), borrowed("max_bytes")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_line",
-        params: &[borrowed("stream")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_lines",
-        params: &[borrowed("stream"), borrowed("max_lines")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_event",
-        params: &[borrowed("stream")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_all",
-        params: &[borrowed("stream"), borrowed("max_bytes")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_read_text",
-        params: &[borrowed("stream"), borrowed("max_bytes")],
-    },
-    DynamicHostAbi {
-        name: "http::__aura_close",
-        params: &[borrowed("stream")],
-    },
-    DynamicHostAbi {
-        name: "regex::__aura_split",
-        params: &[borrowed("pattern"), borrowed("text")],
-    },
-    DynamicHostAbi {
-        name: "regex::__aura_replace",
-        params: &[
-            borrowed("pattern"),
-            borrowed("text"),
-            borrowed("replacement"),
-        ],
-    },
-    DynamicHostAbi {
-        name: "regex::__aura_replace_all",
-        params: &[
-            borrowed("pattern"),
-            borrowed("text"),
-            borrowed("replacement"),
-        ],
-    },
-    DynamicHostAbi {
-        name: "iter::__aura_generator_resume",
-        params: &[borrowed("handle")],
-    },
-    DynamicHostAbi {
-        name: "iter::__aura_generator_take",
-        params: &[borrowed("handle")],
-    },
-    DynamicHostAbi {
-        name: "iter::__aura_generator_close",
-        params: &[borrowed("handle")],
     },
 ];
 
