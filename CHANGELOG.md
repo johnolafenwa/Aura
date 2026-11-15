@@ -7,6 +7,11 @@ in this file.
 
 ## Unreleased
 
+- Documentation: the book has six new chapters on machine learning with
+  the `tensor` module. They cover tensors and gradients, learning from
+  data, neural networks, a transformer trained from scratch, running GPT-2
+  from its published weights, and GPUs and PyTorch.
+
 - Documentation: the book, the install guides, the Manual, and the README
   described the hosts and features of older releases in places. They said
   that Aura does not run natively on Windows, that there is no Linux arm64

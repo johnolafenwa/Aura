@@ -162,6 +162,54 @@ One small tool, `courier`, grows across the sections.
 - 20.4 Randomness (seeded and secure)
 - 20.5 Logging, tracing, and metrics
 
+## 21. Tensors
+
+The first of six chapters on machine learning. They assume no experience
+with it and use the `tensor` module on the CPU device.
+
+- 21.1 Tensors, shapes, and devices
+- 21.2 Operations and broadcasting
+- 21.3 Gradients (`requires_grad`, `backward()`, gradient descent by hand)
+
+## 22. Learning from data
+
+- 22.1 Linear regression (`Linear`, a loss, `SGD`, the `mut` rule for models)
+- 22.2 Classification (`cross_entropy`, `softmax`, accuracy)
+- 22.3 The training loop (batches, held-out data, overfitting, weight decay,
+  `AdamW`)
+
+## 23. Neural networks
+
+- 23.1 Hidden layers (why one layer fails, activations)
+- 23.2 Models and modules (`impl Module`, `Sequential`, saving and loading)
+- 23.3 Convolutional networks (`Conv2d`, pooling, `BatchNorm2d`, training and
+  evaluation modes)
+
+## 24. A transformer from scratch
+
+A project chapter: a character model trained on Shakespeare.
+
+- 24.1 Text as numbers (a vocabulary, batches of windows, a table baseline)
+- 24.2 Attention (queries, keys, values, the causal mask, heads)
+- 24.3 The model and its training (embeddings, blocks, residuals, layer norm)
+- 24.4 Making it write (the generation loop, temperature)
+
+## 25. Running GPT-2
+
+A project chapter: GPT-2 inference from the published weights.
+
+- 25.1 The weights (safetensors, reading a model's design from its names)
+- 25.2 The tokenizer (byte pair encoding from `vocab.json` and `merges.txt`)
+- 25.3 The model (field names as the loading contract, weight tying)
+- 25.4 Generating text (top-k sampling, speed, the key-value cache)
+
+## 26. Devices and speed
+
+- 26.1 Running on a GPU (Metal and CUDA requirements, when the work runs,
+  small work on the CPU, measured times)
+- 26.2 Coming from PyTorch (differences and why, a phrase book, what is not
+  there yet)
+
 ## Appendices
 
 - A: Keywords

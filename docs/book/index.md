@@ -35,7 +35,7 @@ on purpose: it is easier to understand a rule once you have run into it.
 
 Some chapters teach concepts, and some are projects. The project chapters
 (2, 12, and 19) build a complete tool from an empty directory, one step at a
-time. If you like to learn by building, you can read them first and dip back
+time, and Chapters 24 and 25 do the same for a language model. If you like to learn by building, you can read them first and dip back
 into the concept chapters when something puzzles you.
 
 The first half of the book is about the language itself. After installing
@@ -54,9 +54,24 @@ and cleanup with `with`, and Chapter 15 covers structured concurrency.
 Chapter 16 reads and writes files, runs other programs, talks to the network,
 and handles JSON. Chapter 17 takes a program from `aura run` to a shipped
 binary that you can debug and measure, and Chapter 18 calls into C. Chapter 19
-brings most of the book together in a supervised job runner. The appendices
-at the end are for looking things up: keywords, operators, a guide for Python
-developers, the tools, and the diagnostics you will meet most often.
+brings most of the book together in a supervised job runner, and Chapter 20
+tours the rest of the standard library: bytes and codecs, time, regular
+expressions, randomness, and logging.
+
+The last part is about machine learning, and it assumes no experience with
+it. Chapter 21 introduces tensors, the arrays that models compute with, and
+gradients. Chapter 22 uses them to learn from data: fitting a line,
+classifying, and the training loop that every later model shares. Chapter 23
+builds neural networks, including a convolutional one for images. Chapter 24
+writes a transformer from scratch and trains it to imitate Shakespeare, and
+Chapter 25 loads the published weights of GPT-2 into a model we write
+ourselves and has it generate text. Chapter 26 covers running on a GPU and
+how Aura's tensors compare with PyTorch. These chapters lean mostly on the
+first half of the book, so you can go to them any time after Chapter 12.
+
+The appendices at the end are for looking things up: keywords, operators, a
+guide for Python developers, the tools, the diagnostics you will meet most
+often, and notes on following the book on Windows.
 
 You will see a lot of code that does not compile. When the obvious first
 attempt at something is wrong, we write the obvious first attempt, show what
