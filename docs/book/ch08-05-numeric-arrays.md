@@ -695,7 +695,8 @@ There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
 back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. When
 the numbers live in a one-dimensional array, `load_array` and `store_array`
 do the same job: `F64x4.load_array(xs, i)` reads four elements of an
-`Array[float64]`. The [Manual](/manual/simd) has the full list.
+`Array[float64]`. [Section 8.7](/book/ch08-07-lane-values) builds, times,
+and extends a loop like this one step by step.
 
 ### One Number per Row
 
@@ -826,25 +827,6 @@ until you read a result, so that it can run a whole expression in one
 trip. The [Manual](/manual/tensors) explains when that matters and which
 dtypes a GPU has.
 
-## Summary
-
-You now know the collections that most Aura programs are built from. Lists
-keep values in order and give you indexing, slicing, sorting, and in-place
-changes through `mut`. Strings are owned UTF-8 text that counts characters as
-Unicode scalars, slices without ever splitting one, and offers methods for
-the splitting, searching, and formatting that text processing needs.
-Dictionaries map keys to values in insertion order, sets answer membership
-questions, and both make you be explicit about absence with `Lookup` or
-`in`. Comprehensions and builtins such as `sum`, `max`, and `sorted` turn
-most of the loops you'd write over these into one expression, and `Array[T]`
-handles rectangular tables of numbers with whole-array arithmetic,
-broadcasting, and masks.
-
-Running through all of it is ownership. A collection owns its elements, so
-storing a value moves it in, reading one gives you shared access or a copy,
-and the compiler tells you when a string or a list would end up with two
-owners. You've also met a lot of traps along the way: indexes past the end,
-missing keys, `remove` of a value that isn't there, the `max` of an empty
-list. In the [next chapter](/book/ch09-00-error-handling) we'll look at
-errors properly: when a trap is the right response, and how to use `Result`
-to report a problem to the caller and let it decide what to do.
+Arrays, lists, and dictionaries all own their elements. The next section
+shows how to name one of those elements, or a run of them, without copying
+it or taking it out.
