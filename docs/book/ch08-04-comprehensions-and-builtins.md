@@ -140,7 +140,7 @@ names` or `for name in own names` inside the brackets is a syntax error
 
 Python lets you drop the brackets inside a function call, as in `sum(score *
 2 for score in scores)`, to make a *generator expression* that produces
-values one at a time. Aura has no generators:
+values one at a time. Aura has no generator expressions:
 
 ```aura check-fail:AU2005
 def main():
@@ -159,7 +159,9 @@ error[AU2005]: generator expressions are unavailable; use an eager owned list co
 
 Add the brackets, `sum([s * 2 for s in scores])`, and you get a list
 comprehension, which builds the whole list first. For the collection sizes in
-most programs that's fine.
+most programs that's fine. When the values really should come one at a time,
+write a generator function with `yield`, which
+[Chapter 10](/book/ch10-04-iterators-and-generators) covers.
 
 ## Reducing a collection to one value
 

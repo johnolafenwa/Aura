@@ -11,7 +11,7 @@ The maintained language contract consists of:
 1. the normative Language Specification and Manual
 2. compiler fixtures and CLI/LSP regression tests as executable conformance evidence
 3. the compiler, runtime, CLI, and language server as conforming implementations
-4. categorized examples and Learn chapters as teaching material
+4. categorized examples and the book as teaching material
 
 LSP is the Language Server Protocol. The Manual and the executable suite are expected to agree. A divergence is a project defect, not an alternate language rule.
 
@@ -107,6 +107,26 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - Arrays of one dtype broadcast, slices and shape members are views, and comparison members give `Array[bool]` masks. There is no mixed promotion, equality operator, autograd, or accelerator placement.
 - `mean()` returns `float64` for every dtype. Integer Array `/` is rejected, following the integer-division rule.
 
+### Iterators, Generators, And Trait Objects
+
+- `for` consumes any `iter.Iterator[T]` or `iter.IntoIterator[T]` implementation. A function that declares `-> Generator[T]` and uses `yield` is a generator function. See [Statements](/manual/statements#iterator-iteration).
+- A trait may declare associated types, written `Self.Name`.
+- `dyn Trait` is a trait object: a value of any type that implements the trait, called through the trait's methods. See [Generics And Traits](/manual/generics-and-traits).
+
+### Contracts And Verification
+
+- `requires`, `ensures`, `invariant`, and `decreases` clauses are checked at run time and fail with `AU4009`. See [Contracts](/manual/contracts).
+- `aura verify` proves with an SMT solver that contracts, arithmetic, and indexes cannot fail. See [Verification](/manual/verification).
+
+### Tensors And SIMD
+
+- The `tensor` module has `Tensor[T]` values on the CPU, on the Metal GPU of a Mac, or on an NVIDIA GPU through CUDA on Linux, with gradients, layers, and optimizers. See [Tensor Module](/manual/tensors).
+- The `simd` module has fixed-width lane values of `float64`, `float32`, and `int64`. See [SIMD Module](/manual/simd).
+
+### Freestanding Builds
+
+- `aura build --freestanding` compiles fixed-width numbers, `bool`, classes of those, and unions with `None` to one object that needs no runtime. The `mem` module reads and writes integers at an address. See [Freestanding Builds](/manual/freestanding).
+
 ### Integer And Math Operations
 
 - Integer literals support decimal separators and hexadecimal, binary, and octal bases.
@@ -188,7 +208,9 @@ See [Execution Model](/manual/execution-model) and [Current Limits](/manual/curr
 
 ## Platform And Distribution Support
 
-Release archives target glibc Linux x86-64 and macOS x86-64/Apple silicon. Each archive includes the native runtime and linker manifest used by `aura build`. Cargo and the Aura source checkout are not runtime dependencies of an installed archive. A host C compiler is still required.
+Release archives target glibc Linux on x86-64 and arm64, macOS on x86-64 and Apple silicon, and Windows on x86-64. Each archive includes the native runtime and linker manifest used by `aura build`. Cargo and the Aura source checkout are not runtime dependencies of an installed archive. A host C compiler is still required, or on Windows the Microsoft linker from the Visual Studio C++ build tools.
+
+On a Linux host, `aura build --target` builds programs for glibc and musl Linux on x86-64 and arm64. `aura build --freestanding` writes an object with no runtime for x86-64, AArch64, and RISC-V. [CLI And Tooling](/manual/cli-and-tooling) and [Freestanding Builds](/manual/freestanding) describe both.
 
 See the repository `SUPPORTED_PLATFORMS.md` for the exact matrix and pinned toolchain.
 

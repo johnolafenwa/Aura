@@ -37,6 +37,12 @@ or macOS arm64:
 curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh
 ```
 
+On Windows x64, in PowerShell:
+
+```powershell
+irm https://johnolafenwa.github.io/Aura/install.ps1 | iex
+```
+
 To upgrade the compiler and bundled runtime of an existing install, run:
 
 ```bash
@@ -61,11 +67,12 @@ access, mutation, ownership transfer, resource cleanup, and task boundaries.
 
 The long-term goal is a general-purpose systems language for every kind of
 software: applications, services, databases, language runtimes, embedded
-software, operating systems, and device drivers. A first
+software, operating systems, and device drivers. A
 [freestanding build](docs/manual/freestanding.md) compiles code over
-numbers and plain classes with no runtime. Low-level memory facilities,
-hardware interfaces, and the platform controls that scope needs are not
-implemented yet. [Why Aura](docs/positioning.md)
+numbers and plain classes with no runtime, and the
+[`mem` module](docs/manual/mem.md) reads and writes device registers. Heap
+values in freestanding code, inline assembly, and portable layout controls
+are not implemented yet. [Why Aura](docs/positioning.md)
 explains the project direction.
 
 ## Documentation
@@ -81,10 +88,16 @@ explains the project direction.
   backend, and output format.
 - [Concurrency](docs/manual/concurrency.md): tasks, queues, the scheduler, and
   its environment settings.
+- [Tensors](docs/manual/tensors.md): `Tensor[T]` on the CPU, Metal, and CUDA,
+  with gradients, layers, and optimizers.
+- [FFI](docs/manual/ffi.md): calling C libraries from an Aura package.
+- [Contracts](docs/manual/contracts.md) and
+  [Verification](docs/manual/verification.md): conditions checked at run time
+  and proved by `aura verify`.
 - [Performance](docs/manual/performance.md): current measurements and the
   optimization roadmap.
-- [ML systems roadmap](docs/ml_systems_support_plan.md): planned support for ML
-  systems work.
+- [ML systems design notes](docs/ml_systems_support_plan.md): the earlier
+  design document for ML systems work.
 
 ## Monorepo layout
 
@@ -94,6 +107,9 @@ explains the project direction.
 | `tools/` | Editor integrations and other developer tools |
 | `package.json` | npm workspace manifest for the repository's tools |
 | `examples/` | Categorized sample Aura programs |
+| `benchmarks/` | Benchmark programs, baselines in other languages, and recorded results |
+| `scripts/` | Build, release, benchmark, and repository check scripts |
+| `packaging/` | Homebrew, Debian, and Chocolatey package definitions |
 | `docs/` | VitePress site: the book (`docs/book/`), the Manual, install guides, and supporting documents |
 | `architecture_docs/` | Architecture guides and component deep dives for the current implementation |
 | `work/` | Task board and implementation notes |
@@ -107,7 +123,9 @@ Each component has its own README:
 - `crates/aura-core`: semantic types, diagnostics, and integer helpers
   shared by the compiler and the native runtime.
 - `crates/aura-runtime`: the native runtime that executables link, with
-  runtime values, the scheduler, host builtins, codecs, and FFI.
+  runtime values, the scheduler, host builtins, codecs, tensors, and FFI.
+- `crates/aura-mem`: the memory copy and compare routines that musl programs
+  link.
 - `tools/vscode-aura`: the VS Code extension for syntax highlighting and the
   language client.
 - `tools/aura-language-server`: the Aura Language Server Protocol

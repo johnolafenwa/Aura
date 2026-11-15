@@ -90,8 +90,12 @@ visible in the code:
 - **Concurrency has a scope.** A `TaskGroup` owns its child tasks. Leaving the
   scope joins them, cancels stragglers, and loses nothing.
 - **The standard library covers infrastructure.** Files, processes, TCP,
-  HTTP, WebSockets, TLS, queues, retries, and supervisors follow the same
-  ownership and failure rules as the rest of the language.
+  HTTP, WebSockets, TLS, JSON, regular expressions, queues, retries, and
+  supervisors follow the same ownership and failure rules as the rest of the
+  language.
+- **Numbers run where the hardware is.** `Array` and the `simd` module
+  compute on the CPU, and the `tensor` module runs the same program on the
+  CPU, on the Metal GPU of a Mac, or on an NVIDIA GPU.
 
 ## Long-Term Direction
 
@@ -101,8 +105,10 @@ language runtimes, embedded software, operating systems, and device drivers.
 
 Aura 0.16 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
-tooling. Later releases will add freestanding compilation, low-level memory
-access, hardware interfaces, portable layout controls, cross-compilation, and
+tooling. It also has the first low-level pieces: freestanding compilation
+with no runtime, memory access at an address, a C foreign function interface,
+and builds for other Linux machines. Later releases will add heap values in
+freestanding code, inline assembly, portable layout controls, and
 specialized runtime profiles.
 
 <AgentDocs />

@@ -394,7 +394,7 @@ Substituted unions are renormalized. A generic body is checked once under its sy
 - `is None` on a bare `V` is a runtime test.
 - `case V` is rejected with `AU2013`.
 
-**Method defaults.** Trait and implementation methods cannot declare default ordinary parameters in Aura 0.3. Trait default method bodies are permitted. A signature-only trait method has no body after its terminating newline.
+**Method defaults.** Trait and implementation methods cannot declare default ordinary parameters in Aura 0.16. Trait default method bodies are permitted. A signature-only trait method has no body after its terminating newline.
 
 **Clone-safety obligations.** A clone-producing operation over unresolved generic types infers clone-safety obligations on the declared parameters that contribute to it. Calls propagate those obligations to a fixed point and discharge them after substitution. The contract applies equally to ordinary, imported, inherent, associated, bounded trait, operator, task-target, and `From` calls. A concrete type that contains non-cloneable `random.Rng` state, or whose safety cannot be proved, is rejected with `AU3007`.
 

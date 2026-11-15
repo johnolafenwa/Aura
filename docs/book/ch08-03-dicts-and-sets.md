@@ -107,7 +107,7 @@ def main():
 
 ```console
 $ aura check src/main.au
-error[AU2999]: `for` currently requires a `Range`, `Queue[T]`, `list[T]`, or `set[T]` iterable, found `dict[str, int64]`
+error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `iter.Iterator[T]` iterable, found `dict[str, int64]`
  --> src/main.au:3:5
   |
 3 |     for name in grades:

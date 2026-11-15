@@ -9,7 +9,7 @@ never sends it to either registry.
 1. Run the focused release-metadata, packaging, documentation, and extension
    checks locally.
 2. Push the candidate commit. Complete one full hosted continuous integration
-   (CI) run on Linux and macOS for the exact release commit.
+   (CI) run on Linux, macOS, and Windows for the exact release commit.
 3. Hosted CI must be reliably green before you enable or rely on the planned
    on-merge auto-release automation. That automation gates releases on CI
    success.

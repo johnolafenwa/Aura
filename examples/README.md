@@ -20,6 +20,7 @@ representation, and the direct backend compiles native code.
 | File | Shows | Prints |
 | --- | --- | --- |
 | `top_level_script.au` | Top-level executable statements with inferred bindings | `156` |
+| `simple_example.au` | A class, a `mut` parameter, and `float32` arithmetic in one small program | `Ayoola Olafenwa`, `834.6` |
 | `main_function.au` | `main` with an omitted `None` return type | `16` |
 | `none_values.au` | Bare `None` as both the unit type and the unit value | `1` |
 | `mutable_bindings.au` | `mut`, reassignment, and compound assignment | `5` |
@@ -53,6 +54,7 @@ executable size.
 
 | File | Shows | Prints |
 | --- | --- | --- |
+| `new_lists.au` | Building new lists with `sorted`, `reversed`, `list`, `+`, `*`, and stepped slices, each of which copies its elements | begins `[ada, bo, cy]`, `[ada, cy, bo]`, `[bo, ada, cy]` |
 | `comprehensions.au` | Eager owned list, set, and dictionary comprehensions with filters, nested outer-major clauses, target-local scope, and ordinary bare-loop ownership | `[1, 4, 9, 16]`, `[4, 16]`, `{3: 30, 4: 40}`, `[11, 12, 21, 22]` |
 | `slices.au` | Owned list slices and Unicode-scalar `str` slices with every omitted-endpoint form, negative endpoints, and source/result independence | `[20, 30]`, `[10, 20]`, `[30, 40]`, `[10, 20, 30, 40]`, `[10, 20, 30, 40]`, `[99, 30]`, `🎉`, `A🎉`, `🎉Z`, `A🎉Z`, `A🎉Z` |
 | `span_views.au` | `Span[T]` slice views: a range passed to a `Span[T]` parameter, a whole list coerced to a span, a mutable span sorted and written in place, a `mut Span[T]` parameter, a returned range view, and membership | `18`, `27`, `3`, `[1, 5, 7]`, `[4, 9, 1, 5, 7]`, `[40, 90, 1, 5, 7]`, `[90, 1, 5]`, `true` |
@@ -248,7 +250,7 @@ package authorization.
 | --- | --- | --- |
 | `local_path_dependencies/app/` | `Aura.toml`, `src/`, a sibling path dependency, and a package-local helper module | `12` |
 | `workspace/app/` | A workspace-root `Aura.toml`, member packages, and a sibling path dependency resolved through the member package manifest | `8` |
-| `ffi_getpid/` | An FFI v0 package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
+| `ffi_getpid/` | An FFI package with `[package] allow_ffi = true` and a bodyless `extern "C" def getpid() -> int32` declaration | `true` on both backends |
 | `sqlite_notes/` | A binding of the system SQLite library: `[ffi] libraries`, `cstr` text, `mut Handle \| None` out-parameters, a row callback, and opaque handles with `drop` functions | three row ids, two notes, a row report, an SQLite error message, and `0` bytes still allocated |
 
 Run commands:

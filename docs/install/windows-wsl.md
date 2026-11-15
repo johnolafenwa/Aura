@@ -147,10 +147,13 @@ aura --version
 ```
 
 If these commands fail, restore the `PATH` export from step 4 and restart the
-WSL VS Code window. Do not install a Windows copy of Aura. The current
-compiler ships only as the Linux binary running inside WSL.
+WSL VS Code window. A [native Windows install](/install/windows) of Aura
+does not help here: the extension in a WSL window needs the Linux `aura`
+inside WSL.
 
 ### Windows on ARM
 
-The current Aura release has no Linux ARM64 archive. Windows-on-ARM WSL hosts
-are not supported in this preview.
+Windows on ARM is not a supported host in this preview. There is no native
+Windows ARM archive, and CI has no Windows-on-ARM runner. The release does
+have a Linux arm64 archive, so the Linux install may work inside WSL 2 on
+such a machine, but it is not tested there.

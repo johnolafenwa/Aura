@@ -62,8 +62,10 @@ language runtimes, embedded software, operating systems, and device drivers.
 
 Aura 0.16 lays the foundation: static typing, deterministic ownership, native
 compilation, structured concurrency, typed failure, packages, and integrated
-tooling. Later releases will add freestanding compilation, low-level memory
-access, hardware interfaces, portable layout controls, cross-compilation, and
+tooling. It also has the first low-level pieces: freestanding compilation
+with no runtime, memory access at an address, a C foreign function interface,
+and builds for other Linux machines. Later releases will add heap values in
+freestanding code, inline assembly, portable layout controls, and
 specialized runtime profiles.
 
 ## Familiar Source, Strong Guarantees
@@ -94,8 +96,9 @@ Its ownership documentation gives each value one owner and defines
 
 Aura 0.16 centers on the application control plane around models and agents.
 That covers scoped child tasks, transferable messages, typed I/O and process
-failures, timeouts, retries, and supervision. GPU programming, heterogeneous
-hardware, and interoperability with Python libraries are future areas for
+failures, timeouts, retries, and supervision. Its `tensor` module runs tensor programs on the CPU, on Metal,
+and on CUDA through the vendor libraries. Writing GPU kernels in Aura, other
+accelerators, and interoperability with Python libraries are future areas for
 Aura.
 
 ### Nim
@@ -148,6 +151,7 @@ later releases.
 
 Aura 0.16 is an executable technical preview. It includes the language, the
 native compiler, the ownership model, the structured task runtime, numeric
-arrays, control-plane modules, package tooling, the Manual, and the editor
-extension. The [Current Limits](/manual/current-limits) chapter lists the
+arrays, tensors on CPU and GPU devices, a C foreign function interface,
+contracts and `aura verify`, control-plane modules, package tooling, the
+Manual, the book, and the editor extension. The [Current Limits](/manual/current-limits) chapter lists the
 exact boundaries of that surface.

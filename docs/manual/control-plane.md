@@ -365,9 +365,9 @@ Retry delays stay bounded by the host timer range described in
 
 The system, path, JSON, TOML, logging, trace-event, metrics, retry, and
 summarized HTTP contracts on this page are implemented and maintained in
-Aura 0.3.
+Aura 0.16.
 
-Nested TOML data models, derived codecs, telemetry exporters, metric labels,
+Nested TOML data models, typed TOML codecs, telemetry exporters, metric labels,
 scoped tracing spans, and richer HTTP header representations are unavailable.
 Any mention of them describes possible future direction, not accepted language
 behavior.

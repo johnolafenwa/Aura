@@ -70,6 +70,11 @@ LLVM from source takes hours. It also prints an
 `LLVM_SYS_SYSTEM_LIBRARY_DIRS` setting that makes the build link
 Homebrew's static `libzstd.a`, so `aura` loads no Homebrew library.
 
+On Windows x86-64, run the script under Git Bash. It downloads the official
+LLVM 22.1.2 MSVC archive and copies the Windows SDK import libraries that
+LLVM names next to LLVM's own, so the Visual Studio Build Tools with the
+Windows SDK must be installed first.
+
 `scripts/check-aura-libraries.py target/release/aura` lists the libraries
 an `aura` loads, and fails on one outside the system set. The release
 workflow and the native binaries CI job run it.
@@ -92,6 +97,6 @@ solver on `PATH`, the verifier tests skip locally; under CI they fail.
 
 | Workflow | What it does |
 | --- | --- |
-| `.github/workflows/ci.yml` | Runs the repository gate on Linux and macOS. |
+| `.github/workflows/ci.yml` | Runs the repository gate on Linux, macOS, and Windows. |
 | `.github/workflows/docs.yml` | Builds the VitePress book and deploys it to GitHub Pages from `main`. |
-| `.github/workflows/release.yml` | Builds Linux and macOS CLI archives, packages the VS Code extension and docs, and publishes them for pushed `v*` tags. Manual runs only build by default. Publishing needs an explicit opt-in. |
+| `.github/workflows/release.yml` | Builds Linux, macOS, and Windows CLI archives, packages the VS Code extension and docs, and publishes them for pushed `v*` tags. Manual runs only build by default. Publishing needs an explicit opt-in. |

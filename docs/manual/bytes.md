@@ -341,8 +341,7 @@ Aura 0.16 does not provide:
 - other text encodings
 - URL-safe or unpadded base64
 - streaming codecs or incremental hashing
-- HMAC or password hashing
-- constant-time digest comparison
+- password hashing, or a hash other than SHA-256
 - a separate mutable byte buffer type
 - implicit text conversion
 

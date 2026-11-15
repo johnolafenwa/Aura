@@ -599,7 +599,7 @@ Process cancellation and close operations signal or terminate according to the p
 
 ## Runtime Limits
 
-The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.3. [Current Limits](/manual/current-limits) collects them. An implementation MUST reject or return a typed error when a limit is exceeded. It must not allocate without bound, and it must not hang indefinitely where the API supplies a deadline.
+The maintained resource size, header, frame, timeout, and platform limits are normative for Aura 0.16. [Current Limits](/manual/current-limits) collects them. An implementation MUST reject or return a typed error when a limit is exceeded. It must not allocate without bound, and it must not hang indefinitely where the API supplies a deadline.
 
 ## Determinism
 
