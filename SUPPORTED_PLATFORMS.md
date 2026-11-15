@@ -20,7 +20,7 @@ glibc distribution installs. On macOS it loads only system libraries.
 ## Windows
 
 The native Windows target is `x86_64-pc-windows-msvc`. `aura build` and
-`aura run` link with the Microsoft linker from the Visual Studio C++ build
+`aura run --backend direct` link with the Microsoft linker from the Visual Studio C++ build
 tools, and `aura.exe` links the C runtime statically, so it loads only
 system DLLs. On a machine without those build tools, run the Linux x86-64
 archive inside WSL 2.

@@ -16,6 +16,18 @@ Last updated: 2026-11-15
 - Found and not fixed: nine gaps listed in the note, the largest being the
   speed of plain `aura run` on long host loops and of the CPU device.
 
+## Book sections for the library, shipping, and Windows (complete)
+
+- Target: John's 2026-11-15 ask to add the gaps the documentation audit
+  found to the book. Details are in `2026-11-15-book-library-sections.md`.
+  The tensor and machine learning chapters are separate work.
+- Done: sections 8.6, 8.7, 16.5, 16.6, 17.4, chapter 20 (a tour of the
+  standard library), and Appendix F (Windows).
+- Verification: every listing shown with output run with the released
+  0.16.0 compiler and compared with the page, `check_doc_examples.py`, and
+  the `llms.txt` generator.
+- Found and not fixed: three compiler defects listed in the note.
+
 ## Documentation audit against 0.16 (complete)
 
 - Target: John's 2026-11-15 ask, after he read "Aura does not run natively

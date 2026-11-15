@@ -12,10 +12,12 @@ look at the two ways Aura executes a program and why both exist, build a
 standalone native binary, and see what goes into it. Then we will debug that
 binary: first with the runtime's own diagnostics, which already tell you a
 lot, and then with breakpoints and variable inspection in lldb and VS Code.
-Finally we will talk about performance honestly: what is fast in Aura today,
+Then we will talk about performance honestly: what is fast in Aura today,
 what still costs more than it should, and how to measure your own program
-instead of guessing.
+instead of guessing. Finally we will build for machines other than our own:
+another architecture, a minimal container, a newer CPU.
 
 By the end you will be able to ship an Aura program as a single executable,
-find out why it misbehaves when it does, and know which numbers about its
-speed you can trust.
+including a fully static one for a machine unlike yours, find out why it
+misbehaves when it does, and know which numbers about its speed you can
+trust.

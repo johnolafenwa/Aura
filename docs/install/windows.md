@@ -5,14 +5,14 @@ C++ build tools, use [Windows with WSL](/install/windows-wsl).
 
 ## 1. Install The Microsoft Linker
 
-`aura run` and `aura build` compile a program to native code and link it
-with the Microsoft linker, `link.exe`. Install the
+`aura build` and `aura run --backend direct` compile a program to native
+code and link it with the Microsoft linker, `link.exe`. Install the
 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
 and select the **Desktop development with C++** workload. A full Visual
 Studio install with that workload works too.
 
-`aura run --backend mir`, `aura check`, `aura fmt`, and the language server
-need no linker.
+Plain `aura run`, `aura check`, `aura fmt`, and the language server need no
+linker.
 
 ## 2. Install Aura
 

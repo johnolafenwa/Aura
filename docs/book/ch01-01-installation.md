@@ -107,6 +107,8 @@ The [Windows guide](/install/windows) has the details. The commands in this
 book are written for a macOS or Linux shell. In PowerShell the `aura`
 commands are the same, a built program is named with `.exe`, and a few
 shell commands such as `mkdir -p` have PowerShell spellings.
+[Appendix F](/book/appendix-06-windows) lists those spellings and says which
+chapters are easier to follow inside WSL.
 
 ### Windows with WSL 2
 
@@ -168,8 +170,9 @@ $ sudo apt install -y build-essential
 
 On Windows, install the
 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-with the **Desktop development with C++** workload. On Windows, `aura run`
-uses that linker too, so install it before the next section.
+with the **Desktop development with C++** workload. Plain `aura run` works
+without it on Windows as well, so you can start the next section right away. You
+will need the build tools by the time it reaches `aura build`.
 
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.

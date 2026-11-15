@@ -179,7 +179,7 @@ glibc distribution installs. On macOS it loads only system libraries.
 ## Windows
 
 The native Windows target is `x86_64-pc-windows-msvc`. `aura build` and
-`aura run` link with the Microsoft linker from the Visual Studio C++ build
+`aura run --backend direct` link with the Microsoft linker from the Visual Studio C++ build
 tools, and `aura.exe` links the C runtime statically, so it loads only
 system DLLs. On a machine without those build tools, run the Linux x86-64
 archive inside WSL 2.
@@ -1395,14 +1395,14 @@ C++ build tools, use [Windows with WSL](/install/windows-wsl).
 
 ## 1. Install The Microsoft Linker
 
-`aura run` and `aura build` compile a program to native code and link it
-with the Microsoft linker, `link.exe`. Install the
+`aura build` and `aura run --backend direct` compile a program to native
+code and link it with the Microsoft linker, `link.exe`. Install the
 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
 and select the **Desktop development with C++** workload. A full Visual
 Studio install with that workload works too.
 
-`aura run --backend mir`, `aura check`, `aura fmt`, and the language server
-need no linker.
+Plain `aura run`, `aura check`, `aura fmt`, and the language server need no
+linker.
 
 ## 2. Install Aura
 
@@ -7978,7 +7978,7 @@ These figures come from the clean Mac14,9 measurement at `181204b`.
 
 ## Tooling
 
-- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows the native `run` needs that linker too. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
+- `build` requires a host C compiler, or on Windows the Microsoft linker from the Visual Studio C++ build tools. On Windows `run --backend direct` needs that linker too; plain `run` does not. Source-checkout builds may use Cargo to refresh the native runtime. Release archives carry that runtime and do not require Rust or the source checkout.
 - Native `run` cache entries larger than 512 MiB are not retained. The just-built program still runs, but a later invocation rebuilds it instead of using the cache.
 - The direct backend is the maintained native backend for the implemented language surface.
 - `aura build` always emits directly. A file with no entry point fails with `AU2999` instead of producing an executable.
@@ -28266,6 +28266,8 @@ The [Windows guide](/install/windows) has the details. The commands in this
 book are written for a macOS or Linux shell. In PowerShell the `aura`
 commands are the same, a built program is named with `.exe`, and a few
 shell commands such as `mkdir -p` have PowerShell spellings.
+[Appendix F](/book/appendix-06-windows) lists those spellings and says which
+chapters are easier to follow inside WSL.
 
 ### Windows with WSL 2
 
@@ -28327,8 +28329,9 @@ $ sudo apt install -y build-essential
 
 On Windows, install the
 [Visual Studio Build Tools](https://visualstudio.microsoft.com/downloads/#build-tools-for-visual-studio-2022)
-with the **Desktop development with C++** workload. On Windows, `aura run`
-uses that linker too, so install it before the next section.
+with the **Desktop development with C++** workload. Plain `aura run` works
+without it on Windows as well, so you can start the next section right away. You
+will need the build tools by the time it reaches `aura build`.
 
 You can check the result with `xcode-select -p` on macOS or `cc --version` on
 Linux. We will build our first native binary in the next section.
@@ -39364,7 +39367,8 @@ There are also `F64x2`, `F32x4`, and `F32x8`, with `store` to write lanes
 back into a list and `min`, `max`, `abs`, and `sqrt` for each lane. When
 the numbers live in a one-dimensional array, `load_array` and `store_array`
 do the same job: `F64x4.load_array(xs, i)` reads four elements of an
-`Array[float64]`. The [Manual](/manual/simd) has the full list.
+`Array[float64]`. [Section 8.7](/book/ch08-07-lane-values) builds, times,
+and extends a loop like this one step by step.
 
 ### One Number per Row
 
@@ -39495,6 +39499,869 @@ until you read a result, so that it can run a whole expression in one
 trip. The [Manual](/manual/tensors) explains when that matters and which
 dtypes a GPU has.
 
+Arrays, lists, and dictionaries all own their elements. The next section
+shows how to name one of those elements, or a run of them, without copying
+it or taking it out.
+
+## Source: docs/book/ch08-06-views-and-spans.md
+
+# Views and spans
+
+Every collection in this chapter owns its elements, and that has made one
+ordinary request awkward: giving a name to something that lives inside a
+collection. Copy values such as `int64` come out as copies, so `x = scores[0]`
+works. A class instance or a string does not copy, and the gradebook is full
+of both. Let's ask for the student at the top of the list:
+
+*Filename: src/main.au*
+
+```aura check-fail:AU3005
+class Student:
+    name: str
+    points: int64
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    leader = students[1]
+    print(leader.name)
+```
+
+```console
+$ aura check src/main.au
+error[AU3005]: cannot implicitly copy `Student` out of a list index; use `view value = items[index]` for shared access, or `pop(index)` or `set(index, value)` to transfer ownership
+ --> src/main.au:7:14
+  |
+7 |     leader = students[1]
+  |              ^
+```
+
+An ordinary binding owns its value. If `leader` owned this student, either
+the list would have to give her up, leaving a hole at index 1, or there would
+be two owners of one `Student`. Aura allows neither, and the message lists
+the ways out. `pop` and `set` move the element out of the list. The first
+suggestion is the one we want here: we do not want to take the student
+anywhere, we want to look at her where she is.
+
+## Naming a place with `view`
+
+A *view* is a name for a place that something else owns. It is created with
+the `view` keyword in front of a binding, and it gives shared access to the
+place on the right:
+
+*Filename: src/main.au*
+
+```aura
+class Student:
+    name: str
+    points: int64
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    view leader = students[1]
+    print(f"{leader.name} leads with {leader.points}")
+
+    view mut trailing = students[0]
+    trailing.points += 20
+    trailing.name = "Ada L."
+    print(f"{students[0].name} now has {students[0].points}")
+```
+
+<span class="caption">Listing 8-27: A shared view and a mutable view of list elements</span>
+
+```console
+$ aura run src/main.au
+Grace leads with 85
+Ada L. now has 90
+```
+
+`leader` is not a copy of the second student. It is that student, under
+another name, for reading. `view mut` asks for mutable access instead, so
+assignments through `trailing` land in the list, which is why the last line
+sees the new name and the new total when it reads `students[0]` directly. A
+mutable view needs a mutable place to point at, for the same reason a `mut`
+parameter needs a `mut` argument: `students` is declared with `mut`.
+
+Making a view costs nothing at run time. No element is copied and nothing is
+allocated. The index is evaluated once, when the view is created, and an
+index past the end traps there with `AU4003` like any other index. After
+that the view keeps naming the same slot.
+
+You have been using views without the keyword since
+[Chapter 4](/book/ch04-03-copies-and-slices). When you write
+`print(students[1].name)` or pass `students[1]` to a function, Aura lends the
+element for the length of that statement. The `view` keyword is for when the
+loan needs a name and has to last for more than one statement.
+
+## What a view holds on to
+
+A view is only safe if the place it names stays put. A list keeps its
+elements in one block of memory, and `append` may move that block somewhere
+larger. So what happens if we grow the list while a view is looking into it?
+
+```aura check-fail:AU3011
+class Student:
+    name: str
+    points: int64
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    view leader = students[1]
+    students.append(Student(name="Margaret", points=90))
+    print(leader.name)
+```
+
+```console
+$ aura check src/main.au
+error[AU3011]: cannot call `append` on `students` while shared element view `leader` of `students[1]` remains live
+ --> src/main.au:8:14
+  |
+8 |     students.append(Student(name="Margaret", points=90))
+  |              ^
+  = related src/main.au:7:5: view `leader` starts here
+  = related src/main.au:9:11: last use of view `leader` keeps this loan live
+```
+
+The diagnostic names three places. The `append` is the operation that was
+refused. The first `related` line is where the view began, and the second is
+the reason it still matters: `leader` is used again on line 9, after the
+list would have changed. In C++ this program compiles, and the last line
+reads through a pointer into memory the vector may already have freed. Aura
+refuses to build it.
+
+Read the last `related` line again, because it also tells us how to fix the
+program. A view is live from the line that creates it to its *last use*, not
+to the end of the block. If we finish with `leader` before we grow the list,
+there is nothing left to protect:
+
+```aura
+class Student:
+    name: str
+    points: int64
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    view leader = students[1]
+    print(leader.name)
+    students.append(Student(name="Margaret", points=90))
+    print(students.len())
+```
+
+```console
+$ aura run src/main.au
+Grace
+3
+```
+
+While an element view is live, the list cannot change shape: no `append`,
+`insert`, `pop`, `remove`, `clear`, `sort`, `reverse`, or `swap`. A
+dictionary is stricter still. Any assignment into it is refused, because a
+new key can move every entry.
+
+Two views into one collection follow the rule you know from
+[Chapter 4](/book/ch04-02-shared-and-mutable-access): any number of shared
+views, or one mutable view. There is one useful exception. When both indexes
+are written as literals and they differ, the compiler can see that the two
+views name different elements, and it allows two mutable views side by side:
+
+```aura
+class Student:
+    name: str
+    points: int64
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    view mut first = students[0]
+    view mut second = students[1]
+    first.points += 1
+    second.points += 2
+    print(students[0].points + students[1].points)
+```
+
+```console
+$ aura run src/main.au
+158
+```
+
+Replace the literals with bindings `i` and `j` and the second view is
+refused with `AU3002`, even if `i` and `j` happen to hold different numbers.
+The checker reasons about the program text, and it cannot know what a
+binding will hold when the program runs. When you need two elements chosen at
+run time, finish with one view before you take the next, or use `swap`.
+
+Lists are not the only things with places. A view can name a field, a
+dictionary entry, or another view:
+
+```aura
+def main():
+    mut absences = {"Ada": 1, "Grace": 0}
+    view mut count = absences["Ada"]
+    count += 2
+    print(absences)
+```
+
+```console
+$ aura run src/main.au
+{Ada: 3, Grace: 0}
+```
+
+A key that is not in the dictionary traps when the view is created, as
+indexing with it would.
+
+## Returning a view
+
+Now let's move the search for the leader into a function. The function has
+to hand back a student that lives in the caller's list. The first signature
+most of us would write says that it returns a `Student`:
+
+```aura check-fail:AU3005
+class Student:
+    name: str
+    points: int64
+
+def leader(students: list[Student]) -> Student:
+    mut best = 0
+    for i in range(students.len()):
+        if students[i].points > students[best].points:
+            best = i
+    return students[best]
+
+def main():
+    students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    print(leader(students).name)
+```
+
+```console
+$ aura check src/main.au
+error[AU3005]: cannot implicitly copy `Student` out of a list index; use `view value = items[index]` for shared access, or `pop(index)` or `set(index, value)` to transfer ownership
+ --> src/main.au:10:12
+   |
+10 |     return students[best]
+   |            ^
+```
+
+It is the error from the top of this section, for the same reason. An
+ordinary `-> Student` result is owned by the caller, and `leader` has only
+shared access to the list, so it has no student to give away.
+
+A function can return a view instead. The return type says three things:
+that the result is a view, what type it views, and which parameter it lives
+inside.
+
+*Filename: src/main.au*
+
+```aura
+class Student:
+    name: str
+    points: int64
+
+def leader(students: list[Student]) -> view Student from students:
+    mut best = 0
+    for i in range(students.len()):
+        if students[i].points > students[best].points:
+            best = i
+    return view students[best]
+
+def leader_mut(students: mut list[Student]) -> view mut Student from students:
+    mut best = 0
+    for i in range(students.len()):
+        if students[i].points > students[best].points:
+            best = i
+    return view mut students[best]
+
+def main():
+    mut students = [Student(name="Ada", points=70), Student(name="Grace", points=85)]
+    view top = leader(students)
+    print(f"{top.name} leads with {top.points}")
+
+    view mut winner = leader_mut(students)
+    winner.points += 5
+    print(students[1].points)
+```
+
+<span class="caption">Listing 8-28: Functions that return a shared and a mutable view</span>
+
+```console
+$ aura run src/main.au
+Grace leads with 85
+90
+```
+
+`-> view Student from students` reads as "a view of a `Student` that lives
+in `students`". The `from` clause is the part with no counterpart in Python.
+It tells the caller which of its own values the result points into, so that
+the caller's checker can apply the rules from the last section without
+looking inside `leader`. While `top` is live, `students` is on loan, and
+appending to it is refused exactly as before. A `view mut` result needs a
+`mut` parameter to come from, so `leader_mut` takes `mut list[Student]`.
+
+The compiler checks the body against the promise. Every `return view` must
+name the declared origin or something inside it. A view of a local would
+outlive the local, so it is refused:
+
+```aura check-fail:AU3010
+def first(names: list[str]) -> view str from names:
+    sorted_names = sorted(names)
+    return view sorted_names[0]
+
+def main():
+    names = ["Grace", "Ada"]
+    view earliest = first(names)
+    print(earliest)
+```
+
+```console
+$ aura check src/main.au
+error[AU3010]: returned view derives from `sorted_names`, but the declaration names origin `names`
+ --> src/main.au:3:17
+  |
+3 |     return view sorted_names[0]
+  |                 ^
+  = related src/main.au:1:32: returned-view origin is declared here
+```
+
+`sorted_names` is a new list that `first` owns, and it is dropped when
+`first` returns. A function that wants to hand back something it built
+returns it by value, with an ordinary `-> str`.
+
+At the call site, a returned view has to be bound with `view` (or
+`view mut`), or used on the spot as in `print(leader(students).name)`.
+Writing `top = leader(students)` is the `AU3010` error again, with a help
+line that says to write `view top = ...`.
+
+Methods can return views of `self` the same way, which is how a class hands
+out one of its fields without cloning it:
+
+```aura
+class Course:
+    title: str
+    students: list[str]
+
+    def representative(self) -> view str from self:
+        return view self.students[0]
+
+def main():
+    course = Course(title="Compilers", students=["Grace", "Ada"])
+    view name = course.representative()
+    print(name)
+```
+
+```console
+$ aura run src/main.au
+Grace
+```
+
+## Spans: a view of a range
+
+A view names one place. Often we want a run of places: the last three
+scores, the first half of a list. [Chapter 4](/book/ch04-03-copies-and-slices)
+showed that a slice such as `scores[1:4]` builds a new list and copies the
+elements into it. That is the right default, because the copy is independent
+of the original. It is also wasted work when all we want is to read the
+range, and it cannot help at all when we want to change the range in place.
+
+Put `view` in front of the binding and the slice becomes a `Span[T]`: a view
+of a contiguous range of a list.
+
+*Filename: src/main.au*
+
+```aura
+def average(values: Span[float64]) -> float64:
+    return sum(values) / (values.len() as float64)
+
+def main():
+    mut temps = [18.5, 19.0, 21.5, 24.0, 23.5, 20.0, 17.5]
+    print(average(temps[1:4]))
+    print(average(temps))
+
+    view mut afternoon = temps[3:6]
+    afternoon.sort()
+    afternoon[0] = 0.0
+    print(afternoon.len())
+    print(afternoon.to_list())
+    print(temps)
+```
+
+<span class="caption">Listing 8-29: Reading and changing a range of a list through spans</span>
+
+```console
+$ aura run src/main.au
+21.5
+20.571428571428573
+3
+[0.0, 23.5, 24.0]
+[18.5, 19.0, 21.5, 0.0, 23.5, 24.0, 17.5]
+```
+
+`average` takes a `Span[float64]`. A span parameter accepts a slice, a whole
+list, or another span, so `average(temps[1:4])` and `average(temps)` both
+work and neither copies a float. Inside the function a span reads like a
+list: it has `len()`, indexing, `for` loops, `in`, and the builtins `sum`,
+`min`, `max`, and `sorted`.
+
+`afternoon` is a mutable span of three elements. Positions in a span count
+from the start of its range, so `afternoon[0]` is `temps[3]`. Sorting the
+span sorts those three elements where they sit, and the final line shows the
+change in `temps` with its neighbors untouched.
+
+A span has a fixed length. It can reorder and overwrite its elements with
+`sort`, `reverse`, `swap`, and `fill`, but it has no `append` or `pop`,
+because those would change the length of a list it does not own. When you do
+want an independent copy of the range, `to_list()` makes one. That is also
+how you print a span: a span has no text form of its own, and `print(afternoon)`
+is an error whose help line suggests `to_list()`.
+
+### An in-place sort
+
+Spans earn their keep in algorithms that work on smaller and smaller pieces
+of one list. Quicksort is the classic one: pick a pivot, move everything
+smaller to its left, then sort the left part and the right part the same
+way. With copying slices, every level of the recursion would allocate new
+lists. With spans, the whole sort happens inside the caller's list:
+
+*Filename: src/main.au*
+
+```aura
+def partition(values: mut Span[int64]) -> int64:
+    last = values.len() - 1
+    pivot = values[last]
+    mut boundary = 0
+    for i in range(last):
+        if values[i] < pivot:
+            values.swap(i, boundary)
+            boundary += 1
+    values.swap(boundary, last)
+    return boundary
+
+def quicksort(values: mut Span[int64]):
+    if values.len() < 2:
+        return
+    middle = partition(values)
+    quicksort(values[:middle])
+    quicksort(values[middle + 1:])
+
+def main():
+    mut readings = [31, 4, 15, 9, 26, 5, 35, 8]
+    quicksort(readings)
+    print(readings)
+
+    mut partly = [9, 8, 7, 3, 2, 1]
+    quicksort(partly[3:])
+    print(partly)
+```
+
+<span class="caption">Listing 8-30: Quicksort over mutable spans</span>
+
+```console
+$ aura run src/main.au
+[4, 5, 8, 9, 15, 26, 31, 35]
+[9, 8, 7, 1, 2, 3]
+```
+
+`partition` moves the pivot into its final position and returns that
+position. `quicksort` then slices the span it was given into the part before
+the pivot and the part after it. Slicing a span gives a narrower span of the
+same list, with positions counted from the start of the span being sliced,
+so each recursive call sees a small list that starts at index 0 and has no
+idea where it sits in `readings`. The second call in `main` sorts only the
+back half of `partly`. You would not write a sort yourself in a real
+program, since `list.sort` and `Span.sort` exist, but the same shape serves
+binary search, merging, and any other divide-and-conquer work.
+
+### What a span cannot do
+
+A span is a view, so everything in "What a view holds on to" applies to it,
+with one difference: a span borrows the whole list, not one element. While a
+shared span is live the list can be read and nothing else. While a mutable
+span is live the list can only be reached through the span.
+
+Because it is a borrow, a span cannot be stored. It cannot be a class field,
+an element of another collection, or an owned local, and it cannot be sent
+to another task. A class that wants to remember a range keeps the two
+indexes and makes the span when it needs one. A function can return a span
+of a list parameter, declared like any other returned view:
+
+```aura
+def without_ends(values: list[int64]) -> view Span[int64] from values:
+    return view values[1:-1]
+
+def main():
+    scores = [4, 9, 2, 7]
+    view inner = without_ends(scores)
+    print(inner.to_list())
+```
+
+```console
+$ aura run src/main.au
+[9, 2]
+```
+
+Spans cover `list[T]` only. There is no span of a `str` or of an `Array` in
+Aura 0.16 (an `Array` slice already shares memory with its array, as the
+last section showed), and a method cannot yet return a span of `self`. The Manual's pages on
+[ownership](/manual/ownership-and-borrowing#local-views-and-place-identity) and
+[collections](/manual/collections#span-t) have the complete rules.
+
+Views let us read and change numbers in place. In the next section we use
+that to do arithmetic on several of them at once.
+
+## Source: docs/book/ch08-07-lane-values.md
+
+# Several numbers at once with lane values
+
+The last stop in this chapter is for the loops that spend their whole life
+doing arithmetic on a list of numbers. Aura already makes most of them fast.
+`Array` methods run tuned kernels, and a plain counted loop that reads
+`xs[i]` and writes `ys[i]` is turned into vector instructions by the native
+compiler without any help. One common kind of loop gets neither benefit,
+and it is the one we will speed up here.
+
+Suppose we have a second of audio as a list of samples between -1.0 and 1.0,
+and we want its *energy*, the sum of the squares of the samples:
+
+```aura
+def energy(samples: list[float64]) -> float64:
+    mut total = 0.0
+    for i in range(len(samples)):
+        total += samples[i] * samples[i]
+    return total
+
+def main():
+    print(energy([0.5, -0.25, 1.0, 0.75, -0.5]))
+```
+
+```console
+$ aura run src/main.au
+2.125
+```
+
+A modern CPU can add four `float64` values to four others with one
+instruction. It would like to keep four running totals side by side, add
+four squares to them on each step, and combine the four totals at the end.
+But that adds the numbers in a different order from the one we wrote, and
+with floating point the order of additions can change the last digits of
+the result. Aura promises that a program prints the same floats on every
+machine and under both `aura run` and `aura build`, so the compiler adds
+exactly in the order of the source: one element at a time.
+
+The `simd` module is how you tell Aura that a different order is fine, by
+writing that order yourself. (SIMD stands for "single instruction, multiple
+data".)
+
+## Lane values
+
+A *lane value* holds a fixed number of numbers side by side. Each slot is
+called a lane. `simd.F64x4` has four `float64` lanes:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def main():
+    a = F64x4(l0=1.0, l1=2.0, l2=3.0, l3=4.0)
+    b = F64x4.splat(10.0)
+    print((a + b).to_list())
+    print((a * a).to_list())
+    print(a.max(F64x4.splat(2.5)).to_list())
+    print(a.l2)
+    print(a.sum())
+```
+
+<span class="caption">Listing 8-31: Building lane values and operating on every lane</span>
+
+```console
+$ aura run src/main.au
+[11.0, 12.0, 13.0, 14.0]
+[1.0, 4.0, 9.0, 16.0]
+[2.5, 2.5, 3.0, 4.0]
+3.0
+10.0
+```
+
+An `F64x4` is an ordinary copy class with four public fields, `l0` to `l3`,
+so you can build one by naming its fields and read a lane with `a.l2`.
+`splat` fills every lane with one number. The operators `+`, `-`, `*`, and
+`/` work lane by lane: lane 0 of the result comes from lane 0 of each
+operand, and so on. So do the methods `min`, `max`, `abs`, and `sqrt`.
+`to_list()` copies the lanes into a new list, and `sum()` adds them into one
+number.
+
+Both operands of an operator have to be the same lane class. `a * 2.0` is a
+compile error, because `2.0` is a `float64` and not an `F64x4`. Write
+`a * F64x4.splat(2.0)`. That is the same rule as everywhere else in Aura:
+nothing converts implicitly.
+
+There are six lane classes. `F64x2` and `F64x4` hold `float64`, `F32x4` and
+`F32x8` hold `float32`, and `I64x2` and `I64x4` hold `int64`.
+
+## A lane loop
+
+To use lanes on a list we need to get list elements into them.
+`F64x4.load(samples, i)` reads the four elements starting at index `i`. With
+it, the energy loop becomes:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def energy(samples: list[float64]) -> float64:
+    mut total = 0.0
+    for i in range(len(samples)):
+        total += samples[i] * samples[i]
+    return total
+
+def energy_lanes(samples: list[float64]) -> float64:
+    mut acc = F64x4.splat(0.0)
+    for i in range(0, len(samples) - 3, 4):
+        lanes = F64x4.load(samples, i)
+        acc = acc + lanes * lanes
+    mut total = acc.sum()
+    for i in range(len(samples) - len(samples) % 4, len(samples)):
+        total += samples[i] * samples[i]
+    return total
+
+def main():
+    samples = [0.5, -0.25, 1.0, 0.75, -0.5, 0.125]
+    print(energy(samples))
+    print(energy_lanes(samples))
+```
+
+<span class="caption">Listing 8-32: Summing squares four samples at a time</span>
+
+```console
+$ aura run src/main.au
+2.140625
+2.140625
+```
+
+`energy_lanes` has three parts, and every lane loop you write will have the
+same three.
+
+The main loop steps by four. Its bound is `len(samples) - 3`, so it runs
+only while four whole elements are left. Each step loads four samples,
+squares all four with one `*`, and adds the four squares to `acc`. After the
+loop, `acc` holds four separate running totals: lane 0 has the squares of
+samples 0, 4, 8 and so on, lane 1 those of samples 1, 5, 9, and so on.
+
+`acc.sum()` combines the four totals into one number.
+
+The last loop is the *tail*. A list of six samples has one group of four and
+two left over, and `load` cannot read a group that hangs off the end of the
+list: like any index, that traps with `AU4003`. `len(samples) - len(samples)
+% 4` is where the main loop stopped, and the tail finishes the remaining
+zero to three samples one at a time.
+
+The two functions printed the same number here because every value involved
+is exact in binary. On real data they agree to about fifteen digits and can
+differ after that, which is the price of the new order. We will see it in
+the next listing.
+
+## Measuring it
+
+Is it faster? Let's time both functions on the same data. `time.monotonic()`
+reads a clock that only moves forward, and subtracting two readings gives a
+`Duration`. We will meet the `time` module properly in
+[Chapter 20](/book/ch20-02-time-and-dates). Add `import time` at the top of
+Listing 8-32, add a function that makes test data, and replace `main`:
+
+```aura fragment
+import time
+
+def make_samples(count: int64) -> list[float64]:
+    mut samples: list[float64] = []
+    for i in range(count):
+        samples.append(((i * 37) % 201 - 100) as float64 / 100.0)
+    return samples
+
+def main():
+    samples = make_samples(4099)
+
+    mut plain = 0.0
+    started = time.monotonic()
+    for round in range(100000):
+        plain = energy(samples)
+    plain_ms = (time.monotonic() - started).to_ms()
+
+    mut fast = 0.0
+    restarted = time.monotonic()
+    for round in range(100000):
+        fast = energy_lanes(samples)
+    lanes_ms = (time.monotonic() - restarted).to_ms()
+
+    print(plain)
+    print(fast)
+    print(f"plain loop: {plain_ms} ms")
+    print(f"lanes:      {lanes_ms} ms")
+```
+
+<span class="caption">Listing 8-33: Timing the two loops</span>
+
+Lane values only pay off in native code, so build the program instead of
+running it with `aura run`:
+
+```console
+$ aura build -o energy src/main.au
+aura: built `energy` with direct backend
+$ ./energy
+1380.4646999999986
+1380.4647000000002
+plain loop: 281.072563 ms
+lanes:      71.337671 ms
+```
+
+That run was on a Linux x86-64 cloud machine. Your times will differ, but
+the ratio should be similar: the lane loop does the same work in about a
+quarter of the time. In the native build each `F64x4` lives in the CPU's
+vector registers, the calls to `load`, `*`, and `+` are copied into the loop,
+and the range of every `load` is checked once before the loop starts and not
+on each step.
+
+Look at the two results too. They differ by about 0.0000000000016, because
+the lane loop added the same 4,099 squares in a different order. Neither is wrong. Each is the exact result of its own sequence of
+additions, and each will come out the same on every machine. If your program
+compares floats for equality or prints all their digits, decide which order
+you want and stay with it.
+
+Under `aura run` the picture is reversed. The MIR interpreter computes each
+lane as a separate float, so the lane loop gives the same answer and runs
+slower than the plain one. That is fine while you are testing for
+correctness. Measure with `aura build` or `aura run --backend direct`.
+
+## Writing lanes back
+
+Lanes can also change a list in place. `store` is the opposite of `load`: it
+writes the lanes over four elements of a mutable list. Let's turn the volume
+up. `normalize` multiplies every sample by a gain and then holds the result
+between -1.0 and 1.0, so that a loud passage is clipped at the limit and does
+not wrap around:
+
+*Filename: src/main.au*
+
+```aura
+from simd import F64x4
+
+def normalize(samples: mut list[float64], gain: float64):
+    scale = F64x4.splat(gain)
+    low = F64x4.splat(-1.0)
+    high = F64x4.splat(1.0)
+    for i in range(0, len(samples) - 3, 4):
+        (F64x4.load(samples, i) * scale).max(low).min(high).store(samples, i)
+    for i in range(len(samples) - len(samples) % 4, len(samples)):
+        sample = samples[i]
+        samples[i] = max(-1.0, min(1.0, sample * gain))
+
+def main():
+    mut samples = [0.1, -0.2, 0.45, 0.6, -0.7, 0.05]
+    normalize(samples, 2.0)
+    print(samples)
+```
+
+<span class="caption">Listing 8-34: Scaling and clamping samples in place</span>
+
+```console
+$ aura run src/main.au
+[0.2, -0.4, 0.9, 1.0, -1.0, 0.1]
+```
+
+The body of the main loop is one expression that reads left to right: load
+four samples, multiply them by the gain, raise anything below -1.0 up to it,
+lower anything above 1.0 down to it, and store the four results where they
+came from. The fourth and fifth samples, 1.2 and -1.4 after scaling, were
+clipped. The last two samples were handled by the tail loop, which does the
+same arithmetic with the scalar `max` and `min`.
+
+`samples` is a `mut list[float64]` parameter, because `store` writes to it.
+Nothing about ownership changes with lanes: a lane value is a copy value
+that you loaded from the list, and `store` is an ordinary write through
+mutable access.
+
+## Integer lanes
+
+Integer arithmetic in Aura is checked: a sum that does not fit in `int64`
+stops the program instead of wrapping around. The checks are the reason a
+plain loop over integers is not vectorized. `I64x2` and `I64x4` keep the
+checks and do them a whole lane value at a time:
+
+*Filename: src/main.au*
+
+```aura
+from simd import I64x4
+
+def total(values: list[int64]) -> int64:
+    mut acc = I64x4.splat(0)
+    for i in range(0, len(values) - 3, 4):
+        acc = acc + I64x4.load(values, i)
+    mut sum = acc.sum()
+    for i in range(len(values) - len(values) % 4, len(values)):
+        sum += values[i]
+    return sum
+
+def main():
+    print(total([1, 2, 3, 4, 5, 6, 7, 8, 9]))
+    print(total([9223372036854775807, 0, 0, 0, 1, 0, 0, 0]))
+```
+
+<span class="caption">Listing 8-35: A checked integer sum in four lanes</span>
+
+```console
+$ aura run src/main.au
+45
+error[AU4002]: integer value `9223372036854775808` does not fit in `int64`
+ --> <std>/simd.au:570:30
+  = note: Aura call chain (innermost first): Add for simd.I64x4.add at 569:5 -> total at 3:1 -> main at 12:1
+```
+
+The second call puts the largest `int64` in lane 0 and then adds 1 to that
+lane. The trap is the same `AU4002` a scalar `+` would raise, with the value
+that did not fit. Its position is inside the `simd` module's own source,
+which is where the lane addition is written, and the call chain leads back
+to `total` and `main`. Integer sums have no rounding, so when nothing
+overflows the lane loop and the plain loop always agree exactly.
+
+There are no `int32` lanes. Aura computes an `int32` in a 64-bit register
+and checks its range afterward, and when the project measured eight `int32`
+lanes they ran no faster than the plain loop, so they were left out.
+
+## Choosing the CPU
+
+By default `aura build` produces code for the baseline of your architecture,
+so the binary runs on any x86-64 or any arm64 machine. On baseline x86-64 an
+`F64x4` is kept in two 128-bit registers. Newer x86-64 CPUs have 256-bit
+registers that hold all four lanes at once, and `aura build --target-cpu
+x86-64-v3` (or `--target-cpu native`, for whatever the build machine has)
+lets the compiler use them:
+
+```console
+$ aura build --target-cpu x86-64-v3 -o energy src/main.au
+aura: built `energy` with direct backend
+```
+
+The results do not change, because every lane operation is defined in terms
+of the scalar one. The speed may or may not. The energy program above ran in
+the same time with both settings on our machine, while the Manual records
+that a checked `I64x4` sum goes from about 1.2 times the speed of the plain
+loop to more than twice its speed with the wider registers. The cost is
+portability: a binary built for `x86-64-v3` stops with an illegal
+instruction on an older CPU.
+[Chapter 17](/book/ch17-04-building-for-other-machines) comes back to this
+option.
+
+## When to reach for lanes
+
+Lane values are the third tool to try, not the first. If the numbers are in
+an `Array`, its methods are already vectorized, and `fast_sum`, `fast_mean`,
+and `dot` do reordered float sums for you. If the loop reads and writes list
+elements without carrying a float total from one step to the next, write it
+plainly and let the compiler vectorize it. Lanes are for what is left: float
+reductions such as sums and dot products over a list, and checked `int64`
+arithmetic, where you are willing to write the order of operations yourself
+in exchange for the speed.
+
+The [SIMD Module](/manual/simd) page of the Manual lists every operation,
+including `mul_add`, and `load_array` and `store_array` for one-dimensional
+arrays, and it states the exact rounding and trap behavior of each.
+
 ## Summary
 
 You now know the collections that most Aura programs are built from. Lists
@@ -39507,7 +40374,9 @@ questions, and both make you be explicit about absence with `Lookup` or
 `in`. Comprehensions and builtins such as `sum`, `max`, and `sorted` turn
 most of the loops you'd write over these into one expression, and `Array[T]`
 handles rectangular tables of numbers with whole-array arithmetic,
-broadcasting, and masks.
+broadcasting, and masks. Views give a name to an element or a range without
+copying it, and lane values do arithmetic on several list elements with one
+instruction.
 
 Running through all of it is ownership. A collection owns its elements, so
 storing a value moves it in, reading one gives you shared access or a copy,
@@ -50528,11 +51397,13 @@ In this chapter we will build `checkup`, a small health checker. It reads a
 list of checks from a file, runs each one, and writes a report. A check can
 ask whether a file exists, whether a command exits successfully, or whether
 an HTTP endpoint answers. We start with plain text files, then add
-subprocesses, then networking, and finish by replacing the hand-rolled text
-format with typed JSON on both the input and the output side.
+subprocesses, then networking, and then replace the hand-rolled text format
+with typed JSON on both the input and the output side. Two further sections
+go past what `checkup` needs: one on HTTP clients that read bodies, follow
+streams, and retry, and one on UDP, WebSockets, Unix sockets, and TLS.
 
-Aura's four built-in modules for the outside world, `fs`, `process`, `net`,
-and `json`, were designed together, and you will notice they share a shape.
+Aura's built-in modules for the outside world, `fs`, `process`, `net`,
+`http`, and `json`, were designed together, and you will notice they share a shape.
 Anything that can fail returns a `Result`, so failure is in the type and the
 compiler makes you decide what to do with it. Anything that holds an
 operating-system resource, such as an open file, a child process, or a
@@ -50543,8 +51414,9 @@ you have seen the pattern in one module, the others read the same way.
 
 By the end of the chapter you will be able to write a command-line tool that
 reads and writes files safely, runs commands without a shell, serves and
-calls HTTP on loopback, and converts between JSON text and your own classes
-and enums with errors that point at the exact field that was wrong.
+calls HTTP, and converts between JSON text and your own classes and enums
+with errors that point at the exact field that was wrong. You will also know
+which kind of socket to reach for when HTTP is not the right fit.
 
 ## Source: docs/book/ch16-01-files.md
 
@@ -52077,38 +52949,28 @@ derived from the number of cores, between 2 and 8), and
 program that resolves thousands of names at once is where these start to
 matter.
 
-## What the HTTP helpers do not do
+## Beyond a status check
 
-The HTTP client in Aura 0.16 is deliberately small. Each call makes one
-request on a fresh connection. It does not follow redirects, pool
-connections, speak HTTP/2, use a proxy, or decompress bodies. `https://` URLs
-work and verify the server's certificate against the standard public root
-set. Headers are a `dict[str, str]`, which cannot represent a header that
-appears more than once, such as several `Set-Cookie` lines, so do not use
-these helpers where that matters. Incoming messages are limited to 16 MiB and
-64 headers.
+A health checker needs very little from HTTP: one request, one status code.
+The client can do a good deal more. It follows redirects, reuses
+connections, decompresses bodies, and reads a response in pieces or as a
+stream of events. `https://` URLs work and verify the server's certificate
+against the standard public root set.
+[Section 16.5](/book/ch16-05-http-clients) puts all of that to use, along
+with `control.retry` for trying a failed request again.
 
-None of this matters for a health checker, but it is the honest list of what
-you would have to build yourself for a general-purpose client. Retrying is
-one of those things, and the `control.retry` helper in the
-[control-plane modules](/manual/control-plane) runs a function again with
-exponential backoff until it returns `Ok`. Which statuses deserve a retry
-(`503` probably, `404` probably not) is an application decision, so it stays
-in your code.
-
-The `net` module has more than TCP and HTTP. UDP sockets
-(`net.udp_bind`) send and receive datagrams, WebSockets
-(`net.websocket_listen` and `net.websocket_connect_timeout`) exchange whole
-text or byte messages, and on Unix hosts there are Unix domain sockets and
-TLS streams with your own certificates. They follow the same rules you have
-seen: resources in `with`, `Result[..., io.Error]` everywhere, and a `timeout`
-on every wait. The [Network Module](/manual/network) page lists them all with
-their limits.
+The `net` module also has more than TCP and HTTP. UDP sockets send and
+receive datagrams, WebSockets exchange whole messages in both directions,
+Unix domain sockets connect programs on one machine, and TLS streams
+encrypt a TCP conversation with your own certificates. They follow the
+rules you have seen here: resources in `with`, `Result[..., io.Error]`
+everywhere, and a `timeout` on every wait.
+[Section 16.6](/book/ch16-06-other-protocols) has a small program for each.
 
 `checkup` now has all three probes. The configuration format is starting to
 strain, though: a command argument containing a space cannot be written at
 all, and the report is text that another program would have to parse. Both
-problems have the same answer, which is the subject of the last section.
+problems have the same answer, which is the subject of the next section.
 
 ## Source: docs/book/ch16-04-json.md
 
@@ -52664,6 +53526,792 @@ returns a plain `str`. Its failures, such as a `Float` holding infinity that
 you built by hand, are bugs in the program rather than bad input, so they
 trap instead of returning an error.
 
+`checkup` is finished: it reads its checks from JSON, probes files,
+commands, and URLs, and writes a report another program can parse. Its HTTP
+probe only ever looked at a status code, though, and the `net` module has
+more in it than the two protocols we used. The next two sections cover the
+rest: calling HTTP services in earnest, and the other kinds of socket.
+
+## Source: docs/book/ch16-05-http-clients.md
+
+# Calling HTTP services
+
+`checkup` asks one thing of an HTTP server: did it answer, and with what
+status? Most programs that speak HTTP want more than that. They read the
+body, send data of their own, follow a response as it streams in, and try
+again when a server is briefly unavailable. This section covers those four
+jobs with the `http` module, the client we met in
+[Section 16.3](/book/ch16-03-networking).
+
+As before, everything runs on your own machine. We need a server to call,
+so we start with one that has a few more paths than `/health`.
+
+## A service to call
+
+Create a new package with `aura new inventory`, and put this server in
+*src/server.au*. It is Listing 16-10 with more branches:
+
+*Filename: src/server.au*
+
+```aura
+import io
+import net
+
+def answer(exchange: own net.HttpExchange, flaky_hits: mut int64) -> Result[None, io.Error]:
+    with request = exchange:
+        path = request.path()
+        print(f"{request.method()} {path}")
+        if path == "/report":
+            try request.respond_text(200, "disk: ok\nmemory: ok\nqueue: 3 waiting\n", {"Content-Type": "text/plain"})
+        elif path == "/old-report":
+            try request.respond_text(302, "", {"Location": "/report"})
+        elif path == "/notes":
+            body = try request.body_text()
+            try request.respond_text(201, f"stored {body.len()} characters\n", {"Content-Type": "text/plain"})
+        elif path == "/flaky":
+            flaky_hits += 1
+            if flaky_hits % 3 == 0:
+                try request.respond_text(200, "finally\n", {"Content-Type": "text/plain"})
+            else:
+                try request.respond_text(503, "busy\n", {"Content-Type": "text/plain"})
+        else:
+            try request.respond_text(404, "not found\n", {"Content-Type": "text/plain"})
+    return Result.Ok(None)
+
+def serve(address: str) -> Result[None, io.Error]:
+    mut flaky_hits = 0
+    with listener = try net.http_listen(address):
+        print(f"listening on {try listener.local_addr()}")
+        while true:
+            try answer(try listener.accept(), flaky_hits)
+    return Result.Ok(None)
+
+def main() -> int32:
+    match serve("127.0.0.1:8081"):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(f"server failed: {error}")
+            return 1
+```
+
+<span class="caption">Listing 16-15: A small service with a report, a redirect, a place to post notes, and an unreliable path</span>
+
+`/report` returns three lines of text. `/old-report` redirects to it.
+`/notes` accepts a request body and says how long it was. `/flaky` answers
+`503 Service Unavailable` twice out of every three requests, using a counter
+that `serve` owns and lends to `answer` with `mut`. Start it in one terminal
+and leave it running:
+
+```console
+$ aura run src/server.au
+listening on 127.0.0.1:8081
+```
+
+## Reading a response
+
+In a second terminal, write the client in *src/main.au*:
+
+*Filename: src/main.au*
+
+```aura
+import http
+import io
+
+def show_report(url: str) -> Result[None, io.Error]:
+    client = http.Client(timeout=2s, read_timeout=2s)
+    with response = try client.get(url):
+        print(f"{response.status} {response.reason} from {response.url}")
+        print(response.header("content-type"))
+        if not response.ok():
+            return Result.Err(io.Error.Other(f"unexpected status {response.status}"))
+        body = try response.text()
+        print(body.trim_end())
+    return Result.Ok(None)
+
+def main():
+    print(show_report("http://127.0.0.1:8081/report"))
+    print(show_report("http://127.0.0.1:8081/old-report"))
+    print(show_report("http://127.0.0.1:8081/nothing"))
+```
+
+<span class="caption">Listing 16-16: Reading the status, a header, and the body of a response</span>
+
+```console
+$ aura run src/main.au
+200 OK from http://127.0.0.1:8081/report
+text/plain
+disk: ok
+memory: ok
+queue: 3 waiting
+Result.Ok(None)
+200 OK from http://127.0.0.1:8081/report
+text/plain
+disk: ok
+memory: ok
+queue: 3 waiting
+Result.Ok(None)
+404 Not Found from http://127.0.0.1:8081/nothing
+text/plain
+Result.Err(io.Error.Other(unexpected status 404))
+```
+
+An `http.Client` is a bundle of settings. `timeout` limits the wait for the
+response to begin, and `read_timeout` limits each read of the body after
+that. Neither has a default, so a client built with `http.Client()` waits
+forever, and so do the module-level shortcuts `http.get` and `http.post`.
+Set both whenever the server is not yours.
+
+`get` returns as soon as the status line and headers have arrived. At that
+point the `http.Response` knows its `status`, `reason`, and headers, and the
+body is still on the wire. `header(name)` looks a header up without regard
+to case and returns `str | None`. `ok()` is true for statuses 200 to 299.
+Remember from `checkup` that a `404` is a response, not an error. `Err`
+means no response arrived at all, so if a bad status should count as a
+failure in your program, you say so, as `show_report` does.
+
+The second call asked for `/old-report` and got the report. The client
+followed the `302` for us, up to ten redirects by default, and
+`response.url` shows where the response finally came from. Pass
+`max_redirects=0` to see redirect responses yourself.
+
+`text()` reads the rest of the body as UTF-8. It takes `mut self`, because
+reading advances through the body, and that is why the response is bound
+by `with`: a `with` binding can be mutated, and the block closes the
+response on every path out, including the early `return`. `text()` refuses
+a body over 64 MiB, and `text_up_to(max_bytes)` sets a smaller bound. For
+bytes there are `bytes()` and `bytes_up_to`.
+
+There is a small economy hiding here. A response owns its connection until
+its body has been read to the end. Then the connection goes back to a pool
+that the whole process shares, and the next request to the same host reuses
+it without a new TCP handshake. A response that is closed before its body
+is finished cannot be reused, so its connection is closed. Reading bodies
+to the end is polite to the server and faster for you.
+
+## Sending data
+
+`post` sends a text body, and takes the headers as a dictionary:
+
+*Filename: src/main.au*
+
+```aura
+import http
+import io
+
+def store_note(url: str, note: str) -> Result[str, io.Error]:
+    headers = {"Content-Type": "text/plain", "Authorization": "Bearer demo-token"}
+    with response = try http.Client(timeout=2s).post(url, note, headers):
+        if response.status != 201:
+            return Result.Err(io.Error.Other(f"unexpected status {response.status}"))
+        return response.text()
+
+def main():
+    print(store_note("http://127.0.0.1:8081/notes", "remember the milk"))
+    print(store_note("http://127.0.0.1:8081/report", "remember the milk"))
+    print(http.Client(timeout=2s).get("http://127.0.0.1:9/"))
+    print(http.get("ftp://127.0.0.1/"))
+```
+
+<span class="caption">Listing 16-17: Posting a body with headers</span>
+
+```console
+$ aura run src/main.au
+Result.Ok(stored 17 characters
+)
+Result.Err(io.Error.Other(unexpected status 200))
+Result.Err(io.Error.ConnectionRefused)
+Result.Err(io.Error.InvalidInput)
+```
+
+The client adds `Host`, `Content-Length`, and a few other headers itself,
+and a header you pass replaces the one it would have added. For other
+methods there is `request(method, url, body, headers)`, and
+`request_bytes` takes the body as a `list[uint8]`. To send JSON, encode it
+with `json.dumps` from [Section 16.4](/book/ch16-04-json) and set
+`Content-Type` to `application/json`.
+
+The last two lines show the two ways a request can fail before it is
+answered. Nothing listens on port 9, so the connection is refused. And a URL
+that does not start with `http://` or `https://` is rejected as invalid
+input before anything is sent. `https://` URLs verify the server's
+certificate against a built-in set of public roots. A client for a server
+with a private certificate authority names it with
+`http.Client(ca_file="ca.pem")`.
+
+## Following a stream
+
+Some responses are not documents. They are streams: a build log that grows
+while the build runs, or a language model's reply arriving a few words at a
+time. The server keeps the connection open and writes as things happen, and
+the client should show each piece when it arrives, not when the whole
+response ends.
+
+The usual format for this is *server-sent events*. The body is plain text
+in which each event is a few `name: value` lines followed by a blank line.
+Our `net.http_listen` server can only send a complete body, so to produce a
+slow stream we drop down a level and write the HTTP response by hand over
+TCP. Put this in *src/ticker.au*:
+
+*Filename: src/ticker.au*
+
+```aura
+import io
+import net
+
+def stream_events(connection: own net.TcpStream) -> Result[None, io.Error]:
+    with stream = connection:
+        while true:
+            match try stream.read_line(timeout=5s):
+                case str as line:
+                    if line == "":
+                        break
+                case None:
+                    return Result.Ok(None)
+        try stream.write_all("HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nConnection: close\r\n\r\n", timeout=5s)
+        for step in range(1, 4):
+            sleep(300ms)
+            try stream.write_all(f"event: progress\ndata: step {step} of 3\n\n", timeout=5s)
+        try stream.write_all("data: finished\n\n", timeout=5s)
+    return Result.Ok(None)
+
+def serve(address: str) -> Result[None, io.Error]:
+    with listener = try net.listen(address):
+        print(f"ticking on {try listener.local_addr()}")
+        while true:
+            try stream_events(try listener.accept())
+    return Result.Ok(None)
+
+def main() -> int32:
+    match serve("127.0.0.1:8082"):
+        case Result.Ok(_):
+            return 0
+        case Result.Err(error):
+            print(f"ticker failed: {error}")
+            return 1
+```
+
+<span class="caption">Listing 16-18: A hand-written HTTP response that sends one event every 300 milliseconds</span>
+
+`stream_events` reads the request line and headers up to the blank line
+that ends them and ignores what they say. It writes a status line and two
+headers, and then three `progress` events with a pause before each, and a
+final event with no name. It is the least HTTP that a client will accept,
+which is fine for a test fixture and nothing more. Start it in a third
+terminal with `aura run src/ticker.au`.
+
+The client reads events with `read_event`:
+
+*Filename: src/main.au*
+
+```aura
+import http
+import io
+import time
+
+def follow(url: str) -> Result[int64, io.Error]:
+    started = time.monotonic()
+    mut count = 0
+    with stream = try http.Client(timeout=2s, read_timeout=5s).get(url):
+        while true:
+            event = try stream.read_event()
+            if event is None:
+                break
+            count += 1
+            waited = (time.monotonic() - started).to_ms() as int64
+            print(f"{waited} ms  {event.event}: {event.data}")
+    return Result.Ok(count)
+
+def main():
+    print(follow("http://127.0.0.1:8082/"))
+```
+
+<span class="caption">Listing 16-19: Printing server-sent events as they arrive</span>
+
+```console
+$ aura run src/main.au
+301 ms  progress: step 1 of 3
+601 ms  progress: step 2 of 3
+902 ms  progress: step 3 of 3
+902 ms  message: finished
+Result.Ok(4)
+```
+
+The times in the left column are the proof that this is a stream: each
+event was printed about 300 milliseconds after the one before, as the
+server wrote it, and not all together at the end. Your times will differ by
+a few milliseconds.
+
+`read_event` returns the next `http.Event`, or `None` when the server
+closes the stream. An event has an `event` name, its `data`, an `id`, and
+an optional `retry` delay. The method does the format's bookkeeping: it
+joins the `data` lines of one event, skips comment lines, and names an
+event that has no `event` field `"message"`, which is what happened to our
+last one.
+
+Now the two timeouts earn their separate names. `timeout=2s` covers getting
+the response started. `read_timeout=5s` applies to each read of the body, so
+this client tolerates a stream that goes on for an hour as long as it never
+goes quiet for more than five seconds. Set `read_timeout` below the
+ticker's 300 milliseconds and the first `read_event` returns
+`io.Error.TimedOut`.
+
+Events are one of several ways to read a body in pieces. `read_line`
+returns one line at a time, `read_lines(max_lines)` returns the lines that
+have already arrived in one call, and `read_chunk(max_bytes)` returns raw
+bytes, which is how you download a large file without holding it in memory.
+They can be mixed, and each continues where the last one stopped. The
+repository's `examples/agents/streaming_agent` is a complete program built
+on `read_event`: it prints a model's reply as it arrives and runs the tools
+the model asks for.
+
+## Trying again
+
+Networks fail in passing ways. A server restarts, a load balancer drops a
+connection, a service answers `503` for a second while it catches up. A
+client that gives up at the first of these is fragile, and one that retries
+everything forever is a nuisance. The `control` module has a helper for the
+middle ground. `control.retry` calls a function until it returns `Ok`, up
+to a number of attempts, waiting longer before each new attempt.
+
+The catch is the one from Listing 16-16: to `retry`, a failure is an `Err`
+and nothing else, and to the HTTP client a `503` is an `Ok`. So the function
+we hand to `retry` has to translate. That translation is where your
+program's retry policy lives:
+
+*Filename: src/main.au*
+
+```aura
+import control
+import http
+import io
+
+enum Fetched:
+    Body(text: str)
+    Missing
+
+def fetch_once(url: str) -> Result[Fetched, io.Error]:
+    with response = try http.Client(timeout=2s).get(url):
+        print(f"  got {response.status}")
+        if response.status == 404:
+            return Result.Ok(Fetched.Missing)
+        if response.status >= 500:
+            return Result.Err(io.Error.Other(f"server said {response.status}"))
+        return Result.Ok(Fetched.Body(try response.text()))
+
+def fetch(url: own str) -> Result[Fetched, io.Error]:
+    return control.retry(lambda: fetch_once(url), max_attempts=4, initial_backoff=100ms)
+
+def main():
+    print(fetch("http://127.0.0.1:8081/flaky"))
+    print(fetch("http://127.0.0.1:8081/nothing"))
+    print(fetch("http://127.0.0.1:9/"))
+```
+
+<span class="caption">Listing 16-20: Retrying server errors and connection failures, but not a `404`</span>
+
+```console
+$ aura run src/main.au
+  got 503
+  got 503
+  got 200
+Result.Ok(Fetched.Body(finally
+))
+  got 404
+Result.Ok(Fetched.Missing)
+Result.Err(io.Error.ConnectionRefused)
+```
+
+`fetch_once` makes one attempt and sorts the outcome into three kinds. A
+status of 500 or above becomes an `Err`, so it will be retried. A `404`
+becomes `Ok(Fetched.Missing)`: the server answered clearly, asking again
+will not change its mind, and the caller gets a value it can match on. A
+connection failure is already an `Err` and passes through `try`.
+
+`control.retry` takes a function of no arguments that returns a `Result`.
+The lambda captures `url` by value, as [Chapter 13](/book/ch13-01-closures)
+explained, and a function cannot hand a closure a string it only has shared
+access to. That is why `fetch` takes `own str`. `max_attempts`
+counts the first try, so four attempts means at most three retries.
+`initial_backoff` is the wait before the second attempt, and each later
+wait is double the one before: 100, 200, and 400 milliseconds here.
+
+The first call met two `503` responses and succeeded on the third attempt,
+after waiting 300 milliseconds in all. The second call was answered `404`
+and returned at once. The third had nothing to connect to, so it tried four
+times, waited 700 milliseconds in between, and returned the error from the
+last attempt.
+
+`retry` is deliberately plain. Every `Err` is retried, and there is no
+jitter, the random variation in delays that keeps many clients from
+retrying in step. [Chapter 20](/book/ch20-04-randomness) shows how to
+compute jittered delays with a seeded generator, and a loop with `sleep`
+is all you need to apply them. Think also about what you are repeating.
+Asking for a report twice is harmless. Repeating a `POST` that creates an
+order may create two, unless the server offers a way to recognize the
+duplicate.
+
+## What the client does not do
+
+The client speaks HTTP/1.1, with redirects, connection reuse, and gzip and
+deflate decompression handled for you. It does not speak HTTP/2 or HTTP/3,
+it does not use a proxy, and it does not keep cookies between requests. A
+request body is sent whole and cannot be streamed, though a response body
+can be read in pieces as we saw. The [HTTP Module](/manual/http) page lists
+the exact limits.
+
+HTTP is the protocol most programs need. The last section of this chapter
+is a short visit to the other four that the `net` module provides.
+
+## Source: docs/book/ch16-06-other-protocols.md
+
+# UDP, WebSockets, Unix sockets, and TLS
+
+TCP and HTTP carry most of what programs say to each other, but not all of
+it. The `net` module has four more kinds of socket, and each exists because
+TCP or HTTP is the wrong shape for some job. This section is a short tour:
+one small program for each, and a paragraph on when you would reach for it.
+
+They all follow the pattern of Listing 16-9. A server task opens its own
+socket and reports where it is listening through a queue, the client runs
+in `main`, and every wait has a timeout. Only the shape of the conversation
+changes.
+
+## UDP: messages without a connection
+
+TCP sets up a connection, delivers every byte in order, and tells you when
+the other side has gone. That reliability costs a handshake and some
+bookkeeping. UDP does none of it. A UDP socket sends a single *datagram* to
+an address and forgets about it. Nothing reports whether the datagram
+arrived, and nothing is set up or torn down. That suits data where the next
+message replaces the last one and a lost one is not worth resending:
+metrics, service discovery, game state.
+
+Here a collector gathers readings, and a reporter sends it three:
+
+*Filename: src/main.au*
+
+```aura
+import io
+import net
+
+def collect(addresses: Queue[str]) -> Result[list[str], io.Error]:
+    mut readings: list[str] = []
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        _ = addresses.put(try socket.local_addr())
+        while true:
+            match try socket.recv_from(1024, timeout=500ms):
+                case net.UdpDatagram as packet:
+                    readings.append(f"{try packet.text()} ({packet.bytes().len()} bytes)")
+                case None:
+                    break
+    return Result.Ok(readings)
+
+def report(address: str) -> Result[None, io.Error]:
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        try socket.send_text(address, "cpu=41", timeout=1s)
+        try socket.send_text(address, "memory=73", timeout=1s)
+        try socket.send_bytes(address, "disk=88".to_bytes(), timeout=1s)
+    return Result.Ok(None)
+
+def main():
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        collector = group.start(collect, addresses)
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                print(report(address))
+            case _:
+                print("collector never started")
+        print(collector.result())
+```
+
+<span class="caption">Listing 16-21: Sending three datagrams to a collector</span>
+
+```console
+$ aura run src/main.au
+Result.Ok(None)
+TaskResult.Ready(Result.Ok([cpu=41 (6 bytes), memory=73 (9 bytes), disk=88 (7 bytes)]))
+```
+
+There is no listener and no `accept`. Both sides call `net.udp_bind`, and
+the only difference between them is who speaks first. `send_text` and
+`send_bytes` name the destination on every call, because the socket is not
+connected to anyone. `recv_from` returns a `net.UdpDatagram` with the
+sender's `address()` and the payload as `bytes()` or `text()`.
+
+Two things differ from TCP. The first is that message boundaries survive.
+Three sends arrived as three datagrams of 6, 9, and 7 bytes. A TCP stream
+would have delivered 22 bytes with no marks between them, and the receiver
+would have needed newlines or length prefixes to find the seams. The `1024`
+passed to `recv_from` is the largest datagram we are prepared to accept.
+
+The second is what a timeout means. On TCP an expired wait is an error,
+`io.Error.TimedOut`. On UDP silence is normal, so an expired `recv_from`
+returns `Ok(None)`, and the collector uses that to stop: half a second with
+no datagram and it returns what it has. On a real network it would also be
+normal for one of the three never to arrive, or for two to arrive in the
+other order. A protocol built on UDP has to be content with that.
+
+## WebSockets: messages in both directions
+
+HTTP is a question and an answer, always started by the client. A chat
+window, a live dashboard, or a multiplayer game needs the server to speak
+when it has something to say. A WebSocket starts life as an HTTP request and
+then becomes a long-lived connection over which either side can send whole
+messages at any time. It is what browsers offer for this, so it is what
+you use when the other end is a web page.
+
+*Filename: src/main.au*
+
+```aura
+import io
+import net
+
+def serve(addresses: Queue[str]) -> Result[int64, io.Error]:
+    listener = try net.websocket_listen("127.0.0.1:0")
+    _ = addresses.put(try listener.local_addr())
+    mut handled = 0
+    with socket = try listener.accept(timeout=5s):
+        while true:
+            match try socket.recv_text(timeout=5s):
+                case str as message:
+                    handled += 1
+                    try socket.send_text(message.to_upper(), timeout=5s)
+                case None:
+                    break
+    return Result.Ok(handled)
+
+def chat(address: str) -> Result[None, io.Error]:
+    with socket = try net.websocket_connect_timeout(f"ws://{address}/", 5s):
+        for message in ["hello", "is anyone there"]:
+            try socket.send_text(message, timeout=5s)
+            match try socket.recv_text(timeout=5s):
+                case str as reply:
+                    print(reply)
+                case None:
+                    print("server closed")
+    return Result.Ok(None)
+
+def main():
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses)
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                print(chat(address))
+            case _:
+                print("server never started")
+        print(server.result())
+```
+
+<span class="caption">Listing 16-22: A WebSocket server that answers in capitals</span>
+
+```console
+$ aura run src/main.au
+HELLO
+IS ANYONE THERE
+Result.Ok(None)
+TaskResult.Ready(Result.Ok(2))
+```
+
+The client connects with a `ws://` URL. After that, both ends hold a
+`net.WebSocket` with the same four operations: `send_text` and `send_bytes`
+send one message, and `recv_text` and `recv_bytes` receive one. Like UDP, a
+WebSocket delivers whole messages, so there is no framing to invent. Unlike
+UDP, it is reliable and ordered, because TCP is underneath.
+
+`recv_text` returns `None` when the other side closes. That is how the
+server's loop ends: the client's `with` block closes its socket after the
+second reply, the server sees `None`, and reports that it handled two
+messages.
+
+One line of `serve` breaks our pattern. The listener is bound to a plain
+name, not with `with`. In Aura 0.16 a `net.WebSocketListener` has no
+`close()` method, so it cannot be a `with` resource. It is released when
+its binding goes out of scope at the end of `serve`. The Manual lists this
+among the known gaps of the preview, along with one that matters more:
+cancelling a task does not interrupt a WebSocket wait as promptly as it
+interrupts a TCP one. Keep the timeouts short on WebSocket operations in a
+program that has to shut down quickly.
+
+## Unix sockets: local conversations
+
+When both programs are on the same machine, there is no need to go through
+the network stack or to pick a port. A Unix domain socket is addressed by a
+path in the filesystem. The conversation never leaves the machine, and the
+file's permissions decide who may connect. This is how a command-line tool
+talks to its own background service: `docker` to the Docker daemon, for
+example. Despite the name, Aura provides them on Windows as well as on
+Linux and macOS.
+
+*Filename: src/main.au*
+
+```aura
+import fs
+import io
+import net
+
+def serve(path: str, ready: Queue[bool]) -> Result[None, io.Error]:
+    if fs.exists(path):
+        try fs.remove_file(path)
+    with listener = try net.unix_listen(path):
+        _ = ready.put(true)
+        with stream = try listener.accept(timeout=5s):
+            match try stream.read_line(timeout=5s):
+                case str as command:
+                    try stream.write_all(f"ok: {command}\n", timeout=5s)
+                case None:
+                    pass
+    return fs.remove_file(path)
+
+def send(path: str, command: str) -> Result[str, io.Error]:
+    with stream = try net.unix_connect_timeout(path, 5s):
+        try stream.write_all(f"{command}\n", timeout=5s)
+        match own try stream.read_line(timeout=5s):
+            case str as reply:
+                return Result.Ok(reply)
+            case None:
+                return Result.Err(io.Error.UnexpectedEof)
+
+def main():
+    path = "/tmp/courier.sock"
+    with TaskGroup() as group:
+        ready = Queue[bool](capacity=1)
+        server = group.start(serve, path.clone(), ready)
+        match ready.get(timeout=5s):
+            case QueueReceive.Item(_):
+                print(send(path, "reload"))
+            case _:
+                print("server never started")
+        print(server.result())
+    print(send(path, "reload"))
+```
+
+<span class="caption">Listing 16-23: A control socket at a filesystem path</span>
+
+```console
+$ aura run src/main.au
+Result.Ok(ok: reload)
+TaskResult.Ready(Result.Ok(None))
+Result.Err(io.Error.NotFound)
+```
+
+Once connected, a `net.UnixStream` reads and writes lines like a TCP
+stream. The differences are at the edges. The address is a path the server
+chooses, so there is nothing to publish, and the queue only carries a "ready"
+signal. And the path is a real directory entry that outlives the listener.
+Closing a Unix listener does not remove its file, and `net.unix_listen`
+refuses to bind a path that already exists: a second run of a careless
+server fails with `io.Error.AlreadyExists`. So `serve` removes a leftover
+file before it listens and removes its own when it is done. The last line
+of `main` shows the result. With the file gone, a client has nothing to
+connect to.
+
+Be careful with that first `remove_file` in a real service. It deletes
+whatever is at the path. Keep sockets in a directory your program owns,
+such as one under `/run` or the user's runtime directory.
+
+## TLS: your own encrypted streams
+
+Everything so far in this chapter travelled as plain text that anyone on
+the path could read or alter. The HTTP client fixes that for `https://`
+URLs. For your own protocol over TCP, the `net` module has TLS listeners
+and streams, which encrypt the connection and let the client check that it
+reached the right server.
+
+A TLS server needs a certificate and a private key. For an experiment on
+`localhost`, OpenSSL can make a self-signed pair:
+
+```console
+$ mkdir certs
+$ openssl req -x509 -newkey ec -pkeyopt ec_paramgen_curve:prime256v1 -nodes \
+    -keyout certs/key.pem -out certs/cert.pem -days 365 -subj "/CN=localhost" \
+    -addext "subjectAltName=DNS:localhost" \
+    -addext "basicConstraints=critical,CA:FALSE"
+```
+
+That writes `certs/key.pem`, which stays with the server, and
+`certs/cert.pem`, which clients are given so they know what to trust. The
+last option matters. By default OpenSSL marks a self-signed certificate as
+a certificate authority, and Aura's TLS library refuses a server that
+presents an authority's certificate as its own.
+
+*Filename: src/main.au*
+
+```aura
+import io
+import net
+
+def serve(addresses: Queue[str]) -> Result[None, io.Error]:
+    with listener = try net.tls_listen("127.0.0.1:0", "certs/cert.pem", "certs/key.pem"):
+        _ = addresses.put(try listener.local_addr())
+        with stream = try listener.accept(timeout=5s):
+            match try stream.read_line(timeout=5s):
+                case str as question:
+                    try stream.write_all(f"secret answer to: {question}\n", timeout=5s)
+                case None:
+                    pass
+    return Result.Ok(None)
+
+def ask(address: str, server_name: str) -> Result[str, io.Error]:
+    with stream = try net.tls_connect_timeout(address, server_name, "certs/cert.pem", 5s):
+        try stream.write_all("what is the password\n", timeout=5s)
+        match own try stream.read_line(timeout=5s):
+            case str as reply:
+                return Result.Ok(reply)
+            case None:
+                return Result.Err(io.Error.UnexpectedEof)
+
+def main():
+    with TaskGroup() as group:
+        addresses = Queue[str](capacity=1)
+        server = group.start(serve, addresses)
+        match own addresses.get(timeout=5s):
+            case QueueReceive.Item(address):
+                print(ask(address, "localhost"))
+            case _:
+                print("server never started")
+        print(server.result())
+```
+
+<span class="caption">Listing 16-24: A TLS server and a client that verifies it</span>
+
+```console
+$ aura run src/main.au
+Result.Ok(secret answer to: what is the password)
+TaskResult.Ready(Result.Ok(None))
+```
+
+Compare this with Listing 16-9. `net.tls_listen` takes the certificate and
+key files in addition to the address, and `net.tls_connect_timeout` takes
+two extra arguments: the name the client expects the server to prove it
+owns, and the file of certificates it trusts. Between those calls the code
+is the TCP code. `read_line` and `write_all` work on decrypted text, and
+the encryption happens underneath.
+
+The server name is the part people skip, so let's get it wrong on purpose.
+Change the call in `main` to `ask(address, "example.com")`:
+
+```console
+$ aura run src/main.au
+Result.Err(io.Error.InvalidData)
+TaskResult.Ready(Result.Err(io.Error.TimedOut))
+```
+
+The client connected to the same address and was shown the same
+certificate. It refused, because the certificate says `localhost` and we
+asked for `example.com`. Encryption without that check would only prove
+that we have a private conversation with *someone*. The server's side of
+the story is the second line: its handshake never completed, and its
+`accept` gave up when the five seconds ran out.
+
+Certificates for real services come from a certificate authority, and the
+file you pass to the client is then the authority's certificate, not the
+server's. Aura reads certificates and keys from PEM files and has no API
+for making them. A TLS handshake is also capped at ten seconds whatever
+timeout you pass.
+
 ## Summary
 
 `checkup` started as a program that echoed a text file and ends as a tool you
@@ -52672,8 +54320,11 @@ for the outside world. `fs` reads and writes files, with `with` closing
 handles and the temporary-file-and-rename recipe keeping readers from ever
 seeing half a report. `process` runs commands from an explicit argv with no
 shell in between, captures their output, talks to live children through pipes,
-and supervises children with restart policies. `net` serves and calls HTTP
-and TCP, keeping each socket on the task that opened it. And `json` turns
+and supervises children with restart policies. `net` serves HTTP and TCP,
+keeping each socket on the task that opened it, and adds datagrams,
+WebSockets, local sockets, and TLS for the conversations that HTTP does not
+fit. `http` calls other services, reads their answers whole or as a stream,
+and `control.retry` tries again when they stumble. And `json` turns
 documents into your own types and back, with errors that point at a field.
 
 The same three rules held throughout: failures are `Result` values with
@@ -52682,8 +54333,8 @@ timeout. They are the reason `checkup` can tell "the command failed" from
 "the command never started" from "the command is stuck", and why it leaves no
 processes or open files behind on any path out. The full contracts are in the
 Manual pages for [I/O](/manual/io), [the filesystem](/manual/filesystem),
-[processes](/manual/process), [networking](/manual/network), and
-[JSON](/manual/json).
+[processes](/manual/process), [networking](/manual/network),
+[HTTP](/manual/http), and [JSON](/manual/json).
 
 So far we have run everything with `aura run`. In the next chapter we will
 build `checkup` into a native binary you can copy to another machine, step
@@ -52705,13 +54356,15 @@ look at the two ways Aura executes a program and why both exist, build a
 standalone native binary, and see what goes into it. Then we will debug that
 binary: first with the runtime's own diagnostics, which already tell you a
 lot, and then with breakpoints and variable inspection in lldb and VS Code.
-Finally we will talk about performance honestly: what is fast in Aura today,
+Then we will talk about performance honestly: what is fast in Aura today,
 what still costs more than it should, and how to measure your own program
-instead of guessing.
+instead of guessing. Finally we will build for machines other than our own:
+another architecture, a minimal container, a newer CPU.
 
 By the end you will be able to ship an Aura program as a single executable,
-find out why it misbehaves when it does, and know which numbers about its
-speed you can trust.
+including a fully static one for a machine unlike yours, find out why it
+misbehaves when it does, and know which numbers about its speed you can
+trust.
 
 ## Source: docs/book/ch17-01-run-and-build.md
 
@@ -53439,6 +55092,248 @@ And when you do change something, measure again, the same way as before.
 Performance intuition built in another language transfers less than you
 would think, in both directions.
 
+Every measurement in this section was of a binary built for the machine
+that ran it. The last section of the chapter is about building for a
+machine that is somewhere else.
+
+## Source: docs/book/ch17-04-building-for-other-machines.md
+
+# Building for other machines
+
+A binary from `aura build` is made for the machine that built it. That is
+easy to forget, because it so often works anyway: build on your Linux
+laptop, copy to a Linux server, run. Then one day the server is an arm64
+instance, or the destination is a minimal container image, and the binary
+that ran everywhere will not start.
+
+Two things tie a binary to its birthplace. The first is the processor
+architecture: x86-64 machine code means nothing to an arm64 CPU. The second
+is the C library. We saw in
+[Section 17.1](/book/ch17-01-run-and-build) that a built program loads
+`libc.so.6` and a dynamic linker from the system it runs on. Those files
+come from glibc on Ubuntu, Debian, and Fedora. Alpine Linux uses a
+different C library, musl, and an empty container image has no C library at
+all.
+
+`aura build --target` builds for a machine other than the one you are
+sitting at. In Aura 0.16 it runs on a Linux host and produces Linux
+programs for four targets, the two architectures with each of the two C
+libraries. We will use a program small enough to keep in view:
+
+*Filename: src/main.au*
+
+```aura
+import sys
+
+def main():
+    args = sys.args()
+    if args.len() == 0:
+        print("hello from a small binary")
+    else:
+        print(f"hello, {args[0]}")
+```
+
+<span class="caption">Listing 17-3: A program to build four ways</span>
+
+## A fully static program
+
+The target that solves the most problems is the musl one, so let's ask for
+it:
+
+```console
+$ aura build --target x86_64-unknown-linux-musl -o hello-static src/main.au
+error[AU2002]: this Aura installation has no runtime library for `x86_64-unknown-linux-musl`: expected `/home/ada/.local/lib/aura/targets/x86_64-unknown-linux-musl/libaura_runtime.a`; install the target pack of this release (see `aura build --target` in the manual)
+ --> src/main.au
+```
+
+(The path will show your own installation directory.) Every Aura binary
+contains Aura's runtime library, and the runtime is
+itself compiled code. An installation comes with the runtime for its own
+machine and nothing else. The runtime for another target arrives as a
+*target pack*, a separate download of a few dozen megabytes, and the error
+names the directory where it expects to find one. The installer fetches
+packs when you name targets:
+
+```console
+$ curl -fsSL https://johnolafenwa.github.io/Aura/install.sh | sh -s -- --target x86_64-unknown-linux-musl
+```
+
+The pack lands under `lib/aura/targets` in the installation. A pack belongs
+to one exact build of `aura`, and the compiler refuses to link against a
+pack from another release, so the installer also refreshes the packs you
+already have whenever it runs. That keeps them in step when you later run
+`aura upgrade`. With the pack in place the build goes through:
+
+```console
+$ aura build --target x86_64-unknown-linux-musl -o hello-static src/main.au
+aura: built `hello-static` with direct backend for x86_64-unknown-linux-musl
+$ ./hello-static Ada
+hello, Ada
+$ file hello-static
+hello-static: ELF 64-bit LSB executable, x86-64, version 1 (SYSV), statically linked, BuildID[sha1]=431b4ff86a2b158841d08a8190fb194681e3f467, not stripped
+$ ldd hello-static
+	not a dynamic executable
+```
+
+Compare that with the `file` and `ldd` output in Section 17.1. This program
+names no dynamic linker and loads no shared libraries. The C library is
+inside it, and the pack supplied that too, so you did not need to install a
+musl compiler. All the binary asks of its host is a Linux kernel for
+x86-64.
+
+The clearest way to see what that buys is to run it where there is nothing
+else. A container image built `FROM scratch` is an empty filesystem:
+
+*Filename: Dockerfile*
+
+```text
+FROM scratch
+COPY hello-static /hello
+ENTRYPOINT ["/hello"]
+```
+
+```console
+$ docker build -q -t hello-aura .
+sha256:ac34ab37eccce32e6d1e387737a445e8a628667ea87c1d45035bf376ce93382b
+$ docker run --rm hello-aura Ada
+hello, Ada
+$ docker images hello-aura --format '{{.Size}}'
+2.16MB
+```
+
+The whole image is our one file. Put the ordinary glibc build of the same
+program in the same empty image and it cannot even begin:
+
+```console
+$ docker run --rm hello-dynamic
+exec /hello: no such file or directory
+```
+
+The file that is missing is not `/hello`. It is the dynamic linker,
+`/lib64/ld-linux-x86-64.so.2`, which the kernel has to load before the
+program, and which an empty image does not have. This is one of the more
+confusing error messages in Linux, and now you know what it means.
+
+A static program gives up a few things in exchange for its independence.
+It cannot load a shared library at run time, so a package that uses the FFI
+from [Chapter 18](/book/ch18-00-calling-c) must link its C libraries
+statically. And an Aura musl program reads its command-line arguments from
+`/proc/self/cmdline`. Containers mount `/proc`, so this normally goes
+unnoticed, but in a bare `chroot` without it, `sys.args()` comes back
+empty. Speed is not one of the costs. The Manual measured the musl builds
+of its benchmark programs at 0.94 to 1.09 times the running time of the
+glibc builds.
+
+## Another architecture
+
+The same option builds for arm64. The target names put the architecture
+first and the C library last:
+
+| Target | Runs on |
+| --- | --- |
+| `x86_64-unknown-linux-gnu` | x86-64 Linux with glibc |
+| `aarch64-unknown-linux-gnu` | arm64 Linux with glibc |
+| `x86_64-unknown-linux-musl` | any x86-64 Linux, fully static |
+| `aarch64-unknown-linux-musl` | any arm64 Linux, fully static |
+
+A build for the other architecture needs two things: that target's pack,
+and, for the final link, a C compiler that can link for that architecture.
+On Ubuntu the cross compiler is one package:
+
+```console
+$ sudo apt install -y gcc-aarch64-linux-gnu
+$ aura build --target aarch64-unknown-linux-musl -o hello-arm64 src/main.au
+aura: built `hello-arm64` with direct backend for aarch64-unknown-linux-musl
+$ file hello-arm64
+hello-arm64: ELF 64-bit LSB executable, ARM aarch64, version 1 (SYSV), statically linked, BuildID[sha1]=7c4c6ebcf6187fca508fd6ff33c5bbed3552cfe1, not stripped
+$ ./hello-arm64
+bash: ./hello-arm64: cannot execute binary file: Exec format error
+```
+
+`aura` looks for the compiler under the name `aarch64-linux-gnu-gcc` (or
+`x86_64-linux-gnu-gcc` in the other direction), and `AURA_TARGET_CC` names
+a different one. The x86-64 machine that built the program cannot run it,
+which is the "Exec format error" at the end. To try it without an arm64
+machine, the QEMU user-mode emulator runs a foreign binary one process at a
+time:
+
+```console
+$ sudo apt install -y qemu-user-static
+$ qemu-aarch64-static ./hello-arm64 Grace
+hello, Grace
+```
+
+That is how Aura's own continuous integration tests these targets. For a
+program you intend to ship, run its real test suite on real hardware of the
+target architecture before you trust it. `aura run` and `aura test` always
+build for the machine they run on, so the tests have to run there, or
+under emulation.
+
+This is as far as cross-building goes in 0.16. The host must be Linux and
+the targets are Linux. On macOS or Windows, `aura build --target` stops
+with exit status 2, and so does any target name outside the table:
+
+```console
+$ aura build --target riscv64-unknown-linux-gnu -o hello src/main.au
+aura: unknown target `riscv64-unknown-linux-gnu`; the targets are `x86_64-unknown-linux-gnu`, `aarch64-unknown-linux-gnu`, `x86_64-unknown-linux-musl`, `aarch64-unknown-linux-musl`
+```
+
+To produce a macOS or a Windows program, build on that system. And `aura`
+itself needs glibc: you can build *for* Alpine, but not *on* it.
+
+## Choosing the CPU
+
+Architecture is a coarse description. Within x86-64 there are fifteen years
+of processors, and the newer ones have instructions the older ones lack,
+most usefully the wide vector instructions that
+[Section 8.7](/book/ch08-07-lane-values) put to work. By default `aura
+build` uses only what every CPU of the architecture has, so the binary runs
+on all of them. `--target-cpu` raises that floor:
+
+```console
+$ aura build --target-cpu x86-64-v3 -o hello src/main.au
+aura: built `hello` with direct backend
+$ aura build --target-cpu haswell -o hello src/main.au
+aura: unknown target CPU `haswell`; this host accepts `generic`, `native`, `x86-64-v2`, `x86-64-v3`, `x86-64-v4`
+```
+
+The names are levels, not models. `generic` is the default. `x86-64-v2`
+adds SSE4.2, `x86-64-v3` adds AVX2 and FMA, which most x86-64 machines of
+the last ten years have, and `x86-64-v4` adds AVX-512. `native` means
+"whatever this machine has", which is the fastest choice for a program that
+will only ever run where it was built. The environment variable
+`AURA_TARGET_CPU` sets the same thing when the option is absent.
+
+Two properties make this option safer than its counterparts in C. First,
+it never changes a result. Aura does not let the compiler fuse a multiply
+and an add or reorder float arithmetic, so a program prints the same
+numbers at every level. Second, the choice is part of the native cache key,
+so `aura run --backend direct` never mixes binaries built for different
+CPUs.
+
+What it does change is where the binary can run. A program built for
+`x86-64-v3` and started on an older CPU dies with an illegal-instruction
+signal the first time it reaches an AVX2 instruction, which may be at
+startup or may be an hour in. So match the level to the oldest machine you
+deploy to, and do not ship `native` builds to machines you have not seen.
+`native` is also refused together with `--target`, because the build
+machine's CPU says nothing about the machine you are building for:
+
+```console
+$ aura build --target x86_64-unknown-linux-musl --target-cpu native -o hello src/main.au
+aura: target CPU `native` names the build machine's CPU and does not apply with `--target`
+```
+
+Whether a higher level makes your program faster is something to measure,
+as the last section argued. Code that walks lists of numbers often gains.
+Code that waits on files and sockets will not notice. Array arithmetic gains
+nothing from the option at all, because the runtime's array kernels already
+check the CPU when the program starts and pick their widest version.
+
+The [CLI and Tooling](/manual/cli-and-tooling#building-for-another-machine)
+page has the reference for both options, including how to install a target
+pack beside an `apt` installation of Aura.
+
 ## Summary
 
 You can now take an Aura program from source to something you can ship.
@@ -53446,9 +55341,13 @@ You can now take an Aura program from source to something you can ship.
 native binary with the runtime linked in, which runs on a machine with no
 compiler and reports traps with the same source-located diagnostics. A debug
 build with `--debug` adds what lldb and VS Code need for breakpoints,
-stepping, and Aura-typed variables. And you know how to measure a program:
+stepping, and Aura-typed variables. You know how to measure a program:
 time the native binary, count allocations with `AURA_RUNTIME_STATS=1`,
 profile with symbols kept, and read published numbers with their context.
+And when the destination is not the machine in front of you, `--target`
+builds for the other Linux architecture or produces a fully static program
+that runs in an empty container, and `--target-cpu` trades portability for
+newer instructions.
 
 Everything so far has been Aura calling Aura, or Aura calling the operating
 system through its standard modules. Sometimes the function you need already
@@ -56248,6 +58147,1562 @@ That is the end of the main text. The appendices that follow are reference
 material to keep nearby as you write your own programs: the keywords and
 operators, a guide for Python programmers, the tools around the compiler, and
 the diagnostics you are most likely to meet.
+
+## Source: docs/book/ch20-00-library-tour.md
+
+# A tour of the standard library
+
+The chapters so far introduced a library module whenever a program needed
+one. Files, processes, sockets, and JSON arrived with the health checker in
+[Chapter 16](/book/ch16-00-talking-to-the-world), tasks and queues with
+[Chapter 15](/book/ch15-00-concurrency), and arrays with
+[Chapter 8](/book/ch08-00-collections). That left out a handful of modules
+that almost every real program ends up importing and that never had a
+project of their own: the ones for raw bytes and their encodings, for dates
+and times, for regular expressions, for random numbers, and for telling an
+operator what the program is doing.
+
+This chapter visits them in turn. To keep the visits connected we will build
+one small tool across all five sections. `courier` wraps a text message in
+an *envelope* that can be pasted into a chat, a URL, or a configuration file
+and checked at the other end. An envelope is compressed, so it is short. It
+is signed with a shared secret, so the receiver knows who made it and that
+nobody changed it. It carries the time it was sealed, so an old one can be
+refused. Each has a random identifier, and the tool keeps a log that we will
+then search. None of those jobs is hard, and each one leans on a different
+module.
+
+Everything here ships with `aura`. There is nothing to install and no
+dependency to declare: `import bytes` works in any file. All of these
+modules behave the same under `aura run` and in a built binary, and the
+linker leaves out of a binary the library code its program never calls.
+They are also deliberately small. Where a module leaves something out, such as named
+time zones or a hash other than SHA-256, we will say so, because knowing the
+edge of a library saves an afternoon of looking for a function that is not
+there.
+
+By the end of the chapter you will be able to move between text and bytes
+without guessing at an encoding, sign and verify a message, do arithmetic on
+instants in time, pull fields out of text with a pattern, choose between
+reproducible and unpredictable random numbers, and emit structured logs and
+counters from a running program.
+
+## Source: docs/book/ch20-01-bytes-and-codecs.md
+
+# Bytes, digests, and compression
+
+Text is for people. Networks, files, hash functions, and compressors work
+on bytes, and the first job of `courier` is to get a message from one form
+to the other and back without losing anything. Aura has no separate bytes
+type. A sequence of bytes is a `list[uint8]`, an ordinary list whose
+elements are numbers from 0 to 255, so everything you know about lists
+applies to it.
+
+## From text to bytes and back
+
+A `str` is always valid UTF-8, and `to_bytes()` hands you those UTF-8 bytes
+as a new list:
+
+*Filename: src/main.au*
+
+```aura
+import bytes
+
+def main():
+    note = "café ☕"
+    raw = note.to_bytes()
+    print(note.len())
+    print(raw.len())
+    print(raw)
+    print(bytes.hex_encode(raw))
+
+    match str.from_bytes(raw):
+        case Result.Ok(text):
+            print(text)
+        case Result.Err(error):
+            print(error)
+
+    cut_short: list[uint8] = [99, 97, 102, 195]
+    print(str.from_bytes(cut_short))
+```
+
+<span class="caption">Listing 20-1: Converting between `str` and `list[uint8]`</span>
+
+```console
+$ aura run src/main.au
+6
+9
+[99, 97, 102, 195, 169, 32, 226, 152, 149]
+636166c3a920e29895
+café ☕
+Result.Err(bytes.Error.InvalidUtf8(3))
+```
+
+The note has six characters and nine bytes. `c`, `a`, `f`, and the space
+take one byte each, `é` takes two, and the cup takes three. That gap is why
+[Chapter 8](/book/ch08-02-strings) kept `len()` and `byte_len()` apart, and
+it is why "the first 100 bytes of a string" is not a safe thing to ask for:
+the cut can land inside a character.
+
+The last two lines of the listing show what happens when it does. Going from
+bytes to text can fail, because most byte sequences are not valid UTF-8, so
+`str.from_bytes` returns a `Result`. It is called on the type, as
+`str.from_bytes(raw)`, and it is strict: it never replaces a bad byte with a
+placeholder character and never returns the part that did decode. Our
+four-byte list ends with `195`, the first half of `é`, and the error says
+exactly that: an invalid sequence starts at byte 3. A program that reads
+bytes from a socket or a file and needs text has to decide what to do in
+that case, and Aura makes the decision visible.
+
+Neither conversion takes an encoding argument. Aura 0.16 converts to and
+from UTF-8 and nothing else. Text in Latin-1 or UTF-16 has to be transcoded
+before it reaches `str.from_bytes`.
+
+## Hexadecimal and base64
+
+Printing a byte list as decimal numbers gets old quickly. The two standard
+ways to write bytes as text are both in the `bytes` module. Hexadecimal
+writes each byte as two digits, which is easy to read and doubles the
+length. Base64 packs three bytes into four characters, which is harder to
+read and only a third longer:
+
+```aura
+import bytes
+
+def main():
+    raw = "café ☕".to_bytes()
+    print(bytes.hex_encode(raw))
+    print(bytes.base64_encode(raw))
+
+    print(bytes.hex_decode("636166c3a9"))
+    print(bytes.hex_decode("63 61"))
+    print(bytes.base64_decode("Y2Fmw6kg4piV"))
+    print(bytes.base64_decode("Y2Fm-6kg"))
+```
+
+```console
+$ aura run src/main.au
+636166c3a920e29895
+Y2Fmw6kg4piV
+Result.Ok([99, 97, 102, 195, 169])
+Result.Err(bytes.Error.InvalidHexLength(5))
+Result.Ok([99, 97, 102, 195, 169, 32, 226, 152, 149])
+Result.Err(bytes.Error.InvalidBase64(4))
+```
+
+Encoding cannot fail, so the encoders return a `str`. Decoding can, so the
+decoders return a `Result` whose error says what was wrong and where. Both
+decoders are strict. `hex_decode` accepts upper or lower case digits and
+nothing else: no `0x` prefix, no spaces. `"63 61"` has five characters, an
+odd number, and is refused for its length before the space is even looked
+at. `base64_decode` wants the standard alphabet with its `=` padding, and it
+rejected the `-` at index 4, a character from the URL-safe alphabet that
+Aura 0.16 does not provide. If you receive URL-safe base64, replace `-` with
+`+` and `_` with `/` first.
+
+Strictness is deliberate here. A decoder that skips what it does not
+understand lets two different texts decode to the same bytes, and that is a
+bad property for anything you are about to sign.
+
+## A fingerprint with SHA-256
+
+A *digest* boils any amount of data down to a short, fixed-size fingerprint.
+`bytes.sha256` computes the SHA-256 digest, which is 32 bytes whatever the
+input:
+
+```aura
+import bytes
+
+def fingerprint(text: str) -> str:
+    return bytes.hex_encode(bytes.sha256_string(text))
+
+def main():
+    print(fingerprint("deploy finished"))
+    print(fingerprint("deploy finished."))
+    print(bytes.sha256("deploy finished".to_bytes()).len())
+```
+
+```console
+$ aura run src/main.au
+7820090191cfad16f72b9c9eb62f98ac64ee1d8b4284486d1e6a80c57ca5b72d
+27dd38a4391cd0ba663f4ef090f98e81a967efb8b9c71163040eab16f7349cf1
+32
+```
+
+`sha256` takes bytes and returns the raw 32 bytes, and `sha256_string(text)`
+is a shorthand for hashing `text.to_bytes()`. We wrap the result in
+`hex_encode` to get the familiar 64-digit form. Adding one period changed
+every part of the fingerprint, which is the point: you can compare two
+digests to learn whether two files are identical without comparing the
+files.
+
+What a digest cannot tell you is who made it. Anyone can compute the SHA-256
+of anything. If `courier` sent a message together with its digest, someone
+who changed the message in transit would recompute the digest and send that
+along too.
+
+## Signing with a shared secret
+
+To know that a message came from someone we trust, the fingerprint has to
+depend on something an attacker does not have. `bytes.hmac_sha256(key,
+message)` mixes a secret key into the digest. Without the key nobody can
+produce the right 32 bytes for a message, and with it the receiver can
+recompute them and compare:
+
+*Filename: src/main.au*
+
+```aura
+import bytes
+
+def sign(secret: list[uint8], message: str) -> str:
+    return bytes.hex_encode(bytes.hmac_sha256(secret, message.to_bytes()))
+
+def verify(secret: list[uint8], message: str, signature: str) -> bool:
+    match bytes.hex_decode(signature):
+        case Result.Ok(received):
+            expected = bytes.hmac_sha256(secret, message.to_bytes())
+            return bytes.constant_time_eq(expected, received)
+        case Result.Err(_):
+            return false
+
+def main():
+    secret = "correct horse battery staple".to_bytes()
+    signature = sign(secret, "deploy finished")
+    print(signature)
+    print(verify(secret, "deploy finished", signature))
+    print(verify(secret, "deploy failed", signature))
+    print(verify("a guess".to_bytes(), "deploy finished", signature))
+    print(verify(secret, "deploy finished", "not hex"))
+```
+
+<span class="caption">Listing 20-2: Signing a message and checking the signature</span>
+
+```console
+$ aura run src/main.au
+314e35afb3815292bb96160acbbc6d7943e2798f385f4a8b301c718f5305b121
+true
+false
+false
+false
+```
+
+A changed message, a wrong key, and a signature that is not even
+hexadecimal all come out `false`. This is how webhooks from most services
+are authenticated: the sender signs the request body with a secret you both
+hold and puts the signature in a header.
+
+`verify` compares the two digests with `bytes.constant_time_eq` and not with
+`==`, and that is not fussiness. `==` on two lists stops at the first
+element that differs. An attacker who can time many attempts can tell how
+many leading bytes of a forged signature were right and work forward one
+byte at a time. `constant_time_eq` reads every byte before it answers, so
+the time tells them nothing. Use it whenever one side of a comparison is a
+secret.
+
+HMAC proves that the holder of the key produced the message. It does not
+hide the message: anyone can read a signed envelope. Aura 0.16 has no
+encryption functions in its library, and SHA-256 is its only hash. In
+particular, do not store passwords with a bare `sha256`. Password storage
+needs a deliberately slow hash, which the library does not provide.
+
+## Compressing with gzip
+
+Signed messages travel through chat windows and URLs, so shorter is better.
+The `gzip` module compresses and decompresses byte lists in the format of
+`.gz` files:
+
+```aura
+import gzip
+
+def main():
+    report = "status=ok ".repeat(200)
+    packed = gzip.compress(report.to_bytes())
+    print(f"{report.byte_len()} bytes pack into {packed.len()}")
+
+    match gzip.decompress(packed):
+        case Result.Ok(plain):
+            print(plain == report.to_bytes())
+        case Result.Err(error):
+            print(error)
+
+    print(gzip.decompress(packed, max_bytes=1000))
+    print(gzip.decompress("not gzip".to_bytes()))
+```
+
+```console
+$ aura run src/main.au
+2000 bytes pack into 53
+true
+Result.Err(gzip.Error.OutputTooLarge(1000))
+Result.Err(gzip.Error.InvalidData(unexpected end of file))
+```
+
+`compress` cannot fail and takes an optional `level` from 0 to 9. The
+default, 6, is the usual balance of speed and size. Repetitive text like
+ours shrinks dramatically, and that is exactly why `decompress` has a second
+parameter. Two thousand bytes became 53, and a few kilobytes of carefully
+built input can expand to gigabytes. A program that decompresses whatever it
+is sent is handing strangers a way to exhaust its memory. `max_bytes` is the
+largest result we are prepared to hold. Decompression stops the moment the
+output would pass it and returns `OutputTooLarge`. The default is 256 MiB.
+For data from outside, set it to what the program expects.
+
+Both functions work on whole byte lists in memory. For a file too large for
+that, read it in chunks and compress each chunk on its own. Chunks written
+one after another form a valid `.gz` file, and the
+[Gzip Module](/manual/gzip) page shows how.
+
+## Sealing an envelope
+
+We now have every piece of the first version of `courier`. To seal a
+message we compress it, sign the compressed bytes, and join the base64 of
+the bytes to the hex of the signature with a period, a character neither
+encoding uses. To open an envelope we undo the steps in order, and every
+one of them can fail:
+
+*Filename: src/main.au*
+
+```aura
+import bytes
+import gzip
+
+enum OpenError:
+    Malformed
+    BadSignature
+    TooLarge(limit: int64)
+
+def seal(secret: list[uint8], message: str) -> str:
+    packed = gzip.compress(message.to_bytes())
+    signature = bytes.hmac_sha256(secret, packed)
+    return f"{bytes.base64_encode(packed)}.{bytes.hex_encode(signature)}"
+
+def unpack(packed: list[uint8]) -> Result[str, OpenError]:
+    match gzip.decompress(packed, max_bytes=4096):
+        case Result.Ok(plain):
+            return str.from_bytes(plain).map_err(lambda _: OpenError.Malformed)
+        case Result.Err(gzip.Error.OutputTooLarge(limit)):
+            return Result.Err(OpenError.TooLarge(limit))
+        case Result.Err(gzip.Error.InvalidData(_)):
+            return Result.Err(OpenError.Malformed)
+
+def unseal(secret: list[uint8], envelope: str) -> Result[str, OpenError]:
+    parts = envelope.split(".")
+    if parts.len() != 2:
+        return Result.Err(OpenError.Malformed)
+    packed = try bytes.base64_decode(parts[0]).map_err(lambda _: OpenError.Malformed)
+    signature = try bytes.hex_decode(parts[1]).map_err(lambda _: OpenError.Malformed)
+    if not bytes.constant_time_eq(bytes.hmac_sha256(secret, packed), signature):
+        return Result.Err(OpenError.BadSignature)
+    return unpack(packed)
+
+def main():
+    secret = "correct horse battery staple".to_bytes()
+    envelope = seal(secret, "deploy finished: 14 services healthy")
+    print(envelope)
+    print(unseal(secret, envelope))
+    print(unseal("wrong secret".to_bytes(), envelope))
+    print(unseal(secret, envelope.replace("H4sI", "H4sJ")))
+    print(unseal(secret, "hello"))
+    print(unseal(secret, seal(secret, "z".repeat(100000))))
+```
+
+<span class="caption">Listing 20-3: `courier`, version one: compressed, signed envelopes</span>
+
+```console
+$ aura run src/main.au
+H4sIAAAAAAAA/0tJLcjJr1RIy8zLLM5ITbFSMDRRKE4tKstMTi1WyEhNzCnJqAQAm/BbdSQAAAA=.a01ccfbe4c66486085e33683a0508f5a9491358f26a435784382fbb9297b4d21
+Result.Ok(deploy finished: 14 services healthy)
+Result.Err(OpenError.BadSignature)
+Result.Err(OpenError.BadSignature)
+Result.Err(OpenError.Malformed)
+Result.Err(OpenError.TooLarge(4096))
+```
+
+The library's error types, `bytes.Error` and `gzip.Error`, collapse into
+our own `OpenError` with `map_err` from
+[Chapter 9](/book/ch09-02-recoverable-errors), so that `try` can return
+early from `unseal` with one error type. A caller of `unseal` does not care
+which decoder objected. It cares whether the envelope was garbage, forged,
+or too big.
+
+Look at the order of the steps in `unseal`, because it matters more than
+any single call. The signature is checked *before* the bytes are
+decompressed. The fourth line of `main` changes one character of the packed
+data, and the answer is `BadSignature`, not a gzip error: the damaged bytes
+never reached the decompressor. The same holds for the size limit. The last
+line seals a hundred thousand `z` characters, which we signed ourselves, so
+the signature is fine and the limit in `unpack` is what stops it. Check
+authenticity first, then spend memory and time on the contents. An envelope
+from a stranger should cost us one HMAC and nothing more.
+
+`seal` also signs the *compressed* bytes, the same bytes that travel, and
+not the original text. Then `unseal` can verify exactly what it received
+without transforming it first.
+
+Our envelope says who made it and that it is intact. It does not say when.
+Someone who records a valid envelope can send it again next week, and it
+will still verify. To close that gap, `courier` needs a clock.
+
+## Source: docs/book/ch20-02-time-and-dates.md
+
+# Time and dates
+
+Programs ask two different questions about time, and mixing them up is the
+source of a whole family of bugs. "What is the date?" is a question for the
+calendar. "How long did that take?" is a question for a stopwatch. The
+`time` module answers each with its own clock:
+
+*Filename: src/main.au*
+
+```aura
+import time
+
+def main():
+    now = time.now()
+    print(now)
+    print(time.now_local())
+
+    started = time.monotonic()
+    mut total = 0
+    for i in range(100000):
+        total += i
+    elapsed = time.monotonic() - started
+    print(total)
+    print(f"{elapsed.to_ms()} ms")
+```
+
+<span class="caption">Listing 20-4: The system clock and the monotonic clock</span>
+
+```console
+$ aura run src/main.au
+2026-11-15T10:15:59.409629944Z
+2026-11-15T11:15:59.409902610+01:00
+4999950000
+457.502039 ms
+```
+
+Your output will differ on every line but the third. `time.now()` reads the
+system clock and returns a `time.DateTime` at UTC, which prints as RFC 3339
+text ending in `Z`. `time.now_local()` is the same instant shown at the
+offset of the machine's time zone, here one hour east of UTC. (The loop is
+slow because `aura run` interprets it. A built binary finishes it in well
+under a millisecond.)
+
+The system clock can be wrong, and it can be corrected while your program
+runs: by the user, or by a network time service stepping it back half a
+second. Subtract two `time.now()` readings to time something and one day the
+answer will be negative. `time.monotonic()` reads a clock that only moves
+forward and is never adjusted. A single reading means nothing on its own,
+but the difference between two is a trustworthy `Duration`. Use
+`time.now()` when you need a date, and `time.monotonic()` when you need a
+length of time.
+
+## Instants and offsets
+
+A `DateTime` holds two things: an instant, to the nanosecond, and an offset
+from UTC in whole minutes. The instant is the moment itself, the same
+everywhere on Earth. The offset only decides which calendar date and time of
+day we read off it. The examples from here on build their instants from
+fixed text and not from `time.now()`, so that your output matches ours:
+
+*Filename: src/main.au*
+
+```aura
+import time
+
+def run() -> Result[None, time.Error]:
+    sent = try time.parse_rfc3339("2026-11-15T10:02:34Z")
+    print(sent)
+    print(f"{sent.year()}-{sent.month()}-{sent.day()} at {sent.hour()}:{sent.minute()}")
+    print(f"weekday {sent.weekday()}, day {sent.day_of_year()} of the year")
+    print(sent.unix())
+
+    lagos = try sent.to_offset(60)
+    tokyo = try sent.to_offset(9 * 60)
+    print(lagos)
+    print(tokyo)
+    print(f"{lagos.hour()} and {tokyo.hour()}")
+    print(lagos.same_instant(tokyo))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+```
+
+<span class="caption">Listing 20-5: One instant read at three offsets</span>
+
+```console
+$ aura run src/main.au
+2026-11-15T10:02:34Z
+2026-11-15 at 10:2
+weekday 7, day 319 of the year
+1794736954
+2026-11-15T11:02:34+01:00
+2026-11-15T19:02:34+09:00
+11 and 19
+true
+```
+
+`parse_rfc3339` reads the standard timestamp format of the internet, the
+one you see in JSON APIs and log files. It returns a `Result`, because text
+can be malformed, and we use the `run` function with `try` so that every
+fallible step shares one error path. (`main` itself can only return `int32`
+or `None`.) The field methods return plain integers, which is why the minute
+printed as `2` and not `02`. We will format properly in a moment. `weekday()`
+counts from 1 for Monday to 7 for Sunday, and `unix()` is the count of
+seconds since the start of 1970 that many systems use to exchange instants.
+
+`to_offset` gives the same instant at another offset, in minutes east of
+UTC. Lagos is at +60 and Tokyo at +540, so the hour reads 11 in one and 19
+in the other. `same_instant` confirms that nothing but the reading changed.
+Comparisons between `DateTime` values are methods: `same_instant`,
+`is_before`, and `is_after` compare the instants and ignore the offsets.
+There is no `<` or `==` on `DateTime`, so you always say which comparison
+you mean.
+
+Offsets are all Aura 0.16 knows about zones. There is no time zone database
+and no `Europe/Paris`. `to_local()` and `now_local()` ask the operating
+system for the machine's own offset at the instant in question, daylight
+saving included, and any other zone is an offset you supply. A program that
+schedules meetings across zones needs more than this module offers. A
+program that stamps, compares, and prints instants has what it needs.
+
+## Arithmetic with `Duration`
+
+You met `Duration` as the type of timeouts, with literals such as `5s` and
+`250ms`. It is an exact count of nanoseconds, and it is what connects two
+instants:
+
+```aura
+import time
+
+def is_fresh(sent: time.DateTime, now: time.DateTime, max_age: Duration) -> bool:
+    age = now.since(sent)
+    return age >= 0s and age <= max_age
+
+def run() -> Result[None, time.Error]:
+    sent = try time.parse_rfc3339("2026-11-15T10:02:34Z")
+    later = sent.add(Duration.minutes(90))
+    print(later)
+    print(later.since(sent))
+    print(later.since(sent).to_seconds())
+    print(sent.since(later))
+
+    print(is_fresh(sent, sent.add(4m), 5m))
+    print(is_fresh(sent, later, 5m))
+    print(sent.add(Duration.minutes(60 * 24 * 30)))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+```
+
+```console
+$ aura run src/main.au
+2026-11-15T11:32:34Z
+5400000ms
+5400.0
+-5400000ms
+true
+false
+2026-12-15T10:02:34Z
+```
+
+`add` and `sub` move an instant by a `Duration`, and `later.since(earlier)`
+is the `Duration` between two instants, negative when the argument is the
+later one. Durations compare with the ordinary operators, so `is_fresh` is
+two comparisons. Notice that it takes `now` as a parameter and does not call
+`time.now()` itself. A function that reads the clock is hard to test,
+because its answer changes every time. A function that is handed the time
+can be tested with any time you like, and only the outermost caller needs to
+know what time it really is. We will write `courier` this way.
+
+Duration literals come in `ms`, `s`, and `m`. For longer spans multiply:
+`Duration.minutes(60 * 24 * 30)` is thirty days, and adding it carried us
+correctly across the end of November.
+
+Thirty days is not "one month", though, and the module has no way to add a
+month. Months have different lengths, so "a month after January 31" has no
+single answer. February 31 does not exist, and whether you want February
+28, March 3, or an error depends on whether you are billing a customer or
+scheduling a backup. Aura makes you say which. You read the calendar
+fields, change them, and build a new instant with `time.utc`, which checks
+that the date exists:
+
+```aura
+import time
+
+def month_later(day: time.DateTime) -> Result[time.DateTime, time.Error]:
+    (year, month, date) = day.date()
+    if month == 12:
+        return time.utc(year + 1, 1, date)
+    return time.utc(year, month + 1, date)
+
+def run() -> Result[None, time.Error]:
+    print(month_later(try time.utc(2026, 1, 15)))
+    print(month_later(try time.utc(2026, 1, 31)))
+    print(time.utc(2028, 2, 29))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+```
+
+```console
+$ aura run src/main.au
+Result.Ok(2026-02-15T00:00:00Z)
+Result.Err(time.Error.Invalid(day 31 is not in month 2 of 2026))
+Result.Ok(2028-02-29T00:00:00Z)
+```
+
+`time.utc(year, month, day)` builds an instant at midnight UTC, with
+optional `hour`, `minute`, `second`, and `nanosecond` arguments. A date that
+does not exist is an `Err` you can handle, and 2028 is a leap year, so its
+February 29 is fine.
+
+## Formatting and parsing
+
+RFC 3339 is the right format between programs. People and old log files
+want other layouts, and for those `format` and `parse` take a pattern. A
+directive such as `%Y` stands for a field, and every other character stands
+for itself:
+
+```aura
+import time
+
+def run() -> Result[None, time.Error]:
+    sent = try time.parse_rfc3339("2026-11-15T10:02:34Z")
+    lagos = try sent.to_offset(60)
+    print(try sent.format("%A %d %B %Y, %I:%M %p"))
+    print(try lagos.format("%Y-%m-%d %H:%M %:z"))
+
+    logged = try time.parse("15/Nov/2026:11:02:34 +0100", "%d/%b/%Y:%H:%M:%S %z")
+    print(logged)
+    print(logged.same_instant(sent))
+
+    print(time.parse("2026-11-15", "%Y-%m-%d"))
+    print(time.parse("15 November", "%d %B"))
+    print(time.parse_rfc3339("2026-11-15 10:02:34"))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+```
+
+<span class="caption">Listing 20-6: Writing and reading instants with patterns</span>
+
+```console
+$ aura run src/main.au
+Sunday 15 November 2026, 10:02 AM
+2026-11-15 11:02 +01:00
+2026-11-15T11:02:34+01:00
+true
+Result.Ok(2026-11-15T00:00:00Z)
+Result.Err(time.Error.Invalid(the pattern reads no year))
+Result.Err(time.Error.Invalid(expected a UTC offset at ``))
+```
+
+The directives are the ones `strftime` uses in C and Python: `%Y` for the
+year, `%m` and `%d` for month and day, `%H`, `%M`, and `%S` for the time,
+`%B` and `%A` for the names of the month and the weekday, `%z` for the
+offset. Names are always in English. The pattern on the fifth line of `run`
+is the timestamp layout of web server access logs, and the instant it reads
+is the one we started with, written an hour east.
+
+Parsing fills in what the pattern does not mention: a missing time is
+midnight, and a missing offset is UTC. It will not guess a year, so `"15
+November"` is rejected. The last line is a reminder that `parse_rfc3339`
+insists on an offset. A timestamp without one does not name an instant, and
+half the bugs in date handling come from pretending that it does. The
+[Time Module](/manual/time#patterns) page lists every directive.
+
+## Envelopes that expire
+
+Back to `courier`. An envelope from Listing 20-3 verifies forever, so
+anyone who captures one can replay it. We will put the sealing time inside
+the signed data and refuse an envelope that is too old. The time goes on a
+line of its own before the message, and because it sits inside what we
+sign, nobody can change it without breaking the signature.
+
+*Filename: src/main.au*
+
+```aura
+import bytes
+import gzip
+import time
+
+enum OpenError:
+    Malformed
+    BadSignature
+    TooLarge(limit: int64)
+    Expired(age: Duration)
+
+def seal(secret: list[uint8], message: str, now: time.DateTime) -> str:
+    stamped = f"{now.to_rfc3339()}\n{message}"
+    packed = gzip.compress(stamped.to_bytes())
+    signature = bytes.hmac_sha256(secret, packed)
+    return f"{bytes.base64_encode(packed)}.{bytes.hex_encode(signature)}"
+
+def unpack(packed: list[uint8]) -> Result[str, OpenError]:
+    match gzip.decompress(packed, max_bytes=4096):
+        case Result.Ok(plain):
+            return str.from_bytes(plain).map_err(lambda _: OpenError.Malformed)
+        case Result.Err(gzip.Error.OutputTooLarge(limit)):
+            return Result.Err(OpenError.TooLarge(limit))
+        case Result.Err(gzip.Error.InvalidData(_)):
+            return Result.Err(OpenError.Malformed)
+
+def check_age(stamped: str, now: time.DateTime, max_age: Duration) -> Result[str, OpenError]:
+    pair = stamped.split_once("\n")
+    if pair is None:
+        return Result.Err(OpenError.Malformed)
+    stamp, message = pair
+    sent = try time.parse_rfc3339(stamp).map_err(lambda _: OpenError.Malformed)
+    age = now.since(sent)
+    if age < 0s or age > max_age:
+        return Result.Err(OpenError.Expired(age))
+    return Result.Ok(message)
+
+def unseal(secret: list[uint8], envelope: str, now: time.DateTime, max_age: Duration) -> Result[str, OpenError]:
+    parts = envelope.split(".")
+    if parts.len() != 2:
+        return Result.Err(OpenError.Malformed)
+    packed = try bytes.base64_decode(parts[0]).map_err(lambda _: OpenError.Malformed)
+    signature = try bytes.hex_decode(parts[1]).map_err(lambda _: OpenError.Malformed)
+    if not bytes.constant_time_eq(bytes.hmac_sha256(secret, packed), signature):
+        return Result.Err(OpenError.BadSignature)
+    return check_age(try unpack(packed), now, max_age)
+
+def run() -> Result[None, time.Error]:
+    secret = "correct horse battery staple".to_bytes()
+    sealed_at = try time.utc(2026, 11, 15, hour=10, minute=2, second=34)
+    envelope = seal(secret, "deploy finished: 14 services healthy", sealed_at)
+
+    print(unseal(secret, envelope, sealed_at.add(90s), 5m))
+    print(unseal(secret, envelope, sealed_at.add(Duration.minutes(60 * 24 * 7)), 5m))
+    print(unseal(secret, envelope, sealed_at.sub(30s), 5m))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(time.Error.Invalid(message)):
+            print(message)
+```
+
+<span class="caption">Listing 20-7: `courier`, version two: envelopes carry their sealing time</span>
+
+```console
+$ aura run src/main.au
+Result.Ok(deploy finished: 14 services healthy)
+Result.Err(OpenError.Expired(604800000ms))
+Result.Err(OpenError.Expired(-30000ms))
+```
+
+`seal` and `unseal` now take the current time as a parameter, so `run` can
+play three scenes with one envelope: opened ninety seconds after sealing,
+opened a week later, and opened by a machine whose clock is thirty seconds
+behind the sender's. The first is accepted. The other two are refused, and
+the error carries the age so that a log line can say how stale the envelope
+was.
+
+The third case deserves a second look. An envelope "from the future" is not
+an attack. It is clock skew, which every pair of real machines has. A strict
+`age < 0s` check will reject honest messages whenever the receiver's clock
+runs slightly behind. Real protocols allow a small tolerance in both
+directions, and you would relax the test to something like
+`age < Duration.seconds(-60)`. We keep the strict version here because it is
+easier to read. In the real tool, the outermost caller passes `time.now()`
+for `now`, and that is the only place the clock is read.
+
+Envelopes can now expire, but within their five minutes they can still be
+delivered twice. To detect that, each needs an identity. Before we get to
+random identifiers, though, let's look at the log `courier` keeps, because
+reading it back calls for the next module.
+
+## Source: docs/book/ch20-03-regular-expressions.md
+
+# Regular expressions
+
+Suppose `courier` has been running for a while and has written a line to a
+log file for each envelope it handled:
+
+```text
+10:02:34 delivered id=7f3a to=ops@example.com bytes=512 took=18ms
+10:02:35 rejected id=91bc reason=bad-signature
+10:02:39 delivered id=c04d to=ada@example.org bytes=20480 took=131ms
+```
+
+Now somebody asks how many messages were delivered, to whom, and how large
+they were. The string methods from [Chapter 8](/book/ch08-02-strings) can
+answer that. `split(" ")` gives the words and `split_once("=")` takes a word
+apart. But the code would be a pile of index arithmetic that breaks the
+first time a line gains a field. A *regular expression* describes the shape
+of the text we are looking for, and the `regex` module finds it.
+
+## Compiling and matching
+
+A pattern is compiled once into a `regex.Regex`, and the compiled value
+does the searching:
+
+*Filename: src/main.au*
+
+```aura
+import regex
+
+def run() -> Result[None, regex.Error]:
+    log = "10:02:34 delivered id=7f3a to=ops@example.com bytes=512 took=18ms\n10:02:35 rejected id=91bc reason=bad-signature\n10:02:39 delivered id=c04d to=ada@example.org bytes=20480 took=131ms"
+    lines = log.split("\n")
+
+    delivered = try regex.compile(r"delivered id=\w+")
+    print(delivered.is_match(lines[0]))
+    print(delivered.is_match(lines[1]))
+    print(delivered.count(log))
+    print(delivered.find_all(log))
+
+    match delivered.find(log):
+        case None:
+            print("no match")
+        case regex.Match as first:
+            print(f"{first.text} at {first.start}..{first.end}")
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+```
+
+<span class="caption">Listing 20-8: Testing, counting, and finding matches</span>
+
+```console
+$ aura run src/main.au
+true
+false
+2
+[delivered id=7f3a, delivered id=c04d]
+delivered id=7f3a at 9..26
+```
+
+The pattern `delivered id=\w+` matches the literal text `delivered id=`
+followed by one or more word characters. It is written as a raw string,
+`r"..."`, so that the backslash reaches the regex engine as written. In an
+ordinary string literal you would have to double it, `"\\w+"`, and patterns
+are hard enough to read already. Make raw strings a habit for patterns.
+
+`regex.compile` returns a `Result`, because a pattern is a small program and
+can have syntax errors. Once we have a `Regex`, searching cannot fail, and
+the methods return plain values. They are listed here from cheapest to most
+detailed. `is_match` answers yes or no. `count` counts matches without
+building anything. `find_all` returns the matched texts. `find` returns the
+first match as a `regex.Match` with its `text` and its `start` and `end`
+positions, or `None`. Positions count characters, the way `str` indexes do,
+so `log[first.start:first.end]` is the matched text. Call the cheapest
+method that answers your question.
+
+A `Regex` is a small copy value. You can keep it in a binding, pass it to
+functions, or store it in a class field, and every copy searches with the
+same compiled pattern. Compile a pattern once, outside any loop.
+
+## Capturing fields
+
+Finding a line is half the job. We want the id, the recipient, and the size
+out of it. Parentheses in a pattern mark *groups*, and each group remembers
+the part of the text it matched. A group can be given a name with
+`(?P<name>...)`:
+
+*Filename: src/main.au*
+
+```aura
+import regex
+
+class Delivery:
+    id: str
+    recipient: str
+    size: int64
+
+def field(groups: regex.Captures, name: str) -> str:
+    match own groups.name(name):
+        case str as text:
+            return text
+        case None:
+            return ""
+
+def parse_line(pattern: regex.Regex, line: str) -> Delivery | None:
+    match pattern.captures(line):
+        case None:
+            return None
+        case regex.Captures as groups:
+            size = parse_int64(field(groups, "bytes")).unwrap_or(0)
+            return Delivery(id=field(groups, "id"), recipient=field(groups, "to"), size=size)
+
+def run() -> Result[None, regex.Error]:
+    lines = [
+        "10:02:34 delivered id=7f3a to=ops@example.com bytes=512 took=18ms",
+        "10:02:35 rejected id=91bc reason=bad-signature",
+        "10:02:39 delivered id=c04d to=ada@example.org bytes=20480 took=131ms",
+    ]
+    fields = try regex.compile(r"id=(?P<id>\w+) to=(?P<to>\S+) bytes=(?P<bytes>\d+)")
+    mut total = 0
+    for line in lines:
+        match parse_line(fields, line):
+            case None:
+                print("skipped a line")
+            case Delivery as delivery:
+                total += delivery.size
+                print(f"{delivery.id}: {delivery.size} bytes to {delivery.recipient}")
+    print(f"{total} bytes delivered")
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+```
+
+<span class="caption">Listing 20-9: Pulling named fields out of log lines</span>
+
+```console
+$ aura run src/main.au
+7f3a: 512 bytes to ops@example.com
+skipped a line
+c04d: 20480 bytes to ada@example.org
+20992 bytes delivered
+```
+
+`captures` returns the groups of the first match, or `None` when the line
+does not match at all, which is how the `rejected` line is skipped. On a
+`regex.Captures`, `name("id")` gives the text of the named group and
+`get(1)` gives a group by number, where group 0 is the whole match. Both
+return `str | None`, because a group can exist in the pattern and still
+take no part in a match (an optional group, for example). Our `field`
+helper turns that into an empty string.
+
+The pattern guarantees that the `bytes` group is all digits, so the
+`parse_int64` can only fail on a number too large for `int64`, and
+`unwrap_or(0)` covers that. This is the usual division of labor: the
+pattern checks the shape of the text, and typed parsing turns the pieces
+into values.
+
+One detail of `\d` and `\w` is worth knowing: they follow Unicode. `\d`
+matches `٣` (an Arabic-Indic three) as well as `3`, and `parse_int64` would
+then reject it. When you mean ASCII digits only, write `[0-9]`.
+
+## Replacing and splitting
+
+A `Regex` can also rewrite text. Before we send that log to anyone, we
+should hide the recipients:
+
+```aura
+import regex
+
+def run() -> Result[None, regex.Error]:
+    line = "10:02:34 delivered id=7f3a to=ops@example.com bytes=512 took=18ms"
+
+    address = try regex.compile(r"(\w+)@([\w.]+)")
+    print(address.replace_all(line, "***@$2"))
+    print(address.replace_all(line, "$1 at $2"))
+
+    gaps = try regex.compile(r"\s+")
+    print(gaps.split("10:02:34   delivered\tid=7f3a"))
+
+    print(regex.escape("took=1.5ms (approx)"))
+    return Result.Ok(None)
+
+def main():
+    match run():
+        case Result.Ok(_):
+            pass
+        case Result.Err(regex.Error.Invalid(message)):
+            print(message)
+```
+
+```console
+$ aura run src/main.au
+10:02:34 delivered id=7f3a to=***@example.com bytes=512 took=18ms
+10:02:34 delivered id=7f3a to=ops at example.com bytes=512 took=18ms
+[10:02:34, delivered, id=7f3a]
+took=1\.5ms \(approx\)
+```
+
+In the replacement text, `$1` and `$2` stand for the first and second
+groups, `$name` for a named group, and `$0` for the whole match. To put a
+real dollar sign in the output, write `$$`. `replace` changes only the
+first match and `replace_all` changes every one.
+
+`split` cuts the text at each match, so splitting on `\s+` handles runs of
+spaces and tabs that `str.split(" ")` would turn into empty strings.
+
+`regex.escape` goes the other way: it takes text and returns a pattern that
+matches exactly that text, with every special character escaped. Use it
+whenever part of a pattern comes from a user. Without it, someone searching
+for `1.5ms` would also find `105ms`, because `.` matches any character.
+
+## What the engine will not do
+
+Patterns from users can be wrong, so let's see what a bad one looks like,
+along with one that is valid in Python and not in Aura:
+
+```aura
+import regex
+
+def main():
+    print(regex.compile(r"id=(\w+"))
+    print(regex.compile(r"(\w+) \1"))
+```
+
+```console
+$ aura run src/main.au
+Result.Err(regex.Error.Invalid(regex parse error:
+    id=(\w+
+       ^
+error: unclosed group))
+Result.Err(regex.Error.Invalid(regex parse error:
+    (\w+) \1
+          ^^
+error: backreferences are not supported))
+```
+
+The first is a typo, and the message points at the parenthesis that was
+never closed. The second is a design decision. `\1` is a *backreference*:
+"the same text group 1 matched". Python and Perl support it, along with
+look-around assertions such as `(?=...)`. Aura's engine supports neither.
+
+The reason is a guarantee. Engines that support those features search by
+trying one possibility after another and backing up when one fails, and for
+some patterns the number of possibilities doubles with each character of
+input. A pattern like `(a+)+$` can take seconds on thirty characters and
+effectively forever on sixty. If any pattern or any searched text comes
+from outside, that is a way to freeze your server with one request. Aura's
+engine never backs up. Every search takes time proportional to the length
+of the text, whatever the pattern, and the price is that the features which
+need backing up are missing. In practice a backreference can almost always
+be replaced by capturing both pieces and comparing them in code.
+
+A few other limits are worth knowing. Patterns search `str` only, not byte
+lists. The replacement is always text, so a function cannot compute it.
+`matches` and `find_all` return complete lists, with no lazy iterator. The
+[Regex Module](/manual/regex) page has the whole pattern syntax, including
+the flags `(?i)` for ignoring case and `(?m)` for matching `^` and `$` at
+each line.
+
+We can now read `courier`'s log. The ids in it have been made up so far.
+Next we generate real ones.
+
+## Source: docs/book/ch20-04-randomness.md
+
+# Randomness
+
+"Give me a random number" hides a question you have to answer before
+you write any code: random for what? A test that shuffles its input wants
+the *same* shuffle every time it runs, so that a failure can be reproduced.
+A session token wants a value nobody on Earth can guess, including someone
+who has read your source. Those are opposite requirements, and a library
+that serves both from one function will sooner or later hand the first kind
+of number to code that needed the second.
+
+Aura's `random` module keeps the two apart by name. `random.Rng` is a
+generator you seed yourself, and its output is completely determined by the
+seed. The functions whose names start with `secure_` ask the operating
+system for unpredictable bytes. There is no global generator and no
+default, so every call site shows which kind it is using.
+
+## Unpredictable values
+
+`courier` needs an id for each envelope, so that a receiver can notice the
+same envelope arriving twice. The id has to be unique, and it should not be
+guessable, or someone could mark ids as "seen" before the real messages
+arrive. That makes it the secure kind:
+
+*Filename: src/main.au*
+
+```aura
+import bytes
+import random
+
+def new_id() -> str:
+    return bytes.hex_encode(random.secure_bytes(8))
+
+class Mailbox:
+    seen: set[str]
+
+    def accept(mut self, id: str) -> bool:
+        if id in self.seen:
+            return false
+        self.seen.add(id.clone())
+        return true
+
+def main():
+    first = new_id()
+    second = new_id()
+    print(first)
+    print(second)
+
+    mut mailbox = Mailbox(seen=set[str]())
+    print(mailbox.accept(first))
+    print(mailbox.accept(second))
+    print(mailbox.accept(first))
+```
+
+<span class="caption">Listing 20-10: Secure random ids and a mailbox that refuses replays</span>
+
+```console
+$ aura run src/main.au
+0e0412d7b386fa86
+1c4f5e92401ef006
+true
+true
+false
+```
+
+Your two ids will be different from ours and different on every run. That
+is the whole point. `random.secure_bytes(8)` returns eight bytes from the
+operating system's secure source as a `list[uint8]`, and `hex_encode` from
+the first section of this chapter turns them into sixteen readable
+characters. Eight random bytes give 2⁶⁴ possible ids, far more than enough
+to make a collision between honest envelopes a non-event. For a secret,
+such as a signing key or a session token, use at least sixteen bytes.
+
+`Mailbox` remembers the ids it has accepted in a set and refuses one it has
+seen before, which is the replay check that the last section left open. In
+the real tool, `seal` would put the id on a line beside the timestamp,
+inside the signed data, and the mailbox would only need to remember ids for
+as long as an envelope can stay fresh.
+
+The module has one more secure function. `random.secure_int(lo, hi)` returns
+an unpredictable integer from `lo` up to but not including `hi`, for
+choosing a one-time code or picking a winner fairly.
+
+The secure functions return plain values, not `Result`s. If the operating
+system cannot supply entropy, which is very rare, the call traps. It never
+falls back to something weaker, because a token that is silently
+predictable is worse than a program that stops.
+
+## Reproducible values
+
+For everything that is not a secret (test data, simulations, sampling,
+shuffling a playlist) you want a sequence you can run again. Create a
+`random.Rng` with a seed:
+
+*Filename: src/main.au*
+
+```aura
+import random
+
+def main():
+    mut rng = random.Rng(2026)
+    print(rng.next_int(1, 7))
+    print(rng.next_int(1, 7))
+    print(rng.next_float())
+
+    mut again = random.Rng(2026)
+    print(again.next_int(1, 7))
+    print(again.next_int(1, 7))
+
+    mut ids = ["7f3a", "91bc", "c04d", "02ee", "5d19"]
+    rng.shuffle(ids)
+    print(ids)
+```
+
+<span class="caption">Listing 20-11: A seeded generator gives the same sequence every time</span>
+
+```console
+$ aura run src/main.au
+6
+5
+0.8125094267576175
+6
+5
+[02ee, 7f3a, 5d19, c04d, 91bc]
+```
+
+This time your output is the same as ours, digit for digit, and it will be
+the same on macOS, Linux, and Windows, under `aura run` and in a built
+binary. `again` was created with the same seed as `rng`, so its first two
+rolls are the same two rolls. Aura documents the exact algorithm in the
+Manual and has kept its output fixed in every release since 0.3, so that a
+seed written into a test keeps producing the same data.
+
+`next_int(lo, hi)` returns an integer in the half-open range from `lo` up to
+but not including `hi`, so `next_int(1, 7)` is a die. `next_float()` returns
+a `float64` from 0.0 up to but not including 1.0. `shuffle` rearranges a
+mutable list in place. That is the entire API. There is no `choice`, but
+`items[rng.next_int(0, items.len())]` does the job, and no normal
+distribution or other shapes.
+
+Every one of those methods changes the generator, because producing a
+number advances its internal state. So the binding has to be `mut`, and a
+function that draws from a caller's generator takes it as
+`rng: mut random.Rng`. Forget either and the compiler says so:
+
+```aura check-fail:AU3003
+import random
+
+def main():
+    rng = random.Rng(1)
+    print(rng.next_int(0, 10))
+```
+
+```console
+$ aura check src/main.au
+error[AU3003]: method `next_int` requires a mutable receiver
+ --> src/main.au:5:15
+  |
+5 |     print(rng.next_int(0, 10))
+  |               ^
+  = help: declare the receiver place with `mut` before calling a mutating method
+```
+
+A generator also cannot be copied. `rng.clone()` is a compile error, and so
+is any operation that would clone a value containing one. The reason is
+that two copies of one generator produce the same "random" numbers from
+that point on, which is a bug that can go unnoticed for a long time: two
+workers that were meant to behave independently quietly make identical
+choices. For the same reason an `Rng` cannot be sent to another task. When
+several tasks need random numbers, give each its own generator with its own
+seed, for example the base seed plus the worker's index.
+
+## A seeded generator in practice: retry jitter
+
+Here is a small, real use. When many clients retry a failed request after
+exactly the same delay, they all come back at the same moment and knock the
+server over again. The standard cure is *jitter*: add a random amount to
+each delay so the retries spread out. The delays do not need to be secret,
+and in a test we would like them to be predictable:
+
+*Filename: src/main.au*
+
+```aura
+import random
+
+def backoff(rng: mut random.Rng, attempt: int64) -> Duration:
+    base = 100 * (1 << attempt)
+    return Duration.ms(base + rng.next_int(0, base))
+
+def schedule(seed: int64) -> list[Duration]:
+    mut rng = random.Rng(seed)
+    mut delays: list[Duration] = []
+    for attempt in range(4):
+        delays.append(backoff(rng, attempt))
+    return delays
+
+def main():
+    print(schedule(1))
+    print(schedule(2))
+    print(schedule(1))
+```
+
+<span class="caption">Listing 20-12: Exponential backoff with reproducible jitter</span>
+
+```console
+$ aura run src/main.au
+[157ms, 322ms, 500ms, 1383ms]
+[175ms, 282ms, 789ms, 1213ms]
+[157ms, 322ms, 500ms, 1383ms]
+```
+
+`backoff` doubles a base delay on each attempt, 100, 200, 400, and 800
+milliseconds, and adds a random amount up to the base again. Two clients
+with different seeds get different schedules. One seed always gets the same
+schedule, so a test can assert on the exact delays. In production each
+process would pick its seed once at startup, and this is the one place
+where the two kinds of randomness meet: `random.Rng(random.secure_int(0,
+1000000))` seeds a fast, reproducible generator from an unpredictable
+number.
+
+The rule to take away is short. If someone guessing the value would be a
+problem, use `secure_bytes` or `secure_int`. Otherwise, use a seeded `Rng`
+and write the seed down. The [Randomness Module](/manual/randomness) page
+specifies the generator's algorithm exactly, for the rare case where you
+need to reproduce its output in another language.
+
+`courier` can now seal, stamp, identify, and verify. What it cannot yet do
+is tell anyone what it has been up to.
+
+## Source: docs/book/ch20-05-logging-and-metrics.md
+
+# Logging, tracing, and metrics
+
+A program that runs for a second can explain itself with `print`. A program
+that runs for a month, on a machine nobody is watching, needs to leave a
+record that another program can search, and to keep a few numbers that say
+how it is doing. The last three modules of our tour are the smallest in the
+library: `log` and `trace` write structured records, and `metrics` counts.
+
+## Structured log records
+
+Let's give `courier` a function that handles one incoming envelope and logs
+what it did. A log call takes a message and a dictionary of fields. The
+first attempt passes the id straight in:
+
+```aura check-fail:AU3002
+import log
+
+def handle(id: str, size: int64) -> bool:
+    if size > 4096:
+        log.warn("envelope too large", {"id": id, "bytes": f"{size}"})
+        return false
+    log.info("delivered", {"id": id, "bytes": f"{size}"})
+    return true
+
+def main():
+    _ = handle("7f3a", 512)
+```
+
+```console
+$ aura check src/main.au
+error[AU3002]: parameter `id` is borrowed; declare it as `own str` to take ownership, or clone the value before consuming it
+ --> src/main.au:5:47
+  |
+5 |         log.warn("envelope too large", {"id": id, "bytes": f"{size}"})
+  |                                               ^
+  = related src/main.au:3:12: parameter `id` is borrowed here
+  = help: declare the parameter as `own str` when the function should consume it, or call `.clone()` to consume an independent copy
+  = fix: replace src/main.au:5:49-5:49 with `.clone()`
+```
+
+This has nothing to do with logging and everything to do with
+[Chapter 8](/book/ch08-03-dicts-and-sets): a dictionary owns its values, so
+building `{"id": id}` would move `id` into the dictionary, and `handle` only
+has shared access to it. The fields of a log record are a `dict[str, str]`
+like any other. The fix the compiler offers is the right one. Clone the
+string, and format numbers into strings with an f-string:
+
+*Filename: src/main.au*
+
+```aura
+import log
+
+def handle(id: str, size: int64) -> bool:
+    if size > 4096:
+        log.warn("envelope too large", {"id": id.clone(), "bytes": f"{size}"})
+        return false
+    log.info("delivered", {"id": id.clone(), "bytes": f"{size}"})
+    return true
+
+def main():
+    print(handle("7f3a", 512))
+    print(handle("c04d", 20480))
+```
+
+<span class="caption">Listing 20-13: Logging with a message and fields</span>
+
+```console
+$ aura run src/main.au
+{"fields":{"bytes":"512","id":"7f3a"},"kind":"log","level":"info","message":"delivered"}
+true
+{"fields":{"bytes":"20480","id":"c04d"},"kind":"log","level":"warn","message":"envelope too large"}
+false
+```
+
+Each call wrote one line of JSON. The record has four keys: `kind` is
+`"log"`, `level` is the function you called (`debug`, `info`, `warn`, or
+`error`), `message` is the first argument, and `fields` holds the
+dictionary. The message is a fixed phrase and the variable parts go in
+fields. That is the habit that makes logs searchable: "every record whose
+message is `delivered` and whose `bytes` is over 1000" is a question a tool
+can answer, where `"delivered 7f3a (512 bytes)"` would need a regular
+expression for every phrasing.
+
+The lines look interleaved with the program's output, but they went
+somewhere else. `print` writes to standard output and log records go to
+standard error, so the two can be separated when the program is started:
+
+```console
+$ aura run src/main.au 2> courier.log
+true
+false
+$ cat courier.log
+{"fields":{"bytes":"512","id":"7f3a"},"kind":"log","level":"info","message":"delivered"}
+{"fields":{"bytes":"20480","id":"c04d"},"kind":"log","level":"warn","message":"envelope too large"}
+```
+
+That split is the whole delivery mechanism. A service manager, a container
+runtime, or a shell redirection collects standard error, and because every
+line is a JSON object, tools such as `jq` or a log pipeline can filter it
+without parsing free text. One line per record also means a record is never
+split across lines, even when the message contains a newline, because JSON
+escapes it.
+
+Two things you might expect are missing. A record has no timestamp. Most
+collectors add their own, and when yours does not, put one in a field:
+`{"at": time.now().to_rfc3339()}`. And there is no level filter. Every call
+writes, including `log.debug`. If you want debug records only when asked,
+wrap the call:
+
+```aura
+import log
+import sys
+
+def debug(message: str, fields: own dict[str, str]):
+    if sys.env("COURIER_DEBUG") is not None:
+        log.debug(message, fields)
+
+def main():
+    debug("starting", {"mode": "test"})
+    print("done")
+```
+
+```console
+$ aura run src/main.au
+done
+$ COURIER_DEBUG=1 aura run src/main.au
+{"fields":{"mode":"test"},"kind":"log","level":"debug","message":"starting"}
+done
+```
+
+`sys.env` returns the value of an environment variable, or `None` when it
+is not set.
+
+## Trace events
+
+`trace.event(name, fields)` writes the same kind of line with `kind` set to
+`"trace"`. Use it for the milestones of a program's life as opposed to
+things that happened to a particular item: started, loaded configuration,
+began shutting down.
+
+```aura
+import trace
+
+def main():
+    trace.event("courier.start", {"version": "2", "mode": "receive"})
+    trace.event("courier.stop", {"reason": "end of input"})
+```
+
+```console
+$ aura run src/main.au
+{"fields":{"mode":"receive","version":"2"},"kind":"trace","level":"event","message":"courier.start"}
+{"fields":{"reason":"end of input"},"kind":"trace","level":"event","message":"courier.stop"}
+```
+
+Keeping the two kinds apart lets a reader pull out the timeline of the
+process with one filter on `kind`. That is all `trace` is in Aura 0.16: a
+single event. There are no spans with a start and an end, and no trace ids
+that follow a request between services. To time a step, read
+`time.monotonic()` before and after and put the elapsed milliseconds in a
+field.
+
+## Counting with metrics
+
+Logs describe individual events. Often the question is about totals: how
+many envelopes, how many refused. The `metrics` module keeps named `int64`
+counters for the whole process:
+
+*Filename: src/main.au*
+
+```aura
+import log
+import metrics
+
+def handle(id: str, size: int64) -> bool:
+    metrics.increment("envelopes", 1)
+    if size > 4096:
+        metrics.increment("rejected", 1)
+        log.warn("envelope too large", {"id": id.clone(), "bytes": f"{size}"})
+        return false
+    metrics.increment("bytes", size)
+    return true
+
+def worker(name: str, count: int64) -> int64:
+    for i in range(count):
+        _ = handle(f"{name}-{i}", 100)
+    return count
+
+def main():
+    _ = handle("7f3a", 512)
+    _ = handle("c04d", 20480)
+    with TaskGroup() as group:
+        _ = group.start(worker, "east", 2)
+        _ = group.start(worker, "west", 2)
+
+    print(f"envelopes: {metrics.get("envelopes")}")
+    print(f"rejected:  {metrics.get("rejected")}")
+    print(f"bytes:     {metrics.get("bytes")}")
+    print(f"replays:   {metrics.get("replays")}")
+```
+
+<span class="caption">Listing 20-14: Counters shared by every task in the process</span>
+
+```console
+$ aura run src/main.au 2> courier.log
+envelopes: 6
+rejected:  1
+bytes:     912
+replays:   0
+```
+
+`metrics.increment(name, amount)` adds to a counter, creating it at zero on
+first use. `metrics.get(name)` reads it, and a counter that was never
+incremented reads as zero, which is why `replays` printed `0` without
+being declared anywhere. `metrics.reset()` clears them all, which is mostly
+useful at the start of a test.
+
+The counters belong to the process, not to a task. `main` handled two
+envelopes itself and two worker tasks handled two each, and all six landed
+in the same `envelopes` counter. This is one of the very few pieces of
+state in Aura that tasks share without a queue, and it is safe because each
+`increment` and each `get` is atomic on its own. A sequence is not: if two
+tasks each do `get` and then `increment` based on what they read, they can
+interleave. Keep to plain increments and you will not notice.
+
+The amount can be negative, so a counter can also track something that goes
+up and down, such as envelopes currently being processed. Pushing a counter
+past the range of `int64` is a trap, like any integer overflow in Aura.
+
+What `metrics` does not have is a way out of the process. There is no
+exporter, no HTTP endpoint that a monitoring system could scrape, and no
+labels on a counter. In Aura 0.16 you publish the numbers yourself. The
+simplest ways are the two we have already seen: print a summary when the
+program ends, as Listing 20-14 does, or write the counters as fields of a
+log record every minute and let the log pipeline do the rest. A service
+that already has the HTTP server from
+[Chapter 16](/book/ch16-03-networking) can answer a `/metrics` path with
+them.
+
+## Summary
+
+That completes the tour, and `courier`. Its envelopes are compressed with
+`gzip`, signed with `bytes.hmac_sha256`, and carried as base64 and hex. They
+are stamped with a `time.DateTime` and refused when they are stale. Each has
+an id from `random.secure_bytes`, the tool's log can be taken apart with a
+`regex.Regex`, and a running copy reports on itself through `log`, `trace`,
+and `metrics`.
+
+The modules share the habits of the rest of the library. What can fail on
+bad input returns a `Result` with an error that says where the input went
+wrong: a byte offset, a field, a position in a pattern. What can only fail
+through a programming mistake traps. Decoders are strict, sizes are
+bounded, and the choice with security consequences (which kind of random
+number, which comparison) is spelled out in the name of the function you
+call. They are small modules, and we have tried to be plain about where
+each one stops.
+
+The Manual has a page for each: [bytes](/manual/bytes),
+[gzip](/manual/gzip), [time](/manual/time), [regex](/manual/regex),
+[randomness](/manual/randomness), and the
+[control-plane modules](/manual/control-plane) for `log`, `trace`,
+`metrics`, and `sys`.
 
 ## Source: docs/book/ch21-00-tensors.md
 
@@ -61738,6 +65193,10 @@ extension with its language server and debugger.
 diagnostics you are most likely to meet while learning, each with a small
 program that triggers it and the usual fix.
 
+[Appendix F](/book/appendix-06-windows) is for readers working in PowerShell
+on native Windows. It translates the shell commands the book's listings
+use, and says which chapters lean on Unix tools.
+
 The [Manual](/manual/) remains the complete reference. When an appendix
 simplifies a rule, it links to the Manual page that has the full contract.
 
@@ -63237,3 +66696,191 @@ the values on each side of a comparison (Appendix D has an example from
 negative timeout: Chapter 19 runs into exactly that with
 `get(timeout=...) must be non-negative`, and fixes it by clamping the value
 to zero.
+
+## Source: docs/book/appendix-06-windows.md
+
+# Following the book on Windows
+
+Aura runs natively on x86-64 Windows 11, and almost everything in this book
+is about Aura, which is the same there as anywhere. What differs is the
+ground the examples stand on. The console listings were recorded in a macOS
+or Linux shell, and a few chapters call Unix programs such as `/bin/sh`.
+This appendix is for the reader in PowerShell who wants to know what to
+type.
+
+You have two routes, and you can mix them.
+
+The first is WSL 2, the Windows Subsystem for Linux.
+[Section 1.1](/book/ch01-01-installation) shows how to install Ubuntu under
+it. Inside the Ubuntu terminal you are a Linux user: every listing in the
+book works as printed, and you can stop reading here.
+
+The second is native Windows, which the rest of this appendix covers. It
+produces real Windows programs and needs a little translation. We will be
+plain about one thing first. The project tests Aura on Windows in
+continuous integration, running the compiler, the runtime, and the command's
+own test suites there, but the book's listings were run on Linux and macOS.
+Where a chapter leans on Unix tools, we say so below and suggest WSL for
+that chapter.
+
+## What you need installed
+
+Install Aura with the PowerShell command from Section 1.1 and add its `bin`
+directory to your `PATH`. That is enough for most of the book:
+
+```console
+> aura --version
+aura 0.16.0-preview (91218b26b464)
+> aura run hello.au
+Hello, world!
+```
+
+`aura run`, `aura check`, `aura test`, and `aura fmt` need nothing else.
+`aura build` and `aura run --backend direct` produce native code and link
+it with Microsoft's linker, so they need the Visual Studio Build Tools with
+the **Desktop development with C++** workload. Without them, the build
+stops with a message that says what to install:
+
+```console
+> aura build -o hello.exe hello.au
+error[AU2999]: cannot find the Microsoft linker `link.exe`: install the Visual Studio Build Tools with the "Desktop development with C++" workload
+ --> hello.au
+```
+
+You will want the build tools by the end of [Chapter 1](/book/ch01-02-hello-world),
+where we first build a binary.
+
+## Reading the console listings
+
+The book's listings start each command with `$`, the prompt of a Unix
+shell. Yours shows `PS C:\...>`. The `aura` commands themselves are typed
+the same way. The differences are in what surrounds them:
+
+| In the book | In PowerShell |
+| --- | --- |
+| `aura build -o greeter src/main.au` | `aura build -o greeter.exe src/main.au` |
+| `./greeter Ada` | `.\greeter.exe Ada` |
+| `echo $?` | `echo $LASTEXITCODE` |
+| `mkdir -p a/b` | `mkdir a\b` |
+| `cat notes.txt`, `ls`, `cp`, `rm`, `cd` | the same words work as PowerShell aliases |
+| `export NAME=value` | `$env:NAME = "value"` |
+| `NAME=value aura run src/main.au` | `$env:NAME = "value"; aura run src/main.au` |
+| `aura run src/main.au 2> errors.log` | the same |
+| `time ./program` | `Measure-Command { .\program.exe }` |
+| `curl -s -i http://127.0.0.1:8080/health` | `curl.exe -s -i http://127.0.0.1:8080/health` |
+| `file program`, `ldd program` | no direct equivalent |
+
+Three of these deserve a sentence. Windows runs a program by its `.exe`
+extension, so add the extension wherever a listing names an output with
+`-o`. `$?` exists in PowerShell but holds `True` or
+`False`. The number that `main` returned is in `$LASTEXITCODE`. And an
+environment variable set with `$env:` stays set for the rest of the
+session, where the Unix form `NAME=value command` applies to one command.
+Remove it with `Remove-Item Env:NAME` when a listing's next command is
+meant to run without it.
+
+Write `curl.exe` with its extension. In older versions of PowerShell, plain
+`curl` is an alias for a different command with different options.
+
+## Paths and source files
+
+Aura accepts both kinds of slash in a path, on the command line and inside
+a program. `aura check src/main.au` and `aura check src\main.au` are the
+same command, and `fs.exists("src/main.au")` finds the same file as
+`fs.exists("src\\main.au")`. Keep writing forward slashes, as the book does, and
+your programs stay portable.
+
+Diagnostics print the full Windows path, so where the book shows
+
+```text
+error[AU2002]: binding `x` has annotated type `int64`, but value has type `str`
+ --> src/main.au:2:5
+```
+
+you will see the same message with a location such as
+`C:\Users\ada\projects\hello\src\main.au:2:5`.
+
+The compiler reads source files with Windows line endings without
+complaint. The formatter writes Unix line endings, and `aura fmt --check`
+reports a file with Windows line endings as needing formatting. If Git on
+your machine converts line endings on checkout, tell it to leave Aura files
+alone by adding one line to a *.gitattributes* file in your package:
+
+```text
+*.au text eol=lf
+```
+
+Aura keeps built programs and other caches under
+`%USERPROFILE%\.cache\aura`, where the book says `~/.cache/aura`.
+
+## Standard input
+
+Chapters [2](/book/ch02-00-word-counter) and
+[12](/book/ch12-00-log-analyzer) feed files to programs with `<`, which
+PowerShell does not support. Pipe the file in instead:
+
+```console
+> Get-Content poem.txt | aura run src/main.au
+```
+
+`echo "to be or not to be" | aura run src/main.au` works as printed. If a
+file with characters outside ASCII comes through garbled, run the command
+through the classic command prompt, which does support `<` and passes the
+bytes through untouched:
+
+```console
+> cmd /c "aura run src/main.au < poem.txt"
+```
+
+## Chapter by chapter
+
+Most chapters need nothing beyond the table above. These are the ones that
+do.
+
+**Chapter 16, section 2, and Chapter 19** run other programs, and the ones
+they run are Unix programs: `/bin/echo`, `/bin/sleep`, `/usr/bin/sort`, and
+shell scripts through `/bin/sh -c`. The `process` module itself works on
+Windows, with no shell in between, exactly as those chapters describe. A
+command is still a list of strings, so the Windows spelling of
+`["/bin/echo", "hello"]` is `["cmd", "/c", "echo", "hello"]`:
+
+```aura
+import process
+
+def main():
+    print(process.run(["cmd", "/c", "echo", "hello"]))
+```
+
+```console
+> aura run src/main.au
+Result.Ok(<process-completed ExitStatus.Exited(0)>)
+```
+
+The longer examples depend on shell features (`kill -9 $$`, `$(pwd)`, and
+the job scripts of the final project) that have no one-line translation.
+Read those two chapters under WSL. Process groups, which `group=true`
+requests, are also not available on Windows.
+
+**Chapter 16, section 6** uses the path `/tmp/courier.sock` for a Unix
+domain socket. Unix sockets work on Windows. Choose a path that exists
+there, such as a file under the directory that `sys.env("TEMP")` names. The
+`openssl` command in the TLS example is included with Git for Windows, in
+its Git Bash shell.
+
+**Chapter 17** inspects binaries with `file` and `ldd`, which Windows does
+not have. A debug build with `aura build --debug` writes a `.pdb` file
+beside the executable in place of the debug information described there.
+The lldb session in section 2 was recorded on Linux, and we have not
+repeated it on Windows. Section 4's `aura build --target` runs only on a
+Linux host. A Windows machine builds Windows programs, and WSL builds Linux
+ones, including the static kind.
+
+**Chapter 18** compiles small C files with `cc` and links them into Aura
+packages. On Windows a package that names a native library links the
+library's import file (`name.lib`) and loads the matching DLL from `PATH`.
+The chapter's build commands are for a Unix toolchain, and the freestanding
+kernel at its end is built and booted with Linux tools. Use WSL for it.
+
+Everything else, which is to say the language itself, the collections,
+traits, tests, contracts, tasks and queues, files, HTTP, JSON, and the
+library tour in Chapter 20, behaves on Windows as the book describes.

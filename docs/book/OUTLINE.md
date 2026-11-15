@@ -74,6 +74,8 @@ and promises to explain each later.
 - 8.3 Dictionaries and sets
 - 8.4 Comprehensions and builtins (`sum`, `min`, `sorted`, `reversed`, ...)
 - 8.5 Numeric arrays (`Array[T]`)
+- 8.6 Views and spans (`view` bindings, `-> view T from`, `Span[T]`)
+- 8.7 Lane values (the `simd` module, a worked and timed lane loop)
 
 ## 9. Error handling
 
@@ -127,12 +129,17 @@ and promises to explain each later.
 - 16.2 Running processes and supervisors
 - 16.3 Networking and HTTP
 - 16.4 JSON
+- 16.5 HTTP clients (the `http` module, posting, server-sent events,
+  `control.retry`)
+- 16.6 Other protocols (UDP, WebSockets, Unix sockets, TLS)
 
 ## 17. Building, debugging, and shipping
 
 - 17.1 `aura run` vs `aura build`, and what a native binary contains
 - 17.2 Debugging in VS Code
 - 17.3 Performance (what is fast, what costs, how to measure)
+- 17.4 Building for other machines (`--target`, target packs, static musl,
+  arm64, `--target-cpu`)
 
 ## 18. Calling C
 
@@ -144,6 +151,16 @@ and promises to explain each later.
 - 19.1 A single-task runner
 - 19.2 Running jobs in parallel with a worker pool
 - 19.3 Supervision, restarts, and graceful shutdown
+
+## 20. A tour of the standard library
+
+One small tool, `courier`, grows across the sections.
+
+- 20.1 Bytes and codecs (gzip, SHA-256, HMAC, hex, base64)
+- 20.2 Time and dates
+- 20.3 Regular expressions
+- 20.4 Randomness (seeded and secure)
+- 20.5 Logging, tracing, and metrics
 
 ## 21. Tensors
 
@@ -200,3 +217,4 @@ A project chapter: GPT-2 inference from the published weights.
 - C: Aura for Python developers
 - D: Useful tools (formatter, language server, VS Code)
 - E: Diagnostics you will meet often
+- F: Following the book on Windows

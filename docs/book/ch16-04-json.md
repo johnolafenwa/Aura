@@ -550,27 +550,8 @@ returns a plain `str`. Its failures, such as a `Float` holding infinity that
 you built by hand, are bugs in the program rather than bad input, so they
 trap instead of returning an error.
 
-## Summary
-
-`checkup` started as a program that echoed a text file and ends as a tool you
-could run from cron or CI. Along the way you have used each of Aura's modules
-for the outside world. `fs` reads and writes files, with `with` closing
-handles and the temporary-file-and-rename recipe keeping readers from ever
-seeing half a report. `process` runs commands from an explicit argv with no
-shell in between, captures their output, talks to live children through pipes,
-and supervises children with restart policies. `net` serves and calls HTTP
-and TCP, keeping each socket on the task that opened it. And `json` turns
-documents into your own types and back, with errors that point at a field.
-
-The same three rules held throughout: failures are `Result` values with
-specific error types, resources live in `with` blocks, and every wait has a
-timeout. They are the reason `checkup` can tell "the command failed" from
-"the command never started" from "the command is stuck", and why it leaves no
-processes or open files behind on any path out. The full contracts are in the
-Manual pages for [I/O](/manual/io), [the filesystem](/manual/filesystem),
-[processes](/manual/process), [networking](/manual/network), and
-[JSON](/manual/json).
-
-So far we have run everything with `aura run`. In the next chapter we will
-build `checkup` into a native binary you can copy to another machine, step
-through it in a debugger, and look at what Aura code costs when it runs.
+`checkup` is finished: it reads its checks from JSON, probes files,
+commands, and URLs, and writes a report another program can parse. Its HTTP
+probe only ever looked at a status code, though, and the `net` module has
+more in it than the two protocols we used. The next two sections cover the
+rest: calling HTTP services in earnest, and the other kinds of socket.
