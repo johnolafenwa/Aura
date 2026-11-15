@@ -352,35 +352,25 @@ derived from the number of cores, between 2 and 8), and
 program that resolves thousands of names at once is where these start to
 matter.
 
-## What the HTTP helpers do not do
+## Beyond a status check
 
-The HTTP client in Aura 0.16 is deliberately small. Each call makes one
-request on a fresh connection. It does not follow redirects, pool
-connections, speak HTTP/2, use a proxy, or decompress bodies. `https://` URLs
-work and verify the server's certificate against the standard public root
-set. Headers are a `dict[str, str]`, which cannot represent a header that
-appears more than once, such as several `Set-Cookie` lines, so do not use
-these helpers where that matters. Incoming messages are limited to 16 MiB and
-64 headers.
+A health checker needs very little from HTTP: one request, one status code.
+The client can do a good deal more. It follows redirects, reuses
+connections, decompresses bodies, and reads a response in pieces or as a
+stream of events. `https://` URLs work and verify the server's certificate
+against the standard public root set.
+[Section 16.5](/book/ch16-05-http-clients) puts all of that to use, along
+with `control.retry` for trying a failed request again.
 
-None of this matters for a health checker, but it is the honest list of what
-you would have to build yourself for a general-purpose client. Retrying is
-one of those things, and the `control.retry` helper in the
-[control-plane modules](/manual/control-plane) runs a function again with
-exponential backoff until it returns `Ok`. Which statuses deserve a retry
-(`503` probably, `404` probably not) is an application decision, so it stays
-in your code.
-
-The `net` module has more than TCP and HTTP. UDP sockets
-(`net.udp_bind`) send and receive datagrams, WebSockets
-(`net.websocket_listen` and `net.websocket_connect_timeout`) exchange whole
-text or byte messages, and on Unix hosts there are Unix domain sockets and
-TLS streams with your own certificates. They follow the same rules you have
-seen: resources in `with`, `Result[..., io.Error]` everywhere, and a `timeout`
-on every wait. The [Network Module](/manual/network) page lists them all with
-their limits.
+The `net` module also has more than TCP and HTTP. UDP sockets send and
+receive datagrams, WebSockets exchange whole messages in both directions,
+Unix domain sockets connect programs on one machine, and TLS streams
+encrypt a TCP conversation with your own certificates. They follow the
+rules you have seen here: resources in `with`, `Result[..., io.Error]`
+everywhere, and a `timeout` on every wait.
+[Section 16.6](/book/ch16-06-other-protocols) has a small program for each.
 
 `checkup` now has all three probes. The configuration format is starting to
 strain, though: a command argument containing a space cannot be written at
 all, and the report is text that another program would have to parse. Both
-problems have the same answer, which is the subject of the last section.
+problems have the same answer, which is the subject of the next section.

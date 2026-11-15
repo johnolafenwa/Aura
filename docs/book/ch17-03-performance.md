@@ -242,18 +242,6 @@ And when you do change something, measure again, the same way as before.
 Performance intuition built in another language transfers less than you
 would think, in both directions.
 
-## Summary
-
-You can now take an Aura program from source to something you can ship.
-`aura run` executes MIR for fast iteration, and `aura build` produces a
-native binary with the runtime linked in, which runs on a machine with no
-compiler and reports traps with the same source-located diagnostics. A debug
-build with `--debug` adds what lldb and VS Code need for breakpoints,
-stepping, and Aura-typed variables. And you know how to measure a program:
-time the native binary, count allocations with `AURA_RUNTIME_STATS=1`,
-profile with symbols kept, and read published numbers with their context.
-
-Everything so far has been Aura calling Aura, or Aura calling the operating
-system through its standard modules. Sometimes the function you need already
-exists in a C library. [Chapter 18](/book/ch18-00-calling-c) shows how Aura
-calls C, and why it keeps that door deliberately narrow.
+Every measurement in this section was of a binary built for the machine
+that ran it. The last section of the chapter is about building for a
+machine that is somewhere else.
