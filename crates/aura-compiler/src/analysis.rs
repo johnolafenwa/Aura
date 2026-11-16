@@ -3133,6 +3133,13 @@ impl<'a> AnalysisBuilder<'a> {
             .unwrap_or(Type::Unit);
         let class_info = self.class_info_for_type_name(base_type_name(&manager_ty));
         if let Ok(crate::sema::ManagerShape {
+            entry: crate::sema::ManagerEntry::Lock { payload },
+            ..
+        }) = crate::sema::classify_manager(&manager_ty, class_info)
+        {
+            return (payload, "mutable view");
+        }
+        if let Ok(crate::sema::ManagerShape {
             entry: crate::sema::ManagerEntry::View { mutable },
             ..
         }) = crate::sema::classify_manager(&manager_ty, class_info)

@@ -890,6 +890,8 @@ pub(super) fn preserves_qualified_builtin_type_name(type_name: &str) -> bool {
             | "net.HttpExchange"
             | "http.Stream"
             | "tensor.Node"
+            | "sync.Cell"
+            | "sync.Atom"
             | "net.WebSocketListener"
             | "net.WebSocket"
             | "net.UnixListener"
@@ -1427,7 +1429,12 @@ impl<'a> FunctionChecker<'a> {
                 if args.is_empty()
                     && matches!(
                         name.as_str(),
-                        "process.Completed" | "http.Stream" | "tensor.Node" | "net.UdpDatagram"
+                        "process.Completed"
+                            | "http.Stream"
+                            | "tensor.Node"
+                            | "net.UdpDatagram"
+                            | "sync.Cell"
+                            | "sync.Atom"
                     ) =>
             {
                 TransferSummary::default()

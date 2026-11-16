@@ -2008,6 +2008,81 @@ fn tensor_namespace() -> ModuleNamespace {
     namespace
 }
 
+/// The host part of `sync`: the lock cell and the atomic word that
+/// `std/sync.au` builds `Mutex`, `AtomicInt`, `AtomicBool`, and `Map` on.
+/// Both handles are Copy and Transfer, as a `Queue[T]` handle is: a copy
+/// reaches the same shared state.
+fn sync_namespace() -> ModuleNamespace {
+    let int64 = || type_ref("int64", Vec::new());
+    let boolean = || type_ref("bool", Vec::new());
+    let unit = || type_ref("None", Vec::new());
+    let cell = || type_ref("sync.Cell", Vec::new());
+    let atom = || type_ref("sync.Atom", Vec::new());
+    let payload = || type_ref("T", Vec::new());
+    let atom_function = |name: &str, extra: Vec<Param>, result: TypeRef| {
+        let mut params = vec![value_param("atom", atom())];
+        params.extend(extra);
+        function_info("sync", name, params, result)
+    };
+    let mut namespace = function_only_namespace(
+        "sync",
+        vec![
+            generic_function_info(
+                "sync",
+                "__aura_cell_new",
+                vec!["T"],
+                vec![own_param("value", payload())],
+                cell(),
+            ),
+            generic_function_info(
+                "sync",
+                "__aura_cell_take",
+                vec!["T"],
+                vec![value_param("cell", cell())],
+                payload(),
+            ),
+            generic_function_info(
+                "sync",
+                "__aura_cell_put",
+                vec!["T"],
+                vec![value_param("cell", cell()), own_param("value", payload())],
+                unit(),
+            ),
+            function_info(
+                "sync",
+                "__aura_cell_poisoned",
+                vec![value_param("cell", cell())],
+                boolean(),
+            ),
+            function_info(
+                "sync",
+                "__aura_atom_new",
+                vec![value_param("value", int64())],
+                atom(),
+            ),
+            atom_function("__aura_atom_load", Vec::new(), int64()),
+            atom_function("__aura_atom_store", vec![value_param("value", int64())], unit()),
+            atom_function("__aura_atom_add", vec![value_param("delta", int64())], int64()),
+            atom_function("__aura_atom_swap", vec![value_param("value", int64())], int64()),
+            atom_function(
+                "__aura_atom_compare_and_set",
+                vec![
+                    value_param("expected", int64()),
+                    value_param("new", int64()),
+                ],
+                boolean(),
+            ),
+        ],
+    );
+    for name in ["Cell", "Atom"] {
+        let mut handle = class_info("sync", name);
+        handle.decl.copy = true;
+        namespace.classes.insert(name.to_string(), handle.clone());
+        namespace.all_classes.insert(name.to_string(), handle);
+    }
+    namespace
+}
+
 fn time_namespace() -> ModuleNamespace {
     let text = || type_ref("str", Vec::new());
     let int64 = || type_ref("int64", Vec::new());
@@ -2950,6 +3025,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         "http" => Some(http_namespace()),
         "time" => Some(time_namespace()),
         "tensor" => Some(tensor_namespace()),
+        "sync" => Some(sync_namespace()),
         "json" => Some(json_namespace()),
         "iter" => Some(iter_namespace()),
         // The prelude's traits and implementations are Aura source in
@@ -2965,7 +3041,7 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
 
 const HOST_BUILTIN_MODULES: &[&str] = &[
     "sys", "path", "math", "mem", "bytes", "gzip", "regex", "time", "http", "tensor", "json",
-    "iter", "toml", "metrics", "log", "trace", "random",
+    "iter", "toml", "metrics", "log", "trace", "random", "sync",
 ];
 
 fn build_host_builtin_metadata() -> BTreeMap<String, HostBuiltinMetadata> {
@@ -3094,6 +3170,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "regex"
             | "time"
             | "tensor"
+            | "sync"
             | "json"
             | "iter"
             | "prelude"
@@ -3116,7 +3193,7 @@ pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
         "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
         "gzip", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd", "toml",
-        "log", "metrics", "trace",
+        "log", "metrics", "trace", "sync",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

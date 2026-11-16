@@ -5370,6 +5370,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::HttpExchange(_) => "net.HttpExchange".to_string(),
         Value::HttpResponse(_) => "http.Stream".to_string(),
         Value::Tensor(_) => "tensor.Node".to_string(),
+        Value::Sync(handle) => handle.type_name().to_string(),
         Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
         Value::WebSocket(_) => "net.WebSocket".to_string(),
         Value::UnixListener(_) => "net.UnixListener".to_string(),
@@ -5435,6 +5436,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         Value::HttpExchange(_) => Type::named("net.HttpExchange"),
         Value::HttpResponse(_) => Type::named("http.Stream"),
         Value::Tensor(_) => Type::named("tensor.Node"),
+        Value::Sync(handle) => Type::named(handle.type_name()),
         Value::WebSocketListener(_) => Type::named("net.WebSocketListener"),
         Value::WebSocket(_) => Type::named("net.WebSocket"),
         Value::UnixListener(_) => Type::named("net.UnixListener"),
@@ -14228,6 +14230,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::HttpExchange(_) => expected == "net.HttpExchange",
             Value::HttpResponse(_) => expected == "http.Stream",
             Value::Tensor(_) => expected == "tensor.Node",
+            Value::Sync(handle) => expected == handle.type_name(),
             Value::WebSocketListener(_) => expected == "net.WebSocketListener",
             Value::WebSocket(_) => expected == "net.WebSocket",
             Value::UnixListener(_) => expected == "net.UnixListener",
@@ -16016,6 +16019,16 @@ host_builtin_entries! {
     owned "mem::atomic_compare_exchange_uint32" => aura_host_mem_atomic_compare_exchange_uint32(host_builtins::host_mem_atomic_compare_exchange_uint32);
     owned "mem::atomic_compare_exchange_uint64" => aura_host_mem_atomic_compare_exchange_uint64(host_builtins::host_mem_atomic_compare_exchange_uint64);
     owned "mem::fence" => aura_host_mem_fence(host_builtins::host_mem_fence);
+    owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
+    owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
+    owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);
+    owned "sync::__aura_cell_poisoned" => aura_host_sync_cell_poisoned(crate::runtime_value::sync_host::host_cell_poisoned);
+    owned "sync::__aura_atom_new" => aura_host_sync_atom_new(crate::runtime_value::sync_host::host_atom_new);
+    owned "sync::__aura_atom_load" => aura_host_sync_atom_load(crate::runtime_value::sync_host::host_atom_load);
+    owned "sync::__aura_atom_store" => aura_host_sync_atom_store(crate::runtime_value::sync_host::host_atom_store);
+    owned "sync::__aura_atom_add" => aura_host_sync_atom_add(crate::runtime_value::sync_host::host_atom_add);
+    owned "sync::__aura_atom_swap" => aura_host_sync_atom_swap(crate::runtime_value::sync_host::host_atom_swap);
+    owned "sync::__aura_atom_compare_and_set" => aura_host_sync_atom_compare_and_set(crate::runtime_value::sync_host::host_atom_compare_and_set);
     owned "iter::__aura_generator_start" => aura_host_iter_generator_start(direct_generator_start);
     owned "iter::__aura_generator_yield" => aura_host_iter_generator_yield(direct_generator_yield);
     borrowed "iter::__aura_generator_resume" => aura_host_iter_generator_resume(|args| direct_generator_handle("iter::__aura_generator_resume", args));

@@ -19,6 +19,10 @@ pub(crate) enum ManagerEntry {
     /// `__enter__(mut self) -> view [mut] T from self`: the item binding is
     /// the returned view and the manager lives in a hidden managed binding.
     View { mutable: bool },
+    /// A `sync.Locked[T]`: entering takes the lock and moves the guarded
+    /// value into a hidden local, and the item binding is a mutable view
+    /// of that local. Holds the guarded type `T`.
+    Lock { payload: Type },
 }
 
 /// How a `with` item leaves its manager.
@@ -32,6 +36,10 @@ pub(crate) enum ManagerExit {
     Unit,
     /// `__exit__(mut self) -> Result[None, E]`, holding the substituted `E`.
     Result(Type),
+    /// A `sync.Locked[T]`: leaving moves the hidden local back and
+    /// releases the lock. No cleanup is registered. A task that fails
+    /// inside the body poisons the lock instead.
+    Lock,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -82,22 +90,86 @@ pub(crate) fn describe_hidden_manager(
     mut diagnostic: Diagnostic,
     span: crate::diag::Span,
 ) -> Diagnostic {
-    let hidden = format!("`{}`", hidden_manager_binding(span));
-    let readable = format!(
-        "the manager of the `with` item at {}:{}",
-        span.line, span.column
-    );
-    diagnostic.message = diagnostic.message.replace(&hidden, &readable);
-    for secondary in &mut diagnostic.secondary_spans {
-        secondary.label = secondary.label.replace(&hidden, &readable);
-    }
-    for note in &mut diagnostic.notes {
-        *note = note.replace(&hidden, &readable);
-    }
-    for help in &mut diagnostic.help {
-        *help = help.replace(&hidden, &readable);
+    let names = [
+        (
+            format!("`{}`", hidden_manager_binding(span)),
+            format!(
+                "the manager of the `with` item at {}:{}",
+                span.line, span.column
+            ),
+        ),
+        (
+            format!("`{}`", hidden_lock_value_binding(span)),
+            format!(
+                "the value locked by the `with` item at {}:{}",
+                span.line, span.column
+            ),
+        ),
+    ];
+    for (hidden, readable) in &names {
+        diagnostic.message = diagnostic.message.replace(hidden, readable);
+        for secondary in &mut diagnostic.secondary_spans {
+            secondary.label = secondary.label.replace(hidden, readable);
+        }
+        for note in &mut diagnostic.notes {
+            *note = note.replace(hidden, readable);
+        }
+        for help in &mut diagnostic.help {
+            *help = help.replace(hidden, readable);
+        }
     }
     diagnostic
+}
+
+/// The methods of `sync.Locked[T]` that lowering calls to take the lock and
+/// to release it.
+pub(crate) const LOCK_TAKE_METHOD: &str = "__aura_take";
+pub(crate) const LOCK_PUT_METHOD: &str = "__aura_put";
+
+/// The compiler-named local that holds the value of a locked `sync.Mutex`
+/// for the body of its `with` item.
+pub(crate) fn hidden_lock_value_binding(span: crate::diag::Span) -> String {
+    format!("with#value{}_{}", span.line, span.column)
+}
+
+/// The guarded type `T` when `ty` is the builtin `sync.Locked[T]`.
+pub(crate) fn lock_item_payload(ty: &Type, class_info: Option<&ClassInfo>) -> Option<Type> {
+    let Type::Named(_, args) = ty else {
+        return None;
+    };
+    let class_info = class_info?;
+    let is_lock = class_info.module_name == "sync"
+        && class_info.decl.name == "Locked"
+        && class_info.methods.contains_key(LOCK_TAKE_METHOD)
+        && matches!(
+            class_info.fields.get("cell"),
+            Some(FieldInfo { ty: Type::Named(name, _), .. }) if name == "sync.Cell"
+        );
+    match args.as_slice() {
+        [payload] if is_lock => Some(payload.clone()),
+        _ => None,
+    }
+}
+
+/// The synthesized `binding.method(args)` call on a manager.
+pub(crate) fn manager_method_call_with(
+    binding: &str,
+    method: &str,
+    args: Vec<Expr>,
+    span: crate::diag::Span,
+) -> Expr {
+    let mut call = manager_method_call(binding, method, span);
+    if let ExprKind::Call { args: call_args, .. } = &mut call.kind {
+        *call_args = args
+            .into_iter()
+            .map(|value| crate::ast::Argument {
+                name: None,
+                value,
+                span,
+            })
+            .collect();
+    }
+    call
 }
 
 /// The synthesized `binding.method()` call that enters or exits a manager.
@@ -141,6 +213,12 @@ pub(crate) fn classify_manager(
         return Ok(ManagerShape {
             entry: ManagerEntry::None,
             exit: ManagerExit::Builtin,
+        });
+    }
+    if let Some(payload) = lock_item_payload(ty, class_info) {
+        return Ok(ManagerShape {
+            entry: ManagerEntry::Lock { payload },
+            exit: ManagerExit::Lock,
         });
     }
     let Some(class_info) = class_info else {

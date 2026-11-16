@@ -75,6 +75,8 @@ pub mod host_builtins;
 pub mod http_client;
 #[path = "regex_host.rs"]
 pub mod regex_host;
+#[path = "sync_host.rs"]
+pub mod sync_host;
 #[path = "tensor_host.rs"]
 pub mod tensor_host;
 #[path = "time_host.rs"]
@@ -88,6 +90,7 @@ pub use generator::{
 pub use http_client::HttpResponseValue;
 #[cfg(any(test, feature = "test-support"))]
 pub use http_client::HttpSnapshot;
+pub use sync_host::SyncValue;
 pub use tensor_host::{TensorDevice, TensorValue};
 
 type HttpHeaders = Vec<(String, String)>;
@@ -338,6 +341,8 @@ pub enum Value {
     HttpExchange(HttpExchangeValue),
     HttpResponse(HttpResponseValue),
     Tensor(TensorValue),
+    /// A `sync.Cell` or `sync.Atom`: state several tasks share.
+    Sync(SyncValue),
     WebSocketListener(WebSocketListenerValue),
     WebSocket(WebSocketValue),
     ProcessChild(ProcessChildValue),
@@ -6229,6 +6234,8 @@ struct LightweightTaskContext {
     /// queue operation after the first skips the registry's lock. The weak
     /// reference keeps the queue's address from being reused.
     registered_queue_roles: RefCell<Vec<(Weak<ChannelState>, bool)>>,
+    /// The `sync` cells this task holds.
+    sync_holder: sync_host::HolderState,
 }
 
 /// How many queue roles a task remembers. A task that uses more queues
@@ -6944,6 +6951,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::HttpExchange(_) => "net.HttpExchange".to_string(),
             Value::HttpResponse(_) => "http.Stream".to_string(),
             Value::Tensor(_) => "tensor.Node".to_string(),
+            Value::Sync(handle) => handle.type_name().to_string(),
             Value::WebSocketListener(_) => "net.WebSocketListener".to_string(),
             Value::WebSocket(_) => "net.WebSocket".to_string(),
             Value::ProcessChild(_) => "process.Child".to_string(),
@@ -9750,6 +9758,7 @@ impl LightweightTaskScheduler {
             cancellation: request.cancellation,
             task_state: Arc::downgrade(&request.state),
             registered_queue_roles: RefCell::new(Vec::new()),
+            sync_holder: sync_host::HolderState::default(),
         });
         let stack_bounds = task_stack_bounds(&request.stack.stack);
         let stack_size = request.stack.size;
@@ -9926,11 +9935,13 @@ impl LightweightTaskScheduler {
                 // context is still active and may synchronously start owned
                 // child work. Admit those requests before retiring the parent.
                 self.drain_spawn_requests();
+                sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
             CoroutineResult::Return(result) => {
                 record.context.yielder.set(std::ptr::null());
+                sync_host::holder_ended(&record.context.sync_holder);
                 self.complete_task(task_id, &record.state, result);
                 retire_lightweight_task_record(record);
             }
@@ -10941,6 +10952,7 @@ impl Clone for Value {
             Self::HttpExchange(value) => Self::HttpExchange(value.clone()),
             Self::HttpResponse(value) => Self::HttpResponse(value.clone()),
             Self::Tensor(value) => Self::Tensor(value.clone()),
+            Self::Sync(value) => Self::Sync(value.clone()),
             Self::WebSocketListener(value) => Self::WebSocketListener(value.clone()),
             Self::WebSocket(value) => Self::WebSocket(value.clone()),
             Self::ProcessChild(value) => Self::ProcessChild(value.clone()),
@@ -10988,6 +11000,7 @@ impl PartialEq for Value {
             (Value::HttpExchange(left), Value::HttpExchange(right)) => left == right,
             (Value::HttpResponse(left), Value::HttpResponse(right)) => left == right,
             (Value::Tensor(left), Value::Tensor(right)) => left == right,
+            (Value::Sync(left), Value::Sync(right)) => left == right,
             (Value::WebSocketListener(left), Value::WebSocketListener(right)) => left == right,
             (Value::WebSocket(left), Value::WebSocket(right)) => left == right,
             (Value::ProcessChild(left), Value::ProcessChild(right)) => left == right,
@@ -11228,6 +11241,7 @@ impl Value {
                         Value::HttpExchange(_) => rendered.push_str("<http-exchange>"),
                         Value::HttpResponse(_) => rendered.push_str("<http-stream>"),
                         Value::Tensor(_) => rendered.push_str("<tensor-node>"),
+                        Value::Sync(_) => rendered.push_str("<sync-handle>"),
                         Value::WebSocketListener(_) => rendered.push_str("<websocket-listener>"),
                         Value::WebSocket(_) => rendered.push_str("<websocket>"),
                         Value::ProcessChild(_) => rendered.push_str("<process-child>"),

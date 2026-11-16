@@ -12265,6 +12265,9 @@ struct Lowerer<'a> {
     /// Exit result shape of each active `with` place whose action is a
     /// manager `__exit__`, keyed by the place in `with_stack`.
     manager_exits: BTreeMap<String, ManagerExitResult>,
+    /// The `sync.Locked[T]` handle of each active lock item, keyed by the
+    /// place in `with_stack`, which holds the guarded value.
+    lock_exits: BTreeMap<String, String>,
     match_writeback_stack: Vec<MatchWritebackState>,
     local_types: std::collections::BTreeMap<String, Type>,
     /// Original type-parameter identity for roots whose projection-summary
@@ -12545,6 +12548,7 @@ impl<'a> Lowerer<'a> {
             return_redirects: Vec::new(),
             with_stack: Vec::new(),
             manager_exits: BTreeMap::new(),
+            lock_exits: BTreeMap::new(),
             match_writeback_stack: Vec::new(),
             local_types: std::collections::BTreeMap::new(),
             specialized_bound_roots: BTreeMap::new(),
@@ -30900,6 +30904,24 @@ impl<'a> Lowerer<'a> {
     /// popped without running, then `__exit__` is called explicitly so a
     /// `Result` exit propagates its error as `try` would (checkpoint F5).
     fn emit_with_exit(&mut self, place: String, cancel_before_cleanup: bool) {
+        if let Some(handle) = self.lock_exits.get(&place).cloned() {
+            // A lock item registered no cleanup. Leaving moves the guarded
+            // value back into its cell, which releases the lock.
+            let span = Span::new(0, 0);
+            let held = Expr {
+                kind: ExprKind::Name(place),
+                span,
+            };
+            let put = crate::sema::manager_method_call_with(
+                &handle,
+                crate::sema::LOCK_PUT_METHOD,
+                vec![held],
+                span,
+            );
+            let value = self.lower_expr(&put);
+            self.emit(Instruction::Eval { value });
+            return;
+        }
         let Some(exit_result) = self.manager_exits.get(&place).copied() else {
             self.emit(Instruction::PopCleanup {
                 place,
@@ -30962,11 +30984,15 @@ impl<'a> Lowerer<'a> {
         });
         // The `as` name is bound in the body's scope.
         self.binding_blocks.push(BindingBlock::default());
+        let lock_payload = match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { payload }) => Some(payload.clone()),
+            _ => None,
+        };
         // A view-returning `__enter__` keeps the manager in a hidden managed
         // place, a fresh temporary that source code cannot name (F4).
         let place = if matches!(
             shape.as_ref().map(|shape| &shape.entry),
-            Some(crate::sema::ManagerEntry::View { .. })
+            Some(crate::sema::ManagerEntry::View { .. } | crate::sema::ManagerEntry::Lock { .. })
         ) {
             match manager_ty.clone() {
                 Some(ty) => self.new_typed_temp(ty),
@@ -30982,9 +31008,44 @@ impl<'a> Lowerer<'a> {
         });
 
         let span = with_stmt.span;
+        // A lock item: `place` holds the `sync.Locked[T]` handle. Taking
+        // the lock moves the guarded value into a second hidden local, and
+        // that local is the place the item's exits act on.
+        let place = match lock_payload {
+            Some(payload) => {
+                let handle = place;
+                let held = self.new_typed_temp(payload);
+                let take =
+                    crate::sema::manager_method_call(&handle, crate::sema::LOCK_TAKE_METHOD, span);
+                let value = self.lower_expr(&take);
+                self.emit(Instruction::Assign {
+                    target: held.clone(),
+                    value: Rvalue::Use(value),
+                });
+                self.lock_exits.insert(held.clone(), handle);
+                held
+            }
+            None => place,
+        };
         let mut entry_loan = None;
         self.loan_scopes.push(Vec::new());
         match shape.as_ref().map(|shape| &shape.entry) {
+            Some(crate::sema::ManagerEntry::Lock { .. }) => {
+                let view = Stmt::View(crate::ast::ViewStmt {
+                    name: with_stmt.binding.clone(),
+                    mutable: true,
+                    source: Expr {
+                        kind: ExprKind::Name(place.clone()),
+                        span,
+                    },
+                    span,
+                });
+                self.lower_stmt(&view, &BTreeSet::new());
+                entry_loan = self
+                    .loan_scopes
+                    .last()
+                    .and_then(|scope| scope.last().cloned());
+            }
             Some(crate::sema::ManagerEntry::Unit) => {
                 let entry = crate::sema::manager_method_call(&place, "__enter__", span);
                 let value = self.lower_expr(&entry);
@@ -31017,11 +31078,13 @@ impl<'a> Lowerer<'a> {
         if let CleanupAction::ManagerExit { exit_result } = &action {
             self.manager_exits.insert(place.clone(), *exit_result);
         }
-        self.emit(Instruction::PushCleanup {
-            place: place.clone(),
-            action,
-            callee: None,
-        });
+        if !self.lock_exits.contains_key(&place) {
+            self.emit(Instruction::PushCleanup {
+                place: place.clone(),
+                action,
+                callee: None,
+            });
+        }
         self.with_stack.push(place.clone());
         let mut body_endings = ending_loans
             .iter()
@@ -31051,6 +31114,7 @@ impl<'a> Lowerer<'a> {
             self.emit_with_exit(place.clone(), false);
         }
         self.manager_exits.remove(&place);
+        self.lock_exits.remove(&place);
         self.end_binding_block();
         !self.current_terminated()
     }
