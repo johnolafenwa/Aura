@@ -90,11 +90,13 @@ fn decode_failures_come_back_as_status_numbers() {
     assert_eq!(text(&invalid[5]), "the input is empty");
     assert!(byte_list(&invalid[4]).is_empty());
 
-    let unknown = elements(call("image::__aura_decode", bytes(b"GIF89a"), &[100]).expect("returns"));
+    let unknown =
+        elements(call("image::__aura_decode", bytes(b"GIF89a"), &[100]).expect("returns"));
     assert_eq!(number(&unknown[0]), 2);
 
-    let large =
-        elements(call("image::__aura_decode", bytes(b"P5\n20 20\n255\n"), &[399]).expect("returns"));
+    let large = elements(
+        call("image::__aura_decode", bytes(b"P5\n20 20\n255\n"), &[399]).expect("returns"),
+    );
     assert_eq!(number(&large[0]), 3);
     assert_eq!(number(&large[1]), 399);
     assert_eq!(text(&large[5]), "the image has more than 399 pixels");
@@ -104,8 +106,10 @@ fn decode_failures_come_back_as_status_numbers() {
     assert!(text(&info[4]).contains("not a PNG"));
 
     for limit in [0, -4, image_codec::MAX_PIXEL_LIMIT + 1] {
-        assert!(message(call("image::__aura_decode", bytes(b"P5"), &[limit]))
-            .contains("requires a pixel limit from 1 to"));
+        assert!(
+            message(call("image::__aura_decode", bytes(b"P5"), &[limit]))
+                .contains("requires a pixel limit from 1 to")
+        );
     }
 }
 
@@ -142,8 +146,12 @@ fn a_layout_that_does_not_match_the_samples_is_refused() {
     assert!(convert(&[3, 2, 3, 9]).contains("1 to 4 channels, found `9`"));
     assert!(convert(&[i64::MAX, i64::MAX, 3, 1]).contains("found 18"));
     assert!(convert(&[3, 2, 3]).contains("expects 5 arguments, found 4"));
-    assert!(message(call("image::__aura_convert", Value::Bool(true), &[3, 2, 3, 1]))
-        .contains("list[uint8]"));
+    assert!(message(call(
+        "image::__aura_convert",
+        Value::Bool(true),
+        &[3, 2, 3, 1]
+    ))
+    .contains("list[uint8]"));
 }
 
 #[test]
@@ -155,8 +163,12 @@ fn the_pixel_operations_return_new_samples() {
     assert_eq!(byte_list(&wide).len(), 36);
     assert_eq!(&byte_list(&wide)[..6], [0, 10, 20, 0, 10, 20]);
     for filter in [1, 2] {
-        let small = call("image::__aura_resize", bytes(&PIXELS), &[3, 2, 3, 1, 1, filter])
-            .expect("resizes");
+        let small = call(
+            "image::__aura_resize",
+            bytes(&PIXELS),
+            &[3, 2, 3, 1, 1, filter],
+        )
+        .expect("resizes");
         assert_eq!(byte_list(&small).len(), 3);
     }
 
@@ -220,7 +232,12 @@ fn arrays_carry_the_samples_in_both_layouts() {
     assert_eq!(shape, [2, 3, 3]);
     assert_eq!(values[1], 10.0 / 255.0);
     let back = elements(
-        call("image::__aura_from_array", float_array(&values, &shape), &[0]).expect("converts"),
+        call(
+            "image::__aura_from_array",
+            float_array(&values, &shape),
+            &[0],
+        )
+        .expect("converts"),
     );
     let layout: Vec<i64> = back[..3].iter().map(number).collect();
     assert_eq!(layout, [3, 2, 3]);
@@ -232,7 +249,12 @@ fn arrays_carry_the_samples_in_both_layouts() {
     assert_eq!(shape, [3, 2, 3]);
     assert_eq!(values[1], 30.0 / 255.0);
     let back = elements(
-        call("image::__aura_from_array", float_array(&values, &shape), &[1]).expect("converts"),
+        call(
+            "image::__aura_from_array",
+            float_array(&values, &shape),
+            &[1],
+        )
+        .expect("converts"),
     );
     let layout: Vec<i64> = back[..3].iter().map(number).collect();
     assert_eq!(layout, [3, 2, 3]);
@@ -260,9 +282,8 @@ fn from_array_reads_a_view_in_its_own_order() {
         unreachable!()
     };
     let turned = array.transpose().expect("transposes");
-    let image = elements(
-        call("image::__aura_from_array", Value::Array(turned), &[0]).expect("converts"),
-    );
+    let image =
+        elements(call("image::__aura_from_array", Value::Array(turned), &[0]).expect("converts"));
     let layout: Vec<i64> = image[..3].iter().map(number).collect();
     assert_eq!(layout, [2, 3, 1]);
     assert_eq!(byte_list(&image[3]), [0, 153, 51, 204, 102, 255]);
@@ -270,7 +291,8 @@ fn from_array_reads_a_view_in_its_own_order() {
 
 #[test]
 fn from_array_refuses_other_shapes_and_dtypes() {
-    let from = |array: Value, planes: i64| message(call("image::__aura_from_array", array, &[planes]));
+    let from =
+        |array: Value, planes: i64| message(call("image::__aura_from_array", array, &[planes]));
     assert!(from(float_array(&[0.0; 4], &[4]), 0).contains("two or three axes, found shape [4]"));
     assert!(from(float_array(&[0.0; 16], &[2, 2, 2, 2]), 0).contains("two or three axes"));
     assert!(from(float_array(&[0.0; 10], &[1, 2, 5]), 0).contains("1 to 4 channels, found 5"));
@@ -297,14 +319,22 @@ fn arguments_of_the_wrong_kind_are_refused() {
         let refused = function(vec![bytes(&PIXELS), Value::string("three")], None);
         let error = refused.expect_err("text is no integer");
         assert_eq!(error.code, "AU4001");
-        assert!(error.message.contains("expects argument 2 to be `int64`"), "{name}");
+        assert!(
+            error.message.contains("expects argument 2 to be `int64`"),
+            "{name}"
+        );
     }
     assert!(message(call("image::__aura_info", bytes(&PIXELS), &[1]))
         .contains("expects 1 arguments, found 2"));
     assert!(image_host_function("image::__aura_missing").is_none());
-    assert!(
-        message(evaluate_image_builtin("image::__aura_missing", &Value::Unit, &[]))
-            .contains("is not an image function")
+    assert!(message(evaluate_image_builtin(
+        "image::__aura_missing",
+        &Value::Unit,
+        &[]
+    ))
+    .contains("is not an image function"));
+    assert_eq!(
+        failure(&ImageError::Unsupported("x".to_string())),
+        (2, 0, "x".to_string())
     );
-    assert_eq!(failure(&ImageError::Unsupported("x".to_string())), (2, 0, "x".to_string()));
 }

@@ -164,9 +164,7 @@ pub fn header(data: &[u8]) -> Result<Header, ImageError> {
         Format::Jpeg => {
             let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
             decoder.decode_headers().map_err(jpeg_decode_error)?;
-            let (width, height) = decoder
-                .dimensions()
-                .ok_or_else(|| invalid("the JPEG has no frame header"))?;
+            let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
             (width, height, jpeg_output_channels(&decoder))
         }
         Format::Pnm => {
@@ -197,19 +195,18 @@ pub fn decode(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
 /// Runs a decoder from another crate. Should one panic on a file it did
 /// not expect, the file is reported as invalid and the program goes on.
 fn guarded<T>(work: impl FnOnce() -> Result<T, ImageError>) -> Result<T, ImageError> {
-    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work))
-        .unwrap_or_else(|_| Err(invalid("invalid image: the decoder could not read the data")))
+    std::panic::catch_unwind(std::panic::AssertUnwindSafe(work)).unwrap_or_else(|_| {
+        Err(invalid(
+            "invalid image: the decoder could not read the data",
+        ))
+    })
 }
 
 // ---------------------------------------------------------------- PNG
 
 fn png_decoder(data: &[u8], limit_bytes: usize) -> png::Decoder<Cursor<&[u8]>> {
-    let mut decoder = png::Decoder::new_with_limits(
-        Cursor::new(data),
-        png::Limits {
-            bytes: limit_bytes,
-        },
-    );
+    let mut decoder =
+        png::Decoder::new_with_limits(Cursor::new(data), png::Limits { bytes: limit_bytes });
     // Palettes, low bit depths and transparency keys expand to plain
     // samples, and 16-bit samples keep their high byte.
     decoder.set_transformations(png::Transformations::normalize_to_color8());
@@ -290,11 +287,14 @@ pub fn encode_png(
     encoder.set_color(color);
     encoder.set_depth(png::BitDepth::Eight);
     encoder.set_compression(compression);
-    let failed = |error: png::EncodingError| invalid(format!("PNG encoding failed: {error}"));
-    let mut writer = encoder.write_header().map_err(failed)?;
-    writer.write_image_data(data).map_err(failed)?;
-    writer.finish().map_err(failed)?;
+    let mut writer = encoder.write_header().map_err(png_failed)?;
+    writer.write_image_data(data).map_err(png_failed)?;
+    writer.finish().map_err(png_failed)?;
     Ok(output)
+}
+
+fn png_failed(error: png::EncodingError) -> ImageError {
+    invalid(format!("PNG encoding failed: {error}"))
 }
 
 // ---------------------------------------------------------------- JPEG
@@ -320,9 +320,7 @@ fn decode_jpeg(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
 
     let mut decoder = zune_jpeg::JpegDecoder::new(ZCursor::new(data));
     decoder.decode_headers().map_err(jpeg_decode_error)?;
-    let (width, height) = decoder
-        .dimensions()
-        .ok_or_else(|| invalid("the JPEG has no frame header"))?;
+    let (width, height) = decoder.dimensions().ok_or_else(jpeg_without_frame)?;
     let pixels = checked_pixels(width, height, limit_pixels)?;
     let channels = jpeg_output_channels(&decoder);
     let colorspace = if channels == 1 {
@@ -389,15 +387,14 @@ fn encode_jpeg_on(
         (Ok(width), Ok(height)) => (width, height),
         _ => return Err(unsupported("JPEG holds at most 65535 pixels a side")),
     };
-    let color = match channels {
-        1 => jpeg_encoder::ColorType::Luma,
-        3 => jpeg_encoder::ColorType::Rgb,
-        _ => {
-            return Err(unsupported(
+    let color =
+        match channels {
+            1 => jpeg_encoder::ColorType::Luma,
+            3 => jpeg_encoder::ColorType::Rgb,
+            _ => return Err(unsupported(
                 "JPEG has no alpha channel: convert the image with `to_rgb()` or `to_gray()` first",
-            ))
-        }
-    };
+            )),
+        };
     let encode = |rows: &[u8], height: u16| {
         let mut output = Vec::with_capacity(rows.len() / 6 + 1024);
         let mut encoder = jpeg_encoder::Encoder::new(&mut output, quality);
@@ -409,7 +406,7 @@ fn encode_jpeg_on(
         encoder
             .encode(rows, jpeg_width, height, color)
             .map(|()| output)
-            .map_err(|error| invalid(format!("JPEG encoding failed: {error}")))
+            .map_err(jpeg_failed)
     };
 
     // A strip is a whole number of block rows, so its data is exactly what
@@ -439,16 +436,27 @@ fn encode_jpeg_on(
             .map(|rows| scope.spawn(move || encode(rows, (rows.len() / row_bytes) as u16)))
             .collect();
         let mut parts = vec![encode(first, (first.len() / row_bytes) as u16)];
-        parts.extend(workers.into_iter().map(|worker| {
-            worker
-                .join()
-                .unwrap_or_else(|_| Err(invalid("JPEG encoding failed")))
-        }));
+        parts.extend(
+            workers
+                .into_iter()
+                .map(|worker| worker.join().ok().unwrap_or(Err(jpeg_strip_failed()))),
+        );
         parts
     });
     let parts = parts.into_iter().collect::<Result<Vec<_>, _>>()?;
-    join_jpeg_strips(&parts, jpeg_height, interval as u16)
-        .ok_or_else(|| invalid("JPEG encoding failed: a strip is not a baseline JPEG"))
+    join_jpeg_strips(&parts, jpeg_height, interval as u16).ok_or_else(jpeg_strip_failed)
+}
+
+fn jpeg_without_frame() -> ImageError {
+    invalid("the JPEG has no frame header")
+}
+
+fn jpeg_failed(error: jpeg_encoder::EncodingError) -> ImageError {
+    invalid(format!("JPEG encoding failed: {error}"))
+}
+
+fn jpeg_strip_failed() -> ImageError {
+    invalid("JPEG encoding failed: a strip is not a baseline JPEG")
 }
 
 /// Where a JPEG file's frame header and its scan data lie.
@@ -636,7 +644,10 @@ fn decode_pnm(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
     match header.kind {
         // Text bitmaps: one digit a pixel, 1 is black, whitespace optional.
         1 => {
-            let mut cursor = PnmCursor { data, at: header.body };
+            let mut cursor = PnmCursor {
+                data,
+                at: header.body,
+            };
             // A text image cannot hold more samples than it has bytes.
             if samples > body.len() {
                 return Err(short());
@@ -658,7 +669,10 @@ fn decode_pnm(data: &[u8], limit_pixels: usize) -> Result<Pixels, ImageError> {
             }
         }
         2 | 3 => {
-            let mut cursor = PnmCursor { data, at: header.body };
+            let mut cursor = PnmCursor {
+                data,
+                at: header.body,
+            };
             if samples > body.len() {
                 return Err(short());
             }
@@ -717,15 +731,14 @@ pub fn encode_pnm(
     channels: usize,
     data: &[u8],
 ) -> Result<Vec<u8>, ImageError> {
-    let kind = match channels {
-        1 => 5,
-        3 => 6,
-        _ => {
-            return Err(unsupported(
+    let kind =
+        match channels {
+            1 => 5,
+            3 => 6,
+            _ => return Err(unsupported(
                 "PPM has no alpha channel: convert the image with `to_rgb()` or `to_gray()` first",
-            ))
-        }
-    };
+            )),
+        };
     let mut output = format!("P{kind}\n{width} {height}\n255\n").into_bytes();
     output.reserve_exact(data.len());
     output.extend_from_slice(data);

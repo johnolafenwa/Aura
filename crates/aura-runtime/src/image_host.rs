@@ -77,12 +77,7 @@ fn size(numbers: &[i64], index: usize, least: i64, name: &str, what: &str) -> Re
 
 /// The width, height and channel count at `numbers[at..at + 3]`, checked
 /// against the number of samples.
-fn layout(
-    numbers: &[i64],
-    at: usize,
-    samples: usize,
-    name: &str,
-) -> Result<(usize, usize, usize)> {
+fn layout(numbers: &[i64], at: usize, samples: usize, name: &str) -> Result<(usize, usize, usize)> {
     let width = size(numbers, at, 1, name, "a width")?;
     let height = size(numbers, at + 1, 1, name, "a height")?;
     let channels = numbers[at + 2];

@@ -135,7 +135,10 @@ fn jpeg_round_trips_gray_and_rgb_within_tolerance() {
             (56, 40, channels)
         );
         let difference = largest_difference(&pixels.data, &data);
-        assert!(difference <= 12, "{channels} channels differ by {difference}");
+        assert!(
+            difference <= 12,
+            "{channels} channels differ by {difference}"
+        );
     }
 }
 
@@ -175,7 +178,11 @@ fn pnm_round_trips_gray_and_rgb() {
     for channels in [1, 3] {
         let data = gradient(7, 5, channels);
         let file = encode_pnm(7, 5, channels, &data).expect("encodes");
-        assert!(file.starts_with(if channels == 1 { b"P5\n7 5\n255\n" } else { b"P6\n7 5\n255\n" }));
+        assert!(file.starts_with(if channels == 1 {
+            b"P5\n7 5\n255\n"
+        } else {
+            b"P6\n7 5\n255\n"
+        }));
         assert_eq!(sniff(&file), Some(Format::Pnm));
         let head = header(&file).expect("header reads");
         assert_eq!(
@@ -225,7 +232,10 @@ fn pnm_scales_other_maximum_values() {
 
     let mut wide = b"P6\n1 1\n65535\n".to_vec();
     wide.extend_from_slice(&[0xff, 0xff, 0x80, 0x00, 0x00, 0x00]);
-    assert_eq!(decode(&wide, NO_LIMIT).expect("decodes").data, [255, 128, 0]);
+    assert_eq!(
+        decode(&wide, NO_LIMIT).expect("decodes").data,
+        [255, 128, 0]
+    );
 }
 
 #[test]
@@ -275,7 +285,12 @@ fn unknown_and_empty_data_are_told_apart() {
 
 #[test]
 fn truncated_and_corrupt_files_are_invalid_data() {
-    for name in ["rgb.png", "rgba_interlaced.png", "baseline.jpg", "progressive.jpg"] {
+    for name in [
+        "rgb.png",
+        "rgba_interlaced.png",
+        "baseline.jpg",
+        "progressive.jpg",
+    ] {
         let (file, _) = fixture(name);
         for keep in [9, file.len() / 3, file.len() / 2] {
             // A decoder may fill a short JPEG with gray, but it must not
@@ -338,8 +353,7 @@ fn the_pixel_limit_stops_a_decode_before_it_starts() {
     }
     let error = decode(b"P5\n4 4\n255\n", 15).expect_err("over the limit");
     assert_eq!(error.code(), 3);
-    let error =
-        decode(b"P5\n4294967296 4294967296\n255\n", NO_LIMIT).expect_err("over the limit");
+    let error = decode(b"P5\n4294967296 4294967296\n255\n", NO_LIMIT).expect_err("over the limit");
     assert_eq!(error.code(), 3);
 }
 
@@ -402,8 +416,14 @@ fn nearest_resize_repeats_and_drops_pixels() {
         [1, 1, 2, 2, 1, 1, 2, 2, 3, 3, 4, 4, 3, 3, 4, 4]
     );
     let wide = [10u8, 20, 30, 40, 50, 60, 70, 80];
-    assert_eq!(resize(&wide, 8, 1, 1, 4, 1, Filter::Nearest), [20, 40, 60, 80]);
-    assert_eq!(resize(&wide, 4, 1, 2, 2, 1, Filter::Nearest), [30, 40, 70, 80]);
+    assert_eq!(
+        resize(&wide, 8, 1, 1, 4, 1, Filter::Nearest),
+        [20, 40, 60, 80]
+    );
+    assert_eq!(
+        resize(&wide, 4, 1, 2, 2, 1, Filter::Nearest),
+        [30, 40, 70, 80]
+    );
     assert_eq!(resize(&data, 2, 2, 1, 2, 2, Filter::Bicubic), data);
 }
 
@@ -418,10 +438,15 @@ fn smooth_resize_keeps_flat_images_flat_and_averages_when_shrinking() {
         }
     }
     // Halving a checkerboard gives its mean.
-    let board: Vec<u8> = (0..64).map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 200 }).collect();
+    let board: Vec<u8> = (0..64)
+        .map(|i| if (i / 8 + i % 8) % 2 == 0 { 0 } else { 200 })
+        .collect();
     let halved = resize(&board, 8, 8, 1, 4, 4, Filter::Bilinear);
     // The filter is cut off at the border, so the corners lean a little.
-    assert!(halved.iter().all(|&value| (98..=102).contains(&value)), "{halved:?}");
+    assert!(
+        halved.iter().all(|&value| (98..=102).contains(&value)),
+        "{halved:?}"
+    );
     assert_eq!(halved[5], 100);
     // Doubling a ramp stays between its ends and keeps its order.
     let ramp = [0u8, 100, 200];
@@ -512,11 +537,17 @@ fn jpeg_strips_decode_to_the_pixels_of_one_piece() {
             assert_ne!(strips, whole, "{width}x{height} on {threads} threads");
             // The restart interval is declared once.
             assert_eq!(
-                strips.windows(4).filter(|bytes| *bytes == [0xff, 0xdd, 0x00, 0x04]).count(),
+                strips
+                    .windows(4)
+                    .filter(|bytes| *bytes == [0xff, 0xdd, 0x00, 0x04])
+                    .count(),
                 1
             );
             let head = header(&strips).expect("header reads");
-            assert_eq!((head.width, head.height, head.channels), (width, height, channels));
+            assert_eq!(
+                (head.width, head.height, head.channels),
+                (width, height, channels)
+            );
             let pixels = decode(&strips, NO_LIMIT).expect("decodes");
             assert_eq!(pixels, expected, "{width}x{height} on {threads} threads");
         }
@@ -541,7 +572,10 @@ fn small_and_very_wide_jpegs_are_encoded_in_one_piece() {
     // decodes.
     let data = picture(640, 480, 3);
     let file = encode_jpeg(640, 480, 3, &data, 85).expect("encodes");
-    assert_eq!(decode(&file, NO_LIMIT).expect("decodes").data.len(), data.len());
+    assert_eq!(
+        decode(&file, NO_LIMIT).expect("decodes").data.len(),
+        data.len()
+    );
 }
 
 #[test]
@@ -567,19 +601,32 @@ fn strips_that_are_not_baseline_jpegs_do_not_join() {
     // A scan with no frame header before it, and a scan header that runs
     // past the end.
     assert!(jpeg_layout(&[0xff, 0xd8, 0xff, 0xda, 0x00, 0x02, 0xff, 0xd9]).is_none());
-    assert!(jpeg_layout(&[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xda, 0x00, 0x09, 0xff, 0xd9])
-        .is_none());
+    assert!(
+        jpeg_layout(&[0xff, 0xd8, 0xff, 0xc0, 0x00, 0x02, 0xff, 0xda, 0x00, 0x09, 0xff, 0xd9])
+            .is_none()
+    );
 }
 
 #[test]
 fn resize_handles_every_order_and_tiny_sources() {
     let data = picture(40, 30, 3);
     for filter in [Filter::Bilinear, Filter::Bicubic] {
-        for (width, height) in [(20, 15), (80, 15), (20, 60), (80, 60), (7, 29), (39, 3), (1, 1)] {
+        for (width, height) in [
+            (20, 15),
+            (80, 15),
+            (20, 60),
+            (80, 60),
+            (7, 29),
+            (39, 3),
+            (1, 1),
+        ] {
             let resized = resize(&data, 40, 30, 3, width, height, filter);
             assert_eq!(resized.len(), width * height * 3, "{filter:?}");
             // A resample of values between 90 and 216 stays near them.
-            assert!(resized.iter().all(|&value| (70..=236).contains(&value)), "{filter:?}");
+            assert!(
+                resized.iter().all(|&value| (70..=236).contains(&value)),
+                "{filter:?}"
+            );
         }
         for channels in 1..=4 {
             let one = vec![77u8; channels];
@@ -590,8 +637,12 @@ fn resize_handles_every_order_and_tiny_sources() {
             // The ends keep their side's value; bicubic may sharpen past it.
             let pair = [vec![100u8; channels], vec![150u8; channels]].concat();
             let stretched = resize(&pair, 2, 1, channels, 4, 1, filter);
-            assert!(stretched[..channels].iter().all(|&value| (90..=100).contains(&value)));
-            assert!(stretched[3 * channels..].iter().all(|&value| (150..=160).contains(&value)));
+            assert!(stretched[..channels]
+                .iter()
+                .all(|&value| (90..=100).contains(&value)));
+            assert!(stretched[3 * channels..]
+                .iter()
+                .all(|&value| (150..=160).contains(&value)));
         }
     }
 }
@@ -635,6 +686,32 @@ fn filters_read_only_the_samples_in_reach() {
         for position in weights.weights.chunks_exact(weights.taps) {
             assert!((position.iter().sum::<f32>() - 1.0).abs() < 1e-5);
         }
-        assert!(weights.starts.iter().all(|start| start + weights.taps <= 1600));
+        assert!(weights
+            .starts
+            .iter()
+            .all(|start| start + weights.taps <= 1600));
     }
+}
+
+#[test]
+fn encoder_and_frame_faults_are_invalid_data_with_the_cause() {
+    let message = |error: ImageError| match error {
+        ImageError::InvalidData(message) => message,
+        other => panic!("expected invalid data, got {other:?}"),
+    };
+    assert!(
+        message(png_failed(png::EncodingError::LimitsExceeded)).starts_with("PNG encoding failed")
+    );
+    assert!(message(jpeg_failed(
+        jpeg_encoder::EncodingError::ZeroImageDimensions {
+            width: 0,
+            height: 1,
+        }
+    ))
+    .starts_with("JPEG encoding failed"));
+    assert!(message(jpeg_strip_failed()).contains("strip"));
+    assert_eq!(
+        message(jpeg_without_frame()),
+        "the JPEG has no frame header"
+    );
 }

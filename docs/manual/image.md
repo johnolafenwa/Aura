@@ -36,7 +36,7 @@ chooses it from the extension of the name.
 
 ## The Image Class
 
-```aura fragment
+```text
 public class Image:
     public width: int64
     public height: int64
@@ -65,9 +65,10 @@ computed and can read or write `pixels` directly in a loop:
 ```aura
 import image
 
-def invert(mut picture: image.Image) -> None:
+def invert(picture: mut image.Image) -> None:
     for index in range(picture.pixels.len()):
-        picture.pixels[index] = 255 - picture.pixels[index]
+        sample = picture.pixels[index]
+        picture.pixels[index] = 255 - sample
 
 def main():
     mut picture = image.Image.filled(2, 2, 1, 200)
@@ -162,9 +163,9 @@ import fs
 import image
 
 def load_avatar(file_path: str) -> image.Image | None:
-    match fs.read_bytes(file_path):
+    match own fs.read_bytes(file_path):
         case Result.Ok(data):
-            match image.decode_up_to(data, 1024 * 1024):
+            match own image.decode_up_to(data, 1024 * 1024):
                 case Result.Ok(picture):
                     return picture
                 case Result.Err(_):
