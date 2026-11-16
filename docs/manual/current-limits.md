@@ -73,7 +73,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `receiver.method` binds a closure over the receiver with the method's contract. `Class.method` on a non-generic class is a function value.
 - A generic method's type arguments come from `method[T]` or an expected contract. An associated method of a generic class still needs a call.
 - A stored callable may return a view of one named parameter. A `from self` view result and loan captures cannot be stored.
-- Bare callable destinations require identical complete contracts (`AU2015`). A safe restriction needs a thin alias adapter such as `Unary(function)`, or an explicit `Callable[...]` or `TaskCallable[...]` constructor. The callable member of a union destination such as `(def(value: int64) -> int64) | None` is a bare destination too.
+- Bare callable destinations require identical complete contracts (`AU2015`). A safe restriction needs a thin alias adapter such as `Unary(function)`, or the constructor of a `Callable[...]` or `TaskCallable[...]` alias. The callable member of a union destination such as `(def(value: int64) -> int64) | None` is a bare destination too.
 - Callable identities are tracked through at most eight levels of class field nesting. The MIR validator refuses a call through a callable stored deeper than that.
 
 ### Lambdas And Closures
@@ -85,7 +85,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Capturing closures cannot pass through arbitrary written-`def` parameters, fields, collections, or annotated returns. Those boundaries describe capture-free code pointers.
 - Compiler-known repeatable callback sites keep closure metadata. Task start accepts a qualifying closure by move for one call.
 - Conditional and `match` expressions merge capturing closures only through an explicit common `Callable[...]` contract on the destination. Otherwise, invoke the closure within each branch, or use capture-free lambdas or named functions.
-- Owned callable storage, `Callable[...]` and `TaskCallable[...]`, holds owned captures only. It is packed explicitly through an alias call.
+- Owned callable storage, `Callable[...]` and `TaskCallable[...]`, holds owned captures only. A callable value packs where the storage type is expected.
 
 ### Comprehensions And Slices
 

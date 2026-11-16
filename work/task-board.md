@@ -1,6 +1,20 @@
 # Task Board
 
-Last updated: 2026-11-15
+Last updated: 2026-11-16
+
+## First-class closures (in progress)
+
+- Target: John's 2026-11-16 approval of item 3 of the missing features
+  list: a capturing closure needed an alias and a constructor call to be
+  stored, and a lambda is one expression. The design is in
+  `architecture_docs/29-first-class-closures-design-checkpoint.md`.
+  Details are in `2026-11-16-first-class-closures.md`.
+- Done: step 1, ADR-0104. A callable value packs where a `Callable[...]`
+  type is expected, and a lambda captures a Copy parameter by value.
+- Verification: the compiler unit tests, the fixture suite and the callable
+  integration suites on Linux, on both back ends.
+- Remaining: step 2, a `def` statement inside a function for closures with
+  statement bodies (ADR-0105), then benchmarks against Rust and Python.
 
 ## Book chapters on tensors and machine learning (complete)
 

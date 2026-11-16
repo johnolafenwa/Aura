@@ -15541,9 +15541,14 @@ impl<'a> Lowerer<'a> {
         let named_target_type = match (&assign.target, &assign.annotation) {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
+                // A structural `def` annotation leaves a closure its own
+                // type. Owned callable storage packs it (ADR-0104).
                 let storage_type = self
                     .infer_expr_type(&assign.value)
-                    .filter(|ty| matches!(ty, Type::Closure { .. }))
+                    .filter(|ty| {
+                        matches!(ty, Type::Closure { .. })
+                            && !matches!(annotation, Type::Callable(_))
+                    })
                     .unwrap_or(annotation);
                 Some((name, storage_type))
             }
@@ -23440,6 +23445,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_trait_object_cast(expr, false) {
             return value;
         }
+        if let Some(value) = self.lower_callable_destination(expr, expected) {
+            return value;
+        }
         if let Some(expected @ Type::Function { .. }) = expected {
             if let Some(Operand::Function { name, .. }) = self.lower_function_value(expr) {
                 // Contextual typing is what gives a generic named function
@@ -24218,6 +24226,9 @@ impl<'a> Lowerer<'a> {
         if let Some(value) = self.lower_trait_object_cast(expr, true) {
             return value;
         }
+        if let Some(value) = self.lower_callable_destination(expr, expected) {
+            return value;
+        }
         if let ExprKind::Match {
             scrutinee,
             capability,
@@ -24345,6 +24356,47 @@ impl<'a> Lowerer<'a> {
         } else {
             Operand::Place(target)
         })
+    }
+
+    /// Packs a function value, a lambda, a bound method or a closure
+    /// written where the owned callable storage type `expected` is the
+    /// destination (ADR-0104). The value is lowered under the storage's
+    /// contract and packed as the explicit constructor packs it. A value
+    /// that is packed already moves as it is.
+    fn lower_callable_destination(
+        &mut self,
+        expr: &Expr,
+        expected: Option<&Type>,
+    ) -> Option<Operand> {
+        let Some(expected @ Type::Callable(callable)) = expected else {
+            return None;
+        };
+        if let ExprKind::Group(inner) = &expr.kind {
+            return self.lower_callable_destination(inner, Some(expected));
+        }
+        if Self::injects_per_arm(expr) {
+            return None;
+        }
+        let contract = callable.contract();
+        let source = match &expr.kind {
+            ExprKind::Lambda { .. } | ExprKind::Member { .. } | ExprKind::Specialize { .. } => {
+                self.infer_expr_type_with_hint(expr, &contract)
+            }
+            _ => self.infer_expr_type(expr),
+        }?;
+        if !matches!(source, Type::Function { .. } | Type::Closure { .. }) {
+            return None;
+        }
+        let value = self.lower_expr_for_passing(expr, Some(&contract), ReceiverKind::Value);
+        let temp = self.new_typed_temp(expected.clone());
+        self.emit(Instruction::Assign {
+            target: temp.clone(),
+            value: Rvalue::CallableAdapt {
+                value,
+                destination: expected.clone(),
+            },
+        });
+        Some(Operand::Place(temp))
     }
 
     /// Converts a value to the trait object type `expected` where the

@@ -56,7 +56,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 - A by-value closure is Transfer only when every capture is Transfer. A loan closure is never Transfer.
 - A zero-parameter lambda may infer its result without a contextual callable type.
 - Capturing closures keep compiler metadata, so they do not cross thin written-`def` parameter, field, collection, or annotated return boundaries.
-- To cross those boundaries, a closure is packed explicitly as a `Callable[...]` or `TaskCallable[...]` value. Its call kind may only weaken, and its captures are owned. A body may mutate an owned capture, which makes the closure Mutable.
+- To cross those boundaries, write the destination as a `Callable[...]` or `TaskCallable[...]` type. A closure packs where that type is expected. Its call kind may only weaken, and its captures are owned. A body may mutate an owned capture, which makes the closure Mutable.
 - `receiver.method` outside call position is a bound method. It is a compiler-synthesized closure over the receiver, and its call kind follows the receiver capability.
 - `Class.method` on a non-generic class is a function value.
 - A stored callable's contract may return a view of one explicit parameter: `def(...) -> view [mut] T from name`. A call through it binds a `view` whose footprint is every fixed path of the origin, with the result type.

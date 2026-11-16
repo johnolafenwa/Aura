@@ -1,0 +1,6 @@
+error[AU3010]: capture `values` is a live shared loan and cannot be packed into `Callable`
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_destination_loan_capture.au:3:46
+  |
+3 |     size: Callable[def() -> int64] = lambda [values]: values.len()
+  |                                              ^
+  = help: move or clone an owned value into the lambda, or keep the loan closure in a local and call it directly

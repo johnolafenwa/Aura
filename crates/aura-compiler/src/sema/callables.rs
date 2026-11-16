@@ -1172,15 +1172,6 @@ impl<'a> FunctionChecker<'a> {
                     ..
                 }),
             ) => Some((params.as_slice(), Some(return_type.as_ref()))),
-            (None, Some(expected @ Type::Callable(callable))) => {
-                return Err(callable_contract_mismatch(
-                    span,
-                    format!(
-                        "implicit erased storage; a lambda becomes `{expected}` only through an explicit `{}(lambda ...)` constructor call",
-                        callable.constructor_name()
-                    ),
-                ))
-            }
             (None, Some(expected)) => {
                 return Err(Diagnostic::coded_at(
                     "AU2002",
@@ -1386,7 +1377,16 @@ impl<'a> FunctionChecker<'a> {
                 .as_ref()
                 .and_then(|modes| modes.get(&name))
                 .map(|(mode, _)| *mode);
-            if explicit_mode.is_none() && binding.passing != ReceiverKind::Value {
+            // A Copy value behind a shared or mutable parameter is read once,
+            // when the closure is created (ADR-0104).
+            let copied_from_loan = explicit_mode.is_none()
+                && binding.passing != ReceiverKind::Value
+                && binding.view.is_none()
+                && self.is_copy_type(&binding.ty);
+            if explicit_mode.is_none()
+                && binding.passing != ReceiverKind::Value
+                && !copied_from_loan
+            {
                 let shared_parameter = self.implicit_borrowed_params.contains_key(&name);
                 let mut diagnostic = Diagnostic::coded_at(
                     "AU3002",

@@ -7,6 +7,19 @@ in this file.
 
 ## Unreleased
 
+- Language: a closure is stored without ceremony. A lambda, a function, a
+  bound method, or a local that holds a closure packs where a
+  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
+  binding, an argument, a field, a list, set, or dictionary element, a
+  `return`, and each arm of a conditional or `match` expression. A type
+  alias called as a constructor is no longer needed, and `AU2015` no longer
+  reports implicit erased storage. The constructor stays valid and is still
+  how a packed value is restricted to a weaker contract.
+- Language: a lambda without a capture list captures a Copy parameter of
+  the enclosing function by value, so `def make(n: int64)` can return
+  `lambda value: value + n`. A parameter that is not Copy still needs `own`
+  or a clone and reports `AU3002`.
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2

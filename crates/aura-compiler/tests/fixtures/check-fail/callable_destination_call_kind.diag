@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: a Mutable value cannot be packed as Shared `Callable`; a call kind may only weaken
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_destination_call_kind.au:10:38
+   |
+10 |     step: Callable[def() -> int64] = lambda [own counter]: counter.bump()
+   |                                      ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

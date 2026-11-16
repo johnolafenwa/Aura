@@ -32653,16 +32653,16 @@ fn named_callable_slots_keep_every_contract_diagnostic() {
     .expect("unnamed slots admit any parameter name");
     let cases: [(&str, &str); 13] = [
         (
-            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(int64) -> int64] = inc\n",
-            "becomes `Callable[def(int64) -> int64]` only through an explicit `Callable(...)`",
+            "def inc(value: int64 = 1) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(value: int64) -> int64] = inc\n",
+            "use `Adapter(...)` to restrict the value",
         ),
         (
-            "def main():\n    c: Callable[def(int64) -> int64] = lambda x: x\n",
-            "a lambda becomes `Callable[def(int64) -> int64]` only through an explicit",
+            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: Callable[def(other: int64) -> int64] = inc\n",
+            "would be renamed to `other`",
         ),
         (
-            "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(int64) -> int64] = inc\n",
-            "explicit `TaskCallable(...)` constructor call",
+            "def inc(value: int64 = 1) -> int64:\n    return value\n\ndef main():\n    c: TaskCallable[def(value: int64) -> int64] = inc\n",
+            "declare `type Adapter = TaskCallable[def(value: int64) -> int64]`",
         ),
         (
             "def inc(value: int64) -> int64:\n    return value\n\ndef main():\n    k: def(int64, int64) -> int64 = inc\n",
@@ -33649,5 +33649,81 @@ fn array_selections_reject_misuse_in_the_library_checker() {
         let diagnostic = crate::check_source(source).expect_err(message);
         assert_eq!(diagnostic.code, code, "{source}\n{diagnostic:?}");
         assert_eq!(diagnostic.message, message, "{source}");
+    }
+}
+
+#[test]
+fn callable_destination_packs_function_values_lambdas_and_closures() {
+    crate::check_source(
+        "def double(value: int64) -> int64:\n    return value * 2\n\ndef make(amount: int64) -> Callable[def(value: int64) -> int64]:\n    return lambda value: value + amount\n\ndef run(step: Callable[def(value: int64) -> int64]) -> int64:\n    return step(1)\n\ndef main():\n    print(run(double))\n    print(run(make(2)))\n    held = lambda: 4\n    stored: Callable[def() -> int64] = (held)\n    print(stored())\n",
+    )
+    .expect("callable values pack where owned callable storage is expected");
+}
+
+#[test]
+fn callable_destination_copies_a_copy_parameter_into_the_closure() {
+    crate::check_source(
+        "def make(amount: int64, scale: mut int64) -> Callable[def() -> int64]:\n    return lambda: amount * scale\n\ndef main():\n    mut scale = 3\n    print(make(2, scale)())\n",
+    )
+    .expect("a Copy parameter is captured by value");
+    let error = crate::check_source(
+        "def make(items: list[int64]) -> Callable[def() -> int64]:\n    return lambda: items.len()\n",
+    )
+    .expect_err("a non-Copy shared parameter is not captured by value");
+    assert_eq!(error.code, "AU3002");
+}
+
+#[test]
+fn callable_destination_keeps_every_packing_rule() {
+    let cases = [
+        (
+            "class Counter:\n    total: int64\n    def bump(mut self) -> int64:\n        self.total = self.total + 1\n        return self.total\ndef main():\n    counter = Counter(total=0)\n    step: Callable[def() -> int64] = lambda [own counter]: counter.bump()\n",
+            "AU2015",
+            "a call kind may only weaken",
+        ),
+        (
+            "def main():\n    values = [1, 2]\n    size: Callable[def() -> int64] = lambda [values]: values.len()\n",
+            "AU3010",
+            "cannot be packed into `Callable`",
+        ),
+        (
+            "def main():\n    amount = 1\n    step: Callable[def(value: int64) -> int64] = lambda other: other + amount\n",
+            "AU2015",
+            "must be named `value`",
+        ),
+        (
+            "def main():\n    amount = 1\n    step: Callable[def() -> str] = lambda: amount\n",
+            "AU2002",
+            "lambda body has type `int64`, expected `str`",
+        ),
+        (
+            "def main():\n    step: Callable[def() -> int64] = 3\n",
+            "AU2002",
+            "but value has type `int64`",
+        ),
+        (
+            "def step(value: int64 = 1) -> int64:\n    return value\ndef main():\n    held: Callable[def(value: int64) -> int64] = step\n",
+            "AU2015",
+            "use `Adapter(...)` to restrict the value",
+        ),
+        (
+            "def step(value: int64) -> str:\n    return \"\"\ndef main():\n    held: Callable[def(value: int64) -> int64] = step\n",
+            "AU2002",
+            "",
+        ),
+        (
+            "class Group:\n    pass\ndef run(work: own TaskCallable[own def() -> int64]) -> int64:\n    return work()\ndef main():\n    values = [1]\n    view first = values\n    print(run(lambda [first]: first.len()))\n",
+            "AU3010",
+            "",
+        ),
+    ];
+    for (source, code, expected) in cases {
+        let error = crate::check_source(source).expect_err(source);
+        assert_eq!(error.code, code, "{source}\n{}", error.message);
+        assert!(
+            error.message.contains(expected),
+            "{source}\n{}",
+            error.message
+        );
     }
 }

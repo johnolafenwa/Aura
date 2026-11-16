@@ -1,0 +1,4 @@
+def main():
+    values = [1, 2]
+    size: Callable[def() -> int64] = lambda [values]: values.len()
+    print(size())

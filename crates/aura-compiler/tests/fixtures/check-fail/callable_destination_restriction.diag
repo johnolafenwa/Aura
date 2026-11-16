@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: parameter `value` differs from parameter `value` in its default availability; declare `type Adapter = Callable[def(value: int64) -> int64]` and use `Adapter(...)` to restrict the value
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_destination_restriction.au:8:15
+  |
+8 |     print(run(step))
+  |               ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

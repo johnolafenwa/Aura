@@ -7567,6 +7567,183 @@ impl<'a> FunctionChecker<'a> {
         }
     }
 
+    /// Checks one callable value against the owned storage type it packs
+    /// into, for the explicit constructor and for a typed destination
+    /// (ADR-0104). `actual` is the value's own type and `name` is how
+    /// diagnostics spell the destination.
+    fn check_callable_pack_value(
+        &self,
+        name: &str,
+        callable: &CallableType,
+        value: &Expr,
+        actual: &Type,
+    ) -> Result<()> {
+        let contract = callable.contract();
+        let (source_kind, source_task_ready) = match actual {
+            Type::Callable(source) => {
+                let source_contract = source.contract();
+                if source_contract != contract {
+                    return Err(callable_contract_mismatch(
+                        value.span,
+                        function_type_mismatch_message(&contract, &source_contract),
+                    ));
+                }
+                check_callable_adapter_positions(&contract, &source_contract)
+                    .map_err(|reason| callable_contract_mismatch(value.span, reason))?;
+                (source.call_kind, source.task)
+            }
+            Type::Function { .. } => {
+                if *actual != contract {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        value.span,
+                        function_type_mismatch_message(&contract, actual),
+                    ));
+                }
+                check_callable_adapter_positions(&contract, actual)
+                    .map_err(|reason| callable_contract_mismatch(value.span, reason))?;
+                (ClosureCallKind::Repeatable, true)
+            }
+            Type::Closure {
+                captures,
+                call_kind,
+                ..
+            } => {
+                if !closure_signature_matches_function(actual, &contract) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        value.span,
+                        function_type_mismatch_message(&contract, actual),
+                    ));
+                }
+                check_callable_adapter_positions(&contract, actual)
+                    .map_err(|reason| callable_contract_mismatch(value.span, reason))?;
+                if let Some(capture) = captures.iter().find(|capture| {
+                    matches!(
+                        capture.mode,
+                        ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView
+                    )
+                }) {
+                    return Err(Diagnostic::coded_at(
+                        "AU3010",
+                        capture.span,
+                        format!(
+                            "capture `{}` is a live {} loan and cannot be packed into `{}`",
+                            capture.name,
+                            if capture.mode == ClosureCaptureMode::MutableView {
+                                "mutable"
+                            } else {
+                                "shared"
+                            },
+                            name
+                        ),
+                    )
+                    .with_help(
+                        "move or clone an owned value into the lambda, or keep the loan closure in a local and call it directly",
+                    ));
+                }
+                if callable.task {
+                    if let Some((capture, failure)) = captures.iter().find_map(|capture| {
+                        self.transfer_failure(&capture.ty)
+                            .map(|failure| (capture, failure))
+                    }) {
+                        return Err(Diagnostic::coded_at(
+                            "AU3008",
+                            capture.span,
+                            format!(
+                                "capture `{}` of type `{}` is not Transfer, so the closure cannot become `{}`: {failure}",
+                                capture.name, capture.ty, name
+                            ),
+                        ));
+                    }
+                }
+                (*call_kind, true)
+            }
+            _ => {
+                return Err(Diagnostic::coded_at(
+                    "AU2002",
+                    value.span,
+                    format!(
+                        "`{}(...)` expects a function value, lambda, or packed callable, found `{actual}`",
+                        name
+                    ),
+                ));
+            }
+        };
+        if callable.task && !source_task_ready {
+            return Err(Diagnostic::coded_at(
+                "AU3008",
+                value.span,
+                format!(
+                    "an erased `Callable` cannot become `{}`; its environment was never proven Transfer",
+                    name
+                ),
+            ));
+        }
+        if !callable.call_kind.admits(source_kind) {
+            return Err(callable_contract_mismatch(
+                value.span,
+                format!(
+                    "a {} value cannot be packed as {} `{}`; a call kind may only weaken",
+                    source_kind.label(),
+                    callable.call_kind.label(),
+                    name
+                ),
+            ));
+        }
+        Ok(())
+    }
+
+    /// Types a value written where owned callable storage is expected
+    /// (ADR-0104). A function value, a lambda, a bound method or a closure
+    /// packs there under the rules of the explicit constructor. A value that
+    /// is packed already, or is not callable, keeps its own type for the
+    /// destination to judge.
+    fn type_callable_destination(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        callable: &CallableType,
+    ) -> Result<Type> {
+        let destination = Type::Callable(Box::new(callable.clone()));
+        let contract = callable.contract();
+        let hint = if matches!(
+            expr.kind,
+            ExprKind::Lambda { .. } | ExprKind::Member { .. } | ExprKind::Specialize { .. }
+        ) {
+            &contract
+        } else {
+            &destination
+        };
+        let actual = self.type_of_expr_hint_dispatched(expr, locals, Some(hint))?;
+        if !matches!(actual, Type::Function { .. } | Type::Closure { .. }) {
+            return Ok(actual);
+        }
+        self.check_callable_pack_value(callable.constructor_name(), callable, expr, &actual)?;
+        // A typed destination takes the complete contract as it is. Hiding
+        // a default or a name is a restriction, which the constructor makes.
+        let exposed = match &actual {
+            Type::Closure {
+                params,
+                return_type,
+                ..
+            } => Type::Function {
+                params: params.as_ref().clone(),
+                return_type: return_type.clone(),
+            },
+            _ => actual,
+        };
+        check_callable_positions(&contract, &exposed).map_err(|reason| {
+            callable_contract_mismatch(
+                expr.span,
+                format!(
+                    "{reason}; declare `type Adapter = {destination}` and use `Adapter(...)` to restrict the value"
+                ),
+            )
+        })?;
+        Ok(destination)
+    }
+
     /// `Alias(value)` for a `Callable[...]`/`TaskCallable[...]` alias packs one
     /// callable value into owned erased storage (C1, C2, C8): the value's
     /// contract must be admitted, its call kind may only weaken, loan
@@ -7612,118 +7789,7 @@ impl<'a> FunctionChecker<'a> {
         .then_some(&contract);
         let actual =
             self.type_of_expr_hint_uncontracted(&argument.value, locals, lambda_context)?;
-        let (source_kind, source_task_ready) = match &actual {
-            Type::Callable(source) => {
-                let source_contract = source.contract();
-                if source_contract != contract {
-                    return Err(callable_contract_mismatch(
-                        argument.value.span,
-                        function_type_mismatch_message(&contract, &source_contract),
-                    ));
-                }
-                check_callable_adapter_positions(&contract, &source_contract)
-                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
-                (source.call_kind, source.task)
-            }
-            Type::Function { .. } => {
-                if actual != contract {
-                    return Err(Diagnostic::coded_at(
-                        "AU2002",
-                        argument.value.span,
-                        function_type_mismatch_message(&contract, &actual),
-                    ));
-                }
-                check_callable_adapter_positions(&contract, &actual)
-                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
-                (ClosureCallKind::Repeatable, true)
-            }
-            Type::Closure {
-                captures,
-                call_kind,
-                ..
-            } => {
-                if !closure_signature_matches_function(&actual, &contract) {
-                    return Err(Diagnostic::coded_at(
-                        "AU2002",
-                        argument.value.span,
-                        function_type_mismatch_message(&contract, &actual),
-                    ));
-                }
-                check_callable_adapter_positions(&contract, &actual)
-                    .map_err(|reason| callable_contract_mismatch(argument.value.span, reason))?;
-                if let Some(capture) = captures.iter().find(|capture| {
-                    matches!(
-                        capture.mode,
-                        ClosureCaptureMode::SharedView | ClosureCaptureMode::MutableView
-                    )
-                }) {
-                    return Err(Diagnostic::coded_at(
-                        "AU3010",
-                        capture.span,
-                        format!(
-                            "capture `{}` is a live {} loan and cannot be packed into `{}`",
-                            capture.name,
-                            if capture.mode == ClosureCaptureMode::MutableView {
-                                "mutable"
-                            } else {
-                                "shared"
-                            },
-                            name
-                        ),
-                    )
-                    .with_help(
-                        "move or clone an owned value into the lambda, or keep the loan closure in a local and call it directly",
-                    ));
-                }
-                if callable.task {
-                    if let Some((capture, failure)) = captures.iter().find_map(|capture| {
-                        self.transfer_failure(&capture.ty)
-                            .map(|failure| (capture, failure))
-                    }) {
-                        return Err(Diagnostic::coded_at(
-                            "AU3008",
-                            capture.span,
-                            format!(
-                                "capture `{}` of type `{}` is not Transfer, so the closure cannot become `{}`: {failure}",
-                                capture.name, capture.ty, name
-                            ),
-                        ));
-                    }
-                }
-                (*call_kind, true)
-            }
-            _ => {
-                return Err(Diagnostic::coded_at(
-                    "AU2002",
-                    argument.value.span,
-                    format!(
-                        "`{}(...)` expects a function value, lambda, or packed callable, found `{actual}`",
-                        name
-                    ),
-                ));
-            }
-        };
-        if callable.task && !source_task_ready {
-            return Err(Diagnostic::coded_at(
-                "AU3008",
-                argument.value.span,
-                format!(
-                    "an erased `Callable` cannot become `{}`; its environment was never proven Transfer",
-                    name
-                ),
-            ));
-        }
-        if !callable.call_kind.admits(source_kind) {
-            return Err(callable_contract_mismatch(
-                argument.value.span,
-                format!(
-                    "a {} value cannot be packed as {} `{}`; a call kind may only weaken",
-                    source_kind.label(),
-                    callable.call_kind.label(),
-                    name
-                ),
-            ));
-        }
+        self.check_callable_pack_value(name, callable, &argument.value, &actual)?;
         self.consume_value_expr(&argument.value, locals)?;
         Ok(target.clone())
     }
@@ -7988,6 +8054,25 @@ impl<'a> FunctionChecker<'a> {
                 return self.type_trait_object_conversion(expr, locals, trait_object);
             }
         }
+        if let Some(Type::Callable(callable)) = expected {
+            if !matches!(
+                expr.kind,
+                ExprKind::Group(_) | ExprKind::Conditional { .. } | ExprKind::Match { .. }
+            ) {
+                return self.type_callable_destination(expr, locals, callable);
+            }
+        }
+        self.type_of_expr_hint_dispatched(expr, locals, expected)
+    }
+
+    /// Types an expression by its kind, after the conversions a typed
+    /// destination applies have been considered.
+    fn type_of_expr_hint_dispatched(
+        &self,
+        expr: &Expr,
+        locals: &mut HashMap<String, LocalBinding>,
+        expected: Option<&Type>,
+    ) -> Result<Type> {
         if Self::result_consumption_needs_replay(expr) {
             self.expr_result_entries.borrow_mut().insert(
                 expr as *const Expr as usize,
