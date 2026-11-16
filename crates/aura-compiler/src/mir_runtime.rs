@@ -6480,6 +6480,14 @@ impl MirRuntime {
         args: &[MirArg],
         env: &mut Env,
     ) -> Result<Value> {
+        // A member of a union read or stored, which calls no C function.
+        if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
+            let mut named = call.clone();
+            named.symbol = crate::ffi::reinterpret_label(&call.name);
+            return self.evaluate_extern_call_with(&named, args, env, |_, signature, arguments| {
+                crate::ffi::reinterpret(signature, arguments)
+            });
+        }
         self.evaluate_extern_call_with(call, args, env, |symbol, signature, arguments| {
             // SAFETY: semantic analysis admits only the documented FFI v0
             // surface. The remaining process-symbol signature and foreign

@@ -545,6 +545,10 @@ impl FunctionCompiler<'_> {
             ));
         }
 
+        if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
+            return self.compile_reinterpret(call, args, target);
+        }
+
         let mut loaded = Vec::with_capacity(args.len());
         for (index, (argument, param)) in args.iter().zip(&call.params).enumerate() {
             let ffi = foreign_param_type(param)?;
@@ -928,6 +932,68 @@ impl FunctionCompiler<'_> {
                 self.foreign_nullable(handle, &call.return_type)?
             }
             (None, None) => unit_value(&mut *self.builder),
+        };
+        let result = self.coerce_value(result, &return_direct)?;
+        self.coerce_value(result, target)
+    }
+
+    /// A member of an `extern "C" union` read or stored: the bytes of the
+    /// one struct argument, read as the struct of the result. No C
+    /// function is called. Where the argument is shorter than the result,
+    /// the rest is zero.
+    fn compile_reinterpret(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let (from, to) = match (call.params.as_slice(), &call.c_struct_result) {
+            (
+                [MirExternParam {
+                    c_struct: Some(from),
+                    pointer: false,
+                    passing: MirReceiverKind::Borrow | MirReceiverKind::Value,
+                    ..
+                }],
+                Some(to),
+            ) => (from.interned(), to.interned()),
+            _ => {
+                return Err(format!(
+                    "direct backend reads `{}` only from one C struct into another",
+                    call.name
+                ));
+            }
+        };
+        let expected = ensure_direct_type(
+            &call.params[0].ty,
+            &self.classes,
+            &format!("extern parameter `{}`", call.params[0].name),
+        )?;
+        let value = self.load_operand_for_target(&args[0].value, &expected)?;
+        let value = self.coerce_value(value, &expected)?;
+        let value = if from.is_plain() {
+            value
+        } else {
+            self.ensure_opaque(value)?
+        };
+        let label = crate::ffi::reinterpret_label(&call.name);
+        let slot = self.foreign_struct_slot(if from.size() >= to.size() { from } else { to });
+        self.store_foreign_struct(from, &value, slot)?;
+        let return_direct = ensure_direct_type(
+            &call.return_type,
+            &self.classes,
+            &format!("extern return from `{}`", call.name),
+        )?;
+        let result = if to.is_plain() {
+            self.load_foreign_struct(to, slot, return_direct.clone(), &label)?
+        } else {
+            let (descriptor, length) = self.foreign_layout_descriptor(to)?;
+            let (symbol_ptr, symbol_len) = self.string_constant(label.as_bytes())?;
+            let instance = self.builder.call(
+                self.runtime[RuntimeFn::FfiUnpackStruct],
+                &[descriptor, length, slot, symbol_ptr, symbol_len],
+            );
+            self.owned_opaque_result(vec![instance.results[0]], call.return_type.clone())
         };
         let result = self.coerce_value(result, &return_direct)?;
         self.coerce_value(result, target)

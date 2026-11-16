@@ -460,6 +460,17 @@ test("extension highlights and snippets the maintained extern C surface", () => 
     ["extern", '"C"', "class", "Point"]
   );
   assert.equal(classRule.captures["4"].name, "entity.name.type.aura");
+  const unionRule = declarationRules.find(
+    (pattern) => pattern.name === "meta.definition.ffi.union.aura"
+  );
+  assert.ok(unionRule);
+  assert.deepEqual(
+    new RegExp(unionRule.match).exec('public extern "C" union Event:')?.slice(1),
+    ["extern", '"C"', "union", "Event"]
+  );
+  assert.equal(unionRule.captures["3"].name, "keyword.declaration.ffi.aura");
+  // `union` is a name anywhere else.
+  assert.equal(new RegExp(unionRule.match).test("union = merge(a, b)"), false);
   const typeRule = grammar.repository.types.patterns.find(
     (pattern) => pattern.name === "support.type.primitive.aura"
   );

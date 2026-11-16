@@ -556,13 +556,21 @@ pub(crate) fn ffi_struct_layout(
     let Type::Named(name, _) = ty else {
         return None;
     };
-    let fields = class
+    // A union is laid out from its members, which another class of the
+    // same module holds as fields.
+    let holder = match &class.decl.c_union {
+        Some(members) => classes
+            .values()
+            .find(|other| other.decl.name == *members && other.module_name == class.module_name)?,
+        None => class,
+    };
+    let fields = holder
         .decl
         .fields
         .iter()
         .map(|field| {
-            let ty = &class.fields.get(&field.name)?.ty;
-            let lengths = class.decl.c_arrays.get(&field.name);
+            let ty = &holder.fields.get(&field.name)?.ty;
+            let lengths = holder.decl.c_arrays.get(&field.name);
             Some(CField {
                 name: field.name.clone(),
                 kind: ffi_field_kind(ty, lengths.map_or(&[], Vec::as_slice), classes)?,
@@ -572,7 +580,7 @@ pub(crate) fn ffi_struct_layout(
     Some(CStruct {
         name: name.clone(),
         fields,
-        union: false,
+        union: class.decl.c_union.is_some(),
     })
 }
 
@@ -624,6 +632,15 @@ pub(crate) fn validate_ffi_struct_fields(
     class: &ClassInfo,
     classes: &BTreeMap<String, ClassInfo>,
 ) -> Result<()> {
+    // The class of a union holds bytes. Its members are the fields of
+    // another class, which is checked as itself.
+    if class.decl.c_union.is_some() {
+        return Ok(());
+    }
+    let (what, part, owner) = match crate::ast::c_union_of_members_class(&class.decl.name) {
+        Some(union) => ("union", "member", union),
+        None => ("class", "field", class.decl.name.as_str()),
+    };
     for field in &class.decl.fields {
         let info = &class.fields[&field.name];
         // An array field holds scalars or classes, under any number of
@@ -645,12 +662,12 @@ pub(crate) fn validate_ffi_struct_fields(
             "AU2002",
             field.span,
             format!(
-                "field `{}` of `extern \"C\"` class `{}` {found}, which has no C layout",
-                field.name, class.decl.name
+                "{part} `{}` of `extern \"C\"` {what} `{owner}` {found}, which has no C layout",
+                field.name
             ),
         )
         .with_help(
-            "a C struct holds fixed-width scalars, other `extern \"C\"` classes, and `array[T, N]` fields of either; keep a pointer to anything else in a `uint64` or an opaque handle",
+            "a C struct or union holds fixed-width scalars, `extern \"C\"` classes and unions, and `array[T, N]` fields of those; keep a pointer to anything else in a `uint64` or an opaque handle",
         ));
     }
     Ok(())

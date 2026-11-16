@@ -268,6 +268,176 @@ fn run_raylib_example(name: &str, directory: &Path, settings: &[(&str, &str)]) -
     )
 }
 
+/// Whether the C compiler links `library`, with `probe` as a program that
+/// calls into it.
+fn host_links(library: &str, probe: &str) -> bool {
+    let scratch = TempPackage::new(false);
+    let c_file = scratch.path.join("probe.c");
+    fs::write(&c_file, probe).expect("the probe source should be writable");
+    Command::new("cc")
+        .arg(&c_file)
+        .arg(format!("-l{library}"))
+        .arg("-o")
+        .arg(scratch.path.join("probe"))
+        .output()
+        .is_ok_and(|output| output.status.success())
+}
+
+/// SDL reports every event through one union. This program pushes three
+/// events and reads them back through `SDL_Event`.
+const SDL_EVENTS: &str = r#"extern "C" class Keysym:
+    scancode: int32
+    sym: int32
+    modifiers: uint16
+    unused: uint32
+
+
+extern "C" class KeyboardEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    state: uint8
+    repeat: uint8
+    padding2: uint8
+    padding3: uint8
+    keysym: Keysym
+
+
+extern "C" class UserEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    code: int32
+    data1: uint64
+    data2: uint64
+
+
+extern "C" class TextInputEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    text: array[uint8, 32]
+
+
+extern "C" union Event:
+    kind: uint32
+    key: KeyboardEvent
+    user: UserEvent
+    text: TextInputEvent
+    padding: array[uint8, 56]
+
+
+extern "C" def SDL_Init(flags: uint32) -> int32
+
+
+extern "C" def SDL_Quit() -> None
+
+
+extern "C" def SDL_PushEvent(event: mut Event) -> int32
+
+
+extern "C" def SDL_PollEvent(event: mut Event) -> int32
+
+
+extern "C" def SDL_PeepEvents(
+    events: mut ptr[Event],
+    count: int32,
+    action: int32,
+    low: uint32,
+    high: uint32,
+) -> int32
+
+
+SDL_INIT_EVENTS: uint32 = 16384
+SDL_KEYDOWN: uint32 = 768
+SDL_TEXTINPUT: uint32 = 771
+SDL_USEREVENT: uint32 = 32768
+SDL_ADDEVENT: int32 = 0
+
+
+def text_event(first: uint8, second: uint8) -> Event:
+    mut bytes: list[uint8] = [0 for _ in range(32)]
+    bytes[0] = first
+    bytes[1] = second
+    return Event.from_text(
+        TextInputEvent(kind=SDL_TEXTINPUT, timestamp=0, window=0, text=bytes)
+    )
+
+
+def main() -> int32:
+    if SDL_Init(SDL_INIT_EVENTS) != 0:
+        print("SDL did not start")
+        return 1
+    mut key = Event.from_key(
+        KeyboardEvent(
+            kind=SDL_KEYDOWN,
+            timestamp=0,
+            window=0,
+            state=1,
+            repeat=0,
+            padding2=0,
+            padding3=0,
+            keysym=Keysym(scancode=41, sym=27, modifiers=0, unused=0),
+        )
+    )
+    print(SDL_PushEvent(key))
+    mut more = [
+        Event.from_user(
+            UserEvent(
+                kind=SDL_USEREVENT,
+                timestamp=0,
+                window=0,
+                code=7,
+                data1=0,
+                data2=0,
+            )
+        ),
+        text_event(104, 105),
+    ]
+    print(SDL_PeepEvents(more, 2, SDL_ADDEVENT, 0, 65535))
+
+    mut event = Event()
+    while SDL_PollEvent(event) != 0:
+        if event.kind == SDL_KEYDOWN:
+            pressed = event.key
+            print(
+                f"key {pressed.keysym.sym} scancode {pressed.keysym.scancode} state {pressed.state}"
+            )
+        elif event.kind == SDL_USEREVENT:
+            print(f"user {event.user.code}")
+        elif event.kind == SDL_TEXTINPUT:
+            print(
+                f"text {event.text.text[0]} {event.text.text[1]} {event.text.text[2]}"
+            )
+    SDL_Quit()
+    return 0
+"#;
+
+#[test]
+fn sdl_events_cross_as_a_union_with_backend_parity() {
+    if !host_links(
+        "SDL2",
+        "int SDL_Init(unsigned);\nint main(void) { return SDL_Init(0); }\n",
+    ) {
+        eprintln!("the host has no SDL2 library to link; the test needs one");
+        return;
+    }
+    let package = TempPackage::new(true);
+    package.manifest("\n[ffi]\nlibraries = [\"SDL2\"]\n");
+    let source = package.source(SDL_EVENTS);
+    let mir = run_mir(&source);
+    assert_success(&mir, "SDL events on the interpreter");
+    let binary = package.path.join("sdl-events-direct");
+    assert_success(&build_direct(&source, &binary), "SDL events build");
+    let direct = Command::new(&binary)
+        .output()
+        .expect("the SDL events binary should start");
+    assert_success(&direct, "SDL events in a built program");
+    let expected = "1\n2\nkey 27 scancode 41 state 1\nuser 7\ntext 104 105 0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
 /// Whether `path` holds a PNG image of more than a few bytes.
 fn is_png(path: &Path) -> bool {
     fs::read(path).is_ok_and(|bytes| bytes.len() > 1000 && bytes.starts_with(b"\x89PNG\r\n"))
@@ -861,6 +1031,46 @@ void fx_shapes_retag(Shape *shapes, int32_t count) {
 bool fx_points_null(const Pt *points) { return points == NULL; }
 Shape fx_shape_bad_flag(void) { Shape s = fx_shape_make(1); *(uint8_t *)&s.on[0] = 5; return s; }
 void fx_shapes_bad_flag(Shape *shapes) { *(uint8_t *)&shapes[0].on[1] = 5; }
+
+typedef struct { uint32_t kind; int32_t code; uint8_t name[4]; } UKey;
+typedef struct { uint32_t kind; float x; float y; } UMove;
+typedef union { uint32_t kind; UKey key; UMove motion; double ratio; uint8_t padding[24]; } UEvent;
+typedef union { float f; uint32_t bits; } UBits;
+typedef union { float a; float b[2]; } UHfa;
+typedef union { bool on; uint8_t raw; } UFlag;
+typedef struct { int32_t tag; UEvent event; UBits bits[2]; } UHolder;
+UEvent fx_event_key(int32_t code) {
+    UEvent e; memset(&e, 0, sizeof e);
+    e.key.kind = 1; e.key.code = code; memcpy(e.key.name, "key", 4); return e;
+}
+int32_t fx_event_code(UEvent e) { return e.kind == 1 ? e.key.code : -1; }
+bool fx_event_poll(UEvent *out, int32_t round) {
+    if (round >= 2) return false;
+    memset(out, 0, sizeof *out);
+    out->motion.kind = 2; out->motion.x = 1.5f * (float)(round + 1); out->motion.y = -2.0f;
+    return true;
+}
+UBits fx_bits_of(float f) { UBits b; b.f = f; return b; }
+float fx_bits_float(UBits b) { return b.f; }
+UHfa fx_hfa_swap(UHfa h) { UHfa r; r.b[0] = h.b[1]; r.b[1] = h.b[0]; return r; }
+double fx_spill_hfa(double a, double b, double c, double d, double e, double f, double g,
+                    UHfa h, double i) {
+    return a + b + c + d + e + f + g + 10.0 * h.b[0] + 100.0 * h.b[1] + 1000.0 * i;
+}
+UHolder fx_uholder_make(int32_t tag) {
+    UHolder h; memset(&h, 0, sizeof h);
+    h.tag = tag; h.event = fx_event_key(tag * 2); h.bits[0].f = 1.0f; h.bits[1].bits = 7; return h;
+}
+int32_t fx_uholder_sum(UHolder h) {
+    return h.tag + h.event.key.code + (int32_t)h.bits[0].bits % 1000 + (int32_t)h.bits[1].bits;
+}
+int32_t fx_events_kinds(const UEvent *events, int32_t count) {
+    int32_t total = 0; for (int i = 0; i < count; i++) total += (int32_t)events[i].kind; return total;
+}
+void fx_events_fill(UEvent *events, int32_t count) {
+    for (int i = 0; i < count; i++) events[i] = fx_event_key(i + 40);
+}
+UFlag fx_flag_raw(uint8_t raw) { UFlag f; f.raw = raw; return f; }
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -1125,6 +1335,56 @@ extern "C" def fx_shapes_retag(shapes: mut ptr[Shape], count: int32) -> None
 extern "C" def fx_points_null(points: ptr[Pt]) -> bool
 extern "C" def fx_shape_bad_flag() -> Shape
 extern "C" def fx_shapes_bad_flag(shapes: mut ptr[Shape]) -> None
+
+extern "C" class UKey:
+    kind: uint32
+    code: int32
+    name: array[uint8, 4]
+
+extern "C" class UMove:
+    kind: uint32
+    x: float32
+    y: float32
+
+extern "C" union UEvent:
+    kind: uint32
+    key: UKey
+    motion: UMove
+    ratio: float64
+    padding: array[uint8, 24]
+
+extern "C" union UBits:
+    f: float32
+    bits: uint32
+
+extern "C" union UHfa:
+    a: float32
+    b: array[float32, 2]
+
+extern "C" union UFlag:
+    on: bool
+    raw: uint8
+
+extern "C" class UHolder:
+    tag: int32
+    event: UEvent
+    bits: array[UBits, 2]
+
+extern "C" def fx_event_key(code: int32) -> UEvent
+extern "C" def fx_event_code(e: UEvent) -> int32
+extern "C" def fx_event_poll(out: mut UEvent, round: int32) -> bool
+extern "C" def fx_bits_of(f: float32) -> UBits
+extern "C" def fx_bits_float(b: UBits) -> float32
+extern "C" def fx_hfa_swap(h: UHfa) -> UHfa
+extern "C" def fx_spill_hfa(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
+    h: UHfa, i: float64
+) -> float64
+extern "C" def fx_uholder_make(tag: int32) -> UHolder
+extern "C" def fx_uholder_sum(h: UHolder) -> int32
+extern "C" def fx_events_kinds(events: ptr[UEvent], count: int32) -> int32
+extern "C" def fx_events_fill(events: mut ptr[UEvent], count: int32) -> None
+extern "C" def fx_flag_raw(raw: uint8) -> UFlag
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -1739,6 +1999,80 @@ def main() -> int32:
 }
 
 #[test]
+fn unions_cross_and_read_their_members_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+def kind_name(event: UEvent) -> str:
+    if event.kind == 1:
+        return f"key {event.key.code}"
+    if event.kind == 2:
+        return f"motion {event.motion.x} {event.motion.y}"
+    return "nothing"
+
+def main() -> int32:
+    mut event = UEvent()
+    print(len(event.bytes))
+    print(kind_name(event))
+    event = fx_event_key(65)
+    print(kind_name(event))
+    print(event.key.name)
+    print(fx_event_code(event))
+    print(event.padding[4])
+
+    mut round = 0
+    while fx_event_poll(event, round as int32):
+        print(kind_name(event))
+        round += 1
+    print(fx_event_code(event))
+
+    made = UEvent.from_key(UKey(kind=1, code=-9, name=[110, 0, 0, 0]))
+    print(fx_event_code(made))
+    print(UEvent.from_kind(1).bytes[:8])
+    print(UEvent.from_ratio(1.0).padding[6])
+    padded = UEvent.from_padding(made.padding)
+    print(padded.key.code)
+
+    bits = fx_bits_of(1.0)
+    print(bits.bits)
+    print(bits.f)
+    print(fx_bits_float(UBits.from_bits(1073741824)))
+    print(len(bits.bytes))
+
+    swapped = fx_hfa_swap(UHfa.from_b([1.5, -2.5]))
+    print(swapped.b)
+    print(swapped.a)
+    print(fx_spill_hfa(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, UHfa.from_b([0.5, 0.25]), 2.0))
+
+    mut holder = fx_uholder_make(5)
+    print(holder.event.key.code)
+    print(holder.bits[1].bits)
+    print(fx_uholder_sum(holder))
+    holder.event = UEvent.from_key(UKey(kind=1, code=100, name=[0, 0, 0, 0]))
+    holder.bits[1] = UBits.from_bits(50)
+    print(fx_uholder_sum(holder))
+
+    mut events = [UEvent(), UEvent.from_kind(3), UEvent.from_kind(4)]
+    print(fx_events_kinds(events, 3))
+    fx_events_fill(events, 3)
+    print(events[2].key.code)
+    print(fx_events_kinds(events, 3))
+
+    print(fx_flag_raw(1).on)
+    print(fx_flag_raw(0).on)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "unions on the interpreter");
+    assert_success(&direct, "unions in a built program");
+    let expected = "24\nnothing\nkey 65\n[107, 101, 121, 0]\n65\n65\nmotion 1.5 -2.0\n\
+        motion 3.0 -2.0\n-1\n-9\n[1, 0, 0, 0, 0, 0, 0, 0]\n240\n-9\n1065353216\n1.0\n2.0\n4\n\
+        [-2.5, 1.5]\n-2.5\n2058.0\n10\n7\n238\n371\n7\n42\n3\ntrue\nfalse\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
 fn array_fields_that_do_not_fit_c_trap_with_backend_parity() {
     for (body, code, message) in [
         (
@@ -1755,6 +2089,21 @@ fn array_fields_that_do_not_fit_c_trap_with_backend_parity() {
             "    mut shapes = [fx_shape_make(1)]\n    shapes[0].on = [true]\n    print(fx_shapes_tags(shapes, 1))",
             "AU4005",
             "C array field `on` holds 2 element(s), but the list has 1",
+        ),
+        (
+            "    mut event = UEvent()\n    event.bytes = [1, 2]\n    print(fx_event_code(event))",
+            "AU4005",
+            "C union `UEvent` is 24 byte(s), but its `bytes` list has 2",
+        ),
+        (
+            "    mut event = UEvent()\n    event.bytes.append(0)\n    print(event.kind)",
+            "AU4005",
+            "C union `UEvent` is 24 byte(s), but its `bytes` list has 25",
+        ),
+        (
+            "    flag = fx_flag_raw(2)\n    print(flag.raw)\n    print(flag.on)",
+            "AU4001",
+            "FFI call to `UFlag.on` failed",
         ),
         (
             "    print(fx_shape_bad_flag().tag)",

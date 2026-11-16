@@ -7921,6 +7921,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         doc: None,
         c_layout: false,
         c_arrays: Default::default(),
+        c_union: None,
     }
 }
 
@@ -33188,6 +33189,114 @@ def run() -> None:
             "{}",
             diagnostic.message
         );
+    }
+}
+
+#[test]
+fn ffi_lays_out_unions_from_their_members() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+    name: array[uint8, 4]
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    ratio: float64
+    padding: array[uint8, 24]
+
+extern "C" class Holder:
+    tag: int32
+    event: Event
+
+extern "C" def poll(event: mut Event) -> bool
+extern "C" def push(event: Event) -> int32
+extern "C" def last() -> Event
+extern "C" def hold(holder: Holder) -> int32
+extern "C" def fill(events: mut ptr[Event], count: int32) -> None
+
+def run() -> int32:
+    mut event = Event()
+    if poll(event):
+        return event.key.code
+    made = Event.from_key(Key(kind=1, code=2, name=[0, 0, 0, 0]))
+    mut events = [Event.from_kind(1), Event.from_ratio(0.5), Event.from_padding(made.padding)]
+    fill(events, 3)
+    holder = Holder(tag=1, event=last())
+    return push(made) + hold(holder) + (len(event.bytes) as int32)
+"#,
+    )
+    .expect("unions should check");
+    let event = program.extern_functions["push"].c_struct_params[0]
+        .as_ref()
+        .expect("a union crosses as a struct does");
+    assert!(event.union && event.holds_union() && !event.is_plain());
+    assert_eq!(event.name, "Event");
+    assert_eq!((event.size(), event.align()), (24, 8));
+    assert_eq!(
+        event
+            .fields
+            .iter()
+            .map(|field| field.name.as_str())
+            .collect::<Vec<_>>(),
+        ["kind", "key", "ratio", "padding"]
+    );
+    assert_eq!(
+        program.extern_functions["last"].c_struct_result.as_ref(),
+        Some(event)
+    );
+    assert_eq!(
+        program.extern_functions["fill"].c_struct_params[0].as_ref(),
+        Some(event)
+    );
+    let holder = program.extern_functions["hold"].c_struct_params[0]
+        .as_ref()
+        .expect("a class that holds a union crosses");
+    assert_eq!((holder.size(), holder.align()), (32, 8));
+    assert!(!program.classes["Event"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+    // The default of the bytes is as long as the union.
+    let Some(Expr {
+        kind: ExprKind::Comprehension { clauses, .. },
+        ..
+    }) = &program.classes["Event"].decl.fields[0].default
+    else {
+        panic!("the bytes of a union default to a comprehension");
+    };
+    let ExprKind::Call { args, .. } = &clauses[0].iterable.kind else {
+        panic!("the comprehension runs over a range");
+    };
+    assert!(matches!(args[0].value.kind, ExprKind::Int(24)));
+
+    for (source, message, code) in [
+        (
+            "extern \"C\" union U:\n    name: str\n",
+            "member `name` of `extern \"C\"` union `U` has type `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    names: array[str, 2]\n",
+            "member `names` of `extern \"C\"` union `U` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    mut u = U()\n    u.a = 1\n",
+            "",
+            "",
+        ),
+        (
+            "extern \"C\" union U:\n    a: int32\ndef run() -> None:\n    u = U()\n    v = u\n    print(u.a)\n",
+            "use of moved value `u`",
+            "AU3001",
+        ),
+    ] {
+        let error = check_ffi_source_for_test(source).expect_err("the union is misused");
+        assert!(error.message.contains(message), "{}", error.message);
+        if !code.is_empty() {
+            assert_eq!(error.code, code, "{}", error.message);
+        }
     }
 }
 

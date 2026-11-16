@@ -155,6 +155,12 @@ test("recovery preserves extern C declarations while the compiler is unavailable
     [["Point", "class", 'extern "C" class']]
   );
   assert.deepEqual(
+    documentSymbols(
+      ['extern "C" union Event:', "    kind: uint32", "    key: Key", ""].join("\n")
+    ).map((symbol) => [symbol.name, symbol.kind, symbol.detail]),
+    [["Event", "class", 'extern "C" union']]
+  );
+  assert.deepEqual(
     documentSymbols('extern "C" opaque class Database drop sqlite3_close\n').map(
       (symbol) => symbol.name
     ),

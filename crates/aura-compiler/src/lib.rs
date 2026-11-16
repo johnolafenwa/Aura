@@ -1601,6 +1601,22 @@ fn qualify_function_info_for_export(
     qualified
 }
 
+fn qualify_export_layout(program: &Program, layout: &mut c_layout::CStruct) {
+    fn qualify_kind(program: &Program, kind: &mut c_layout::CFieldKind) {
+        match kind {
+            c_layout::CFieldKind::Scalar(_) => {}
+            c_layout::CFieldKind::Struct(inner) => qualify_export_layout(program, inner),
+            c_layout::CFieldKind::Array(element, _) => qualify_kind(program, element),
+        }
+    }
+    if !layout.name.contains('.') && program_declares_type(program, &layout.name) {
+        layout.name = format!("{}.{}", program.module_name, layout.name);
+    }
+    for field in &mut layout.fields {
+        qualify_kind(program, &mut field.kind);
+    }
+}
+
 fn qualify_extern_function_info_for_export(
     program: &Program,
     info: &sema::ExternFunctionInfo,
@@ -1618,6 +1634,16 @@ fn qualify_extern_function_info_for_export(
         .collect();
     qualified.signature.return_type =
         qualify_export_type(program, &qualified.signature.return_type);
+    // A value read from C carries the name of its class, which an importer
+    // knows by the qualified name.
+    for layout in qualified
+        .c_struct_params
+        .iter_mut()
+        .flatten()
+        .chain(&mut qualified.c_struct_result)
+    {
+        qualify_export_layout(program, layout);
+    }
     qualified
 }
 

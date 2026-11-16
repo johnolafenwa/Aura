@@ -1622,15 +1622,100 @@ pub unsafe fn call_process_symbol(
     signature: &FfiSignature,
     arguments: &mut [FfiValue],
 ) -> Result<FfiValue, FfiError> {
+    if symbol == REINTERPRET_SYMBOL {
+        return reinterpret(signature, arguments);
+    }
     let function = process_symbol(symbol)?;
     // SAFETY: delegated to this function's caller.
     unsafe { call_host_function(function, signature, arguments) }
+}
+
+/// The symbol of the extern functions the compiler declares for the
+/// members of an `extern "C" union`. A call of one is not a call into C:
+/// its result is the leading bytes of its argument, read as the result's
+/// struct, and zero bytes where the argument is shorter.
+pub const REINTERPRET_SYMBOL: &str = "aura.reinterpret";
+
+/// The name a failed read or store of a union member is reported under:
+/// `Name.member` for the function `__Name_get_member` the compiler
+/// declared for it.
+pub fn reinterpret_label(function: &str) -> String {
+    let name = function.strip_prefix("__").unwrap_or(function);
+    for marker in ["_get_", "_set_"] {
+        if let Some((union, member)) = name.split_once(marker) {
+            return format!("{union}.{member}");
+        }
+    }
+    name.to_string()
+}
+
+/// The result of a call of [`REINTERPRET_SYMBOL`].
+pub fn reinterpret(signature: &FfiSignature, arguments: &[FfiValue]) -> Result<FfiValue, FfiError> {
+    let ([FfiValue::Struct(_, bytes)], FfiType::Struct(result)) = (arguments, &signature.result)
+    else {
+        return Err(FfiError::ArityMismatch {
+            expected: 1,
+            actual: arguments.len(),
+        });
+    };
+    let mut bytes = bytes.clone();
+    bytes.resize(result.size(), 0);
+    Ok(FfiValue::Struct(result, bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::c_void;
+
+    #[test]
+    fn a_reinterpret_call_reads_the_bytes_of_one_struct_as_another() {
+        use crate::c_layout::{CField, CFieldKind};
+        let layout = |name: &str, scalar: FfiScalar| {
+            CStruct {
+                name: name.to_string(),
+                fields: vec![CField {
+                    name: "value".to_string(),
+                    kind: CFieldKind::Scalar(scalar),
+                }],
+                union: false,
+            }
+            .interned()
+        };
+        let (narrow, wide) = (
+            layout("Narrow", FfiScalar::U16),
+            layout("Wide", FfiScalar::U64),
+        );
+        let call = |from: &'static CStruct, to: &'static CStruct, bytes: Vec<u8>| {
+            let signature = FfiSignature::new(vec![FfiType::Struct(from)], FfiType::Struct(to));
+            // SAFETY: the symbol names no C function.
+            unsafe {
+                call_process_symbol(
+                    REINTERPRET_SYMBOL,
+                    &signature,
+                    &mut [FfiValue::Struct(from, bytes)],
+                )
+            }
+        };
+        // A longer result is zero past the argument, and a shorter one is
+        // the leading bytes.
+        let Ok(FfiValue::Struct(_, bytes)) = call(narrow, wide, vec![1, 2]) else {
+            panic!("the call returns a struct");
+        };
+        assert_eq!(bytes, [1, 2, 0, 0, 0, 0, 0, 0]);
+        let Ok(FfiValue::Struct(_, bytes)) = call(wide, narrow, vec![9, 8, 7, 6, 5, 4, 3, 2])
+        else {
+            panic!("the call returns a struct");
+        };
+        assert_eq!(bytes, [9, 8]);
+        let scalar = FfiSignature::new(vec![FfiType::Struct(narrow)], FfiType::I32);
+        assert!(reinterpret(&scalar, &[FfiValue::Struct(narrow, vec![0, 0])]).is_err());
+        assert!(reinterpret(&scalar, &[]).is_err());
+
+        assert_eq!(reinterpret_label("__Event_get_kind"), "Event.kind");
+        assert_eq!(reinterpret_label("__Event_set_key"), "Event.key");
+        assert_eq!(reinterpret_label("as_pair"), "as_pair");
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static LAST_MUTABLE_BYTES_ADDRESS: AtomicUsize = AtomicUsize::new(0);

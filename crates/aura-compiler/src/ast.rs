@@ -274,6 +274,24 @@ pub struct ClassDecl {
     /// `list` nested once per length.
     #[serde(skip_serializing_if = "BTreeMap::is_empty")]
     pub c_arrays: BTreeMap<String, Vec<usize>>,
+    /// For the class of an `extern "C" union`, the name of the class in
+    /// the same module whose fields are the union's members. The union's
+    /// own class holds its bytes, and crosses the C boundary laid out as a
+    /// C union of those members.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub c_union: Option<String>,
+}
+
+/// The name of the class the parser declares to hold the members of the
+/// `extern "C" union` `name`.
+pub fn c_union_members_class(name: &str) -> String {
+    format!("__{name}_members")
+}
+
+/// The union whose members the class `name` holds, when the parser
+/// declared the class for an `extern "C" union`.
+pub fn c_union_of_members_class(name: &str) -> Option<&str> {
+    name.strip_prefix("__")?.strip_suffix("_members")
 }
 
 #[derive(Clone, Debug, Serialize)]

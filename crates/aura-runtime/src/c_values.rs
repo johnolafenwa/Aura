@@ -34,6 +34,12 @@ pub enum CValueError {
         expected: usize,
         found: usize,
     },
+    /// The `bytes` list of a union is not as long as the C union.
+    UnionLength {
+        name: String,
+        expected: usize,
+        found: usize,
+    },
     /// C left a byte other than 0 or 1 in a `bool`.
     BadBool(u8),
 }
@@ -42,7 +48,7 @@ impl CValueError {
     /// The diagnostic code the failure reports under.
     pub fn code(&self) -> &'static str {
         match self {
-            Self::Shape { .. } | Self::Length { .. } => "AU4005",
+            Self::Shape { .. } | Self::Length { .. } | Self::UnionLength { .. } => "AU4005",
             Self::BadBool(_) => "AU4001",
         }
     }
@@ -62,6 +68,14 @@ impl fmt::Display for CValueError {
             } => write!(
                 formatter,
                 "C array field `{field}` holds {expected} element(s), but the list has {found}"
+            ),
+            Self::UnionLength {
+                name,
+                expected,
+                found,
+            } => write!(
+                formatter,
+                "C union `{name}` is {expected} byte(s), but its `{UNION_BYTES_FIELD}` list has {found}"
             ),
             Self::BadBool(byte) => write!(
                 formatter,
@@ -267,7 +281,16 @@ pub fn pack(value: &Value, layout: &CStruct, bytes: &mut [u8]) -> Result<(), CVa
             .get(UNION_BYTES_FIELD)
             .ok_or_else(mismatch)?;
         let kind = CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), layout.size());
-        return pack_kind(&held, &kind, UNION_BYTES_FIELD, bytes);
+        return pack_kind(&held, &kind, UNION_BYTES_FIELD, bytes).map_err(|error| match error {
+            CValueError::Length {
+                expected, found, ..
+            } => CValueError::UnionLength {
+                name: layout.name.clone(),
+                expected,
+                found,
+            },
+            other => other,
+        });
     }
     for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
         let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;

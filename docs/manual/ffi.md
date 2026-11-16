@@ -121,6 +121,11 @@ extern "C" class Label:
     text: array[uint8, 16]
     corner: Div
 
+extern "C" union Number:
+    whole: int64
+    real: float64
+    bytes8: array[uint8, 8]
+
 extern "C" def div(numerator: int32, denominator: int32) -> Div
 extern "C" def total(parts: ptr[Div], count: int32) -> int64
 extern "C" def qsort(
@@ -163,6 +168,10 @@ The rules for these declarations:
   type parameters. A field of type `array[T, N]` is a C array of `N`
   elements, where `N` is a whole number written in the source. See
   [Structs](#structs).
+
+- **C unions.** A union declaration is written `extern "C" union Name:`
+  with a block of members, under the rules of a struct's fields. `union` is
+  an ordinary name everywhere else. See [Unions](#unions).
 
 To define a function that C code calls by name, see
 [Exported Functions](/manual/freestanding#exported-functions).
@@ -423,7 +432,7 @@ def main() -> int32:
 - **Booleans.** A `bool` field that comes back with a byte other than `0` or
   `1` fails with `AU4001`.
 
-`own Name` is `AU3004`, and `Name | None` is `AU2010`. C unions,
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. C
 bit-fields, pointer fields, and packed or over-aligned structs have no
 spelling. Declare a pointer field as `uint64` only when the code never
 dereferences it.
@@ -530,6 +539,82 @@ def main() -> int32:
 
 `own ptr[Name]` is `AU3004`. A pointer to anything but scalars or an
 `extern "C"` class is `AU2002`.
+
+#### Unions
+
+`extern "C" union Name:` declares a C union. Every member starts at offset
+0, and the union is as large as its largest member, rounded up to the
+strictest alignment among them. A member is a scalar, an `extern "C"`
+class, another union, or an `array[T, N]` of those.
+
+```aura fragment
+extern "C" class KeyEvent:
+    kind: uint32
+    code: int32
+
+extern "C" class MotionEvent:
+    kind: uint32
+    x: float32
+    y: float32
+
+extern "C" union Event:
+    kind: uint32
+    key: KeyEvent
+    motion: MotionEvent
+    padding: array[uint8, 56]
+
+extern "C" def poll_event(event: mut Event) -> bool
+extern "C" def push_event(event: Event) -> int32
+
+KEY_DOWN: uint32 = 1
+
+def main() -> int32:
+    mut event = Event()
+    while poll_event(event):
+        if event.kind == KEY_DOWN:
+            print(event.key.code)
+    push_event(Event.from_key(KeyEvent(kind=KEY_DOWN, code=27)))
+    return 0
+```
+
+In Aura a union is a class with one field, `bytes: list[uint8]`, which
+holds the bytes of the C union. The declaration gives the class these
+parts:
+
+| Part | Meaning |
+| --- | --- |
+| `Name()` | a union of zero bytes |
+| `value.member` | a read-only property: the leading bytes of the union, read as the member's type |
+| `Name.from_member(value)` | a union that holds `value` in that member, with every other byte zero |
+| `value.bytes` | the bytes themselves, which the program can read and write |
+
+- **A member read makes a new value.** `event.key` is a `KeyEvent` built
+  from the bytes at that moment. Changing it does not change the union.
+- **Members cannot be assigned.** `event.kind = 2` and
+  `event.key.code = 2` are `AU2045`, because a member is a property. Build a new union with `from_member`, or write
+  `bytes`.
+- **No member is the active one.** A C union carries no tag, and neither
+  does this one. Which member holds meaning is the library's convention,
+  usually a first field every member shares. Reading another member
+  reinterprets the bytes, as it does in C.
+- **A `bool` member is checked.** Reading one from a byte other than `0`
+  or `1` fails with `AU4001`.
+- **The bytes keep their length.** A union whose `bytes` list is not
+  exactly as long as the C union fails with `AU4005` when it crosses or
+  when a member is read.
+- **A union is not `Copy`.** It holds a list, so assignment moves it, as
+  for a class with an array field. A class that holds a union is not
+  `Copy` either.
+- **A member cannot be named `bytes`.**
+
+A union crosses wherever an `extern "C"` class does: by value, as `mut
+Name` for a pointer the function writes through, as a field, as an array
+element, and through `ptr[Name]`. By value it is passed the way the
+platform's convention passes a C union of those members.
+
+Reading a member costs a runtime call that copies the union's bytes, so a
+loop that reads several members of one event pays for each. Bind a member
+to a name when it is read more than once.
 
 ### Callbacks
 
@@ -775,7 +860,7 @@ never appears in source-visible output or diagnostics.
 | Code | Cause |
 | --- | --- |
 | `AU1101` | Malformed extern or opaque syntax. The parser gives dedicated guidance for a foreign body, defaults, type parameters, variadics, and raw-pointer spelling. |
-| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field with no C layout. |
+| `AU2002` | A type outside the fixed scalar, view, C text, struct, and opaque-handle tables, including a returned `str` or `list[uint8]` view, a `cstr` in a union other than `cstr \| None`, a `ptr` to anything but a scalar, and an `extern "C"` class field or union member with no C layout. |
 | `AU2003` | Equality or inequality on an opaque handle or a value that structurally contains one. |
 | `AU2005` | A reserved FFI form, construction of an opaque handle, a raw-pointer contract that reaches static checking, a callback argument that is not a named top-level function, a function as an extern result, or a `drop` clause that does not name an extern function taking the handle as its one `own` parameter. |
 | `AU2010` | A union result or parameter other than `Handle \| None` and `cstr \| None`. |
@@ -816,7 +901,8 @@ result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
 loads to find the list's elements. A struct argument or result costs a
 store and a load for each field. A struct with an array field and a
-`ptr[Name]` list cost a runtime call that copies each element. A callback costs about 4 ns more
+`ptr[Name]` list cost a runtime call that copies each element. A union
+costs a runtime call when it crosses and when a member is read. A callback costs about 4 ns more
 than a C function pointer, for the frame that guards the C caller against
 a failure.
 
@@ -828,7 +914,8 @@ still name the host's actual C symbol.
 
 FFI does not:
 
-- define C unions or bit-fields, or pass enums
+- define C bit-fields, or pass enums
+- assign one member of a union in place
 - pass a struct that holds a pointer Aura can follow
 - allocate foreign memory or expose pointer arithmetic
 - return views, or free a `cstr` result
@@ -861,14 +948,15 @@ Implemented:
 - `extern "C"` classes passed and returned by value, and passed by pointer
 - `array[T, N]` fields of an `extern "C"` class
 - `ptr[Name]` and `mut ptr[Name]` pointers to the elements of a struct list
+- `extern "C" union` declarations, passed wherever a struct is
 - named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
 Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
-other nullable shapes, and unions. Aura does not infer them
-from current syntax.
+other nullable shapes, and Aura union types such as `int32 | float64`.
+Aura does not infer them from current syntax.
 
 Design record:
 [anonymous closed union types](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0052-anonymous-closed-union-types.md)

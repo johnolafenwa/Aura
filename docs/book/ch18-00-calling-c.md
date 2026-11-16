@@ -537,8 +537,8 @@ defaults, and no type parameters, and each field is a scalar or another
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C unions
-and bit-fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. C
+bit-fields have no Aura spelling.
 
 ### Arrays of structs
 
@@ -621,6 +621,98 @@ boundary. A `Material` that comes back from C always has four elements in
 `AU4005` before C sees anything. One more thing changes: a class that
 holds a list cannot be a `copy class`, so a `Material` moves when we assign
 it, like any other class with a list inside.
+
+### Unions
+
+A C union is several types laid over the same bytes. SDL, the library
+behind many games, reports everything that happens through one: a key
+press, a mouse move, and a window resize are all an `SDL_Event`, and its
+first four bytes say which. We declare a union with `extern "C" union`,
+listing the members we care about:
+
+*Filename: src/events.au*
+
+```aura fragment
+extern "C" class Keysym:
+    scancode: int32
+    sym: int32
+    modifiers: uint16
+    unused: uint32
+
+extern "C" class KeyboardEvent:
+    kind: uint32
+    timestamp: uint32
+    window: uint32
+    state: uint8
+    repeat: uint8
+    padding2: uint8
+    padding3: uint8
+    keysym: Keysym
+
+extern "C" union Event:
+    kind: uint32
+    key: KeyboardEvent
+    padding: array[uint8, 56]
+
+extern "C" def SDL_Init(flags: uint32) -> int32
+extern "C" def SDL_PushEvent(event: mut Event) -> int32
+extern "C" def SDL_PollEvent(event: mut Event) -> int32
+extern "C" def SDL_Quit() -> None
+
+SDL_INIT_EVENTS: uint32 = 16384
+SDL_KEYDOWN: uint32 = 768
+
+def main() -> int32:
+    SDL_Init(SDL_INIT_EVENTS)
+    mut escape = Event.from_key(KeyboardEvent(
+        kind=SDL_KEYDOWN, timestamp=0, window=0, state=1, repeat=0, padding2=0, padding3=0,
+        keysym=Keysym(scancode=41, sym=27, modifiers=0, unused=0),
+    ))
+    SDL_PushEvent(escape)
+
+    mut event = Event()
+    while SDL_PollEvent(event) != 0:
+        if event.kind == SDL_KEYDOWN:
+            pressed = event.key
+            print(f"key {pressed.keysym.sym}, state {pressed.state}")
+    SDL_Quit()
+    return 0
+```
+
+<span class="caption">Listing 18-8: Reading SDL events through a union</span>
+
+With `libraries = ["SDL2"]` in the manifest, the program prints the key we
+pushed:
+
+```console
+$ aura run
+key 27, state 1
+```
+
+`SDL_Event` has about thirty members in C. We listed three, and that is
+fine as long as one of them is as large as the whole union. SDL pads its
+union to 56 bytes for that reason, and our `padding` member does the same.
+
+Three things in `main` are new. `Event()` makes a union of zero bytes for
+SDL to fill. `event.kind` and `event.key` read the same bytes two ways: the
+first as a `uint32`, the second as a whole `KeyboardEvent`. And
+`Event.from_key(...)` builds a union from one member, with every byte the
+member does not cover set to zero. Each member we declare gets a read like
+`event.key` and a `from_` function like `Event.from_key`.
+
+A C union does not remember which member was stored, and neither does
+ours. Nothing stops us from reading `event.key` when the event is a mouse
+move. We would get a `KeyboardEvent` made of the mouse event's bytes, as a
+C program would. The `kind` field is SDL's convention for telling us which
+member to read, and checking it first is our job.
+
+Reading a member gives us a copy. `event.key` builds a new `KeyboardEvent`
+each time, which is why the loop binds it to `pressed` and reads two
+fields from that. For the same reason Aura rejects `event.kind = 1` and
+`event.key.state = 0` with `AU2045`: a member is read-only. To change a
+union, build a new one with a `from_` function. The
+bytes themselves are also there, as the list `event.bytes`, for the rare
+case where nothing else will do.
 
 ## Callbacks
 
@@ -813,7 +905,7 @@ without a change to your own manifest that a reviewer will see.
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
-variadic functions such as `printf`, no unions, no
+variadic functions such as `printf`, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler

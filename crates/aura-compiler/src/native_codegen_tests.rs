@@ -17107,6 +17107,56 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_reads_union_members_without_a_c_call() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+
+extern "C" class Pair:
+    low: uint32
+    high: uint32
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    text: array[uint8, 12]
+
+extern "C" def un_poll(event: mut Event) -> bool
+extern "C" def as_pair(key: Key) -> Pair symbol "aura.reinterpret"
+
+def main() -> int32:
+    mut event = Event()
+    if un_poll(event):
+        print(event.key.code)
+    made = Event.from_key(Key(kind=1, code=2))
+    print(made.kind)
+    print(Event.from_text(made.text).kind)
+    print(as_pair(Key(kind=3, code=4)).high)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a union should emit");
+    let referenced = object_referenced_symbols(&object);
+    let references = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "un_poll",
+        "aura_direct_ffi_pack_struct",
+        "aura_direct_ffi_unpack_struct",
+    ] {
+        assert!(references(symbol), "the object should reference `{symbol}`");
+    }
+    // A member read is not a call of a C function.
+    assert!(!references(crate::ffi::REINTERPRET_SYMBOL));
+    assert!(!referenced.iter().any(|name| name.contains("__Event_")));
+}
+
+#[test]
 fn direct_ffi_codegen_packs_array_fields_and_struct_arrays_in_the_runtime() {
     let module = lower_ffi_source_to_mir(
         r#"

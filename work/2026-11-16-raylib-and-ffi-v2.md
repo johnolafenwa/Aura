@@ -110,6 +110,42 @@ read against AAPCS64. Speed of the runtime conversion path is not yet
 measured; a list of structs is converted element by element on every
 call.
 
+## Step 3: Unions
+
+ADR-0107 records the decisions. What changed:
+
+- `extern "C" union Name:` parses into a class that holds
+  `bytes: list[uint8]`, a property and a `from_` function for each member,
+  and the private declarations those call. See
+  `Parser::parse_extern_union`.
+- `ffi_struct_layout` lays a union out from the fields of its
+  `__Name_members` class, and the checker sets the length of the `bytes`
+  default once layouts are known.
+- An extern function with the symbol `aura.reinterpret` reads the C bytes
+  of its one struct argument as its struct result. The interpreter does it
+  in `ffi::reinterpret` and built programs in
+  `compile_reinterpret`.
+- Exported extern functions carry module-qualified names in their C
+  layouts, so a value read from C in an importing module has the class
+  name the importer knows.
+- The editor analysis hides the generated declarations and lists a
+  union's members in the outline. The language server's recovery outline
+  and the VS Code grammar know `extern "C" union`.
+
+Verification for step 3:
+
+- `cargo test -p aura-compiler --lib` and `cargo test -p aura-runtime
+  --lib`. Three compiler tests fail on this machine with or without the
+  change: one needs a non-root user, and two float proofs need a newer Z3
+  than the 4.8.12 installed here.
+- `cargo test -p aura --test ffi_acceptance`: unions by value, by pointer,
+  as fields, in arrays, and through `ptr[Name]` against the fixture
+  library, the failure cases, and an SDL event loop.
+- `node --test ./test/*.test.js` in `tools/aura-language-server`.
+
+Not run: any arm64 or macOS machine. Unions of floats take a different
+path there, which the fixture's `UHfa` union exercises in CI.
+
 ## Follow-Up
 
-Unions, `cstr` in callbacks, SDL2 and GLFW tests, and benchmarks.
+`cstr` in callbacks, a GLFW test, and benchmarks.

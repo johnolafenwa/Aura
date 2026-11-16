@@ -11,6 +11,9 @@
 # On macOS, installs Homebrew's raylib. The programs that open a window do
 # not run there unless AURA_RAYLIB_WINDOW_TESTS is set.
 #
+# On both, also installs SDL2 and GLFW from the system's packages, for the
+# FFI acceptance tests that call them.
+#
 # Usage: scripts/install-raylib.sh
 #
 # The script does nothing when the C compiler already links raylib.
@@ -32,12 +35,15 @@ links_raylib() {
 case "$(uname -s)" in
   Darwin)
     links_raylib || brew install raylib
+    # The SDL and GLFW tests skip on a host that cannot link them.
+    brew list sdl2 > /dev/null 2>&1 || brew install sdl2
+    brew list glfw > /dev/null 2>&1 || brew install glfw
     ;;
   Linux)
     sudo apt-get update
     sudo apt-get install -y cmake git xvfb libgl1-mesa-dev libgl1-mesa-dri \
       libx11-dev libxrandr-dev libxi-dev libxcursor-dev libxinerama-dev \
-      libwayland-dev libxkbcommon-dev libasound2-dev
+      libwayland-dev libxkbcommon-dev libasound2-dev libsdl2-dev libglfw3-dev
     if ! links_raylib; then
       source_dir="$(mktemp -d)"
       git clone --depth 1 --branch "$version" https://github.com/raysan5/raylib.git "$source_dir"

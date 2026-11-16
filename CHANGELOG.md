@@ -14,6 +14,13 @@ in this file.
   crosses, or the call fails with `AU4005`. A class with an array field is
   not a `copy class`.
 
+- FFI: `extern "C" union Name:` declares a C union. In Aura it is a class
+  that holds the union's bytes in `bytes: list[uint8]`. Each member is a
+  read-only property, such as `event.key`, and has an associated function
+  that builds a union from it, such as `Event.from_key(value)`. `Name()`
+  is a union of zero bytes. A union crosses wherever an `extern "C"` class
+  does. SDL's event loop can now be written in Aura.
+
 - FFI: `ptr[Name]` and `mut ptr[Name]` pass a `list[Name]` of an
   `extern "C"` class as a C array of structs, such as `const Vector2 *`.
   The call copies the elements into the array and, for `mut`, back out of

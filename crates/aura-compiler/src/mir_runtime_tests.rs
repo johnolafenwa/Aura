@@ -24728,6 +24728,73 @@ def main() -> int32:
 }
 
 #[test]
+fn ffi_unions_read_and_store_their_members_and_cross_through_libc() {
+    // `memcpy` fills a union through a pointer and `memcmp` reads an
+    // array of them.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    ratio: float64
+    text: array[uint8, 12]
+
+extern "C" def memcpy(to: mut Event, source: ptr[uint8], count: uint64) -> uint64
+extern "C" def memcmp(a: ptr[Event], b: ptr[uint8], count: uint64) -> int32
+
+def main() -> int32:
+    mut event = Event()
+    if len(event.bytes) != 16 or event.kind != 0:
+        return -1
+    source: list[uint8] = [7, 0, 0, 0, 254, 255, 255, 255, 65, 66]
+    memcpy(event, source, 10)
+    if event.kind != 7 or event.key.code != -2 or event.text[9] != 66:
+        return -2
+    made = Event.from_key(Key(kind=3, code=4))
+    if made.kind != 3 or made.bytes[4] != 4 or made.bytes[8] != 0:
+        return -3
+    if Event.from_ratio(1.0).bytes[7] != 63:
+        return -4
+    texts = [Event.from_text(event.text), Event.from_kind(9)]
+    same: list[uint8] = [7, 0, 0, 0, 254, 255, 255, 255, 65, 66, 0, 0, 0, 0, 0, 0, 9]
+    if memcmp(texts, same, 17) != 0:
+        return -5
+    event.bytes[0] = 8
+    return (event.kind as int32) * 10 + made.key.code
+"#,
+    );
+    let output = super::run_trusted(&module).expect("a union reads and stores its members");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(84));
+
+    for (body, code, message) in [
+        (
+            "    mut flag = Flag()\n    flag.bytes = [1, 2]\n    return flag.raw as int32",
+            "AU4005",
+            "C union `Flag` is 1 byte(s), but its `bytes` list has 2",
+        ),
+        (
+            "    flag = Flag.from_raw(2)\n    if flag.on:\n        return 1\n    return 0",
+            "AU4001",
+            "FFI call to `Flag.on` failed",
+        ),
+    ] {
+        let module = lower_ffi_runtime_source(&format!(
+            "extern \"C\" union Flag:\n    on: bool\n    raw: uint8\n\ndef main() -> int32:\n{body}\n"
+        ));
+        let error = super::run_trusted(&module).expect_err("the union does not read");
+        assert_eq!(error.code, code, "{}", error.message);
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
 fn ffi_array_fields_and_struct_arrays_cross_through_libc() {
     use crate::ffi::{FfiType, FfiValue};
 

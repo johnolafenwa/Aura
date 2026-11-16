@@ -279,14 +279,19 @@ fn a_union_is_its_bytes() {
         "Event",
         vec![(UNION_BYTES_FIELD, list("uint8", vec![int(1)]))],
     );
-    assert!(matches!(
-        pack(&short, &event, &mut again),
-        Err(CValueError::Length {
+    let error = pack(&short, &event, &mut again).unwrap_err();
+    assert_eq!(
+        error,
+        CValueError::UnionLength {
+            name: "Event".to_string(),
             expected: 16,
-            found: 1,
-            ..
-        })
-    ));
+            found: 1
+        }
+    );
+    assert_eq!(error.code(), "AU4005");
+    assert!(error
+        .to_string()
+        .contains("C union `Event` is 16 byte(s), but its `bytes` list has 1"));
     assert!(pack(&instance("Event", vec![]), &event, &mut again).is_err());
 
     // A union as a field and as an array element.

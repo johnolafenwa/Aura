@@ -444,6 +444,9 @@ struct Parser {
     /// Whether the fields being parsed are those of an `extern "C"` class,
     /// where `array[T, N]` spells a fixed-size C array.
     extern_fields: bool,
+    /// Declarations generated for an `extern "C" union`, which join the
+    /// module's items.
+    generated_items: Vec<Item>,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
     source_lines: Vec<String>,
@@ -465,6 +468,7 @@ impl Parser {
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
             extern_fields: false,
+            generated_items: Vec::new(),
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
         }
@@ -556,6 +560,7 @@ impl Parser {
             self.skip_newlines();
         }
 
+        items.append(&mut self.generated_items);
         Ok(Module {
             doc,
             imports,
@@ -842,6 +847,12 @@ impl Parser {
 
         if self.at_simple(&TokenKind::KwClass) {
             return Ok(Item::Class(self.parse_extern_class(public)?));
+        }
+        // `union` is a word only here, between the ABI and a name.
+        if matches!(self.current_kind(), TokenKind::Identifier(word) if word == "union")
+            && matches!(self.peek_kind(1), Some(TokenKind::Identifier(_)))
+        {
+            return Ok(Item::Class(self.parse_extern_union(public)?));
         }
 
         self.expect_keyword(TokenKind::KwDef)?;
@@ -1188,6 +1199,7 @@ impl Parser {
             doc,
             c_layout: false,
             c_arrays: std::collections::BTreeMap::new(),
+            c_union: None,
         })
     }
 
@@ -1243,6 +1255,148 @@ impl Parser {
         class.copy = class.c_arrays.is_empty();
         class.c_layout = true;
         Ok(class)
+    }
+
+    /// Parses an `extern "C" union`: a block of members that all start at
+    /// offset 0. The union becomes a class that holds its bytes, with a
+    /// read-only property and an associated `from_<member>` function for
+    /// each member. The declarations those need are generated here and
+    /// join the module's items.
+    fn parse_extern_union(&mut self, public: bool) -> Result<ClassDecl> {
+        // The members parse as the fields of an `extern "C"` class.
+        let keyword = self.current_span();
+        self.tokens[self.index].kind = TokenKind::KwClass;
+        let mut members = self.parse_extern_class(public).map_err(|mut error| {
+            error.message = error
+                .message
+                .replace("`extern \"C\"` class", "`extern \"C\"` union")
+                .replace("at least one field", "at least one member");
+            error
+        })?;
+        let holder = crate::ast::c_union_members_class(&members.name);
+        let name = std::mem::replace(&mut members.name, holder);
+        if let Some(member) = members
+            .fields
+            .iter()
+            .find(|field| field.name == crate::c_layout::UNION_BYTES_FIELD)
+        {
+            return Err(parse_error(
+                member.span,
+                format!(
+                    "`extern \"C\"` union `{name}` cannot have a member named `{}`; that is the name of the field that holds the union's bytes",
+                    crate::c_layout::UNION_BYTES_FIELD
+                ),
+            ));
+        }
+        let visible = if public { "public " } else { "" };
+        let symbol = crate::ffi::REINTERPRET_SYMBOL;
+        let mut class_text = format!(
+            "{visible}class {name}:\n    {visible}bytes: list[uint8] = [0 for _ in range(0)]\n"
+        );
+        let mut items_text = String::new();
+        for field in &members.fields {
+            let member = &field.name;
+            // A member that is a class crosses as itself. A scalar or an
+            // array crosses as the one field of a class declared for it.
+            let boxed = members.c_arrays.contains_key(member)
+                || matches!(&field.ty.kind, TypeRefKind::Named { name, .. } if C_SCALAR_TYPE_NAMES.contains(&name.as_str()));
+            let copy = if members.c_arrays.contains_key(member) {
+                "[:]"
+            } else {
+                ""
+            };
+            let (read, stored, crossing) = if boxed {
+                (
+                    ".value",
+                    format!("__{name}_box_{member}(value=value{copy})"),
+                    format!("__{name}_box_{member}"),
+                )
+            } else {
+                ("", "value".to_string(), "uint8".to_string())
+            };
+            class_text.push_str(&format!(
+                "    @property\n    {visible}def {member}(self) -> uint8:\n        return __{name}_get_{member}(self){read}\n\
+                 \x20   {visible}def from_{member}(value: uint8) -> {name}:\n        return __{name}_set_{member}({stored})\n"
+            ));
+            if boxed {
+                items_text.push_str(&format!(
+                    "extern \"C\" class __{name}_box_{member}:\n    value: uint8\n"
+                ));
+            }
+            items_text.push_str(&format!(
+                "extern \"C\" def __{name}_get_{member}(value: {name}) -> {crossing} symbol \"{symbol}\"\n\
+                 extern \"C\" def __{name}_set_{member}(value: {crossing}) -> {name} symbol \"{symbol}\"\n"
+            ));
+        }
+        // Each generated token takes the place of the `union` word, at a
+        // column of its own.
+        let mut tokens = lex(&format!("{class_text}{items_text}"))
+            .expect("the generated declarations of a union lex");
+        for (index, token) in tokens.iter_mut().enumerate() {
+            token.span = Span::new(
+                keyword.line,
+                keyword.column + (index + 1) * crate::diag::GENERATED_COLUMN_STRIDE,
+            );
+        }
+        let generated = Parser::new(tokens)
+            .parse_module()
+            .expect("the generated declarations of a union parse");
+        let mut union = None;
+        for mut item in generated.items {
+            match &mut item {
+                Item::Class(class) if class.name == name => {
+                    for (pair, member) in class.methods.chunks_mut(2).zip(&members.fields) {
+                        pair[0].return_type = member.ty.clone();
+                        pair[0].doc = member.doc.clone();
+                        pair[1].params[0].ty = member.ty.clone();
+                    }
+                    class.span = members.span;
+                    class.doc = members.doc.take();
+                    class.c_layout = true;
+                    class.c_union = Some(members.name.clone());
+                    union = Some(class.clone());
+                    continue;
+                }
+                Item::ExternFunction(function) => {
+                    let member = |prefix: &str| {
+                        let member = function.name.strip_prefix(&format!("__{name}_{prefix}_"))?;
+                        members.fields.iter().find(|field| field.name == member)
+                    };
+                    if let Some(member) = member("get") {
+                        if !matches!(&function.return_type.kind, TypeRefKind::Named { name: to, .. } if to.starts_with("__"))
+                        {
+                            function.return_type = member.ty.clone();
+                        }
+                    }
+                    if let Some(member) = member("set") {
+                        if !matches!(&function.params[0].ty.kind, TypeRefKind::Named { name: from, .. } if from.starts_with("__"))
+                        {
+                            function.params[0].ty = member.ty.clone();
+                        }
+                    }
+                }
+                Item::Class(class) => {
+                    let member =
+                        class
+                            .name
+                            .strip_prefix(&format!("__{name}_box_"))
+                            .and_then(|member| {
+                                members.fields.iter().find(|field| field.name == member)
+                            });
+                    if let Some(member) = member {
+                        class.fields[0].ty = member.ty.clone();
+                        if let Some(lengths) = members.c_arrays.get(&member.name) {
+                            class.c_arrays.insert("value".to_string(), lengths.clone());
+                            class.copy = false;
+                        }
+                    }
+                }
+                _ => {}
+            }
+            self.generated_items.push(item);
+        }
+        self.generated_items.push(Item::Class(members));
+        Ok(union.expect("the generated declarations hold the union's class"))
     }
 
     fn parse_enum(&mut self, public: bool) -> Result<EnumDecl> {
@@ -5930,6 +6084,11 @@ fn take_c_array(ty: &mut TypeRef, lengths: &mut Vec<usize>) -> Result<()> {
 }
 
 /// The most elements one C array field holds.
+/// The scalar types a member of an `extern "C" union` can have.
+const C_SCALAR_TYPE_NAMES: [&str; 11] = [
+    "bool", "int8", "int16", "int32", "int64", "uint8", "uint16", "uint32", "uint64", "float32",
+    "float64",
+];
 const C_ARRAY_MAX_LENGTH: usize = 1 << 20;
 
 /// Rewrites `ptr[T]` to `list[T]` in the type of an extern parameter, and

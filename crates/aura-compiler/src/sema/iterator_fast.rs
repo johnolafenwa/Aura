@@ -1114,6 +1114,7 @@ fn generator_frame(
         doc: None,
         c_layout: false,
         c_arrays: BTreeMap::new(),
+        c_union: None,
     };
 
     // The builder takes the generator's parameters and starts every local

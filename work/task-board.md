@@ -21,8 +21,10 @@ Last updated: 2026-11-16
   tests against a C fixture library and raylib on both backends on x86-64
   Linux under Xvfb. Not run on macOS, Windows, or arm64 here; the AArch64
   call sequence was checked by reading the generated assembly.
-- Remaining: unions, `cstr` in callbacks, SDL2 and GLFW acceptance tests,
-  benchmarks against Rust and Python.
+- Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
+  that runs an SDL event loop on both backends.
+- Remaining: `cstr` in callbacks, a GLFW acceptance test, benchmarks
+  against Rust and Python.
 
 ## Book chapters on tensors and machine learning (complete)
 

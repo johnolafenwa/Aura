@@ -2,7 +2,10 @@
 
 Status: **Open 2026-11-16.** Work proceeds on the defaults marked below.
 Sections A, C, and the AArch64 part of F are implemented and recorded in
-[ADR-0106](decisions/0106-c-array-fields-and-struct-arrays.md).
+[ADR-0106](decisions/0106-c-array-fields-and-struct-arrays.md). Section B
+is implemented and recorded in [ADR-0107](decisions/0107-c-unions.md),
+with one change from B3: a union is built from a member with the
+associated function `Name.from_member(value)`, not `Name(member=value)`.
 Each default stays open to change until the release that ships it.
 
 This checkpoint covers two pieces of the graphics work: a maintained
