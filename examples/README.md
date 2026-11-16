@@ -64,6 +64,7 @@ executable size.
 | `list_algorithms.au` | Eager shared `map` and `filter`, stable natural sorting of numbers and `str`, stable key sorting that calls the key once per element, and source retention | `[6, 2, 4, 8]`, `[2, 4]`, `[1, 2, 3, 4]`, `[4, 3, 2, 1]`, `second`, `first`, `third`, `[Apple, fig, pear]`, `[3, 1, 2, 4]` |
 | `dict_basics.au` | `dict[K, V]` literals, `update(...)`, tuple-valued `items()`, indexed writes, indexed reads, and typed optional lookup and removal | `3`, `true`, `1`, `1`, `5`, `(aura, 5)`, `(repo, 3)`, `3`, `3`, `3`, `true` |
 | `lookup_in_place.au` | Arm-scoped `lookup` on lists and dictionaries: a mutable `Found` view that appends in place, the `Missing` arm for an invalid position or absent key, and a shared read | `no team at 2`, `core: 1`, `2`, `1`, `1` |
+| `set_algebra.au` | Set union, intersection, difference, and symmetric difference with `\|`, `&`, `-`, `^` and the named methods, the subset, superset, and disjoint tests, and `update` | `either: ada, grace, linus, margaret`, `both: grace`, `backend only: ada, linus`, `one team: ada, linus, margaret`, `either: ada, grace, linus, margaret`, `false`, `true`, `true`, `5` |
 | `set_basics.au` | `set[T]` literals, shared-borrow iteration, deduplication, and the set method surface | `3`, `true`, `false`, `true`, `true`, `9`, `true`, `true`, `1` |
 
 ### `classes/`
@@ -149,6 +150,7 @@ seven real loopback requests.
 
 | File | Shows | Prints |
 | --- | --- | --- |
+| `byte_strings_and_encodings.au` | Byte strings such as `b"\r\n"` as `list[uint8]` values, `bytes.encode` and `bytes.decode` through UTF-8, Latin-1, UTF-16, ASCII, and Windows-1252, and matching each `bytes.EncodingError` | `16`, `true`, `00ff`, `utf-8: 636166c3a9`, `latin-1: 636166e9`, `utf-16-le: 630061006600e900`, `ascii: cannot hold character 3`, `no encoding named ebcdic`, `“quoted”` |
 | `codecs_and_hashing.au` | Converts `str` to strict UTF-8 bytes and back, encodes and decodes binary data with canonical base64, renders lowercase hex, computes raw SHA-256, and reuses shared inputs afterward | `4175726120f09f8c8c`, `Aura 🌌`, `AAH+/w==`, `0001feff`, `ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad`, `4175726120f09f8c8c`, `[0, 1, 254, 255]` |
 
 ### `control_flow/`
@@ -365,6 +367,7 @@ printed-output order unless they coordinate that order explicitly.
 | `float32_values.au` | `float32` values in annotated bindings, parameters, returns, and class fields | `3.25`, `2.0`, `5.0` |
 | `numeric_casts.au` | Explicit numeric conversions with `expr as Type` | `7`, `3.0`, `1.25`, `2.0` |
 | `numeric_builtins.au` | Builtin numeric helpers `abs(...)`, `min(...)`, `max(...)`, `sqrt(...)`, and `float64.sqrt()` | `7`, `3.5`, `2`, `12`, `9.0`, `9.0` |
+| `angles_and_integers.au` | The inverse trigonometric functions, `hypot`, `degrees`, and value classification from the `math` module, and its exact integer functions `gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and `perm` | `5.0`, `53`, `30`, `true`, `true`, `12`, `12`, `31622`, `3628800`, `2598960`, `20` |
 | `scalar_math.au` | Exact `float64` constants and scalar rounding, power, exponential, logarithmic, and trigonometric functions from the `math` module | `3.141592653589793`, `2.718281828459045`, `inf`, `NaN`, `-2`, `-1`, `-1`, `0.125`, `1.0`, `0.0`, `3.0`, `3.0`, `0.0`, `1.0`, `0.0` |
 | `numeric_arrays.au` | Global contiguous row-major `Array[T]` over the four supported dtypes. Covers construction, multidimensional indexing, mutable replacement, row slices, mapping, reductions, scalar kernels, and explicit wrapping and saturating integer arithmetic. | `2`, `[1, 2, 3, 4]`, `[2, 2]`, `20`, `46`, `25.0`, `-2147483648`, `2147483647`, `16.0` |
 | `array_products.au` | `Array.matmul` of a table and a vector and of two tables, `Array.dot`, and the reordered `fast_sum` and `fast_mean` beside the left-to-right `sum` | `Array[float64](shape=[2], values=[88.3, 88.3])`, `0.38`, `Array[int64](shape=[2, 2], values=[19, 22, 43, 50])`, `70`, `100000.00000133288`, `99999.9999999441`, `0.0999999999999441` |
@@ -381,6 +384,7 @@ printed-output order unless they coordinate that order explicitly.
 | --- | --- | --- |
 | `greeting.au` | String concatenation and equality | `hello, aura` |
 | `string_clone.au` | `str.clone()` on owned strings | `aura` |
+| `character_positions.au` | Reading one character of a `str` with `text[index]` and `char_at`, negative positions, and loops that compare characters from both ends | `n`, `ï`, `e`, `a`, `AKL`, `true`, `false` |
 | `string_methods.au` | Single-quoted strings, an owned `str \| None` match helper, and the `str` methods: `int64` Unicode-scalar `len()`, `int64` UTF-8 `byte_len()`, `contains(...)`, `starts_with(...)`, `ends_with(...)`, `split(...)`, `replace(...)`, `to_lower()`, `to_upper()`, `strip_prefix(...)`, `strip_suffix(...)`, `trim()`, and `clone()` | `13`, `true`, `true`, `true`, `aura repo`, `2`, `aura`, `repo`, `aura lang`, `aura repo`, `AURA REPO`, `repo`, `none`, `aura`, `none`, `9` |
 | `string_parsing_and_formatting.au` | Parsing builtins, scalar and boolean `.to_string()`, and `str.join(...)` | `42`, `-9000000000`, `3.5`, `true`, `aura-lang-tests`, `true`, `12`, `4`, `9`, `3.0` |
 | `text_parsing.au` | A small request-log parser that uses `lines()`, `split_whitespace()`, `rsplit_once(...)`, `split_once(...)`, `trim_start()`, `trim_end()`, `find(...)`, `count(...)`, and `repeat(...)`, plus `bytes.starts_with`, `bytes.find`, and `bytes.ends_with` | `Requests`, `--------`, three aligned request rows, `skipped: broken`, `Content-Type = text/plain; charset=utf-8`, `utf-8`, `2`, `68656c6c6f`, `true` |

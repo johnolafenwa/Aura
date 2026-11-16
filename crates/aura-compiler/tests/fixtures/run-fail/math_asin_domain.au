@@ -1,0 +1,4 @@
+import math
+
+def main():
+    print(math.asin(1.5))

@@ -173,6 +173,255 @@ pub fn host_math_tan(args: Vec<Value>, _program_args: Option<&[String]>) -> Resu
     host_math_unary(MathFunction::Tan, args)
 }
 
+/// The value of one `float64` argument of a `math` function.
+fn math_float_argument(name: &str, value: &Value) -> Result<f64> {
+    match value {
+        Value::Float(value) => Ok(*value),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{name}` expects `float64`"),
+        )),
+    }
+}
+
+/// The value of one `int64` argument of a `math` function.
+fn math_integer_argument(name: &str, value: &Value) -> Result<i64> {
+    match value {
+        Value::Int(value) => value
+            .as_i128()
+            .and_then(|value| i64::try_from(value).ok())
+            .ok_or_else(|| Diagnostic::coded("AU4001", format!("`{name}` expects `int64`"))),
+        _ => Err(Diagnostic::coded(
+            "AU4001",
+            format!("`{name}` expects `int64`"),
+        )),
+    }
+}
+
+fn math_domain_error(name: &str, value: f64) -> Diagnostic {
+    Diagnostic::coded("AU4001", format!("`{name}` domain error for `{value}`"))
+}
+
+fn math_overflow(name: &str) -> Diagnostic {
+    Diagnostic::coded("AU4002", format!("`{name}` overflow"))
+}
+
+/// A `math` function from one `float64` to `float64` that the first table
+/// of `MathFunction` does not hold: the inverse and hyperbolic functions
+/// and the roots. NaN gives NaN. A finite input outside the function's
+/// domain is `AU4001`, and a finite input whose result is infinite is
+/// `AU4002`.
+pub(crate) fn math_extended_unary(name: &str, value: f64) -> Result<f64> {
+    if value.is_nan() {
+        return Ok(value);
+    }
+    let outside = match name {
+        "math.sqrt" => value < 0.0,
+        "math.asin" | "math.acos" => !(-1.0..=1.0).contains(&value),
+        "math.acosh" => value < 1.0,
+        "math.atanh" => !(-1.0 < value && value < 1.0),
+        "math.log1p" => value <= -1.0,
+        _ => false,
+    };
+    if outside {
+        return Err(math_domain_error(name, value));
+    }
+    let result = match name {
+        "math.sqrt" => value.sqrt(),
+        "math.cbrt" => value.cbrt(),
+        "math.asin" => value.asin(),
+        "math.acos" => value.acos(),
+        "math.atan" => value.atan(),
+        "math.sinh" => value.sinh(),
+        "math.cosh" => value.cosh(),
+        "math.tanh" => value.tanh(),
+        "math.asinh" => value.asinh(),
+        "math.acosh" => value.acosh(),
+        "math.atanh" => value.atanh(),
+        "math.expm1" => value.exp_m1(),
+        "math.log1p" => value.ln_1p(),
+        "math.degrees" => value.to_degrees(),
+        _ => value.to_radians(),
+    };
+    if value.is_finite() && result.is_infinite() {
+        return Err(math_overflow(name));
+    }
+    Ok(result)
+}
+
+/// A `math` function of two `float64` values.
+pub(crate) fn math_binary(name: &str, left: f64, right: f64) -> Result<f64> {
+    let result = match name {
+        "math.atan2" => left.atan2(right),
+        "math.hypot" => left.hypot(right),
+        _ => left.copysign(right),
+    };
+    if left.is_finite() && right.is_finite() && result.is_infinite() {
+        return Err(math_overflow(name));
+    }
+    Ok(result)
+}
+
+/// The greatest common divisor of two magnitudes.
+fn magnitude_gcd(mut left: u64, mut right: u64) -> u64 {
+    while right != 0 {
+        (left, right) = (right, left % right);
+    }
+    left
+}
+
+/// A `math` function over `int64` values: `gcd`, `lcm`, `isqrt`,
+/// `factorial`, `comb`, and `perm`. A negative count is `AU4001`, and a
+/// result outside `int64` is `AU4002`.
+pub(crate) fn math_integer(name: &str, left: i64, right: i64) -> Result<i64> {
+    let fit = |value: u128| i64::try_from(value).map_err(|_| math_overflow(name));
+    let negative =
+        |value: i64| Diagnostic::coded("AU4001", format!("`{name}` domain error for `{value}`"));
+    match name {
+        "math.gcd" => fit(u128::from(magnitude_gcd(
+            left.unsigned_abs(),
+            right.unsigned_abs(),
+        ))),
+        "math.lcm" => {
+            let (left, right) = (left.unsigned_abs(), right.unsigned_abs());
+            if left == 0 || right == 0 {
+                return Ok(0);
+            }
+            fit(u128::from(left / magnitude_gcd(left, right)) * u128::from(right))
+        }
+        "math.isqrt" => {
+            if left < 0 {
+                return Err(negative(left));
+            }
+            // The float root is within one of the answer; step to it.
+            let value = left as u64;
+            let mut root = (value as f64).sqrt() as u64;
+            while root.checked_mul(root).is_none_or(|square| square > value) {
+                root -= 1;
+            }
+            while (root + 1)
+                .checked_mul(root + 1)
+                .is_some_and(|square| square <= value)
+            {
+                root += 1;
+            }
+            Ok(root as i64)
+        }
+        "math.factorial" => {
+            if left < 0 {
+                return Err(negative(left));
+            }
+            let mut product: u128 = 1;
+            for factor in 2..=left as u128 {
+                product *= factor;
+                fit(product)?;
+            }
+            fit(product)
+        }
+        _ => {
+            if left < 0 {
+                return Err(negative(left));
+            }
+            if right < 0 {
+                return Err(negative(right));
+            }
+            if right > left {
+                return Ok(0);
+            }
+            let (count, mut chosen) = (left as u128, right as u128);
+            if name == "math.perm" {
+                let mut product: u128 = 1;
+                for factor in (count - chosen + 1)..=count {
+                    product *= factor;
+                    fit(product)?;
+                }
+                return fit(product);
+            }
+            // `comb`: each partial product is itself a binomial
+            // coefficient no larger than the answer, times at most `count`.
+            chosen = chosen.min(count - chosen);
+            let mut result: u128 = 1;
+            for step in 1..=chosen {
+                result = result * (count - chosen + step) / step;
+                fit(result)?;
+            }
+            fit(result)
+        }
+    }
+}
+
+fn host_math_extended_unary(name: &'static str, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&name.replace('.', "::"), &args, 1)?;
+    math_extended_unary(name, math_float_argument(name, &args[0])?).map(Value::Float)
+}
+
+fn host_math_binary(name: &'static str, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&name.replace('.', "::"), &args, 2)?;
+    let left = math_float_argument(name, &args[0])?;
+    let right = math_float_argument(name, &args[1])?;
+    math_binary(name, left, right).map(Value::Float)
+}
+
+fn host_math_predicate(name: &'static str, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&name.replace('.', "::"), &args, 1)?;
+    let value = math_float_argument(name, &args[0])?;
+    Ok(Value::Bool(match name {
+        "math.is_nan" => value.is_nan(),
+        "math.is_inf" => value.is_infinite(),
+        _ => value.is_finite(),
+    }))
+}
+
+fn host_math_integer(name: &'static str, count: usize, args: Vec<Value>) -> Result<Value> {
+    host_expect_arity(&name.replace('.', "::"), &args, count)?;
+    let left = math_integer_argument(name, &args[0])?;
+    let right = match args.get(1) {
+        Some(value) => math_integer_argument(name, value)?,
+        None => 0,
+    };
+    math_integer(name, left, right).map(|value| Value::Int(IntegerValue::from_i64(value)))
+}
+
+macro_rules! host_math_functions {
+    ($($function:ident => $shape:ident($($argument:expr),*);)*) => {
+        $(
+            pub fn $function(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+                $shape($($argument,)* args)
+            }
+        )*
+    };
+}
+
+host_math_functions! {
+    host_math_sqrt => host_math_extended_unary("math.sqrt");
+    host_math_cbrt => host_math_extended_unary("math.cbrt");
+    host_math_asin => host_math_extended_unary("math.asin");
+    host_math_acos => host_math_extended_unary("math.acos");
+    host_math_atan => host_math_extended_unary("math.atan");
+    host_math_sinh => host_math_extended_unary("math.sinh");
+    host_math_cosh => host_math_extended_unary("math.cosh");
+    host_math_tanh => host_math_extended_unary("math.tanh");
+    host_math_asinh => host_math_extended_unary("math.asinh");
+    host_math_acosh => host_math_extended_unary("math.acosh");
+    host_math_atanh => host_math_extended_unary("math.atanh");
+    host_math_expm1 => host_math_extended_unary("math.expm1");
+    host_math_log1p => host_math_extended_unary("math.log1p");
+    host_math_degrees => host_math_extended_unary("math.degrees");
+    host_math_radians => host_math_extended_unary("math.radians");
+    host_math_atan2 => host_math_binary("math.atan2");
+    host_math_hypot => host_math_binary("math.hypot");
+    host_math_copysign => host_math_binary("math.copysign");
+    host_math_is_nan => host_math_predicate("math.is_nan");
+    host_math_is_inf => host_math_predicate("math.is_inf");
+    host_math_is_finite => host_math_predicate("math.is_finite");
+    host_math_gcd => host_math_integer("math.gcd", 2);
+    host_math_lcm => host_math_integer("math.lcm", 2);
+    host_math_isqrt => host_math_integer("math.isqrt", 1);
+    host_math_factorial => host_math_integer("math.factorial", 1);
+    host_math_comb => host_math_integer("math.comb", 2);
+    host_math_perm => host_math_integer("math.perm", 2);
+}
+
 pub fn host_control_retry_validate(
     args: Vec<Value>,
     _program_args: Option<&[String]>,
@@ -866,6 +1115,33 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "math::sin" => host_math_sin,
         "math::cos" => host_math_cos,
         "math::tan" => host_math_tan,
+        "math::sqrt" => host_math_sqrt,
+        "math::cbrt" => host_math_cbrt,
+        "math::asin" => host_math_asin,
+        "math::acos" => host_math_acos,
+        "math::atan" => host_math_atan,
+        "math::sinh" => host_math_sinh,
+        "math::cosh" => host_math_cosh,
+        "math::tanh" => host_math_tanh,
+        "math::asinh" => host_math_asinh,
+        "math::acosh" => host_math_acosh,
+        "math::atanh" => host_math_atanh,
+        "math::expm1" => host_math_expm1,
+        "math::log1p" => host_math_log1p,
+        "math::degrees" => host_math_degrees,
+        "math::radians" => host_math_radians,
+        "math::atan2" => host_math_atan2,
+        "math::hypot" => host_math_hypot,
+        "math::copysign" => host_math_copysign,
+        "math::is_nan" => host_math_is_nan,
+        "math::is_inf" => host_math_is_inf,
+        "math::is_finite" => host_math_is_finite,
+        "math::gcd" => host_math_gcd,
+        "math::lcm" => host_math_lcm,
+        "math::isqrt" => host_math_isqrt,
+        "math::factorial" => host_math_factorial,
+        "math::comb" => host_math_comb,
+        "math::perm" => host_math_perm,
         "control::__retry_validate" => host_control_retry_validate,
         "control::__retry_next_backoff" => host_control_retry_next_backoff,
         "control::__retry_cancel_if_requested" => host_control_retry_cancel_if_requested,
@@ -903,6 +1179,8 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
         "log::error" => host_log_error,
         "trace::event" => host_trace_event,
         "bytes::hmac_sha256" => host_bytes_hmac_sha256,
+        "bytes::encode" => host_bytes_encode,
+        "bytes::decode" => host_bytes_decode,
         "bytes::constant_time_eq" => host_bytes_constant_time_eq,
         "gzip::compress" => host_gzip_compress,
         "gzip::decompress" => host_gzip_decompress,
@@ -1042,6 +1320,64 @@ pub fn host_gzip_decompress(args: Vec<Value>, _program_args: Option<&[String]>) 
     })))
 }
 
+/// The `bytes.EncodingError` value for a failed conversion.
+fn encoding_error_value(variant: &'static str, payload: Value) -> Value {
+    result_err(Value::EnumVariant(EnumVariantValue {
+        enum_name: RuntimeName::from_static("bytes.EncodingError"),
+        variant_name: RuntimeName::from_static(variant),
+        payloads: vec![payload].into(),
+    }))
+}
+
+/// The `encoding` argument of `bytes.encode` and `bytes.decode`, or the
+/// `Unknown` error result for a name no encoding has.
+fn host_encoding_arg(
+    args: &[Value],
+    call: &str,
+) -> Result<std::result::Result<crate::text_encodings::Encoding, Value>> {
+    let name = host_string_value_ref(&args[1], 1, &call.replace("::", "."))?;
+    Ok(crate::text_encodings::Encoding::from_name(name)
+        .ok_or_else(|| encoding_error_value("Unknown", Value::string(name.to_string()))))
+}
+
+fn encoding_error_index(index: usize) -> Value {
+    Value::Int(IntegerValue::from_i64(index as i64))
+}
+
+pub fn host_bytes_encode(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    use crate::text_encodings::{encode, EncodingError};
+    let name = "bytes::encode";
+    host_expect_arity(name, &args, 2)?;
+    let text = host_string_value_ref(&args[0], 0, "bytes.encode")?;
+    let encoding = match host_encoding_arg(&args, name)? {
+        Ok(encoding) => encoding,
+        Err(unknown) => return Ok(unknown),
+    };
+    match encode(text, encoding) {
+        Ok(bytes) => host_bytes_value(bytes, name).map(result_ok),
+        Err(EncodingError::Unencodable { index } | EncodingError::Invalid { index }) => Ok(
+            encoding_error_value("Unencodable", encoding_error_index(index)),
+        ),
+    }
+}
+
+pub fn host_bytes_decode(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    use crate::text_encodings::{decode, EncodingError};
+    let name = "bytes::decode";
+    host_expect_arity(name, &args, 2)?;
+    let bytes = host_bytes_arg(&args, 0, name)?;
+    let encoding = match host_encoding_arg(&args, name)? {
+        Ok(encoding) => encoding,
+        Err(unknown) => return Ok(unknown),
+    };
+    match decode(&bytes, encoding) {
+        Ok(text) => Ok(result_ok(Value::string(text))),
+        Err(EncodingError::Invalid { index } | EncodingError::Unencodable { index }) => {
+            Ok(encoding_error_value("Invalid", encoding_error_index(index)))
+        }
+    }
+}
+
 pub fn host_bytes_hex_encode_ref(value: &Value) -> Result<Value> {
     let name = "bytes::hex_encode";
     preflight_runtime_bytes_encoder(value, name, bytes_codec::hex_encoded_len)
@@ -1125,3 +1461,7 @@ pub fn host_str_from_bytes_ref(value: &Value) -> Result<Value> {
 #[cfg(test)]
 #[path = "host_builtins_mem_tests.rs"]
 mod mem_tests;
+
+#[cfg(test)]
+#[path = "host_builtins_math_tests.rs"]
+mod math_tests;

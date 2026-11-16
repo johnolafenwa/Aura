@@ -40,6 +40,7 @@ pub mod runtime_value;
 #[cfg(any(windows, test))]
 mod socket_watcher;
 pub mod text;
+pub mod text_encodings;
 pub mod text_methods;
 pub mod union_runtime;
 #[cfg(windows)]

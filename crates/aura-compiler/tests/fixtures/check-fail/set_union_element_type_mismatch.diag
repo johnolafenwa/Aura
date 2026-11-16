@@ -1,0 +1,5 @@
+error[AU2002]: `union` expects `set[int64]`, found `set[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/set_union_element_type_mismatch.au:4:29
+  |
+4 |     print(len(numbers.union(names)))
+  |                             ^

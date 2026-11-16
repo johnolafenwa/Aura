@@ -1,0 +1,5 @@
+error[AU2002]: str indices must have type `int64` or a losslessly narrower integer type, found `str`
+ --> crates/aura-compiler/tests/fixtures/check-fail/str_index_needs_integer.au:3:16
+  |
+3 |     print(text["a"])
+  |                ^

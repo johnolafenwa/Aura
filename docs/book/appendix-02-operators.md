@@ -13,7 +13,7 @@ evaluation rules.
 | Operator | Meaning | Example |
 | --- | --- | --- |
 | `+` | addition, string concatenation, `Duration` sum | `total + 1`, `"ab" + "cd"`, `2s + 500ms` |
-| `-` | subtraction, and unary negation | `end - start`, `-offset` |
+| `-` | subtraction, unary negation, and the difference of two sets | `end - start`, `-offset` |
 | `*` | multiplication, `Duration` times `int64` | `width * height`, `100ms * 3` |
 | `/` | true division, floating-point types only | `7.0 / 2.0` |
 | `//` | floor division | `7 // 2` |
@@ -98,9 +98,9 @@ values and has the lowest precedence of all.
 
 | Operator | Meaning |
 | --- | --- |
-| `&` | bitwise and |
-| `\|` | bitwise or; also the union type operator, as in `str \| None` |
-| `^` | bitwise exclusive or |
+| `&` | bitwise and; intersection of two sets |
+| `\|` | bitwise or; union of two sets; also the union type operator, as in `str \| None` |
+| `^` | bitwise exclusive or; symmetric difference of two sets |
 | `~` | bitwise not (unary) |
 | `<<`, `>>` | shift left, shift right |
 

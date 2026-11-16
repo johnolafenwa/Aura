@@ -124,27 +124,29 @@ because a slice that asks for nine characters of a four-character word
 usually means the program's idea of the text is wrong, and silently
 returning less hides that.
 
-## No indexing by position
+## One character at a time
 
-If you try to take one character with an index, as you might in Python, the
-compiler stops you:
+An index with one number gives you one character, as a string of length one:
 
-```aura check-fail:AU2999
+```aura
 def main():
     word = "café"
     print(word[0])
+    print(word[-1])
 ```
 
 ```console
-$ aura check src/main.au
-error[AU2999]: cannot index non-Array, list, or dict value `str`
- --> src/main.au:3:11
-  |
-3 |     print(word[0])
-  |           ^
+$ aura run src/main.au
+c
+é
 ```
 
-and a `for` loop over a string isn't available either:
+Positions count scalars, as `len()` and slices do, and a negative position
+counts from the end. A position outside the string traps, like a slice that
+goes too far. You can read through an index but not write: a string is
+changed by building a new one.
+
+A `for` loop over a string isn't available:
 
 ```aura check-fail:AU2999
 def main():
@@ -165,10 +167,11 @@ error[AU2999]: `for` requires a `Range`, `Queue[T]`, `list[T]`, `set[T]`, or `it
 This trips up everyone coming from Python, so let's be clear about why it
 happens. Aura has no character type: a single letter is a `str` of length
 one. Finding the scalar at position `n` in UTF-8 means walking from the
-start, so if a string could be indexed or iterated one position at a time, a
-loop like this would quietly turn a linear algorithm into a quadratic one.
-Aura would rather make you ask for the characters explicitly, so the cost is
-visible. You ask with `chars()`, which walks the string once and gives back a
+start, unless the text is plain ASCII, where Aura jumps straight to it. So
+`word[i]` inside a loop over every position is fine for ASCII text and
+quietly quadratic for anything else. When you want every character, ask for
+them all at once and the cost is one pass.
+You ask with `chars()`, which walks the string once and gives back a
 `list[str]` of one-character strings. `ord` turns one of them into its
 Unicode scalar value, and `chr` goes the other way:
 
@@ -200,7 +203,7 @@ scalar, stops the program with a trap.
 In practice, most text processing doesn't need single characters at all. You
 want words, fields, lines, and prefixes, and the methods in the rest of this
 section work on those directly. When you need one character from a known
-position, a slice such as `word[0:1]` gives it to you as a one-character
+position, an index such as `word[0]` gives it to you as a one-character
 `str` without building the whole list.
 
 ## Searching

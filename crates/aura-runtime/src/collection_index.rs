@@ -1443,6 +1443,67 @@ impl<T: PartialEq> PartialEq<Vec<T>> for SharedVec<T> {
     }
 }
 
+/// The result of a set-algebra method, by name: a new set for `union`,
+/// `intersection`, `difference`, and `symmetric_difference`, and whether the
+/// relation holds for `is_subset`, `is_superset`, and `is_disjoint`. A new
+/// set keeps the receiver's order, then `other`'s for the elements only
+/// `other` has. `None` for any other name.
+pub fn set_algebra(method: &str, left: &SetElements, right: &SetElements) -> Option<SetAlgebra> {
+    let collect = |elements: &mut dyn Iterator<Item = &Value>| {
+        let mut result = SetElements::new();
+        for element in elements {
+            result.insert(element.clone());
+        }
+        SetAlgebra::Elements(result)
+    };
+    let within = |inner: &SetElements, outer: &SetElements| {
+        inner.len() <= outer.len() && inner.iter().all(|element| outer.contains_key(element))
+    };
+    Some(match method {
+        "union" => collect(&mut left.iter().chain(right.iter())),
+        "intersection" => collect(&mut left.iter().filter(|element| right.contains_key(element))),
+        "difference" => collect(&mut left.iter().filter(|element| !right.contains_key(element))),
+        "symmetric_difference" => collect(
+            &mut left
+                .iter()
+                .filter(|element| !right.contains_key(element))
+                .chain(right.iter().filter(|element| !left.contains_key(element))),
+        ),
+        "is_subset" => SetAlgebra::Holds(within(left, right)),
+        "is_superset" => SetAlgebra::Holds(within(right, left)),
+        "is_disjoint" => {
+            // Probe the larger set with the elements of the smaller.
+            let (small, large) = if left.len() <= right.len() {
+                (left, right)
+            } else {
+                (right, left)
+            };
+            SetAlgebra::Holds(!small.iter().any(|element| large.contains_key(element)))
+        }
+        _ => return None,
+    })
+}
+
+/// What `set_algebra` computed.
+pub enum SetAlgebra {
+    Elements(SetElements),
+    Holds(bool),
+}
+
+/// The set-algebra methods, in the order of their collection-operation
+/// opcodes, which start at `SET_ALGEBRA_FIRST_OPCODE`.
+pub const SET_ALGEBRA_METHODS: [&str; 7] = [
+    "union",
+    "intersection",
+    "difference",
+    "symmetric_difference",
+    "is_subset",
+    "is_superset",
+    "is_disjoint",
+];
+
+pub const SET_ALGEBRA_FIRST_OPCODE: i64 = 8;
+
 #[cfg(test)]
 #[path = "collection_index_tests.rs"]
 mod tests;

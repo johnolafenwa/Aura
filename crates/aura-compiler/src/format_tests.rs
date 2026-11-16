@@ -534,3 +534,11 @@ fn an_exported_function_formats_as_a_declaration() {
     );
     assert_eq!(format(&formatted), formatted);
 }
+
+#[test]
+fn byte_strings_keep_their_spelling() {
+    assert_formats(
+        "def main():\n    data=b\"a\\x00 b\"+b'c\"'\n    b=1\n    print(b)\n",
+        "def main():\n    data = b\"a\\x00 b\" + b'c\"'\n    b = 1\n    print(b)\n",
+    );
+}

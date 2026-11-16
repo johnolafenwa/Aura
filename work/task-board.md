@@ -1,6 +1,20 @@
 # Task Board
 
-Last updated: 2026-11-15
+Last updated: 2026-11-16
+
+## Collections, text, and numbers (step 1 of 3 complete)
+
+- Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
+  survey. The plan is
+  `architecture_docs/32-collections-text-numbers-design-checkpoint.md`,
+  and step 1 is in `2026-11-16-collections-text-numbers-step-1.md`.
+- Done: 27 `math` functions and `tau`, byte strings, `text[index]`,
+  `bytes.encode` and `bytes.decode`, and set algebra (ADR-0110 to 0112).
+- Verification: runtime and compiler library tests, fixtures recorded on
+  both backends, `check_doc_examples.py`, and the extension grammar tests.
+- Next: step 2, the `numbers` module (`BigInt`, `Decimal`, `Complex`).
+  Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
+  the cost of list operations on a class field is removed.
 
 ## Book chapters on tensors and machine learning (complete)
 

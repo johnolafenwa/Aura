@@ -5999,6 +5999,13 @@ impl<'a> FunctionChecker<'a> {
                     ));
                 }
                 value_ty.clone()
+            } else if object_ty == Type::named("str") {
+                return Err(Diagnostic::coded_at(
+                    "AU2003",
+                    assign.span,
+                    "a `str` cannot be changed through an index",
+                )
+                .with_help("build a new string, for example from slices: `text[:i] + \"x\" + text[i + 1:]`"));
             } else {
                 return Err(Diagnostic::at(
                     assign.span,
@@ -9639,6 +9646,12 @@ impl<'a> FunctionChecker<'a> {
                     }
                     return Ok(element_ty);
                 }
+                if object_ty == Type::named("str") {
+                    // `text[index]` is `text.char_at(index)`: a fresh
+                    // one-character string, never a place.
+                    self.check_index_domain_type(index, index.span, "str indices", locals)?;
+                    return Ok(object_ty);
+                }
                 if let Some(element_ty) = array_element_type(&object_ty).cloned() {
                     let selects = self.check_array_index_type(index, locals)?;
                     let retained_base = self
@@ -10127,6 +10140,11 @@ impl<'a> FunctionChecker<'a> {
         if let Some(result) = builtin_duration_binary_result(op, &left_ty, &right_ty) {
             return Ok(result);
         }
+        if let Some(method) = crate::call::set_binary_method(op, &left_ty, &right_ty) {
+            // A new set holds copies of elements.
+            self.reject_rng_duplication(&format!("set.{method}"), &left_ty, span)?;
+            return Ok(left_ty);
+        }
         let opaque_operand = if self.is_opaque_handle_type(&left_ty) {
             Some(&left_ty)
         } else if self.is_opaque_handle_type(&right_ty) {
@@ -10214,6 +10232,22 @@ impl<'a> FunctionChecker<'a> {
             return Err(Diagnostic::at(
                 span,
                 "integer `/` is not supported; use `//` for floor division, or call `.to_float()` on both operands for true division",
+            ));
+        }
+        let is_set =
+            |ty: &Type| matches!(ty, Type::Named(name, args) if name == "set" && args.len() == 1);
+        if matches!(
+            op,
+            BinaryOp::BitAnd | BinaryOp::BitOr | BinaryOp::BitXor | BinaryOp::Sub
+        ) && is_set(&left_ty)
+            && is_set(&right_ty)
+        {
+            return Err(Diagnostic::coded_at(
+                "AU2002",
+                span,
+                format!(
+                    "set operators need two sets of one element type, found `{left_ty}` and `{right_ty}`"
+                ),
             ));
         }
         if matches!(
@@ -14188,9 +14222,12 @@ impl<'a> FunctionChecker<'a> {
                                 | BuiltinMember::StringRsplitOnce
                                 | BuiltinMember::StringFind
                                 | BuiltinMember::StringCount
-                                | BuiltinMember::StringRepeat => {
-                                    let expected = if builtin_member == BuiltinMember::StringRepeat
-                                    {
+                                | BuiltinMember::StringRepeat
+                                | BuiltinMember::StringCharAt => {
+                                    let expected = if matches!(
+                                        builtin_member,
+                                        BuiltinMember::StringRepeat | BuiltinMember::StringCharAt
+                                    ) {
                                         Type::named("int64")
                                     } else {
                                         Type::named("str")
@@ -14446,6 +14483,14 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetInsert
                                     | BuiltinMember::SetRemove
                                     | BuiltinMember::SetDiscard
+                                    | BuiltinMember::SetUnion
+                                    | BuiltinMember::SetIntersection
+                                    | BuiltinMember::SetDifference
+                                    | BuiltinMember::SetSymmetricDifference
+                                    | BuiltinMember::SetIsSubset
+                                    | BuiltinMember::SetIsSuperset
+                                    | BuiltinMember::SetIsDisjoint
+                                    | BuiltinMember::SetUpdate
                             ) {
                                 self.require_array_equality_eligible(
                                     &receiver_args[0],
@@ -14495,6 +14540,60 @@ impl<'a> FunctionChecker<'a> {
                                 BuiltinMember::SetClear => {
                                     self.require_mutable_receiver(object, field, span, locals)?;
                                     Ok(Type::Unit)
+                                }
+                                BuiltinMember::SetUnion
+                                | BuiltinMember::SetIntersection
+                                | BuiltinMember::SetDifference
+                                | BuiltinMember::SetSymmetricDifference
+                                | BuiltinMember::SetIsSubset
+                                | BuiltinMember::SetIsSuperset
+                                | BuiltinMember::SetIsDisjoint
+                                | BuiltinMember::SetUpdate => {
+                                    let updates = builtin_member == BuiltinMember::SetUpdate;
+                                    if updates {
+                                        self.require_mutable_receiver(object, field, span, locals)?;
+                                    }
+                                    let other_arg = self.bound_argument(
+                                        &ordered_args,
+                                        0,
+                                        span,
+                                        format!("`{field}` requires an `other` argument"),
+                                    )?;
+                                    let actual = self.type_of_expr_hint(
+                                        &other_arg.value,
+                                        locals,
+                                        Some(&receiver_ty),
+                                    )?;
+                                    if actual != receiver_ty {
+                                        return Err(Diagnostic::coded_at(
+                                            "AU2002",
+                                            other_arg.span,
+                                            format!(
+                                                "`{field}` expects `{receiver_ty}`, found `{actual}`"
+                                            ),
+                                        ));
+                                    }
+                                    self.apply_builtin_argument_passing(
+                                        builtin_member,
+                                        0,
+                                        other_arg,
+                                        locals,
+                                    )?;
+                                    match builtin_member {
+                                        BuiltinMember::SetUpdate => Ok(Type::Unit),
+                                        BuiltinMember::SetIsSubset
+                                        | BuiltinMember::SetIsSuperset
+                                        | BuiltinMember::SetIsDisjoint => Ok(Type::named("bool")),
+                                        _ => {
+                                            // A new set holds copies of elements.
+                                            self.reject_rng_duplication(
+                                                &format!("set.{field}"),
+                                                &receiver_ty,
+                                                span,
+                                            )?;
+                                            Ok(receiver_ty.clone())
+                                        }
+                                    }
                                 }
                                 BuiltinMember::SetReserve => {
                                     self.require_mutable_receiver(object, field, span, locals)?;

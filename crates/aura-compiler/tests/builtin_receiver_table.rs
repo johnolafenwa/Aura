@@ -49,6 +49,7 @@ fn builtin_receiver_table_matches_the_checker() {
         (BuiltinMember::SetInsert, "tags.add(\"y\")"),
         (BuiltinMember::SetRemove, "tags.remove(\"x\")"),
         (BuiltinMember::SetDiscard, "tags.discard(\"x\")"),
+        (BuiltinMember::SetUpdate, "tags.update({\"z\"})"),
         (BuiltinMember::SetClear, "tags.clear()"),
         (BuiltinMember::SetReserve, "tags.reserve(1)"),
         (BuiltinMember::QueuePut, "print(queue.put(1))"),

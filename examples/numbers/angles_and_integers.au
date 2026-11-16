@@ -1,0 +1,20 @@
+import math
+
+
+def main():
+    # The distance and direction of the point (3, 4).
+    print(math.hypot(3.0, 4.0))
+    print(round(math.degrees(math.atan2(4.0, 3.0))))
+
+    # Inverse functions undo the forward ones.
+    print(round(math.degrees(math.asin(0.5))))
+    print(math.is_nan(math.nan))
+    print(math.is_finite(1.0 / 3.0))
+
+    # Exact integer functions. They trap rather than wrap on overflow.
+    print(math.gcd(84, 36))
+    print(math.lcm(4, 6))
+    print(math.isqrt(1000000007))
+    print(math.factorial(10))
+    print(math.comb(52, 5))
+    print(math.perm(5, 2))

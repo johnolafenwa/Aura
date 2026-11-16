@@ -3,6 +3,7 @@ use super::{
     HostBuiltin, ListOp, PrintKind, QueueOp, ResourceOp, RngOp, RuntimeOp, RuntimeTarget,
     ScalarElement, ScalarOp, SetOp, SpanOp, StrOp, TaskGroupOp, TaskOp, ValueOp,
 };
+use crate::call::BuiltinMember;
 use crate::mir::{specialized_member_op, MirArg, Operand};
 use crate::native_runtime::HOST_BUILTIN_SYMBOLS;
 use crate::runtime_abi::RuntimeFn;
@@ -608,7 +609,7 @@ fn collection_ops_specialize_by_element_type_and_literal_key() {
 #[test]
 fn collection_ops_pass_their_kind_and_operation_words() {
     use RuntimeFn as F;
-    let cases: [(RuntimeOp, RuntimeFn, &[i64], usize); 14] = [
+    let cases: [(RuntimeOp, RuntimeFn, &[i64], usize); 22] = [
         (
             RuntimeOp::List(ListOp::PushScalar(ScalarElement::Float64)),
             F::VecPushScalar,
@@ -662,6 +663,54 @@ fn collection_ops_pass_their_kind_and_operation_words() {
             F::CollectionOperation,
             &[7],
             2,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Union),
+            F::CollectionOperation,
+            &[8],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Intersection),
+            F::CollectionOperation,
+            &[9],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Difference),
+            F::CollectionOperation,
+            &[10],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::SymmetricDifference),
+            F::CollectionOperation,
+            &[11],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::IsSubset),
+            F::CollectionOperation,
+            &[12],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::IsSuperset),
+            F::CollectionOperation,
+            &[13],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::IsDisjoint),
+            F::CollectionOperation,
+            &[14],
+            1,
+        ),
+        (
+            RuntimeOp::Set(SetOp::Update),
+            F::CollectionOperation,
+            &[15],
+            1,
         ),
         (RuntimeOp::Dict(DictOp::GetStr), F::MapGetStr, &[], 1),
         (RuntimeOp::Array(ArrayOp::Mean), F::ArrayReduce, &[3], 0),
@@ -1138,4 +1187,45 @@ fn ops_consume_the_values_they_store() {
             .first()
             .map(|param| crate::mir::ownership::OperandRole::of_passing(param.passing))
     );
+}
+
+#[test]
+fn set_algebra_ops_name_their_members_and_result_types() {
+    let element = Some(Type::named("str"));
+    let set = Type::Named("set".to_string(), vec![Type::named("str")]);
+    for (op, member, result) in [
+        (SetOp::Union, BuiltinMember::SetUnion, set.clone()),
+        (
+            SetOp::Intersection,
+            BuiltinMember::SetIntersection,
+            set.clone(),
+        ),
+        (SetOp::Difference, BuiltinMember::SetDifference, set.clone()),
+        (
+            SetOp::SymmetricDifference,
+            BuiltinMember::SetSymmetricDifference,
+            set.clone(),
+        ),
+        (
+            SetOp::IsSubset,
+            BuiltinMember::SetIsSubset,
+            Type::named("bool"),
+        ),
+        (
+            SetOp::IsSuperset,
+            BuiltinMember::SetIsSuperset,
+            Type::named("bool"),
+        ),
+        (
+            SetOp::IsDisjoint,
+            BuiltinMember::SetIsDisjoint,
+            Type::named("bool"),
+        ),
+        (SetOp::Update, BuiltinMember::SetUpdate, Type::Unit),
+    ] {
+        assert!(SetOp::ALL.contains(&op));
+        assert_eq!(op.builtin_member(), Some(member));
+        assert_eq!(SetOp::from_builtin_member(member), Some(op));
+        assert_eq!(op.result_type(element.clone()), result, "{member:?}");
+    }
 }

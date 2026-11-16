@@ -1,0 +1,5 @@
+error[AU2002]: set operators need two sets of one element type, found `set[int64]` and `set[str]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/set_operator_element_type_mismatch.au:4:15
+  |
+4 |     print(len(numbers | names))
+  |               ^

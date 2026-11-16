@@ -24,7 +24,7 @@ The lexer produces two kinds of tokens used here:
 
 - Layout tokens: `NEWLINE`, `INDENT`, `DEDENT`, and `EOF`.
 - Lexical tokens: `IDENT`, `INTEGER`, `FLOAT`, `DURATION`, `STRING`,
-  `FSTRING`, and `BOOLEAN`, described below.
+  `BYTES`, `FSTRING`, and `BOOLEAN`, described below.
 
 Every comma-separated list that a production closes with `)`, `]`, or `}`
 accepts one optional `","` before that closing delimiter. The productions
@@ -140,8 +140,13 @@ whitespace.
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters are preserved. A raw string
 cannot span a physical line or end in an odd run of backslashes. Raw triple
-strings, raw f-strings, and byte strings are not tokens. There is no separate
+strings and raw f-strings are not tokens. There is no separate
 character-literal token.
+
+`BYTES` is a byte string: lowercase `b` immediately followed by one single or
+double quote, a body of printable ASCII characters and the ordinary escapes
+without `\u{...}`, and the matching quote. It is single-line. In it `\xHH` is
+one byte.
 
 `FSTRING` begins with `f"` and ends at the matching double quote.
 `{ expression }` interpolates an ordinary Aura expression. Literal braces work
@@ -1081,6 +1086,7 @@ primary-expression
     | FLOAT
     | BOOLEAN
     | STRING
+    | BYTES
     | FSTRING
     | parenthesized-expression
     | list-literal
