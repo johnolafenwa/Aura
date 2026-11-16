@@ -21,6 +21,7 @@ pub mod c_layout;
 pub mod collection_index;
 pub mod ffi;
 pub mod gzip_codec;
+pub mod image_codec;
 pub mod host_io;
 #[cfg(any(test, feature = "test-support"))]
 #[doc(hidden)]

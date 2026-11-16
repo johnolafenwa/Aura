@@ -11,7 +11,7 @@ and times, for regular expressions, for random numbers, and for telling an
 operator what the program is doing.
 
 This chapter visits them in turn. To keep the visits connected we will build
-one small tool across all five sections. `courier` wraps a text message in
+one small tool across the first five sections. `courier` wraps a text message in
 an *envelope* that can be pasted into a chat, a URL, or a configuration file
 and checked at the other end. An envelope is compressed, so it is short. It
 is signed with a shared secret, so the receiver knows who made it and that
@@ -33,4 +33,5 @@ By the end of the chapter you will be able to move between text and bytes
 without guessing at an encoding, sign and verify a message, do arithmetic on
 instants in time, pull fields out of text with a pattern, choose between
 reproducible and unpredictable random numbers, and emit structured logs and
-counters from a running program.
+counters from a running program. A last section, which stands apart from
+`courier`, reads and writes pictures.

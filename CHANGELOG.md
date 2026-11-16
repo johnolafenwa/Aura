@@ -7,6 +7,16 @@ in this file.
 
 ## Unreleased
 
+- New builtin module `image`. It reads and writes PNG, JPEG, and PPM/PGM
+  files into an `image.Image`, whose pixels are a `list[uint8]`.
+  `image.read`, `image.decode`, `image.info`, `image.write`, and the
+  `image.encode_*` functions return `Result` with an `image.Error`, and a
+  damaged or oversized file is never a trap. An image can be resized,
+  cropped, flipped, and converted between gray, RGB, and alpha forms.
+  `to_array` and `to_planes` give `Array[float32]` values from 0 to 1 for
+  `Tensor.from_array`. See the Image Module page of the Manual and
+  section 20.6 of the book (ADR-0114).
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2

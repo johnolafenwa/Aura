@@ -238,7 +238,7 @@ them.
 
 ## Summary
 
-That completes the tour, and `courier`. Its envelopes are compressed with
+That completes `courier`. Its envelopes are compressed with
 `gzip`, signed with `bytes.hmac_sha256`, and carried as base64 and hex. They
 are stamped with a `time.DateTime` and refused when they are stale. Each has
 an id from `random.secure_bytes`, the tool's log can be taken apart with a
@@ -259,3 +259,6 @@ The Manual has a page for each: [bytes](/manual/bytes),
 [randomness](/manual/randomness), and the
 [control-plane modules](/manual/control-plane) for `log`, `trace`,
 `metrics`, and `sys`.
+
+One module is left that `courier` had no use for. The next section reads
+and writes pictures.
