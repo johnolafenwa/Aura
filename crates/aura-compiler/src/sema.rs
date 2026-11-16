@@ -756,7 +756,7 @@ fn validate_ffi_callback(
     ty: &Type,
     span: crate::diag::Span,
 ) -> Result<()> {
-    let help = "a callback takes fixed-width scalars, `mut` scalars for pointers to one, and returns a scalar or `None`";
+    let help = "a callback takes fixed-width scalars, `mut` scalars for pointers to one, and `cstr` for C text, and returns a scalar or `None`";
     if mode != ParamMode::Default {
         return Err(Diagnostic::coded_at(
             "AU3004",
@@ -777,7 +777,11 @@ fn validate_ffi_callback(
         .with_help(help));
     };
     for (index, param) in params.iter().enumerate() {
-        if !ffi_scalar_type(&param.ty) {
+        // The parser wrote `str` for a `cstr` parameter, and refused a
+        // `str` written there.
+        let text =
+            param.ty == Type::named("str") && param.passing != crate::ast::ReceiverKind::BorrowMut;
+        if !text && !ffi_scalar_type(&param.ty) {
             return Err(Diagnostic::coded_at(
                 "AU2002",
                 span,

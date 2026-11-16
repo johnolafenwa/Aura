@@ -6646,6 +6646,19 @@ impl MirRuntime {
             .ok_or_else(|| Diagnostic::new(format!("unknown MIR function `{name}`")))?;
         let mut args = Vec::with_capacity(signature.params.len());
         for (param, word) in signature.params.iter().zip(frame.iter()) {
+            if param.text {
+                // SAFETY: the C caller passed this address as C text, which
+                // it keeps valid for the length of the callback.
+                let text = unsafe { crate::ffi::callback_text(*word as usize) }
+                    .map_err(|error| ffi_runtime_diagnostic(name, error))?;
+                args.push(EvaluatedMirArg {
+                    name: None,
+                    value: Value::String(text.into()),
+                    ty: Some(Type::named("str")),
+                    writeback_place: None,
+                });
+                continue;
+            }
             let ty = scalar_field_type(param.scalar);
             // C code can pass any byte as a `bool`. Nonzero is true.
             let word = match param.scalar {
@@ -11438,9 +11451,20 @@ pub(crate) fn callback_signature(ty: &Type) -> Option<crate::ffi::CCallback> {
     let params = params
         .iter()
         .map(|param| {
+            let pointer = param.passing == crate::ast::ReceiverKind::BorrowMut;
+            // `cstr` in a callback type is `str` here: C text the callback
+            // gets a copy of.
+            if param.ty == Type::named("str") {
+                return (!pointer).then_some(CCallbackParam {
+                    scalar: FfiScalar::U64,
+                    pointer: false,
+                    text: true,
+                });
+            }
             Some(CCallbackParam {
                 scalar: scalar(&param.ty)?,
-                pointer: param.passing == crate::ast::ReceiverKind::BorrowMut,
+                pointer,
+                text: false,
             })
         })
         .collect::<Option<Vec<_>>>()?;

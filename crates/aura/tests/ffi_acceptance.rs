@@ -1071,6 +1071,22 @@ void fx_events_fill(UEvent *events, int32_t count) {
     for (int i = 0; i < count; i++) events[i] = fx_event_key(i + 40);
 }
 UFlag fx_flag_raw(uint8_t raw) { UFlag f; f.raw = raw; return f; }
+
+int32_t fx_each_word(const char *text, int32_t (*visit)(int32_t index, const char *word)) {
+    char word[32]; int32_t total = 0, index = 0; size_t length = 0;
+    for (const char *at = text;; at++) {
+        if (*at == ' ' || *at == 0) {
+            word[length] = 0; total += visit(index++, word); length = 0;
+            if (*at == 0) break;
+        } else if (length < sizeof word - 1) word[length++] = *at;
+    }
+    return total;
+}
+void fx_log(void (*sink)(const char *message, double value, const char *unit)) {
+    sink("speed", 2.5, "m/s"); sink("", -1.0, "caf\xc3\xa9");
+}
+void fx_text_null(void (*sink)(const char *message)) { sink(NULL); }
+void fx_text_bad(void (*sink)(const char *message)) { sink("\xff\xfe"); }
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -1385,6 +1401,10 @@ extern "C" def fx_uholder_sum(h: UHolder) -> int32
 extern "C" def fx_events_kinds(events: ptr[UEvent], count: int32) -> int32
 extern "C" def fx_events_fill(events: mut ptr[UEvent], count: int32) -> None
 extern "C" def fx_flag_raw(raw: uint8) -> UFlag
+extern "C" def fx_each_word(text: cstr, visit: def(index: int32, word: cstr) -> int32) -> int32
+extern "C" def fx_log(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
+extern "C" def fx_text_null(sink: def(message: cstr) -> None) -> None
+extern "C" def fx_text_bad(sink: def(message: cstr) -> None) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -2383,6 +2403,250 @@ not failing: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211, 22, 22, 22, 31]\
 ";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn callbacks_take_c_text_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Tally:
+    words: list[str]
+
+def shout(word: str) -> str:
+    return word + "!"
+
+def visit(index: int32, word: str) -> int32:
+    kept = [word.clone(), shout(word)]
+    print(f"{index}: {word} {kept[1]} {len(word)}")
+    return len(word) as int32
+
+def log(message: str, value: float64, unit: str) -> None:
+    if message == "":
+        print(f"(none) {value} {unit}")
+    else:
+        print(f"{message} {value} {unit}")
+
+def count(index: int32, word: str) -> int32:
+    return 1
+
+def main() -> int32:
+    print(fx_each_word("the quick brown fox", visit))
+    fx_log(log)
+    mut round = 0
+    mut total = 0
+    while round < 2000:
+        total += fx_each_word("a bb ccc dddd eeeee", count) as int64
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "C text in callbacks on the interpreter");
+    assert_success(&direct, "C text in callbacks in a built program");
+    let expected = "0: the the! 3\n1: quick quick! 5\n2: brown brown! 5\n3: fox fox! 3\n16\n\
+        speed 2.5 m/s\n(none) -1.0 caf\u{e9}\n10000\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+
+    for (function, detail) in [
+        (
+            "fx_text_null",
+            "the C caller passed a null pointer as a cstr",
+        ),
+        (
+            "fx_text_bad",
+            "the C caller passed a cstr that is not valid UTF-8",
+        ),
+    ] {
+        let (package, source) = fixture_package(&format!(
+            "def sink(message: str) -> None:\n    print(message)\n\n\
+             def main() -> int32:\n    {function}(sink)\n    print(\"not reached\")\n    return 0\n"
+        ));
+        let (mir, direct) = run_on_both_backends(&package, &source);
+        for (backend, output) in [("mir", &mir), ("direct", &direct)] {
+            let stdout = String::from_utf8_lossy(&output.stdout);
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{backend}: {stdout}");
+            assert!(!stdout.contains("not reached"), "{backend}: {stdout}");
+            assert!(stderr.contains("AU4005"), "{backend}: {stderr}");
+            assert!(
+                stderr.contains("FFI call to `sink` failed"),
+                "{backend}: {stderr}"
+            );
+            assert!(stderr.contains(detail), "{backend}: {stderr}");
+        }
+    }
+}
+
+/// GLFW reports errors through a callback that takes C text, and reads a
+/// gamepad into a struct of two arrays.
+const GLFW_WINDOW: &str = r#"extern "C" opaque class Window
+
+
+extern "C" class GamepadState:
+    buttons: array[uint8, 15]
+    axes: array[float32, 6]
+
+
+extern "C" def getenv(name: cstr) -> cstr | None
+extern "C" def glfwSetErrorCallback(
+    callback: def(code: int32, description: cstr) -> None
+) -> uint64
+
+
+extern "C" def glfwInit() -> int32
+
+
+extern "C" def glfwTerminate() -> None
+
+
+extern "C" def glfwWindowHint(hint: int32, value: int32) -> None
+
+
+extern "C" def glfwCreateWindow(
+    width: int32,
+    height: int32,
+    title: cstr,
+    monitor: uint64,
+    share: uint64,
+) -> Window | None
+
+
+extern "C" def glfwDestroyWindow(window: own Window) -> None
+
+
+extern "C" def glfwGetWindowSize(
+    window: Window,
+    width: mut int32,
+    height: mut int32,
+) -> None
+
+
+extern "C" def glfwSetWindowSize(window: Window, width: int32, height: int32) -> None
+
+
+extern "C" def glfwPollEvents() -> None
+
+
+extern "C" def glfwGetKey(window: Window, key: int32) -> int32
+
+
+extern "C" def glfwWindowShouldClose(window: Window) -> int32
+
+
+extern "C" def glfwGetGamepadState(joystick: int32, state: mut GamepadState) -> int32
+
+
+extern "C" def glfwSetKeyCallback(
+    window: Window,
+    callback: def(
+        window: uint64,
+        key: int32,
+        scancode: int32,
+        action: int32,
+        mods: int32,
+    ) -> None,
+) -> uint64
+
+
+GLFW_VISIBLE: int32 = 131076
+GLFW_KEY_ESCAPE: int32 = 256
+
+
+def report(code: int32, description: str) -> None:
+    print(f"GLFW error {code}: {description}")
+
+
+def on_key(
+    window: uint64,
+    key: int32,
+    scancode: int32,
+    action: int32,
+    mods: int32,
+) -> None:
+    print(f"key {key}")
+
+
+def main() -> int32:
+    glfwSetErrorCallback(report)
+    # A call before `glfwInit` reports an error through the callback.
+    glfwWindowHint(GLFW_VISIBLE, 0)
+    if getenv("AURA_GLFW_WINDOW") is None:
+        return 0
+    if glfwInit() == 0:
+        print("no display")
+        return 0
+    glfwWindowHint(GLFW_VISIBLE, 0)
+    window = glfwCreateWindow(320, 200, "Aura", 0, 0)
+    if window is None:
+        print("no window")
+        glfwTerminate()
+        return 0
+    glfwSetKeyCallback(window, on_key)
+    mut width: int32 = 0
+    mut height: int32 = 0
+    glfwGetWindowSize(window, width, height)
+    print(f"window {width} by {height}")
+    glfwPollEvents()
+    print(glfwGetKey(window, GLFW_KEY_ESCAPE))
+    print(glfwWindowShouldClose(window))
+    mut state = GamepadState(
+        buttons=[0 for _ in range(15)],
+        axes=[0.0 for _ in range(6)],
+    )
+    print(glfwGetGamepadState(0, state))
+    print(len(state.axes))
+    glfwDestroyWindow(window)
+    glfwTerminate()
+    return 0
+"#;
+
+#[test]
+fn glfw_reports_errors_and_opens_a_window_with_backend_parity() {
+    if !host_links(
+        "glfw",
+        "int glfwInit(void);\nint main(void) { return glfwInit(); }\n",
+    ) {
+        eprintln!("the host has no GLFW library to link; the test needs one");
+        return;
+    }
+    let package = TempPackage::new(true);
+    package.manifest("\n[ffi]\nlibraries = [\"glfw\"]\n");
+    let source = package.source(GLFW_WINDOW);
+    // The program opens a window only where the host can show one.
+    let window: &[(&str, &str)] = match host_shows_windows() {
+        true => &[("AURA_GLFW_WINDOW", "1")],
+        false => &[],
+    };
+    let mir = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
+        .arg(&source)
+        .envs(window.iter().copied())
+        .output()
+        .expect("the GLFW program should start in the interpreter");
+    assert_success(&mir, "GLFW on the interpreter");
+    let binary = package.path.join("glfw-direct");
+    assert_success(&build_direct(&source, &binary), "GLFW build");
+    let direct = Command::new(&binary)
+        .envs(window.iter().copied())
+        .output()
+        .expect("the GLFW binary should start");
+    assert_success(&direct, "GLFW in a built program");
+    let (mir, direct) = (
+        String::from_utf8_lossy(&mir.stdout),
+        String::from_utf8_lossy(&direct.stdout),
+    );
+    assert_eq!(mir, direct);
+    // The first call comes before `glfwInit`, on every host.
+    assert!(
+        mir.starts_with("GLFW error 65537: The GLFW library is not initialized\n"),
+        "{mir}"
+    );
+    // The rest needs a display, which a host may lack.
+    if host_shows_windows() {
+        assert!(mir.ends_with("window 320 by 200\n0\n0\n0\n6\n"), "{mir}");
+    }
 }
 
 #[test]

@@ -182,6 +182,9 @@ pub struct CCallbackParam {
     /// The parameter is a pointer to the scalar, which the callback reads
     /// and may write.
     pub pointer: bool,
+    /// The parameter is C text, `const char *`. Its scalar is the address,
+    /// a `U64`, and the callback gets a copy of the text as a `str`.
+    pub text: bool,
 }
 
 /// The C signature of a callback: a function the foreign code calls.
@@ -257,6 +260,22 @@ unsafe extern "C" fn callback_entry(
         Some(FfiScalar::I32) => *result = word as i32 as i64 as u64,
         Some(_) => *result = word,
     }
+}
+
+/// A copy of the C text at `address`, which a callback received.
+///
+/// # Safety
+///
+/// `address` is null or points to NUL-terminated bytes.
+pub unsafe fn callback_text(address: usize) -> Result<String, FfiError> {
+    if address == 0 {
+        return Err(FfiError::NullCallbackText);
+    }
+    // SAFETY: delegated to this function's caller.
+    unsafe { std::ffi::CStr::from_ptr(address as *const std::ffi::c_char) }
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| FfiError::InvalidUtf8CallbackText)
 }
 
 /// The address of new code with the C signature `signature` that runs
@@ -454,6 +473,8 @@ pub enum FfiError {
     },
     NullCStringReturn,
     InvalidUtf8Return,
+    NullCallbackText,
+    InvalidUtf8CallbackText,
 }
 
 impl fmt::Display for FfiError {
@@ -507,6 +528,12 @@ impl fmt::Display for FfiError {
                 index + 1
             ),
             Self::NullCStringReturn => formatter.write_str("FFI function returned a null cstr"),
+            Self::NullCallbackText => {
+                formatter.write_str("the C caller passed a null pointer as a cstr")
+            }
+            Self::InvalidUtf8CallbackText => {
+                formatter.write_str("the C caller passed a cstr that is not valid UTF-8")
+            }
             Self::InvalidUtf8Return => {
                 formatter.write_str("FFI function returned a cstr that is not UTF-8")
             }
@@ -1992,24 +2019,54 @@ mod tests {
     }
 
     #[test]
+    fn callback_text_copies_valid_c_text_and_names_what_is_not() {
+        let text = c"snow \u{2603}";
+        // SAFETY: each address is null or NUL-terminated bytes.
+        unsafe {
+            assert_eq!(
+                callback_text(text.as_ptr() as usize),
+                Ok("snow \u{2603}".to_string())
+            );
+            assert_eq!(callback_text(c"".as_ptr() as usize), Ok(String::new()));
+            assert_eq!(callback_text(0), Err(FfiError::NullCallbackText));
+            assert_eq!(
+                callback_text(c"\xc3".as_ptr() as usize),
+                Err(FfiError::InvalidUtf8CallbackText)
+            );
+        }
+        assert_eq!(
+            FfiError::NullCallbackText.to_string(),
+            "the C caller passed a null pointer as a cstr"
+        );
+        assert_eq!(
+            FfiError::InvalidUtf8CallbackText.to_string(),
+            "the C caller passed a cstr that is not valid UTF-8"
+        );
+    }
+
+    #[test]
     fn callbacks_run_a_handler_over_the_frame_of_each_call() {
         let signature = CCallback {
             params: vec![
                 CCallbackParam {
                     scalar: FfiScalar::I32,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::I16,
                     pointer: true,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::F32,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::Bool,
                     pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::I8),
@@ -2066,10 +2123,12 @@ mod tests {
                 CCallbackParam {
                     scalar: FfiScalar::F64,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::U64,
                     pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::F64),

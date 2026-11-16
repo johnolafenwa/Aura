@@ -19,8 +19,8 @@ use std::str;
 use aura_core::diag::Diagnostic;
 
 use super::{
-    boxed_value, runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut,
-    value_type_name, with_value, OpaqueValue,
+    boxed_value, free_frozen_direct_value, freeze_direct_value, runtime_diagnostic_error,
+    runtime_error, task_runtime_boundary, value_mut, value_type_name, with_value, OpaqueValue,
 };
 use crate::c_layout::CStruct;
 use crate::c_values::{self, CValueError};
@@ -688,6 +688,49 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     if let Err(payload) = outcome {
         CALLBACK_FAILURE.set(Some(payload));
     }
+}
+
+/// A new `str` that holds a copy of the C text a callback received.
+/// `function` names the Aura function the callback runs. The box is
+/// frozen, as the box of a `str` literal is: the function borrows it, a
+/// release of it does nothing, and anything that keeps the text copies it.
+/// The callback's body frees it with
+/// [`aura_direct_ffi_release_callback_text`] when the function returns.
+///
+/// # Safety
+///
+/// `text` is null or points to NUL-terminated bytes, and the function
+/// name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
+    text: *const c_char,
+    function: *const u8,
+    function_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        match crate::ffi::callback_text(text as usize) {
+            Ok(text) => {
+                let boxed = boxed_value(Value::String(text.into()));
+                // The box is new and confined to this thread.
+                freeze_direct_value(boxed);
+                boxed
+            }
+            Err(failure) => {
+                foreign_call_failure(metadata_text(function, function_length), "AU4005", failure)
+            }
+        }
+    })
+}
+
+/// Frees the copy of C text that [`aura_direct_ffi_callback_text`] made.
+///
+/// # Safety
+///
+/// `text` came from that function and has not been freed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_callback_text(text: *mut OpaqueValue) {
+    // SAFETY: the caller's contract. Nothing else holds the frozen box.
+    unsafe { free_frozen_direct_value(text) }
 }
 
 /// Raises the failure of a callback that ran under the foreign call that

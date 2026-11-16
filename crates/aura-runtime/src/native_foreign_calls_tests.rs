@@ -10,11 +10,12 @@ use super::super::{
 };
 use super::{
     aura_direct_ffi_bad_bool, aura_direct_ffi_bytes_view, aura_direct_ffi_bytes_view_mut,
-    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_check_flags,
-    aura_direct_ffi_elements, aura_direct_ffi_elements_mut, aura_direct_ffi_handle,
-    aura_direct_ffi_handle_address, aura_direct_ffi_none, aura_direct_ffi_null_handle,
-    aura_direct_ffi_nullable_handle_address, aura_direct_ffi_pack_struct,
-    aura_direct_ffi_pack_structs, aura_direct_ffi_release_bytes, aura_direct_ffi_release_c_string,
+    aura_direct_ffi_c_string, aura_direct_ffi_c_string_result, aura_direct_ffi_callback_text,
+    aura_direct_ffi_check_flags, aura_direct_ffi_elements, aura_direct_ffi_elements_mut,
+    aura_direct_ffi_handle, aura_direct_ffi_handle_address, aura_direct_ffi_none,
+    aura_direct_ffi_null_handle, aura_direct_ffi_nullable_handle_address,
+    aura_direct_ffi_pack_struct, aura_direct_ffi_pack_structs, aura_direct_ffi_release_bytes,
+    aura_direct_ffi_release_c_string, aura_direct_ffi_release_callback_text,
     aura_direct_ffi_release_structs, aura_direct_ffi_str_view, aura_direct_ffi_unpack_struct,
     aura_direct_ffi_unpack_struct_into, aura_direct_ffi_unpack_structs, ForeignView,
 };
@@ -700,6 +701,46 @@ fn a_callback_failure_waits_for_the_foreign_call_to_return() {
     aura_direct_ffi_callback_check();
     unsafe { aura_direct_ffi_callback_guard(doubles, later.as_mut_ptr()) };
     assert_eq!(later, [21, 42]);
+}
+
+#[test]
+fn a_callback_copies_the_c_text_it_receives() {
+    let function = "show";
+    unsafe {
+        let text =
+            aura_direct_ffi_callback_text(c"caf\u{e9}".as_ptr(), function.as_ptr(), function.len());
+        assert_eq!(rendered(text), "caf\u{e9}");
+        // The box is frozen: a release leaves it, and the callback's body
+        // frees it.
+        aura_direct_release_value(text);
+        assert_eq!(rendered(text), "caf\u{e9}");
+        aura_direct_ffi_release_callback_text(text);
+    }
+
+    type Work = fn();
+    let failures: [(Work, &str); 2] = [
+        (
+            || unsafe {
+                aura_direct_ffi_callback_text(std::ptr::null(), "show".as_ptr(), 4);
+            },
+            "the C caller passed a null pointer as a cstr",
+        ),
+        (
+            || unsafe {
+                aura_direct_ffi_callback_text(c"\xff".as_ptr(), "show".as_ptr(), 4);
+            },
+            "the C caller passed a cstr that is not valid UTF-8",
+        ),
+    ];
+    for (work, expected) in failures {
+        let diagnostic = capture_diagnostic(work);
+        assert_eq!(diagnostic.code, "AU4005", "{}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(expected) && diagnostic.message.contains("`show`"),
+            "{}",
+            diagnostic.message
+        );
+    }
 }
 
 static RELEASED: std::sync::Mutex<Vec<usize>> = std::sync::Mutex::new(Vec::new());

@@ -226,6 +226,34 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
         TypeRefKind::Function { .. }
     ));
 
+    // `cstr` in a callback type is C text the callback receives. It reads
+    // as `str` from there on, and a written `str` is refused.
+    let text = parse(
+        "extern \"C\" def each(visit: def(word: cstr, count: int32, mut cstr, list[cstr]) -> None, plain: int32) -> None\n",
+    )
+    .expect("a callback that takes C text parses");
+    let Item::ExternFunction(each) = &text.items[0] else {
+        panic!("expected an extern function");
+    };
+    let TypeRefKind::Function { params, .. } = &each.params[0].ty.kind else {
+        panic!("expected a callback type");
+    };
+    let names = params
+        .iter()
+        .map(|param| match &param.ty.kind {
+            TypeRefKind::Named { name, .. } => name.as_str(),
+            _ => "",
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(names, ["str", "int32", "str", "list"]);
+    assert_eq!(each.c_string_params, [false, false]);
+    let written = parse("extern \"C\" def each(visit: def(word: str) -> None) -> None\n")
+        .expect_err("a callback takes text as `cstr`");
+    assert_eq!(
+        written.message,
+        "a callback takes text as `cstr`: C passes a pointer to NUL-terminated bytes, with no length"
+    );
+
     let raw_pointer = parse("extern \"C\" def read(output: *uint8) -> int64\n")
         .expect_err("FFI v0 reserves raw pointer syntax");
     assert_eq!(

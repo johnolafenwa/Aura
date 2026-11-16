@@ -17336,6 +17336,38 @@ def main() -> int32:
         );
     }
 
+    // C text reaches a callback as a pointer, which the body copies into
+    // a `str` and frees when the function returns.
+    let text = lower_ffi_source_to_mir(
+        r#"
+extern "C" def cb_words(visit: def(word: cstr, index: int32) -> int32) -> None
+
+def show(word: str, index: int32) -> int32:
+    print(word)
+    return index
+
+def main() -> int32:
+    cb_words(show)
+    return 0
+"#,
+    );
+    let callbacks = super::foreign::module_callbacks(&text);
+    let (entry, _) = super::foreign::callback_signatures(&callbacks[0].1);
+    assert_eq!(entry.params, [types::I64, types::I32]);
+    let object = emit_host_object(&text).expect("a text callback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_ffi_callback_text",
+        "aura_direct_ffi_release_callback_text",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
     // A module that passes no callback does not check for a parked failure.
     let plain = lower_ffi_source_to_mir(
         "extern \"C\" def cb_plain(value: int32) -> int32\n\ndef main() -> int32:\n    return cb_plain(1)\n",

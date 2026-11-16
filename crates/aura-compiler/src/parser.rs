@@ -887,6 +887,9 @@ impl Parser {
                 "`extern` functions cannot return Aura views",
             ));
         }
+        for param in &mut params {
+            take_callback_c_strings(&mut param.ty)?;
+        }
         let c_string_params = params
             .iter_mut()
             .map(|param| take_c_string(&mut param.ty))
@@ -6102,6 +6105,42 @@ fn take_pointer(ty: &mut TypeRef) -> bool {
         }
         _ => false,
     }
+}
+
+/// Rewrites `cstr` to `str` in the parameters of a callback type, the
+/// `def(...) -> T` type of an extern parameter. A callback takes text only
+/// as C text, so a `str` written there is refused.
+fn take_callback_c_strings(ty: &mut TypeRef) -> Result<()> {
+    let TypeRefKind::Function {
+        params,
+        return_type,
+        ..
+    } = &mut ty.kind
+    else {
+        return Ok(());
+    };
+    if matches!(&return_type.kind, TypeRefKind::Named { name, args } if name == "cstr" && args.is_empty())
+    {
+        return Err(parse_error(
+            return_type.span,
+            "a callback cannot return `cstr`: nothing would own the text once the function returns",
+        ));
+    }
+    for param in params {
+        match &mut param.ty.kind {
+            TypeRefKind::Named { name, args } if name == "cstr" && args.is_empty() => {
+                *name = "str".to_string();
+            }
+            TypeRefKind::Named { name, args } if name == "str" && args.is_empty() => {
+                return Err(parse_error(
+                    param.ty.span,
+                    "a callback takes text as `cstr`: C passes a pointer to NUL-terminated bytes, with no length",
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
 }
 
 /// Rewrites `cstr`, alone or as a member of a union, to `str` in the type

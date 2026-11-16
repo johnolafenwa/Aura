@@ -210,8 +210,23 @@ impl NativeCodegen<'_> {
                 body_id,
                 &body,
                 &format!("callback body for `{name}`"),
-                |_, builder| {
-                    emit_callback_body(builder, &callback, target);
+                |codegen, builder| {
+                    // A `cstr` parameter is copied into a `str` for the
+                    // call, and the copy is released after it.
+                    let text = match callback.params.iter().any(|param| param.text) {
+                        true => Some(CallbackText {
+                            copy: codegen.runtime[RuntimeFn::FfiCallbackText],
+                            release: codegen.runtime[RuntimeFn::FfiReleaseCallbackText],
+                            name: string_data_id(
+                                builder.module(),
+                                &mut codegen.string_data,
+                                name.as_bytes(),
+                            )?,
+                            name_length: name.len(),
+                        }),
+                        false => None,
+                    };
+                    emit_callback_body(builder, &callback, target, text);
                     Ok(())
                 },
             )?;
@@ -282,6 +297,16 @@ impl NativeCodegen<'_> {
     }
 }
 
+/// What a callback's body needs to pass C text to its function: the
+/// runtime functions that copy the text and release the copy, and the
+/// name of the Aura function, for the report of text that is not valid.
+pub(super) struct CallbackText {
+    copy: FuncHandle,
+    release: FuncHandle,
+    name: DataHandle,
+    name_length: usize,
+}
+
 /// The code the guard runs: it calls the Aura function `target` with the
 /// words of the frame, and stores the result and what the function wrote
 /// to its `mut` parameters back to the frame.
@@ -289,6 +314,7 @@ pub(super) fn emit_callback_body(
     builder: &mut dyn FunctionBackend,
     callback: &CCallback,
     target: FuncHandle,
+    text: Option<CallbackText>,
 ) {
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
@@ -297,17 +323,40 @@ pub(super) fn emit_callback_body(
     let frame = builder.block_params(entry)[0];
     let flags = MemFlags::trusted();
     let count = callback.params.len();
+    let text = text.map(|text| {
+        let name = builder.import_data(text.name);
+        (
+            builder.import_function(text.copy),
+            builder.import_function(text.release),
+            builder.symbol_value(types::I64, name),
+            builder.iconst(types::I64, text.name_length as i64),
+        )
+    });
+    let mut copies = Vec::new();
     let arguments = callback
         .params
         .iter()
         .enumerate()
         .map(|(index, param)| {
             let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
-            builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8)
+            let word = builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8);
+            match (text, param.text) {
+                (Some((copy, _, name, length)), true) => {
+                    let copy = builder.call(copy, &[word, name, length]).results[0];
+                    copies.push(copy);
+                    copy
+                }
+                _ => word,
+            }
         })
         .collect::<Vec<_>>();
     let target = builder.import_function(target);
     let results = builder.call(target, &arguments).results;
+    if let Some((_, release, ..)) = text {
+        for copy in copies {
+            builder.call(release, &[copy]);
+        }
+    }
     // The function returns its result, then one word for each `mut`
     // parameter in order.
     let written = callback.params.iter().filter(|param| param.pointer).count();

@@ -2301,6 +2301,59 @@ def main():
 }
 
 #[test]
+fn ffi_callbacks_take_c_text_as_a_borrowed_str() {
+    check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr, count: int32) -> int32) -> None
+
+def show(word: str, count: int32) -> int32:
+    print(word)
+    return count
+
+def main():
+    each(show)
+"#,
+    )
+    .expect("a callback takes C text");
+
+    // The text is borrowed for the call, so a function that takes it by
+    // another mode is not that callback.
+    let owned = check_ffi_source_for_test(
+        r#"extern "C" def each(visit: def(word: cstr) -> None) -> None
+
+def keep(word: own str) -> None:
+    print(word)
+
+def main():
+    each(keep)
+"#,
+    )
+    .expect_err("a callback borrows its text");
+    assert_eq!(owned.code, "AU2015", "{}", owned.message);
+
+    let result = check_ffi_source_for_test(
+        r#"extern "C" def bad(make: def() -> cstr) -> None
+"#,
+    )
+    .expect_err("a callback does not return text");
+    assert_eq!(
+        result.message,
+        "a callback cannot return `cstr`: nothing would own the text once the function returns"
+    );
+    let list = check_ffi_source_for_test(
+        r#"extern "C" def bad(visit: def(words: list[int32]) -> None) -> None
+"#,
+    )
+    .expect_err("a callback takes scalars and text");
+    assert!(
+        list.help
+            .iter()
+            .any(|help| help.contains("`cstr` for C text")),
+        "{:?}",
+        list.help
+    );
+}
+
+#[test]
 fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
     let rejected = [
         (
@@ -2328,7 +2381,7 @@ fn ffi_v0_rejects_unsupported_abi_types_and_returned_views() {
             "AU2002",
         ),
         (
-            r#"extern "C" def bad(value: def(str) -> int32) -> None
+            r#"extern "C" def bad(value: def(mut cstr) -> int32) -> None
 "#,
             "parameter 1 of callback `value` cannot cross the C boundary as `str`",
             "AU2002",
@@ -33539,6 +33592,11 @@ class Counter:
     let bad_declarations = [
         (
             "extern \"C\" def bad(f: def(text: str) -> None) -> None\n",
+            "a callback takes text as `cstr`",
+            "AU1101",
+        ),
+        (
+            "extern \"C\" def bad(f: def(text: mut cstr) -> None) -> None\n",
             "parameter 1 of callback `f` cannot cross the C boundary as `str`",
             "AU2002",
         ),

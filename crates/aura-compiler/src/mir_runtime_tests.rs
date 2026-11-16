@@ -24912,6 +24912,55 @@ def main() -> int32:
 }
 
 #[test]
+fn ffi_callbacks_copy_the_c_text_they_receive() {
+    // `bsearch` hands its key to the comparison untouched, so the key is
+    // the C text here.
+    let program = |key: &str, body: &str| {
+        lower_ffi_runtime_source(&format!(
+            r#"
+extern "C" def bsearch(
+    key: ptr[uint8], base: ptr[int32], count: uint64, size: uint64,
+    compare: def(key: cstr, element: mut int32) -> int32
+) -> uint64
+
+def by_length(key: str, element: mut int32) -> int32:
+    if len(key) == 2:
+        return 2 - element
+    return -1
+
+def main() -> int32:
+    key: list[uint8] = {key}
+    values: list[int32] = [1, 2, 3]
+{body}
+"#
+        ))
+    };
+    let found = program(
+        "[104, 105, 0]",
+        "    if bsearch(key, values, 3, 4, by_length) == 0:\n        return -1\n    return 0",
+    );
+    let output = super::run_trusted(&found).expect("bsearch should pass the key as text");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(0));
+
+    let invalid = program(
+        "[255, 0]",
+        "    bsearch(key, values, 3, 4, by_length)\n    return 0",
+    );
+    let error = super::run_trusted(&invalid).expect_err("the key is not UTF-8");
+    assert_eq!(error.code, "AU4005", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("the C caller passed a cstr that is not valid UTF-8"),
+        "{}",
+        error.message
+    );
+}
+
+#[test]
 fn ffi_callbacks_reenter_the_interpreter_and_park_a_failure() {
     use crate::ffi::{CCallback, CCallbackParam, FfiScalar, FfiType};
 
@@ -24996,18 +25045,36 @@ def main() -> int32:
             params: vec![
                 CCallbackParam {
                     scalar: FfiScalar::I64,
-                    pointer: false
+                    pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::F32,
-                    pointer: true
+                    pointer: true,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::Bool,
-                    pointer: false
+                    pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::U16),
+        })
+    );
+    // C text is a pointer the callback copies into a `str`.
+    assert_eq!(
+        super::callback_signature(&function_type(
+            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            Type::Unit,
+        )),
+        Some(CCallback {
+            params: vec![CCallbackParam {
+                scalar: FfiScalar::U64,
+                pointer: false,
+                text: true,
+            }],
+            result: None,
         })
     );
     let nothing = function_type(Vec::new(), Type::Unit);
@@ -25021,7 +25088,7 @@ def main() -> int32:
     for ty in [
         Type::named("int32"),
         function_type(
-            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            vec![("str", aura_core::ops::ReceiverKind::BorrowMut)],
             Type::Unit,
         ),
         function_type(Vec::new(), Type::named("str")),
