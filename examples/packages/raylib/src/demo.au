@@ -1,0 +1,40 @@
+"""What the windowed programs share: how long to run and where to save a frame.
+
+A test sets `RAYLIB_DEMO_FRAMES` to stop a program after that many frames,
+and `RAYLIB_DEMO_SHOT` to the name of a PNG the program writes before it
+closes. With neither set, a program runs until its window is closed.
+"""
+
+import raylib
+
+
+extern "C" def getenv(name: cstr) -> cstr | None
+
+
+public def frame_limit() -> int64:
+    """The number of frames to run, or 0 to run until the window closes."""
+    text = getenv("RAYLIB_DEMO_FRAMES")
+    if text is None:
+        return 0
+    match parse_int64(text):
+        case Result.Ok(count):
+            return count
+        case Result.Err(_):
+            return 0
+
+
+public def finished(frame: int64, limit: int64) -> bool:
+    """Whether the program should leave its frame loop."""
+    if limit > 0 and frame >= limit:
+        return true
+    return raylib.WindowShouldClose()
+
+
+public def save_frame() -> None:
+    """Writes the last frame to the file `RAYLIB_DEMO_SHOT` names, if set."""
+    name = getenv("RAYLIB_DEMO_SHOT")
+    if name is None:
+        return
+    image = raylib.LoadImageFromScreen()
+    raylib.ExportImage(image, name)
+    raylib.UnloadImage(image)

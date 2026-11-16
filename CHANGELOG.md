@@ -7,6 +7,14 @@ in this file.
 
 ## Unreleased
 
+- Examples: `examples/packages/raylib` binds the raylib graphics library
+  through FFI. A script in the package generates the binding from
+  raylib's own API description, and it covers 556 of raylib 6.0's 600
+  functions. Three programs use it: a brick game with keyboard and mouse
+  input, a 3D scene with a camera and a model, and a picture drawn into
+  an image and written to a PNG. The package's README says how to install
+  raylib and run them.
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2
