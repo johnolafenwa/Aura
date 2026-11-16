@@ -281,6 +281,7 @@ fn maintained_raylib_picture_runs_with_backend_parity() {
     }
     let scratch = TempPackage::new(false);
     let expected = "picture.png is 320 by 200\nthe sun is 255, 203, 0\n\
+                    the hill is 0, 158, 47\n\
                     the grass is 0, 117, 44\n";
     let (mir, direct) = run_raylib_example("picture", &scratch.path, &[]);
     assert_eq!(mir, expected);

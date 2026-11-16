@@ -569,6 +569,10 @@
         },
         {
           "name": "support.type.primitive.aura",
+          "match": "(?<=: |array\\[)array(?=\\[)"
+        },
+        {
+          "name": "support.type.primitive.aura",
           "match": "\\b(Callable|TaskCallable)\\b"
         }
       ]

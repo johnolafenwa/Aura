@@ -117,7 +117,12 @@ extern "C" class Div:
     quot: int32
     rem: int32
 
+extern "C" class Label:
+    text: array[uint8, 16]
+    corner: Div
+
 extern "C" def div(numerator: int32, denominator: int32) -> Div
+extern "C" def total(parts: ptr[Div], count: int32) -> int64
 extern "C" def qsort(
     base: mut ptr[int32], count: uint64, size: uint64,
     compare: def(a: mut int32, b: mut int32) -> int32
@@ -155,7 +160,9 @@ The rules for these declarations:
   parameters.
 - **C structs.** A struct declaration is written `extern "C" class Name:`
   with a block of fields. It has no methods, invariants, field defaults, or
-  type parameters. See [Structs](#structs).
+  type parameters. A field of type `array[T, N]` is a C array of `N`
+  elements, where `N` is a whole number written in the source. See
+  [Structs](#structs).
 
 To define a function that C code calls by name, see
 [Exported Functions](/manual/freestanding#exported-functions).
@@ -315,9 +322,15 @@ def main() -> int32:
 
 A built program passes the address of the list's own storage, with no copy,
 when the list keeps its elements unboxed. Lists of scalars do. The checker
-rejects a `ptr` to anything but a scalar with `AU2002`, and `own ptr[T]`
-with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
+rejects a `ptr` to anything but a scalar or an `extern "C"` class with
+`AU2002`, and `own ptr[T]` with `AU3004`. `ptr[T]` cannot be a result, and `list[uint8]` remains the
 form for bytes with a length.
+
+
+`T` is also an `extern "C"` class. A `ptr[Name]` parameter takes a
+`list[Name]` and passes a C array of `struct name`, as a vertex buffer or a
+list of points is passed. [Arrays Of Structs](#arrays-of-structs) has the
+rules.
 
 ### Arrays
 
@@ -391,12 +404,14 @@ def main() -> int32:
 | `value: mut Name` | `struct name *` | a mutable `Name` place | the function reads and may write the fields |
 | `-> Name` | `struct name` | | the struct comes back by value |
 
-- **Fields.** A field is a scalar of the [Scalars](#scalars) table or
-  another `extern "C"` class, which is held inline as a nested struct. Any
-  other field type is `AU2002`. The class needs at least one field.
-- **An ordinary value.** In Aura code the class is a `copy class`. Construct
-  it with keyword arguments, read and assign its fields, and keep it in a
-  list or another class. It has no C identity until it crosses.
+- **Fields.** A field is a scalar of the [Scalars](#scalars) table,
+  another `extern "C"` class, which is held inline as a nested struct, or
+  an [array](#array-fields) of either. Any other field type is `AU2002`.
+  The class needs at least one field.
+- **An ordinary value.** In Aura code the class is a `copy class`, unless
+  it holds an array field. Construct it with keyword arguments, read and
+  assign its fields, and keep it in a list or another class. It has no C
+  identity until it crosses.
 - **By value.** A `Name` parameter or result is passed the way the C calling
   convention passes that struct: in registers when it is small, and in
   memory otherwise.
@@ -408,16 +423,113 @@ def main() -> int32:
 - **Booleans.** A `bool` field that comes back with a byte other than `0` or
   `1` fails with `AU4001`.
 
-`own Name` is `AU3004`, and `Name | None` is `AU2010`. A `ptr[Name]` array of
-structs is not available. C unions, bit-fields, fixed-size array fields,
-pointer fields, and packed or over-aligned structs have no spelling. Declare
-a pointer field as `uint64` only when the code never dereferences it.
+`own Name` is `AU3004`, and `Name | None` is `AU2010`. C unions,
+bit-fields, pointer fields, and packed or over-aligned structs have no
+spelling. Declare a pointer field as `uint64` only when the code never
+dereferences it.
 
 Struct layout and passing follow the System V convention on x86-64 and the
-standard procedure call convention on AArch64, for Linux and macOS. On
-AArch64, a struct argument that the convention would split between the last
-free registers and the stack is a build error. Move the parameter earlier or
-pass it as `mut Name`.
+standard procedure call convention on AArch64, for Linux and macOS. A
+struct that does not fit the argument registers that are left is passed on
+the stack, as each convention requires.
+
+#### Array Fields
+
+A field of type `array[T, N]` is laid out as `T name[N]`: `N` elements in a
+row, with the alignment of one. `T` is a scalar, an `extern "C"` class, or
+another array. `N` is a whole number from 1 to 1048576, written in the
+source.
+
+```aura fragment
+extern "C" class Vertex:
+    x: float32
+    y: float32
+
+extern "C" class Badge:
+    name: array[uint8, 8]
+    weights: array[float32, 4]
+    corners: array[Vertex, 2]
+    grid: array[array[int16, 3], 2]
+
+extern "C" def badge_weight(badge: Badge) -> float32
+extern "C" def badge_rename(badge: mut Badge) -> None
+
+def main() -> int32:
+    mut badge = Badge(
+        name=[65, 117, 114, 97, 0, 0, 0, 0],
+        weights=[0.5, 1.0, 1.5, 2.0],
+        corners=[Vertex(x=0.0, y=0.0), Vertex(x=4.0, y=3.0)],
+        grid=[[1, 2, 3], [4, 5, 6]],
+    )
+    badge.weights[0] = 2.5
+    print(badge_weight(badge))
+    badge_rename(badge)
+    print(badge.name)
+    return 0
+```
+
+- **The field is a list.** In Aura code the type of an `array[T, N]` field
+  is `list[T]`. Index it, assign its elements, iterate over it, and pass it
+  to any function that takes a list. `array` names a type only in a field
+  of an `extern "C"` class.
+- **Exactly `N` elements cross.** The list must hold `N` elements when the
+  struct is passed to a foreign function. Any other length fails with
+  `AU4005` before the call. A struct that comes back holds a list of `N`
+  elements for each array field.
+- **Not a `copy class`.** A class with an array field holds a list, so its
+  values move, and so do the values of an `extern "C"` class that holds
+  one. Write `.clone()` for a second value.
+- **`char name[N]`.** C text in a fixed buffer is an `array[uint8, N]` or
+  `array[int8, N]`. The bytes cross as they are, and the terminating NUL is
+  the program's to write and to find.
+- **Booleans.** An element of an `array[bool, N]` that comes back with a
+  byte other than `0` or `1` fails with `AU4001`.
+
+A class with an array field is passed and returned under the rules of the
+table above. It crosses through the runtime, which copies each element, so
+it costs more per call than a class of scalars.
+
+#### Arrays Of Structs
+
+`ptr[Name]` is a pointer to the first of a run of structs, such as
+`const Vector2 *` in C, where `Name` is an `extern "C"` class. The argument
+is a `list[Name]`. No length crosses with it, so C functions of this kind
+take the count as another parameter.
+
+```aura fragment
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" def draw_strip(points: ptr[Point], count: int32) -> None
+extern "C" def move_points(points: mut ptr[Point], count: int32, by: float32) -> None
+
+def main() -> int32:
+    mut points = [Point(x=0.0, y=0.0), Point(x=4.0, y=3.0), Point(x=8.0, y=0.0)]
+    count = len(points) as int32
+    move_points(points, count, 1.5)
+    draw_strip(points, count)
+    return 0
+```
+
+| Declaration | C type | Argument | Contract |
+| --- | --- | --- | --- |
+| `values: ptr[Name]` | `const struct name *` | a `list[Name]` | the function reads the structs |
+| `values: mut ptr[Name]` | `struct name *` | a mutable `list[Name]` | the function reads and writes the structs |
+
+- **The call converts the elements.** Aura keeps a class value in its own
+  form, so the call writes a C array before the foreign function runs.
+  For `mut ptr[Name]` it reads the array back afterwards, and the list
+  holds what the function left. The cost is linear in the list.
+- **An empty list is a null pointer.**
+- **The array lives for the call.** A C function that keeps the pointer
+  after it returns reads freed memory.
+- **Large numeric buffers.** A buffer of floats that must cross with no
+  copy is an [`Array[float32]`](#arrays) or a `ptr[float32]` list, which
+  lend their own storage.
+
+`own ptr[Name]` is `AU3004`. A pointer to anything but scalars or an
+`extern "C"` class is `AU2002`.
 
 ### Callbacks
 
@@ -703,7 +815,8 @@ find its bytes, and a `str` literal adds nothing. A `cstr` argument or
 result costs one allocation and one copy, about 20 to 40 nanoseconds. An
 out-parameter costs a store and a load. A `ptr[T]` argument costs a few
 loads to find the list's elements. A struct argument or result costs a
-store and a load for each field. A callback costs about 4 ns more
+store and a load for each field. A struct with an array field and a
+`ptr[Name]` list cost a runtime call that copies each element. A callback costs about 4 ns more
 than a C function pointer, for the frame that guards the C caller against
 a failure.
 
@@ -715,13 +828,12 @@ still name the host's actual C symbol.
 
 FFI does not:
 
-- define C unions, bit-fields, or array fields, or pass enums
-- pass an array of structs, or a struct that holds a pointer Aura can follow
+- define C unions or bit-fields, or pass enums
+- pass a struct that holds a pointer Aura can follow
 - allocate foreign memory or expose pointer arithmetic
 - return views, or free a `cstr` result
-- pass typed pointers to anything but one scalar, one handle, or the
-  elements of a list of scalars
-- pass an `Array[T]` as a pointer
+- pass typed pointers to anything but one scalar, one struct, one handle,
+  or the elements of a list of scalars or structs
 - accept variadics
 - pass a closure as a callback, or pass text, lists, structs, or handles to
   one
@@ -747,13 +859,15 @@ Implemented:
 - `mut` scalar out-parameters
 - `ptr[T]` and `mut ptr[T]` pointers to the elements of a scalar list
 - `extern "C"` classes passed and returned by value, and passed by pointer
+- `array[T, N]` fields of an `extern "C"` class
+- `ptr[Name]` and `mut ptr[Name]` pointers to the elements of a struct list
 - named functions passed as C callbacks
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
 
 Reserved or unavailable: closures as callbacks, raw-pointer arithmetic, variadics, returned views,
-other nullable shapes, unions, and arrays of structs. Aura does not infer them
+other nullable shapes, and unions. Aura does not infer them
 from current syntax.
 
 Design record:

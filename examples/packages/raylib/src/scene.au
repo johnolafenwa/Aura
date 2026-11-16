@@ -38,6 +38,27 @@ def main() -> int32:
         projection=raylib.CAMERA_PERSPECTIVE,
     )
     ring = raylib.LoadModelFromMesh(raylib.GenMeshTorus(0.2, 4.0, 16, 32))
+    # A mesh drawn with a material of its own, with no model around it.
+    plinth = raylib.GenMeshCylinder(1.2, 0.4, 24)
+    stone = raylib.LoadMaterialDefault()
+    under = raylib.Matrix(
+        m0=1.0,
+        m4=0.0,
+        m8=0.0,
+        m12=0.0,
+        m1=0.0,
+        m5=1.0,
+        m9=0.0,
+        m13=3.6,
+        m2=0.0,
+        m6=0.0,
+        m10=1.0,
+        m14=0.0,
+        m3=0.0,
+        m7=0.0,
+        m11=0.0,
+        m15=1.0,
+    )
     mut frame = 0
 
     while not demo.finished(frame, limit):
@@ -64,10 +85,14 @@ def main() -> int32:
                 raylib.DrawCubeWires(center, 1.4, tall, 1.4, raylib.DARKGRAY)
         above = raylib.Vector3(x=0.0, y=5.0, z=0.0)
         raylib.DrawSphere(above, 0.8, raylib.GOLD)
-        raylib.DrawModel(
+        raylib.DrawMesh(plinth, stone, under)
+        size = (1.0 + 0.2 * math.sin(time * 3.0)) as float32
+        raylib.DrawModelEx(
             ring,
             above,
-            (1.0 + 0.2 * math.sin(time * 3.0)) as float32,
+            raylib.Vector3(x=1.0, y=0.0, z=0.0),
+            (time * 90.0) as float32,
+            raylib.Vector3(x=size, y=size, z=size),
             raylib.MAROON,
         )
         raylib.DrawGrid(12, 2.0)
@@ -84,6 +109,8 @@ def main() -> int32:
 
     demo.save_frame()
     raylib.UnloadModel(ring)
+    raylib.UnloadMesh(plinth)
+    raylib.UnloadMaterial(stone)
     raylib.CloseWindow()
     print(f"drew {frame} frames")
     return 0

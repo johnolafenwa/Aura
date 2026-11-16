@@ -466,6 +466,15 @@ test("extension highlights and snippets the maintained extern C surface", () => 
   for (const ffiType of ["cstr", "ptr"]) {
     assert.equal(new RegExp(typeRule.match).test(ffiType), true);
   }
+  // `array` is a type only as the type of a field: `name: array[T, N]`.
+  const arrayRule = grammar.repository.types.patterns.find((pattern) =>
+    pattern.match.includes("array(?=")
+  );
+  assert.ok(arrayRule);
+  const arrayField = new RegExp(arrayRule.match, "g");
+  assert.equal("    params: array[float32, 4]".match(arrayField)?.length, 1);
+  assert.equal("    grid: array[array[int16, 3], 2]".match(arrayField)?.length, 2);
+  assert.equal("    total = array[0] + array[1]".match(arrayField), null);
   assert.deepEqual(snippets["Extern C function"].body, [
     'public extern "C" def ${1:name}(${2}) -> ${3:int32}'
   ]);

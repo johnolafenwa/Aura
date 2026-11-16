@@ -1,6 +1,8 @@
 # FFI v2 And raylib Design Checkpoint
 
 Status: **Open 2026-11-16.** Work proceeds on the defaults marked below.
+Sections A, C, and the AArch64 part of F are implemented and recorded in
+[ADR-0106](decisions/0106-c-array-fields-and-struct-arrays.md).
 Each default stays open to change until the release that ships it.
 
 This checkpoint covers two pieces of the graphics work: a maintained

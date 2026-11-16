@@ -67,6 +67,49 @@ Found on the way:
 Not run: macOS, Windows, arm64, and raylib on its default GLFW platform
 layer, which the CI step builds.
 
+## Step 2: Array Fields And Arrays Of Structs
+
+ADR-0106 records the decisions. What changed:
+
+- `name: array[T, N]` in an `extern "C"` class. The parser records the
+  lengths in `ClassDecl.c_arrays` and types the field `list[T]`. A class
+  with such a field, or one that holds such a class, is not `Copy`.
+- `ptr[Name]` and `mut ptr[Name]` for an `extern "C"` class. The call
+  takes a `list[Name]`, and an empty list passes a null pointer.
+- `crates/aura-runtime/src/c_values.rs` converts between Aura values and C
+  bytes for any layout. The interpreter always uses it. Built programs
+  keep their inline code for structs of plain scalars and call it through
+  `aura_direct_ffi_pack_struct` and its siblings for everything else.
+- On AArch64, a struct that does not fit the registers left is one LLVM
+  array argument, which LLVM places on the stack as AAPCS64 requires.
+- `CStruct::argument` no longer sends a struct to the stack because the
+  registers of a kind it does not use have run out. Before, a built
+  program passed `struct { int a, b; }` wrongly after nine `double`
+  arguments. The interpreter was right because libffi places arguments
+  itself.
+- The binding generator emits array fields and struct pointers, and the
+  binding covers 587 of 600 functions. The 13 left are 2 variadic
+  functions, 10 that take callbacks, and one with a `Rectangle **`
+  parameter.
+- The picture draws a hill with `ImageDrawTriangleFan`, the game draws the
+  ball's trail with `DrawLineStrip`, and the scene uses `DrawModelEx` and
+  `DrawMesh` with `LoadMaterialDefault`, whose `Material` has a
+  `float params[4]` field.
+
+Verification for step 2:
+
+- `cargo test -p aura-runtime --lib c_values c_layout native_foreign_calls`.
+- `cargo test -p aura-compiler --lib`.
+- `cargo test -p aura --test ffi_acceptance`: the fixture library tests
+  compare both backends for array fields, nested arrays, struct arrays
+  written back, wrong lengths, and structs after exhausted registers.
+- The three raylib programs on both backends under Xvfb.
+
+Not run: any arm64 or macOS machine. The generated AArch64 assembly was
+read against AAPCS64. Speed of the runtime conversion path is not yet
+measured; a list of structs is converted element by element on every
+call.
+
 ## Follow-Up
 
-Steps 2 to 5.
+Unions, `cstr` in callbacks, SDL2 and GLFW tests, and benchmarks.

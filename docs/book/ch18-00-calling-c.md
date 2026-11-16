@@ -537,8 +537,90 @@ defaults, and no type parameters, and each field is a scalar or another
 
 Small structs travel in registers and larger ones in memory, by the same
 rules the C compiler follows on the machine we build for, so a call with a
-struct costs a few nanoseconds more than one with plain numbers. C unions,
-bit-fields, and array fields have no Aura spelling.
+struct costs a few nanoseconds more than one with plain numbers. C unions
+and bit-fields have no Aura spelling.
+
+### Arrays of structs
+
+C functions often take a pointer to the first of a run of structs, with a
+count beside it. A graphics library takes its points that way, and so does
+`poll`, the system call that asks which of a set of files are ready. Each
+entry is a `struct pollfd`: a file descriptor, the events we ask about, and
+the events that happened, which `poll` fills in. We met `ptr[T]` for lists
+of numbers, and it takes an `extern "C"` class as well:
+
+*Filename: src/ready.au*
+
+```aura fragment
+extern "C" class PollFd:
+    fd: int32
+    events: int16
+    revents: int16
+
+extern "C" def poll(fds: mut ptr[PollFd], count: uint64, timeout_ms: int32) -> int32
+
+POLLOUT: int16 = 4
+
+def main() -> int32:
+    mut watched = [
+        PollFd(fd=1, events=POLLOUT, revents=0),
+        PollFd(fd=2, events=POLLOUT, revents=0),
+    ]
+    ready = poll(watched, 2, 0)
+    print(ready)
+    for entry in watched:
+        print(entry.revents & POLLOUT != 0)
+    return 0
+```
+
+<span class="caption">Listing 18-7: A list of structs passed as a C array</span>
+
+```console
+$ aura run src/ready.au
+2
+true
+true
+```
+
+The argument is an ordinary `list[PollFd]`. For the call, Aura writes its
+elements into a C array, one `struct pollfd` after another, and passes the
+address of the first. Because the parameter is `mut`, it reads the array
+back when `poll` returns, and that is how `revents` reached our list. Both
+standard output and standard error were ready for writing. A parameter
+without `mut` is `const struct pollfd *`, and skips the reading back.
+
+The copy costs time for every element on every call. That is fine for a
+few dozen points or file descriptors. A buffer of a million floats should
+be an `Array[float32]`, which lends its own memory instead.
+
+### Arrays inside structs
+
+The other place C puts an array is inside the struct itself: `char
+name[32]`, `float params[4]`. The field type `array[T, N]` declares one. This is raylib's `Material`,
+whose two pointers we carry as addresses:
+
+```aura fragment
+extern "C" class Shader:
+    id: uint32
+    locs: uint64
+
+extern "C" class Material:
+    shader: Shader
+    maps: uint64
+    params: array[float32, 4]
+
+extern "C" def LoadMaterialDefault() -> Material
+extern "C" def UnloadMaterial(material: Material) -> None
+```
+
+`array` is a word only here, in a field of an `extern "C"` class. To the
+rest of the program, `params` is a `list[float32]`: we can index it, loop
+over it, and assign `material.params[0] = 2.5`. The `4` matters at the
+boundary. A `Material` that comes back from C always has four elements in
+`params`, and one we pass must have exactly four, or the call fails with
+`AU4005` before C sees anything. One more thing changes: a class that
+holds a list cannot be a `copy class`, so a `Material` moves when we assign
+it, like any other class with a list inside.
 
 ## Callbacks
 
@@ -731,7 +813,7 @@ without a change to your own manifest that a reviewer will see.
 The list of missing features is long, and every item on it is missing for the
 same reason: it would let C code and Aura code disagree about memory in a way
 the compiler cannot check. There are no closures as callbacks, no
-variadic functions such as `printf`, no unions or arrays of structs, no
+variadic functions such as `printf`, no unions, no
 raw pointers or pointer arithmetic, no returned views, no freeing of
 returned C strings, and no asynchronous foreign calls. When you need one of
 those, the practical answer today is a thin C adapter that presents a simpler
