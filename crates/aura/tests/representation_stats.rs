@@ -387,8 +387,8 @@ fn direct_callable_overflow_allocates_one_block_per_packing() {
 fn direct_callable_boundaries_box_once_each() {
     let (_, direct) = assert_both_backends("repr-callable-boundary", CALLABLE_BOUNDARY, "13\n51\n");
     assert_eq!(
-        direct.closure_environments, 2,
-        "a list store and a task start each box the callable once at the boundary"
+        direct.closure_environments, 1,
+        "a task start boxes the captures once, and a list store keeps the callable's words"
     );
     assert_eq!(direct.callable_overflow_allocations, 0);
 }

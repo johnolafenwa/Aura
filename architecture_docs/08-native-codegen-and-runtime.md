@@ -493,6 +493,50 @@ instead of copying it into a new box.
   temporary for one call. A lookup result is a fresh value whose uses
   cross blocks, so the check sits beside the lookup slots instead.
 
+### Stored Callables
+
+Generated code holds a callable as four words: a descriptor and three
+environment words. A class field and a list element hold a runtime
+function value. A callable kept there is still called through its
+descriptor.
+
+- **Kept words.** The `box` adapter of a Shared or Mutable shape hands
+  the four words to `aura_direct_closure_value_deferred`. The function
+  value keeps them in a `DirectCallable` with the key of the contract's
+  `invoke` signature (`contract_abi_key`). The descriptor's
+  `box_captures` adapter, at offset 48, turns the captures into runtime
+  values. The runtime calls it the first time runtime code reads them. A
+  Mutable callable then moves its state to those values and releases the
+  words. A Consuming shape is boxed with its captures as before.
+- **A call in place.** `stored_callable_in_place` in `native_codegen.rs`
+  recognizes a callee that is a field of an instance kept in place, an
+  element of a local list, or an element of a list in such a field. It
+  asks `aura_direct_function_callable` or `aura_direct_vec_callable` for
+  the address of the kept words and calls `invoke` on them. No value is
+  copied and no reference is taken. A value with no words for the
+  caller's contract is called through its box.
+- **A loop.** `compile_callable_element_read` lowers the element read of
+  a `for` loop over a list of callables. `aura_direct_vec_callable_copy`
+  copies the words of a Shared callable into the loop variable with a
+  reference of its own to each capture. A Mutable callable keeps its
+  state in one place, so it is read as a value and called through the
+  kept words.
+- **A call through a loan.** A `for` loop over `mut` elements lends each
+  element, reads the loan into a temporary, calls the temporary, and
+  releases it. `called_loan_reads` in `native_codegen_elements.rs` finds
+  that pattern. The read and the release emit nothing, and the call
+  reaches the words in the list through the loan. A loan of a callable
+  element that needs no bounds check skips the borrow probe.
+- **A reloaded box.** A boxed value read into a callable local carries
+  the contract descriptor and its handle. The contract's `invoke` adapter
+  asks for the kept words first and calls through them when they are
+  there.
+- **Sinks.** The caller of `invoke` sets bit 63 of the supplied mask
+  when it handed mutable sinks over. Only then does the adapter call
+  `aura_direct_claim_indirect_mutable_sinks`.
+
+`benchmarks/closures` measures these paths against Rust and Python.
+
 ## A tiny direct-backend design example
 
 This miniature example does not use LLVM, but it shows the same architectural split: simple values are direct, complex values are boxed.

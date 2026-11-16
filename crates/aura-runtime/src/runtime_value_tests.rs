@@ -2908,7 +2908,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         "def(label: str = ..., items: mut list[int32], predicate: own def(own bool) -> None) -> (int64,)"
     );
 
-    let function = Value::Function(Box::new(FunctionValue {
+    let function = Value::Function(Arc::new(FunctionValue {
         name: "support::transform".to_string(),
         signature: signature.clone(),
         source_path: Some("/workspace/support.au".to_string()),
@@ -2916,6 +2916,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: Some(11),
         direct_default_binder: Some(12),
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_eq!(function.render(), "<function support::transform>");
 
@@ -2940,7 +2941,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
     assert_eq!(function, cloned);
 
     let same_callable_contract_with_different_execution_metadata =
-        Value::Function(Box::new(FunctionValue {
+        Value::Function(Arc::new(FunctionValue {
             name: "support::transform".to_string(),
             signature: function_signature("renamed", false),
             source_path: Some("/installed/support.au".to_string()),
@@ -2948,13 +2949,14 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
             direct_thunk: Some(101),
             direct_default_binder: None,
             closure_environment: None,
+            direct_callable: None,
         }));
     assert_eq!(
         function, same_callable_contract_with_different_execution_metadata,
         "function identity ignores declaration-only parameter metadata and backend addresses"
     );
 
-    let different_name = Value::Function(Box::new(FunctionValue {
+    let different_name = Value::Function(Arc::new(FunctionValue {
         name: "support::other".to_string(),
         signature: signature.clone(),
         source_path: None,
@@ -2962,10 +2964,11 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_ne!(function, different_name);
 
-    let different_signature = Value::Function(Box::new(FunctionValue {
+    let different_signature = Value::Function(Arc::new(FunctionValue {
         name: "support::transform".to_string(),
         signature: Type::Function {
             params: Vec::new(),
@@ -2976,6 +2979,7 @@ fn function_values_expose_structural_identity_rendering_cloning_and_cast_diagnos
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }));
     assert_ne!(function, different_signature);
     assert_ne!(function, Value::Unit);
@@ -2998,7 +3002,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
             .into_iter()
             .enumerate()
             .map(|(index, name)| {
-                Value::Function(Box::new(FunctionValue {
+                Value::Function(Arc::new(FunctionValue {
                     name: format!("support::{name}"),
                     signature: signature.clone(),
                     source_path: Some("/workspace/support.au".to_string()),
@@ -3006,6 +3010,7 @@ fn function_values_remain_observable_inside_structural_runtime_aggregates() {
                     direct_thunk: Some(20 + index as i64),
                     direct_default_binder: None,
                     closure_environment: None,
+                    direct_callable: None,
                 }))
             })
             .collect(),
@@ -3105,7 +3110,7 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
         call_kind: aura_core::types::ClosureCallKind::Repeatable,
     };
     let function = |environment: Option<Arc<ClosureEnvironment>>| {
-        Value::Function(Box::new(FunctionValue {
+        Value::Function(Arc::new(FunctionValue {
             name: "main::__lambda_repeatable".to_string(),
             signature: signature.clone(),
             source_path: Some("/workspace/main.au".to_string()),
@@ -3113,6 +3118,7 @@ fn closure_environments_share_identity_and_enforce_capture_ownership() {
             direct_thunk: Some(17),
             direct_default_binder: None,
             closure_environment: environment,
+            direct_callable: None,
         }))
     };
     let shared = function(Some(Arc::clone(&repeatable)));

@@ -352,7 +352,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
         return_type: Box::new(Type::Unit),
     };
     assert_eq!(
-        runtime_member_type(&Value::Function(Box::new(FunctionValue {
+        runtime_member_type(&Value::Function(Arc::new(FunctionValue {
             name: "f".to_string(),
             signature: signature.clone(),
             source_path: None,
@@ -360,6 +360,7 @@ fn runtime_member_type_identifies_every_backend_independent_payload_kind() {
             direct_thunk: None,
             direct_default_binder: None,
             closure_environment: None,
+            direct_callable: None,
         }))),
         Some(signature)
     );

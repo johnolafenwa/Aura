@@ -1380,7 +1380,7 @@ fn discover_test_cases(
             }
             cases.push(DiscoveredTestCase {
                 name: format!("{base_name}[{label}]"),
-                entry: Some(case.name),
+                entry: Some(case.name.clone()),
             });
         }
     }

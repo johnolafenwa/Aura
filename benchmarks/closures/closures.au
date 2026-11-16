@@ -36,7 +36,7 @@ def list_call(count: int64, reps: int64) -> None:
         if index % 2 == 0:
             steps.append(make_adder(index))
         else:
-            steps.append(lambda value: value ^ index)
+            steps.append(lambda value: value * 3 + index)
     mut acc = 0
     start = sys.monotonic_time_ms()
     for rep in range(reps):
@@ -52,6 +52,18 @@ def field_call(calls: int64) -> None:
     for index in range(calls):
         acc = rule.step(acc + rule.weight) & 1048575
     print(f"field_call {calls} {sys.monotonic_time_ms() - start} {acc}")
+
+
+def mutable_list_call(count: int64, reps: int64) -> None:
+    mut tallies: list[Tally] = []
+    for index in range(count):
+        tallies.append(running_total())
+    mut acc = 0
+    start = sys.monotonic_time_ms()
+    for rep in range(reps):
+        for tally in mut tallies:
+            acc = (acc + tally(rep & 7)) & 1048575
+    print(f"mutable_list_call {count * reps} {sys.monotonic_time_ms() - start} {acc}")
 
 
 def mutable_call(calls: int64) -> None:
@@ -83,6 +95,7 @@ def argument_call(calls: int64) -> None:
 def main():
     list_call(64, 500000)
     field_call(30000000)
+    mutable_list_call(16, 1000000)
     mutable_call(30000000)
     create_call(10000000)
     argument_call(10000000)

@@ -13,8 +13,11 @@ Last updated: 2026-11-16
   type is expected, and a lambda captures a Copy parameter by value.
 - Verification: the compiler unit tests, the fixture suite and the callable
   integration suites on Linux, on both back ends.
+- Done: direct calls through stored closures. A closure in a field or a
+  list element is called where it is kept, and `benchmarks/closures`
+  compares the calls with Rust and Python.
 - Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0105), then benchmarks against Rust and Python.
+  statement bodies (ADR-0105).
 
 ## Book chapters on tensors and machine learning (complete)
 
