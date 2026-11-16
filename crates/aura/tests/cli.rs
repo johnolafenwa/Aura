@@ -7987,7 +7987,7 @@ def main() -> int32:
         "direct backend recursion overflow should not terminate by signal"
     );
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        String::from_utf8_lossy(&run.stderr).contains("call stack exhausted"),
         "expected a direct-backend recursion diagnostic, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );
@@ -14306,7 +14306,8 @@ def main() -> int32:
     );
     let stderr = String::from_utf8_lossy(&run.stderr);
     assert!(
-        stderr.contains("maximum call depth") && stderr.contains("while calling `recurse`"),
+        stderr.contains("error[AU4005]: call stack exhausted while calling `recurse`")
+            && stderr.contains("more calls ..."),
         "stderr should describe the Aura recursion limit, stderr was:\n{}",
         stderr
     );
@@ -14409,7 +14410,7 @@ def main() -> int32:
     );
     assert_eq!(String::from_utf8_lossy(&run.stdout), "close A\n");
     assert!(
-        String::from_utf8_lossy(&run.stderr).contains("maximum call depth"),
+        String::from_utf8_lossy(&run.stderr).contains("call stack exhausted"),
         "stderr should describe the Aura recursion limit, stderr was:\n{}",
         String::from_utf8_lossy(&run.stderr)
     );

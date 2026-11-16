@@ -196,12 +196,16 @@ fn run_resolved_entry(
     let handle = match thread::Builder::new()
         .stack_size(MIR_RUNTIME_STACK_SIZE)
         .spawn(move || {
+            // A program with no tasks runs on this thread's own stack.
+            let _stack_bounds =
+                crate::runtime_value::enter_thread_stack_bounds(MIR_RUNTIME_STACK_SIZE);
             let result = panic::catch_unwind(AssertUnwindSafe(move || {
                 let stdout = Arc::new(Mutex::new(String::new()));
                 let task_stdout = stdout.clone();
                 let task_stdout_sink = stdout_sink.clone();
                 let task_entry = entry.clone();
                 let value_result = if module_uses_lightweight_tasks(&module) {
+                    crate::runtime_value::set_root_task_stack_size(MIR_RUNTIME_STACK_SIZE);
                     run_lightweight_root_task(move || {
                         let mut runtime = MirRuntime::new_with_stdout_sink_and_program_args(
                             module,
@@ -496,10 +500,8 @@ fn deserialize_runtime_module(mir_json: &[u8]) -> Result<MirModule> {
     Ok(module)
 }
 
-// Keep the MIR runtime call-depth budget comfortably below the host thread's
-// stack ceiling. Recursive Aura programs should fail with a diagnostic before
-// the runtime thread can overflow its Rust stack.
-pub(crate) const MAX_CALL_DEPTH: usize = 256;
+/// The call frames a trap keeps from each end of a deeper call chain.
+const TRACE_FRAMES_PER_END: usize = 128;
 /// Writable coroutine stack the interpreter requires before entering another
 /// Aura call, so an exhausted task stack becomes a diagnostic instead of a
 /// guard-page fault. It must exceed the stack one call transition consumes
@@ -515,7 +517,11 @@ pub(crate) const TASK_STACK_HEADROOM_RESERVE: usize = if cfg!(debug_assertions) 
 } else {
     128 * 1024
 };
-pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 64 * 1024 * 1024;
+/// The stack the interpreter reserves for the program's entry: the thread
+/// of a program with no tasks, and the root task's coroutine otherwise. An
+/// interpreted call takes about 11 KiB in an optimized build, so this holds
+/// about 20,000 nested calls. The pages are committed as they are used.
+pub(crate) const MIR_RUNTIME_STACK_SIZE: usize = 256 * 1024 * 1024;
 const MAX_RUNTIME_BLOCKS: usize = 1_000_000;
 const MAX_RUNTIME_INSTRUCTIONS: usize = 1_000_000;
 const MAX_RUNTIME_TERMINATOR_ARMS: usize = 1_000_000;
@@ -893,6 +899,7 @@ struct EvaluatedMirArg {
 }
 
 struct StartTaskRequest<'a> {
+    recover: bool,
     returns_handle: bool,
     result_is_repeatable: bool,
     stack_size: Option<usize>,
@@ -2816,10 +2823,12 @@ impl MirRuntime {
     }
 
     fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
-        error.capture_runtime_frames_once(
+        if error.capture_runtime_frames_once(
             self.call_chain(),
             self.task_ancestry.iter().rev().cloned().collect(),
-        );
+        ) {
+            error.shorten_call_frames(TRACE_FRAMES_PER_END);
+        }
         error
     }
 
@@ -3515,28 +3524,22 @@ impl MirRuntime {
         // The headroom excludes the allocator's guard layout, so a probe that
         // passes leaves at least the reserve of writable stack for the frames
         // this call pushes before its own callees probe again.
+        // Nothing else bounds the depth of calls: a call chain may be as
+        // deep as the stack it runs on allows.
         if let Some(headroom) = crate::runtime_value::task_stack_headroom() {
             if headroom < TASK_STACK_HEADROOM_RESERVE {
-                return Err(Diagnostic::coded(
+                return Err(Diagnostic::coded_at(
                     "AU4005",
+                    function.span,
                     format!(
-                        "task stack exhausted while calling `{}`: {} bytes remain but the interpreter keeps {} in reserve; start the task with `start_with_stack` and a larger size",
+                        "call stack exhausted while calling `{}`",
                         public_runtime_function_name(&function.name),
-                        headroom,
-                        TASK_STACK_HEADROOM_RESERVE
                     ),
+                )
+                .with_help(
+                    "the calls are nested too deeply for this task's stack; a task started with `start_with_stack` gets a larger one",
                 ));
             }
-        }
-        if self.call_depth >= MAX_CALL_DEPTH {
-            return Err(Diagnostic::at(
-                function.span,
-                format!(
-                    "maximum call depth of {} exceeded while calling `{}`",
-                    MAX_CALL_DEPTH,
-                    public_runtime_function_name(&function.name)
-                ),
-            ));
         }
         // Supplied arguments have already been evaluated in source order.
         // Bind them to declaration slots, then evaluate target-owned defaults
@@ -4827,6 +4830,7 @@ impl MirRuntime {
                 }
             }
             Rvalue::StartTask {
+                recover,
                 returns_handle,
                 result_is_copy,
                 stack_size,
@@ -4841,6 +4845,7 @@ impl MirRuntime {
                     .transpose()?;
                 Ok(RvalueOutcome::Value(self.start_task(
                     StartTaskRequest {
+                        recover: *recover,
                         returns_handle: *returns_handle,
                         result_is_repeatable: *result_is_copy,
                         stack_size,
@@ -6791,6 +6796,16 @@ impl MirRuntime {
         }
     }
 
+    /// A runtime that runs the function of a `control.recover` call. Its
+    /// call chain starts at that function, so a trap it reports names the
+    /// calls the recovery covers and nothing outside them.
+    fn fork_for_recovered_call(&self) -> MirRuntime {
+        MirRuntime {
+            generator_body: false,
+            ..self.fork_for_generator()
+        }
+    }
+
     /// This runtime's active calls, innermost first, followed by those of
     /// the code that resumed it when it runs a generator body.
     fn call_chain(&self) -> Vec<RuntimeCallFrame> {
@@ -6896,6 +6911,7 @@ impl MirRuntime {
 
     fn start_task(&mut self, request: StartTaskRequest<'_>, env: &mut Env) -> Result<Value> {
         let StartTaskRequest {
+            recover,
             returns_handle,
             result_is_repeatable,
             stack_size,
@@ -6949,6 +6965,32 @@ impl MirRuntime {
             None,
             (!is_closure).then_some(&function_value.signature),
         )?;
+        if recover {
+            // `control.recover` (ADR-0104): the function runs here, in a
+            // runtime of its own, so a trap leaves this runtime's calls as
+            // they are. A cancelled task unwinds past this as a panic.
+            let mut runtime = self.fork_for_recovered_call();
+            let outcome = if is_closure {
+                runtime.call_function_for_target(&function, None, bound_args, None)
+            } else {
+                runtime.call_function_for_value(
+                    &function,
+                    bound_args,
+                    &function_value.signature,
+                    None,
+                )
+            }
+            .and_then(|outcome| outcome.value.into_result());
+            return Ok(match outcome {
+                Ok(value) => crate::runtime_value::result_ok(value),
+                Err(trap) => {
+                    let trap = runtime.annotate_runtime_trap_once(trap);
+                    crate::runtime_value::result_err(crate::runtime_value::recovered_trap_value(
+                        &trap,
+                    ))
+                }
+            });
+        }
         let mut producer_queues = Vec::new();
         for argument in &bound_args {
             collect_queue_handles(&argument.value, &mut producer_queues);

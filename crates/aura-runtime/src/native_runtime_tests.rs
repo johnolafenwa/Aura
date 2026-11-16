@@ -42,6 +42,15 @@ use std::sync::{Arc, Mutex};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant, SystemTime, UNIX_EPOCH};
 
+/// A call depth that takes several doublings of the frame stack to reach.
+const DEEP_CALLS: usize = 256;
+
+/// Makes the machine stack look used up to the frame stack's next check,
+/// until the guard drops.
+fn exhausted_machine_stack() -> crate::runtime_value::ThreadStackBounds {
+    crate::runtime_value::enter_stack_floor_for_test(usize::MAX / 2)
+}
+
 fn string_value(text: &str) -> *mut OpaqueValue {
     super::aura_direct_string_literal(text.as_ptr(), text.len())
 }
@@ -12104,9 +12113,11 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
                 }
             }
             "direct-call-depth" => unsafe {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
                 }
+                let _exhausted = exhausted_machine_stack();
+                super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
             },
             _ => {}
         }
@@ -12120,7 +12131,7 @@ fn direct_root_entrypoint_helper_exits_for_invalid_thunks_and_return_types() {
         ),
         (
             "direct-call-depth",
-            "maximum call depth of 256 exceeded while calling `recurse`",
+            "call stack exhausted while calling `recurse`",
         ),
     ] {
         let output = Command::new(std::env::current_exe().expect("test binary should exist"))
@@ -16959,24 +16970,28 @@ fn native_runtime_frame_descriptor_depth_limit_names_the_function() {
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_frame(address as *const _);
                     }
+                }
+                let _exhausted = exhausted_machine_stack();
+                unsafe {
+                    super::aura_direct_enter_frame(address as *const _);
                 }
                 Value::Unit
             }))
         })
     })
-    .expect_err("the call past the depth limit should trap");
+    .expect_err("the call that finds the stack exhausted should trap");
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.code, "AU4005");
+    assert_eq!(diagnostic.span, Some(Span::new(7, 3)));
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
+    assert_eq!(diagnostic.omitted_call_frames, None);
     assert_eq!(diagnostic.call_frames[0].function, "recurse");
 }
 
@@ -17044,7 +17059,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
     let diagnostic = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for index in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for index in 0..DEEP_CALLS {
                     let function: &'static str =
                         Box::leak(format!("accepted_{index}").into_boxed_str());
                     unsafe {
@@ -17059,6 +17074,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
                     }
                 }
                 let attempted = b"rejected";
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call_with_frame(
                         400,
@@ -17075,7 +17091,7 @@ fn native_runtime_rejected_call_depth_does_not_push_the_attempted_frame() {
         })
     })
     .expect_err("the rejected call should fail at the scheduler boundary");
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(diagnostic.call_frames.len(), DEEP_CALLS);
     assert_eq!(
         diagnostic
             .call_frames
@@ -19787,7 +19803,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
     let diagnostic = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
             Ok(super::with_task_runtime_error_capture(|| {
-                for _ in 0..super::DIRECT_MAX_CALL_DEPTH {
+                for _ in 0..DEEP_CALLS {
                     unsafe {
                         super::aura_direct_enter_call(1, 1, b"recurse".as_ptr(), b"recurse".len());
                     }
@@ -19803,6 +19819,7 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
                     cleanup_args,
                     1,
                 );
+                let _exhausted = exhausted_machine_stack();
                 unsafe {
                     super::aura_direct_enter_call(2, 1, b"rejected".as_ptr(), b"rejected".len());
                 }
@@ -19811,20 +19828,20 @@ fn native_runtime_max_depth_skips_saturated_cleanup_and_releases_its_snapshot() 
             }))
         })
     })
-    .expect_err("the saturated call chain should fail at the task boundary");
+    .expect_err("the exhausted call chain should fail at the task boundary");
     assert_eq!(
         diagnostic.message,
-        "maximum call depth of 256 exceeded while calling `rejected`"
+        "call stack exhausted while calling `rejected`"
     );
     assert_eq!(
         unsafe { value_ref(witness) },
-        Value::String("cleanup skipped".to_string().into()),
-        "a cleanup registered at the saturated depth must not enter its callback"
+        Value::String("cleanup invoked".to_string().into()),
+        "a cleanup registered where the stack ran out still runs, in the reserve the trap kept"
     );
     assert_eq!(
         unsafe { &*witness }.ref_count.load(Ordering::SeqCst),
         1,
-        "skipping the callback must still release its retained argument snapshot"
+        "the callback must release its retained argument snapshot"
     );
     unsafe {
         release_value(witness);
@@ -23720,19 +23737,30 @@ fn direct_call_depth_overflow_reports_the_call_site_and_uses_the_program_path() 
     let source = "def main() -> int32:\n    return 0\n";
     super::aura_direct_runtime_init(path.as_ptr(), path.len(), source.as_ptr(), source.len());
     let diagnostic = capture_direct_boundary_diagnostic(|| unsafe {
-        for _ in 0..=super::DIRECT_MAX_CALL_DEPTH {
+        for _ in 0..1_000 {
             super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
         }
+        let _exhausted = exhausted_machine_stack();
+        super::aura_direct_enter_call(2, 3, b"recurse".as_ptr(), b"recurse".len());
     });
     assert_eq!(
         diagnostic.message,
-        format!(
-            "maximum call depth of {} exceeded while calling `recurse`",
-            super::DIRECT_MAX_CALL_DEPTH
-        )
+        "call stack exhausted while calling `recurse`"
     );
+    assert_eq!(diagnostic.code, "AU4005");
     assert_eq!(diagnostic.span, Some(Span::new(2, 3)));
-    assert_eq!(diagnostic.call_frames.len(), super::DIRECT_MAX_CALL_DEPTH);
+    // A chain this deep keeps its two ends and counts the calls between.
+    assert_eq!(
+        diagnostic.call_frames.len(),
+        2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+    );
+    assert_eq!(
+        diagnostic.omitted_call_frames,
+        Some((
+            super::frame_stack::DIRECT_TRACE_FRAMES_PER_END,
+            1_000 - 2 * super::frame_stack::DIRECT_TRACE_FRAMES_PER_END
+        ))
+    );
 }
 
 #[test]

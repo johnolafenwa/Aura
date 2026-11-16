@@ -198,8 +198,8 @@ every Aura call:
   guard page, not from the start of the mapping. The guard page never counts
   as usable space.
 - A call that would leave less than the interpreter's headroom reserve traps
-  with `AU4005` ("task stack exhausted while calling ..."). The message names
-  the callee and the writable bytes that remain. The trap happens before any
+  with `AU4005` ("call stack exhausted while calling ..."). The message names
+  the callee. The trap happens before any
   frame can reach the guard page, so the task reports a diagnostic instead of
   faulting.
 - The reserve exceeds the stack that one interpreter call transition uses.
@@ -211,14 +211,16 @@ every Aura call:
   that minimum can always run one call. How many nested calls a given capacity
   holds beyond that also depends on the build profile.
 
-The root task that runs the program entry reserves a lazily mapped 16 MiB
-coroutine stack and is probed the same way. Deep root recursion reports either
-`AU4005` or the 256-call depth diagnostic, depending on the per-call cost.
-Both are diagnostics, not faults. A program that starts no task runs its entry
-on the 64 MiB runtime thread, where only the depth limit applies.
+The root task that runs the program entry is probed the same way on its own
+stack: 256 MiB under `aura run` and 64 MiB in a built program, both reserved
+and committed as they are touched. Deep recursion there reports `AU4005`, a
+diagnostic and not a fault.
 
-The direct backend has only its 256-call depth guard. It performs no headroom
-probe and never reports the `AU4005` stack-exhaustion diagnostic.
+A built program makes the same check at the entry of every function that can
+call itself, directly or through other functions, and reports the same
+`AU4005`. No count limits nested calls on either backend.
+[Recovering From Traps](/manual/failure-recovery#call-depth) has the measured
+depths.
 
 ### Scope Exit
 
@@ -751,7 +753,9 @@ worker-index or affinity-introspection API.
 **Stacks and depth.** Ordinary lightweight tasks request 768 KiB of writable
 coroutine stack. An explicit request is limited to 64 MiB. Requests are
 page-rounded and guard-protected. The MIR and direct entry thread reserves
-64 MiB. Nested Aura calls stop at 256 frames.
+64 MiB for a built program and 256 MiB under `aura run`. Nested Aura calls
+stop with `AU4005` when the stack they run on is exhausted
+([Call Depth](/manual/failure-recovery#call-depth)).
 
 **Blocking-I/O pool.** The process-wide pool works as follows:
 

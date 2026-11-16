@@ -181,8 +181,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - `TaskGroup.start_with_stack` and `start_soon_with_stack` accept exact `int64` requests from 256 KiB through 64 MiB inclusive.
 - Accepted requests are rounded up to the host page size and guard-protected. Smaller and larger requests are rejected, not clamped.
 - The stack override API is provisional.
-- The MIR and direct runtime entry thread reserves 64 MiB. Maintained execution paths stop with a recursion-depth diagnostic after 256 nested Aura calls.
-- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. The direct backend has only the depth limit.
+- The program's first task has a 64 MiB stack in a built program and 256 MiB under `aura run`. No count limits nested calls: a call that would not fit on the running stack traps with `AU4005` ([Call Depth](/manual/failure-recovery#call-depth)). `aura run` reaches a much smaller depth than a built program, because one interpreted call costs about 11 KiB of stack.
+- On the MIR backend, a call that would leave less than the interpreter's headroom reserve on the task's writable stack traps with `AU4005` first. The reserve is 128 KiB in optimized builds and 224 KiB in debug-assertion builds, measured above the guard page. A built program checks at the entry of every function that can call itself.
 - The 256 KiB lower bound is an opt-in minimum for measured shallow tasks, not a generally safe default. The complete compiled Aura HTTP example faulted when 256 KiB was the global default and succeeded with a 512 KiB default.
 - An isolated runtime protocol round trip succeeds with 256 KiB callers because it excludes compiled language-execution frames. It proves the service offload boundary, not a 256 KiB whole-program default.
 

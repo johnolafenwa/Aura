@@ -163,7 +163,8 @@ pub use frame_stack::{
     DIRECT_CALL_SAFEPOINT_INTERVAL,
 };
 use frame_stack::{
-    DIRECT_FRAME_FLAG_PENDING_SINKS, DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_MAX_CALL_DEPTH,
+    DIRECT_CLEANUP_STACK_RESERVE, DIRECT_FRAME_FLAG_PENDING_SINKS,
+    DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_STACK_RESERVE,
 };
 use owned_values::DirectOwnedValues;
 pub use owned_values::{direct_ownership_layout, DirectOwnershipLayout};
@@ -173,7 +174,6 @@ struct DirectCleanupRegistration {
     thunk_ptr: i64,
     args: *mut i64,
     arg_count: usize,
-    call_depth: usize,
 }
 
 impl DirectCleanupRegistration {
@@ -562,6 +562,21 @@ struct DirectTaskRuntimeState {
     pending_mutable_sinks: Option<DirectPendingMutableSinks>,
     mutable_sinks: HashMap<i64, DirectMutableWritebackSink>,
     next_mutable_sink_id: i64,
+    /// Set while this state belongs to a call that `control.recover` runs
+    /// in generated code: where a trap goes back to, and the caller's state.
+    recovered_call: Option<DirectRecoveredCall>,
+}
+
+/// A `control.recover` call that runs its function on the caller's stack
+/// (ADR-0104). The state that holds this is the function's own.
+struct DirectRecoveredCall {
+    /// The jump buffer in the caller's frame that `_setjmp` filled.
+    jump_buffer: *mut u8,
+    /// How many generator bodies were running when the call began. A trap
+    /// stops at the call only on the machine stack the call began on.
+    generator_depth: usize,
+    /// The caller's state, which the function's state stands in for.
+    caller: Box<DirectTaskRuntimeState>,
 }
 
 #[derive(Default)]
@@ -698,6 +713,7 @@ impl Default for DirectTaskRuntimeState {
             pending_mutable_sinks: None,
             mutable_sinks: HashMap::new(),
             next_mutable_sink_id: 1,
+            recovered_call: None,
         }
     }
 }
@@ -729,6 +745,22 @@ impl DirectTaskRuntimeState {
 
     fn owned_values_mut(&mut self) -> &mut DirectOwnedValues {
         &mut self.frames_mut().owned_values
+    }
+
+    /// Points the frame stack's limit at the reserve of the machine stack
+    /// this thread runs on now. The state calls this whenever its task may
+    /// have moved to another machine stack: when the task's frame stack is
+    /// looked up after a task switch, when a generator body starts or stops
+    /// running, and when the cleanups start or stop draining.
+    fn refresh_stack_limit(&mut self) {
+        let reserve = if self.cleanup_draining {
+            DIRECT_CLEANUP_STACK_RESERVE
+        } else {
+            DIRECT_STACK_RESERVE
+        };
+        let limit = crate::runtime_value::current_task_stack_floor()
+            .map_or(0, |floor| floor.saturating_add(reserve));
+        self.frames_mut().set_stack_limit(limit);
     }
 
     /// The calls active above the frame stack's floor.
@@ -855,6 +887,22 @@ impl DirectTaskRuntimeStates {
         self.states.insert(key, state)
     }
 
+    /// Puts `state` in the place of the state `key` already has and
+    /// returns that one. Hands `state` back when `key` has none.
+    fn replace(
+        &mut self,
+        key: u64,
+        state: Box<DirectTaskRuntimeState>,
+    ) -> std::result::Result<Box<DirectTaskRuntimeState>, Box<DirectTaskRuntimeState>> {
+        let Some(slot) = self.states.get_mut(&key) else {
+            return Err(state);
+        };
+        let previous = std::mem::replace(slot, state);
+        self.cached = Some((key, NonNull::from(slot.as_mut())));
+        forget_direct_current_frame_stack();
+        Ok(previous)
+    }
+
     fn remove(&mut self, key: u64) -> Option<Box<DirectTaskRuntimeState>> {
         self.cached = None;
         forget_direct_current_frame_stack();
@@ -927,8 +975,12 @@ fn current_direct_frame_stack() -> Option<NonNull<DirectFrameStack>> {
 #[cold]
 fn find_direct_frame_stack() -> Option<NonNull<DirectFrameStack>> {
     let key = direct_task_runtime_key();
-    let stack = DIRECT_TASK_RUNTIME_STATES
-        .with(|states| states.borrow_mut().get_mut(key).map(|state| state.frames))?;
+    let stack = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        states.borrow_mut().get_mut(key).map(|state| {
+            state.refresh_stack_limit();
+            state.frames
+        })
+    })?;
     set_current_task_native_slot(stack.as_ptr().cast());
     Some(stack)
 }
@@ -1065,7 +1117,9 @@ fn install_direct_task_runtime_state(
     DirectTaskRuntimeScopeGuard { key, previous }
 }
 
-fn direct_runtime_call_frames() -> Vec<RuntimeCallFrame> {
+/// The active calls, innermost first, and the number of calls left out of
+/// the middle of a chain too deep to keep whole.
+fn direct_runtime_call_frames() -> (Vec<RuntimeCallFrame>, usize) {
     with_direct_task_runtime_state(|state| state.frames().materialize_innermost_first())
 }
 
@@ -1079,9 +1133,24 @@ fn direct_runtime_compact_task_ancestry() -> DirectTaskAncestry {
 
 fn capture_direct_runtime_frames_once(diagnostic: &mut Diagnostic) {
     if diagnostic.capture_runtime_frames_once(Vec::new(), Vec::new()) {
-        diagnostic.call_frames = direct_runtime_call_frames();
+        let (call_frames, omitted) = direct_runtime_call_frames();
+        let before_gap = call_frames.len() / 2;
+        diagnostic.call_frames = call_frames;
+        diagnostic.set_omitted_call_frames(before_gap, omitted);
         diagnostic.task_ancestry = direct_runtime_task_ancestry();
     }
+}
+
+/// Brings the running task's stack limit up to date after its code moved
+/// to another machine stack without a task switch, as a generator body
+/// does. Does nothing for a task with no direct runtime state.
+pub(crate) fn refresh_direct_stack_limit() {
+    let key = direct_task_runtime_key();
+    DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        if let Some(state) = states.borrow_mut().get_mut(key) {
+            state.refresh_stack_limit();
+        }
+    });
 }
 
 fn clear_direct_task_runtime_states() {
@@ -1155,7 +1224,6 @@ fn push_direct_cleanup_registration(thunk_ptr: i64, args: *mut i64, arg_count: u
             thunk_ptr,
             args,
             arg_count,
-            call_depth: state.call_depth(),
         });
         id
     })
@@ -1206,6 +1274,7 @@ impl Drop for DirectCleanupDrainGuard {
     fn drop(&mut self) {
         with_direct_task_runtime_state_for_key(self.key, |state| {
             state.cleanup_draining = false;
+            state.refresh_stack_limit();
         });
     }
 }
@@ -1253,6 +1322,7 @@ impl Drop for DirectPrimaryDiagnosticGuard {
     }
 }
 
+#[cfg(test)]
 fn direct_primary_runtime_diagnostic() -> Option<Diagnostic> {
     with_direct_task_runtime_state(|state| state.primary_runtime_diagnostic.clone())
 }
@@ -1263,10 +1333,6 @@ fn direct_cleanup_is_draining() -> bool {
 
 fn direct_runtime_error_capture_enabled() -> bool {
     with_direct_task_runtime_state(|state| state.runtime_error_capture)
-}
-
-fn is_call_depth_diagnostic(diagnostic: &Diagnostic) -> bool {
-    diagnostic.message.starts_with("maximum call depth")
 }
 
 fn write_stdout(text: &str) {
@@ -5070,6 +5136,9 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
             true
         } else {
             state.cleanup_draining = true;
+            // The exits are Aura calls. After a trap for an exhausted stack
+            // they run in the reserve the trap kept.
+            state.refresh_stack_limit();
             false
         }
     });
@@ -5086,9 +5155,6 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
         key,
         previous: previous_depth,
     };
-    let skip_max_depth_cleanup = direct_primary_runtime_diagnostic()
-        .as_ref()
-        .is_some_and(is_call_depth_diagnostic);
     loop {
         // Keep every registration owned by task-local state until its thunk
         // returns. A cleanup thunk may itself trap, and the scheduler then
@@ -5102,19 +5168,12 @@ fn drain_direct_cleanup_registrations(key: u64) -> bool {
                     registration.thunk_ptr,
                     registration.args,
                     registration.arg_count,
-                    registration.call_depth,
                 )
             })
         });
-        let Some((id, thunk_ptr, args, arg_count, call_depth)) = registration else {
+        let Some((id, thunk_ptr, args, arg_count)) = registration else {
             break;
         };
-        // Match the interpreter: a cleanup call captured at the saturated Aura
-        // call depth cannot enter its `close` method during recursion unwinding.
-        if skip_max_depth_cleanup && call_depth >= DIRECT_MAX_CALL_DEPTH {
-            drop(take_direct_cleanup_registration(id));
-            continue;
-        }
         if thunk_ptr != 0 {
             let thunk: NativeThunk = unsafe { std::mem::transmute(thunk_ptr as usize) };
             unsafe {
@@ -5242,7 +5301,27 @@ fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalD
     }
 }
 
+thread_local! {
+    /// Set by `leaf_trap` for the one `runtime_diagnostic_error` call it
+    /// makes next.
+    static LEAF_TRAP: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+}
+
+/// Ends the running task with the trap `build` describes. For an entry
+/// point generated code calls only to trap: nothing of the runtime is
+/// active between that call and the trap, so when a recovered call on
+/// this machine stack takes the trap (ADR-0104), no Rust frame has to be
+/// unwound to hand it over.
+fn leaf_trap(build: impl FnOnce() -> Diagnostic) -> ! {
+    task_runtime_boundary(|| {
+        let diagnostic = build();
+        LEAF_TRAP.with(|leaf| leaf.set(true));
+        runtime_diagnostic_error(diagnostic)
+    })
+}
+
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
+    let leaf = LEAF_TRAP.with(|leaf| leaf.replace(false));
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
     if direct_cleanup_is_draining() {
@@ -5256,7 +5335,13 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     }
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
     drain_direct_cleanup_stack();
-    emit_runtime_diagnostic_error(attach_direct_manager_exit_failures(diagnostic));
+    let diagnostic = attach_direct_manager_exit_failures(diagnostic);
+    if leaf && recovered_call_takes_exit() {
+        // The exit is taken where it is recorded, and the frames from here
+        // to the generated code that trapped are abandoned with it.
+        fail_current_lightweight_task(diagnostic)
+    }
+    emit_runtime_diagnostic_error(diagnostic);
 }
 
 fn runtime_error(message: impl AsRef<str>) -> ! {
@@ -5323,6 +5408,15 @@ fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
             }
             Err(payload) => std::panic::resume_unwind(payload),
         },
+    }
+}
+
+/// A trap whose code the caller knows, at `line:column` when that is a
+/// source position.
+fn coded_trap(code: &str, message: String, line: i64, column: i64) -> Diagnostic {
+    match runtime_span(line, column) {
+        Some(span) => Diagnostic::coded_at(code, span, message),
+        None => Diagnostic::coded(code, message),
     }
 }
 
@@ -5928,15 +6022,64 @@ fn reject_invalid_direct_frame_utf8() -> ! {
 #[inline(never)]
 fn reject_direct_call_depth(line: i64, column: i64, function: &DirectFrameText) -> ! {
     task_runtime_boundary(|| {
-        let message = format!(
-            "maximum call depth of {} exceeded while calling `{}`",
-            DIRECT_MAX_CALL_DEPTH,
-            function.as_str()
-        );
+        let diagnostic = call_stack_exhausted_diagnostic(function.as_str());
         if line > 0 && column > 0 {
-            runtime_error_at(Span::new(line as usize, column as usize), message);
+            runtime_diagnostic_error_at(
+                diagnostic,
+                Some(Span::new(line as usize, column as usize)),
+            );
         }
-        runtime_error(message);
+        runtime_diagnostic_error(diagnostic);
+    })
+}
+
+/// The trap for a call that would leave the task's machine stack with less
+/// than its reserve.
+fn call_stack_exhausted_diagnostic(function: &str) -> Diagnostic {
+    Diagnostic::coded(
+        "AU4005",
+        format!("call stack exhausted while calling `{function}`"),
+    )
+    .with_help(
+        "the calls are nested too deeply for this task's stack; a task started with `start_with_stack` gets a larger one",
+    )
+}
+
+/// Whether the machine stack pointer is inside the running task's reserve.
+/// False when the task's stack is not known.
+#[inline(never)]
+fn direct_stack_is_exhausted(limit: usize) -> bool {
+    let marker = 0u8;
+    let stack_pointer = std::ptr::addr_of!(marker) as usize;
+    stack_pointer < limit
+}
+
+/// Traps when the machine stack pointer is inside the running task's
+/// reserve. The entry of a function on a call cycle calls this once its
+/// own comparison with the frame stack's limit fails, after it has pushed
+/// its frame record.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_stack_exhausted() {
+    let (exhausted, frame) = with_direct_task_runtime_state(|state| {
+        state.refresh_stack_limit();
+        let exhausted = direct_stack_is_exhausted(state.frames().stack_limit());
+        let frame = exhausted
+            .then(|| state.frames().innermost())
+            .flatten();
+        (exhausted, frame)
+    });
+    if !exhausted {
+        return;
+    }
+    task_runtime_boundary(|| {
+        let diagnostic = match frame {
+            Some(frame) => {
+                let diagnostic = call_stack_exhausted_diagnostic(&frame.function);
+                runtime_diagnostic_error_at(diagnostic, Some(frame.span.start))
+            }
+            None => call_stack_exhausted_diagnostic("<unknown>"),
+        };
+        runtime_diagnostic_error(diagnostic)
     })
 }
 
@@ -6023,7 +6166,11 @@ fn enter_direct_call_frame(
     function: &DirectFrameText,
 ) {
     let (depth_exceeded, invalid_pending_sinks) = with_direct_task_runtime_state(|state| {
-        if state.call_depth() >= DIRECT_MAX_CALL_DEPTH {
+        // The runtime pushes a call when the frame stack grows and while a
+        // flag is set. A function on no call cycle checks the machine stack
+        // nowhere else.
+        state.refresh_stack_limit();
+        if direct_stack_is_exhausted(state.frames().stack_limit()) {
             return (true, false);
         }
         let mutable_sinks = match state.pending_mutable_sinks.take() {
@@ -6085,7 +6232,10 @@ pub extern "C" fn aura_direct_frame_stack() -> *mut DirectFrameStack {
 #[cold]
 #[inline(never)]
 extern "C" fn direct_frame_stack_slow() -> *mut DirectFrameStack {
-    let stack = with_direct_task_runtime_state(|state| state.frames.as_ptr());
+    let stack = with_direct_task_runtime_state(|state| {
+        state.refresh_stack_limit();
+        state.frames.as_ptr()
+    });
     set_current_task_native_slot(stack.cast());
     stack
 }
@@ -21331,6 +21481,366 @@ impl Drop for PendingDirectTaskArgs {
     }
 }
 
+/// The `returns_handle` word of a task start that is a `control.recover`
+/// call: the function runs to its end in place and the result comes back.
+pub const DIRECT_START_RECOVERS: i64 = 2;
+
+/// Runs the function of a `control.recover` call (ADR-0104) and returns a
+/// boxed `Result`: `Ok` with its return value, or `Err` with the parts of
+/// its trap.
+///
+/// The function runs as a task's entry does, with a frame stack, cleanup
+/// stack and ownership ledger of its own, on a stack of its own. A trap
+/// therefore ends exactly what the function started: its `with` exits run,
+/// its ledger frees what it owned, and its machine stack is dropped. The
+/// caller's state is put back before this returns.
+unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
+    let DirectTaskSpawn {
+        cancellation,
+        thunk,
+        args_address,
+        claim_flag_address,
+        result_is_copy,
+        task_ancestry,
+        mutable_capture_indices,
+        ..
+    } = spawn;
+    /// Puts the caller's state back and releases the function's.
+    struct CallerState {
+        key: u64,
+        previous: Option<Box<DirectTaskRuntimeState>>,
+        restored: bool,
+    }
+    impl CallerState {
+        fn restore(&mut self) {
+            if std::mem::replace(&mut self.restored, true) {
+                return;
+            }
+            let current = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+                let mut states = states.borrow_mut();
+                let current = states.remove(self.key);
+                if let Some(previous) = self.previous.take() {
+                    states.insert(self.key, previous);
+                }
+                current
+            });
+            if let Some(current) = current {
+                release_direct_task_runtime_state(current);
+            }
+        }
+    }
+    impl Drop for CallerState {
+        fn drop(&mut self) {
+            self.restore();
+        }
+    }
+    let key = direct_task_runtime_key();
+    let mut state = boxed_direct_task_runtime_state(true, task_ancestry);
+    state.fallback_cancellation = cancellation;
+    let previous = DIRECT_TASK_RUNTIME_STATES.with(|states| states.borrow_mut().insert(key, state));
+    let mut caller = CallerState {
+        key,
+        previous,
+        restored: false,
+    };
+    let body = move || {
+        Ok(with_task_runtime_error_capture(|| {
+            let args = unsafe { &*(args_address as *const Vec<i64>) };
+            unsafe { claim_direct_task_args(args, claim_flag_address) };
+            let result_ptr = unsafe { thunk(args.as_ptr(), args.len()) };
+            for index in &mutable_capture_indices {
+                let handle = args[*index];
+                if handle != 0 {
+                    unsafe { aura_direct_release_value(handle as *mut OpaqueValue) };
+                }
+            }
+            unsafe { consume_direct_task_result(result_ptr, result_is_copy) }
+        }))
+    };
+    let caller_state = &mut caller as *mut CallerState;
+    let outcome = crate::runtime_value::run_isolated(
+        body,
+        crate::runtime_value::DIRECT_RECOVER_STACK_BYTES,
+        // The function's stack is gone. Its state goes first, as a failed
+        // task's does, and then the arguments it never took over.
+        || unsafe {
+            (*caller_state).restore();
+            release_direct_task_external_state(args_address, claim_flag_address);
+        },
+    );
+    let value = match outcome {
+        Ok(value) => {
+            caller.restore();
+            unsafe { release_direct_task_external_state(args_address, claim_flag_address) };
+            result_ok(value)
+        }
+        Err(crate::runtime_value::IsolatedFailure::Trap(trap)) => {
+            result_err(crate::runtime_value::recovered_trap_value(&trap))
+        }
+        Err(crate::runtime_value::IsolatedFailure::Exit(exit)) => {
+            // The task is cancelled. The function's exits already ran, and
+            // the caller's run now, as they do when a task is cancelled
+            // outside any recovered call.
+            caller.restore();
+            drain_cleanups_for_task_exit();
+            exit.resume()
+        }
+    };
+    drop(caller);
+    boxed_value(value)
+}
+
+/// Runs the current state's `with` exits before its task exits for a
+/// reason other than a trap.
+fn drain_cleanups_for_task_exit() {
+    if direct_runtime_error_capture_enabled() {
+        drain_direct_cleanup_stack();
+    }
+    with_direct_task_runtime_state(|state| state.manager_exit_failures.clear());
+}
+
+thread_local! {
+    /// States ready for the next `control.recover` call on this thread.
+    /// Each is as a new state is: nothing owned, no call active.
+    static RECOVERED_CALL_STATES: RefCell<Vec<Box<DirectTaskRuntimeState>>> =
+        const { RefCell::new(Vec::new()) };
+    /// The `Result.Err` of the call that just trapped, between the jump
+    /// back into generated code and `aura_direct_recover_trapped`.
+    static RECOVERED_TRAP: std::cell::Cell<*mut OpaqueValue> =
+        const { std::cell::Cell::new(std::ptr::null_mut()) };
+}
+
+/// The states kept ready for recovered calls on one thread.
+const RECOVERED_CALL_STATE_POOL: usize = 8;
+
+/// The bytes generated code reserves for the jump buffer of a recovered
+/// call. It covers `jmp_buf` on every hosted Unix target.
+pub const DIRECT_RECOVER_JUMP_BUFFER_BYTES: u32 = 512;
+
+#[cfg(unix)]
+extern "C" {
+    fn _longjmp(buffer: *mut u8, value: std::ffi::c_int) -> !;
+}
+
+/// Begins a `control.recover` call that generated code makes itself
+/// (ADR-0104). The function it calls next runs with a frame stack, cleanup
+/// stack and ownership ledger of its own, on the caller's machine stack.
+/// `jump_buffer` is the buffer generated code hands to `_setjmp` right
+/// after this. Returns `target`, the function's address, which generated
+/// code calls through so that the call cannot be inlined: an inlined body
+/// would keep using the caller's frame stack.
+///
+/// # Safety
+///
+/// `jump_buffer` names `DIRECT_RECOVER_JUMP_BUFFER_BYTES` writable bytes in
+/// the calling frame, which stays active until `aura_direct_recover_end`
+/// or a trap ends the call.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_recover_begin(jump_buffer: *mut u8, target: i64) -> i64 {
+    let key = direct_task_runtime_key();
+    let mut state = RECOVERED_CALL_STATES
+        .with(|states| states.borrow_mut().pop())
+        .unwrap_or_else(|| boxed_direct_task_runtime_state(true, DirectTaskAncestry::default()));
+    let generator_depth = crate::runtime_value::running_generator_depth();
+    DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let caller = states.get_or_default(key);
+        if caller.task_ancestry.len != 0 {
+            state.task_ancestry = caller.task_ancestry.clone();
+        }
+        state.fallback_cancellation = caller.fallback_cancellation.clone();
+        state.runtime_error_capture = true;
+        if caller.cleanup_draining {
+            state.refresh_stack_limit();
+        } else {
+            // The call runs on the caller's machine stack.
+            let limit = caller.frames().stack_limit();
+            state.frames_mut().set_stack_limit(limit);
+        }
+        let frames = state.frames;
+        let Ok(caller) = states.replace(key, state) else {
+            unreachable!("the caller's state was just looked up");
+        };
+        states.get_or_default(key).recovered_call = Some(DirectRecoveredCall {
+            jump_buffer,
+            generator_depth,
+            caller,
+        });
+        set_current_task_native_slot(frames.as_ptr().cast());
+    });
+    target
+}
+
+/// Moves one reference to `value`, an argument the caller owns, into the
+/// ledger of the recovered call that just began, so a trap releases it
+/// with everything else the call owns.
+///
+/// # Safety
+///
+/// `value` is null or a live box the caller's ledger holds a reference to.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_recover_adopt(value: *mut OpaqueValue) {
+    if value.is_null() || direct_value_is_frozen(value) {
+        return;
+    }
+    with_direct_task_runtime_state(|state| {
+        let Some(call) = state.recovered_call.as_mut() else {
+            return;
+        };
+        let caller = call.caller.frames.as_ptr();
+        // SAFETY: the caller's stack is live, and nothing else uses its
+        // ledger while the recovered call runs.
+        unsafe { (*caller).owned_values.remove(caller, value) };
+    });
+    register_direct_owned_value(value);
+}
+
+/// Ends a recovered call that returned, and makes the caller's state
+/// current again. `returned` is the box the function returned, which moves
+/// to the caller's ledger, or null when it returned no box.
+///
+/// # Safety
+///
+/// `returned` is null or a live box the recovered call's ledger holds one
+/// reference to, and `aura_direct_recover_begin` began the call.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_recover_end(
+    returned: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    let moved = unregister_direct_owned_value(returned);
+    let state = leave_recovered_call();
+    if moved {
+        register_direct_owned_value(returned);
+    }
+    let Some(mut state) = state else {
+        return returned;
+    };
+    let clean = state.owned_values().is_empty()
+        && state.cleanup_stack.is_empty()
+        && state.call_depth() == 0
+        && state.returned_views.is_empty()
+        && state.pending_mutable_sinks.is_none()
+        && state.mutable_sinks.is_empty()
+        && state.manager_exit_failures.is_empty()
+        && state.primary_runtime_diagnostic.is_none();
+    if !clean {
+        // A call that returned owns nothing more. Release whatever it
+        // left, as a finished task's state is released.
+        release_direct_task_runtime_state(state);
+        return returned;
+    }
+    if state.task_ancestry.len != 0 {
+        state.task_ancestry = DirectTaskAncestry::default();
+    }
+    state.fallback_cancellation = CancellationContext::default();
+    RECOVERED_CALL_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        if states.len() < RECOVERED_CALL_STATE_POOL {
+            states.push(state);
+        }
+    });
+    returned
+}
+
+/// Makes the caller's state current again and returns the state of the
+/// recovered call, or `None` when the current state is not one. The
+/// caller's stack limit stands: generated code begins and ends a recovered
+/// call on one machine stack.
+fn leave_recovered_call() -> Option<Box<DirectTaskRuntimeState>> {
+    let key = direct_task_runtime_key();
+    DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let call = states.get_mut(key)?.recovered_call.take()?;
+        let frames = call.caller.frames;
+        let state = states.replace(key, call.caller).ok()?;
+        set_current_task_native_slot(frames.as_ptr().cast());
+        Some(state)
+    })
+}
+
+/// The `Result.Err` of the recovered call that just trapped. Generated
+/// code calls this where `_setjmp` returned a second time.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_recover_trapped() -> *mut OpaqueValue {
+    let trapped = RECOVERED_TRAP.with(|trap| trap.replace(std::ptr::null_mut()));
+    if trapped.is_null() {
+        runtime_error("a recovered call resumed without a trap");
+    }
+    trapped
+}
+
+/// Whether an exit recorded now is taken by a recovered call that generated
+/// code began on this machine stack.
+fn recovered_call_takes_exit() -> bool {
+    let key = direct_task_runtime_key();
+    let began_at = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+        let mut states = states.borrow_mut();
+        let call = states.get_mut(key)?.recovered_call.as_ref()?;
+        Some(call.generator_depth)
+    });
+    began_at == Some(crate::runtime_value::running_generator_depth())
+}
+
+/// Stops the exit a task just recorded at the `control.recover` call it
+/// happened in, when generated code began that call on this machine
+/// stack. A trap jumps back into the caller and never returns here. Any
+/// other exit, such as cancellation, ends each recovered call around it
+/// in turn, runs the caller's `with` exits, and returns so that the exit
+/// goes on.
+pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
+    loop {
+        let key = direct_task_runtime_key();
+        let call = DIRECT_TASK_RUNTIME_STATES.with(|states| {
+            let mut states = states.borrow_mut();
+            let call = states.get_mut(key)?.recovered_call.as_ref()?;
+            Some((call.jump_buffer, call.generator_depth))
+        });
+        let Some((jump_buffer, began_at_depth)) = call else {
+            return;
+        };
+        if began_at_depth != generator_depth {
+            // The exit comes from a generator body the call resumed. The
+            // generator hands it to that resume, which is on the call's
+            // stack, and it arrives here again.
+            return;
+        }
+        let Some(exit) = crate::runtime_value::PendingTaskExit::take() else {
+            return;
+        };
+        // The function's exits ran before it recorded the exit. Its state
+        // goes as a failed task's does.
+        if let Some(state) = leave_recovered_call() {
+            release_direct_task_runtime_state(state);
+        }
+        match exit.into_trap() {
+            Ok(trap) => {
+                let result =
+                    boxed_value(result_err(crate::runtime_value::recovered_trap_value(&trap)));
+                drop(trap);
+                RECOVERED_TRAP.with(|slot| slot.set(result));
+                // SAFETY: `_setjmp` filled the buffer in a generated frame
+                // that is still active below this one, and the frames in
+                // between hold nothing that is used again: the function's
+                // state, which owned what they held, was just released.
+                #[cfg(unix)]
+                unsafe {
+                    _longjmp(jump_buffer, 1)
+                }
+                // Generated code begins such a call only on Unix targets.
+                #[cfg(not(unix))]
+                {
+                    let _ = jump_buffer;
+                    runtime_error("a recovered call cannot resume on this platform")
+                }
+            }
+            Err(exit) => {
+                drain_cleanups_for_task_exit();
+                exit.restore();
+            }
+        }
+    }
+}
+
 struct DirectTaskCall {
     thunk_ptr: i64,
     args_ptr: *const i64,
@@ -21396,6 +21906,22 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
                     share_direct_value(arg as *mut OpaqueValue);
                 }
             }
+        }
+        if returns_handle == DIRECT_START_RECOVERS {
+            // The call and what follows it own the external state now.
+            std::mem::forget(external_state_guard);
+            return unsafe {
+                recover_direct_call(DirectTaskSpawn {
+                    cancellation: current_cancellation(),
+                    thunk,
+                    args_address,
+                    claim_flag_address,
+                    result_is_copy: result_is_copy != 0,
+                    stack_size: None,
+                    task_ancestry: direct_runtime_compact_task_ancestry(),
+                    mutable_capture_indices,
+                })
+            };
         }
         let group = if task_group.is_null() {
             runtime_error("task starting requires a `TaskGroup`")
@@ -21491,9 +22017,9 @@ pub extern "C-unwind" fn aura_direct_assert_fail(
     column: i64,
     kind: i64,
 ) -> ! {
-    task_runtime_boundary(|| {
+    leaf_trap(|| {
         let message = direct_assert_message(message);
-        runtime_diagnostic_error(direct_assert_diagnostic(message, line, column, kind))
+        direct_assert_diagnostic(message, line, column, kind)
     })
 }
 
@@ -21549,7 +22075,7 @@ pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
     right_value: i64,
     kind: i64,
 ) -> ! {
-    task_runtime_boundary(|| {
+    leaf_trap(|| {
         let message = direct_assert_message(message);
         let left_label = direct_assert_string(left_label, "left label");
         let left_type = direct_assert_string(left_type, "left type");
@@ -21557,10 +22083,9 @@ pub extern "C-unwind" fn aura_direct_assert_fail_detailed(
         let right_label = direct_assert_string(right_label, "right label");
         let right_type = direct_assert_string(right_type, "right type");
         let right_value = direct_assert_string(right_value, "right value");
-        let diagnostic = direct_assert_diagnostic(message, line, column, kind)
+        direct_assert_diagnostic(message, line, column, kind)
             .with_assertion_operand(left_label, left_type, left_value)
-            .with_assertion_operand(right_label, right_type, right_value);
-        runtime_diagnostic_error(diagnostic)
+            .with_assertion_operand(right_label, right_type, right_value)
     })
 }
 
@@ -21595,10 +22120,7 @@ pub extern "C-unwind" fn aura_direct_record_manager_exit_failure(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fail_division_by_zero(line: i64, column: i64) -> ! {
-    task_runtime_boundary(|| match runtime_span(line, column) {
-        Some(span) => runtime_error_at(span, "division by zero"),
-        None => runtime_error("division by zero"),
-    })
+    leaf_trap(|| coded_trap("AU4004", "division by zero".to_string(), line, column))
 }
 
 /// A mutable trait method reached through a generic receiver that holds a
@@ -21619,13 +22141,7 @@ pub extern "C-unwind" fn aura_direct_fail_erased_union_mutable_receiver(
 
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_fail_int32_overflow(value: i64, line: i64, column: i64) -> ! {
-    task_runtime_boundary(|| {
-        let message = int32_overflow_message(value);
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, message),
-            None => runtime_error(message),
-        }
-    })
+    leaf_trap(|| coded_trap("AU4002", int32_overflow_message(value), line, column))
 }
 
 /// Stops the program because an integer result does not fit the
@@ -21640,7 +22156,7 @@ pub extern "C-unwind" fn aura_direct_fail_narrow_overflow(
     line: i64,
     column: i64,
 ) -> ! {
-    task_runtime_boundary(|| {
+    leaf_trap(|| {
         let value = if unsigned == 0 {
             i128::from(value)
         } else {
@@ -21650,10 +22166,7 @@ pub extern "C-unwind" fn aura_direct_fail_narrow_overflow(
             "integer value `{value}` does not fit in `{}`",
             DirectScalarKind::of_code(kind).type_name()
         );
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, message),
-            None => runtime_error(message),
-        }
+        coded_trap("AU4002", message, line, column)
     })
 }
 
@@ -21698,12 +22211,9 @@ pub extern "C-unwind" fn aura_direct_fail_integer_overflow(
     line: i64,
     column: i64,
 ) -> ! {
-    task_runtime_boundary(|| {
+    leaf_trap(|| {
         let message = wide_integer_overflow_message(kind, op, left, right);
-        match runtime_span(line, column) {
-            Some(span) => runtime_error_at(span, message),
-            None => runtime_error(message),
-        }
+        coded_trap("AU4002", message, line, column)
     })
 }
 

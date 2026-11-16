@@ -5,7 +5,7 @@
 //! first-call headroom of the opt-in minimum stack, under every build profile
 //! the suite runs under.
 
-use crate::mir_runtime::{MAX_CALL_DEPTH, MIR_RUNTIME_STACK_SIZE, TASK_STACK_HEADROOM_RESERVE};
+use crate::mir_runtime::{MIR_RUNTIME_STACK_SIZE, TASK_STACK_HEADROOM_RESERVE};
 use crate::runtime_value::{
     task_stack_bounds, task_stack_observation, ROOT_LIGHTWEIGHT_TASK_STACK_SIZE,
 };
@@ -247,62 +247,34 @@ fn interpreter_call_transitions_fit_inside_the_headroom_reserve() {
 }
 
 #[test]
-fn root_task_recursion_is_a_diagnostic_before_either_limit_can_fault() {
+fn root_task_recursion_is_a_diagnostic_before_the_stack_can_fault() {
     let _serialized = RECORDER
         .lock()
         .unwrap_or_else(|poisoned| poisoned.into_inner());
-    let measurements = measure_shapes();
-    let worst = worst_measurement(&measurements);
-
-    // A program without tasks runs its entry on the runtime thread with no
-    // headroom probe; the call-depth limit alone must keep the deepest legal
-    // recursion inside that thread's stack.
-    let deepest_entry_thread_use = MAX_CALL_DEPTH.saturating_mul(worst.worst_transition);
-    assert!(
-        deepest_entry_thread_use + ENTRY_THREAD_MARGIN <= MIR_RUNTIME_STACK_SIZE,
-        "{MAX_CALL_DEPTH} nested calls of `{}` ({} bytes each) need \
-         {deepest_entry_thread_use} bytes, which must leave {ENTRY_THREAD_MARGIN} bytes of the \
-         {MIR_RUNTIME_STACK_SIZE} byte entry thread stack when no task probe protects it",
-        worst.shape,
-        worst.worst_transition
-    );
-
-    // On the root task the probe is active, so recursion ends with whichever
-    // diagnostic its stack reaches first. Predict that from the shape's own
-    // measured consumption; near the crossover either diagnostic is valid.
+    // Nothing but the stack bounds the depth of calls, so recursion that
+    // never ends must stop at the headroom probe on the root task's stack.
     let shape = &SHAPES[1];
-    let measured = measurements
-        .iter()
-        .find(|measurement| measurement.shape == shape.name)
-        .expect("the packed shape is measured");
-    let root_capacity = ROOT_LIGHTWEIGHT_TASK_STACK_SIZE
-        .saturating_sub(TASK_STACK_HEADROOM_RESERVE)
-        .saturating_sub(measured.entry_overhead);
-    let predicted_use = MAX_CALL_DEPTH.saturating_mul(measured.mean_transition);
-    let crossover_band = root_capacity / 10;
-    let mir = lower_source_to_mir(&root_program(shape, 1000)).expect("root recursion lowers");
-    let error = run_mir(&mir).expect_err("root recursion past both limits fails");
-    let message = error.to_string();
-    let exhausted = message.contains("task stack exhausted while calling");
-    let depth_limited =
-        message.contains(&format!("maximum call depth of {MAX_CALL_DEPTH} exceeded"));
+    let mir =
+        lower_source_to_mir(&root_program(shape, 100_000_000)).expect("root recursion lowers");
+    let error = run_mir(&mir).expect_err("root recursion past the stack fails");
+    assert_eq!(error.code, "AU4005");
     assert!(
-        exhausted ^ depth_limited,
-        "the root task reports exactly one of the stack or depth diagnostics: {message}"
+        error
+            .message
+            .contains("call stack exhausted while calling"),
+        "{error}"
     );
-    if predicted_use > root_capacity + crossover_band {
-        assert!(
-            exhausted,
-            "{MAX_CALL_DEPTH} calls at {} bytes each exceed the {root_capacity} byte root \
-             capacity, so the root must report stack exhaustion: {message}",
-            measured.mean_transition
-        );
-    } else if predicted_use + crossover_band < root_capacity {
-        assert!(
-            depth_limited,
-            "{MAX_CALL_DEPTH} calls at {} bytes each fit the {root_capacity} byte root \
-             capacity, so the root must report the call-depth limit: {message}",
-            measured.mean_transition
-        );
-    }
+}
+
+#[test]
+fn the_entry_stack_is_the_root_task_stack() {
+    // The interpreter gives the program's first task the whole stack its
+    // thread was started with, so deep recursion has the same room with
+    // and without tasks.
+    assert_eq!(
+        ROOT_LIGHTWEIGHT_TASK_STACK_SIZE,
+        64 * 1024 * 1024
+    );
+    assert!(MIR_RUNTIME_STACK_SIZE >= 4 * ROOT_LIGHTWEIGHT_TASK_STACK_SIZE);
+    assert!(TASK_STACK_HEADROOM_RESERVE + ENTRY_THREAD_MARGIN < MIR_RUNTIME_STACK_SIZE);
 }

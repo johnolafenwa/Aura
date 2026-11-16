@@ -172,8 +172,8 @@ fn uncoded_constructors_assign_stable_phase_banded_codes() {
         "AU4002"
     );
     assert_eq!(
-        Diagnostic::new("maximum call depth of 256 exceeded while calling `loop`").code,
-        "AU4001"
+        Diagnostic::new("call stack exhausted while calling `loop`").code,
+        "AU4005"
     );
     assert_eq!(
         Diagnostic::new("`main` must return `int32` or `None` in the bootstrap runtime").code,

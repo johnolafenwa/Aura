@@ -3,8 +3,12 @@ use std::ptr::NonNull;
 use super::{
     direct_frame_stack_layout, DirectFrameStack, DirectFrameStackLayout,
     DIRECT_CALL_SAFEPOINT_INTERVAL, DIRECT_FRAME_FLAG_PENDING_SINKS,
-    DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_FRAME_STACK_INLINE_ENTRIES, DIRECT_MAX_CALL_DEPTH,
+    DIRECT_FRAME_FLAG_RETURNED_VIEWS, DIRECT_FRAME_STACK_INLINE_ENTRIES,
+    DIRECT_TRACE_FRAMES_PER_END,
 };
+
+/// A depth that takes several doublings of the entry block to reach.
+const DEEP_CALLS: usize = 256;
 use crate::native_runtime::{
     DirectFrameDescriptor, DirectFrameText, DirectRuntimeCallFrame, DirectRuntimeSourceSpan,
 };
@@ -70,6 +74,7 @@ fn innermost_names(stack: &mut OwnedStack) -> Vec<String> {
     stack
         .get()
         .materialize_innermost_first()
+        .0
         .into_iter()
         .map(|frame| frame.function)
         .collect()
@@ -85,8 +90,9 @@ fn the_layout_names_the_header_fields_generated_code_reads() {
             layout.floor_offset,
             layout.entries_offset,
             layout.call_fuel_offset,
+            layout.stack_limit_offset,
         ],
-        [0, 8, 16, 32, 40],
+        [0, 8, 16, 32, 40, 48],
         "generated code relies on the header coming first"
     );
     assert_eq!(DirectFrameStackLayout::ENTRY_BYTES, 8);
@@ -152,7 +158,7 @@ fn generated_pushes_fill_the_inline_entries_then_the_runtime_grows_the_stack() {
     while stack.generated_push(leaf) {}
     assert_eq!(stack.get().len(), 2 * DIRECT_FRAME_STACK_INLINE_ENTRIES);
     // Each full block sends one push to the runtime, which doubles it.
-    while stack.get().len() < DIRECT_MAX_CALL_DEPTH {
+    while stack.get().len() < DEEP_CALLS {
         stack
             .get()
             .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
@@ -160,11 +166,11 @@ fn generated_pushes_fill_the_inline_entries_then_the_runtime_grows_the_stack() {
     }
     assert_eq!(
         stack.get().len(),
-        DIRECT_MAX_CALL_DEPTH,
-        "the depth limit stops generated pushes"
+        DEEP_CALLS,
+        "a full block stops generated pushes"
     );
-    assert_eq!(stack.get().limit(), DIRECT_MAX_CALL_DEPTH);
-    assert_eq!(stack.get().depth(), DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(stack.get().limit(), DEEP_CALLS);
+    assert_eq!(stack.get().depth(), DEEP_CALLS);
     assert!(innermost_names(&mut stack)
         .iter()
         .all(|name| name == "leaf"));
@@ -249,22 +255,22 @@ fn the_floor_restarts_the_depth_without_dropping_entries() {
     // Deep cleanup counts its own depth: the limit sits above the floor.
     let mut deep = OwnedStack::new();
     let leaf = descriptor(b"leaf");
-    for _ in 0..DIRECT_MAX_CALL_DEPTH {
+    for _ in 0..DEEP_CALLS {
         if !deep.generated_push(leaf) {
             deep.get()
                 .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
         }
     }
-    assert_eq!(deep.get().depth(), DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(deep.get().depth(), DEEP_CALLS);
     deep.get().set_depth(0);
     assert_eq!(deep.get().limit(), deep.get().capacity());
     deep.get()
         .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
-    assert!(deep.get().capacity() > DIRECT_MAX_CALL_DEPTH);
+    assert!(deep.get().capacity() > DEEP_CALLS);
     assert_eq!(deep.get().limit(), deep.get().capacity());
     while deep.generated_push(leaf) {}
-    assert_eq!(deep.get().depth(), DIRECT_MAX_CALL_DEPTH);
-    assert_eq!(deep.get().len(), 2 * DIRECT_MAX_CALL_DEPTH);
+    assert_eq!(deep.get().depth(), DEEP_CALLS);
+    assert_eq!(deep.get().len(), 2 * DEEP_CALLS);
 }
 
 #[test]
@@ -299,4 +305,84 @@ fn a_suspended_generator_takes_its_entries_out_and_puts_them_back() {
     assert_eq!(stack.get().flags(), 0);
     stack.get().restore_entries(Vec::new());
     assert_eq!(innermost_names(&mut stack), ["caller"]);
+}
+
+#[test]
+fn nothing_but_the_block_size_limits_generated_pushes() {
+    let mut stack = OwnedStack::new();
+    let leaf = descriptor(b"leaf");
+    for _ in 0..10_000 {
+        if !stack.generated_push(leaf) {
+            stack
+                .get()
+                .push_descriptor(NonNull::new(leaf.cast_mut()).unwrap());
+        }
+    }
+    assert_eq!(stack.get().depth(), 10_000);
+    assert_eq!(stack.get().limit(), stack.get().capacity());
+    assert!(stack.get().capacity() >= 10_000);
+}
+
+#[test]
+fn a_deep_chain_materializes_both_ends_and_counts_the_middle() {
+    let mut stack = OwnedStack::new();
+    let outer = descriptor(b"outer");
+    let middle = descriptor(b"middle");
+    let inner = descriptor(b"inner");
+    let per_end = DIRECT_TRACE_FRAMES_PER_END;
+    let push = |stack: &mut OwnedStack, descriptor: *const DirectFrameDescriptor| {
+        stack
+            .get()
+            .push_descriptor(NonNull::new(descriptor.cast_mut()).unwrap());
+    };
+    for _ in 0..per_end {
+        push(&mut stack, outer);
+    }
+    for _ in 0..per_end {
+        push(&mut stack, inner);
+    }
+    // Exactly twice the kept count is still a whole chain.
+    let (frames, omitted) = stack.get().materialize_innermost_first();
+    assert_eq!(omitted, 0);
+    assert_eq!(frames.len(), 2 * per_end);
+
+    let mut stack = OwnedStack::new();
+    for _ in 0..per_end {
+        push(&mut stack, outer);
+    }
+    for _ in 0..1_000 {
+        push(&mut stack, middle);
+    }
+    for _ in 0..per_end {
+        push(&mut stack, inner);
+    }
+    let (frames, omitted) = stack.get().materialize_innermost_first();
+    assert_eq!(omitted, 1_000);
+    assert_eq!(frames.len(), 2 * per_end);
+    assert!(frames[..per_end].iter().all(|frame| frame.function == "inner"));
+    assert!(frames[per_end..].iter().all(|frame| frame.function == "outer"));
+    assert_eq!(
+        stack.get().innermost().map(|frame| frame.function),
+        Some("inner".to_string())
+    );
+    assert_eq!(OwnedStack::new().get().innermost(), None);
+}
+
+#[test]
+fn the_stack_limit_starts_unknown_and_holds_what_the_runtime_sets() {
+    let mut stack = OwnedStack::new();
+    assert_eq!(stack.get().stack_limit(), 0);
+    stack.get().set_stack_limit(0x7000_0000);
+    assert_eq!(stack.get().stack_limit(), 0x7000_0000);
+    let layout = direct_frame_stack_layout();
+    // SAFETY: the offset names the field generated code reads.
+    let read = unsafe {
+        stack
+            .raw()
+            .cast::<u8>()
+            .offset(layout.stack_limit_offset as isize)
+            .cast::<usize>()
+            .read()
+    };
+    assert_eq!(read, 0x7000_0000);
 }

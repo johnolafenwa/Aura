@@ -15,7 +15,8 @@
 
 use super::{
     enter_task_stack_bounds, take_pooled_task_stack, task_stack_bounds, Diagnostic,
-    RuntimeSchedulerWakeReason, TaskStackBounds, TaskStackReturn, TaskYield, Value,
+    PendingTaskExit, RuntimeSchedulerWakeReason, TaskStackBounds, TaskStackReturn, TaskYield,
+    Value,
 };
 use corosensei::stack::DefaultStack;
 use corosensei::{Coroutine, CoroutineResult, Yielder};
@@ -355,8 +356,12 @@ impl GeneratorValue {
             self.with_hooks(|hooks| hooks.before_resume());
             RUNNING_GENERATORS.with(|running| running.borrow_mut().push(yielder.clone()));
             let bounds_guard = bounds.map(enter_task_stack_bounds);
+            // The body's calls check the generator's stack, and the
+            // caller's calls check the caller's again afterwards.
+            crate::native_runtime::refresh_direct_stack_limit();
             let outcome = panic::catch_unwind(AssertUnwindSafe(|| coroutine.resume(input)));
             drop(bounds_guard);
+            crate::native_runtime::refresh_direct_stack_limit();
             RUNNING_GENERATORS.with(|running| {
                 running.borrow_mut().pop();
             });
@@ -368,6 +373,22 @@ impl GeneratorValue {
                     state.coroutine = Some(coroutine);
                     state.status = GeneratorStatus::Suspended;
                     return Ok(true);
+                }
+                Ok(CoroutineResult::Yield(GeneratorSignal::Wait(TaskYield::Exit))) => {
+                    // The body's task is exiting, so the body never runs
+                    // again. Its stack goes back to the pool now: the exit
+                    // does not return here, whether it ends the task or
+                    // stops at a `control.recover` call around this resume.
+                    {
+                        let mut state = lock(&self.inner);
+                        state.status = GeneratorStatus::Failed;
+                        // SAFETY: nothing on the body's stack is used
+                        // again, and the task's ledger owns its values.
+                        unsafe { coroutine.force_reset() };
+                        state.retire(coroutine);
+                    }
+                    super::yield_current_lightweight_task(TaskYield::Exit);
+                    std::process::abort()
                 }
                 Ok(CoroutineResult::Yield(GeneratorSignal::Wait(wait))) => {
                     // Perform the wait in the enclosing context, then hand
@@ -405,6 +426,119 @@ impl GeneratorValue {
             lock(&self.inner).hooks = Some(hooks);
         }
     }
+}
+
+/// The reserved stack of a function `control.recover` runs for the direct
+/// backend. It is committed lazily, so a call that stays shallow touches
+/// only a few pages of it.
+pub const DIRECT_RECOVER_STACK_BYTES: usize = 16 * 1024 * 1024;
+
+type IsolatedCoroutine =
+    Coroutine<GeneratorInput, GeneratorSignal, Result<Value, Diagnostic>, DefaultStack>;
+
+/// How many generator bodies and isolated calls are running on this
+/// thread, one inside the other.
+pub fn running_generator_depth() -> usize {
+    RUNNING_GENERATORS.with(|running| running.borrow().len())
+}
+
+/// Why an isolated call did not return.
+pub enum IsolatedFailure {
+    /// The call trapped.
+    Trap(Diagnostic),
+    /// The task is exiting for another reason, such as cancellation. The
+    /// caller finishes its own part and then resumes the exit.
+    Exit(PendingTaskExit),
+}
+
+/// Runs `body` to its end on a stack of its own and returns its result,
+/// for `control.recover` (ADR-0104).
+///
+/// The direct backend cannot unwind generated frames. A trap there ends
+/// the task from where it stands: it records the failure and hands the
+/// scheduler an exit. Under this function the exit stops here instead. The
+/// body's stack is dropped as it stands and the failure comes back, so the
+/// caller's own calls are untouched.
+///
+/// `abandoned` runs on the caller's stack after the body's stack was
+/// dropped without the body returning. It releases whatever the body kept
+/// outside its stack. A scheduler wait inside the body is performed by the
+/// enclosing context, exactly as for a generator body.
+pub fn run_isolated(
+    body: impl FnOnce() -> Result<Value, Diagnostic> + 'static,
+    stack_bytes: usize,
+    abandoned: impl FnOnce(),
+) -> Result<Value, IsolatedFailure> {
+    let (stack, stack_return) = match take_pooled_task_stack(stack_bytes) {
+        Ok(pooled) => pooled.into_parts(),
+        Err(error) => {
+            abandoned();
+            return Err(IsolatedFailure::Trap(Diagnostic::coded(
+                "AU4005",
+                format!(
+                    "cannot allocate a stack for `control.recover`: {}",
+                    error.message
+                ),
+            )));
+        }
+    };
+    let bounds = task_stack_bounds(&stack);
+    let yielder = Arc::new(YielderCell(Cell::new(std::ptr::null())));
+    let yielder_cell = yielder.clone();
+    let mut coroutine: IsolatedCoroutine =
+        Coroutine::with_stack(stack, move |yielder: &GeneratorYielder, _input| {
+            yielder_cell.0.set(yielder as *const _);
+            body()
+        });
+    let mut input = GeneratorInput::Next;
+    // The body stops with a wait the caller cannot perform for it: the
+    // exit of its task, or a `yield` with no generator to take the item.
+    let stopped = loop {
+        RUNNING_GENERATORS.with(|running| running.borrow_mut().push(yielder.clone()));
+        let bounds_guard = enter_task_stack_bounds(bounds);
+        crate::native_runtime::refresh_direct_stack_limit();
+        let outcome = panic::catch_unwind(AssertUnwindSafe(|| coroutine.resume(input)));
+        drop(bounds_guard);
+        crate::native_runtime::refresh_direct_stack_limit();
+        RUNNING_GENERATORS.with(|running| {
+            running.borrow_mut().pop();
+        });
+        match outcome {
+            Ok(CoroutineResult::Return(result)) => {
+                stack_return.recycle(coroutine.into_stack());
+                return result.map_err(IsolatedFailure::Trap);
+            }
+            Ok(CoroutineResult::Yield(GeneratorSignal::Wait(TaskYield::Exit))) => break true,
+            Ok(CoroutineResult::Yield(GeneratorSignal::Wait(wait))) => {
+                input = GeneratorInput::Woke(super::yield_current_lightweight_task(wait));
+            }
+            Ok(CoroutineResult::Yield(GeneratorSignal::Item(_))) => break false,
+            Err(payload) => {
+                // The body's Rust frames unwound, so its stack is finished.
+                stack_return.recycle(coroutine.into_stack());
+                panic::resume_unwind(payload);
+            }
+        }
+    };
+    // SAFETY: nothing on the body's stack is used again. What the body
+    // owned outside the stack is released by `abandoned`.
+    unsafe { coroutine.force_reset() };
+    stack_return.recycle(coroutine.into_stack());
+    abandoned();
+    if !stopped {
+        return Err(IsolatedFailure::Trap(generator_error(
+            "`yield` ran outside a generator body",
+        )));
+    }
+    Err(match PendingTaskExit::take() {
+        Some(exit) => match exit.into_trap() {
+            Ok(trap) => IsolatedFailure::Trap(trap),
+            Err(exit) => IsolatedFailure::Exit(exit),
+        },
+        None => IsolatedFailure::Trap(Diagnostic::new(
+            "internal error: a recovered call exited without a result",
+        )),
+    })
 }
 
 /// Suspends the running generator body with `item`. Returns true when the

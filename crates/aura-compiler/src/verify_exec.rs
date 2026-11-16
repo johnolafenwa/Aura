@@ -2839,7 +2839,12 @@ impl<'a> Exec<'a> {
                     _ => fresh_target(self),
                 }
             }
-            Rvalue::StartTask { function, args, .. } => {
+            Rvalue::StartTask {
+                recover,
+                function,
+                args,
+                ..
+            } => {
                 // A child runs its target on arguments moved or copied into
                 // it, so the start proves the target's `requires` on them,
                 // and its result has the target's `ensures`.
@@ -2867,6 +2872,11 @@ impl<'a> Exec<'a> {
                 };
                 let result =
                     self.user_call(state, &name, None, actuals, result_type.as_ref(), target);
+                if *recover {
+                    // `control.recover` yields a `Result`, and whether the
+                    // call trapped is not known here.
+                    return fresh_target(self);
+                }
                 Val::Task(Box::new(result))
             }
             _ => fresh_target(self),

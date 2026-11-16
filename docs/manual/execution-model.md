@@ -126,7 +126,7 @@ A call evaluates and binds its arguments, then transfers control to the target b
 
 `return view [mut] place` hands one checked loan to the caller instead. The declaration's `from` slot fixes the loan's origin. The caller continues the exact selected projection with no unlock and relock, and no clone. Every other callee loan ends before control returns. A trap before the handoff transfers no loan.
 
-Each recursive Aura call consumes one logical call-depth unit. The maintained runtime rejects execution after 256 nested Aura calls with a source diagnostic, so the host stack does not overflow.
+No count limits nested Aura calls. A call that would not fit on the stack it runs on traps with `AU4005`, so the host stack does not overflow. [Call Depth](/manual/failure-recovery#call-depth) specifies the check and the stack sizes.
 
 ## Loan Lifetime And Cleanup
 
