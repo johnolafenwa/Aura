@@ -594,18 +594,62 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
 }
 
-/// The libffi description of a C struct.
+/// The libffi description of a C struct or union.
+///
+/// libffi has structs of scalars and structs only. An array is described
+/// as a struct of its elements, which has the same layout and is passed
+/// the same way. A struct that is or holds a union is described by what
+/// decides how it is passed: its size, its alignment, and the class of
+/// each of its register pieces on this machine.
 fn struct_type(layout: &CStruct) -> Type {
+    if layout.holds_union() {
+        return overlapping_struct_type(layout);
+    }
     Type::structure(
         layout
             .fields
             .iter()
-            .map(|field| match &field.kind {
-                CFieldKind::Scalar(scalar) => scalar_type(*scalar),
-                CFieldKind::Struct(inner) => struct_type(inner),
-            })
+            .map(|field| field_type(&field.kind))
             .collect::<Vec<_>>(),
     )
+}
+
+fn field_type(kind: &CFieldKind) -> Type {
+    match kind {
+        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
+        CFieldKind::Struct(inner) => struct_type(inner),
+        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element); *count]),
+    }
+}
+
+/// A struct of scalars with the size, alignment, and register classes of
+/// `layout`, a struct that is or holds a union.
+fn overlapping_struct_type(layout: &CStruct) -> Type {
+    use crate::c_layout::{CAbi, CPassing, CPiece};
+    let align = layout.align();
+    let word = match align {
+        1 => FfiScalar::U8,
+        2 => FfiScalar::U16,
+        4 => FfiScalar::U32,
+        _ => FfiScalar::U64,
+    };
+    let words = |size: usize| std::iter::repeat_n(scalar_type(word), size / align);
+    let pieces = match CAbi::host().map(|abi| layout.passing(abi)) {
+        Some(CPassing::Registers(pieces)) => pieces,
+        _ => return Type::structure(words(layout.size()).collect::<Vec<_>>()),
+    };
+    let mut elements = Vec::new();
+    for piece in pieces {
+        match piece {
+            CPiece::Int { size, .. } => elements.extend(words(size)),
+            CPiece::Sse { size: 8, .. } if align == 8 => elements.push(Type::f64()),
+            CPiece::Sse { size, .. } => {
+                elements.extend(std::iter::repeat_n(Type::f32(), size / 4));
+            }
+            CPiece::Float { scalar, .. } => elements.push(scalar_type(scalar)),
+        }
+    }
+    Type::structure(elements)
 }
 
 fn scalar_type(scalar: FfiScalar) -> Type {
@@ -661,10 +705,13 @@ fn type_accepts_value(expected: FfiType, value: &FfiValue) -> bool {
             FfiType::Pointer(expected) | FfiType::PointerMut(expected),
             FfiValue::Elements(actual, _),
         ) => expected == *actual,
-        (
-            FfiType::Struct(expected) | FfiType::StructPointer(expected),
-            FfiValue::Struct(actual, bytes),
-        ) => expected == *actual && bytes.len() == expected.size(),
+        (FfiType::Struct(expected), FfiValue::Struct(actual, bytes)) => {
+            expected == *actual && bytes.len() == expected.size()
+        }
+        // A pointer reaches one struct or a run of them, one after another.
+        (FfiType::StructPointer(expected), FfiValue::Struct(actual, bytes)) => {
+            expected == *actual && bytes.len() % expected.size().max(1) == 0
+        }
         (FfiType::CString | FfiType::NullableCString, FfiValue::String(_)) => true,
         (FfiType::NullableCString | FfiType::NullableOpaqueHandle, FfiValue::Unit) => true,
         (FfiType::NullableOpaqueHandle, FfiValue::OpaqueHandle(_)) => true,
@@ -822,8 +869,13 @@ fn append_argument(
         }
         (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) => {
             let mut words = aligned_bytes(bytes, 1);
+            // An empty run passes a null pointer, as an empty view does.
+            let pointer = match bytes.is_empty() {
+                true => std::ptr::null_mut(),
+                false => words.as_mut_ptr().cast(),
+            };
             types.push(Type::pointer());
-            values.push(AbiArgument::MutPointer(words.as_mut_ptr().cast()));
+            values.push(AbiArgument::MutPointer(pointer));
             storage.structs.push((index, words));
         }
         (FfiType::OpaqueHandleOut, value) => {
@@ -1828,6 +1880,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
+            union: false,
         }
         .interned()
     }

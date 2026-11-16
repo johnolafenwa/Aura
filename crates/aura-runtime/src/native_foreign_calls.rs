@@ -22,6 +22,8 @@ use super::{
     boxed_value, runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut,
     value_type_name, with_value, OpaqueValue,
 };
+use crate::c_layout::CStruct;
+use crate::c_values::{self, CValueError};
 use crate::list_elements::ListForm;
 use crate::runtime_value::{ArrayValue, FfiHandleDrop, FfiHandleValue, Value, VecValue};
 
@@ -700,3 +702,233 @@ pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
 #[cfg(test)]
 #[path = "native_foreign_calls_tests.rs"]
 mod tests;
+
+/// The C layout generated code describes as JSON in its data. A call site
+/// passes the same bytes every time, so the layout is read once per
+/// address.
+///
+/// # Safety
+///
+/// `descriptor` and `length` describe text generated code holds in its
+/// data for the life of the program.
+unsafe fn foreign_layout(descriptor: *const u8, length: usize) -> &'static CStruct {
+    type Layouts = std::collections::HashMap<usize, (Box<str>, &'static CStruct)>;
+    static LAYOUTS: std::sync::Mutex<Option<Layouts>> = std::sync::Mutex::new(None);
+    // SAFETY: the caller's contract.
+    let text = unsafe { metadata_text(descriptor, length) };
+    let mut layouts = LAYOUTS.lock().unwrap_or_else(|poison| poison.into_inner());
+    let layouts = layouts.get_or_insert_with(Default::default);
+    if let Some((known, layout)) = layouts.get(&(descriptor as usize)) {
+        if **known == *text {
+            return layout;
+        }
+    }
+    let Ok(layout) = serde_json::from_str::<CStruct>(text) else {
+        runtime_error("a foreign call names a C layout that does not read");
+    };
+    let layout = layout.interned();
+    layouts.insert(descriptor as usize, (text.into(), layout));
+    layout
+}
+
+fn c_value_failure(symbol: &str, error: CValueError) -> ! {
+    match error {
+        CValueError::BadBool(byte) => foreign_call_failure(
+            symbol,
+            "AU4001",
+            crate::ffi::FfiError::NonCanonicalBoolReturn(byte),
+        ),
+        other => runtime_diagnostic_error(Diagnostic::coded(other.code(), other.to_string())),
+    }
+}
+
+/// Writes the class instance `value` at `slot` in the C layout that
+/// `descriptor` describes. Generated code calls this for a class with an
+/// array field or a union, whose value is not one word per scalar.
+///
+/// # Safety
+///
+/// `value` is a live value, `descriptor` is as [`foreign_layout`] needs,
+/// and `slot` has room for one struct of the layout.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_struct(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *mut u8,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts_mut(slot, layout.size());
+        if let Err(error) = with_value(value, |value| c_values::pack(value, layout, bytes)) {
+            c_value_failure(&layout.name, error)
+        }
+    })
+}
+
+/// A new instance for the C struct at `slot`, which the foreign function
+/// `symbol` returned.
+///
+/// # Safety
+///
+/// `descriptor` is as [`foreign_layout`] needs, `slot` holds one struct of
+/// the layout, and the symbol name is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_struct(
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts(slot, layout.size());
+        match c_values::unpack(layout, bytes) {
+            Ok(value) => boxed_value(value),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        }
+    })
+}
+
+/// Sets every field of the instance `value` from the C struct at `slot`,
+/// which the foreign function `symbol` wrote through a pointer.
+///
+/// # Safety
+///
+/// As [`aura_direct_ffi_unpack_struct`], and `value` is a live value its
+/// caller holds exclusively.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_struct_into(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    slot: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = slice::from_raw_parts(slot, layout.size());
+        let read = match c_values::unpack(layout, bytes) {
+            Ok(Value::Instance(read)) => read,
+            Ok(_) => runtime_error("a C struct did not read back as an instance"),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        };
+        value_mut(value, |value| {
+            let Value::Instance(instance) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a class instance, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            for (name, field) in read.fields.iter() {
+                if let Err(error) = instance.fields.insert(name, field.into_owned()) {
+                    runtime_error(error);
+                }
+            }
+        })
+    })
+}
+
+/// The bytes before a C array [`aura_direct_ffi_pack_structs`] returns,
+/// which hold the array's byte length.
+const STRUCTS_HEADER: usize = 16;
+
+fn structs_block(bytes: usize) -> std::alloc::Layout {
+    std::alloc::Layout::from_size_align(STRUCTS_HEADER + bytes, 16)
+        .unwrap_or_else(|_| runtime_error("a C struct array is too large"))
+}
+
+/// A new C array of the layout `descriptor` describes that holds the
+/// elements of the list `value`, or null for an empty list. The caller
+/// frees it with [`aura_direct_ffi_release_structs`].
+///
+/// # Safety
+///
+/// `value` is a live value and `descriptor` is as [`foreign_layout`]
+/// needs.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_structs(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+) -> *mut u8 {
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let bytes = match with_value(value, |value| c_values::pack_elements(value, layout)) {
+            Ok(bytes) => bytes,
+            Err(error) => c_value_failure(&layout.name, error),
+        };
+        if bytes.is_empty() {
+            return std::ptr::null_mut();
+        }
+        let block = std::alloc::alloc(structs_block(bytes.len()));
+        if block.is_null() {
+            runtime_error("a C struct array could not be allocated");
+        }
+        block.cast::<usize>().write(bytes.len());
+        let array = block.add(STRUCTS_HEADER);
+        std::ptr::copy_nonoverlapping(bytes.as_ptr(), array, bytes.len());
+        array
+    })
+}
+
+/// Replaces the elements of the list `value` with those of `array`, which
+/// the foreign function `symbol` wrote through a `mut ptr[Name]`.
+///
+/// # Safety
+///
+/// As [`aura_direct_ffi_pack_structs`]; `array` is what that function
+/// returned for `value`, `value` is held exclusively, and the symbol name
+/// is UTF-8 text in generated code's data.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_structs(
+    value: *mut OpaqueValue,
+    descriptor: *const u8,
+    descriptor_length: usize,
+    array: *const u8,
+    symbol: *const u8,
+    symbol_length: usize,
+) {
+    if array.is_null() {
+        return;
+    }
+    task_runtime_boundary(|| unsafe {
+        let layout = foreign_layout(descriptor, descriptor_length);
+        let length = array.sub(STRUCTS_HEADER).cast::<usize>().read();
+        let read = match c_values::unpack_elements(layout, slice::from_raw_parts(array, length)) {
+            Ok(Value::Vec(read)) => read,
+            Ok(_) => runtime_error("a C struct array did not read back as a list"),
+            Err(error) => c_value_failure(metadata_text(symbol, symbol_length), error),
+        };
+        value_mut(value, |value| {
+            let Value::Vec(vector) = value else {
+                runtime_error(format!(
+                    "FFI argument expected a list for a mut pointer, but received `{}`",
+                    value_type_name(value)
+                ));
+            };
+            vector.elements = read.elements;
+        })
+    })
+}
+
+/// Frees a C array [`aura_direct_ffi_pack_structs`] returned.
+///
+/// # Safety
+///
+/// `array` is null or a pointer that function returned, not yet freed.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) {
+    if array.is_null() {
+        return;
+    }
+    // SAFETY: the caller's contract; the header holds the byte length the
+    // block was allocated for.
+    unsafe {
+        let block = array.sub(STRUCTS_HEADER);
+        let length = block.cast::<usize>().read();
+        std::alloc::dealloc(block, structs_block(length));
+    }
+}

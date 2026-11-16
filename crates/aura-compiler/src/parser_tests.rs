@@ -5763,6 +5763,89 @@ fn extern_c_classes_are_copy_classes_of_fields_only() {
 }
 
 #[test]
+fn an_extern_c_class_spells_a_c_array_field_as_array_of_a_length() {
+    let module = parse(concat!(
+        "extern \"C\" class Material:\n",
+        "    shader: uint64\n",
+        "    params: array[float32, 4]\n",
+        "    grid: array[array[int16, 3], 2]\n",
+        "    corners: array[geometry.Point, 2]\n\n",
+        "extern \"C\" class Plain:\n    x: int32\n",
+    ))
+    .expect("an array field is a field");
+    let classes: Vec<&ClassDecl> = module
+        .items
+        .iter()
+        .filter_map(|item| match item {
+            Item::Class(decl) => Some(decl),
+            _ => None,
+        })
+        .collect();
+    let material = classes[0];
+    // The class holds lists, so it is not Copy.
+    assert!(material.c_layout && !material.copy);
+    assert!(classes[1].copy && classes[1].c_arrays.is_empty());
+    assert_eq!(material.c_arrays["params"], [4]);
+    assert_eq!(material.c_arrays["grid"], [2, 3]);
+    assert_eq!(material.c_arrays["corners"], [2]);
+    assert!(!material.c_arrays.contains_key("shader"));
+    let spelled = |index: usize| {
+        let TypeRefKind::Named { name, args } = &material.fields[index].ty.kind else {
+            panic!("a field has a named type");
+        };
+        (name.clone(), args.len())
+    };
+    assert_eq!(spelled(1), ("list".to_string(), 1));
+    assert_eq!(spelled(2), ("list".to_string(), 1));
+    let shape = |class: &ClassDecl| serde_json::to_value(class).expect("a class serializes");
+    assert_eq!(
+        shape(material)["c_arrays"]["grid"],
+        serde_json::json!([2, 3])
+    );
+    assert!(
+        shape(classes[1]).get("c_arrays").is_none(),
+        "a class with no array field serializes as before"
+    );
+
+    for (source, message) in [
+        (
+            "def first(values: array[int32, 4]) -> int32:\n    return values[0]\n",
+            "`array[T, N]` is the type of a field of an `extern \"C\"` class",
+        ),
+        (
+            "class Plain:\n    values: array[int32, 4]\n",
+            "`array[T, N]` is the type of a field of an `extern \"C\"` class",
+        ),
+        (
+            "extern \"C\" class Empty:\n    values: array[int32, 0]\n",
+            "where `N` is a whole number from 1 to",
+        ),
+        (
+            "extern \"C\" class Huge:\n    values: array[int32, 99999999]\n",
+            "where `N` is a whole number from 1 to",
+        ),
+        (
+            "extern \"C\" class Bare:\n    values: array[int32]\n",
+            "a C array field is written `array[T, N]`",
+        ),
+        (
+            "extern \"C\" class Two:\n    values: array[int32, int32]\n",
+            "a C array field is written `array[T, N]`",
+        ),
+        (
+            "extern \"C\" class Open:\n    values: array[int32, 4, 5]\n",
+            "expected",
+        ),
+    ] {
+        let error = parse(source).expect_err("the array type is misplaced or malformed");
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+    // An extern function after the class is parsed as before.
+    parse("extern \"C\" class A:\n    v: array[int8, 2]\nextern \"C\" def f(a: A, p: ptr[A]) -> None\n")
+        .expect("a class with an array field crosses");
+}
+
+#[test]
 fn an_opaque_class_names_its_drop_function() {
     let module = parse(concat!(
         "extern \"C\" opaque class Database drop sqlite3_close\n",

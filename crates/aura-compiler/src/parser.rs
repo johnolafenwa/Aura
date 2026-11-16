@@ -441,6 +441,9 @@ struct Parser {
     /// The `type Name = T` lines of the `impl` block being parsed, so a
     /// `Self.Name` type in its methods names `T`.
     impl_assoc_types: Vec<AssocTypeBinding>,
+    /// Whether the fields being parsed are those of an `extern "C"` class,
+    /// where `array[T, N]` spells a fixed-size C array.
+    extern_fields: bool,
     /// The source, line by line, for contract clause text. Empty for
     /// generated source.
     source_lines: Vec<String>,
@@ -461,6 +464,7 @@ impl Parser {
             recursion_depth,
             current_function_returns_view: false,
             impl_assoc_types: Vec::new(),
+            extern_fields: false,
             source_lines: Vec::new(),
             ghost_locals: Default::default(),
         }
@@ -1183,13 +1187,17 @@ impl Parser {
             span,
             doc,
             c_layout: false,
+            c_arrays: std::collections::BTreeMap::new(),
         })
     }
 
     /// Parses the class of an `extern "C" class` declaration: a `copy`
     /// class of fields only, laid out as a C struct.
     fn parse_extern_class(&mut self, public: bool) -> Result<ClassDecl> {
-        let mut class = self.parse_class(public)?;
+        let outer = std::mem::replace(&mut self.extern_fields, true);
+        let class = self.parse_class(public);
+        self.extern_fields = outer;
+        let mut class = class?;
         let name = &class.name;
         let rejected = if !class.type_params.is_empty() {
             Some((
@@ -1224,7 +1232,15 @@ impl Parser {
         if let Some((span, message)) = rejected {
             return Err(parse_error(span, message));
         }
-        class.copy = true;
+        for field in &mut class.fields {
+            let mut lengths = Vec::new();
+            take_c_array(&mut field.ty, &mut lengths)?;
+            if !lengths.is_empty() {
+                class.c_arrays.insert(field.name.clone(), lengths);
+            }
+        }
+        // A class with an array field holds a list, so it is not Copy.
+        class.copy = class.c_arrays.is_empty();
         class.c_layout = true;
         Ok(class)
     }
@@ -3221,13 +3237,33 @@ impl Parser {
             } else {
                 let mut args = Vec::new();
                 if self.eat_simple(&TokenKind::LBracket).is_some() {
+                    let mut closed = false;
                     loop {
+                        // `array[T, N]`: the length of a C array field.
+                        if name == C_ARRAY_TYPE_NAME && args.len() == 1 {
+                            if let TokenKind::IntLiteral(length) = self.current_kind() {
+                                let length = length.to_string();
+                                let length_span = self.bump().span;
+                                if !self.extern_fields {
+                                    return Err(parse_error(
+                                        span,
+                                        "`array[T, N]` is the type of a field of an `extern \"C\"` class and names no type elsewhere; use `list[T]`",
+                                    ));
+                                }
+                                args.push(TypeRef::named(length, Vec::new(), false, length_span));
+                                self.expect_simple(TokenKind::RBracket)?;
+                                closed = true;
+                                break;
+                            }
+                        }
                         args.push(self.parse_type()?);
                         if !self.eat_list_comma(&TokenKind::RBracket) {
                             break;
                         }
                     }
-                    self.expect_simple(TokenKind::RBracket)?;
+                    if !closed {
+                        self.expect_simple(TokenKind::RBracket)?;
+                    }
                 }
                 TypeRef::named(name, args, indirect, span)
             }
@@ -5856,6 +5892,45 @@ pub(crate) fn mentions_ghost(expr: &Expr) -> bool {
     visit(&mut expr.clone(), &mut found);
     found
 }
+
+/// The name that spells a C array in a field of an `extern "C"` class.
+const C_ARRAY_TYPE_NAME: &str = "array";
+
+/// Rewrites `array[T, N]` to `list[T]` in the type of a field of an
+/// `extern "C"` class, and appends `N` to `lengths`. An array of arrays
+/// gives the outer length first. `array` is how a `list[T]` of exactly `N`
+/// elements is laid out in C and names no type of its own.
+fn take_c_array(ty: &mut TypeRef, lengths: &mut Vec<usize>) -> Result<()> {
+    let span = ty.span;
+    let TypeRefKind::Named { name, args } = &mut ty.kind else {
+        return Ok(());
+    };
+    if name != C_ARRAY_TYPE_NAME {
+        return Ok(());
+    }
+    let length = match args.as_slice() {
+        [_, TypeRef {
+            kind: TypeRefKind::Named { name, args },
+            ..
+        }] if args.is_empty() => name.parse::<usize>().ok(),
+        _ => None,
+    };
+    let Some(length) = length.filter(|length| (1..=C_ARRAY_MAX_LENGTH).contains(length)) else {
+        return Err(parse_error(
+            span,
+            format!(
+                "a C array field is written `array[T, N]`, where `N` is a whole number from 1 to {C_ARRAY_MAX_LENGTH}"
+            ),
+        ));
+    };
+    args.pop();
+    *name = "list".to_string();
+    lengths.push(length);
+    take_c_array(&mut args[0], lengths)
+}
+
+/// The most elements one C array field holds.
+const C_ARRAY_MAX_LENGTH: usize = 1 << 20;
 
 /// Rewrites `ptr[T]` to `list[T]` in the type of an extern parameter, and
 /// reports whether it was there. `ptr[T]` is how a `list[T]` crosses as a

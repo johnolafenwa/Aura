@@ -6537,7 +6537,8 @@ impl MirRuntime {
                 _ if matches!(param.ty, Type::Function { .. }) => {
                     ffi_callback_from_runtime(&argument.value, &param.ty)
                 }
-                (Some(layout), _) => ffi_struct_from_runtime(&argument.value, layout),
+                (Some(layout), true) => ffi_struct_elements_from_runtime(&argument.value, layout),
+                (Some(layout), false) => ffi_struct_from_runtime(&argument.value, layout),
                 (None, true) => ffi_elements_from_runtime(&argument.value, &param.ty),
                 (None, false) => ffi_value_from_runtime(&argument.value, &param.ty),
             })
@@ -6574,6 +6575,10 @@ impl MirRuntime {
                     Value::Array(passed) => array_elements_runtime_value(scalar, &words, passed)?,
                     _ => elements_runtime_value(scalar, &words, &param.ty, &call.symbol)?,
                 },
+                FfiValue::Struct(layout, bytes) if param.pointer => {
+                    aura_runtime::c_values::unpack_elements(layout, &bytes)
+                        .map_err(|error| c_value_diagnostic(&call.symbol, error))?
+                }
                 FfiValue::Struct(layout, bytes) => {
                     struct_runtime_value(layout, &bytes, &call.symbol)?
                 }
@@ -11193,8 +11198,11 @@ fn ffi_type_for_extern_param(param: &MirExternParam) -> Result<FfiType> {
         return Ok(FfiType::Callback);
     }
     if let Some(layout) = &param.c_struct {
-        return Ok(match param.passing {
-            MirReceiverKind::BorrowMut => FfiType::StructPointer(layout.interned()),
+        // A `ptr[Name]` parameter points to the first struct of a run.
+        return Ok(match (param.passing, param.pointer) {
+            (MirReceiverKind::BorrowMut, _) | (_, true) => {
+                FfiType::StructPointer(layout.interned())
+            }
             _ => FfiType::Struct(layout.interned()),
         });
     }
@@ -11501,6 +11509,17 @@ fn ffi_struct_from_runtime(value: &Value, layout: &crate::c_layout::CStruct) -> 
     Ok(FfiValue::Struct(layout, bytes))
 }
 
+/// The diagnostic for a value that did not cross as a C struct.
+fn c_value_diagnostic(symbol: &str, error: aura_runtime::c_values::CValueError) -> Diagnostic {
+    use aura_runtime::c_values::CValueError;
+    match error {
+        CValueError::BadBool(byte) => {
+            ffi_runtime_diagnostic(symbol, FfiError::NonCanonicalBoolReturn(byte))
+        }
+        other => Diagnostic::coded(other.code(), other.to_string()),
+    }
+}
+
 /// Writes each field of the instance `value` at its offset in `bytes`,
 /// which holds the C struct `layout`.
 fn write_struct_bytes(
@@ -11508,35 +11527,8 @@ fn write_struct_bytes(
     layout: &crate::c_layout::CStruct,
     bytes: &mut [u8],
 ) -> Result<()> {
-    use crate::c_layout::CFieldKind;
-    let mismatch = || {
-        Diagnostic::coded(
-            "AU4005",
-            format!(
-                "FFI value for C struct `{}` has incompatible runtime shape `{}`",
-                layout.name,
-                value.render()
-            ),
-        )
-    };
-    let Value::Instance(instance) = value else {
-        return Err(mismatch());
-    };
-    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
-        let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
-        match &field.kind {
-            CFieldKind::Scalar(scalar) => {
-                let crossed = ffi_value_from_runtime(&held, &scalar_field_type(*scalar))?;
-                let word = scalar.word(&crossed).ok_or_else(mismatch)?;
-                let size = scalar.size();
-                bytes[offset..offset + size].copy_from_slice(&word.to_le_bytes()[..size]);
-            }
-            CFieldKind::Struct(inner) => {
-                write_struct_bytes(&held, inner, &mut bytes[offset..offset + inner.size()])?;
-            }
-        }
-    }
-    Ok(())
+    aura_runtime::c_values::pack(value, layout, bytes)
+        .map_err(|error| c_value_diagnostic(&layout.name, error))
 }
 
 /// The instance the bytes of the C struct `layout` describe, as a foreign
@@ -11546,29 +11538,17 @@ fn struct_runtime_value(
     bytes: &[u8],
     symbol: &str,
 ) -> Result<Value> {
-    use crate::c_layout::CFieldKind;
-    let mut fields = BTreeMap::new();
-    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
-        let value = match &field.kind {
-            CFieldKind::Scalar(scalar) => {
-                let size = scalar.size();
-                let mut word = [0_u8; 8];
-                word[..size].copy_from_slice(&bytes[offset..offset + size]);
-                let crossed = scalar
-                    .value(u64::from_le_bytes(word))
-                    .map_err(|error| ffi_runtime_diagnostic(symbol, error))?;
-                runtime_value_from_ffi(crossed, &scalar_field_type(*scalar))?
-            }
-            CFieldKind::Struct(inner) => {
-                struct_runtime_value(inner, &bytes[offset..offset + inner.size()], symbol)?
-            }
-        };
-        fields.insert(field.name.clone(), value);
-    }
-    Ok(Value::Instance(InstanceValue {
-        class_name: aura_runtime::runtime_value::RuntimeName::from(layout.name.clone()),
-        fields: fields.into(),
-    }))
+    aura_runtime::c_values::unpack(layout, bytes).map_err(|error| c_value_diagnostic(symbol, error))
+}
+
+/// The list `value` as a C array of `layout`, for a `ptr[Name]` parameter.
+fn ffi_struct_elements_from_runtime(
+    value: &Value,
+    layout: &crate::c_layout::CStruct,
+) -> Result<FfiValue> {
+    let bytes = aura_runtime::c_values::pack_elements(value, layout)
+        .map_err(|error| c_value_diagnostic(&layout.name, error))?;
+    Ok(FfiValue::Struct(layout.interned(), bytes))
 }
 
 /// The element type of `ty`, the `list[T]` of a `ptr[T]` parameter, and the

@@ -269,6 +269,11 @@ pub struct ClassDecl {
     /// those fields in order.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub c_layout: bool,
+    /// The fields of an `extern "C"` class that are C arrays, each with
+    /// its lengths, the outer array first. The type of such a field is a
+    /// `list` nested once per length.
+    #[serde(skip_serializing_if = "BTreeMap::is_empty")]
+    pub c_arrays: BTreeMap<String, Vec<usize>>,
 }
 
 #[derive(Clone, Debug, Serialize)]

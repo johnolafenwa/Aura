@@ -1373,6 +1373,26 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
         }
     }
 
+    // An `extern "C"` class is Copy unless it holds an array field, which
+    // is a list, or a class that does. The parser saw only the arrays.
+    loop {
+        let holder = classes.iter().find_map(|(name, class)| {
+            let holds_list = class.decl.c_layout
+                && class.decl.copy
+                && class.decl.fields.iter().any(|field| {
+                    super::ffi_struct(&class.fields[&field.name].ty, &classes)
+                        .is_some_and(|held| !held.decl.copy)
+                });
+            holds_list.then(|| name.clone())
+        });
+        let Some(holder) = holder else {
+            break;
+        };
+        if let Some(class) = classes.get_mut(&holder) {
+            class.decl.copy = false;
+        }
+    }
+
     for class in classes.values() {
         // The fields of an `extern "C"` class get their own, narrower check.
         if !class.decl.copy || class.decl.c_layout {
@@ -1654,7 +1674,11 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             ExternFunctionInfo {
                 c_struct_params: params
                     .iter()
-                    .map(|param| super::ffi_struct_layout(param, &classes))
+                    .enumerate()
+                    .map(|(index, param)| match extern_decl.pointer_param(index) {
+                        true => super::ffi_struct_elements_layout(param, &classes),
+                        false => super::ffi_struct_layout(param, &classes),
+                    })
                     .collect(),
                 c_struct_result: super::ffi_struct_layout(&return_type, &classes),
                 handle_drops: super::ffi_handle_drops(

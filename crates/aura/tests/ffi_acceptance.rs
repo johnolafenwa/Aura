@@ -804,6 +804,62 @@ void fx_crate_keep(fx_crate **slot) { if (*slot) (*slot)->id += 100; }
 void fx_crate_swap(fx_crate **slot, int32_t id) { fx_crate_close(*slot); *slot = fx_crate_open(id); }
 Flag fx_bad_struct_flag(void) { Flag f; *(uint8_t *)&f.ok = 9; return f; }
 void fx_bad_struct_out(Flag *f) { *(uint8_t *)&f->ok = 9; }
+int64_t fx_spill_words(int64_t a, int64_t b, int64_t c, int64_t d, int64_t e, int64_t f,
+                       int64_t g, Wide w, int64_t h) {
+    return a + b + c + d + e + f + g + 10 * w.lo + 100 * w.hi + 1000 * h;
+}
+double fx_spill_vec3(double a, double b, double c, double d, double e, double f, Vec3 v,
+                     float g, IPair p, double h) {
+    return a + b + c + d + e + f + 10.0 * v.x + 100.0 * v.y + 1000.0 * v.z + 10000.0 * g
+        + p.a + p.b + 100000.0 * h;
+}
+typedef struct { float x, y; } Pt;
+typedef struct { uint8_t tag; char name[8]; float weights[4]; Pt corners[2]; bool on[2]; } Shape;
+typedef struct { int32_t id; Shape shape; int16_t grid[2][3]; } Holder;
+typedef struct { double m[4]; } Quad;
+typedef struct { float v[2]; } FPair;
+typedef struct { uint64_t w[2]; } WPair;
+Shape fx_shape_make(uint8_t tag) {
+    Shape s; memset(&s, 0, sizeof s); s.tag = tag; memcpy(s.name, "shape", 6);
+    for (int i = 0; i < 4; i++) s.weights[i] = (float)(i + 1) * 0.5f;
+    s.corners[0] = (Pt){1, 2}; s.corners[1] = (Pt){3, 4}; s.on[1] = true;
+    return s;
+}
+float fx_shape_sum(Shape s) {
+    return s.weights[0] + s.weights[1] + s.weights[2] + s.weights[3] + s.tag
+        + s.corners[1].y + (s.on[0] ? 100 : 0) + (s.on[1] ? 1000 : 0);
+}
+void fx_shape_grow(Shape *s) { s->tag += 1; s->name[0] = 'S'; s->corners[1].y *= 2; s->weights[3] = 9; }
+int32_t fx_holder_sum(Holder h) {
+    return h.id + h.shape.tag + (int32_t)h.shape.corners[1].x + h.grid[0][0] + 10 * h.grid[1][2];
+}
+Holder fx_holder_make(int32_t id) {
+    Holder h; memset(&h, 0, sizeof h); h.id = id; h.shape = fx_shape_make((uint8_t)id);
+    for (int r = 0; r < 2; r++) for (int c = 0; c < 3; c++) h.grid[r][c] = (int16_t)(r * 10 + c);
+    return h;
+}
+Quad fx_quad_scale(Quad q, double k) { for (int i = 0; i < 4; i++) q.m[i] *= k; return q; }
+FPair fx_fpair_swap(FPair p) { FPair r = {{p.v[1], p.v[0]}}; return r; }
+WPair fx_wpair_swap(WPair p) { WPair r = {{p.w[1], p.w[0]}}; return r; }
+double fx_spill_fpair(double a, double b, double c, double d, double e, double f, double g,
+                      FPair p, double h) {
+    return a + b + c + d + e + f + g + 10.0 * p.v[0] + 100.0 * p.v[1] + 1000.0 * h;
+}
+float fx_points_sum(const Pt *points, int32_t count) {
+    float total = 0; for (int i = 0; i < count; i++) total += points[i].x + points[i].y; return total;
+}
+void fx_points_shift(Pt *points, int32_t count, float by) {
+    for (int i = 0; i < count; i++) { points[i].x += by; points[i].y -= by; }
+}
+int32_t fx_shapes_tags(const Shape *shapes, int32_t count) {
+    int32_t total = 0; for (int i = 0; i < count; i++) total += shapes[i].tag; return total;
+}
+void fx_shapes_retag(Shape *shapes, int32_t count) {
+    for (int i = 0; i < count; i++) shapes[i].tag = (uint8_t)(i * 10);
+}
+bool fx_points_null(const Pt *points) { return points == NULL; }
+Shape fx_shape_bad_flag(void) { Shape s = fx_shape_make(1); *(uint8_t *)&s.on[0] = 5; return s; }
+void fx_shapes_bad_flag(Shape *shapes) { *(uint8_t *)&shapes[0].on[1] = 5; }
 "#;
 
 const FIXTURE_DECLARATIONS: &str = r#"extern "C" opaque class Box
@@ -1016,6 +1072,58 @@ extern "C" def qsort(
     compare: def(a: mut int32, b: mut int32) -> int32
 ) -> None
 extern "C" def fx_bad_struct_out(f: mut Flag) -> None
+extern "C" def fx_spill_words(
+    a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64, w: Wide, h: int64
+) -> int64
+extern "C" def fx_spill_vec3(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, v: Vec3,
+    g: float32, p: IPair, h: float64
+) -> float64
+
+extern "C" class Pt:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    name: array[int8, 8]
+    weights: array[float32, 4]
+    corners: array[Pt, 2]
+    on: array[bool, 2]
+
+extern "C" class Holder:
+    id: int32
+    shape: Shape
+    grid: array[array[int16, 3], 2]
+
+extern "C" class Quad:
+    m: array[float64, 4]
+
+extern "C" class FPair:
+    v: array[float32, 2]
+
+extern "C" class WPair:
+    w: array[uint64, 2]
+
+extern "C" def fx_shape_make(tag: uint8) -> Shape
+extern "C" def fx_shape_sum(s: Shape) -> float32
+extern "C" def fx_shape_grow(s: mut Shape) -> None
+extern "C" def fx_holder_sum(h: Holder) -> int32
+extern "C" def fx_holder_make(id: int32) -> Holder
+extern "C" def fx_quad_scale(q: Quad, k: float64) -> Quad
+extern "C" def fx_fpair_swap(p: FPair) -> FPair
+extern "C" def fx_wpair_swap(p: WPair) -> WPair
+extern "C" def fx_spill_fpair(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
+    p: FPair, h: float64
+) -> float64
+extern "C" def fx_points_sum(points: ptr[Pt], count: int32) -> float32
+extern "C" def fx_points_shift(points: mut ptr[Pt], count: int32, by: float32) -> None
+extern "C" def fx_shapes_tags(shapes: ptr[Shape], count: int32) -> int32
+extern "C" def fx_shapes_retag(shapes: mut ptr[Shape], count: int32) -> None
+extern "C" def fx_points_null(points: ptr[Pt]) -> bool
+extern "C" def fx_shape_bad_flag() -> Shape
+extern "C" def fx_shapes_bad_flag(shapes: mut ptr[Shape]) -> None
 "#;
 
 /// A package that links the fixture library from its `native` directory.
@@ -1392,11 +1500,8 @@ Array[float64](shape=[2], values=[3.0, 3.0])\n18.0\n60000.0\n";
 #[test]
 fn structs_cross_by_value_and_by_pointer_with_backend_parity() {
     // Seven floats leave one float register on AArch64, which a `Vec2`
-    // does not fit. C passes it whole on the stack there. A built program
-    // refuses the call, so that host runs the rest of the fixture and
-    // checks the refusal by itself.
-    let spill = "fx_spill_floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, b, 0.5)";
-    let refused = cfg!(target_arch = "aarch64");
+    // does not fit. C passes it whole on the stack there, and the float
+    // after it follows it there.
     let main = r#"
 class Scene:
     origin: Vec2
@@ -1511,25 +1616,7 @@ def main() -> int32:
     print(acc.y)
     return 0
 "#;
-    if refused {
-        let (package, source) = fixture_package(&format!(
-            "def main() -> int32:\n    b = Vec2(x=0.5, y=-0.25)\n    print({spill})\n    return 0\n"
-        ));
-        assert_success(&run_mir(&source), "the spilled struct on the interpreter");
-        let build = build_direct(&source, &package.path.join("ffi-fixture-spill"));
-        let stderr = String::from_utf8_lossy(&build.stderr);
-        assert!(!build.status.success(), "{stderr}");
-        assert!(
-            stderr.contains("struct `Vec2` does not fit the argument registers"),
-            "{stderr}"
-        );
-    }
-    let main = if refused {
-        main.replace(spill, "433.0")
-    } else {
-        main.to_string()
-    };
-    let (package, source) = fixture_package(&main);
+    let (package, source) = fixture_package(main);
     let (mir, direct) = run_on_both_backends(&package, &source);
     assert_success(&mir, "structs on the interpreter");
     assert_success(&direct, "structs in a built program");
@@ -1541,6 +1628,154 @@ def main() -> int32:
         100\n-1000\n7\n3.0\n20.0\n27.0\n47.5\n1000.0\n-2000.0\n";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn array_fields_and_struct_arrays_cross_with_backend_parity() {
+    let (package, source) = fixture_package(
+        r#"
+class Scene:
+    shapes: list[Shape]
+    best: Shape
+
+def heaviest(shapes: list[Shape]) -> float32:
+    mut best: float32 = 0.0
+    for shape in shapes:
+        sum = fx_shape_sum(shape)
+        if sum > best:
+            best = sum
+    return best
+
+def main() -> int32:
+    mut made = fx_shape_make(7)
+    print(made.tag)
+    print(made.name)
+    print(made.weights)
+    print(made.corners[1].x)
+    print(made.on)
+    print(fx_shape_sum(made))
+    fx_shape_grow(made)
+    print(made.tag)
+    print(made.name[0])
+    print(made.corners[1].y)
+    print(made.weights[3])
+    made.weights[0] = 100.0
+    made.on[0] = true
+    made.corners[1] = Pt(x=0.0, y=0.5)
+    print(fx_shape_sum(made))
+
+    built = Shape(
+        tag=1,
+        name=[104, 105, 0, 0, 0, 0, 0, 0],
+        weights=[1.0, 2.0, 3.0, 4.0],
+        corners=[Pt(x=0.0, y=0.0), Pt(x=0.0, y=8.0)],
+        on=[false, false],
+    )
+    print(fx_shape_sum(built))
+
+    mut holder = fx_holder_make(3)
+    print(holder.grid)
+    print(holder.shape.name)
+    print(fx_holder_sum(holder))
+    holder.grid[1][2] = -5
+    holder.shape.tag = 40
+    print(fx_holder_sum(holder))
+
+    quad = fx_quad_scale(Quad(m=[1.0, 2.0, 3.0, 4.0]), 2.5)
+    print(quad.m)
+    print(fx_fpair_swap(FPair(v=[1.5, -2.5])).v)
+    print(fx_wpair_swap(WPair(w=[1, 18446744073709551615])).w)
+    print(fx_spill_fpair(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, FPair(v=[0.5, 0.25]), 2.0))
+    print(fx_spill_words(1, 2, 3, 4, 5, 6, 7, Wide(lo=3, hi=-4), 2))
+    print(fx_spill_vec3(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, Vec3(x=0.5, y=0.25, z=2.0), 3.0, IPair(a=7, b=8), 1.0))
+
+    mut points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0), Pt(x=5.0, y=6.0)]
+    print(fx_points_sum(points, 3))
+    fx_points_shift(points, 3, 0.5)
+    print(points[0].x)
+    print(points[2].y)
+    print(fx_points_sum(points[1:], 2))
+    points.append(Pt(x=10.0, y=20.0))
+    print(fx_points_sum(points, 4))
+    empty: list[Pt] = []
+    print(fx_points_null(empty))
+    print(fx_points_null(points))
+    print(fx_points_sum(empty, 0))
+    mut none: list[Pt] = []
+    fx_points_shift(none, 0, 1.0)
+    print(len(none))
+
+    mut shapes = [fx_shape_make(1), fx_shape_make(2), fx_shape_make(3)]
+    print(fx_shapes_tags(shapes, 3))
+    fx_shapes_retag(shapes, 3)
+    print(shapes[2].tag)
+    print(shapes[1].name)
+    print(fx_shapes_tags(shapes, 3))
+    print(heaviest(shapes))
+    scene = Scene(shapes=shapes, best=fx_shape_make(9))
+    print(fx_shapes_tags(scene.shapes, 3) + (scene.best.tag as int32))
+
+    mut round = 0
+    mut total: float32 = 0.0
+    while round < 500:
+        total += fx_shape_sum(fx_shape_make((round % 200) as uint8))
+        round += 1
+    print(total)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    assert_success(&mir, "array fields on the interpreter");
+    assert_success(&direct, "array fields in a built program");
+    let expected = "7\n[115, 104, 97, 112, 101, 0, 0, 0]\n[0.5, 1.0, 1.5, 2.0]\n3.0\n\
+        [false, true]\n1016.0\n8\n83\n8.0\n9.0\n1220.0\n19.0\n\
+        [[0, 1, 2], [10, 11, 12]]\n[115, 104, 97, 112, 101, 0, 0, 0]\n129\n-4\n\
+        [2.5, 5.0, 7.5, 10.0]\n[-2.5, 1.5]\n[18446744073709551615, 1]\n2058.0\n1658\n\
+        132066.0\n21.0\n1.5\n5.5\n18.0\n51.0\ntrue\nfalse\n0.0\n0\n6\n20\n\
+        [115, 104, 97, 112, 101, 0, 0, 0]\n30\n1029.0\n39\n549250.0\n";
+    assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
+    assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn array_fields_that_do_not_fit_c_trap_with_backend_parity() {
+    for (body, code, message) in [
+        (
+            "    s = Shape(tag=1, name=[1, 2], weights=[1.0, 2.0, 3.0, 4.0], corners=[Pt(x=0.0, y=0.0), Pt(x=0.0, y=0.0)], on=[true, false])\n    print(fx_shape_sum(s))",
+            "AU4005",
+            "C array field `name` holds 8 element(s), but the list has 2",
+        ),
+        (
+            "    mut holder = fx_holder_make(1)\n    holder.grid[1] = [1, 2]\n    print(fx_holder_sum(holder))",
+            "AU4005",
+            "C array field `grid` holds 3 element(s), but the list has 2",
+        ),
+        (
+            "    mut shapes = [fx_shape_make(1)]\n    shapes[0].on = [true]\n    print(fx_shapes_tags(shapes, 1))",
+            "AU4005",
+            "C array field `on` holds 2 element(s), but the list has 1",
+        ),
+        (
+            "    print(fx_shape_bad_flag().tag)",
+            "AU4001",
+            "FFI call to `fx_shape_bad_flag` failed",
+        ),
+        (
+            "    mut shapes = [fx_shape_make(1)]\n    fx_shapes_bad_flag(shapes)\n    print(shapes[0].tag)",
+            "AU4001",
+            "FFI call to `fx_shapes_bad_flag` failed",
+        ),
+    ] {
+        let (package, source) =
+            fixture_package(&format!("def main() -> int32:\n{body}\n    return 0\n"));
+        let (mir, direct) = run_on_both_backends(&package, &source);
+        for (output, backend) in [(&mir, "the interpreter"), (&direct, "a built program")] {
+            let stderr = String::from_utf8_lossy(&output.stderr);
+            assert!(!output.status.success(), "{backend}: {body}");
+            assert!(stderr.contains(code), "{backend}: {stderr}");
+            assert!(stderr.contains(message), "{backend}: {stderr}");
+        }
+    }
 }
 
 #[test]

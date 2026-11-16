@@ -7920,6 +7920,7 @@ fn class_decl(name: &str, copy: bool, fields: Vec<FieldDecl>) -> ClassDecl {
         span: Span::new(1, 1),
         doc: None,
         c_layout: false,
+        c_arrays: Default::default(),
     }
 }
 
@@ -33181,6 +33182,158 @@ def run() -> None:
     for (source, message, code) in rejected {
         let diagnostic =
             check_ffi_source_for_test(source).expect_err("the unsupported struct use must fail");
+        assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
+        assert!(
+            diagnostic.message.contains(message),
+            "{}",
+            diagnostic.message
+        );
+    }
+}
+
+#[test]
+fn ffi_admits_array_fields_and_struct_arrays() {
+    let program = check_ffi_source_for_test(
+        r#"
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    name: array[int8, 8]
+    corners: array[Point, 2]
+    grid: array[array[int16, 3], 2]
+
+extern "C" class Holder:
+    id: int32
+    shape: Shape
+
+extern "C" def area(s: Shape) -> float32
+extern "C" def make(tag: uint8) -> Shape
+extern "C" def grow(s: mut Shape) -> None
+extern "C" def hold(h: Holder) -> int32
+extern "C" def total(points: ptr[Point], count: int32) -> float32
+extern "C" def shift(points: mut ptr[Point], count: int32) -> None
+extern "C" def retag(shapes: mut ptr[Shape], count: int32) -> None
+
+def run() -> float32:
+    mut shape = make(1)
+    grow(shape)
+    shape.name[0] = 65
+    first = shape.corners[0]
+    mut points = [first, Point(x=1.0, y=2.0)]
+    shift(points, 2)
+    mut shapes = [make(2)]
+    retag(shapes, 1)
+    holder = Holder(id=1, shape=make(3))
+    return area(shape) + total(points, 2) + (hold(holder) as float32)
+"#,
+    )
+    .expect("array fields and struct arrays should check");
+    use crate::c_layout::CFieldKind;
+    use crate::ffi::FfiScalar;
+    let area = &program.extern_functions["area"];
+    let shape = area.c_struct_params[0].as_ref().expect("a struct");
+    assert_eq!(
+        shape.fields[1].kind,
+        CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::I8)), 8)
+    );
+    let CFieldKind::Array(corner, 2) = &shape.fields[2].kind else {
+        panic!("corners is an array of two");
+    };
+    assert!(matches!(&**corner, CFieldKind::Struct(point) if point.name == "Point"));
+    assert_eq!(
+        shape.fields[3].kind,
+        CFieldKind::Array(
+            Box::new(CFieldKind::Array(
+                Box::new(CFieldKind::Scalar(FfiScalar::I16)),
+                3
+            )),
+            2
+        )
+    );
+    assert_eq!((shape.size(), shape.align()), (40, 4));
+    assert!(!shape.is_plain());
+    assert_eq!(
+        program.extern_functions["make"].c_struct_result.as_ref(),
+        Some(shape)
+    );
+    // A `ptr[Name]` parameter carries the layout of one element.
+    let total = &program.extern_functions["total"];
+    assert_eq!(
+        total.c_struct_params[0].as_ref().map(|point| point.size()),
+        Some(8)
+    );
+    assert!(total.c_struct_params[1].is_none());
+    assert_eq!(
+        program.extern_functions["retag"].c_struct_params[0].as_ref(),
+        Some(shape)
+    );
+    // A class with an array field is not Copy, and neither is its holder.
+    assert!(program.classes["Point"].decl.copy);
+    assert!(!program.classes["Shape"].decl.copy);
+    assert!(!program.classes["Holder"].decl.copy);
+
+    let rejected = [
+        (
+            r#"extern "C" class P:
+    names: array[str, 2]
+"#,
+            "field `names` of `extern \"C\"` class `P` is an array of `str`, which has no C layout",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    values: list[int32]
+"#,
+            "field `values` of `extern \"C\"` class `P` has type `list[int32]`",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" def bad(p: ptr[str]) -> None
+"#,
+            "pointer parameter `p` must point to a fixed-width scalar type or an `extern \"C\"` class",
+            "AU2002",
+        ),
+        (
+            r#"extern "C" class P:
+    x: int32
+extern "C" def bad(p: own ptr[P]) -> None
+"#,
+            "pointer parameter `p` cannot be `own`",
+            "AU3004",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" def use(p: P) -> None
+def run() -> None:
+    p = P(v=[1, 2])
+    q = p
+    use(p)
+"#,
+            "use of moved value `p`",
+            "AU3001",
+        ),
+        (
+            r#"extern "C" class P:
+    v: array[int32, 2]
+extern "C" class H:
+    p: P
+extern "C" def use(h: H) -> None
+def run() -> None:
+    h = H(p=P(v=[1, 2]))
+    k = h
+    use(h)
+"#,
+            "use of moved value `h`",
+            "AU3001",
+        ),
+    ];
+    for (source, message, code) in rejected {
+        let diagnostic =
+            check_ffi_source_for_test(source).expect_err("the unsupported array use must fail");
         assert_eq!(diagnostic.code, code, "{source}: {}", diagnostic.message);
         assert!(
             diagnostic.message.contains(message),
