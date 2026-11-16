@@ -85,6 +85,9 @@ pub(crate) fn holder_ended(holder: &HolderState) {
     }
     holder.held.set(0);
     lock_mutex(dead_holders()).insert(holder.token());
+    // A holder that lives on, such as a thread that runs one program after
+    // another, takes its next lock under a fresh token.
+    holder.token.set(0);
     DEAD_HOLDER_COUNT.fetch_add(1, Ordering::SeqCst);
     let waited = lock_mutex(waited_cells())
         .iter()
@@ -93,6 +96,13 @@ pub(crate) fn holder_ended(holder: &HolderState) {
     for cell in waited {
         cell.wake_one();
     }
+}
+
+/// Poisons every cell the running task or thread holds. Code that stops a
+/// trap from ending its task calls this, because the frames that would
+/// have released the locks are gone.
+pub fn abandon_held_cells() {
+    with_current_holder(holder_ended);
 }
 
 struct CellState {

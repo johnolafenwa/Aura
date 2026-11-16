@@ -9027,7 +9027,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         match op {
             RuntimeOp::Print(kind) => self.compile_print(kind, args),
-            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args),
+            RuntimeOp::Host(builtin) => self.compile_host_builtin_call(builtin, args, target),
             RuntimeOp::Function(function) => self.compile_function_op(function, args, target),
             RuntimeOp::Resource(_)
             | RuntimeOp::Rng(_)
@@ -9442,6 +9442,7 @@ impl<'a> FunctionCompiler<'a> {
         &mut self,
         builtin: HostBuiltin,
         args: &[MirArg],
+        target: &DirectType,
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
         if lookups::is_str_from_bytes(builtin) {
@@ -9465,6 +9466,9 @@ impl<'a> FunctionCompiler<'a> {
         }
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
+        }
+        if let Some(value) = self.compile_sync_access(builtin, args, target)? {
+            return Ok(value);
         }
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
@@ -11482,6 +11486,16 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(element, &direct_type)
             }
             DirectType::Opaque(_) => {
+                if let Some(handle) = sync::handle_class_field(&object.ty, &self.classes) {
+                    if handle.name == field {
+                        // The instance is its handle: the same box, read
+                        // as the field's type.
+                        return Ok(ValueRef {
+                            values: object.values,
+                            ty: DirectType::Opaque(handle.ty.clone()),
+                        });
+                    }
+                }
                 let field_ty =
                     direct_field_type_with_enums(&object.ty, field, &self.classes, &self.enums);
                 if let Some(field_ty) = &field_ty {
@@ -12962,6 +12976,17 @@ impl<'a> FunctionCompiler<'a> {
         let root = segments.remove(0);
         let result = if segments.is_empty() {
             self.store_root(root, value)
+        } else if let Some(root_ty) = self.handle_class_store(root, &segments) {
+            // The instance is its handle: the written box becomes the
+            // instance.
+            let value = self.ensure_opaque(value)?;
+            self.store_root(
+                root,
+                ValueRef {
+                    values: value.values,
+                    ty: root_ty,
+                },
+            )
         } else if matches!(self.variable_types.get(root), Some(DirectType::Opaque(_))) {
             match self.store_class_place(place, value)? {
                 None => Ok(()),
@@ -17322,6 +17347,9 @@ impl<'a> FunctionCompiler<'a> {
             "direct backend does not know class `{}`",
             class_name
         ))?;
+        if let Some(built) = self.construct_handle_class(fields, target_ty)? {
+            return Ok(built);
+        }
         if let Some(built) = self.construct_class_in_place(class_name, fields, target_ty, &class)? {
             return Ok(built);
         }
@@ -20493,6 +20521,8 @@ mod shadow_reads;
 mod plain;
 #[path = "native_codegen_shapes.rs"]
 mod shapes;
+#[path = "native_codegen_sync.rs"]
+mod sync;
 
 #[cfg(test)]
 #[path = "native_codegen_tests.rs"]

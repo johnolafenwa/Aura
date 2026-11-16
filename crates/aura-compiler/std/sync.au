@@ -138,41 +138,41 @@ public copy class Map[K: Transfer, V: Transfer]:
     values, so one call is one atomic step. Two calls are two steps:
     another task may change the map between a `get` and a `set`. A change
     that must read and write as one step uses a `Mutex[dict[K, V]]`."""
-    table: Mutex[dict[K, V]]
+    cell: sync.Cell
 
     public def __init__(self):
-        self.table = Mutex[dict[K, V]](dict[K, V]())
+        self.cell = sync.__aura_cell_new[dict[K, V]](dict[K, V]())
 
     public def get(self, key: K) -> Lookup[V]:
         """`Lookup.Found` with a clone of the value stored for `key`, or
         `Lookup.Missing`."""
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             return table.get(key)
 
     public def set(self, key: own K, value: own V) -> None:
         """Stores `value` for `key`, replacing any value already there."""
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             table[key] = value
 
     public def remove(self, key: K) -> Lookup[V]:
         """Removes the entry for `key` and returns its value in
         `Lookup.Found`, or returns `Lookup.Missing`."""
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             return table.remove(key)
 
     public def contains(self, key: K) -> bool:
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             return key in table
 
     public def len(self) -> int64:
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             return table.len()
 
     public def clear(self) -> None:
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             table.clear()
 
     public def snapshot(self) -> dict[K, V]:
         """A copy of the whole map as it is at one instant."""
-        with table = self.table.lock():
+        with table = Locked[dict[K, V]](cell=self.cell):
             return table.copy()

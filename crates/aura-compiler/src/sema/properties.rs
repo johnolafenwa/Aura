@@ -578,6 +578,24 @@ pub(super) fn find_copy_enum_in_modules<'a>(
     }
 }
 
+/// The types a value of the copy class `class_info[args]` stores: its
+/// field types with `args` in place of the type parameters, or `args`
+/// themselves for a class that declares no fields or is given the wrong
+/// number of arguments.
+pub(super) fn copy_class_storage_types(class_info: &ClassInfo, args: &[Type]) -> Vec<Type> {
+    if class_info.fields.is_empty() || args.len() != class_info.decl.type_params.len() {
+        return args.to_vec();
+    }
+    let substitutions = substitutions_from_decl_type_args(&class_info.decl.type_params, args);
+    class_info
+        .decl
+        .fields
+        .iter()
+        .filter_map(|field| class_info.fields.get(&field.name))
+        .map(|field| substitute_type(&field.ty, &substitutions))
+        .collect()
+}
+
 pub(super) fn type_is_copy_in_context_inner(
     ty: &Type,
     classes: &BTreeMap<String, ClassInfo>,
@@ -683,10 +701,16 @@ pub(super) fn type_is_copy_in_context_inner(
                 .get(name)
                 .or_else(|| copy_class_info_from_modules(name, imported_modules?, module_registry?))
             {
+                // A copy class is Copy when every field is, with the type
+                // arguments in place. An argument no field stores, such as
+                // the `T` of a `sync.Mutex[T]` handle, does not count. A
+                // host class has no declared fields, so its arguments
+                // stand in for them.
+                let field_types = copy_class_storage_types(class_info, args);
                 let result = class_info.decl.copy
-                    && args.iter().all(|arg| {
+                    && field_types.iter().all(|field| {
                         type_is_copy_in_context_inner(
-                            arg,
+                            field,
                             classes,
                             enums,
                             imported_modules,
@@ -1885,7 +1909,8 @@ impl<'a> FunctionChecker<'a> {
                             noncopy_formals: Vec::new(),
                         }
                     } else {
-                        self.combine_symbolic_copy_shapes(args.iter(), formals, visiting)
+                        let field_types = copy_class_storage_types(&class_info, args);
+                        self.combine_symbolic_copy_shapes(field_types.iter(), formals, visiting)
                     }
                 } else if let Some(enum_info) = self.enums.get(name).cloned().or_else(|| {
                     copy_enum_info_from_modules(name, self.imported_modules, self.module_registry)

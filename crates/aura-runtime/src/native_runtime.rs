@@ -20556,6 +20556,118 @@ fn direct_text<T>(name: &str, handle: *mut OpaqueValue, read: impl FnOnce(&str) 
     }
 }
 
+/// One step on a `sync.Atom`: `operation` 0 loads, 1 stores `first`, 2 adds
+/// `first`, 3 swaps in `first`, and 4 stores `second` if the value is
+/// `first`. A store returns 0 and a compare-and-set returns whether it
+/// stored.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_atom(
+    handle: *mut OpaqueValue,
+    operation: i64,
+    first: i64,
+    second: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        with_sync_handle(handle, "sync.Atom", |handle| match operation {
+            0 => handle.load(),
+            1 => handle.store(first).map(|()| 0),
+            2 => handle.add(first),
+            3 => handle.swap(first),
+            _ => handle.compare_and_set(first, second).map(i64::from),
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// Reads the `sync` handle in `handle` in place, with no clone.
+fn with_sync_handle<T>(
+    handle: *mut OpaqueValue,
+    expected: &str,
+    read: impl FnOnce(&crate::runtime_value::SyncValue) -> T,
+) -> T {
+    unsafe {
+        with_value(handle, |value| match value {
+            Value::Sync(handle) => read(handle),
+            other => runtime_error(format!(
+                "expected `{expected}`, found `{}`",
+                value_type_name(other)
+            )),
+        })
+    }
+}
+
+/// Locks the `sync.Cell` in `handle` and moves its value out. The lock may
+/// wait through the scheduler, which runs other tasks on this thread, so
+/// the wait holds a copy of the handle and no access to its box.
+fn locked_cell_value(handle: *mut OpaqueValue) -> std::result::Result<Value, Diagnostic> {
+    with_sync_handle(handle, "sync.Cell", Clone::clone).take()
+}
+
+/// Takes the lock of a `sync.Cell` and moves its value out.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_take(handle: *mut OpaqueValue) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        match locked_cell_value(handle) {
+            Ok(value) => boxed_value(value),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+/// Moves `value` back into a `sync.Cell` and releases its lock.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_put(
+    handle: *mut OpaqueValue,
+    value: *mut OpaqueValue,
+) {
+    task_runtime_boundary(|| {
+        let value = unsafe { consume_owned_value(value) };
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| handle.put(value)) {
+            runtime_diagnostic_error(error)
+        }
+    })
+}
+
+/// [`aura_direct_sync_cell_take`] for a cell that guards an `int64`
+/// (`kind` 0) or a `bool` (`kind` 1): the value as one word, with no box.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_take_word(
+    handle: *mut OpaqueValue,
+    kind: i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        match locked_cell_value(handle) {
+            Ok(Value::Bool(value)) if kind == 1 => i64::from(value),
+            Ok(value) if kind == 0 => unbox_int64_of(&value),
+            Ok(other) => runtime_error(format!(
+                "a lock that guards a `bool` held `{}`",
+                value_type_name(&other)
+            )),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
+/// [`aura_direct_sync_cell_put`] for the word
+/// [`aura_direct_sync_cell_take_word`] returned, changed or not.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_cell_put_word(
+    handle: *mut OpaqueValue,
+    kind: i64,
+    word: i64,
+) {
+    task_runtime_boundary(|| {
+        let value = if kind == 1 {
+            Value::Bool(word != 0)
+        } else {
+            Value::Int(IntegerValue::from_i64(word))
+        };
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| handle.put(value)) {
+            runtime_diagnostic_error(error)
+        }
+    })
+}
+
 /// `regex.Regex.is_match`, `count`, and the group index of a name: the
 /// search `operation` of pattern `number` over the `str` handle `text`.
 #[cfg_attr(not(coverage), no_mangle)]

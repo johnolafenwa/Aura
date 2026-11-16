@@ -11035,6 +11035,12 @@ fn lower_enum_layouts(program: &Program) -> Vec<MirEnum> {
 /// The class is asked about with its own type parameters as arguments, so
 /// a generic class is not Copy here.
 fn mir_class_is_copy(program: &Program, name: &str, class: &crate::sema::ClassInfo) -> bool {
+    // A generic class whose fields store none of its type parameters is
+    // Copy for every argument, and its values still take the generic
+    // path here, which drops them.
+    if !class.decl.type_params.is_empty() {
+        return false;
+    }
     let ty = Type::Named(
         name.to_string(),
         class

@@ -1,0 +1,135 @@
+# Shared state benchmark: a lock, an atomic counter, and a shared cache,
+# each alone on one task and then under four tasks. Prints one line per
+# phase: `<phase> <milliseconds> <checksum>`.
+import sync
+import sys
+
+LOCK_STEPS: int64 = 4000000
+ATOMIC_STEPS: int64 = 20000000
+DICT_STEPS: int64 = 4000000
+CACHE_STEPS: int64 = 1000000
+CACHE_KEYS: int64 = 1024
+TASKS: int64 = 4
+
+
+def lock_steps(counter: sync.Mutex[int64], steps: int64) -> int64:
+    mut i = 0
+    while i < steps:
+        with value = counter.lock():
+            value += 1
+        i += 1
+    return steps
+
+
+def atomic_steps(counter: sync.AtomicInt, steps: int64) -> int64:
+    mut i = 0
+    while i < steps:
+        _ = counter.add(1)
+        i += 1
+    return steps
+
+
+def dict_steps(table: sync.Mutex[dict[int64, int64]], steps: int64) -> int64:
+    mut i = 0
+    while i < steps:
+        with entries = table.lock():
+            entries[i % CACHE_KEYS] = i
+        i += 1
+    return steps
+
+
+def cache_steps(cache: sync.Map[int64, int64], seed: int64, steps: int64) -> int64:
+    mut state = seed
+    mut total = 0
+    mut i = 0
+    while i < steps:
+        state = (state * 48271) % 2147483647
+        key = state % CACHE_KEYS
+        match cache.get(key):
+            case Lookup.Found(known):
+                total += known
+            case Lookup.Missing:
+                cache.set(key, key * 3)
+                total += key * 3
+        i += 1
+    return total
+
+
+def lock_alone() -> None:
+    counter = sync.Mutex[int64](0)
+    start = sys.monotonic_time_ms()
+    _ = lock_steps(counter, LOCK_STEPS)
+    elapsed = sys.monotonic_time_ms() - start
+    with value = counter.lock():
+        print(f"lock {elapsed} {value}")
+
+
+def atomic_alone() -> None:
+    counter = sync.AtomicInt(0)
+    start = sys.monotonic_time_ms()
+    _ = atomic_steps(counter, ATOMIC_STEPS)
+    elapsed = sys.monotonic_time_ms() - start
+    print(f"atomic {elapsed} {counter.load()}")
+
+
+def dict_alone() -> None:
+    table = sync.Mutex[dict[int64, int64]](dict[int64, int64]())
+    start = sys.monotonic_time_ms()
+    _ = dict_steps(table, DICT_STEPS)
+    elapsed = sys.monotonic_time_ms() - start
+    with entries = table.lock():
+        print(f"dict {elapsed} {entries.len()}")
+
+
+def lock_shared() -> None:
+    counter = sync.Mutex[int64](0)
+    start = sys.monotonic_time_ms()
+    with TaskGroup() as group:
+        a = group.start(lock_steps, counter, LOCK_STEPS // TASKS)
+        b = group.start(lock_steps, counter, LOCK_STEPS // TASKS)
+        c = group.start(lock_steps, counter, LOCK_STEPS // TASKS)
+        d = group.start(lock_steps, counter, LOCK_STEPS // TASKS)
+        _ = a.result_or(0, timeout=120s) + b.result_or(0, timeout=120s)
+        _ = c.result_or(0, timeout=120s) + d.result_or(0, timeout=120s)
+    elapsed = sys.monotonic_time_ms() - start
+    with value = counter.lock():
+        print(f"lock_shared {elapsed} {value}")
+
+
+def atomic_shared() -> None:
+    counter = sync.AtomicInt(0)
+    start = sys.monotonic_time_ms()
+    with TaskGroup() as group:
+        a = group.start(atomic_steps, counter, ATOMIC_STEPS // TASKS)
+        b = group.start(atomic_steps, counter, ATOMIC_STEPS // TASKS)
+        c = group.start(atomic_steps, counter, ATOMIC_STEPS // TASKS)
+        d = group.start(atomic_steps, counter, ATOMIC_STEPS // TASKS)
+        _ = a.result_or(0, timeout=120s) + b.result_or(0, timeout=120s)
+        _ = c.result_or(0, timeout=120s) + d.result_or(0, timeout=120s)
+    elapsed = sys.monotonic_time_ms() - start
+    print(f"atomic_shared {elapsed} {counter.load()}")
+
+
+def cache_shared() -> None:
+    cache = sync.Map[int64, int64]()
+    mut total = 0
+    start = sys.monotonic_time_ms()
+    with TaskGroup() as group:
+        a = group.start(cache_steps, cache, 11, CACHE_STEPS)
+        b = group.start(cache_steps, cache, 23, CACHE_STEPS)
+        c = group.start(cache_steps, cache, 37, CACHE_STEPS)
+        d = group.start(cache_steps, cache, 41, CACHE_STEPS)
+        total += a.result_or(0, timeout=120s) + b.result_or(0, timeout=120s)
+        total += c.result_or(0, timeout=120s) + d.result_or(0, timeout=120s)
+    elapsed = sys.monotonic_time_ms() - start
+    print(f"cache_shared {elapsed} {total} {cache.len()}")
+
+
+def main() -> int32:
+    lock_alone()
+    atomic_alone()
+    dict_alone()
+    lock_shared()
+    atomic_shared()
+    cache_shared()
+    return 0

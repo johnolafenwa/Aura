@@ -29201,6 +29201,118 @@ fn direct_time_helpers_write_parse_and_keep_the_outcome() {
 }
 
 #[test]
+fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
+    use crate::runtime_value::SyncValue;
+    let atom = boxed_value(Value::Sync(SyncValue::atom(5)));
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 5);
+    assert_eq!(super::aura_direct_sync_atom(atom, 1, 8, 0), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 2, 2, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 3, 1, 0), 10);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 7), 1);
+    assert_eq!(super::aura_direct_sync_atom(atom, 4, 1, 9), 0);
+    assert_eq!(super::aura_direct_sync_atom(atom, 0, 0, 0), 7);
+
+    let cell = boxed_value(Value::Sync(SyncValue::cell(Value::string("held"))));
+    let held = super::aura_direct_sync_cell_take(cell);
+    unsafe {
+        assert_eq!(super::value_ref(held), Value::string("held"));
+    }
+    super::aura_direct_sync_cell_put(cell, held);
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(unsafe { take_value(again) }, Value::string("held"));
+    super::aura_direct_sync_cell_put(cell, boxed_value(Value::string("next")));
+
+    let count = boxed_value(Value::Sync(SyncValue::cell(Value::Int(
+        IntegerValue::from_i64(41),
+    ))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 41);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+    assert_eq!(super::aura_direct_sync_cell_take_word(count, 0), 42);
+    super::aura_direct_sync_cell_put_word(count, 0, 42);
+
+    let flag = boxed_value(Value::Sync(SyncValue::cell(Value::Bool(false))));
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 0);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+    assert_eq!(super::aura_direct_sync_cell_take_word(flag, 1), 1);
+    super::aura_direct_sync_cell_put_word(flag, 1, 1);
+
+    unsafe {
+        for value in [atom, cell, count, flag] {
+            release_value(value);
+        }
+    }
+}
+
+#[test]
+fn direct_sync_helpers_report_a_wrong_handle_and_a_failed_step() {
+    use crate::runtime_value::SyncValue;
+    let failure = |run: fn()| {
+        run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                run();
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("the helper traps")
+        .message
+    };
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_atom(bool_value(true), 0, 0, 0);
+        }),
+        "expected `sync.Atom`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| {
+            let _ = super::aura_direct_sync_cell_take(bool_value(true));
+        }),
+        "expected `sync.Cell`, found `bool`"
+    );
+    assert_eq!(
+        failure(|| super::aura_direct_sync_cell_put(bool_value(true), bool_value(true))),
+        "expected `sync.Cell`, found `bool`"
+    );
+    // A cell is not an atom, an overflow traps, and a cell that is not
+    // locked takes no value back.
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_atom(cell, 0, 0, 0);
+    })
+    .contains("sync.Atom"));
+    assert!(failure(|| {
+        let atom = boxed_value(Value::Sync(SyncValue::atom(i64::MAX)));
+        let _ = super::aura_direct_sync_atom(atom, 2, 1, 0);
+    })
+    .contains("overflow"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put(cell, bool_value(true));
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        super::aura_direct_sync_cell_put_word(cell, 0, 1);
+    })
+    .contains("does not hold"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take(cell);
+        let _ = super::aura_direct_sync_cell_take(cell);
+    })
+    .contains("already holds"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 0);
+    })
+    .contains("int64"));
+    assert!(failure(|| {
+        let cell = boxed_value(Value::Sync(SyncValue::cell(Value::Unit)));
+        let _ = super::aura_direct_sync_cell_take_word(cell, 1);
+    })
+    .contains("bool"));
+}
+
+#[test]
 fn direct_regex_helpers_search_with_a_pattern_number() {
     use crate::runtime_value::host_builtins::host_builtin_function;
     let compile = host_builtin_function("regex::__aura_compile").expect("a builtin");
