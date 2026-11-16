@@ -9070,7 +9070,27 @@ impl<'a> FunctionChecker<'a> {
                 let locals_after_left = locals.clone();
                 let right_hint = array_element_type(&left_ty).unwrap_or(&left_ty);
                 let mut right_ty =
-                    self.type_equality_operand(*op, right, locals, Some(right_hint))?;
+                    match self.type_equality_operand(*op, right, locals, Some(right_hint)) {
+                        Ok(right_ty) => right_ty,
+                        Err(error) => {
+                            // The left operand's type is only a hint. With a
+                            // number on the left, a right operand of another
+                            // type may still have an operator trait for it,
+                            // as in `2 * tensor.ones(shape)`, so the operand
+                            // is checked again on its own.
+                            if !is_numeric_type(&left_ty) {
+                                return Err(error);
+                            }
+                            let mut unhinted = locals_after_left.clone();
+                            match self.type_equality_operand(*op, right, &mut unhinted, None) {
+                                Ok(right_ty) if !is_numeric_type(&right_ty) => {
+                                    *locals = unhinted;
+                                    right_ty
+                                }
+                                _ => return Err(error),
+                            }
+                        }
+                    };
                 if span_equality {
                     right_ty = span_as_list_type(right_ty);
                 }

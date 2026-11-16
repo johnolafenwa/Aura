@@ -7720,6 +7720,48 @@ impl<'a> FunctionCompiler<'a> {
             );
             return Ok(self.owned_opaque_result(inst.results, Type::named("Unknown")));
         }
+        if matches!(op, BinaryOp::Eq | BinaryOp::NotEq)
+            && left.ty == right.ty
+            && left.ty.scalar_kind().is_none()
+        {
+            if let DirectType::PlainClass(class) = left.ty.clone() {
+                // A Copy class is equal field by field, each field under
+                // the rule of its own type.
+                let mut equal = self.builder.iconst(types::I64, 1);
+                let mut at = 0;
+                for field in &class.fields {
+                    let words = field.ty.abi_types().len();
+                    let field_equal = self.compile_binary(
+                        BinaryOp::Eq,
+                        ValueRef {
+                            values: left.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        ValueRef {
+                            values: right.values[at..at + words].to_vec(),
+                            ty: field.ty.clone(),
+                        },
+                        span,
+                        ArithmeticTrap::None,
+                    )?;
+                    equal = self.builder.band(equal, field_equal.values[0]);
+                    at += words;
+                }
+                let result = if op == BinaryOp::Eq {
+                    equal
+                } else {
+                    self.builder.bxor_imm(equal, 1)
+                };
+                return Ok(ValueRef {
+                    values: vec![result],
+                    ty: DirectType::Scalar(ScalarKind::Bool),
+                });
+            }
+            // Any other inline value: the runtime compares the boxed forms.
+            let left = self.ensure_opaque(left)?;
+            let right = self.ensure_opaque(right)?;
+            return self.compile_binary(op, left, right, span, trap);
+        }
         match (left.ty.scalar_kind(), right.ty.scalar_kind()) {
             (Some(lhs), Some(rhs)) if lhs == rhs && lhs.is_narrow_integer() => {
                 self.compile_narrow_binary(lhs, op, left.values[0], right.values[0], span, trap)
