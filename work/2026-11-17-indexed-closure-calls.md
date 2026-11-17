@@ -7,7 +7,9 @@ already works. A shared callable held in a tuple element must support
 repeated calls while the tuple continues to own it.
 
 The release benchmark and matching checksums for the six original
-workloads are recorded in `benchmarks/closures/README.md`. The original
-mutable list loop takes longer than Python's on this worker. Runtime
-and compiler improvements under investigation must be measured against
-that loop as well as against calls through fields and locals.
+workloads are recorded in `benchmarks/closures/README.md`. Three
+single-core runs put the original mutable-list loop at 6,765 ms and the
+optimized loop at 1,133 ms. A shared list element used only for calls can
+stay in place. A mutable element call with a bit mask in its argument can
+also use its existing loan. The shared and mutable list calls and mutable
+local still exceed the three-times-Rust target on this host.
