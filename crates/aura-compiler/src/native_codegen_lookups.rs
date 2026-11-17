@@ -823,3 +823,70 @@ pub(super) fn text_byte_slices(function: &MirFunction) -> HashSet<String> {
         .map(str::to_string)
         .collect()
 }
+
+/// Known bytes for a character read from a single-assignment ASCII literal.
+/// A mutable call or loan can replace the local through another name.
+pub(super) fn indexed_ascii_literals(function: &MirFunction) -> HashMap<String, String> {
+    use crate::mir::ownership::{instruction_accesses, Access};
+    fn receiver(instruction: &Instruction) -> Option<&str> {
+        match instruction {
+            Instruction::Assign {
+                value:
+                    Rvalue::Call {
+                        callee:
+                            CallTarget::Runtime {
+                                op: RuntimeOp::Str(crate::runtime_ops::StrOp::CharAt),
+                                receiver: Some(Operand::Place(local)),
+                                ..
+                            },
+                        ..
+                    },
+                ..
+            } => Some(local),
+            _ => None,
+        }
+    }
+    let instructions = || function.blocks.iter().flat_map(|block| &block.instructions);
+    let mut indexed = instructions().filter_map(receiver).collect::<HashSet<_>>();
+    if indexed.is_empty() {
+        return HashMap::new();
+    }
+    let mut literals = HashMap::new();
+    let mut writes = HashMap::<&str, usize>::new();
+    for instruction in instructions() {
+        if let Instruction::Assign {
+            target,
+            value: Rvalue::Use(Operand::String(text)),
+        } = instruction
+        {
+            if indexed.contains(target.as_str()) && text.is_ascii() && !text.is_empty() {
+                literals.insert(target.clone(), text.clone());
+            }
+        }
+        for (place, access) in instruction_accesses(instruction) {
+            // MIR retains a receiver place even for the read-only CharAt method.
+            if access == Access::Writeback && Some(place) == receiver(instruction) {
+                continue;
+            }
+            if !matches!(access, Access::Assign | Access::Writeback) {
+                continue;
+            }
+            let root = place.split('.').next().unwrap_or(place);
+            if indexed.contains(root) {
+                *writes.entry(root).or_default() += 1;
+            }
+        }
+        if let Instruction::BeginLoan { source, .. }
+        | Instruction::BeginElementLoan { source, .. }
+        | Instruction::Lend { place: source, .. } = instruction
+        {
+            indexed.remove(source.split('.').next().unwrap_or(source));
+        }
+    }
+    literals.retain(|place, _| {
+        indexed.contains(place.as_str())
+            && writes.get(place.as_str()) == Some(&1)
+            && !function.params.iter().any(|param| param.name == *place)
+    });
+    literals
+}

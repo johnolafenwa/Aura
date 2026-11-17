@@ -17,3 +17,15 @@ Run the benchmark from the repository root.
 cargo build --locked --release -p aura
 bash benchmarks/collections_text/run.sh
 ```
+
+## ASCII indexing
+
+On a shared Linux x86-64 worker, the median of nine rotated runs for the
+400,000 reads above was 0.64 ms in Aura, 0.86 ms in Rust and 81.26 ms in
+Python. The previous Aura compiler took 3.74 ms on the same runs.
+
+A second comparison increased the loop to 40 million reads, pinned one CPU
+and recorded process CPU time. Per 400,000 reads, the medians were 0.841 ms
+for Aura, 0.971 ms for Rust and 40.755 ms for Python. Aura took 4.490 ms
+when the function received the string as an argument of unknown content.
+All outputs counted the same characters.

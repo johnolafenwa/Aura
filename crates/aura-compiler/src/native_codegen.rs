@@ -2524,6 +2524,7 @@ impl<'a> NativeCodegen<'a> {
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
             recovery_slots,
+            indexed_ascii_literals: lookups::indexed_ascii_literals(function),
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -3971,6 +3972,8 @@ struct FunctionCompiler<'a> {
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
     text_byte_slices: HashSet<String>,
+    /// Indexed locals that keep the same ASCII string literal throughout the function.
+    indexed_ascii_literals: HashMap<String, String>,
     /// The list and slice words of each of `text_byte_slices` whose
     /// `str.from_bytes` is still to compile.
     byte_slice_words: HashMap<String, Vec<Val>>,
@@ -8091,17 +8094,43 @@ impl<'a> FunctionCompiler<'a> {
         if compared != character || text.contains('.') || argument.writeback_place.is_some() {
             return Ok(false);
         }
-        let text = self.load_place(text)?;
+        let known = self.indexed_ascii_literals.get(text).cloned();
+        let text = self.load_place(text)?.values[0];
         let index =
             self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
-        let index = self.coerce_value(index, &DirectType::Scalar(ScalarKind::Int64))?;
-        let actual = self.builder.call(
-            self.runtime[RuntimeFn::StringScalarAt],
-            &[text.values[0], index.values[0]],
-        );
-        let comparison =
+        let index = self
+            .coerce_value(index, &DirectType::Scalar(ScalarKind::Int64))?
+            .values[0];
+        let actual = if let Some(bytes) = known {
+            let (data, length) = self.string_constant(bytes.as_bytes())?;
+            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, index, 0);
+            let from_end = self.builder.iadd(index, length);
+            let position = self.builder.select(negative, from_end, index);
+            let outside = self
+                .builder
+                .icmp(IntCC::UnsignedGreaterThanOrEqual, position, length);
+            let (fast, slow, join) = emit_frame_branch(&mut *self.builder, outside);
+            self.builder.append_block_param(join, types::I64);
+            self.builder.switch_to_block(fast);
+            let address = self.builder.iadd(data, position);
+            let byte = self.builder.uload8(types::I64, MemFlags::new(), address, 0);
+            self.builder.jump(join, &[byte]);
+            self.builder.switch_to_block(slow);
+            let checked = self
+                .builder
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index]);
+            self.builder.jump(join, &[checked.results[0]]);
+            self.builder.switch_to_block(join);
+            self.builder.seal_block(join);
+            self.builder.block_params(join)[0]
+        } else {
             self.builder
-                .icmp_imm(condition, actual.results[0], i64::from(u32::from(literal)));
+                .call(self.runtime[RuntimeFn::StringScalarAt], &[text, index])
+                .results[0]
+        };
+        let comparison = self
+            .builder
+            .icmp_imm(condition, actual, i64::from(u32::from(literal)));
         let word = self.builder.uextend(types::I64, comparison);
         self.store_place(
             target,
