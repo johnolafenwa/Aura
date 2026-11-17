@@ -20461,7 +20461,9 @@ impl<'a> Lowerer<'a> {
         };
         if name != "list"
             || args.len() != 1
-            || !(crate::mir_copies::lendable_loop_element(&args[0]) || args[0].is_trait_object())
+            || !(crate::mir_copies::lendable_loop_element(&args[0])
+                || args[0].is_trait_object()
+                || crate::mir_copies::shared_callable_element(&args[0]))
         {
             return false;
         }

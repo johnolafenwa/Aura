@@ -28,6 +28,13 @@ pub(crate) fn lendable_loop_element(element: &Type) -> bool {
     }
 }
 
+/// Shared callables can execute directly on their list element for the
+/// duration of a call. Other uses of the loop binding still copy or move it.
+pub(crate) fn shared_callable_element(element: &Type) -> bool {
+    matches!(element, Type::Callable(callable)
+        if callable.call_kind == crate::sema::ClosureCallKind::Repeatable)
+}
+
 /// Whether `element.field(...)` with `arity` arguments reads a lent list
 /// element in place: `len()` on any lendable element, and `get(key)` on a
 /// `dict`.
@@ -128,6 +135,9 @@ fn expr_only_borrows(expr: &Expr, name: &str, element: &Type) -> bool {
                 .iter()
                 .all(|argument| expr_only_borrows(&argument.value, name, element));
             match &grouped(callee).kind {
+                ExprKind::Name(called) if called == name && shared_callable_element(element) => {
+                    arguments_borrow
+                }
                 ExprKind::Member { object, field }
                     if is_binding(object)
                         && borrowed_element_method(element, field, args.len()) =>
