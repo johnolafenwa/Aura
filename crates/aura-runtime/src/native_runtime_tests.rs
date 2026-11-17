@@ -77,7 +77,7 @@ fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
                 super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
                 super::with_direct_task_runtime_state(|state| {
                     if active {
-                        state.foreign_callback_active = true;
+                        state.foreign_callback_cleanup_base = Some(0);
                     } else {
                         state.foreign_callback_failure = Some(Box::new("unfinished callback"));
                     }
@@ -85,7 +85,7 @@ fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
                 super::aura_direct_recover_end(std::ptr::null_mut());
                 super::aura_direct_recover_begin(buffer.as_mut_ptr(), 1);
                 super::with_direct_task_runtime_state(|state| {
-                    assert!(!state.foreign_callback_active);
+                    assert!(state.foreign_callback_cleanup_base.is_none());
                     assert!(state.foreign_callback_failure.is_none());
                 });
                 super::aura_direct_recover_end(std::ptr::null_mut());

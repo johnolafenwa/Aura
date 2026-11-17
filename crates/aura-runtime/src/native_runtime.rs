@@ -5430,7 +5430,11 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
     drain_direct_cleanup_stack();
     let diagnostic = attach_direct_manager_exit_failures(diagnostic);
-    if leaf && recovered_call_takes_exit() {
+    // Let the callback return to C before a surrounding recovered call takes the trap.
+    if leaf
+        && recovered_call_takes_exit()
+        && with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_none())
+    {
         // The exit is taken where it is recorded, and the frames from here
         // to the generated code that trapped are abandoned with it.
         fail_current_lightweight_task(diagnostic)
@@ -22301,7 +22305,7 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_end(
     let Some(mut state) = state else {
         return returned;
     };
-    let clean = !state.foreign_callback_active
+    let clean = state.foreign_callback_cleanup_base.is_none()
         && state.foreign_callback_failure.is_none()
         && state.owned_values().is_empty()
         && state.cleanup_stack.is_empty()

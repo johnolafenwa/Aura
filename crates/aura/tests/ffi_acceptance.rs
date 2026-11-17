@@ -2765,11 +2765,20 @@ import control
 extern "C" def fc_call(visit: def(text: cstr) -> None) -> int32
 extern "C" def fc_cleaned() -> int32
 
+class Marker:
+    name: str
+
+    def close(mut self) -> None:
+        print(f"{self.name} sees C cleanup {fc_cleaned()}")
+
 def reject(text: str) -> None:
-    assert text == "", text
+    with inner = Marker(name="callback manager"):
+        assert text == "", text
 
 def foreign_failure() -> int32:
-    return fc_call(reject)
+    with outer = Marker(name="foreign caller manager"):
+        return fc_call(reject)
+    return 0
 
 def inner_recovery(text: str) -> None:
     match control.recover(reject, text.clone()):
@@ -2793,7 +2802,7 @@ def main() -> int32:
     let (interpreted, compiled) = run_on_both_backends(&package, &source);
     for (backend, output) in [("mir", interpreted), ("direct", compiled)] {
         assert_success(&output, backend);
-        assert_eq!(String::from_utf8_lossy(&output.stdout), "outer AU4001: callback stopped\nC finished cleanup 1\ninner AU4001: callback stopped\n17\nC finished cleanup 1\n", "{backend}");
+        assert_eq!(String::from_utf8_lossy(&output.stdout), "callback manager sees C cleanup 0\nforeign caller manager sees C cleanup 1\nouter AU4001: callback stopped\nC finished cleanup 1\ncallback manager sees C cleanup 0\ninner AU4001: callback stopped\n17\nC finished cleanup 1\n", "{backend}");
     }
 }
 
