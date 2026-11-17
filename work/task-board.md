@@ -11,6 +11,18 @@ Last updated: 2026-11-17
 - Compiler and runtime tests, editor checks and release benchmarks are
   underway. The shared branch collects this work.
 
+
+## Three compiler defects from the book sections (complete)
+
+- Target: John's 2026-11-16 ask to fix the defects the book work found.
+  Details are in `2026-11-16-book-compiler-defects.md`.
+- Done: comprehension element loans end inside their iteration, an inline
+  number list takes the byte type of a method parameter, and a static
+  musl program reads its arguments from its first stack without `/proc`.
+- Verification: the three repros on both backends, new unit tests, a
+  run-pass fixture, and the cross-target test, which runs the musl program
+  in a bare `chroot`.
+
 ## Book chapters on tensors and machine learning (complete)
 
 - Target: John's 2026-11-15 ask for "very strong ml and tensor programming
@@ -35,7 +47,7 @@ Last updated: 2026-11-17
 - Verification: every listing shown with output run with the released
   0.16.0 compiler and compared with the page, `check_doc_examples.py`, and
   the `llms.txt` generator.
-- Found and not fixed: three compiler defects listed in the note.
+- Found: three compiler defects listed in the note, fixed on 2026-11-16.
 
 ## Documentation audit against 0.16 (complete)
 

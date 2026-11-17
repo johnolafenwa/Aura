@@ -14,6 +14,19 @@ in this file.
   available stack traps with AU4005. Deep diagnostics record how many
   intervening calls were omitted.
 
+- Fixed: a comprehension whose output or filter reads a list element by
+  index and calls a method on it, such as
+  `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR
+  loan flow". The loop form always worked.
+- Fixed: a list of numbers written inline as the byte argument of a
+  method, such as `socket.send_bytes(address, [100, 105], timeout=1s)`,
+  passed `aura check` and then stopped at run time with AU4001. The same
+  applies to `write_bytes` on files, TCP streams, and process pipes, to
+  `send_bytes` on a WebSocket, and to `respond_bytes`.
+- Fixed: a static musl program gave an empty `sys.args()` where `/proc` is
+  not mounted, as in a bare `chroot`. It now reads its arguments from its
+  first stack when `/proc/self/cmdline` cannot be read.
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2

@@ -21231,3 +21231,37 @@ fn kernel_command_line_gives_the_arguments_after_the_program_name() {
     assert_eq!(args(b""), Vec::<String>::new());
     assert_eq!(args(b"./app\0caf\xff\0"), ["caf\u{fffd}"]);
 }
+
+#[test]
+fn first_stack_gives_the_arguments_after_the_program_name() {
+    let strings = [c"./app", c"first", c"second arg"];
+    let stack_of = |arguments: &[&std::ffi::CStr], count: usize| {
+        let mut stack = vec![count];
+        stack.extend(arguments.iter().map(|argument| argument.as_ptr() as usize));
+        // The word that ends the arguments, then one environment entry.
+        stack.extend([0, strings[0].as_ptr() as usize, 0]);
+        stack
+    };
+    let args = |stack: &[usize], environment: usize| unsafe {
+        super::initial_stack_args(stack.as_ptr().add(environment))
+    };
+
+    let stack = stack_of(&strings, 3);
+    assert_eq!(
+        args(&stack, 5),
+        Some(vec!["first".to_string(), "second arg".to_string()])
+    );
+    let stack = stack_of(&strings[..1], 1);
+    assert_eq!(args(&stack, 3), Some(Vec::new()));
+    // A program started with no arguments at all, not even its name.
+    let stack = stack_of(&[], 0);
+    assert_eq!(args(&stack, 2), Some(Vec::new()));
+
+    // An array that `setenv` moved has no null word in front of it, and a
+    // count that matches nothing ends the walk.
+    let stack = stack_of(&strings, 3);
+    assert_eq!(args(&stack, 6), None);
+    let stack = stack_of(&strings, 9);
+    assert_eq!(args(&stack, 5), None);
+    assert_eq!(unsafe { super::initial_stack_args(std::ptr::null()) }, None);
+}
