@@ -74,12 +74,16 @@ fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
     const HELPER: &str = "recovered_scalar_shared_result";
     if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
         let output = std::process::Command::new(std::env::current_exe().unwrap())
-            .args(["--exact", "native_runtime::tests::recovered_scalar_assertion_shares_its_result_and_copies_the_trap"])
-            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER).output().unwrap();
+            .arg("--exact")
+            .arg("native_runtime::tests::recovered_scalar_assertion_shares_its_result_and_copies_the_trap")
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER)
+            .output()
+            .unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
         assert!(
-            output.status.success(),
-            "{}",
-            String::from_utf8_lossy(&output.stdout)
+            output.status.success() && stdout.contains("1 passed"),
+            "{stdout}\n{}",
+            String::from_utf8_lossy(&output.stderr)
         );
         return;
     }
@@ -105,8 +109,8 @@ fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
             }
         };
         let (left, right) = std::thread::scope(|scope| {
-            let first = scope.spawn(&read);
-            let second = scope.spawn(&read);
+            let first = scope.spawn(read);
+            let second = scope.spawn(read);
             (first.join().unwrap(), second.join().unwrap())
         });
         assert_eq!(left, right);
