@@ -16,6 +16,7 @@ use std::collections::TryReserveError;
 use std::hash::{BuildHasher, Hash, Hasher, RandomState};
 use std::ops::{Deref, DerefMut};
 use std::sync::{Arc, OnceLock};
+use triomphe::Arc as EntriesArc;
 
 use hashbrown::HashTable;
 
@@ -482,8 +483,11 @@ pub struct IndexedEntries<T> {
 
 #[derive(Debug)]
 enum Storage<T> {
-    Small(Arc<Vec<T>>),
-    Large(Arc<Large<T>>),
+    // Eager entries have only strong owners. A write to unique storage
+    // needs one acquire load, even when every lookup and store takes its
+    // own lock. Snapshots and transfers still share immutable storage.
+    Small(EntriesArc<Vec<T>>),
+    Large(EntriesArc<Large<T>>),
     /// The entries of an object in a parsed JSON document's tape, made
     /// values the first time a read needs them as values. A write first
     /// takes them as eager storage of its own.
@@ -495,16 +499,16 @@ enum Storage<T> {
 /// tape tests its form once.
 #[derive(Debug)]
 enum Eager<T> {
-    Small(Arc<Vec<T>>),
-    Large(Arc<Large<T>>),
+    Small(EntriesArc<Vec<T>>),
+    Large(EntriesArc<Large<T>>),
 }
 
 impl<T> Eager<T> {
     /// The same storage, shared.
     fn share(&self) -> Self {
         match self {
-            Self::Small(entries) => Self::Small(Arc::clone(entries)),
-            Self::Large(large) => Self::Large(Arc::clone(large)),
+            Self::Small(entries) => Self::Small(EntriesArc::clone(entries)),
+            Self::Large(large) => Self::Large(EntriesArc::clone(large)),
         }
     }
 
@@ -525,14 +529,14 @@ impl<T> Eager<T> {
 
 /// The storage a read sees (see [`IndexedEntries::eager`]).
 enum EagerRef<'a, T> {
-    Small(&'a Arc<Vec<T>>),
-    Large(&'a Arc<Large<T>>),
+    Small(&'a EntriesArc<Vec<T>>),
+    Large(&'a EntriesArc<Large<T>>),
 }
 
 /// The storage a write sees (see [`IndexedEntries::eager_mut`]).
 enum EagerMut<'a, T> {
-    Small(&'a mut Arc<Vec<T>>),
-    Large(&'a mut Arc<Large<T>>),
+    Small(&'a mut EntriesArc<Vec<T>>),
+    Large(&'a mut EntriesArc<Large<T>>),
 }
 
 /// See [`Storage::Lazy`].
@@ -668,7 +672,7 @@ pub type SetElements = IndexedEntries<Value>;
 impl<T> Default for IndexedEntries<T> {
     fn default() -> Self {
         Self {
-            storage: Storage::Small(Arc::new(Vec::new())),
+            storage: Storage::Small(EntriesArc::new(Vec::new())),
         }
     }
 }
@@ -677,8 +681,8 @@ impl<T> Clone for IndexedEntries<T> {
     /// Shares the storage. A later write copies it first.
     fn clone(&self) -> Self {
         let storage = match &self.storage {
-            Storage::Small(entries) => Storage::Small(Arc::clone(entries)),
-            Storage::Large(large) => Storage::Large(Arc::clone(large)),
+            Storage::Small(entries) => Storage::Small(EntriesArc::clone(entries)),
+            Storage::Large(large) => Storage::Large(EntriesArc::clone(large)),
             Storage::Lazy(lazy) => Storage::Lazy(Arc::clone(lazy)),
         };
         Self { storage }
@@ -715,7 +719,7 @@ impl<T: Keyed + Clone> From<Vec<T>> for IndexedEntries<T> {
     /// keys, lookups find the first, as a scan of the same entries would.
     fn from(entries: Vec<T>) -> Self {
         let mut collection = Self {
-            storage: Storage::Small(Arc::new(entries)),
+            storage: Storage::Small(EntriesArc::new(entries)),
         };
         collection.rebuild_index();
         collection
@@ -936,8 +940,8 @@ impl<T> IndexedEntries<T> {
             return true;
         }
         match self.eager() {
-            EagerRef::Small(entries) => Arc::strong_count(entries) > 1,
-            EagerRef::Large(large) => Arc::strong_count(large) > 1,
+            EagerRef::Small(entries) => !entries.is_unique(),
+            EagerRef::Large(large) => !large.is_unique(),
         }
     }
 
@@ -953,8 +957,8 @@ impl<T> IndexedEntries<T> {
 impl<T: Clone> IndexedEntries<T> {
     pub fn into_vec(self) -> Vec<T> {
         match self.into_eager() {
-            Eager::Small(entries) => Arc::unwrap_or_clone(entries),
-            Eager::Large(large) => Arc::unwrap_or_clone(large)
+            Eager::Small(entries) => EntriesArc::unwrap_or_clone(entries),
+            Eager::Large(large) => EntriesArc::unwrap_or_clone(large)
                 .slots
                 .into_iter()
                 .flatten()
@@ -964,8 +968,8 @@ impl<T: Clone> IndexedEntries<T> {
 
     pub fn try_reserve(&mut self, additional: usize) -> Result<(), TryReserveError> {
         match self.eager_mut() {
-            EagerMut::Small(entries) => Arc::make_mut(entries).try_reserve(additional),
-            EagerMut::Large(large) => Arc::make_mut(large).slots.try_reserve(additional),
+            EagerMut::Small(entries) => EntriesArc::make_mut(entries).try_reserve(additional),
+            EagerMut::Large(large) => EntriesArc::make_mut(large).slots.try_reserve(additional),
         }
     }
 }
@@ -983,7 +987,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 let mut index = large.index.clone();
                 large.pack_index(&mut index);
                 Self {
-                    storage: Storage::Large(Arc::new(Large {
+                    storage: Storage::Large(EntriesArc::new(Large {
                         slots: entries.into_iter().map(Some).collect(),
                         index,
                         holes: 0,
@@ -1083,8 +1087,8 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// The entry in `slot`, for writing.
     fn at_slot_mut(&mut self, slot: usize) -> &mut T {
         let entry = match self.eager_mut() {
-            EagerMut::Small(entries) => Arc::make_mut(entries).get_mut(slot),
-            EagerMut::Large(large) => Arc::make_mut(large)
+            EagerMut::Small(entries) => EntriesArc::make_mut(entries).get_mut(slot),
+            EagerMut::Large(large) => EntriesArc::make_mut(large)
                 .slots
                 .get_mut(slot)
                 .and_then(Option::as_mut),
@@ -1101,14 +1105,14 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     fn push_new_hashed(&mut self, entry: T, hash: Option<u64>) {
         match self.eager_mut() {
             EagerMut::Small(entries) => {
-                let entries = Arc::make_mut(entries);
+                let entries = EntriesArc::make_mut(entries);
                 entries.push(entry);
                 if entries.len() > INDEX_THRESHOLD {
                     self.rebuild_index();
                 }
             }
             EagerMut::Large(large) => {
-                let large = Arc::make_mut(large);
+                let large = EntriesArc::make_mut(large);
                 let slot = large.slots.len();
                 let hash = hash.unwrap_or_else(|| hash_value(entry.key()));
                 large.slots.push(Some(entry));
@@ -1150,9 +1154,9 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// set. `hash` is its key's hash when a probe already has it.
     fn remove_slot(&mut self, slot: usize, hash: Option<u64>, pack: bool) -> T {
         let removed = match self.eager_mut() {
-            EagerMut::Small(entries) => return Arc::make_mut(entries).remove(slot),
+            EagerMut::Small(entries) => return EntriesArc::make_mut(entries).remove(slot),
             EagerMut::Large(large) => {
-                let large = Arc::make_mut(large);
+                let large = EntriesArc::make_mut(large);
                 let hash = hash.unwrap_or_else(|| {
                     hash_value(
                         large.slots[slot]
@@ -1176,17 +1180,17 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
 
     pub fn clear(&mut self) {
         match self.eager_mut() {
-            EagerMut::Small(entries) => match Arc::get_mut(entries) {
+            EagerMut::Small(entries) => match EntriesArc::get_mut(entries) {
                 Some(entries) => entries.clear(),
-                None => *entries = Arc::new(Vec::new()),
+                None => *entries = EntriesArc::new(Vec::new()),
             },
             EagerMut::Large(large) => {
                 // Clearing an unshared collection keeps its room.
-                let entries = match Arc::get_mut(large) {
+                let entries = match EntriesArc::get_mut(large) {
                     Some(large) => Vec::with_capacity(large.slots.capacity()),
                     None => Vec::new(),
                 };
-                self.storage = Storage::Small(Arc::new(entries));
+                self.storage = Storage::Small(EntriesArc::new(entries));
             }
         }
     }
@@ -1201,14 +1205,14 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
     /// index from the entries.
     fn rebuild_index(&mut self) {
         let entries = match self.eager_mut() {
-            EagerMut::Small(entries) => std::mem::take(Arc::make_mut(entries)),
-            EagerMut::Large(large) => std::mem::take(&mut Arc::make_mut(large).slots)
+            EagerMut::Small(entries) => std::mem::take(EntriesArc::make_mut(entries)),
+            EagerMut::Large(large) => std::mem::take(&mut EntriesArc::make_mut(large).slots)
                 .into_iter()
                 .flatten()
                 .collect(),
         };
         if entries.len() <= INDEX_THRESHOLD {
-            self.storage = Storage::Small(Arc::new(entries));
+            self.storage = Storage::Small(EntriesArc::new(entries));
             return;
         }
         let mut index = HashTable::with_capacity(entries.len());
@@ -1223,7 +1227,7 @@ impl<T: Keyed + Clone> IndexedEntries<T> {
                 index.insert_unique(hash, (hash, position), |&(hash, _)| hash);
             }
         }
-        self.storage = Storage::Large(Arc::new(Large {
+        self.storage = Storage::Large(EntriesArc::new(Large {
             slots: entries.into_iter().map(Some).collect(),
             index,
             holes: 0,
@@ -1282,7 +1286,7 @@ impl DictEntries {
     pub fn insert(&mut self, key: Value, value: Value) -> Option<Value> {
         // A small dict scans and writes its one vector, made unshared once.
         if let EagerMut::Small(entries) = self.eager_mut() {
-            let entries = Arc::make_mut(entries);
+            let entries = EntriesArc::make_mut(entries);
             if let Some(entry) = entries
                 .iter_mut()
                 .find(|(candidate, _)| key_equals(candidate, &key))
