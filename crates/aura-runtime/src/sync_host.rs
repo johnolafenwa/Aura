@@ -32,18 +32,35 @@ const SPIN_LIMIT: u32 = 96;
 #[derive(Default)]
 pub(crate) struct HolderState {
     token: Cell<u64>,
-    held: RefCell<Vec<Weak<CellState>>>,
+    held: RefCell<Vec<HeldCell>>,
+    epoch: Cell<u64>,
     depth: Cell<usize>,
 }
+
+struct HeldCell {
+    cell: Weak<CellState>,
+    epoch: u64,
+}
+
+/// Identifies the cells acquired inside a recovery call on this task.
+#[derive(Clone, Copy)]
+pub struct HeldCellMark(u64);
 
 impl HolderState {
     fn acquired(&self, cell: &Arc<CellState>) {
         let depth = self.depth.get();
         let mut held = self.held.borrow_mut();
-        match held.get_mut(depth) {
-            Some(slot) if std::ptr::eq(slot.as_ptr(), Arc::as_ptr(cell)) => {}
-            Some(slot) => *slot = Arc::downgrade(cell),
-            None => held.push(Arc::downgrade(cell)),
+        let epoch = self.epoch.get();
+        if let Some(slot) = held.get_mut(depth) {
+            if !std::ptr::eq(slot.cell.as_ptr(), Arc::as_ptr(cell)) {
+                slot.cell = Arc::downgrade(cell);
+            }
+            slot.epoch = epoch;
+        } else {
+            held.push(HeldCell {
+                cell: Arc::downgrade(cell),
+                epoch,
+            });
         }
         self.depth.set(depth + 1);
         cell.holder.store(self.token(), Ordering::Relaxed);
@@ -52,26 +69,29 @@ impl HolderState {
     fn released(&self, cell: &Arc<CellState>) {
         let last = self.depth.get() - 1;
         let mut held = self.held.borrow_mut();
-        if !std::ptr::eq(held[last].as_ptr(), Arc::as_ptr(cell)) {
+        if !std::ptr::eq(held[last].cell.as_ptr(), Arc::as_ptr(cell)) {
             // Host calls can return two cells in a different order.
             let position = held[..last]
                 .iter()
-                .position(|slot| std::ptr::eq(slot.as_ptr(), Arc::as_ptr(cell)))
+                .position(|slot| std::ptr::eq(slot.cell.as_ptr(), Arc::as_ptr(cell)))
                 .expect("the current holder registered this cell");
             held[position..=last].rotate_left(1);
         }
         self.depth.set(last);
     }
 
-    fn abandon_since(&self, depth: usize) {
+    fn abandon_since(&self, mark: HeldCellMark) {
         let end = self.depth.get();
-        if end <= depth {
+        if end == 0 {
             return;
         }
-        self.depth.set(depth);
-        for cell in self.held.borrow()[depth..end]
+        let held = self.held.borrow();
+        let active = &held[..end];
+        let keep = active.partition_point(|entry| entry.epoch < mark.0);
+        self.depth.set(keep);
+        for cell in active[keep..]
             .iter()
-            .filter_map(Weak::upgrade)
+            .filter_map(|entry| entry.cell.upgrade())
         {
             if cell.state.swap(POISONED, Ordering::Release) == CONTENDED {
                 cell.wake_one();
@@ -105,22 +125,34 @@ fn with_current_holder<T>(f: impl FnOnce(&HolderState) -> T) -> T {
 
 /// Poisons every cell still held at task completion.
 pub(crate) fn holder_ended(holder: &HolderState) {
-    holder.abandon_since(0);
+    holder.abandon_since(HeldCellMark(0));
 }
 
-/// The boundary between a caller's locks and those a nested call acquires.
-pub fn held_cell_depth() -> usize {
-    with_current_holder(|holder| holder.depth.get())
+/// Marks the start of a recovery call on this task. A caller can release
+/// a pre-existing cell during the call, so a count alone cannot mark it.
+pub fn mark_held_cells() -> HeldCellMark {
+    with_current_holder(|holder| {
+        if holder.depth.get() == 0 {
+            return HeldCellMark(0);
+        }
+        let epoch = holder
+            .epoch
+            .get()
+            .checked_add(1)
+            .expect("lock recovery epoch exhausted");
+        holder.epoch.set(epoch);
+        HeldCellMark(epoch)
+    })
 }
 
-/// Poisons only the locks whose frames have been abandoned.
-pub fn abandon_held_cells_since(depth: usize) {
-    with_current_holder(|holder| holder.abandon_since(depth));
+/// Poisons only the cells acquired since `mark` on this task.
+pub fn abandon_held_cells_since(mark: HeldCellMark) {
+    with_current_holder(|holder| holder.abandon_since(mark));
 }
 
 /// Poisons every lock held by the current task.
 pub fn abandon_held_cells() {
-    abandon_held_cells_since(0);
+    abandon_held_cells_since(HeldCellMark(0));
 }
 
 /// A native caller can leave a unique generated-code box intact between

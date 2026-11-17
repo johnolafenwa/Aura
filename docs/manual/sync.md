@@ -74,7 +74,7 @@ name is a mutable view of the guarded value: the body reads it, assigns to
 it, and calls its methods as it would with a `mut` local. The view cannot
 be stored, returned, or passed to a task, so no reference to the value
 outlives the block. Every way out of the block releases the lock: the end
-of the body, `return`, `break`, `continue`, and `?`.
+of the body, `return`, `break`, `continue`, and `try`.
 
 A value computed inside the block leaves it as an owned value:
 

@@ -87,7 +87,7 @@ pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, manager_method_call_with,
-    ManagerEntry, ManagerExit, ManagerShape, LOCK_PUT_METHOD, LOCK_TAKE_METHOD,
+    ManagerEntry, ManagerExit, LOCK_PUT_METHOD, LOCK_TAKE_METHOD,
 };
 mod patterns;
 mod structural_patterns;

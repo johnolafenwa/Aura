@@ -21,7 +21,8 @@ ends the borrow and moves the value back before leaving the block.
 The scheduler identifies the current holder by task. It keeps the held
 cells in acquisition order. If a task fails, it poisons its active cells
 and signals their wait queues. An inner recovery scope can record its
-starting depth so a trap affects only locks taken since that point.
+starting epoch. A trap affects only locks acquired since the mark, even
+when a caller releases an earlier lock in the meantime.
 Recursive locking by one task reports `AU4001`.
 
 Each cell has an atomic state. An immediate acquisition takes an
