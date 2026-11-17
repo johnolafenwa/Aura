@@ -34,6 +34,24 @@ const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.a
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn recover_rejects_invalid_targets_and_arguments() {
+    for (case, code) in [
+        ("argument_move", "AU3001"),
+        ("file_result", "AU3008"),
+        ("missing_target", "AU2004"),
+        ("mut_parameter", "AU3002"),
+        ("named_target", "AU2004"),
+        ("type_args", "AU2004"),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/check-fail/control_recover_{case}.au"
+        ));
+        let error = check_path(&fixture).expect_err(case);
+        assert_eq!(error.code, code, "{case}: {error:?}");
+    }
+}
+
+#[test]
 fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
     assert_eq!(
         sha256_hex(b""),
@@ -2286,19 +2304,40 @@ fn control_flow_example_runs() {
 }
 
 #[test]
-fn mir_runtime_reports_recursion_limit_before_overflowing_the_host_stack() {
-    let source = include_str!("../../../test_edge/test_recursive_medium.au");
-    let source = source.to_string();
-    let handle = thread::Builder::new()
-        .stack_size(16 * 1024 * 1024)
-        .spawn(move || run_source(&source))
-        .expect("recursion test thread should spawn");
-    let error = handle
-        .join()
-        .expect("recursion test thread should join")
-        .expect_err("medium recursion should diagnose before stack overflow");
-    assert!(error.message.contains("maximum call depth of"));
-    assert!(error.message.contains("count_down"));
+fn mir_runtime_runs_recursion_deeper_than_the_old_call_limit() {
+    // 400 nested calls, which the 256-call limit used to reject. An
+    // unoptimized interpreter spends close to 200 KiB of stack on each.
+    let source = "def count_down(n: int32) -> int32:\n    if n <= 0:\n        return 0\n    return count_down(n=n - 1)\n\ndef main() -> int32:\n    print(count_down(n=400))\n    return 0\n";
+    let output = run_source(source).expect("400 nested calls fit the entry stack");
+    assert_eq!(output.stdout, "0\n");
+}
+
+#[test]
+fn mir_runtime_reports_unbounded_recursion_before_overflowing_the_host_stack() {
+    let source = "def count_down(n: int64) -> int64:\n    return count_down(n=n + 1)\n\ndef main() -> int32:\n    print(count_down(n=0))\n    return 0\n";
+    let error = run_source(source).expect_err("unbounded recursion ends with a diagnostic");
+    assert_eq!(error.code, "AU4005");
+    assert_eq!(
+        error.message,
+        "call stack exhausted while calling `count_down`"
+    );
+    assert!(
+        error
+            .help
+            .iter()
+            .any(|help| help.contains("start_with_stack")),
+        "{error:?}"
+    );
+    // The chain keeps both ends and counts the middle.
+    let (before, omitted) = error
+        .omitted_call_frames
+        .expect("a chain this deep leaves calls out");
+    assert_eq!(before, 128);
+    assert!(omitted > 0);
+    assert_eq!(error.call_frames.len(), 256);
+    assert_eq!(error.call_frames.last().unwrap().function, "main");
+    let rendered = error.render_with_source("recursion.au", source);
+    assert!(rendered.contains("more calls ..."), "{rendered}");
 }
 
 #[test]

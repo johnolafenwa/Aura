@@ -1,0 +1,7 @@
+import control
+
+def identity(value: int64) -> int64:
+    return value
+
+def main():
+    _ = control.recover[int64](identity, 3)

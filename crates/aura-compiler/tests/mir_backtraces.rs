@@ -200,7 +200,9 @@ fn imported_call_and_cross_module_task_frames_keep_their_own_paths() {
 fn recursion_depth_rejection_does_not_add_the_unentered_callee_frame() {
     let error = run_source(RECURSION_TRAP).expect_err("unbounded recursion should trap");
     assert!(
-        error.message.contains("maximum call depth of 256 exceeded"),
+        error
+            .message
+            .contains("call stack exhausted while calling `recurse`"),
         "unexpected recursion diagnostic: {error:?}"
     );
     assert_eq!(error.call_frames.len(), 256);

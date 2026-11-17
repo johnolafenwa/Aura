@@ -2489,6 +2489,7 @@ fn dead_task_starts_do_not_enable_reachable_native_safepoints() {
                 instructions: vec![Instruction::Assign {
                     target: "dead_task".to_string(),
                     value: Rvalue::StartTask {
+                        recover: false,
                         returns_handle: false,
                         result_is_copy: true,
                         stack_size: None,
@@ -9070,6 +9071,7 @@ def main() -> int32:
             Instruction::Assign {
                 target: "test_task".to_string(),
                 value: Rvalue::StartTask {
+                    recover: false,
                     returns_handle: true,
                     result_is_copy: true,
                     stack_size: None,
@@ -9151,6 +9153,7 @@ def main() -> int32:
     borrowed_main_mut.blocks[0].instructions[1] = Instruction::Assign {
         target: "test_task".to_string(),
         value: Rvalue::StartTask {
+            recover: false,
             returns_handle: true,
             result_is_copy: true,
             stack_size: None,
@@ -9226,6 +9229,7 @@ def main() -> int32:
         invalid_main.blocks[0].instructions[1] = Instruction::Assign {
             target: "test_task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -11246,6 +11250,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
         .expect("MovePlace should remain valid for a consuming assignment");
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::MovePlace("stack_bytes".to_string())),
@@ -11262,6 +11267,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),
@@ -11278,6 +11284,7 @@ fn direct_validation_rejects_move_place_in_non_consuming_expressions() {
     );
 
     let task_start = Rvalue::StartTask {
+        recover: false,
         returns_handle: true,
         result_is_copy: true,
         stack_size: Some(Operand::Place("stack_bytes".to_string())),

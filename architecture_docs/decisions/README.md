@@ -128,3 +128,5 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 101. [ADR-0101: `aura build --target` builds programs for other Linux machines](0101-linux-targets-for-aura-build.md) — Accepted; x86-64 and arm64, glibc and static musl, from a Linux host; a musl program links the C library the runtime ships; each target has its own runtime library
 102. [ADR-0102. Shared state handles](0102-shared-state-handles.md) records how tasks share mutexes, atomics, and maps.
 103. [ADR-0103. Lock lowering and native storage](0103-lock-lowering-and-native-storage.md) records how tasks acquire, release, and poison cells.
+104. [ADR-0104. Trap recovery with control.recover](0104-trap-recovery-with-control-recover.md) defines the recovery boundary and its result.
+105. [ADR-0105. Call depth is bounded by the stack](0105-call-depth-is-bounded-by-the-stack.md) specifies when a recursive call traps.

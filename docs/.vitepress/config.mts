@@ -114,6 +114,7 @@ export default defineConfig({
             { text: 'Randomness Module', link: '/manual/randomness' },
             { text: 'Concurrency', link: '/manual/concurrency' },
             { text: 'Sync Module', link: '/manual/sync' },
+            { text: 'Recovering From Traps', link: '/manual/failure-recovery' },
             { text: 'I/O Module', link: '/manual/io' },
             { text: 'Filesystem Module', link: '/manual/filesystem' },
             { text: 'Network Module', link: '/manual/network' },

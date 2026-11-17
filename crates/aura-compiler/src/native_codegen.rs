@@ -620,6 +620,9 @@ impl LayoutScratch {
 
 #[derive(Clone, Copy)]
 struct TaskStartMode {
+    /// A `control.recover` call: the function runs in place and the
+    /// result is a `Result`, not a task handle.
+    recover: bool,
     returns_handle: bool,
     result_is_copy: bool,
 }
@@ -705,8 +708,9 @@ struct NativeCodegen<'a> {
     explicit_locals: HashMap<String, crate::mir::ownership::ExplicitLocals>,
     reachable_blocks: HashMap<String, HashSet<String>>,
     safepoints_enabled: bool,
-    /// The functions on a call cycle, whose entries count the task's call
-    /// fuel (see `mir::recursion`). Empty when safepoints are elided.
+    /// The functions on a call cycle (see `mir::recursion`). Their entries
+    /// check the machine stack, and count the task's call fuel unless
+    /// safepoints are elided. Empty in a freestanding build.
     recursive_functions: HashSet<String>,
     program_path: String,
     program_source: String,
@@ -948,10 +952,12 @@ impl<'a> NativeCodegen<'a> {
         // for a loop to starve. Keep explicit MIR markers for portability, but
         // elide their native fast-path cost for provably sequential programs.
         let safepoints_enabled = !collect_task_start_targets(module, &reachable_blocks).is_empty();
-        let recursive_functions = if safepoints_enabled {
-            crate::mir::recursion::recursive_functions(module)
-        } else {
+        // A freestanding program has no runtime to count fuel in or to
+        // report an exhausted stack to.
+        let recursive_functions = if freestanding.is_some() {
             HashSet::new()
+        } else {
+            crate::mir::recursion::recursive_functions(module)
         };
         let mut classes = HashMap::new();
         for class in &module.classes {
@@ -1480,8 +1486,13 @@ impl<'a> NativeCodegen<'a> {
         };
         // An entry of a function on a call cycle is a safepoint, so deep
         // recursion with no loop yields like a loop does.
+        // It is also where the machine stack is checked, since a call
+        // chain grows without bound only through such a function.
         if self.recursive_functions.contains(&function.name) {
-            body = emit_call_safepoint(builder, &runtime_refs);
+            if self.safepoints_enabled {
+                emit_call_safepoint(builder, &runtime_refs);
+            }
+            body = emit_stack_check(builder, &runtime_refs);
         }
         blocks.insert(function.entry.clone(), body);
 
@@ -6540,6 +6551,7 @@ impl<'a> FunctionCompiler<'a> {
                 self.compile_variant_payload(scrutinee, *index)
             }
             Rvalue::StartTask {
+                recover,
                 returns_handle,
                 result_is_copy,
                 stack_size,
@@ -6549,6 +6561,7 @@ impl<'a> FunctionCompiler<'a> {
                 span,
             } => self.compile_start_task(TaskStart {
                 mode: TaskStartMode {
+                    recover: *recover,
                     returns_handle: *returns_handle,
                     result_is_copy: *result_is_copy,
                 },
@@ -17408,6 +17421,11 @@ impl<'a> FunctionCompiler<'a> {
             spawn_span,
             target,
         } = task;
+        if mode.recover {
+            if let Some(result) = self.compile_recovered_call(function, args, target)? {
+                return Ok(result);
+            }
+        }
         let function_value = self.load_operand(function)?;
         let function_value = self.ensure_opaque(function_value)?;
         let function_params =
@@ -17483,9 +17501,14 @@ impl<'a> FunctionCompiler<'a> {
                 .load(types::I64, MemFlags::new(), buffer, (index as i32) * 8);
             self.tag_raw_opaque_runtime_type(raw, &expected[index])?;
         }
-        let returns_handle_value = self
-            .builder
-            .iconst(types::I64, if mode.returns_handle { 1 } else { 0 });
+        let returns_handle_value = self.builder.iconst(
+            types::I64,
+            if mode.recover {
+                aura_runtime::native_runtime::DIRECT_START_RECOVERS
+            } else {
+                i64::from(mode.returns_handle)
+            },
+        );
         let result_is_copy_value = self
             .builder
             .iconst(types::I64, if mode.result_is_copy { 1 } else { 0 });
@@ -17503,9 +17526,14 @@ impl<'a> FunctionCompiler<'a> {
                 self.builder.iconst(types::I64, 0),
             ),
         };
-        let group = self.load_operand(task_group)?;
-        let group = self.ensure_opaque(group)?;
-        let task_group_value = group.values[0];
+        let task_group_value = if mode.recover {
+            // A recovered call starts no task, so it has no group.
+            self.builder.iconst(types::I64, 0)
+        } else {
+            let group = self.load_operand(task_group)?;
+            let group = self.ensure_opaque(group)?;
+            group.values[0]
+        };
         let current_function_name = self.current_function_name.clone();
         let current_function_path = self.current_function_path.clone();
         let (parent_function_ptr, parent_function_len) =
@@ -17556,6 +17584,159 @@ impl<'a> FunctionCompiler<'a> {
                 Ok(unit_value(&mut *self.builder))
             }
         }
+    }
+
+    /// A `control.recover` call of a named function, made as an ordinary
+    /// call on this stack (ADR-0104). The runtime gives the callee a frame
+    /// stack and a ledger of its own between `RecoverBegin` and
+    /// `RecoverEnd`, and a trap inside it comes back out of `_setjmp` a
+    /// second time. `None` for a call this path does not cover, which the
+    /// caller then makes through the runtime: a closure or stored target,
+    /// arguments left to defaults or passed by name, a value that owns
+    /// handles inline, or a target without `_setjmp`.
+    fn compile_recovered_call(
+        &mut self,
+        function: &Operand,
+        args: &[MirArg],
+        target: &DirectType,
+    ) -> std::result::Result<Option<ValueRef>, String> {
+        if !cfg!(unix) {
+            return Ok(None);
+        }
+        let Operand::Function { name, .. } = function else {
+            return Ok(None);
+        };
+        let DirectType::Opaque(result_type) = target else {
+            return Ok(None);
+        };
+        let Some(func_ref) = self.function_refs.get(name.as_str()).copied() else {
+            return Ok(None);
+        };
+        let expected = self
+            .function_param_types
+            .get(name.as_str())
+            .cloned()
+            .unwrap_or_default();
+        let plain = |ty: &DirectType| match ty {
+            DirectType::Scalar(_) | DirectType::PlainClass(_) | DirectType::Opaque(_) => true,
+            DirectType::Union(union) => !union.owns_handles(),
+            DirectType::Callable(_) => false,
+        };
+        if args.len() != expected.len()
+            || args
+                .iter()
+                .any(|arg| arg.name.is_some() || arg.writeback_place.is_some())
+            || !expected.iter().all(plain)
+            || !plain(&self.call_result_type(name)?)
+            || self
+                .function_writeback_types
+                .get(name.as_str())
+                .is_some_and(|types| !types.is_empty())
+        {
+            return Ok(None);
+        }
+        // The arguments the callee borrows are released here after it
+        // returns. The others it consumes.
+        let kept = self
+            .borrowing
+            .get(name.as_str())
+            .map(|callee| callee.params.clone())
+            .unwrap_or_default();
+        let mut words = Vec::new();
+        let mut handles = Vec::new();
+        let mut borrowed = Vec::new();
+        for (index, (arg, expected)) in args.iter().zip(&expected).enumerate() {
+            let loaded = self.load_operand_for_target(&arg.value, expected)?;
+            let value = self.coerce_value(loaded, expected)?;
+            if matches!(value.ty, DirectType::Opaque(_)) {
+                let handle = self.transfer_opaque_arg(&value);
+                handles.push(handle);
+                if kept.get(index) == Some(&MirReceiverKind::Borrow) {
+                    borrowed.push(handle);
+                }
+                words.push(handle);
+            } else {
+                words.extend(value.values.iter().copied());
+            }
+        }
+        let slot = self.builder.create_sized_stack_slot(
+            aura_runtime::native_runtime::DIRECT_RECOVER_JUMP_BUFFER_BYTES,
+            4,
+        );
+        let buffer = self.builder.stack_addr(types::I64, slot, 0);
+        let address = self.builder.func_addr(types::I64, func_ref);
+        let signature = self.builder.signature_of(func_ref);
+        let begun = self
+            .builder
+            .call(self.runtime[RuntimeFn::RecoverBegin], &[buffer, address]);
+        let callee = begun.results[0];
+        for handle in &handles {
+            self.builder
+                .call(self.runtime[RuntimeFn::RecoverAdopt], &[*handle]);
+        }
+        let set_jump = declare_runtime_function(
+            self.builder.module(),
+            crate::runtime_abi::RECOVER_SET_JUMP,
+            &[types::I64],
+            Some(types::I32),
+        )?;
+        let set_jump = self.builder.import_function(set_jump);
+        let resumed = self.builder.call(set_jump, &[buffer]);
+        let trapped = self
+            .builder
+            .icmp_imm(IntCC::NotEqual, resumed.results[0], 0);
+        let call_block = self.builder.create_block();
+        let trap_block = self.builder.create_block();
+        let done = self.builder.create_block();
+        let result = self.builder.append_block_param(done, types::I64);
+        self.builder.brif(trapped, trap_block, &[], call_block, &[]);
+
+        self.builder.switch_to_block(call_block);
+        self.builder.seal_block(call_block);
+        let call = self.builder.call_indirect(signature, callee, &words);
+        for handle in borrowed {
+            self.release_opaque_handle(handle);
+        }
+        let (returned, _) = self.split_call_results(name, call.results)?;
+        // The box the function returned moves to this function's ledger
+        // as the call ends, and the `Result` is built here like any other.
+        let moved = if matches!(returned.ty, DirectType::Opaque(_)) {
+            returned.values[0]
+        } else {
+            self.builder.iconst(types::I64, 0)
+        };
+        self.builder
+            .call(self.runtime[RuntimeFn::RecoverEnd], &[moved]);
+        self.mark_temporary_opaque_owned(&returned);
+        let ok = match self.construct_variant_in_place_from_values(
+            result_type,
+            "Ok",
+            std::slice::from_ref(&returned),
+        )? {
+            Some(ok) => ok,
+            None => self.compile_enum_variant_from_values(
+                "Result",
+                "Ok",
+                vec![returned],
+                result_type.clone(),
+            )?,
+        };
+        self.clear_temporary_opaque_owned(&ok);
+        self.builder.jump(done, &[ok.values[0]]);
+
+        self.builder.switch_to_block(trap_block);
+        self.builder.seal_block(trap_block);
+        self.builder.set_cold_block(trap_block);
+        let err = self
+            .builder
+            .call(self.runtime[RuntimeFn::RecoverTrapped], &[]);
+        self.builder.jump(done, &[err.results[0]]);
+
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        Ok(Some(
+            self.owned_opaque_result(vec![result], result_type.clone()),
+        ))
     }
 
     fn value_matches_type(
@@ -18407,6 +18588,34 @@ fn emit_call_safepoint(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable
     let interval = builder.iconst(types::I64, DIRECT_CALL_SAFEPOINT_INTERVAL as i64);
     builder.store(header, interval, stack, layout.call_fuel_offset);
     builder.call(runtime[RuntimeFn::YieldNow], &[]);
+    builder.jump(done, &[]);
+
+    builder.seal_block(done);
+    builder.switch_to_block(done);
+    done
+}
+
+/// Traps when the machine stack has less than the task's reserve left. A
+/// call chain grows without bound only through a function on a call cycle,
+/// so the entries of those functions are where the stack is checked. The
+/// address of a slot of this frame stands for the stack pointer; the frame
+/// stack holds the lowest address it may have, or 0 when the task's stack
+/// is not known. Returns the block the code continues in.
+fn emit_stack_check(builder: &mut dyn FunctionBackend, runtime: &RuntimeTable<FuncRef>) -> Blk {
+    let layout = frame_stack_layout();
+    let header = MemFlags::trusted_in(AliasClass::FrameHeader);
+    let stack = builder.call(runtime[RuntimeFn::FrameStack], &[]).results[0];
+    let slot = builder.create_sized_stack_slot(8, 3);
+    let stack_pointer = builder.stack_addr(types::I64, slot, 0);
+    let limit = builder.load(types::I64, header, stack, layout.stack_limit_offset);
+    let exhausted = builder.icmp(IntCC::UnsignedLessThan, stack_pointer, limit);
+    let (fast_block, slow_block, done) = emit_frame_branch(builder, exhausted);
+
+    builder.switch_to_block(fast_block);
+    builder.jump(done, &[]);
+
+    builder.switch_to_block(slow_block);
+    builder.call(runtime[RuntimeFn::StackExhausted], &[]);
     builder.jump(done, &[]);
 
     builder.seal_block(done);
@@ -20463,8 +20672,15 @@ fn collect_task_start_targets(
                 continue;
             }
             for instruction in &block.instructions {
+                // A recovered call runs in its caller's task, so it alone
+                // gives a loop nothing to yield to.
                 if let Instruction::Assign {
-                    value: Rvalue::StartTask { function, .. },
+                    value:
+                        Rvalue::StartTask {
+                            recover: false,
+                            function,
+                            ..
+                        },
                     ..
                 } = instruction
                 {

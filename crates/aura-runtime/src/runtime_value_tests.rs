@@ -39,6 +39,75 @@ use super::{
 use super::{install_after_select_queue_commit_hook, install_after_select_source_validation_hook};
 use crate::integer::IntegerKind;
 
+#[test]
+fn recovered_trap_exposes_the_innermost_path_position_and_shortened_chain() {
+    use crate::diag::{RuntimeCallFrame, RuntimeSourceSpan, GENERATED_COLUMN_STRIDE};
+    let mut diagnostic = Diagnostic::coded_at(
+        "AU4003",
+        Span::new(17, GENERATED_COLUMN_STRIDE + 3),
+        "missing element",
+    );
+    diagnostic.render_path = Some("fallback.au".into());
+    diagnostic.call_frames = ["read", "parse"]
+        .into_iter()
+        .map(|name| RuntimeCallFrame {
+            function: name.into(),
+            span: RuntimeSourceSpan::point(Some("worker.au".into()), Span::new(2, 1)),
+        })
+        .collect();
+    diagnostic.set_omitted_call_frames(1, 7);
+    let Value::Instance(trap) = super::recovered_trap_value(&diagnostic) else {
+        panic!("expected a control.Trap");
+    };
+    assert_eq!(trap.class_name.as_str(), "control.Trap");
+    let fields = trap.fields.map();
+    assert_eq!(fields["code"], Value::string("AU4003"));
+    assert_eq!(fields["message"], Value::string("missing element"));
+    assert_eq!(fields["path"], Value::string("worker.au"));
+    assert_eq!(
+        fields["line"],
+        Value::Int(crate::integer::IntegerValue::from_i64(17))
+    );
+    assert_eq!(
+        fields["column"],
+        Value::Int(crate::integer::IntegerValue::from_i64(3))
+    );
+    let Value::Vec(frames) = &fields["frames"] else {
+        panic!("expected a list of call frames");
+    };
+    let display: Vec<_> = frames
+        .elements
+        .iter()
+        .map(|value| format_runtime_value(&value))
+        .collect();
+    assert_eq!(
+        display,
+        ["read at 2:1", "... 7 more calls ...", "parse at 2:1"]
+    );
+}
+
+#[test]
+fn recovered_trap_without_frames_or_location_uses_documented_defaults() {
+    let mut diagnostic = Diagnostic::coded("AU4005", "stack exhausted");
+    for path in [None, Some("program.au".to_string())] {
+        diagnostic.render_path = path.clone();
+        let Value::Instance(trap) = super::recovered_trap_value(&diagnostic) else {
+            panic!("expected a control.Trap");
+        };
+        let fields = trap.fields.map();
+        assert_eq!(fields["path"], Value::string(path.unwrap_or_default()));
+        assert_eq!(
+            fields["line"],
+            Value::Int(crate::integer::IntegerValue::from_i64(0))
+        );
+        assert_eq!(
+            fields["column"],
+            Value::Int(crate::integer::IntegerValue::from_i64(0))
+        );
+        assert!(matches!(&fields["frames"], Value::Vec(frames) if frames.elements.is_empty()));
+    }
+}
+
 /// The payload of a `T | None` union value, `None` when the value is absent.
 fn optional_payload(value: Value) -> Option<Value> {
     match value {

@@ -1,0 +1,127 @@
+import control
+from iter import Generator
+
+type Job = TaskCallable[def() -> int64]
+
+class Guard:
+    name: str
+
+    def __enter__(mut self) -> None:
+        print("enter " + self.name)
+
+    def __exit__(mut self) -> None:
+        print("exit " + self.name + " cancelled=" + str(cancelled()))
+
+def checked(value: int64, limit: int64 = 10) -> int64:
+    assert value < limit, "value too large"
+    return value
+
+def total(items: list[int64], label: str) -> str:
+    mut sum = 0
+    for item in items:
+        sum += item
+    assert sum < 100, "sum too large"
+    return f"{label}={sum}"
+
+def worker(id: int64) -> str:
+    mut failures = 0
+    mut passed = 0
+    for round in range(50):
+        match control.recover(checked, round * id, 60):
+            case Ok(value):
+                passed += 1
+            case Err(trap):
+                failures += 1
+    return f"worker {id}: {passed} passed, {failures} trapped"
+
+def report(task: own Task[str]) -> str:
+    match task.result():
+        case TaskResult.Ready(text):
+            return text.clone()
+        case _:
+            return "worker failed"
+
+def risky_numbers(limit: int64) -> Generator[int64]:
+    for index in range(limit):
+        match control.recover(checked, index, 3):
+            case Ok(value):
+                yield value
+            case Err(trap):
+                yield -1
+
+def wait_for_cancel(ready: Queue[int64], release: Queue[int64]) -> int64:
+    with guard = Guard(name="inner"):
+        _ = ready.put(1)
+        match release.get(timeout=5s):
+            case QueueReceive.Cancelled:
+                print("inner observed cancellation")
+                return 1
+            case _:
+                return 2
+    return 0
+
+def cancelled_inside(ready: Queue[int64], release: Queue[int64]) -> int64:
+    with guard = Guard(name="outer"):
+        match control.recover(wait_for_cancel, ready, release):
+            case Ok(value):
+                print(f"recovered call returned {value}")
+                return value
+            case Err(trap):
+                print("unexpected trap")
+                return -1
+    return 0
+
+def main() -> None:
+    with TaskGroup() as group:
+        first = group.start(worker, 1)
+        second = group.start(worker, 2)
+        third = group.start(worker, 3)
+        print(report(first))
+        print(report(second))
+        print(report(third))
+
+    for value in risky_numbers(5):
+        print(f"generated {value}")
+
+    match control.recover(checked, 4):
+        case Ok(value):
+            print(f"default ok {value}")
+        case Err(trap):
+            print("default trapped")
+    match control.recover(checked, limit=2, value=4):
+        case Ok(value):
+            print(f"named ok {value}")
+        case Err(trap):
+            print(f"named trapped: {trap.message}")
+
+    numbers = [10, 20, 30]
+    match control.recover(total, numbers.copy(), "small"):
+        case Ok(text):
+            print(text)
+        case Err(trap):
+            print("small trapped")
+    match control.recover(total, [50, 60], "large"):
+        case Ok(text):
+            print(text)
+        case Err(trap):
+            print(f"large trapped: {trap.message} in {trap.frames[0]}")
+    print(len(numbers))
+
+    base = 7
+    job = Job(lambda [own base]: 21 // (base - 7))
+    match control.recover(job):
+        case Ok(value):
+            print(f"job ok {value}")
+        case Err(trap):
+            print(f"job trapped: {trap.code}")
+
+    ready = Queue[int64]()
+    release = Queue[int64]()
+    with TaskGroup() as group:
+        task = group.start(cancelled_inside, ready, release)
+        match ready.get(timeout=5s):
+            case QueueReceive.Item(_):
+                group.cancel()
+            case _:
+                print("task did not start")
+    print("done")

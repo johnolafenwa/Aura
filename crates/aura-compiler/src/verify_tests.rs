@@ -2748,6 +2748,24 @@ def main():
 }
 
 #[test]
+fn recover_checks_its_targets_preconditions() {
+    assert_open(
+        r#"
+import control
+
+def work(n: int64) -> int64:
+    requires n >= 0
+    return n
+
+def main():
+    _ = control.recover(work, 4)
+    _ = control.recover(work, -1)
+"#,
+        &["10 requires failed"],
+    );
+}
+
+#[test]
 fn extern_functions_have_trusted_contracts() {
     let dir = script_dir("extern-contract");
     std::fs::write(

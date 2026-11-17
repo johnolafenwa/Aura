@@ -1,0 +1,43 @@
+# The Aura-source part of the builtin `control` module. The compiler checks
+# this file as module `control` and merges its public items with the host
+# functions that `builtin_modules.rs` declares. `control.recover` itself is
+# an operation the compiler knows, and the runtime builds the `Trap` it
+# returns from the fields declared here. `__aura_caught` is never called:
+# the compiler uses its signature to give `control.recover` its type.
+import control
+
+
+public class Trap:
+    """A trap that `control.recover` caught: the failure that would have
+    ended the task."""
+    # The diagnostic code, such as `AU4003` for an index out of bounds.
+    public code: str
+    # The message of the diagnostic, without its code.
+    public message: str
+    # The source file the trap happened in, or "" when it is not known.
+    public path: str
+    # The line and column of the operation that trapped, from 1, or 0 when
+    # they are not known.
+    public line: int64
+    public column: int64
+    # The calls that were active, innermost first, each written as
+    # `function at line:column`. A chain too deep to keep whole has one
+    # entry that counts the calls left out of its middle.
+    public frames: list[str]
+
+    public def describe(self) -> str:
+        """The trap on one line: `error[AU4003]: message (path:line:column)`."""
+        if self.line == 0:
+            return f"error[{self.code}]: {self.message}"
+        if self.path == "":
+            return f"error[{self.code}]: {self.message} ({self.line}:{self.column})"
+        return f"error[{self.code}]: {self.message} ({self.path}:{self.line}:{self.column})"
+
+
+public def __aura_caught[T](raw: own Result[T, (str, str, str, int64, int64, list[str])]) -> Result[T, Trap]:
+    match own raw:
+        case Result.Ok(value):
+            return Result.Ok(value)
+        case Result.Err(parts):
+            (code, message, path, line, column, frames) = parts
+            return Result.Err(Trap(code, message, path, line, column, frames))

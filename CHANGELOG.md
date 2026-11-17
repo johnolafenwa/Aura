@@ -11,6 +11,13 @@ in this file.
   `Map[K, V]` for state shared between tasks. A `with` block around
   `mutex.lock()` gives its body a mutable view of the guarded value.
 
+- `control.recover(function, arguments...)` returns the function's value in
+  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
+  current task and cleans up its own scopes on failure.
+- Recursive calls can continue past 256 frames. A call that exhausts the
+  available stack traps with AU4005. Deep diagnostics record how many
+  intervening calls were omitted.
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

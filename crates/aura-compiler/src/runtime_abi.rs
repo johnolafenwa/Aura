@@ -11,6 +11,11 @@ pub(crate) enum AbiType {
     F64,
 }
 
+/// The C library function generated code calls to mark where a recovered
+/// call resumes when it traps (ADR-0104). It is not a runtime helper: the
+/// code generator declares it `returns_twice`.
+pub(crate) const RECOVER_SET_JUMP: &str = "_setjmp";
+
 macro_rules! runtime_functions {
     ($( $variant:ident => ($symbol:literal, [$($param:ident),* $(,)?], $result:expr) ),+ $(,)?) => {
         /// One helper exported by the direct runtime.
@@ -58,6 +63,11 @@ runtime_functions! {
     FrameStack => ("aura_direct_frame_stack", [], Some(I64)),
     EnterCall => ("aura_direct_enter_frame", [I64], None),
     ExitCall => ("aura_direct_exit_call", [], None),
+    StackExhausted => ("aura_direct_stack_exhausted", [], None),
+    RecoverBegin => ("aura_direct_recover_begin", [I64, I64], Some(I64)),
+    RecoverAdopt => ("aura_direct_recover_adopt", [I64], None),
+    RecoverEnd => ("aura_direct_recover_end", [I64], Some(I64)),
+    RecoverTrapped => ("aura_direct_recover_trapped", [], Some(I64)),
     SetReturnedViewProjection => ("aura_direct_set_returned_view_projection", [I64, I64], None),
     TakeReturnedViewProjection => ("aura_direct_take_returned_view_projection", [I64, I64], Some(I64)),
     PushReturnedViewSelector => ("aura_direct_push_returned_view_selector", [I64], None),

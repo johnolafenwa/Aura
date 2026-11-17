@@ -1,0 +1,4 @@
+import control
+
+def main():
+    _ = control.recover()

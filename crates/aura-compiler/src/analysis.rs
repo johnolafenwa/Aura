@@ -1,5 +1,6 @@
 mod api_docs;
 mod requests;
+use crate::sema::recover;
 pub use api_docs::{
     api_module_from_program, render_api_markdown, ApiDeclaration, ApiMember, ApiModule,
     API_DOCS_SCHEMA_VERSION,
@@ -1888,6 +1889,14 @@ impl<'a> AnalysisBuilder<'a> {
         let mut completions = Vec::new();
         if let Type::Module(path) = receiver_type {
             if let Some(namespace) = self.module_namespace(path) {
+                if namespace.path == recover::MODULE {
+                    completions.push(AnalysisCompletion {
+                        name: recover::RECOVER.into(),
+                        kind: "function".into(),
+                        detail: recover::SIGNATURE.into(),
+                        documentation: Some(recover::SUMMARY.into()),
+                    });
+                }
                 for child in namespace.modules.values() {
                     completions.push(AnalysisCompletion {
                         name: child.name.clone(),
@@ -3952,6 +3961,17 @@ impl<'a> AnalysisBuilder<'a> {
     fn resolve_member_type(&self, receiver_type: &Type, field: &str) -> Option<ResolvedMember> {
         if let Type::Module(path) = receiver_type {
             let namespace = self.module_namespace(path)?;
+            if namespace.path == recover::MODULE && field == recover::RECOVER {
+                return Some(ResolvedMember {
+                    hover: format!(
+                        "```aura\nfunction {}\n```\n\n{}",
+                        recover::SIGNATURE,
+                        recover::SUMMARY
+                    ),
+                    definition: None,
+                    ty: None,
+                });
+            }
             if let Some(child) = namespace.modules.get(field) {
                 return Some(ResolvedMember {
                     hover: self
@@ -5662,7 +5682,26 @@ impl<'a> AnalysisBuilder<'a> {
                     }
                 }
                 let receiver_type = self.infer_expr_type(object, scope)?;
-                if matches!(receiver_type, Type::Module(_)) {
+                if let Type::Module(path) = &receiver_type {
+                    if self
+                        .module_namespace(path)
+                        .is_some_and(|module| module.path == recover::MODULE)
+                        && field == recover::RECOVER
+                    {
+                        let (target, arguments) = args.split_first()?;
+                        let value = self
+                            .infer_call_type(&target.value, arguments, scope)
+                            .or_else(|| match self.infer_expr_type(&target.value, scope)? {
+                                Type::Function { return_type, .. }
+                                | Type::Closure { return_type, .. } => Some(*return_type),
+                                Type::Callable(callable) => Some(callable.return_type.clone()),
+                                _ => None,
+                            })?;
+                        return Some(Type::Named(
+                            "Result".into(),
+                            vec![value, Type::named("control.Trap")],
+                        ));
+                    }
                     if let Some(alias) = self.analysis_alias_for_callee(callee, scope) {
                         return self.infer_alias_call_type(alias, None, callee.span, args, scope);
                     }

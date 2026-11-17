@@ -18,8 +18,20 @@ use super::owned_values::DirectOwnedValues;
 use super::{DirectFrameDescriptor, DirectRuntimeCallFrame};
 use crate::diag::RuntimeCallFrame;
 
-/// The most calls one task may have active at once.
-pub(super) const DIRECT_MAX_CALL_DEPTH: usize = 256;
+/// The bytes of machine stack a task keeps free below its Aura calls. The
+/// entry of a function on a call cycle traps once the stack pointer is
+/// inside this reserve, so the reserve holds whatever runs between two such
+/// entries: the frames of functions on no cycle, the runtime's own calls,
+/// and the trap itself.
+pub(super) const DIRECT_STACK_RESERVE: usize = 128 * 1024;
+
+/// The reserve while a trap runs the task's cleanups. The cleanups are Aura
+/// calls on the stack that just ran out, so they get most of the reserve
+/// to run in.
+pub(super) const DIRECT_CLEANUP_STACK_RESERVE: usize = 32 * 1024;
+
+/// The call frames a trap keeps from each end of a deeper call chain.
+pub(super) const DIRECT_TRACE_FRAMES_PER_END: usize = 128;
 
 /// The entries a stack holds before it moves them to the heap.
 pub(super) const DIRECT_FRAME_STACK_INLINE_ENTRIES: usize = 16;
@@ -45,7 +57,8 @@ const DIRECT_FRAME_FLAG_OWNED_FRAMES: u64 = 1 << 2;
 
 /// The active calls of one task.
 ///
-/// Generated code reads the first three fields and `entries`. It pushes a
+/// Generated code reads the first three fields, `entries`, `call_fuel`,
+/// and `stack_limit`. It pushes a
 /// call by storing the descriptor address at `entries[len]` and adding one
 /// to `len`, when `len < limit`. It pops a call by subtracting one from
 /// `len`, when `len > pop_floor`. While `flags` is nonzero, `limit` is 0
@@ -58,8 +71,7 @@ const DIRECT_FRAME_FLAG_OWNED_FRAMES: u64 = 1 << 2;
 pub struct DirectFrameStack {
     /// The number of entries in use.
     len: usize,
-    /// The smaller of the capacity and the depth limit above `floor`, or
-    /// 0 while `flags` is nonzero.
+    /// The capacity, or 0 while `flags` is nonzero.
     limit: usize,
     /// `floor`, or `usize::MAX` while `flags` is nonzero.
     pop_floor: usize,
@@ -70,6 +82,11 @@ pub struct DirectFrameStack {
     /// The recursive-function entries left before the task yields (see
     /// [`DIRECT_CALL_SAFEPOINT_INTERVAL`]). Only generated code reads it.
     call_fuel: u64,
+    /// The lowest address the machine stack pointer may hold at the entry
+    /// of a function on a call cycle, or 0 when the task's machine stack is
+    /// not known. Generated code compares its stack pointer with it; the
+    /// runtime sets it whenever the task starts to run on a machine stack.
+    stack_limit: usize,
     capacity: usize,
     runtime_flags: u64,
     owned_frames: usize,
@@ -96,6 +113,7 @@ impl DirectFrameStack {
             flags: 0,
             entries: ptr::null_mut(),
             call_fuel: DIRECT_CALL_SAFEPOINT_INTERVAL,
+            stack_limit: 0,
             capacity: DIRECT_FRAME_STACK_INLINE_ENTRIES,
             runtime_flags: 0,
             owned_frames: 0,
@@ -138,6 +156,16 @@ impl DirectFrameStack {
     pub(super) fn set_depth(&mut self, depth: usize) {
         self.floor = self.len.saturating_sub(depth);
         self.update_limit();
+    }
+
+    /// Sets the address below which an entry of a recursive function traps.
+    pub(super) fn set_stack_limit(&mut self, limit: usize) {
+        self.stack_limit = limit;
+    }
+
+    /// The address below which an entry of a recursive function traps, or 0.
+    pub(super) fn stack_limit(&self) -> usize {
+        self.stack_limit
     }
 
     /// The active entries, outermost first.
@@ -246,13 +274,31 @@ impl DirectFrameStack {
         self.update_flags();
     }
 
-    /// The active calls, innermost first.
-    pub(super) fn materialize_innermost_first(&self) -> Vec<RuntimeCallFrame> {
+    /// The innermost active call.
+    pub(super) fn innermost(&self) -> Option<RuntimeCallFrame> {
         self.words()
-            .iter()
-            .rev()
+            .last()
             .map(|word| frame_from_word(*word).materialize())
-            .collect()
+    }
+
+    /// The active calls, innermost first, and how many calls in the middle
+    /// of the chain were left out. A chain longer than twice
+    /// [`DIRECT_TRACE_FRAMES_PER_END`] keeps that many calls from each end.
+    pub(super) fn materialize_innermost_first(&self) -> (Vec<RuntimeCallFrame>, usize) {
+        let words = self.words();
+        let materialize = |word: &usize| frame_from_word(*word).materialize();
+        if words.len() <= 2 * DIRECT_TRACE_FRAMES_PER_END {
+            return (words.iter().rev().map(materialize).collect(), 0);
+        }
+        let omitted = words.len() - 2 * DIRECT_TRACE_FRAMES_PER_END;
+        let innermost = words[words.len() - DIRECT_TRACE_FRAMES_PER_END..]
+            .iter()
+            .rev();
+        let outermost = words[..DIRECT_TRACE_FRAMES_PER_END].iter().rev();
+        (
+            innermost.chain(outermost).map(materialize).collect(),
+            omitted,
+        )
     }
 
     fn update_flags(&mut self) {
@@ -269,9 +315,7 @@ impl DirectFrameStack {
     /// follow.
     fn update_limit(&mut self) {
         if self.flags == 0 {
-            self.limit = self
-                .capacity
-                .min(self.floor.saturating_add(DIRECT_MAX_CALL_DEPTH));
+            self.limit = self.capacity;
             self.pop_floor = self.floor;
         } else {
             self.limit = 0;
@@ -432,6 +476,9 @@ pub struct DirectFrameStackLayout {
     pub entries_offset: i32,
     /// The offset of the scheduling fuel recursive entries count down.
     pub call_fuel_offset: i32,
+    /// The offset of the address the stack pointer of a recursive entry
+    /// must stay at or above.
+    pub stack_limit_offset: i32,
 }
 
 impl DirectFrameStackLayout {
@@ -446,6 +493,7 @@ impl DirectFrameStackLayout {
             i64::from(self.floor_offset),
             i64::from(self.entries_offset),
             i64::from(self.call_fuel_offset),
+            i64::from(self.stack_limit_offset),
             Self::ENTRY_BYTES,
         ];
         fields.iter().fold(0x46_72_61_6d_i64, |hash, field| {
@@ -462,6 +510,7 @@ pub fn direct_frame_stack_layout() -> DirectFrameStackLayout {
         floor_offset: std::mem::offset_of!(DirectFrameStack, pop_floor) as i32,
         entries_offset: std::mem::offset_of!(DirectFrameStack, entries) as i32,
         call_fuel_offset: std::mem::offset_of!(DirectFrameStack, call_fuel) as i32,
+        stack_limit_offset: std::mem::offset_of!(DirectFrameStack, stack_limit) as i32,
     }
 }
 

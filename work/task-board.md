@@ -13,6 +13,16 @@ Last updated: 2026-11-17
   verifier, CLI and editor regressions cover lock release, handle transfer
   and the multi-task example. Performance and verification gates are in progress.
 
+## Failure recovery (in progress)
+
+- Bring the `control.recover` API and stack-bounded recursion to both
+  backends. See `2026-11-17-failure-recovery.md`.
+- The interpreter and native compiler agree on the task/cancellation
+  fixture. Six compiler fixtures cover incorrect inputs and moves.
+- Compiler and runtime tests, editor checks and release benchmarks are
+  underway. The shared branch collects this work.
+
+
 ## Three compiler defects from the book sections (complete)
 
 - Target: John's 2026-11-16 ask to fix the defects the book work found.
