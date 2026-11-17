@@ -57,3 +57,11 @@ The original Linux verify job passed. On macOS the compiler library test
 15-second readiness deadline. The other platform jobs passed. Main at
 `02b1104f` includes the book fixes. The image branch incorporates that
 commit and regenerates the documentation for the combined source.
+
+The next Linux run passed compiler coverage at 96.56% of lines and
+97.40% of functions. The npm audit then reported GHSA-fc5q-39xc-vjpf in
+the documentation toolchain. The recommended VitePress downgrade also
+failed the audit. The lockfile pins the patched `@ryotsu/picomatch`
+4.0.7-a fork until upstream ships a fixed release. Both npm and Cargo
+audits pass locally. All 11 documentation-site tests pass, and
+VitePress builds and renders the site with the pinned package.

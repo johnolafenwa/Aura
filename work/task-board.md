@@ -36,6 +36,7 @@ Last updated: 2026-11-17
 - Verification: runtime and compiler unit tests with fixtures made by
   Pillow, the example under `aura run` and in a built binary, and
   `benchmarks/image_codec` against Rust and Pillow.
+  The documentation build and both dependency audits pass with the pinned glob matcher.
 - Left out: 16-bit samples, metadata, other formats, drawing.
 
 
