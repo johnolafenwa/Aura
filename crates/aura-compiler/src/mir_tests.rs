@@ -16555,3 +16555,78 @@ fn calling_indexed_closures_preserves_field_and_tuple_storage() {
     let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
     validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
 }
+
+#[test]
+fn comprehension_element_loans_end_inside_their_iteration() {
+    let module = crate::lower_source_to_mir(
+        r#"
+def main():
+    ids = ["a", "bc", "def"]
+    print([ids[i].clone() for i in range(2)])
+    print([ids[i].clone() for i in [2, 0]])
+    print([i for i in range(3) if ids[i].len() > 1])
+    print({ids[i].clone(): ids[i].len() for i in range(3) if ids[i] != "a"})
+"#,
+    )
+    .expect("a comprehension that reads elements by index should lower");
+    validate_loan_flow(&module).expect("every loan should end on the path that began it");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .expect("main should lower");
+    for block in &main.blocks {
+        let begun = block
+            .instructions
+            .iter()
+            .filter(|instruction| matches!(instruction, Instruction::BeginElementLoan { .. }))
+            .count();
+        let ended = block
+            .instructions
+            .iter()
+            .filter(|instruction| matches!(instruction, Instruction::EndLoan { .. }))
+            .count();
+        assert_eq!(
+            begun, ended,
+            "block `{}` should end the loans it begins",
+            block.label
+        );
+    }
+}
+
+#[test]
+fn a_number_list_passed_to_a_byte_parameter_of_a_method_holds_bytes() {
+    let module = crate::lower_source_to_mir(
+        r#"
+import io
+import net
+
+def report(address: str) -> Result[None, io.Error]:
+    with socket = try net.udp_bind("127.0.0.1:0"):
+        try socket.send_bytes(address, [100, 105], timeout=1s)
+    return Result.Ok(None)
+
+def main():
+    print(report("127.0.0.1:9"))
+"#,
+    )
+    .expect("an inline byte list should lower");
+    let report = module
+        .functions
+        .iter()
+        .find(|function| function.name == "report")
+        .expect("report should lower");
+    let element_types = report
+        .blocks
+        .iter()
+        .flat_map(|block| &block.instructions)
+        .filter_map(|instruction| match instruction {
+            Instruction::Assign {
+                value: Rvalue::VecLiteral { element_type, .. },
+                ..
+            } => Some(element_type.clone()),
+            _ => None,
+        })
+        .collect::<Vec<_>>();
+    assert_eq!(element_types, [Type::named("uint8")]);
+}

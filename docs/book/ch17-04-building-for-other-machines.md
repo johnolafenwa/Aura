@@ -114,15 +114,12 @@ The file that is missing is not `/hello`. It is the dynamic linker,
 program, and which an empty image does not have. This is one of the more
 confusing error messages in Linux, and now you know what it means.
 
-A static program gives up a few things in exchange for its independence.
-It cannot load a shared library at run time, so a package that uses the FFI
+A static program gives up one thing in exchange for its independence. It
+cannot load a shared library at run time, so a package that uses the FFI
 from [Chapter 18](/book/ch18-00-calling-c) must link its C libraries
-statically. And an Aura musl program reads its command-line arguments from
-`/proc/self/cmdline`. Containers mount `/proc`, so this normally goes
-unnoticed, but in a bare `chroot` without it, `sys.args()` comes back
-empty. Speed is not one of the costs. The Manual measured the musl builds
-of its benchmark programs at 0.94 to 1.09 times the running time of the
-glibc builds.
+statically. Speed is not one of the costs. The Manual measured the musl
+builds of its benchmark programs at 0.94 to 1.09 times the running time of
+the glibc builds.
 
 ## Another architecture
 
