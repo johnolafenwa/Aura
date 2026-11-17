@@ -322,6 +322,7 @@ runtime_functions! {
     MapSetIndexInPlace => ("aura_direct_map_set_index_in_place", [I64, I64, I64, I64, I64], Some(I64)),
     MapSetIndexInt64 => ("aura_direct_map_set_index_int64", [I64, I64, I64], None),
     MapSetIndexInt64Key => ("aura_direct_map_set_index_int64_key", [I64, I64, I64], None),
+    MapSetIndexInt64Pair => ("aura_direct_map_set_index_int64_pair", [I64, I64, I64], None),
     ValueSlotPushScalar => ("aura_direct_value_slot_push_scalar", [I64, I64, I64], None),
     SetEmpty => ("aura_direct_set_empty", [], Some(I64)),
     SetLen => ("aura_direct_set_len", [I64], Some(I64)),

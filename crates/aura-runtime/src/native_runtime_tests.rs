@@ -28820,6 +28820,29 @@ fn scalar_pushes_store_their_bits_in_a_list_of_their_form() {
 }
 
 #[test]
+fn two_word_dict_stores_preserve_key_order_and_copied_tables() {
+    let table = super::aura_direct_map_empty();
+    for key in 0..24 {
+        super::aura_direct_map_set_index_int64_pair(table, key, -key);
+    }
+    let Value::Map(snapshot) = (unsafe { value_ref(table) }) else {
+        panic!("expected dict");
+    };
+    super::aura_direct_map_set_index_int64_key(table, -1, string_value("previous"));
+    super::aura_direct_map_set_index_int64_pair(table, -1, 11);
+    super::aura_direct_map_set_index_int64_pair(table, 0, 29);
+    let Value::Map(changed) = (unsafe { take_value(table) }) else {
+        panic!("expected dict");
+    };
+    let int = |value| Value::Int(IntegerValue::from_i64(value));
+    assert_eq!(snapshot.entries.value_of_i64(0), Some(&int(0)));
+    assert_eq!(snapshot.entries.value_of_i64(-1), None);
+    assert_eq!(changed.entries.value_of_i64(0), Some(&int(29)));
+    assert_eq!(changed.entries.value_of_i64(-1), Some(&int(11)));
+    assert_eq!(changed.entries.at_slot(24).0, int(-1));
+}
+
+#[test]
 fn entry_loans_append_scalars_to_the_list_the_map_keeps() {
     use super::DirectScalarKind as K;
     let lists = super::aura_direct_map_empty();

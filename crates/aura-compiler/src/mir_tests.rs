@@ -4314,9 +4314,33 @@ fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
 }
 
 #[test]
+fn sync_maps_preserve_snapshots_and_atomics_report_exchange_outcomes() {
+    let output = crate::run_source(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/sync_public_methods.stdout")
+    );
+}
+
+#[test]
 fn direct_lock_entries_remember_the_receiver_and_evaluate_custom_factories() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_binding.au");
     let module = crate::lower_source_to_mir(source).unwrap();
+    let env = super::layout::layout_env(&module);
+    let mut layouts = aura_core::layout::LayoutBuilder::new(&env);
+    let handle = layouts
+        .layout(&Type::Named(
+            "sync.Mutex".to_string(),
+            vec![Type::named("int64")],
+        ))
+        .unwrap();
+    assert!(matches!(
+        layouts.into_table().get(handle).kind,
+        aura_core::layout::LayoutKind::Handle
+    ));
     let main = module
         .functions
         .iter()

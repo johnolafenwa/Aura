@@ -8815,6 +8815,24 @@ fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T
     }
 }
 
+/// An indexed store changes the entries, preserving the existing key and value type tags.
+fn with_map_entries_mut<T>(
+    ptr: *mut OpaqueValue,
+    write: impl FnOnce(&mut crate::collection_index::DictEntries) -> T,
+) -> T {
+    let header = unsafe { ptr.as_ref() }
+        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
+    let access = header.access_unlisted(true);
+    // SAFETY: the box is confined or write-locked. Only a dictionary is
+    // changed, so there is no inline list view to adopt or refresh.
+    let found = match unsafe { &mut *header.value.get() } {
+        Value::Map(map) => return write(&mut map.entries),
+        other => value_type_name(other),
+    };
+    drop(access);
+    runtime_error(format!("expected `dict`, found `{found}`"))
+}
+
 fn with_set<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&SetValue) -> T) -> T {
     unsafe {
         with_unlisted_value(ptr, |value| match value {
@@ -12719,6 +12737,31 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64(
             map.entries
                 .insert(key, Value::Int(IntegerValue::from_i64(value)));
         });
+    })
+}
+
+/// Both operands of an `int64` to `int64` store fit in words. An existing
+/// slot keeps its original key and insertion order.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        with_map_entries_mut(map, |entries| {
+            let value = IntegerValue::from_i64(value);
+            if let Some(slot) = entries.position_i64(key) {
+                let previous = entries.value_at_mut(slot);
+                if let Value::Int(previous) = previous {
+                    *previous = value;
+                } else {
+                    *previous = Value::Int(value);
+                }
+            } else {
+                entries.push_new((Value::Int(IntegerValue::from_i64(key)), Value::Int(value)));
+            }
+        })
     })
 }
 

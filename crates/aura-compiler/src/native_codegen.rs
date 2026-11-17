@@ -17346,16 +17346,20 @@ impl<'a> FunctionCompiler<'a> {
                 self.coerce_value(indexed, &value_direct_ty)
             }
             DictOp::SetIndex if value_direct_ty == DirectType::Scalar(ScalarKind::Int64) => {
-                // An `int64` value goes in as its word, with no box.
-                let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
-                let loaded =
-                    self.load_operand_with_integer_hint(&args[1].value, Some(ScalarKind::Int64))?;
-                let value = self.coerce_value(loaded, &value_direct_ty)?.values[0];
-                let key = self.transfer_owned_opaque_value(&key);
-                self.builder.call(
-                    self.runtime[RuntimeFn::MapSetIndexInt64],
-                    &[map, key, value],
-                );
+                let (key, entry) = if key_direct_ty == DirectType::Scalar(ScalarKind::Int64) {
+                    (
+                        self.load_word(args[0], ScalarKind::Int64, true)?,
+                        RuntimeFn::MapSetIndexInt64Pair,
+                    )
+                } else {
+                    let key = self.load_operand_as_opaque_direct(&args[0].value, &key_direct_ty)?;
+                    (
+                        self.transfer_owned_opaque_value(&key),
+                        RuntimeFn::MapSetIndexInt64,
+                    )
+                };
+                let value = self.load_word(args[1], ScalarKind::Int64, true)?;
+                self.builder.call(self.runtime[entry], &[map, key, value]);
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
