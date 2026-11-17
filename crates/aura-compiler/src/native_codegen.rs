@@ -2332,6 +2332,7 @@ impl<'a> NativeCodegen<'a> {
             current_snapshot_label: String::new(),
             current_snapshot_instruction: 0,
             pending_snapshot_pads: Vec::new(),
+            union_read_buffers: BTreeMap::new(),
             fresh_str_copies: HashSet::new(),
             program_shapes: &self.program_shapes,
             view_places: HashMap::new(),
@@ -2370,6 +2371,7 @@ impl<'a> NativeCodegen<'a> {
         compiler.json_nests = Some(std::mem::take(&mut compiler.json_nests))
             .filter(|_| tapes)
             .unwrap_or_default();
+        compiler.prepare_union_read_buffers(function);
         compiler.compile_reachable_blocks(function, &return_ty)?;
 
         compiler.builder.seal_all_blocks();
@@ -3672,6 +3674,7 @@ struct FunctionCompiler<'a> {
     /// The blocks the terminator being compiled jumps through to enter
     /// loops, with each one's target and snapshots, filled once it is done.
     pending_snapshot_pads: Vec<(Blk, Blk, Vec<usize>)>,
+    union_read_buffers: BTreeMap<String, foreign_reads::Buffer>,
     /// Set for the next `emit_class_check` of a confined instance.
     skip_class_check: bool,
     /// The `mut` arguments and receivers the MIR moves into their call,
@@ -4727,6 +4730,14 @@ impl<'a> FunctionCompiler<'a> {
                 continue;
             }
             self.current_snapshot_instruction = instruction_index;
+            if self.compile_union_buffer_read(block, instruction_index)? {
+                skipped = 3;
+                continue;
+            }
+            if self.compile_lent_element_getter(block, instruction_index)? {
+                skipped = 2;
+                continue;
+            }
             if let Some(fused) =
                 self.compile_element_path_push(&block.instructions[instruction_index..])?
             {
@@ -4827,6 +4838,23 @@ impl<'a> FunctionCompiler<'a> {
         self.layout_scratch.consumers = consuming_operands(
             crate::mir::ownership::operand_roles_with(instruction, &borrowed),
         );
+        // A reinitialised or released list no longer denotes C's prior bytes.
+        if !self.union_read_buffers.is_empty() {
+            let replaced = match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::VecLiteral { .. },
+                } => Some(target),
+                Instruction::Release { place } => Some(place),
+                _ => None,
+            };
+            if let Some(buffer) = replaced
+                .and_then(|place| self.union_read_buffers.get(place))
+                .copied()
+            {
+                self.release_union_buffer(buffer);
+            }
+        }
         let compiled = self.compile_instruction_body(block_label, instruction_index, instruction);
         if compiled.is_ok()
             && self.deferred_element_retain.is_some()
@@ -5926,6 +5954,14 @@ impl<'a> FunctionCompiler<'a> {
         value: ValueRef,
         releases: &[String],
     ) -> std::result::Result<(), String> {
+        for buffer in self
+            .union_read_buffers
+            .values()
+            .copied()
+            .collect::<Vec<_>>()
+        {
+            self.release_union_buffer(buffer);
+        }
         let mut return_values = self.transfer_values(&value);
         self.emit_pending_cleanups_for(true, false)?;
         self.append_writeback_return_values(&mut return_values)?;
@@ -20508,6 +20544,8 @@ mod elements;
 mod enums;
 #[path = "native_codegen_foreign.rs"]
 mod foreign;
+#[path = "native_codegen_foreign_reads.rs"]
+mod foreign_reads;
 #[path = "native_codegen_freestanding.rs"]
 mod freestanding;
 #[cfg(test)]

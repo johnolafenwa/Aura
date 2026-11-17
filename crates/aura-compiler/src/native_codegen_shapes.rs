@@ -19,7 +19,7 @@
 //! local a mutable loan borrows, since the loan changes what the box holds,
 //! not the box.
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 use crate::mir::{Instruction, MirFunction, MirModule, Operand, Rvalue, Terminator};
 
@@ -42,6 +42,7 @@ pub(super) struct ProgramShapes {
     /// `leaf_body`): such a method hands back the box it was given as it
     /// was, so a call tags neither the receiver nor the write-back.
     field_only_methods: HashSet<String>,
+    pub(super) numeric_union_projections: HashMap<String, (String, usize, crate::ffi::FfiScalar)>,
 }
 
 impl ProgramShapes {
@@ -55,6 +56,11 @@ impl ProgramShapes {
         let mut shapes = Self::default();
         for function in &module.functions {
             let name = function.name.as_str();
+            if let Some(projection) = super::foreign_reads::numeric_projection(function) {
+                shapes
+                    .numeric_union_projections
+                    .insert(function.name.clone(), projection);
+            }
             // A method qualifies when only named calls and statically
             // dispatched method calls reach it, which the ownership pass
             // records in `borrowing`.

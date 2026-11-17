@@ -28,9 +28,10 @@ Last updated: 2026-11-17
   failure rules. Native callback cleanup also covers a trap in a callback.
 - The FFI v2 benchmark covers struct arrays, fixed array fields, union
   reads, and UTF-8 callbacks. Native record arrays with a matching C
-  layout copy directly into a call buffer. The four cases took 2.69×,
-  2.49×, 14.04× and 4.59× Rust's process CPU time respectively. All beat
-  Python ctypes. Union reads and text callbacks remain above the 3× goal.
+  layout copy directly into a call buffer. C-filled union lists used only
+  for numeric member reads can reuse those bytes. Latest CPU medians were
+  3.42×, 2.18×, 1.23× and 4.87× Rust's respectively. The struct-array
+  ratio was 2.69× in the prior run. All four beat Python ctypes.
   [FFI v2 measurements](../benchmarks/ffi_calls/README.md#ffi-v2-results)
 
 ## Three compiler defects from the book sections (complete)

@@ -1068,6 +1068,9 @@ int32_t fx_uholder_sum(UHolder h) {
 int32_t fx_events_kinds(const UEvent *events, int32_t count) {
     int32_t total = 0; for (int i = 0; i < count; i++) total += (int32_t)events[i].kind; return total;
 }
+void fx_events_number(UEvent *events, int32_t count, uint32_t first) {
+    for (int32_t i = 0; i < count; i++) events[i].kind = first + (uint32_t)i;
+}
 void fx_events_fill(UEvent *events, int32_t count) {
     for (int i = 0; i < count; i++) events[i] = fx_event_key(i + 40);
 }
@@ -1411,6 +1414,7 @@ extern "C" def fx_uholder_make(tag: int32) -> UHolder
 extern "C" def fx_uholder_sum(h: UHolder) -> int32
 extern "C" def fx_events_kinds(events: ptr[UEvent], count: int32) -> int32
 extern "C" def fx_events_fill(events: mut ptr[UEvent], count: int32) -> None
+extern "C" def fx_events_number(events: mut ptr[UEvent], count: int32, first: uint32) -> None
 extern "C" def fx_flag_raw(raw: uint8) -> UFlag
 extern "C" def fx_each_word(text: cstr, visit: def(index: int32, word: cstr) -> int32) -> int32
 extern "C" def fx_log(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
@@ -2029,6 +2033,50 @@ def main() -> int32:
         [115, 104, 97, 112, 101, 0, 0, 0]\n30\n1029.0\n39\n549250.0\n";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+#[test]
+fn union_array_reads_observe_fills_replacements_and_projected_writes() {
+    let (package, source) = fixture_package(
+        r#"
+def read_after_fill(events: mut list[UEvent], count: int32, index: int64, fill: bool) -> uint32:
+    if fill:
+        fx_events_number(events, count, 40)
+    return events[index].kind
+
+def refill(events: mut list[UEvent], count: int32) -> uint32:
+    fx_events_number(events, count, 10)
+    first = events[1].kind
+    fx_events_number(events, count, 30)
+    return first + events[2].kind
+
+def edit_bytes(events: mut list[UEvent], count: int32) -> uint32:
+    fx_events_number(events, count, 20)
+    events[1].bytes = UEvent.from_kind(97).bytes
+    return events[1].kind
+
+def main() -> int32:
+    mut events = [UEvent.from_kind(6), UEvent.from_kind(7), UEvent.from_kind(8)]
+    print(read_after_fill(events, 3, 1, false))
+    print(read_after_fill(events, 3, 2, true))
+    print(refill(events, 3))
+    print(edit_bytes(events, 3))
+    mut local = [UEvent(), UEvent()]
+    fx_events_number(local, 2, 50)
+    print(local[1].kind)
+    local = [UEvent.from_kind(91)]
+    print(local[0].kind)
+    return 0
+"#,
+    );
+    let (mir, direct) = run_on_both_backends(&package, &source);
+    for output in [&mir, &direct] {
+        assert_success(output, "C union list reads");
+        assert_eq!(
+            String::from_utf8_lossy(&output.stdout),
+            "7\n42\n43\n97\n51\n91\n"
+        );
+    }
 }
 
 #[test]

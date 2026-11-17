@@ -127,13 +127,22 @@ the difference between process CPU and elapsed time.
 | `union_read` | 6.74 | 0.48 | 212.24 | 7.85 | 0.51 | 415.52 |
 | `text_callback` | 112.78 | 24.59 | 1100.07 | 176.81 | 48.48 | 1865.62 |
 
-The struct array and fixed array field took 2.69 and 2.49 times Rust's
-process CPU time. The union read took 14.04 times Rust's and the text
-callback took 4.59 times Rust's. Those two cases remain above the
-three-times-Rust target. All four took less time than ctypes on both clocks.
+The first run put the struct array and fixed array field at 2.69 and 2.49
+times Rust's CPU time. The ordinary indexed union getter checked the storage
+and length of the byte field before loading the member. A malformed value
+entered the getter's diagnostic frame. Six alternating runs measured 8.94 ns
+per read before eliding that frame on valid input and 5.62 ns afterwards.
 
-Rust reads a member from an indexed C-layout union. Aura borrows the indexed
-class, checks the storage and length of its byte field, then loads the member.
-The numeric getter now enters a diagnostic frame only on the fallback path.
-Using the same release runtime, six alternating pairs of runs measured
-8.94 ns per union read before this change and 5.62 ns after it.
+A later native build kept the private C writeback array until the last use
+of an exclusively read union list. Numeric indexed reads measured 0.82 ns
+in Aura, 0.67 ns in Rust, and 216.12 ns in Python ctypes. Eight alternating
+pairs with the same runtime measured 4.54 ns for the previous getter and
+0.78 ns for the packed read. The compiler uses the ordinary list when a
+later operation can escape or change its elements. Out-of-range indices and
+malformed union bytes report the same diagnostics as the interpreter.
+
+In this repeat the other CPU medians for Aura / Rust / ctypes were
+17.81 / 5.21 / 1127.81 ns for struct arrays, 7.50 / 3.44 / 797.16 ns for
+fixed array fields, and 114.26 / 23.44 / 1098.63 ns for text callbacks.
+The struct-array ratio moved between 2.69× and 3.42× across the two runs.
+The text callback remains above the three-times-Rust target.
