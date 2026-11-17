@@ -106,6 +106,14 @@ fn recovered_trap_without_frames_or_location_uses_documented_defaults() {
 #[test]
 fn recovered_trap_copies_share_an_unformatted_snapshot_until_mutation() {
     let trap = super::recovered_trap_value(Diagnostic::coded("AU4001", "original"));
+    let holder = Value::Instance(super::InstanceValue {
+        class_name: "Holder".into(),
+        fields: [("trap".to_string(), trap.clone())].into(),
+    });
+    let Value::Instance(holder_copy) = super::try_clone_array_containing_value(&holder).unwrap()
+    else {
+        panic!("holder instance");
+    };
     let Value::Instance(mut copy) = super::try_clone_array_containing_value(&trap).unwrap() else {
         panic!("trap instance");
     };
@@ -115,6 +123,13 @@ fn recovered_trap_copies_share_an_unformatted_snapshot_until_mutation() {
     let super::InstanceFields::Recovered(snapshot) = &original.fields else {
         panic!("immutable diagnostic snapshot");
     };
+    let nested = holder_copy.fields.get("trap").unwrap();
+    let Value::Instance(nested) = nested.as_ref() else {
+        panic!("nested trap");
+    };
+    assert!(
+        matches!(&nested.fields, super::InstanceFields::Recovered(other) if Arc::ptr_eq(snapshot, other))
+    );
     assert!(std::sync::LazyLock::get(&snapshot.fields).is_none());
     assert_eq!(
         copy.fields.remove("message"),
