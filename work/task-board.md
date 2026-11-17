@@ -1,6 +1,16 @@
 # Task Board
 
-Last updated: 2026-11-15
+Last updated: 2026-11-17
+
+## Shared Mutable State (in progress)
+
+- The sync module provides `Mutex[T]`, `AtomicInt`, `AtomicBool` and
+  `Map[K, V]`. Checkpoint 31 and ADR-0102 cover the design.
+- Empty collection literals in generic class initializers keep their
+  specialized element type. The compiler regression covers both a local
+  class and an imported mutex. See `2026-11-17-shared-state.md`.
+- Remaining work includes performance comparisons, parity and verification
+  tests, the lock implementation decision, the book and editor support.
 
 ## Book chapters on tensors and machine learning (complete)
 

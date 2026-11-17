@@ -60,6 +60,7 @@ date of that decision, not the state of the implementation today.
 - [26-batch-8-design-checkpoint.md](26-batch-8-design-checkpoint.md): the multicore runtime
 - [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
 - [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
+- [31-shared-state-design-checkpoint.md](31-shared-state-design-checkpoint.md) covers shared mutexes, atomics, and maps.
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

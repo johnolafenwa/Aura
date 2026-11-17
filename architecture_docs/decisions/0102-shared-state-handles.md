@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-16
 - Builds on: ADR-0043, ADR-0057, ADR-0059
-- Design checkpoint: `architecture_docs/29-shared-state-design-checkpoint.md`
+- Design checkpoint: `architecture_docs/31-shared-state-design-checkpoint.md`
 
 ## Context
 

@@ -4267,6 +4267,14 @@ def main():
 }
 
 #[test]
+fn generic_initializer_collection_arguments_keep_the_specialized_element_type() {
+    let source =
+        include_str!("../tests/fixtures/run-pass/generic_initializer_collection_arguments.au");
+    let output = crate::run_source(source).expect("local and imported constructors should run");
+    assert_eq!(output.stdout, "0\n[1, 255]\n[42]\n");
+}
+
+#[test]
 fn array_and_builtin_associated_results_retain_checked_types_in_mir() {
     let module = crate::lower_source_to_mir(
         r#"

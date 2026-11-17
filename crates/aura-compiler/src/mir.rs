@@ -25851,10 +25851,6 @@ impl<'a> Lowerer<'a> {
                     });
                     return Operand::Place(temp);
                 }
-                if class.initializer().is_some() {
-                    self.lower_initializer_call(&class, name, args, callee.span, &temp);
-                    return Operand::Place(temp);
-                }
                 let constructor_type = expected
                     .filter(|expected| {
                         matches!(expected, Type::Named(expected_name, _) if expected_name == name)
@@ -25869,6 +25865,17 @@ impl<'a> Lowerer<'a> {
                     }
                     _ => std::collections::HashMap::new(),
                 };
+                if class.initializer().is_some() {
+                    self.lower_initializer_call(
+                        &class,
+                        name,
+                        args,
+                        callee.span,
+                        &temp,
+                        &substitutions,
+                    );
+                    return Operand::Place(temp);
+                }
                 let field_names = class
                     .decl
                     .fields
@@ -26352,16 +26359,6 @@ impl<'a> Lowerer<'a> {
                             return Operand::Place(temp);
                         }
                         if let Some(class) = namespace.classes.get(field).cloned() {
-                            if class.initializer().is_some() {
-                                self.lower_initializer_call(
-                                    &class,
-                                    field,
-                                    args,
-                                    callee.span,
-                                    &temp,
-                                );
-                                return Operand::Place(temp);
-                            }
                             let runtime_class_name = mir_runtime_class_name(self.program, &class);
                             let qualified_class_name = format!("{}.{}", module_path, field);
                             let constructor_type = expected
@@ -26385,6 +26382,17 @@ impl<'a> Lowerer<'a> {
                                 }
                                 _ => std::collections::HashMap::new(),
                             };
+                            if class.initializer().is_some() {
+                                self.lower_initializer_call(
+                                    &class,
+                                    field,
+                                    args,
+                                    callee.span,
+                                    &temp,
+                                    &substitutions,
+                                );
+                                return Operand::Place(temp);
+                            }
                             let field_names = class
                                 .decl
                                 .fields
@@ -27926,15 +27934,32 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         span: Span,
         target: &str,
+        substitutions: &HashMap<String, Type>,
     ) {
         let initializer = class
             .initializer()
             .expect("an initializer call lowers only for a class with `__init__`");
-        let lowered_args = self.lower_user_args(
+        let expected_param_types = (!substitutions.is_empty()).then(|| {
+            initializer
+                .signature
+                .params
+                .iter()
+                .zip(&initializer.decl.params)
+                .map(|(ty, param)| {
+                    if crate::sema::has_unresolved_type_params(ty) {
+                        substitute_type(ty, substitutions)
+                    } else {
+                        self.lower_type_ref_with_provenance(&param.ty)
+                    }
+                })
+                .collect::<Vec<_>>()
+        });
+        let lowered_args = self.lower_user_args_with_types(
             &format!("class `{surface_name}`"),
             &initializer.decl.params,
             args,
             span,
+            expected_param_types.as_deref(),
             Some(&initializer.signature.param_passings),
         );
         self.emit(Instruction::Assign {

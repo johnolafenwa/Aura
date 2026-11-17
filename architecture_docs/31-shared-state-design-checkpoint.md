@@ -56,7 +56,11 @@ import sync
 def main() -> int32:
     hits = sync.Mutex[dict[str, int64]](dict[str, int64]())
     with table = hits.lock():
-        table["home"] = table.get_or("home", 0) + 1
+        match table.get("home"):
+            case Lookup.Found(count):
+                table["home"] = count + 1
+            case Lookup.Missing:
+                table["home"] = 1
     return 0
 ```
 
@@ -93,7 +97,7 @@ lock is not fair and not reentrant. A task that locks a mutex it already
 holds traps with `AU4001` instead of waiting forever.
 
 `replace(value) -> T` and `set(value)` swap the value in one step under
-the lock. `get()` returns a clone for a type that can be cloned.
+the lock. `replace` returns the previous value.
 
 ## C. Atomics
 
@@ -111,7 +115,7 @@ atomic machine operation with sequentially consistent ordering.
 ## D. The Shared Map
 
 `sync.Map[K, V]` is a dictionary several tasks can use at once: `get`,
-`get_or`, `set`, `remove`, `contains`, `len`. Each call locks only for
+`set`, `remove`, `contains`, `len`, `clear`, and `snapshot`. Each call locks only for
 its own duration and returns owned values, so no view crosses a lock.
 A read-modify-write of one key that must be atomic uses a
 `Mutex[dict[K, V]]` instead.
