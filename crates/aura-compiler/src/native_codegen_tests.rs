@@ -18023,6 +18023,13 @@ def main() -> None:
 }
 
 #[test]
+fn recovered_callable_factories_emit_valid_native_control_flow() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_returned_callable.au");
+    let module = lower_source_to_mir(source).expect("callable factories lower");
+    emit_unoptimized_object(&module).expect("all three successful results transfer their callable");
+}
+
+#[test]
 fn recovered_numeric_calls_transfer_the_embedded_handle() {
     let source = include_str!("../tests/fixtures/run-pass/recover_numeric_values.au");
     let mir = lower_source_to_mir(source).expect("numeric recovery lowers");

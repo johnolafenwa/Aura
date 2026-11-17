@@ -4826,38 +4826,22 @@ fn rebase_callable_rvalue(
         Rvalue::StartTask {
             returns_handle: true,
             function: started,
+            recover,
             ..
         } => {
-            let return_type = match started {
-                Operand::Function { name, .. } => context
-                    .functions
-                    .get(name.as_str())
-                    .map(|callee| callee.return_type.clone()),
-                Operand::Place(place) | Operand::MovePlace(place) => state
-                    .authoritative_callables
-                    .get(place)
-                    .and_then(|callable| match &callable.signature {
-                        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
-                            Some((**return_type).clone())
-                        }
-                        // A stored `TaskCallable` target carries its result
-                        // contract in the erased signature (Q21); a callable
-                        // result keeps its identity through the task handle
-                        // exactly like a named or closure target's result.
-                        Type::Callable(callable) => Some(callable.return_type.clone()),
-                        _ => None,
-                    }),
-                _ => None,
-            };
-            return_type
+            callable_operand_result_type(started, state)
                 .map(|ty| {
-                    callable_identities_in_type(&ty, context)
+                    callable_identities_in_type(ty, context)
                         .into_iter()
                         .map(|(suffix, callable)| {
-                            (
-                                format!("{target}.{TASK_RESULT_PROJECTION}{suffix}"),
-                                callable,
-                            )
+                            // Recovery returns Result immediately. A task handle
+                            // exposes the same return contract when it is joined.
+                            let place = if *recover {
+                                format!("{target}.{ENUM_PAYLOAD_PROJECTION_PREFIX}Ok_0{suffix}")
+                            } else {
+                                format!("{target}.{TASK_RESULT_PROJECTION}{suffix}")
+                            };
+                            (place, callable)
                         })
                         .collect()
                 })
@@ -5019,6 +5003,25 @@ fn callable_identities_in_type(
     out
 }
 
+/// The result of the validated, specialized function operand or stored callable.
+fn callable_operand_result_type<'a>(
+    operand: &'a Operand,
+    state: &'a ValidatedLoanState,
+) -> Option<&'a Type> {
+    let signature = match operand {
+        Operand::Function { signature, .. } => signature.as_ref(),
+        Operand::Place(place) | Operand::MovePlace(place) => {
+            &state.authoritative_callables.get(place)?.signature
+        }
+        _ => return None,
+    };
+    match signature {
+        Type::Function { return_type, .. } | Type::Closure { return_type, .. } => Some(return_type),
+        Type::Callable(callable) => Some(&callable.return_type),
+        _ => None,
+    }
+}
+
 /// The identities a call result carries: the callee's declared return
 /// contract, resolved structurally. Container member calls are handled by
 /// [`rebase_container_result_callables`]; user method calls resolve through
@@ -5082,23 +5085,7 @@ fn call_result_callable_identities(
                 callee.return_type.clone()
             }
         }),
-        CallTarget::Value(operand) => {
-            let signature = match operand {
-                Operand::Function { signature, .. } => Some((**signature).clone()),
-                Operand::Place(place) | Operand::MovePlace(place) => state
-                    .authoritative_callables
-                    .get(place)
-                    .map(|callable| callable.signature.clone()),
-                _ => None,
-            };
-            signature.and_then(|signature| match signature {
-                Type::Function { return_type, .. } | Type::Closure { return_type, .. } => {
-                    Some((*return_type).clone())
-                }
-                Type::Callable(callable) => Some(callable.return_type.clone()),
-                _ => None,
-            })
-        }
+        CallTarget::Value(operand) => callable_operand_result_type(operand, state).cloned(),
         CallTarget::Member { .. } | CallTarget::TraitMember { .. } | CallTarget::Runtime { .. } => {
             let Some(MemberCallParts {
                 object,

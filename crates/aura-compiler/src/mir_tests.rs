@@ -16752,3 +16752,13 @@ fn calling_indexed_closures_preserves_field_and_tuple_storage() {
     let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
     validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
 }
+
+#[test]
+fn recovered_factories_keep_the_callable_contract_in_ok() {
+    let source = include_str!("../tests/fixtures/run-pass/recover_returned_callable.au");
+    let output = crate::run_source(source).expect("recovered callables run");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/recover_returned_callable.stdout")
+    );
+}

@@ -55,3 +55,9 @@ representation owns a heap reference. The native compiler transfers
 these values through the same boxed call boundary as an owning union.
 The regression covers small integers, overflow into a large integer,
 and a decimal with a large coefficient.
+
+A recovered call can return a callable that captures owned state. MIR
+records its specialized call signature on the successful Result payload.
+Native recovery uses the generic call boundary when the callee's opaque
+ABI still has type parameters. The named, stored, and generic factories
+each return callable values that produce the same results on both backends.

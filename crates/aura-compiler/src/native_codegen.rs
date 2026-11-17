@@ -18583,10 +18583,13 @@ impl<'a> FunctionCompiler<'a> {
             .get(name.as_str())
             .cloned()
             .unwrap_or_default();
-        // An opaque box can move between ledgers. A class or union with an
-        // embedded reference needs the runtime call path to transfer its payload.
-        let plain =
-            |ty: &DirectType| matches!(ty, DirectType::Opaque(_)) || !layout_owns_handles(ty);
+        // A concrete opaque box can move between ledgers. Embedded handles and
+        // generic results require the runtime call path to transfer or adapt
+        // the payload before it becomes the successful Result.
+        let plain = |ty: &DirectType| match ty {
+            DirectType::Opaque(ty) => !crate::sema::has_unresolved_type_params(ty),
+            _ => !layout_owns_handles(ty),
+        };
         if args.len() != expected.len()
             || args
                 .iter()
