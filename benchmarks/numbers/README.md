@@ -26,3 +26,24 @@ Rust uses `num-bigint` at the same version as the Aura runtime,
 `rust_decimal`, and `num-complex`. Its factorial uses a balanced product
 tree. Python uses its integer and complex builtins, `math.factorial`, and
 `decimal.Decimal`. Every decimal operation in this workload is exact.
+
+## Linux x86-64 timings
+
+The release direct backend at commit `cf7d08f5` was measured on one
+logical CPU of an Intel Xeon Platinum 8573C on November 17, 2026, using
+LLVM 22.1.8, Rust 1.95.0 in release mode and Python 3.12.14. The table
+shows median milliseconds from 21 complete runs per language. The three
+executables rotated the first position and returned matching checksums.
+Compilation and process startup were outside the measured intervals.
+
+| Case | Aura ms | Rust ms | Python ms | Aura / Rust | Checksum |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Factorial | 33.267 | 41.011 | 148.487 | 0.81 | 4269323 |
+| Fibonacci | 19.876 | 13.606 | 26.139 | 1.46 | 20827 |
+| Small integers | 1.109 | 2.198 | 42.084 | 0.50 | 124999750000 |
+| Modular powers | 3.611 | 149.414 | 31.589 | 0.02 | 10018095003163 |
+| Decimal money | 3.881 | 2.820 | 52.116 | 1.38 | 11970000.00 |
+| Mandelbrot | 7.409 | 6.386 | 803.370 | 1.16 | 1551224 |
+
+Aura finished all six workloads faster than Python. Its longest time
+relative to Rust was 1.46 times Rust’s time, on Fibonacci.
