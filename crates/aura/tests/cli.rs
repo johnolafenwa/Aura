@@ -14325,7 +14325,7 @@ def main() -> int32:
 }
 
 #[test]
-fn direct_backend_recursion_with_with_frames_matches_run_cleanup_count() {
+fn recursion_exhaustion_closes_every_entered_scope_on_both_backends() {
     let source = r#"
 class Resource:
     def close(mut self):
@@ -14333,62 +14333,76 @@ class Resource:
 
 def recurse(value: int32) -> int32:
     with resource = Resource():
+        print("OPEN_REC")
         return recurse(value + 1)
 
-def main() -> int32:
-    return recurse(0)
+def main():
+    with group = TaskGroup():
+        job = group.start_with_stack(786432, recurse, 0)
+        match job.result():
+            case TaskResult.Error(message):
+                print(message)
+            case _:
+                print("unexpected outcome")
 "#;
 
     let (temp, source_path) = write_temp_source("aura-recursion-with-cleanup-count", source);
-    let run = Command::new(aura_bin())
-        .arg("run")
+    let interpreter = Command::new(aura_bin())
+        .args(["run", "--backend", "mir"])
         .arg(&source_path)
         .output()
-        .expect("failed to run aura run");
-    assert!(!run.status.success(), "aura run should fail on recursion");
-
-    let run_stdout = String::from_utf8_lossy(&run.stdout);
-    let run_close_count = run_stdout
-        .lines()
-        .filter(|line| *line == "CLOSE_REC")
-        .count();
-    assert_eq!(
-        run_close_count, 254,
-        "aura run should preserve the established cleanup count"
-    );
-
+        .expect("failed to run the interpreter");
     let output_path = temp.path().join("out");
     let build = Command::new(aura_bin())
-        .arg("build")
-        .arg("--backend")
-        .arg("direct")
-        .arg("-o")
+        .args(["build", "--backend", "direct", "-o"])
         .arg(&output_path)
         .arg(&source_path)
         .output()
-        .expect("failed to run aura build --backend direct");
+        .expect("failed to build the native program");
     assert!(
         build.status.success(),
-        "direct backend build should succeed, stderr was:\n{}",
+        "{}",
         String::from_utf8_lossy(&build.stderr)
     );
-
-    let direct = generated_binary(&output_path)
+    let native = generated_binary(&output_path)
         .output()
-        .expect("failed to run direct binary");
-    assert!(
-        !direct.status.success(),
-        "direct binary should fail on recursion"
-    );
-    let direct_stdout = String::from_utf8_lossy(&direct.stdout);
-    let direct_close_count = direct_stdout
-        .lines()
-        .filter(|line| *line == "CLOSE_REC")
-        .count();
-    assert_eq!(
-        direct_close_count, run_close_count,
-        "direct backend should unwind the same number of with frames as aura run"
-    );
+        .expect("run the native program");
+
+    // Stack space per call differs between the two backends. Each has to
+    // run one cleanup per entered scope before the task reports the trap.
+    for (backend, output) in [("interpreter", interpreter), ("native", native)] {
+        assert!(
+            output.status.success(),
+            "{backend}: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        let stdout = String::from_utf8(output.stdout).unwrap();
+        let mut lines = stdout.lines().peekable();
+        let mut entered = 0;
+        while lines.next_if_eq(&"OPEN_REC").is_some() {
+            entered += 1;
+        }
+        assert!(
+            entered > 0,
+            "{backend}: expected at least one entered scope"
+        );
+        for depth in (0..entered).rev() {
+            assert_eq!(
+                lines.next(),
+                Some("CLOSE_REC"),
+                "{backend}: cleanup at depth {depth}"
+            );
+        }
+        assert_eq!(
+            lines.next(),
+            Some("call stack exhausted while calling `recurse`"),
+            "{backend}"
+        );
+        assert!(
+            lines.next().is_none(),
+            "{backend}: unexpected output after the trap"
+        );
+    }
 }
 
 #[test]

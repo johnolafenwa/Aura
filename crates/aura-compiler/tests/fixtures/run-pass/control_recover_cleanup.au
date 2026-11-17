@@ -1,0 +1,55 @@
+import control
+
+
+class Guard:
+    name: str
+
+    def __enter__(mut self):
+        print("enter " + self.name)
+
+    def __exit__(mut self):
+        print("exit " + self.name)
+
+
+def checked(value: int64) -> int64:
+    assert value > 0, "expected positive"
+    return value
+
+
+def guarded(value: int64) -> int64:
+    with guard = Guard("work"):
+        return checked(value)
+    return 0
+
+
+def nested(value: int64) -> str:
+    match control.recover(guarded, value):
+        case Ok(answer):
+            return f"value {answer}"
+        case Err(trap):
+            assert trap.code == "AU4001"
+            assert trap.message == "expected positive"
+            assert trap.path.ends_with("control_recover_cleanup.au")
+            assert trap.describe().starts_with("error[AU4001]: expected positive (")
+            assert trap.line > 0 and trap.column > 0
+            assert len(trap.frames) == 2
+            assert trap.frames[0].starts_with("checked at ")
+            assert trap.frames[1].starts_with("guarded at ")
+            return "inner trap"
+    return "unreachable"
+
+
+def main():
+    with guard = Guard("caller"):
+        for value in [0, 3, -1, 6]:
+            match control.recover(nested, value):
+                case Ok(status):
+                    print(status)
+                case Err(trap):
+                    print(trap.describe())
+        match control.recover(guarded, value=0):
+            case Err(trap):
+                print("named " + trap.code)
+            case Ok(value):
+                print(value)
+    print("done")

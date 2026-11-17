@@ -80,8 +80,8 @@ workers -> 4
 1
 ```
 
-The final `1` comes from `echo $?`. A trapped program always exits with status
-1, so a shell script or a CI job knows that something went wrong.
+The final `1` comes from `echo $?`. An unhandled trap in the main task
+gives the program exit status 1, so a shell script can detect the failure.
 
 ## What traps
 

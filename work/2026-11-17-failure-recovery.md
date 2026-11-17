@@ -23,7 +23,24 @@ survive a failed call.
 
 ## Verification
 
-Release comparisons, the compiler and runtime library suites, and the
-editor tests are in progress. The benchmark in
+The separate nested cleanup fixture produced the same 17 lines on MIR and
+the Linux native backend. It checks a direct call and the named-argument
+path, order of exits, the innermost source location and the recovery
+boundary's call chain. A second fixture cancels a task while its recovered
+call is waiting. The next cancellation check inside `control.retry` exits
+the callee and caller in order. Both native paths and MIR produced the
+same six lines and returned `TaskResult.Cancelled`.
+
+All 24 checked listings in the edited pages passed. The compiler-backed
+editor test passed after failing on the missing completion. Z3 proved the
+valid recovered call and returned AU5101 for the invalid precondition.
+A freestanding build reported AU2052 at the recovery call. An explicit
+768 KiB task stack held seven nested scopes on the local debug interpreter
+and 10,178 on a native build. Both ran exactly one exit per entered scope
+before reporting AU4005. The CLI regression counts each backend’s own
+scopes instead of pinning an implementation-dependent depth.
+
+Release comparisons and the compiler and runtime library suites are in
+progress. The benchmark in
 `benchmarks/failure_recovery/` times successful calls and traps separately
 and checks the outcomes in all three languages.
