@@ -30486,3 +30486,18 @@ fn native_numbers_read_borrowed_limbs_and_return_modular_powers_in_one_word() {
     );
     assert_eq!(super::aura_direct_small_pow_mod(-2, 3, -5), -3);
 }
+
+#[test]
+fn native_decimal_result_slot_is_written_only_for_compact_answers() {
+    let mut out = [7, 9];
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(0, i64::MAX, 0, 1, 0, &mut out),
+        0
+    );
+    assert_eq!(out, [7, 9]);
+    assert_eq!(
+        super::aura_direct_small_decimal_binary(1, -25, -2, 4, 0, &mut out),
+        1
+    );
+    assert_eq!(out, [-1, 0]);
+}
