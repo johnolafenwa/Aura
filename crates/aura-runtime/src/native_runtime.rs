@@ -23030,6 +23030,40 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_assertion_cell(
     })
 }
 
+/// The failure of a checked scalar call with an interpolated message. Keep
+/// this invocation's text and frame independently until its fields are read.
+///
+/// # Safety
+///
+/// The descriptor and its registered source texts live for the program. The
+/// caller borrows a live string box for this call.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_recover_formatted_assertion(
+    descriptor: *const DirectFrameDescriptor,
+    message: *mut OpaqueValue,
+    line: i64,
+    column: i64,
+    kind: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let descriptor = unsafe { &*descriptor };
+        descriptor.ensure_validated();
+        let frame = descriptor.frame();
+        let message = unsafe {
+            with_unlisted_value(message, |value| match value {
+                Value::String(text) => text.clone(),
+                _ => runtime_error("expected a formatted assertion message"),
+            })
+        };
+        let trap = crate::runtime_value::deferred_recovered_trap_value(move || {
+            let mut diagnostic = direct_assert_diagnostic(message.to_string(), line, column, kind);
+            diagnostic.call_frames.push(frame.materialize());
+            diagnostic
+        });
+        boxed_value(result_err(trap))
+    })
+}
+
 /// Private direct-backend assertion ABI for the compiler-proven two-operand
 /// introspection shape. Every pointer is borrowed for the duration of this
 /// call; the diagnostic owns only bounded string snapshots.
