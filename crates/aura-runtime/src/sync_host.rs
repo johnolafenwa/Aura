@@ -172,6 +172,21 @@ impl GuardedValue {
         }
     }
 
+    /// Borrows a map under its cell's lock. Native readers only inspect
+    /// the dictionary and can leave its box in the cell.
+    pub(crate) fn copy_map_entry(
+        slot: &Option<Self>,
+        find: impl FnOnce(&MapValue) -> Option<&Value>,
+    ) -> Result<Option<Value>> {
+        let map = match slot {
+            Some(Self::Value(Value::Map(map))) => Some(map),
+            Some(Self::Native(boxed)) => boxed.as_map(),
+            _ => None,
+        }
+        .ok_or_else(map_type_error)?;
+        find(map).map(try_clone_array_containing_value).transpose()
+    }
+
     pub(crate) fn take(slot: &mut Option<Self>) -> Self {
         slot.take().expect("an unlocked cell holds its value")
     }
@@ -179,8 +194,8 @@ impl GuardedValue {
 
 struct CellState {
     state: AtomicU8,
-    /// The guarded value. Only the holder reads or writes it. `None` while
-    /// the holder has it, and after poisoning.
+    /// Only the holder accesses the value. A lock block takes it out
+    /// until release; a map lookup reads it in place.
     value: UnsafeCell<Option<GuardedValue>>,
     /// Made on first contention. A token in it wakes one waiter.
     wake: OnceLock<ChannelValue>,
@@ -211,6 +226,13 @@ impl CellState {
     fn check_poisoned(&self) -> bool {
         self.state.load(Ordering::Acquire) == POISONED
     }
+}
+
+fn map_type_error() -> Diagnostic {
+    Diagnostic::coded(
+        "AU4001",
+        "sync.Map.get expected a cell containing a dictionary",
+    )
 }
 
 fn poisoned_error() -> Diagnostic {
@@ -514,6 +536,17 @@ pub fn host_cell_put(mut args: Vec<Value>, _program_args: Option<&[String]>) -> 
     handle_arg(&args, name)?.put(value).map(|()| Value::Unit)
 }
 
+pub fn host_map_get(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+    let name = "sync::__aura_map_get";
+    host_expect_arity(name, &args, 2)?;
+    let handle = handle_arg(&args, name)?;
+    let found = handle.take_with(|slot| {
+        GuardedValue::copy_map_entry(slot, |map| map.entries.value_of(&args[1]))
+    })??;
+    handle.put_with(|_| {})?;
+    Ok(found.map(lookup_found).unwrap_or_else(lookup_missing))
+}
+
 pub fn host_cell_poisoned(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "sync::__aura_cell_poisoned";
     host_expect_arity(name, &args, 1)?;
@@ -574,6 +607,7 @@ pub fn sync_host_function(name: &str) -> Option<host_builtins::HostBuiltinFn> {
         "sync::__aura_cell_take" => host_cell_take,
         "sync::__aura_cell_put" => host_cell_put,
         "sync::__aura_cell_poisoned" => host_cell_poisoned,
+        "sync::__aura_map_get" => host_map_get,
         "sync::__aura_atom_new" => host_atom_new,
         "sync::__aura_atom_load" => host_atom_load,
         "sync::__aura_atom_store" => host_atom_store,

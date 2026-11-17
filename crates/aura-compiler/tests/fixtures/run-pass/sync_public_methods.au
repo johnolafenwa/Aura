@@ -28,3 +28,7 @@ def main():
     cache.set("b", [7])
     cache.clear()
     print(cache.len())
+    counts = sync.Map[int64, int64]()
+    print(counts.get(-1))
+    counts.set(-1, 8)
+    print(counts.get(-1))

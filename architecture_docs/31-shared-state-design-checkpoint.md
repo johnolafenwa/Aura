@@ -145,8 +145,8 @@ A read-modify-write of one key that must be atomic uses a
 
 ## G. Verification
 
-`aura verify` treats the value a lock yields, and the result of an
-atomic read, as unknown values of their type. Another task may have
+`aura verify` treats the value a lock yields, an atomic read, and a
+shared map lookup as fresh values of their type. Another task may have
 changed them, so nothing proved before the lock holds after it. Contracts
 on the body are checked against that unknown value.
 

@@ -17674,3 +17674,17 @@ fn integer_dict_index_stores_pass_both_words_without_boxing() {
         "{referenced:?}"
     );
 }
+
+#[test]
+fn direct_sync_map_lookup_passes_an_integer_key_without_boxing() {
+    let module = lower_source_to_mir(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    let symbols = exact_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_int64"),
+        "{symbols:?}"
+    );
+    assert!(symbols.contains("aura_host_sync_map_get"), "{symbols:?}");
+}

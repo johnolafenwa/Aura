@@ -146,8 +146,7 @@ public copy class Map[K: Transfer, V: Transfer]:
     public def get(self, key: K) -> Lookup[V]:
         """`Lookup.Found` with a clone of the value stored for `key`, or
         `Lookup.Missing`."""
-        with table = Locked[dict[K, V]](cell=self.cell):
-            return table.get(key)
+        return sync.__aura_map_get[K, V](self.cell, key)
 
     public def set(self, key: own K, value: own V) -> None:
         """Stores `value` for `key`, replacing any value already there."""

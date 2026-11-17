@@ -2048,6 +2048,16 @@ fn sync_namespace() -> ModuleNamespace {
                 vec![value_param("cell", cell()), own_param("value", payload())],
                 unit(),
             ),
+            generic_function_info(
+                "sync",
+                "__aura_map_get",
+                vec!["K", "V"],
+                vec![
+                    value_param("cell", cell()),
+                    value_param("key", type_ref("K", Vec::new())),
+                ],
+                type_ref("Lookup", vec![type_ref("V", Vec::new())]),
+            ),
             function_info(
                 "sync",
                 "__aura_cell_poisoned",
