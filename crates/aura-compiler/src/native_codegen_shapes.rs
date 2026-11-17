@@ -42,6 +42,8 @@ pub(super) struct ProgramShapes {
     /// `leaf_body`): such a method hands back the box it was given as it
     /// was, so a call tags neither the receiver nor the write-back.
     field_only_methods: HashSet<String>,
+    /// Only compiler-supplied methods have no user source path.
+    collection_methods: HashSet<String>,
 }
 
 impl ProgramShapes {
@@ -54,6 +56,9 @@ impl ProgramShapes {
         let value_functions = value_functions.into_iter().collect::<HashSet<_>>();
         let mut shapes = Self::default();
         for function in &module.functions {
+            if function.module_name == "collections" && function.source_path.is_none() {
+                shapes.collection_methods.insert(function.name.clone());
+            }
             let name = function.name.as_str();
             // A method qualifies when only named calls and statically
             // dispatched method calls reach it, which the ownership pass
@@ -106,6 +111,10 @@ impl ProgramShapes {
     /// Records the methods that never name their receiver's box.
     pub(super) fn set_field_only_methods(&mut self, methods: HashSet<String>) {
         self.field_only_methods = methods;
+    }
+
+    pub(super) fn is_standard_collection_method(&self, function: &str) -> bool {
+        self.collection_methods.contains(function)
     }
 
     /// Whether `function` only reads and writes scalar fields of its

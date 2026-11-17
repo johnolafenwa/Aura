@@ -2,6 +2,14 @@ from collections import Deque, SortedMap
 import random
 
 
+class Box:
+    map: SortedMap[int64, int64]
+
+
+def replace(map: mut SortedMap[int64, int64]):
+    map.set(5, 40)
+
+
 def main():
     mut queue = Deque[str]()
     queue.push_back("left")
@@ -48,3 +56,35 @@ def main():
         mut stream = value
         print(key)
         print(stream.next_float() == rest.next_float())
+
+    mut numbers = SortedMap[int64, int64]()
+    numbers.set(4, 12)
+    mut maps: list[SortedMap[int64, int64]] = []
+    maps.append(numbers)
+    match own maps.get(0):
+        case Found(snapshot):
+            mut changed = snapshot
+            changed.set(4, 19)
+            print(changed.get(4))
+        case _:
+            assert false
+    print(maps.pop().get(4))
+
+    mut boxed = Box(map=SortedMap[int64, int64]())
+    replace(boxed.map)
+    boxed.map.set(value=41, key=6)
+    print(boxed.map.range(5, 7))
+
+    mut events = Deque[int64]()
+    events.push_back(14)
+    mut lists: list[Deque[int64]] = []
+    lists.append(events)
+    match own lists.get(0):
+        case Found(snapshot):
+            mut later = snapshot
+            later.push_front(23)
+            print(later.pop_front())
+        case _:
+            assert false
+    mut first = lists.pop()
+    print(first.pop_back())

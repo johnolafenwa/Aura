@@ -4545,4 +4545,9 @@ fn ordered_collections_use_their_declared_order_and_own_elements() {
     ))
     .expect_err("the type-erased collection storage must be private");
     assert!(error.message.contains("private"));
+    let error = check_source(include_str!(
+        "../tests/fixtures/check-fail/ordered_storage_type_is_private.au"
+    ))
+    .expect_err("the store definition is internal even in a type annotation");
+    assert!(error.message.contains("collections.__Store"));
 }
