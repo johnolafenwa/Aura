@@ -10,22 +10,23 @@ def checked(value: int64) -> int64:
 def main() -> None:
     passes: int64 = 1000000
     failures: int64 = 100000
+    samples: list[int64] = [(i * 37) % 257 for i in range(256)]
     mut sum: int64 = 0
     mut start = sys.monotonic_time_ms()
     for i in range(passes):
-        match control.recover(checked, i):
+        match control.recover(checked, samples[i & 255]):
             case Ok(value):
                 sum += value
             case Err(trap):
                 assert false, trap.describe()
     elapsed = sys.monotonic_time_ms() - start
-    assert sum == passes * (passes - 1) // 2
+    assert sum == 127639971
     print(f"success {passes} {elapsed} {sum}")
 
     mut trapped: int64 = 0
     start = sys.monotonic_time_ms()
     for i in range(failures):
-        match control.recover(checked, -i - 1):
+        match control.recover(checked, -samples[i & 255] - 1):
             case Ok(value):
                 assert false, "expected a trap"
             case Err(trap):
