@@ -4853,28 +4853,40 @@ impl<'a> FunctionCompiler<'a> {
             },
         ) = (self.checked_scalar_body, &block.terminator)
         {
-            // Eligibility proved every instruction here only formats
-            // assertion operands, which control.Trap does not expose.
-            let message = match message {
-                Some(Operand::String(text)) => text.as_str(),
-                None => "assertion failed",
-                _ => return Err("expected a literal recovered assertion".to_string()),
-            };
-            // All data for this checked leaf's failure belongs to
-            // this source site. Its frozen Result can be shared.
-            let key = format!("\0recovered check {} {}", id.0, block.label);
-            let cell = word_cell(self.tag_cells, self.builder, &key)?;
-            let (ptr, len) = self.string_constant(message.as_bytes())?;
             let (line, column) = self.span_values(Some(*span));
             let descriptor = self.frameless_descriptor.expect("scalar body descriptor");
             let kind = self.builder.iconst(types::I64, kind.word());
-            let error = self
-                .builder
-                .call(
-                    self.runtime[RuntimeFn::RecoverAssertion],
-                    &[cell, descriptor, ptr, len, line, column, kind],
-                )
-                .results[0];
+            let error = match message {
+                Some(Operand::Place(name) | Operand::MovePlace(name)) => {
+                    let message = self.checked_failure_message(block, name)?;
+                    let error = self
+                        .builder
+                        .call(
+                            self.runtime[RuntimeFn::RecoverFormattedAssertion],
+                            &[descriptor, message.values[0], line, column, kind],
+                        )
+                        .results[0];
+                    self.release_all_temporary_owned();
+                    error
+                }
+                None | Some(Operand::String(_)) => {
+                    let text = match message {
+                        Some(Operand::String(text)) => text.as_str(),
+                        _ => "assertion failed",
+                    };
+                    // Only a literal failure belongs wholly to its source site.
+                    let key = format!("\0recovered check {} {}", id.0, block.label);
+                    let cell = word_cell(self.tag_cells, self.builder, &key)?;
+                    let (ptr, len) = self.string_constant(text.as_bytes())?;
+                    self.builder
+                        .call(
+                            self.runtime[RuntimeFn::RecoverAssertion],
+                            &[cell, descriptor, ptr, len, line, column, kind],
+                        )
+                        .results[0]
+                }
+                _ => return Err("expected a checked scalar assertion message".to_string()),
+            };
             let mut words = return_ty.zero_values(self.builder);
             words.push(error);
             self.builder.return_(&words);
@@ -4942,6 +4954,35 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
         compiled
+    }
+
+    /// Evaluate the scalar copies leading to the message and its interpolation.
+    /// Other formatting in this block captures operands for uncaught assertions.
+    fn checked_failure_message(
+        &mut self,
+        block: &BasicBlock,
+        name: &str,
+    ) -> std::result::Result<ValueRef, String> {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            match instruction {
+                Instruction::Assign {
+                    target,
+                    value: Rvalue::FormatString { parts },
+                } if target == name => {
+                    return self.compile_format_string(parts);
+                }
+                Instruction::Assign {
+                    value: Rvalue::Use(_),
+                    ..
+                } => {
+                    self.compile_instruction(&block.label, index, instruction)?;
+                }
+                _ => {}
+            }
+        }
+        Err(format!(
+            "checked assertion message `{name}` has no format expression"
+        ))
     }
 
     fn compile_instruction(
@@ -18329,7 +18370,7 @@ fn small_leaf(function: &MirFunction) -> bool {
 
 /// A recovered entry can return an error directly if every instruction
 /// outside a failed check is a total scalar operation. A failed check has a
-/// literal message and only renders scalar operands for the richer diagnostic
+/// literal or scalar-formatted message and only renders scalar operands for the richer diagnostic
 /// of an uncaught check. Calls, cleanup, loops and implicit traps keep their
 /// full recovery boundary.
 fn checked_scalar_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
@@ -18359,12 +18400,28 @@ fn checked_scalar_leaf(function: &MirFunction, classes: &HashMap<String, MirClas
     };
     function.blocks.iter().all(|block| {
         if let Terminator::AssertFail { message, .. } = &block.terminator {
-            return matches!(message, None | Some(Operand::String(_)))
+            let has_message = match message {
+                None | Some(Operand::String(_)) => true,
+                Some(Operand::Place(name) | Operand::MovePlace(name)) => {
+                    block.instructions.iter().any(|instruction| {
+                        matches!(instruction, Instruction::Assign {
+                            target,
+                            value: Rvalue::FormatString { .. },
+                        } if target == name)
+                    })
+                }
+                _ => false,
+            };
+            return has_message
                 && block
                     .instructions
                     .iter()
                     .all(|instruction| match instruction {
                         Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                        Instruction::Assign {
+                            target,
+                            value: Rvalue::Use(operand),
+                        } => local_scalar(target) && plain(operand),
                         Instruction::Assign {
                             value: Rvalue::FormatString { parts },
                             ..

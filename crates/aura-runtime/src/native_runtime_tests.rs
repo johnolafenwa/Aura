@@ -68,6 +68,41 @@ fn bool_value(value: bool) -> *mut OpaqueValue {
 }
 
 #[test]
+fn recovered_formatted_assertion_keeps_each_calls_message() {
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(2, 1, b"values.au", b"validate");
+        let make = |message: &str| unsafe {
+            let text = boxed_value(Value::string(message.to_string()));
+            let result = super::aura_direct_recover_formatted_assertion(descriptor, text, 3, 5, 0);
+            super::aura_direct_release_value(text);
+            result
+        };
+        let first = make("negative -7");
+        let second = make("negative -8");
+        for (result, expected) in [(first, "negative -7"), (second, "negative -8")] {
+            let payload = super::aura_direct_variant_take_payload(result, 0);
+            unsafe {
+                super::aura_direct_release_value(result);
+                super::with_value(payload, |value| {
+                    let Value::Instance(trap) = value else {
+                        panic!("trap instance");
+                    };
+                    assert_eq!(
+                        trap.fields.get("message").unwrap().as_ref(),
+                        &Value::string(expected)
+                    );
+                    assert_eq!(
+                        trap.fields.get("path").unwrap().as_ref(),
+                        &Value::string("values.au")
+                    );
+                });
+                super::aura_direct_release_value(payload);
+            }
+        }
+    });
+}
+
+#[test]
 fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
     // Program teardown clears its frozen values; isolate it from other
     // runtime tests which initialize independent programs.

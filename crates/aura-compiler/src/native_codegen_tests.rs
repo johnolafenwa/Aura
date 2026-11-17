@@ -35,6 +35,10 @@ def check(x: int64) -> int64:
     assert x >= 0, "negative"
     return x
 
+def formatted(x: int64) -> int64:
+    assert x >= 0, f"bad {x}"
+    return x
+
 def dynamic(x: int64) -> int64:
     assert x >= 0, str(x)
     return x
@@ -53,7 +57,14 @@ def loop_bound(x: int64) -> int64:
     return found
 "#;
     let module = lower_source_to_mir(source).expect("validation functions lower");
-    for name in ["check", "dynamic", "divide", "effect", "loop_bound"] {
+    for name in [
+        "check",
+        "formatted",
+        "dynamic",
+        "divide",
+        "effect",
+        "loop_bound",
+    ] {
         let function = module
             .functions
             .iter()
@@ -61,7 +72,7 @@ def loop_bound(x: int64) -> int64:
             .unwrap();
         assert_eq!(
             super::checked_scalar_leaf(function, &HashMap::new()),
-            name == "check",
+            matches!(name, "check" | "formatted"),
             "{name}"
         );
     }

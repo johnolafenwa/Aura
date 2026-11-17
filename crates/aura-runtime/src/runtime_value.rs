@@ -18560,10 +18560,16 @@ pub const RECOVERED_TRAP_CLASS: &str = "control.Trap";
 /// (ADR-0104): its code, message, path, line, column, and call chain,
 /// innermost first. The fields are those `std/control.au` declares.
 pub fn recovered_trap_value(trap: Diagnostic) -> Value {
+    deferred_recovered_trap_value(move || trap)
+}
+
+pub(crate) fn deferred_recovered_trap_value(
+    diagnostic: impl FnOnce() -> Diagnostic + Send + Sync + 'static,
+) -> Value {
     Value::Instance(InstanceValue {
         class_name: RuntimeName::from_static(RECOVERED_TRAP_CLASS),
         fields: InstanceFields::Recovered(Arc::new(RecoveredTrapFields {
-            fields: LazyLock::new(Box::new(move || recovered_trap_fields(trap))),
+            fields: LazyLock::new(Box::new(move || recovered_trap_fields(diagnostic()))),
         })),
     })
 }

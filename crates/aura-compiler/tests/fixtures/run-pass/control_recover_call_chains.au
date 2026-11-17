@@ -72,3 +72,13 @@ def main() -> None:
             print(number)
         case Err(trap):
             print(render(trap))
+    match control.recover(dynamic, -7):
+        case Ok(number):
+            print(number)
+        case Err(first):
+            match control.recover(dynamic, -8):
+                case Ok(number):
+                    print(number)
+                case Err(second):
+                    print(render(first))
+                    print(render(second))
