@@ -393,6 +393,7 @@ fn class_info(module_name: &str, name: &str) -> ClassInfo {
     ClassInfo {
         module_name: module_name.to_string(),
         is_builtin: true,
+        is_builtin_source: false,
         decl: ClassDecl {
             public: true,
             copy: false,
@@ -3392,7 +3393,8 @@ fn builtin_root_namespace(name: &str) -> Option<ModuleNamespace> {
         // `std/prelude.au`.
         "prelude" => Some(function_only_namespace("prelude", Vec::new())),
         // The lane classes are Aura source in `std/simd.au`.
-        "simd" => Some(function_only_namespace("simd", Vec::new())),
+        "simd" => Some(function_only_namespace(name, Vec::new())),
+        "collections" => Some(function_only_namespace(name, Vec::new())),
         "toml" => Some(serialization_namespace(name)),
         "log" | "metrics" | "trace" => Some(telemetry_namespace(name)),
         _ => None,
@@ -3537,6 +3539,7 @@ pub(crate) fn is_builtin_root_module(name: &str) -> bool {
             | "iter"
             | "prelude"
             | "simd"
+            | "collections"
             | "toml"
             | "log"
             | "metrics"
@@ -3553,9 +3556,34 @@ pub(crate) fn builtin_module_namespace(path: &[String]) -> Option<ModuleNamespac
 
 pub(crate) fn builtin_module_registry() -> BTreeMap<String, ModuleNamespace> {
     [
-        "io", "fs", "net", "process", "random", "control", "sys", "path", "math", "mem", "bytes",
-        "gzip", "image", "regex", "time", "http", "tensor", "json", "iter", "prelude", "simd",
-        "toml", "log", "metrics", "trace", "sync", "numbers",
+        "io",
+        "fs",
+        "net",
+        "process",
+        "random",
+        "control",
+        "sys",
+        "path",
+        "math",
+        "mem",
+        "bytes",
+        "gzip",
+        "image",
+        "regex",
+        "time",
+        "http",
+        "tensor",
+        "json",
+        "iter",
+        "prelude",
+        "simd",
+        "collections",
+        "toml",
+        "log",
+        "metrics",
+        "trace",
+        "sync",
+        "numbers",
     ]
     .into_iter()
     .filter_map(|name| builtin_root_namespace(name).map(|namespace| (name.to_string(), namespace)))

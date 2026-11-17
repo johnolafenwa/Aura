@@ -1,0 +1,52 @@
+from collections import Deque, Heap, SortedMap, SortedSet
+import sys
+
+
+def main():
+    count = 8192
+    mut result = 0
+    mut deque = Deque[int64]()
+    mut start = sys.monotonic_time_ms()
+    for i in range(count):
+        if i % 2 == 0:
+            deque.push_front(i)
+        else:
+            deque.push_back(i)
+    for i in range(count):
+        if i % 2 == 0:
+            result += deque.pop_front()
+        else:
+            result += deque.pop_back()
+    print(f"deque {sys.monotonic_time_ms() - start} {result}")
+
+    mut heap = Heap[int64]()
+    result = 0
+    start = sys.monotonic_time_ms()
+    for i in range(count):
+        heap.push((i * 40503) % count)
+    for i in range(count):
+        result += heap.pop() * i
+    print(f"heap {sys.monotonic_time_ms() - start} {result}")
+
+    mut map = SortedMap[int64, int64]()
+    result = 0
+    start = sys.monotonic_time_ms()
+    for i in range(count):
+        map.set((i * 40503) % count, i)
+    for i in range(count):
+        match own map.get(i):
+            case Found(value):
+                result += value
+            case _:
+                assert false
+    print(f"map {sys.monotonic_time_ms() - start} {result}")
+
+    mut seen = SortedSet[int64]()
+    result = 0
+    start = sys.monotonic_time_ms()
+    for i in range(count):
+        seen.add((i * 40503) % count)
+    for i in range(count):
+        if seen.remove(i):
+            result += i
+    print(f"set {sys.monotonic_time_ms() - start} {result}")

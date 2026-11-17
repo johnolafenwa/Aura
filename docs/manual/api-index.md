@@ -428,7 +428,9 @@ zone, RFC 3339 text, the pattern directives, and limits.
 
 ## Collections
 
-[Collections](/manual/collections) covers ownership and iteration.
+[Collections](/manual/collections) covers ownership and iteration. The
+[`collections` module](/manual/collections#the-collections-module) exports
+`Deque[T]`, `Heap[T]`, `SortedMap[K, V]` and `SortedSet[T]`.
 
 ### list[T]
 

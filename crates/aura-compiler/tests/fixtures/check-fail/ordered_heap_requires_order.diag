@@ -1,0 +1,5 @@
+error[AU2002]: type `list[int64]` does not implement trait `Ord[list[int64]]`
+ --> crates/aura-compiler/tests/fixtures/check-fail/ordered_heap_requires_order.au:5:13
+  |
+5 |     queue = Heap[list[int64]]()
+  |             ^

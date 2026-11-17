@@ -1,0 +1,536 @@
+from iter import IntoIterator, Iterator, ListIter, Step
+from prelude import Ord
+
+
+# Keep the older half in reverse order and the newer half in forward order.
+# A transfer leaves half the elements at each end, even for alternating pops.
+def refill[T](source: mut list[T], destination: mut list[T]):
+    mut keep: list[T] = []
+    for _ in range(source.len() // 2):
+        keep.append(source.pop())
+    while source.len() > 0:
+        destination.append(source.pop())
+    while keep.len() > 0:
+        source.append(keep.pop())
+
+
+public class Deque[T]:
+    """A double-ended queue with amortized constant-time pushes and pops."""
+    left: list[T]
+    right: list[T]
+
+    public def __init__(self):
+        self.left = []
+        self.right = []
+
+    public def len(self) -> int64:
+        return self.left.len() + self.right.len()
+
+    public def push_front(mut self, value: own T):
+        """Moves a value to the front of the queue."""
+        self.left.append(value)
+
+    public def push_back(mut self, value: own T):
+        """Moves a value to the back of the queue."""
+        self.right.append(value)
+
+    public def pop_front(mut self) -> T:
+        """Removes the front value. An empty queue traps."""
+        if self.left.len() == 0:
+            refill(self.right, self.left)
+        return self.left.pop()
+
+    public def pop_back(mut self) -> T:
+        """Removes the back value. An empty queue traps."""
+        if self.right.len() == 0:
+            refill(self.left, self.right)
+        return self.right.pop()
+
+    public def get(self, index: int64) -> Lookup[T]:
+        """Clones the indexed element, or returns Missing for an invalid index."""
+        mut position = index
+        if position < 0:
+            position += self.len()
+        if position < 0 or position >= self.len():
+            return Lookup.Missing
+        if position < self.left.len():
+            return self.left.get(self.left.len() - position - 1)
+        return self.right.get(position - self.left.len())
+
+    public def at(self, index: int64) -> T:
+        """Clones the indexed element. An invalid position traps with AU4003."""
+        match own self.get(index):
+            case Found(value):
+                return value
+            case _:
+                # Use the same bounds trap as list.pop on an empty list.
+                mut empty: list[T] = []
+                return empty.pop()
+
+    public def front(self) -> Lookup[T]:
+        return self.get(0)
+
+    public def back(self) -> Lookup[T]:
+        return self.get(-1)
+
+    public def clear(mut self):
+        self.left.clear()
+        self.right.clear()
+
+
+impl[T] Iterator[T] for Deque[T]:
+    def next(mut self) -> Step[T]:
+        if self.len() == 0:
+            return Step.End
+        return Step.Item(self.pop_front())
+
+
+public class Heap[T: Ord[T]]:
+    """A binary priority queue that pops the least value first by default."""
+    items: list[T]
+    descending: bool
+
+    public def __init__(self):
+        self.items = []
+        self.descending = false
+
+    public def max() -> Heap[T]:
+        """Creates an empty priority queue that pops its greatest value first."""
+        mut heap = Heap[T]()
+        heap.descending = true
+        return heap
+
+    public def from_list(items: own list[T]) -> Heap[T]:
+        """Moves a list into a min-heap in linear time."""
+        mut heap = Heap[T]()
+        heap.items = items
+        mut index = heap.len() // 2
+        while index > 0:
+            index -= 1
+            heap.sift_down(index)
+        return heap
+
+    public def len(self) -> int64:
+        return self.items.len()
+
+    def precedes(self, left: int64, right: int64) -> bool:
+        view a = self.items[left]
+        view b = self.items[right]
+        if self.descending:
+            return a > b
+        return a < b
+
+    def sift_down(mut self, start: int64):
+        mut position = start
+        count = self.len()
+        while position < count // 2:
+            mut child = position * 2 + 1
+            if child + 1 < count and self.precedes(child + 1, child):
+                child += 1
+            if not self.precedes(child, position):
+                return
+            self.items.swap(position, child)
+            position = child
+
+    public def push(mut self, value: own T):
+        self.items.append(value)
+        mut position = self.len() - 1
+        while position > 0:
+            parent = (position - 1) // 2
+            if not self.precedes(position, parent):
+                return
+            self.items.swap(parent, position)
+            position = parent
+
+    public def peek(self) -> Lookup[T]:
+        """Clones the next value or returns Missing for an empty heap."""
+        return self.items.get(0)
+
+    public def pop(mut self) -> T:
+        """Removes the next value. An empty heap traps."""
+        self.items.swap(0, -1)
+        result = self.items.pop()
+        self.sift_down(0)
+        return result
+
+    public def into_sorted(own self) -> list[T]:
+        """Consumes the queue and returns the values in pop order."""
+        mut heap = self
+        mut result: list[T] = []
+        result.reserve(heap.len())
+        while heap.len() > 0:
+            result.append(heap.pop())
+        return result
+
+
+# A node holds at most eleven keys, like a B-tree of minimum degree six.
+# Internal nodes have exactly one more child than key.
+class Node[K: Ord[K], V]:
+    keys: list[K]
+    values: list[V]
+    children: indirect list[Node[K, V]]
+
+    def __init__(self):
+        self.keys = []
+        self.values = []
+        self.children = []
+
+    def lower_bound(self, key: K) -> int64:
+        mut low = 0
+        mut high = self.keys.len()
+        while low < high:
+            middle = low + (high - low) // 2
+            view stored = self.keys[middle]
+            if stored < key:
+                low = middle + 1
+            else:
+                high = middle
+        return low
+
+    def matches_at(self, position: int64, key: K) -> bool:
+        if position == self.keys.len():
+            return false
+        view stored = self.keys[position]
+        return not (key < stored)
+
+    def contains(self, key: K) -> bool:
+        position = self.lower_bound(key)
+        if self.matches_at(position, key):
+            return true
+        if self.children.len() == 0:
+            return false
+        view child = self.children[position]
+        return child.contains(key)
+
+    def get(self, key: K) -> Lookup[V]:
+        position = self.lower_bound(key)
+        if self.matches_at(position, key):
+            return self.values.get(position)
+        if self.children.len() == 0:
+            return Lookup.Missing
+        view child = self.children[position]
+        return child.get(key)
+
+    def entry(self, index: int64) -> Lookup[(K, V)]:
+        match own self.keys.get(index):
+            case Found(key):
+                match own self.values.get(index):
+                    case Found(value):
+                        return Lookup.Found((key, value))
+                    case _:
+                        pass
+            case _:
+                pass
+        return Lookup.Missing
+
+    def edge(self, last: bool) -> Lookup[(K, V)]:
+        mut index = 0
+        if last:
+            index = -1
+        if self.children.len() == 0:
+            return self.entry(index)
+        view child = self.children[index]
+        return child.edge(last)
+
+    def bound(self, key: K, upper: bool, exact: bool = false) -> Lookup[(K, V)]:
+        position = self.lower_bound(key)
+        if self.matches_at(position, key):
+            return self.entry(position)
+        if self.children.len() > 0:
+            view child = self.children[position]
+            match own child.bound(key, upper, exact):
+                case Found(pair):
+                    return Lookup.Found(pair)
+                case _:
+                    pass
+        if exact:
+            return Lookup.Missing
+        if upper:
+            return self.entry(position)
+        if position > 0:
+            return self.entry(position - 1)
+        return Lookup.Missing
+
+    def grow_root(mut self):
+        mut child = Node[K, V]()
+        while self.keys.len() > 0:
+            child.keys.append(self.keys.pop(0))
+            child.values.append(self.values.pop(0))
+        while self.children.len() > 0:
+            child.children.append(self.children.pop(0))
+        self.children.append(child)
+        self.split(0)
+
+    def split(mut self, index: int64):
+        mut left = self.children.pop(index)
+        mut right = Node[K, V]()
+        # Move the upper five entries without cloning keys or values.
+        for _ in range(5):
+            right.keys.append(left.keys.pop(6))
+            right.values.append(left.values.pop(6))
+        while left.children.len() > 6:
+            right.children.append(left.children.pop(6))
+        self.keys.insert(index, left.keys.pop())
+        self.values.insert(index, left.values.pop())
+        self.children.insert(index, left)
+        self.children.insert(index + 1, right)
+
+    def insert(mut self, key: own K, value: own V) -> bool:
+        mut position = self.lower_bound(key)
+        if self.matches_at(position, key):
+            self.values[position] = value
+            return false
+        if self.children.len() == 0:
+            self.keys.insert(position, key)
+            self.values.insert(position, value)
+            return true
+        if self.children[position].keys.len() == 11:
+            self.split(position)
+            position = self.lower_bound(key)
+            if self.matches_at(position, key):
+                self.values[position] = value
+                return false
+        view mut child = self.children[position]
+        return child.insert(key, value)
+
+    # Bring a child that lost one key back to at least five entries.
+    def rebalance(mut self, index: int64):
+        if self.children[index].keys.len() >= 5:
+            return
+        mut child = self.children.pop(index)
+        if index > 0 and self.children[index - 1].keys.len() > 5:
+            view mut left = self.children[index - 1]
+            donated_key = left.keys.pop()
+            donated_value = left.values.pop()
+            if left.children.len() > 0:
+                child.children.insert(0, left.children.pop())
+            child.keys.insert(0, self.keys.set(index - 1, donated_key))
+            child.values.insert(0, self.values.set(index - 1, donated_value))
+            self.children.insert(index, child)
+            return
+        if index < self.children.len() and self.children[index].keys.len() > 5:
+            view mut right = self.children[index]
+            donated_key = right.keys.pop(0)
+            donated_value = right.values.pop(0)
+            if right.children.len() > 0:
+                child.children.append(right.children.pop(0))
+            child.keys.append(self.keys.set(index, donated_key))
+            child.values.append(self.values.set(index, donated_value))
+            self.children.insert(index, child)
+            return
+        mut at = index
+        if index > 0:
+            at -= 1
+        mut sibling = self.children.pop(at)
+        # Place the left node in child and the right node in sibling.
+        if index > 0:
+            old = child
+            child = sibling
+            sibling = old
+        child.keys.append(self.keys.pop(at))
+        child.values.append(self.values.pop(at))
+        child.keys.extend(sibling.keys)
+        child.values.extend(sibling.values)
+        child.children.extend(sibling.children)
+        self.children.insert(at, child)
+
+    def extract_from(mut self, position: int64) -> (K, V):
+        view mut child = self.children[position]
+        return child.extract_last()
+
+    def remove_from(mut self, position: int64, key: K) -> Lookup[V]:
+        view mut child = self.children[position]
+        return child.remove(key)
+
+    def extract_last(mut self) -> (K, V):
+        if self.children.len() == 0:
+            return (self.keys.pop(), self.values.pop())
+        position = self.children.len() - 1
+        pair = self.extract_from(position)
+        self.rebalance(position)
+        return pair
+
+    def remove(mut self, key: K) -> Lookup[V]:
+        position = self.lower_bound(key)
+        if self.matches_at(position, key):
+            if self.children.len() == 0:
+                self.keys.pop(position)
+                return Lookup.Found(self.values.pop(position))
+            replacement, value = self.extract_from(position)
+            self.keys[position] = replacement
+            removed = self.values.set(position, value)
+            self.rebalance(position)
+            return Lookup.Found(removed)
+        if self.children.len() == 0:
+            return Lookup.Missing
+        match own self.remove_from(position, key):
+            case Found(value):
+                self.rebalance(position)
+                return Lookup.Found(value)
+            case _:
+                return Lookup.Missing
+
+    def collect_range(self, low: K, high: K, result: mut list[(K, V)]):
+        mut position = self.lower_bound(low)
+        while true:
+            if self.children.len() > 0:
+                view child = self.children[position]
+                child.collect_range(low, high, result)
+            if position == self.keys.len():
+                return
+            view key = self.keys[position]
+            if not (key < high):
+                return
+            match own self.entry(position):
+                case Found(pair):
+                    result.append(pair)
+                case _:
+                    pass
+            position += 1
+
+    def drain(own self, result: mut list[(K, V)]):
+        mut node = self
+        node.keys.reverse()
+        node.values.reverse()
+        node.children.reverse()
+        while node.keys.len() > 0:
+            if node.children.len() > 0:
+                node.children.pop().drain(result)
+            result.append((node.keys.pop(), node.values.pop()))
+        if node.children.len() > 0:
+            node.children.pop().drain(result)
+
+
+public class SortedMap[K: Ord[K], V]:
+    """A B-tree map whose entries iterate in increasing key order."""
+    root: Node[K, V]
+    count: int64
+
+    public def __init__(self):
+        self.root = Node[K, V]()
+        self.count = 0
+
+    public def len(self) -> int64:
+        return self.count
+
+    public def set(mut self, key: own K, value: own V):
+        """Inserts a key or replaces its value when the ordering is equal."""
+        if self.root.keys.len() == 11:
+            self.root.grow_root()
+        if self.root.insert(key, value):
+            self.count += 1
+
+    public def get(self, key: K) -> Lookup[V]:
+        return self.root.get(key)
+
+    public def contains(self, key: K) -> bool:
+        return self.root.contains(key)
+
+    public def remove(mut self, key: K) -> Lookup[V]:
+        match own self.root.remove(key):
+            case Found(value):
+                self.count -= 1
+                if self.root.keys.len() == 0 and self.root.children.len() > 0:
+                    self.root = self.root.children.pop()
+                return Lookup.Found(value)
+            case _:
+                return Lookup.Missing
+
+    public def first(self) -> Lookup[(K, V)]:
+        return self.root.edge(false)
+
+    public def last(self) -> Lookup[(K, V)]:
+        return self.root.edge(true)
+
+    public def floor(self, key: K) -> Lookup[(K, V)]:
+        """Gets the greatest entry whose key is at most key."""
+        return self.root.bound(key, false)
+
+    public def ceiling(self, key: K) -> Lookup[(K, V)]:
+        """Gets the least entry whose key is at least key."""
+        return self.root.bound(key, true)
+
+    public def range(self, low: K, high: K) -> list[(K, V)]:
+        """Clones the entries from low inclusive to high exclusive."""
+        mut result: list[(K, V)] = []
+        if low < high:
+            self.root.collect_range(low, high, result)
+        return result
+
+    def drain_entries(own self) -> list[(K, V)]:
+        mut result: list[(K, V)] = []
+        result.reserve(self.count)
+        self.root.drain(result)
+        return result
+
+
+impl[K: Ord[K], V] IntoIterator[(K, V)] for SortedMap[K, V]:
+    type Iter = ListIter[(K, V)]
+
+    def into_iter(own self) -> ListIter[(K, V)]:
+        return self.drain_entries().into_iter()
+
+
+def only_key[T](pair: own Lookup[(T, None)]) -> Lookup[T]:
+    match own pair:
+        case Found(entry):
+            key, _ = entry
+            return Lookup.Found(key)
+        case _:
+            return Lookup.Missing
+
+
+public class SortedSet[T: Ord[T]]:
+    """A set whose members iterate in increasing order."""
+    map: SortedMap[T, None]
+
+    public def __init__(self):
+        self.map = SortedMap[T, None]()
+
+    public def len(self) -> int64:
+        return self.map.len()
+
+    public def add(mut self, key: own T):
+        self.map.set(key, None)
+
+    public def get(self, key: T) -> Lookup[T]:
+        """Clones the stored member whose ordering equals key."""
+        return only_key(self.map.root.bound(key, false, true))
+
+    public def contains(self, key: T) -> bool:
+        return self.map.contains(key)
+
+    public def remove(mut self, key: T) -> bool:
+        match own self.map.remove(key):
+            case Found(_):
+                return true
+            case _:
+                return false
+
+    public def first(self) -> Lookup[T]:
+        return only_key(self.map.first())
+
+    public def last(self) -> Lookup[T]:
+        return only_key(self.map.last())
+
+    public def floor(self, key: T) -> Lookup[T]:
+        return only_key(self.map.floor(key))
+
+    public def ceiling(self, key: T) -> Lookup[T]:
+        return only_key(self.map.ceiling(key))
+
+    public def range(self, low: T, high: T) -> list[T]:
+        mut keys: list[T] = []
+        for key, _ in own self.map.range(low, high):
+            keys.append(key)
+        return keys
+
+
+impl[T: Ord[T]] IntoIterator[T] for SortedSet[T]:
+    type Iter = ListIter[T]
+
+    def into_iter(own self) -> ListIter[T]:
+        mut keys: list[T] = []
+        for key, _ in own self.map.drain_entries():
+            keys.append(key)
+        return keys.into_iter()

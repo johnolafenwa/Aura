@@ -1,0 +1,26 @@
+Lookup.Found(a)
+Lookup.Found(c)
+b
+a
+c
+b
+one
+Lookup.Found(1)
+1
+[2, 2, 5, 8]
+Lookup.Found(9)
+[9, 2, 1]
+Lookup.Found(updated)
+Lookup.Found((10, ten))
+Lookup.Found((20, updated))
+[(10, ten), (20, updated)]
+Lookup.Found(ten)
+false
+20 updated
+30 thirty
+Lookup.Found(2)
+Lookup.Found(4)
+[2, 3]
+true
+2
+4

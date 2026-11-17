@@ -140,3 +140,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 114. [ADR-0114: The `image` module](0114-image-module.md) — Accepted; PNG, JPEG and Netpbm into a class of three integers and a `list[uint8]`; codecs in the runtime behind nine host functions; a pixel limit checked before decoding; `Array` forms as the bridge to tensors
 115. [ADR-0115: A callable value packs where owned callable storage is expected](0115-callable-values-pack-at-typed-destinations.md) — Accepted; a lambda, function, bound method or closure packs at every typed `Callable[...]` destination under the constructor's rules; a lambda captures a Copy parameter by value
 116. [ADR-0116: Local Function Bodies And Recursion](0116-local-function-bodies-and-recursion.md) — Accepted
+117. [ADR-0117 Ordered collections](0117-ordered-collections.md) covers deques, binary heaps and B-tree maps and sets.

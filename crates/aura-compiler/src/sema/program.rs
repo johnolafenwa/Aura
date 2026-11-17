@@ -235,6 +235,8 @@ pub struct ClassInfo {
     /// True only for classes synthesized by a builtin module namespace.
     /// A user module may have the same logical name without acquiring builtin behavior.
     pub is_builtin: bool,
+    /// True for classes defined in the standard library source bundled in the compiler.
+    pub is_builtin_source: bool,
     pub decl: ClassDecl,
     pub type_param_bounds: BTreeMap<String, Vec<TraitBound>>,
     pub fields: BTreeMap<String, FieldInfo>,
@@ -242,6 +244,10 @@ pub struct ClassInfo {
 }
 
 impl ClassInfo {
+    pub(crate) fn is_deque(&self) -> bool {
+        self.is_builtin_source && self.module_name == "collections" && self.decl.name == "Deque"
+    }
+
     pub(crate) fn builtin_constructor(&self) -> Option<BuiltinClassConstructor> {
         self.is_builtin
             .then(|| BuiltinClassConstructor::resolve(&self.module_name, &self.decl.name))
@@ -1338,6 +1344,7 @@ fn check_with_context_once(module: Module, context: ModuleContext) -> Result<Pro
             ClassInfo {
                 module_name: module_name.clone(),
                 is_builtin: false,
+                is_builtin_source: false,
                 decl: class_decl.clone(),
                 type_param_bounds,
                 fields,

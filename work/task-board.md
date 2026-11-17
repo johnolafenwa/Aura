@@ -87,6 +87,13 @@ Last updated: 2026-11-17
 - Local functions with statement bodies and recursion are in development
   under ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
+## Ordered collections (in progress)
+
+The four source collections and a scalar list-swap optimization are on the
+feature branch. Map insert/remove stress, deque balancing and heap ordering
+have passed in MIR. Native parity, release measurements and editor checks
+are in progress. See `2026-11-17-ordered-collections.md`.
+
 ## Collections, text, and numbers (step 1 of 3 complete)
 
 - Target: John's 2026-11-16 go-ahead for item 6 of the missing-features
