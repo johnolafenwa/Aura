@@ -15,3 +15,7 @@ def main() -> None:
     pair: (Step, int64) = (lambda value: value * offset, 0)
     print(pair[0](2))
     print(pair[0](3))
+    index = 0
+    steps: list[Step] = [lambda value: value + offset]
+    indexed: def(int64) -> int64 = lambda value: steps[index](value)
+    print(indexed(7))

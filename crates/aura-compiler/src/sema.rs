@@ -17508,13 +17508,28 @@ impl<'a> FunctionChecker<'a> {
                             }
                             ClosureCallKind::Repeatable => {}
                         }
-                        return self.type_check_function_value_args(
+                        let passing = if callable.call_kind == ClosureCallKind::MutableRepeatable {
+                            ReceiverKind::BorrowMut
+                        } else {
+                            ReceiverKind::Borrow
+                        };
+                        let receiver = self
+                            .retained_call_place_access(
+                                base_callee,
+                                &Type::Callable(callable.clone()),
+                                passing,
+                                "callable element",
+                            )
+                            .into_iter()
+                            .collect();
+                        return self.type_check_function_value_args_with_receiver(
                             &callable.params,
                             &callable.return_type,
                             args,
                             span,
                             locals,
                             expected,
+                            receiver,
                         );
                     }
                 }
