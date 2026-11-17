@@ -32,3 +32,10 @@ checker had previously discarded the move state of returning branches,
 which allowed a recursively called closure to consume its environment on
 one branch. The regression covers a local function whose base case moves
 a captured list.
+
+The Rust and Python equivalents of the named-local benchmark also give
+473,089 after 48 million calls. In three rotating, CPU-pinned runs the
+medians were 220 ms for the Aura local function, 80 ms for Rust and
+10,872 ms for Python. All 159 language-server tests passed again. On a
+busy-worker repeat of the documentation suite, eight of the 1,096 examples
+hit their 30-second process limit. Each passed when rerun on a reserved CPU.
