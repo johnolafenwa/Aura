@@ -8363,15 +8363,17 @@ fn with_map<T>(ptr: *mut OpaqueValue, read: impl FnOnce(&MapValue) -> T) -> T {
 }
 
 fn with_map_mut<T>(ptr: *mut OpaqueValue, write: impl FnOnce(&mut MapValue) -> T) -> T {
-    let result = unsafe {
-        value_mut(ptr, |value| match value {
-            Value::Map(map) => Ok(write(map)),
-            other => Err(value_type_name(other)),
-        })
-    };
-    match result {
-        Ok(value) => value,
-        Err(found) => runtime_error(format!("expected `dict`, found `{found}`")),
+    let header = unsafe { ptr.as_ref() }
+        .unwrap_or_else(|| runtime_error("direct runtime received a null opaque value pointer"));
+    let _access = header.access_unlisted(true);
+    // SAFETY: the box is confined or write-locked. Only a dictionary is
+    // changed, so there is no inline list view to adopt or refresh.
+    match unsafe { &mut *header.value.get() } {
+        Value::Map(map) => write(map),
+        other => runtime_error(format!(
+            "expected `dict`, found `{}`",
+            value_type_name(other)
+        )),
     }
 }
 
@@ -12246,6 +12248,32 @@ pub extern "C-unwind" fn aura_direct_map_set_index_int64(
             map.entries
                 .insert(key, Value::Int(IntegerValue::from_i64(value)));
         });
+    })
+}
+
+/// Both operands of an `int64` to `int64` store fit in words. An existing
+/// slot keeps its original key and insertion order.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_map_set_index_int64_pair(
+    map: *mut OpaqueValue,
+    key: i64,
+    value: i64,
+) {
+    task_runtime_boundary(|| {
+        with_map_mut(map, |map| {
+            let value = IntegerValue::from_i64(value);
+            if let Some(slot) = map.entries.position_i64(key) {
+                let previous = map.entries.value_at_mut(slot);
+                if let Value::Int(previous) = previous {
+                    *previous = value;
+                } else {
+                    *previous = Value::Int(value);
+                }
+            } else {
+                map.entries
+                    .push_new((Value::Int(IntegerValue::from_i64(key)), Value::Int(value)));
+            }
+        })
     })
 }
 

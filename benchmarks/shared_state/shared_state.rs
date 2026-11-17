@@ -21,7 +21,8 @@ fn lock_steps(counter: &Mutex<i64>, steps: i64) {
 
 fn atomic_steps(counter: &AtomicI64, steps: i64) {
     for _ in 0..steps {
-        black_box(counter).fetch_add(1, Ordering::SeqCst);
+        let previous = black_box(counter).fetch_add(1, Ordering::SeqCst);
+        previous.checked_add(1).expect("atomic increment overflow");
     }
 }
 

@@ -1,0 +1,17 @@
+false
+false
+false
+true
+true
+4
+7
+false
+true
+12
+Lookup.Missing
+true
+Lookup.Found([3])
+Lookup.Found([4])
+Lookup.Missing
+[3]
+0

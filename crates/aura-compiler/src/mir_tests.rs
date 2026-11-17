@@ -4314,6 +4314,18 @@ fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
 }
 
 #[test]
+fn sync_maps_preserve_snapshots_and_atomics_report_exchange_outcomes() {
+    let output = crate::run_source(include_str!(
+        "../tests/fixtures/run-pass/sync_public_methods.au"
+    ))
+    .unwrap();
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/sync_public_methods.stdout")
+    );
+}
+
+#[test]
 fn direct_lock_entries_remember_the_receiver_and_evaluate_custom_factories() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_binding.au");
     let module = crate::lower_source_to_mir(source).unwrap();

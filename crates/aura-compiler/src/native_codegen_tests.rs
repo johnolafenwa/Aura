@@ -17663,3 +17663,14 @@ fn leaf_method_call_fixtures_emit_directly() {
         emit_host_object(&mir).expect("leaf call fixture should emit directly");
     }
 }
+#[test]
+fn integer_dict_index_stores_pass_both_words_without_boxing() {
+    let source = "def assign(table: mut dict[int64, int64], key: int64, value: int64):\n    table[key] = value\n\ndef main():\n    mut table = dict[int64, int64]()\n    assign(table, 1, 7)\n    print(table.len())\n";
+    let module = lower_source_to_mir(source).unwrap();
+    let object = emit_host_object(&module).unwrap();
+    let referenced = exact_referenced_symbols(&object);
+    assert!(
+        referenced.contains("aura_direct_map_set_index_int64_pair"),
+        "{referenced:?}"
+    );
+}

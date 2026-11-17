@@ -289,6 +289,7 @@ fn every_runtime_op_calls_a_declared_helper_with_matching_arity() {
             RuntimeFn::MapWithCapacity,
             RuntimeFn::MapSetIndexInt64,
             RuntimeFn::MapSetIndexInt64Key,
+            RuntimeFn::MapSetIndexInt64Pair,
         ]
     );
 }

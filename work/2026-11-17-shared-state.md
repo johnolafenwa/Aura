@@ -77,3 +77,8 @@ factory still runs once, and rebinding the source variable in the body
 still releases the original mutex. Native integer and boolean steps read
 and write the word in its guarded slot; tests cross between native word,
 boxed, and interpreter accesses to the same cell.
+
+The integer dictionary workload also boxed each key for an indexed store.
+The native entry now accepts both words, probes the existing index by
+integer value, and preserves insertion order and copy-on-write snapshots.
+The benchmark checks the final values as well as the number of entries.
