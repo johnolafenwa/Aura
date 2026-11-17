@@ -46,6 +46,10 @@ these values through the usual boxed interface. For other
 payloads the mutex can transfer a unique native box to the next holder.
 A box with another owner first supplies an independent value.
 
+A shared map lookup locks the cell, copies the matching entry, and then
+unlocks it. A native map can stay in its existing box for this read.
+Building the returned `Lookup` after the copy shortens the critical section.
+
 ## Consequences
 
 The body can use ordinary value and borrowing operations. A trap discards

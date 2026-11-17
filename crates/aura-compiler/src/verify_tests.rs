@@ -4086,11 +4086,16 @@ def observe(counter: sync.AtomicInt, guard: sync.Mutex[int64]):
     with next_value = guard.lock():
         assert next_value == 17
 
+def observe_map(cache: sync.Map[int64, int64]):
+    first = cache.get(1)
+    second = cache.get(1)
+    assert first == second
+
 def main():
     pass
 "#;
     let Some(report) = verify(source) else { return };
-    for line in [6, 10] {
+    for line in [6, 10, 15] {
         assert!(
             report
                 .obligations

@@ -29602,6 +29602,34 @@ fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
 }
 
 #[test]
+fn direct_sync_map_lookup_reads_the_same_dictionary_before_and_after_box_transfer() {
+    use crate::runtime_value::{lookup_found, lookup_missing, SyncValue};
+    let table = super::aura_direct_map_empty();
+    super::aura_direct_map_set_index_int64_pair(table, 2, 9);
+    let shared = SyncValue::cell(unsafe { take_value(table) });
+    let cell = boxed_value(Value::Sync(shared.clone()));
+    let read = |key| unsafe { take_value(super::aura_direct_sync_map_get_int64(cell, key)) };
+    let nine = Value::Int(IntegerValue::from_i64(9));
+    assert_eq!(read(2), lookup_found(nine.clone()));
+    let boxed = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, boxed);
+    assert_eq!(read(3), lookup_missing());
+    std::thread::spawn(move || {
+        let child = boxed_value(Value::Sync(shared));
+        let found = unsafe { take_value(super::aura_direct_sync_map_get_int64(child, 2)) };
+        assert_eq!(found, lookup_found(Value::Int(IntegerValue::from_i64(9))));
+        unsafe { release_value(child) };
+    })
+    .join()
+    .unwrap();
+    assert_eq!(read(2), lookup_found(nine));
+    let again = super::aura_direct_sync_cell_take(cell);
+    assert_eq!(again, boxed);
+    super::aura_direct_sync_cell_put(cell, again);
+    unsafe { release_value(cell) };
+}
+
+#[test]
 fn guarded_words_round_trip_through_host_and_generic_callers() {
     use crate::runtime_value::SyncValue;
     for (kind, initial, changed) in [(0, 41, 42), (1, 0, 1)] {

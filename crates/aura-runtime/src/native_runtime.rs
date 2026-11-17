@@ -16630,6 +16630,7 @@ host_builtin_entries! {
     owned "sync::__aura_cell_new" => aura_host_sync_cell_new(crate::runtime_value::sync_host::host_cell_new);
     owned "sync::__aura_cell_take" => aura_host_sync_cell_take(crate::runtime_value::sync_host::host_cell_take);
     owned "sync::__aura_cell_put" => aura_host_sync_cell_put(crate::runtime_value::sync_host::host_cell_put);
+    owned "sync::__aura_map_get" => aura_host_sync_map_get(crate::runtime_value::sync_host::host_map_get);
     owned "sync::__aura_cell_poisoned" => aura_host_sync_cell_poisoned(crate::runtime_value::sync_host::host_cell_poisoned);
     owned "sync::__aura_atom_new" => aura_host_sync_atom_new(crate::runtime_value::sync_host::host_atom_new);
     owned "sync::__aura_atom_load" => aura_host_sync_atom_load(crate::runtime_value::sync_host::host_atom_load);
@@ -21228,6 +21229,15 @@ impl Drop for GuardedNativeBox {
 }
 
 impl GuardedNativeBox {
+    pub(crate) fn as_map(&self) -> Option<&MapValue> {
+        // SAFETY: the cell holds the only reference to the detached box and
+        // its lock stays held for this borrow. A map has no inline list view.
+        match unsafe { &*self.0.as_ref().value.get() } {
+            Value::Map(map) => Some(map),
+            _ => None,
+        }
+    }
+
     /// The caller transfers one generated-code reference to the cell.
     unsafe fn from_owned(ptr: *mut OpaqueValue) -> Self {
         let header = unsafe { ptr.as_ref() }.unwrap_or_else(|| {
@@ -21276,6 +21286,25 @@ fn with_locked_cell<T>(
         Some(value) => Ok(value),
         None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_with(read),
     }
+}
+
+/// A shared map lookup with an integer key can keep the dictionary in its
+/// cell, copy the one result, and release the lock before boxing the Lookup.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_sync_map_get_int64(
+    handle: *mut OpaqueValue,
+    key: i64,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        let found = with_locked_cell(handle, |slot| {
+            GuardedValue::copy_map_entry(slot, |map| map.entries.value_of_i64(key))
+        })
+        .flatten()
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        with_sync_handle(handle, "sync.Cell", |handle| handle.put_with(|_| {}))
+            .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(found.map(lookup_found).unwrap_or_else(lookup_missing))
+    })
 }
 
 /// Takes the lock of a `sync.Cell` and moves its value out.

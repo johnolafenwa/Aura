@@ -200,6 +200,7 @@ fn every_sync_host_function_checks_its_argument_count() {
         "sync::__aura_cell_take",
         "sync::__aura_cell_put",
         "sync::__aura_cell_poisoned",
+        "sync::__aura_map_get",
         "sync::__aura_atom_new",
         "sync::__aura_atom_load",
         "sync::__aura_atom_store",
@@ -209,6 +210,33 @@ fn every_sync_host_function_checks_its_argument_count() {
     ] {
         assert!(call(name, Vec::new()).is_err(), "{name}");
     }
+}
+
+#[test]
+fn a_shared_map_lookup_copies_its_entry_and_releases_the_lock() {
+    let table = Value::Map(MapValue {
+        key_type: SharedType::named("str"),
+        value_type: SharedType::named("int64"),
+        entries: vec![(Value::string("key"), int(7))].into(),
+    });
+    let cell = Value::Sync(SyncValue::cell(table));
+    for (key, expected) in [("key", lookup_found(int(7))), ("missing", lookup_missing())] {
+        let result = call(
+            "sync::__aura_map_get",
+            vec![cell.clone(), Value::string(key)],
+        )
+        .unwrap();
+        assert_eq!(result, expected);
+    }
+    let invalid = SyncValue::cell(Value::Unit);
+    let error = call(
+        "sync::__aura_map_get",
+        vec![Value::Sync(invalid.clone()), int(1)],
+    )
+    .unwrap_err();
+    assert!(error.message.contains("dictionary"));
+    abandon_held_cells();
+    assert!(invalid.is_poisoned().unwrap());
 }
 
 #[test]

@@ -25,15 +25,16 @@ lock in addition to their atomic word.
 Each task tracks the cells it holds and validates ownership before
 removing a cell. A new runtime boundary can poison only cells acquired
 since the recorded acquisition epoch. A unit regression covers releasing
-an outer lock before acquiring an inner one. Child tasks receive independent wrappers around
-the same synchronized state. Native collection locks can transfer the
+an outer lock before acquiring an inner one. Child tasks receive independent
+wrappers around the same synchronized state. Native collection locks can transfer the
 unique box between critical sections. ADR-0103 gives the storage and
 waiting rules.
 
 The editor regression covers module and method completion, the type of
 the lock binding and its definition in the example. The CLI test compares
-the example's five output lines across both backends. The verifier regression passed. Atomic reads and successive lock blocks
-each see fresh values.
+the example's five output lines across both backends. The verifier
+regression passed. Atomic reads and successive lock blocks each see fresh
+values.
 
 The first Linux verify job found that the source identity checker
 misclassified the declaration of the synchronized map as a builtin type
@@ -98,3 +99,11 @@ A native parity run also exposed a mutex field in a user record being
 treated as an inline record. The common layout plan now stores the
 handle word in nested positions as well as at the root. The custom
 manager fixture exercises the field through both backends.
+
+A comparison on the shared build host found the four-task cache slower
+than the counter and dictionary workloads. The original map lookup moved
+the dictionary out of its cell and returned it on every hit. It now
+copies the matching entry under the lock, then constructs the public
+`Lookup` after releasing the cell. The runtime tests cover maps in
+interpreter storage and detached native boxes, plus a hit and a miss in
+each representation.

@@ -126,6 +126,23 @@ impl FunctionCompiler<'_> {
             }));
         }
         match name {
+            "sync::__aura_map_get" => {
+                let (Operand::Place(place) | Operand::MovePlace(place), DirectType::Opaque(result)) =
+                    (&args[1].value, target)
+                else {
+                    return Ok(None);
+                };
+                if self.type_of_place(place)? != DirectType::Scalar(ScalarKind::Int64) {
+                    return Ok(None);
+                }
+                let key = self.load_operand(&args[1].value)?;
+                let handle = self.load_operand(&args[0].value)?;
+                let handle = self.ensure_opaque(handle)?;
+                let words = [handle.values[0], key.values[0]];
+                let results =
+                    self.runtime_call_results(self.runtime[RuntimeFn::SyncMapGetInt64], &words);
+                Ok(Some(self.owned_opaque_result(results, result.clone())))
+            }
             "sync::__aura_cell_take" => {
                 let handle = self.load_operand(&args[0].value)?;
                 let handle = self.ensure_opaque(handle)?;
