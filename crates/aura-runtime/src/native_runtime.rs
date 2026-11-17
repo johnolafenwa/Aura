@@ -5553,6 +5553,7 @@ fn value_type_name(value: impl Borrow<Value>) -> String {
         Value::Map(_) => "dict".to_string(),
         Value::Duration(_) => "Duration".to_string(),
         Value::Rng(_) => "random.Rng".to_string(),
+        Value::CollectionStore(_) => "collections.__Store".to_string(),
         Value::Generator(_) => "iter.GeneratorHandle".to_string(),
         Value::Range(_) => "Range".to_string(),
         Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
@@ -5593,7 +5594,7 @@ fn is_unknown_runtime_type(ty: &Type) -> bool {
     matches!(ty, Type::Named(name, args) if name == "Unknown" && args.is_empty())
 }
 
-fn inferred_collection_type(value: &Value) -> Type {
+pub(crate) fn inferred_collection_type(value: &Value) -> Type {
     if let Value::Union(union) = value {
         return Type::clone(&union.union_type);
     }
@@ -5621,6 +5622,7 @@ fn inferred_collection_type(value: &Value) -> Type {
         ),
         Value::Duration(_) => Type::named("Duration"),
         Value::Rng(_) => Type::named("random.Rng"),
+        Value::CollectionStore(_) => Type::named("collections.__Store"),
         Value::Generator(_) => Type::named("iter.GeneratorHandle"),
         Value::Range(_) => Type::named("Range"),
         Value::Function(function) => function.signature.clone(),
@@ -14708,6 +14710,7 @@ pub extern "C-unwind" fn aura_direct_value_type_matches(
             Value::ProcessSupervisor(_) => expected == "process.Supervisor",
             Value::Duration(_) => expected == "Duration",
             Value::Rng(_) => expected == "random.Rng",
+            Value::CollectionStore(_) => expected == "collections.__Store",
             Value::Generator(_) => expected == "iter.GeneratorHandle",
             Value::Range(_) => expected == "Range",
             Value::Bool(_) => expected == "bool",
@@ -16312,6 +16315,24 @@ macro_rules! host_builtin_entries {
 }
 
 host_builtin_entries! {
+    owned "collections::__aura_new" => aura_host_collections_new(crate::runtime_value::ordered_collections::new);
+    owned "collections::__aura_len" => aura_host_collections_len(crate::runtime_value::ordered_collections::len);
+    owned "collections::__aura_supported" => aura_host_collections_supported(crate::runtime_value::ordered_collections::supported);
+    owned "collections::__aura_deque_push" => aura_host_collections_deque_push(crate::runtime_value::ordered_collections::deque_push);
+    owned "collections::__aura_deque_pop" => aura_host_collections_deque_pop(crate::runtime_value::ordered_collections::deque_pop);
+    owned "collections::__aura_deque_get" => aura_host_collections_deque_get(crate::runtime_value::ordered_collections::deque_get);
+    owned "collections::__aura_heap_from" => aura_host_collections_heap_from(crate::runtime_value::ordered_collections::heap_from);
+    owned "collections::__aura_heap_push" => aura_host_collections_heap_push(crate::runtime_value::ordered_collections::heap_push);
+    owned "collections::__aura_heap_take" => aura_host_collections_heap_take(crate::runtime_value::ordered_collections::heap_take);
+    owned "collections::__aura_heap_peek" => aura_host_collections_heap_peek(crate::runtime_value::ordered_collections::heap_peek);
+    owned "collections::__aura_map_put" => aura_host_collections_map_put(crate::runtime_value::ordered_collections::map_put);
+    owned "collections::__aura_map_get" => aura_host_collections_map_get(crate::runtime_value::ordered_collections::map_get);
+    owned "collections::__aura_map_has" => aura_host_collections_map_has(crate::runtime_value::ordered_collections::map_has);
+    owned "collections::__aura_map_take" => aura_host_collections_map_take(crate::runtime_value::ordered_collections::map_take);
+    owned "collections::__aura_map_edge" => aura_host_collections_map_edge(crate::runtime_value::ordered_collections::map_edge);
+    owned "collections::__aura_map_bound" => aura_host_collections_map_bound(crate::runtime_value::ordered_collections::map_bound);
+    owned "collections::__aura_map_range" => aura_host_collections_map_range(crate::runtime_value::ordered_collections::map_range);
+    owned "collections::__aura_map_drain" => aura_host_collections_map_drain(crate::runtime_value::ordered_collections::map_drain);
     owned "math::floor" => aura_host_math_floor(host_builtins::host_math_floor);
     owned "math::ceil" => aura_host_math_ceil(host_builtins::host_math_ceil);
     owned "math::trunc" => aura_host_math_trunc(host_builtins::host_math_trunc);

@@ -13328,8 +13328,6 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(join_block);
     }
 
-    /// The address of the element at `position` in unboxed storage whose
-    /// elements are `stride` bytes wide.
     /// Swaps scalar slots in one unshared list view. A shared backing store,
     /// non-scalar representation, or invalid index takes the regular swap.
     fn emit_scalar_list_swap(
@@ -13376,6 +13374,8 @@ impl<'a> FunctionCompiler<'a> {
         self.builder.seal_block(join);
     }
 
+    /// The address of the element at `position` in unboxed storage whose
+    /// elements are `stride` bytes wide.
     fn scalar_list_element(&mut self, elements: Val, position: Val, stride: i64) -> Val {
         let offset = if stride == 1 {
             position
@@ -20323,7 +20323,11 @@ fn direct_type_inner(
             ScalarKind::of_name(name).map(DirectType::Scalar)
         }
         Type::Named(name, args)
-            if args.is_empty() && (name == "random.Rng" || name == "iter.GeneratorHandle") =>
+            if args.is_empty()
+                && matches!(
+                    name.as_str(),
+                    "random.Rng" | "iter.GeneratorHandle" | "collections.__Store"
+                ) =>
         {
             Some(DirectType::Opaque(Type::named(name)))
         }

@@ -152,6 +152,13 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
     host.all_traits.extend(part.all_traits);
     host.trait_impls.extend(part.trait_impls);
     host.imported_modules.extend(part.imported_modules);
+    if host.name == "collections" {
+        // The source module sees the raw host namespace through its self
+        // import. Exports keep its representation and type-erased calls private.
+        host.functions
+            .retain(|name, _| !name.starts_with("__aura_"));
+        host.classes.remove("__Store");
+    }
     host.closures.extend(part.closures);
     host.comprehensions.extend(part.comprehensions);
 }

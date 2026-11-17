@@ -90,10 +90,11 @@ Last updated: 2026-11-17
 
 ## Ordered collections (in progress)
 
-The four source collections and a scalar list-swap optimization are on the
-feature branch. Map insert/remove stress, deque balancing and heap ordering
-have passed in MIR. Native parity, release measurements and editor checks
-are in progress. See `2026-11-17-ordered-collections.md`.
+Five fixtures pass on MIR and the direct backend, including custom ordering,
+snapshot independence, B-tree splits and merges, and moving stored values
+that cannot be cloned. Editor completions and the manual examples pass.
+Primitive keys now use runtime storage. Release comparisons are in progress.
+See `2026-11-17-ordered-collections.md`.
 
 ## Collections, text, and numbers (step 1 of 3 complete)
 

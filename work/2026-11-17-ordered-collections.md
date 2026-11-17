@@ -19,10 +19,23 @@ test passed for all four types. A separate fixture checked a user-defined
 
 On the release baseline at 8,192 keys the source implementation took
 24 ms for the deque, 732 ms for the heap, 94,036 ms for the map and
-119,877 ms for the set. These measurements missed the target. Runtime
-storage work and final native parity checks are in progress.
+119,877 ms for the set. These measurements missed the target. The checkpoint
+therefore authorized the runtime implementation for primitive keys.
 
 Ubuntu verification detected that the collection naming check treated
 `Heap.push` as a list method. The scanner now recognizes imported heap
 receiver types and still rejects `list.push`. The ordered-key fixture uses
 a name outside the historical map-compatibility checks.
+
+The runtime holds primitive elements in a deque or binary heap and
+primitive map keys in a B-tree. A shared snapshot detaches on mutation.
+A source module can lower calls to its own private helpers. User imports
+cannot call the type-erased helpers or construct their hidden store.
+
+Five fixtures passed with identical expected output on MIR and the direct
+backend. They cover independent deque and map snapshots, consuming stored
+RNGs, trait-defined class keys, B-tree rebalance and numeric list swaps.
+Both negative storage diagnostics matched their snapshots. The four
+runtime storage tests, native host argument-count checks and all 18
+manual examples passed. The benchmark runner checks a checksum for every
+collection and language before reporting medians.

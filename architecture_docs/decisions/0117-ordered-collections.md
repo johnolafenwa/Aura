@@ -20,6 +20,19 @@ from a sibling or merges siblings to restore occupancy. A sorted set
 stores its members as map keys with a unit payload. All comparisons use
 the key's `Ord` implementation. User classes can supply that order.
 
+## Runtime storage
+
+The source benchmark missed the performance targets. The standard module
+uses runtime storage for primitive keys and deque elements. The runtime
+holds a `VecDeque`, a Rust min/max binary heap or a `BTreeMap`. Integers
+retain their width and signedness, strings use scalar order, and floating
+point keys put NaNs last in ascending order as list sorting does.
+
+Cloning a store shares an immutable snapshot. A mutation consumes one
+store and takes a private copy when another value still holds the snapshot.
+The hidden host functions are visible only to the standard module. Classes
+with custom ordering continue to use their Aura `Ord` methods.
+
 ## Ownership and access
 
 Insertion moves a value into storage. A pop or removal transfers ownership

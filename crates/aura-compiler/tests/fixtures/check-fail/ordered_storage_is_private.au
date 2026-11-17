@@ -1,0 +1,6 @@
+import collections
+
+
+def main():
+    values = collections.__aura_new(3)
+    print(values)

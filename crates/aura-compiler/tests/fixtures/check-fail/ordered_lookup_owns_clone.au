@@ -1,0 +1,8 @@
+from collections import SortedMap
+import random
+
+
+def main():
+    mut streams = SortedMap[int64, random.Rng]()
+    streams.set(1, random.Rng(42))
+    print(streams.get(1))

@@ -40,3 +40,16 @@ def main():
     print(labels.floor(b))
     print(labels.ceiling(Key(rank=3, id=0)))
     print(labels.range(same, b).len())
+
+    mut tree = SortedMap[Key, int64]()
+    for i in range(109):
+        k = Key(rank=(i * 37) % 109, id=i)
+        tree.set(k, i)
+    for i in range(109):
+        k = Key(rank=(i * 37) % 109, id=0)
+        match own tree.remove(k):
+            case Found(value):
+                assert value == i
+            case _:
+                assert false
+    print(tree.len())

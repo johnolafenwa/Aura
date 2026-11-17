@@ -75,6 +75,8 @@ pub mod host_builtins;
 pub mod http_client;
 #[path = "image_host.rs"]
 pub mod image_host;
+#[path = "ordered_collections.rs"]
+pub mod ordered_collections;
 #[path = "regex_host.rs"]
 pub mod regex_host;
 #[path = "sync_host.rs"]
@@ -358,6 +360,7 @@ pub enum Value {
     TlsStream(TlsStreamValue),
     /// A generator frame (Batch 9). Not Transfer and not cloneable.
     Generator(GeneratorValue),
+    CollectionStore(ordered_collections::Store),
     /// A trait object of the interpreter: a value together with the type it
     /// had where it was converted. Generated code keeps the value in its own
     /// box instead and never builds this.
@@ -7191,6 +7194,7 @@ pub fn cast_numeric_value(value: Value, target: &Type, span: Option<Span>) -> Re
             Value::Map(_) => "dict".to_string(),
             Value::Duration(_) => "Duration".to_string(),
             Value::Rng(_) => "random.Rng".to_string(),
+            Value::CollectionStore(_) => "collections.__Store".to_string(),
             Value::Generator(_) => "iter.GeneratorHandle".to_string(),
             Value::Range(_) => "Range".to_string(),
             Value::ModuleNamespace(namespace) => format!("module {}", namespace.path),
@@ -11230,6 +11234,7 @@ impl Clone for Value {
             Self::ModuleNamespace(value) => Self::ModuleNamespace(value.clone()),
             Self::Function(value) => Self::Function(value.clone()),
             Self::Unit => Self::Unit,
+            Self::CollectionStore(state) => Self::CollectionStore(state.clone()),
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => {
                 representation_stats::note_cloned_elements(value.fields.len());
@@ -11282,6 +11287,7 @@ impl PartialEq for Value {
             (Value::Set(left), Value::Set(right)) => left == right,
             (Value::Map(left), Value::Map(right)) => left == right,
             (Value::Rng(left), Value::Rng(right)) => left == right,
+            (Value::CollectionStore(left), Value::CollectionStore(right)) => left == right,
             (Value::Generator(left), Value::Generator(right)) => left == right,
             (Value::Range(left), Value::Range(right)) => left == right,
             (Value::ModuleNamespace(left), Value::ModuleNamespace(right)) => left == right,
@@ -11502,6 +11508,7 @@ impl Value {
                         }
                         Value::Duration(value) => rendered.push_str(&render_duration(*value)),
                         Value::Rng(_) => rendered.push_str("<rng>"),
+                        Value::CollectionStore(_) => rendered.push_str("<collection storage>"),
                         Value::Generator(_) => rendered.push_str("<generator>"),
                         Value::Range(range) => {
                             if range.step == 1 {
