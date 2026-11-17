@@ -25,6 +25,17 @@ Last updated: 2026-11-17
 - Compiler and runtime tests, editor checks and release benchmarks are
   underway. The shared branch collects this work.
 
+## The `image` module (complete)
+
+- Target: John's 2026-11-16 "lets do 1,2,3" on the graphics options, of
+  which this is option 2. Details are in `2026-11-16-image-module.md`.
+- Done: PNG, JPEG and Netpbm reading and writing, resize, crop, flips,
+  channel conversion, `Array` forms for tensors, the Manual page, book
+  section 20.6, ADR-0114, an example and a benchmark.
+- Verification: runtime and compiler unit tests with fixtures made by
+  Pillow, the example under `aura run` and in a built binary, and
+  `benchmarks/image_codec` against Rust and Pillow.
+- Left out: 16-bit samples, metadata, other formats, drawing.
 
 ## Three compiler defects from the book sections (complete)
 

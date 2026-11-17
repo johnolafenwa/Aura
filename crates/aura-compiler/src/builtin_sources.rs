@@ -23,6 +23,7 @@ const HTTP_SOURCE: &str = include_str!("../std/http.au");
 const TENSOR_SOURCE: &str = include_str!("../std/tensor.au");
 const SYNC_SOURCE: &str = include_str!("../std/sync.au");
 const CONTROL_SOURCE: &str = include_str!("../std/control.au");
+const IMAGE_SOURCE: &str = include_str!("../std/image.au");
 
 fn module_source(name: &str) -> Option<&'static str> {
     match name {
@@ -36,6 +37,7 @@ fn module_source(name: &str) -> Option<&'static str> {
         "tensor" => Some(TENSOR_SOURCE),
         "sync" => Some(SYNC_SOURCE),
         "control" => Some(CONTROL_SOURCE),
+        "image" => Some(IMAGE_SOURCE),
         _ => None,
     }
 }

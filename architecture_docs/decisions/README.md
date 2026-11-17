@@ -130,3 +130,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 103. [ADR-0103. Lock lowering and native storage](0103-lock-lowering-and-native-storage.md) records how tasks acquire, release, and poison cells.
 104. [ADR-0104. Trap recovery with control.recover](0104-trap-recovery-with-control-recover.md) defines the recovery boundary and its result.
 105. [ADR-0105. Call depth is bounded by the stack](0105-call-depth-is-bounded-by-the-stack.md) specifies when a recursive call traps.
+114. [ADR-0114: The `image` module](0114-image-module.md) — Accepted; PNG, JPEG and Netpbm into a class of three integers and a `list[uint8]`; codecs in the runtime behind nine host functions; a pixel limit checked before decoding; `Array` forms as the bridge to tensors
