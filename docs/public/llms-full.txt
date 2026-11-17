@@ -40721,8 +40721,8 @@ workers -> 4
 1
 ```
 
-The final `1` comes from `echo $?`. A trapped program always exits with status
-1, so a shell script or a CI job knows that something went wrong.
+The final `1` comes from `echo $?`. An unhandled trap in the main task
+gives the program exit status 1, so a shell script can detect the failure.
 
 ## What traps
 
@@ -41762,10 +41762,10 @@ next reader that ignoring the error was a decision, not an oversight.
 
 ## Summary
 
-Aura gives failures two shapes. A trap stops the current task at the line that
-failed, runs cleanup, and reports a diagnostic with a code, the values
-involved, and the call chain. Traps can't be caught, which keeps bugs from
-hiding. A `Result[T, E]` is an ordinary value that carries either a success or
+At a trap, Aura runs cleanup and reports a diagnostic with the code,
+location and call chain. The task ends unless a call to `control.recover`
+contains the failure. A `Result[T, E]` is an ordinary value that carries
+either a success or
 an error. The compiler makes you look inside it before using the success,
 `match` makes you handle both cases, and `try` passes an error up to the
 caller, changing its type only through a `From` conversion you wrote. A small

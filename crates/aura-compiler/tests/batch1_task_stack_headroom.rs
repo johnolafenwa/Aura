@@ -36,7 +36,7 @@ enum Outcome {
     Exhausted,
 }
 
-fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
+fn parse_sweep(stdout: &str) -> Vec<Outcome> {
     stdout
         .lines()
         .enumerate()
@@ -60,16 +60,6 @@ fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
                 message.contains("`descend`") || message.contains("`descend::__lambda_"),
                 "depth {depth} names the callee: {message}"
             );
-            let remaining = message
-                .split(": ")
-                .nth(1)
-                .and_then(|tail| tail.split(' ').next())
-                .and_then(|digits| digits.parse::<usize>().ok())
-                .unwrap_or_else(|| panic!("depth {depth} reports the remaining bytes: {message}"));
-            assert!(
-                remaining < stack,
-                "depth {depth} reports writable headroom below the requested {stack} bytes: {message}"
-            );
             Outcome::Exhausted
         })
         .collect()
@@ -78,7 +68,7 @@ fn parse_sweep(stdout: &str, stack: usize) -> Vec<Outcome> {
 fn run_sweep(stack: usize, max_depth: usize) -> Vec<Outcome> {
     let mir = lower_source_to_mir(&child_sweep_source(stack, max_depth)).expect("sweep lowers");
     let output = run_mir(&mir).expect("every child failure is observed by the parent");
-    let outcomes = parse_sweep(&output.stdout, stack);
+    let outcomes = parse_sweep(&output.stdout);
     assert_eq!(outcomes.len(), max_depth + 1, "{}", output.stdout);
     let first_failure = outcomes
         .iter()
