@@ -4267,8 +4267,26 @@ def main():
 }
 
 #[test]
+fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/sync_nontransfer_payload.au"),
+            "AU3008",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/sync_guarded_view_escape.au"),
+            "AU3010",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("an invalid guarded value");
+        assert_eq!(error.code, code);
+    }
+}
+
+#[test]
 fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
+    crate::lower_source_to_mir(source).expect("lock error edges have explicit ownership");
     let output = crate::run_source(source).expect("early exits release the lock");
     assert_eq!(
         output.stdout,
@@ -9339,7 +9357,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         value: Operand::Int(1),
     });
     lowerer.with_stack.push("resource".to_string());
-    lowerer.emit_cleanup_range(0, true);
+    lowerer.emit_cleanup_range(0, true, 0);
     lowerer.terminate(Terminator::Return(Operand::Int(0)));
     assert!(lowerer.current_terminated());
     lowerer.switch_to(block);

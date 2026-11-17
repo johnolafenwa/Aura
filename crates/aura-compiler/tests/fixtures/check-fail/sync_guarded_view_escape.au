@@ -1,0 +1,8 @@
+import sync
+
+def escape(guard: sync.Mutex[list[int64]]) -> view list[int64] from guard:
+    with value = guard.lock():
+        return value
+
+def main():
+    pass

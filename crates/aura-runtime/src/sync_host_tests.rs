@@ -247,3 +247,31 @@ fn a_released_outer_lock_does_not_hide_a_new_lock_from_recovery() {
     assert!(inner.is_poisoned().unwrap());
     assert!(!outer.is_poisoned().unwrap());
 }
+
+#[test]
+fn standard_mutex_and_atomic_wrappers_render_as_opaque_handles() {
+    for name in [
+        "sync.Mutex",
+        "sync.Locked",
+        "sync.Map",
+        "sync.AtomicInt",
+        "sync.AtomicBool",
+    ] {
+        assert_eq!(
+            Value::Instance(InstanceValue {
+                class_name: RuntimeName::from(name),
+                fields: InstanceFields::default(),
+            })
+            .render(),
+            "<sync-handle>"
+        );
+    }
+    assert_eq!(
+        Value::Instance(InstanceValue {
+            class_name: RuntimeName::from_static("Mutex"),
+            fields: InstanceFields::default(),
+        })
+        .render(),
+        "Mutex()"
+    );
+}

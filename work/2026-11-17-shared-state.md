@@ -45,3 +45,17 @@ tests passed, including checks for unqualified collection names.
 The full comparative benchmark checks each phase's result across Aura,
 Rust and Python. Runtime and compiler testing, the cross-backend CLI and
 editor checks, and hosted CI are in progress.
+
+## Early Exits And Output
+
+A fixture that propagates a typed error while holding a mutex reproduced
+a retained lock on the interpreter. The error path now releases its
+managers in reverse order and preserves the original error when a
+fallible manager also returns an error. The native ownership pass treats
+a propagating `try` before an unreachable terminator as a possible return.
+
+The runtime tests pass for copied handles, transfer of a collection box
+and out-of-order release across a recovery boundary. The language server
+passed all 159 tests. The two backends previously rendered a mutex
+differently. The manual and a fixture specify `<sync-handle>` for direct
+and nested rendering.

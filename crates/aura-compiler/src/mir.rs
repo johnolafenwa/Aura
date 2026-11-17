@@ -14782,7 +14782,7 @@ impl<'a> Lowerer<'a> {
                         target: return_place,
                         value: Rvalue::Use(value),
                     });
-                    self.emit_cleanup_range(cleanup_depth, true);
+                    self.emit_cleanup_range(cleanup_depth, true, 0);
                     self.terminate(Terminator::Goto(label));
                 } else {
                     let mut value = value;
@@ -14794,7 +14794,7 @@ impl<'a> Lowerer<'a> {
                         });
                         value = self.move_place_for_type(temp, &self.return_type);
                     }
-                    self.emit_cleanup_range(0, true);
+                    self.emit_cleanup_range(0, true, 0);
                     self.terminate(Terminator::Return(value));
                 }
                 false
@@ -14827,7 +14827,7 @@ impl<'a> Lowerer<'a> {
                 let loan_depth = loop_labels.loan_depth;
                 let continue_label = loop_labels.continue_label.clone();
                 self.emit_loan_cleanup_from(loan_depth, None);
-                self.emit_cleanup_range(cleanup_depth, true);
+                self.emit_cleanup_range(cleanup_depth, true, loan_depth);
                 self.terminate(Terminator::Goto(continue_label));
                 false
             }
@@ -14843,7 +14843,7 @@ impl<'a> Lowerer<'a> {
         let loan_depth = loop_labels.loan_depth;
         let break_label = loop_labels.break_label.clone();
         self.emit_loan_cleanup_from(loan_depth, None);
-        self.emit_cleanup_range(cleanup_depth, true);
+        self.emit_cleanup_range(cleanup_depth, true, loan_depth);
         self.terminate(Terminator::Goto(break_label));
     }
 
@@ -21666,6 +21666,15 @@ impl<'a> Lowerer<'a> {
                 // it early is safe: a successful `try` falls through to the
                 // arm's own writeback, which stores the same or a newer value.
                 self.emit_active_match_writebacks();
+                let value = if self
+                    .with_stack
+                    .iter()
+                    .any(|place| self.lock_exits.contains_key(place))
+                {
+                    self.emit_locked_try_error_edge(value, inner, expr)
+                } else {
+                    value
+                };
                 let temp = self.new_temp_for_expr(expr);
                 self.emit(Instruction::Assign {
                     target: temp.clone(),
@@ -30964,11 +30973,71 @@ impl<'a> Lowerer<'a> {
         self.terminate(Terminator::Goto(self.label(after_block)));
     }
 
-    fn emit_cleanup_range(&mut self, depth: usize, cancel_before_cleanup: bool) {
-        let places = self.with_stack[depth..].to_vec();
-        for place in places.into_iter().rev() {
+    /// A successful `try` leaves every holder in place. On its error edge,
+    /// publish locked values and run intervening managers in exit order.
+    /// Registered managers discard a secondary Result.Err during propagation.
+    fn emit_locked_try_error_edge(&mut self, value: Operand, inner: &Expr, expr: &Expr) -> Operand {
+        let source = self.new_temp_for_expr(inner);
+        self.emit(Instruction::Assign {
+            target: source.clone(),
+            value: Rvalue::Use(value),
+        });
+        let error = self.new_block("locked_try_error");
+        let ok = self.new_block("locked_try_ok");
+        self.terminate(Terminator::Match {
+            scrutinee: Operand::Place(source.clone()),
+            arms: vec![MirMatchArm {
+                enum_name: Some("Result".to_string()),
+                variant_name: Some("Err".to_string()),
+                wildcard: false,
+                label: self.label(error),
+            }],
+            otherwise: self.label(ok),
+        });
+        self.switch_to(error);
+        self.emit_loan_cleanup_from(0, None);
+        for place in self.with_stack.clone().into_iter().rev() {
+            if self.lock_exits.contains_key(&place) {
+                self.emit_with_exit(place, true);
+            } else {
+                self.emit(Instruction::PopCleanup {
+                    place,
+                    cancel_before_cleanup: true,
+                    run: true,
+                });
+            }
+        }
+        // Preserve the ordinary From conversion and the frame's release list.
+        let never = self.new_temp_for_expr(expr);
+        self.emit(Instruction::Assign {
+            target: never,
+            value: Rvalue::Try {
+                value: Operand::MovePlace(source.clone()),
+                releases_on_error: Vec::new(),
+                from: None,
+            },
+        });
+        self.terminate(Terminator::Unreachable);
+        self.switch_to(ok);
+        Operand::MovePlace(source)
+    }
+
+    fn emit_cleanup_range(
+        &mut self,
+        depth: usize,
+        cancel_before_cleanup: bool,
+        ended_loan_depth: usize,
+    ) {
+        // A fallible manager exit may itself propagate an error. During its
+        // lowering only the outer, still-active managers and loans remain.
+        let ended_scopes = self.loan_scopes.split_off(ended_loan_depth);
+        let original_stack = self.with_stack.clone();
+        while self.with_stack.len() > depth {
+            let place = self.with_stack.pop().expect("active manager");
             self.emit_with_exit(place, cancel_before_cleanup);
         }
+        self.with_stack = original_stack;
+        self.loan_scopes.extend(ended_scopes);
     }
 
     /// Leaves one `with` item on a normal exit path. A manager's action is

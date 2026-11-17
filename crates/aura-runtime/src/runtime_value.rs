@@ -11257,6 +11257,10 @@ impl Value {
                         Value::TlsStream(_) => rendered.push_str("<tls-stream>"),
                         Value::Instance(instance) => {
                             let class = nominal_runtime_base_name(&instance.class_name);
+                            if sync_host::is_handle_class(class) {
+                                rendered.push_str("<sync-handle>");
+                                continue;
+                            }
                             rendered.push_str(class);
                             rendered.push('(');
                             actions.push(RenderAction::Static(")"));

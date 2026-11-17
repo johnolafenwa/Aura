@@ -223,6 +223,15 @@ fn relock_error() -> Diagnostic {
     )
 }
 
+/// Standard library wrapper classes whose native representation is the
+/// handle itself. Local classes keep their declared fields and rendering.
+pub fn is_handle_class(name: &str) -> bool {
+    matches!(
+        name,
+        "sync.Mutex" | "sync.Locked" | "sync.Map" | "sync.AtomicInt" | "sync.AtomicBool"
+    )
+}
+
 /// A `sync.Cell` or a `sync.Atom`.
 #[derive(Clone)]
 pub struct SyncValue(SyncHandle);
