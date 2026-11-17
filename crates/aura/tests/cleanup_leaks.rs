@@ -372,3 +372,30 @@ def main() -> None:
 "#;
     assert_frees_everything("leak-decorator-captures", source, "11\n", 0);
 }
+
+#[test]
+fn an_overflow_in_a_forwarded_method_names_both_frames() {
+    let source = r#"type Tally = Callable[mut def(amount: int64) -> int64]
+
+class Count:
+    value: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.value += amount
+        return self.value
+
+def counter(start: int64) -> Tally:
+    count = Count(value=start)
+    return lambda [own count] amount: count.add(amount)
+
+def main() -> None:
+    mut tally = counter(9223372036854775807)
+    print(tally(1))
+"#;
+    let diagnostic = assert_frees_everything("forwarded-method-overflow", source, "", 1);
+    assert!(diagnostic.contains("AU4002"), "{diagnostic}");
+    assert!(
+        diagnostic.contains("Count.add at 6:5 -> counter::__lambda_12_12 at 12:12 -> main at 14:1"),
+        "{diagnostic}"
+    );
+}

@@ -1683,7 +1683,7 @@ impl OpaqueValue {
         // holds its view.
         let view = unsafe { vector.str_view.get_or_create() };
         view.misses += 1;
-        if view.misses.saturating_mul(STR_VIEW_MISSES_PER_ELEMENT) < values.len() {
+        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
             return;
         }
         view.misses = 0;
@@ -1701,6 +1701,42 @@ impl OpaqueValue {
         self.list_elements.set(view.entries.as_ptr() as usize);
         self.list_access
             .store(DirectListAccess::Str as u32, Ordering::Relaxed);
+    }
+
+    /// Records direct-callable addresses after enough reads to pay for a
+    /// traversal. Only a confined list whose elements are whole values may
+    /// use this view. A normal write restores its storage view. A borrowed
+    /// element lives in a list of boxes, which can change independently.
+    fn note_callable_view_miss(&self, vector: &VecValue) {
+        if self.list_access.load(Ordering::Relaxed) != DirectListAccess::Values as u32
+            || self.shared_lock().is_some()
+        {
+            return;
+        }
+        let Some(values) = vector.elements.as_values() else {
+            return;
+        };
+        // SAFETY: the caller has read access and the value is confined to
+        // this thread. Nothing else can hold its cache during this read.
+        let view = unsafe { vector.str_view.get_or_create() };
+        view.misses += 1;
+        if view.misses.saturating_mul(LIST_VIEW_MISSES_PER_ELEMENT) < values.len() {
+            return;
+        }
+        view.misses = 0;
+        view.callables.clear();
+        view.callables.extend(values.iter().map(|value| {
+            match value {
+                Value::Function(function) => function
+                    .direct_callable
+                    .as_ref()
+                    .map_or(0, |callable| Arc::as_ptr(callable) as usize),
+                _ => 0,
+            }
+        }));
+        self.list_elements.set(view.callables.as_ptr() as usize);
+        self.list_access
+            .store(DirectListAccess::Callables as u32, Ordering::Relaxed);
     }
 
     /// The lock of a shared value, or `None` while it is confined.
@@ -1840,7 +1876,11 @@ unsafe fn freeze_direct_value(ptr: *mut OpaqueValue) {
     // the value holds, which a reader may then change, so only views of
     // elements kept in place stay.
     let access = value.list_access.load(Ordering::Relaxed);
-    if access == DirectListAccess::Boxes as u32 || access >= FIRST_CLASS_ACCESS {
+    if access == DirectListAccess::Boxes as u32
+        || access == DirectListAccess::Callables as u32
+        || access == FUNCTION_VIEW_ACCESS
+        || access >= FIRST_CLASS_ACCESS
+    {
         value
             .list_access
             .store(DirectListAccess::None as u32, Ordering::Release);
@@ -3104,6 +3144,16 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
             let room = u32::try_from(room).unwrap_or(u32::MAX);
             (access, elements, len, room, 0)
         }
+        Value::Function(function) => match &function.direct_callable {
+            Some(callable) => (
+                FUNCTION_VIEW_ACCESS,
+                Arc::as_ptr(callable) as usize,
+                0,
+                0,
+                0,
+            ),
+            None => (DirectListAccess::None as u32, 0, 0, 0, 0),
+        },
         // A strided view has no element address to read in place, so it
         // keeps the `None` access and every read calls the runtime.
         Value::Array(array)
@@ -3169,6 +3219,11 @@ fn list_view_of(value: &Value) -> (u32, usize, usize, u32, usize) {
 /// scalar at [`crate::json_tape::NODE_SCALAR_OFFSET`]. The code lies
 /// between the list forms and the first plain layout's code.
 pub const JSON_TAPE_ACCESS: u32 = 0xF0;
+
+/// A confined boxed function whose direct callable is owned by that box.
+pub const FUNCTION_VIEW_ACCESS: u32 = 0xF2;
+const _: () =
+    assert!(JSON_TAPE_ACCESS < FUNCTION_VIEW_ACCESS && FUNCTION_VIEW_ACCESS < FIRST_PLAIN_ACCESS);
 
 const _: () = assert!(
     JSON_TAPE_ACCESS > direct_array_access(DirectListAccess::ArrayFloat64, DIRECT_ARRAY_MAX_RANK)
@@ -3239,20 +3294,23 @@ pub enum DirectListAccess {
     /// code lends instead of copying the elements (see
     /// [`aura_direct_vec_lend`]).
     Boxes = 14,
+    /// A confined list of whole values. The table stores the address of
+    /// each element's native callable, or zero when it has none.
+    Callables = 15,
     /// A rank-1 `Array[int32]`.
-    ArrayInt32 = 15,
+    ArrayInt32 = 16,
     /// A rank-1 `Array[int64]`.
-    ArrayInt64 = 16,
+    ArrayInt64 = 17,
     /// A rank-1 `Array[float32]`.
-    ArrayFloat32 = 17,
+    ArrayFloat32 = 18,
     /// A rank-1 `Array[float64]`.
-    ArrayFloat64 = 18,
+    ArrayFloat64 = 19,
 }
 
 impl DirectListAccess {
     /// The codes of the list forms, which all keep their length in the
     /// view. They are consecutive from [`DirectListAccess::Values`].
-    pub const LIST_FORMS: u32 = 14;
+    pub const LIST_FORMS: u32 = Self::Callables as u32;
 }
 
 /// The scalar types generated code names to the runtime in one word: the
@@ -3396,9 +3454,9 @@ pub const DIRECT_STR_VIEW_ENTRY_BYTES: i32 = std::mem::size_of::<DirectStrViewEn
 pub const DIRECT_STR_VIEW_PTR_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, ptr) as i32;
 pub const DIRECT_STR_VIEW_LEN_OFFSET: i32 = std::mem::offset_of!(DirectStrViewEntry, len) as i32;
 
-/// A `list[str]` builds its `str` view once its misses times this reach
-/// its length.
-const STR_VIEW_MISSES_PER_ELEMENT: usize = 8;
+/// A string or callable list builds its lookup table once the number of
+/// misses times this factor reaches its length.
+const LIST_VIEW_MISSES_PER_ELEMENT: usize = 8;
 
 /// Where generated code finds the list view in a boxed value. The offsets
 /// hold for one build of the runtime, so the compiler records
@@ -3444,6 +3502,10 @@ impl DirectListLayout {
             DirectListAccess::Uint64 as i64,
             DirectListAccess::Boxes as i64,
             i64::from(DirectListAccess::LIST_FORMS),
+            i64::from(FUNCTION_VIEW_ACCESS),
+            i64::from(DirectCallable::WORDS_OFFSET),
+            i64::from(DirectCallable::ABI_KEY_OFFSET),
+            i64::from(DirectCallable::RELEASED_OFFSET),
             DirectScalarKind::Float32 as i64,
             i64::from(DIRECT_STR_VIEW_ENTRY_BYTES),
             i64::from(DIRECT_STR_VIEW_PTR_OFFSET),
@@ -6689,14 +6751,32 @@ pub extern "C-unwind" fn aura_direct_function_callable(
     abi_key: i64,
 ) -> i64 {
     unsafe {
-        with_unlisted_value(function, |value| match value {
-            Value::Function(function) => function
-                .direct_callable
-                .as_ref()
-                .and_then(|callable| callable.words_for(abi_key))
-                .map_or(0, |words| words as i64),
-            _ => 0,
-        })
+        let header = function.as_ref().unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        if header.list_access.load(Ordering::Relaxed) == FUNCTION_VIEW_ACCESS {
+            // SAFETY: the confined function owns this direct callable. A
+            // replacement refreshes the view, and sharing clears its tag.
+            let callable = &*(header.list_elements.get() as *const DirectCallable);
+            return callable.words_for(abi_key).map_or(0, |words| words as i64);
+        }
+        boxed_callable_words(header, abi_key)
+    }
+}
+
+// Keeping the guarded reads out of line lets a confined hit return without
+// constructing a lock guard or saving the registers used by the slow path.
+#[inline(never)]
+fn boxed_callable_words(header: &OpaqueValue, abi_key: i64) -> i64 {
+    let _access = header.access_unlisted(false);
+    // SAFETY: the box is confined to this thread or the read guard is held.
+    match unsafe { &*header.value.get() } {
+        Value::Function(function) => function
+            .direct_callable
+            .as_ref()
+            .and_then(|callable| callable.words_for(abi_key))
+            .map_or(0, |words| words as i64),
+        _ => 0,
     }
 }
 
@@ -6711,25 +6791,60 @@ pub extern "C-unwind" fn aura_direct_vec_callable(
     abi_key: i64,
 ) -> i64 {
     unsafe {
-        // A list containing functions stores whole values or boxes. Only
-        // scalar and typed lists can have pending native appends, and
-        // neither representation can provide a callable.
-        with_unlisted_value(vec, |value| {
-            let Value::Vec(vector) = value else {
+        let header = vec.as_ref().unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        if header.list_access.load(Ordering::Relaxed) == DirectListAccess::Callables as u32 {
+            let len = header.list_len.get();
+            // The common nonnegative loop index needs only one bounds
+            // comparison. Negative indices count back from the end.
+            let index = if index < 0 {
+                usize::try_from(index.unsigned_abs())
+                    .ok()
+                    .and_then(|offset| len.checked_sub(offset))
+            } else {
+                usize::try_from(index).ok()
+            };
+            let Some(index) = index.filter(|&index| index < len) else {
                 return 0;
             };
-            let element = normalize_vec_index(index, vector.elements.len())
-                .and_then(|index| vector.elements.value_at(index));
-            match element {
-                Some(Value::Function(function)) => function
-                    .direct_callable
-                    .as_ref()
-                    .and_then(|callable| callable.words_for(abi_key))
-                    .map_or(0, |words| words as i64),
-                _ => 0,
-            }
-        })
+            // SAFETY: the tag belongs only to a confined list. Its table
+            // covers `list_len` slots, and the corresponding function in
+            // each slot owns the direct callable until a list write.
+            let entries = header.list_elements.get() as *const usize;
+            let callable = *entries.add(index) as *const DirectCallable;
+            return callable
+                .as_ref()
+                .and_then(|callable| callable.words_for(abi_key))
+                .map_or(0, |words| words as i64);
+        }
+        list_callable_words(header, index, abi_key)
     }
+}
+
+#[inline(never)]
+fn list_callable_words(header: &OpaqueValue, index: i64, abi_key: i64) -> i64 {
+    // Only scalar and typed lists can have pending native appends, and
+    // neither representation provides a callable.
+    let _access = header.access_unlisted(false);
+    // SAFETY: the box is confined to this thread or the read guard is held.
+    let Value::Vec(vector) = (unsafe { &*header.value.get() }) else {
+        return 0;
+    };
+    let element = normalize_vec_index(index, vector.elements.len())
+        .and_then(|index| vector.elements.value_at(index));
+    let Some(Value::Function(function)) = element else {
+        return 0;
+    };
+    let Some(words) = function
+        .direct_callable
+        .as_ref()
+        .and_then(|callable| callable.words_for(abi_key))
+    else {
+        return 0;
+    };
+    header.note_callable_view_miss(vector);
+    words as i64
 }
 
 /// Copies the inline callable words of element `index` of the list `vec`

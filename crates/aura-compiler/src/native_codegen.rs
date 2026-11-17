@@ -1405,7 +1405,7 @@ impl<'a> NativeCodegen<'a> {
             func_id,
             &signature,
             &format!("direct function `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, func_id, false),
+            |codegen, builder| codegen.emit_function(builder, function, func_id, false, None),
         )?;
         if let Some(id) = self.recovery_functions.get(&function.name).copied() {
             let mut signature = signature.clone();
@@ -1424,8 +1424,92 @@ impl<'a> NativeCodegen<'a> {
             sinkless_id,
             &signature,
             &format!("the sink-free body of `{}`", function.name),
-            |codegen, builder| codegen.emit_function(builder, function, sinkless_id, true),
+            |codegen, builder| {
+                if let Some(method) = codegen.forwarded_leaf_method(function) {
+                    return codegen.emit_function(
+                        builder,
+                        method,
+                        sinkless_id,
+                        true,
+                        Some(function),
+                    );
+                }
+                codegen.emit_function(builder, function, sinkless_id, true, None)
+            },
         )
+    }
+
+    /// A closure whose whole body passes its parameters unchanged to a
+    /// leaf method and returns its result. Its sink-free entry may use the
+    /// method body directly, retaining both source frames on a trap.
+    fn forwarded_leaf_method(&self, wrapper: &MirFunction) -> Option<&'a MirFunction> {
+        if !wrapper.name.contains("::__lambda_") || self.debug_info {
+            return None;
+        }
+        let [block] = wrapper.blocks.as_slice() else {
+            return None;
+        };
+        let [Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            object: Operand::Place(object),
+                            receiver_place: Some(place),
+                            dispatch: Some(MethodDispatch::Static { function }),
+                            ..
+                        },
+                    args,
+                    type_args,
+                },
+        }] = block.instructions.as_slice()
+        else {
+            return None;
+        };
+        let (receiver, tail) = wrapper.params.split_first()?;
+        if !matches!(&block.terminator, Terminator::Return(Operand::Place(result)) if result == target)
+            || !type_args.is_empty()
+            || receiver.passing != MirReceiverKind::BorrowMut
+            || receiver.name != *object
+            || object != place
+        {
+            return None;
+        }
+        let method = self
+            .module
+            .functions
+            .iter()
+            .find(|candidate| &candidate.name == function)?;
+        let self_ty = method
+            .local_types
+            .iter()
+            .find(|local| local.name == "self")?;
+        if method.receiver != Some(MirReceiverKind::BorrowMut)
+            || self_ty.ty != receiver.ty
+            || method.return_type != wrapper.return_type
+            || !matches!(
+                direct_type(&receiver.ty, &self.classes),
+                Some(DirectType::PlainClass(_))
+            )
+            || !leaf_body(method, &self.classes)
+            || method.params.len() != tail.len()
+            || args.len() != tail.len()
+        {
+            return None;
+        }
+        args.iter()
+            .zip(tail)
+            .zip(&method.params)
+            .all(|((arg, forwarded), formal)| {
+                arg.name.is_none()
+                    && arg.writeback_place.is_none()
+                    && matches!(&arg.value, Operand::Place(place) if place == &forwarded.name)
+                    && forwarded.ty == formal.ty
+                    && forwarded.passing == formal.passing
+                    && formal.passing != MirReceiverKind::BorrowMut
+            })
+            .then_some(method)
     }
 
     /// The receiver of a call of a method of the receiver's own type that
@@ -1484,12 +1568,36 @@ impl<'a> NativeCodegen<'a> {
             .then_some(object)
     }
 
+    fn frame_descriptor_value(
+        &mut self,
+        builder: &mut dyn FunctionBackend,
+        function: &MirFunction,
+        symbol: &str,
+    ) -> std::result::Result<Val, String> {
+        let path = function
+            .source_path
+            .as_deref()
+            .unwrap_or(&self.program_path);
+        let descriptor = declare_frame_descriptor(
+            builder.module(),
+            &mut self.string_data,
+            symbol,
+            function.span,
+            path.as_bytes(),
+            public_direct_function_name(&function.name).as_bytes(),
+        )?;
+        self.frame_descriptors.push(descriptor);
+        let descriptor = builder.import_data(descriptor);
+        Ok(builder.symbol_value(types::I64, descriptor))
+    }
+
     fn emit_function(
         &mut self,
         builder: &mut dyn FunctionBackend,
         function: &MirFunction,
         func_id: FuncHandle,
         without_sinks: bool,
+        forwarded_by: Option<&MirFunction>,
     ) -> std::result::Result<(), String> {
         let reachable_blocks = self
             .reachable_blocks
@@ -1521,27 +1629,20 @@ impl<'a> NativeCodegen<'a> {
         builder.append_block_params_for_function_params(entry);
         builder.switch_to_block(entry);
         let runtime_refs = self.runtime.map(|id| builder.import_function(*id));
-        let public_function_name = public_direct_function_name(&function.name);
-        let function_path = function
-            .source_path
-            .as_deref()
-            .unwrap_or(&self.program_path);
         let descriptor = if self.freestanding.is_some() {
-            // A freestanding function keeps no frame record.
             builder.iconst(types::I64, 0)
         } else {
-            let descriptor = declare_frame_descriptor(
-                builder.module(),
-                &mut self.string_data,
-                &format!("aura_frame_{}", func_id.0),
-                function.span,
-                function_path.as_bytes(),
-                public_function_name.as_bytes(),
-            )?;
-            self.frame_descriptors.push(descriptor);
-            let descriptor = builder.import_data(descriptor);
-            builder.symbol_value(types::I64, descriptor)
+            self.frame_descriptor_value(builder, function, &format!("aura_frame_{}", func_id.0))?
         };
+        let forwarding_frame = forwarded_by
+            .map(|outer| {
+                self.frame_descriptor_value(
+                    builder,
+                    outer,
+                    &format!("aura_frame_wrapper_{}", func_id.0),
+                )
+            })
+            .transpose()?;
         // The entry block's code continues after the push, in the block
         // where both of its paths meet. A frameless leaf pushes its record
         // only on a trap path.
@@ -2392,6 +2493,7 @@ impl<'a> NativeCodegen<'a> {
             freestanding: self.freestanding,
             checks_cast: false,
             frameless_descriptor: frameless.then_some(descriptor),
+            forwarding_frame,
             deferred_traps: (frameless
                 && defers_lane_traps(function)
                 && crate::native_backend::joins_lane_checks())
@@ -3801,6 +3903,8 @@ struct FunctionCompiler<'a> {
     /// record (see `frameless_leaf`), which each trap path pushes before
     /// the runtime reports the trap.
     frameless_descriptor: Option<Val>,
+    /// The source frame of a closure implemented by its forwarded method.
+    forwarding_frame: Option<Val>,
     /// The overflow checks of a lane method that wait for its return (see
     /// `defers_lane_traps`), or `None` in any other function.
     deferred_traps: Option<Vec<DeferredTrap>>,
@@ -7691,6 +7795,10 @@ impl<'a> FunctionCompiler<'a> {
             return;
         }
         if let Some(descriptor) = self.frameless_descriptor {
+            if let Some(outer) = self.forwarding_frame {
+                self.builder
+                    .call(self.runtime[RuntimeFn::EnterCall], &[outer]);
+            }
             self.builder
                 .call(self.runtime[RuntimeFn::EnterCall], &[descriptor]);
         }
@@ -9161,6 +9269,91 @@ impl<'a> FunctionCompiler<'a> {
         Ok(true)
     }
 
+    /// Reads the native callable from a confined function box or a list's
+    /// callable table. The runtime handles shared values and constructs a
+    /// table after repeated reads. A mutable callable can materialize its
+    /// captures while an entry still exists, so its release flag is always
+    /// read before the words are handed to the caller.
+    fn stored_callable_words(&mut self, holder: Val, index: Option<Val>, key: Val) -> Val {
+        use aura_runtime::native_runtime::{
+            direct_list_layout, DirectListAccess, FUNCTION_VIEW_ACCESS,
+        };
+        use aura_runtime::runtime_value::DirectCallable;
+        let layout = direct_list_layout();
+        let fast = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let decode = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.append_block_param(decode, types::I64);
+        self.builder.append_block_param(done, types::I64);
+        let zero = self.builder.iconst(types::I64, 0);
+        let wanted = if index.is_some() {
+            DirectListAccess::Callables as u32
+        } else {
+            FUNCTION_VIEW_ACCESS
+        };
+        let actual = self.emit_list_access(holder, &layout);
+        let cached = self
+            .builder
+            .icmp_imm(IntCC::Equal, actual, i64::from(wanted));
+        self.builder.brif(cached, fast, &[], slow, &[]);
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let pointer = self.list_view_word(holder, list_snapshots::ViewWord::Elements);
+        if let Some(index) = index {
+            let position = self.emit_list_view_bounds_check(holder, index, &layout, slow);
+            let offset = self.builder.imul_imm(position, 8);
+            let entry = self.builder.element_address(pointer, offset);
+            let callable = self.builder.load(types::I64, MemFlags::trusted(), entry, 0);
+            self.builder
+                .brif(callable, decode, &[callable], done, &[zero]);
+        } else {
+            self.builder.jump(decode, &[pointer]);
+        }
+        self.builder.switch_to_block(decode);
+        self.builder.seal_block(decode);
+        let callable = self.builder.block_params(decode)[0];
+        let actual_key = self.builder.load(
+            types::I64,
+            MemFlags::trusted(),
+            callable,
+            DirectCallable::ABI_KEY_OFFSET,
+        );
+        let same = self.builder.icmp(IntCC::Equal, key, actual_key);
+        let flag = self
+            .builder
+            .iadd_imm(callable, i64::from(DirectCallable::RELEASED_OFFSET));
+        let released = self
+            .builder
+            .memory_access(
+                crate::native_backend::MemoryAccess::AtomicLoad,
+                types::I8,
+                &[flag],
+            )
+            .expect("atomic load returns a word");
+        let live = self.builder.icmp_imm(IntCC::Equal, released, 0);
+        let valid = self.builder.band(same, live);
+        let words = self
+            .builder
+            .iadd_imm(callable, i64::from(DirectCallable::WORDS_OFFSET));
+        let result = self.builder.select(valid, words, zero);
+        self.builder.jump(done, &[result]);
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        let call = match index {
+            Some(index) => self
+                .builder
+                .call(self.runtime[RuntimeFn::VecCallable], &[holder, index, key]),
+            None => self
+                .builder
+                .call(self.runtime[RuntimeFn::FunctionCallable], &[holder, key]),
+        };
+        self.builder.jump(done, &[call.results[0]]);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.block_params(done)[0]
+    }
+
     /// Reaches the callee `place` where a class field or a list element
     /// keeps it, with no copy of the stored value. Returns the address of
     /// four callable words and a handle the caller releases after the call
@@ -9243,18 +9436,12 @@ impl<'a> FunctionCompiler<'a> {
                     }
                 };
                 let index = self.builder.use_var(selector.variable);
-                let inst = self
-                    .builder
-                    .call(self.runtime[RuntimeFn::VecCallable], &[list, index, key]);
-                let words = inst.results[0];
+                let words = self.stored_callable_words(list, Some(index), key);
                 self.builder
                     .brif(words, inline_block, &[words], slow_block, &[]);
             }
             (None, Some(handle), _) => {
-                let inst = self
-                    .builder
-                    .call(self.runtime[RuntimeFn::FunctionCallable], &[handle, key]);
-                let words = inst.results[0];
+                let words = self.stored_callable_words(handle, None, key);
                 // A value with no inline words is called through its box,
                 // which the field keeps.
                 let boxed_block = self.builder.create_block();

@@ -725,8 +725,13 @@ impl NativeCodegen<'_> {
         // A box can outlive the creating task (for example, a decorated
         // module function). A captured handle must become a runtime Value
         // here so the box owns it independently of that task's ledger.
-        // Embedded scalar words already have independent ownership.
-        if keep_inline && !key.consuming && !shape.capture_types.iter().any(layout_owns_handles) {
+        // An overflow block's reference count is confined to its task too.
+        // Only embedded words have independent ownership at this boundary.
+        if keep_inline
+            && !key.consuming
+            && shape.inline()
+            && !shape.capture_types.iter().any(layout_owns_handles)
+        {
             // The boxed value takes a reference of its own to the captures.
             let slot =
                 builder.create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
