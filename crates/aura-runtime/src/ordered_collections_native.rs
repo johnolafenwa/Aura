@@ -95,6 +95,24 @@ fn edit_store<R>(
     })
 }
 
+#[cold]
+fn fail_operation(mut error: Diagnostic, op: I64Op, word: i64) -> ! {
+    if let Some((method, span)) = op.pop_frame(word) {
+        // The native operation replaces this standard method. Keep the
+        // caller and task ancestry that normal runtime errors capture.
+        capture_direct_runtime_frames_once(&mut error);
+        let path = direct_program_path_frame_text().map(|path| path.materialize());
+        error.call_frames.insert(
+            0,
+            RuntimeCallFrame {
+                function: method.to_string(),
+                span: RuntimeSourceSpan::point(path, span),
+            },
+        );
+    }
+    runtime_diagnostic_error(error)
+}
+
 fn operation(receiver: *mut OpaqueValue, code: i64, key: i64, payload: i64) -> Option<i64> {
     let op = I64Op::from_code(code).unwrap_or_else(|| runtime_diagnostic_error(invalid_store()));
     let result = if op.is_read() {
@@ -110,7 +128,7 @@ fn operation(receiver: *mut OpaqueValue, code: i64, key: i64, payload: i64) -> O
             })
         }
     };
-    result.unwrap_or_else(|error| runtime_diagnostic_error(error))
+    result.unwrap_or_else(|error| fail_operation(error, op, key))
 }
 
 #[cfg_attr(not(coverage), no_mangle)]
@@ -164,9 +182,9 @@ pub extern "C-unwind" fn aura_direct_ordered_local_words(
                 edit_store(value, op, false, |store| Ok(store.local_words()))
             })
         };
-        result
-            .unwrap_or_else(|err| runtime_diagnostic_error(err))
-            .unwrap_or(std::ptr::null_mut())
+        // The guarded fallback has the source position of the operation
+        // and reports the full Aura frame if opening an empty pop failed.
+        result.ok().flatten().unwrap_or(std::ptr::null_mut())
     })
 }
 
@@ -188,14 +206,16 @@ pub unsafe extern "C-unwind" fn aura_direct_ordered_local_step(
         return result;
     }
     task_runtime_boundary(|| {
-        let diagnostic = match I64Op::from_code(code) {
-            Some(I64Op::PopFront | I64Op::PopBack) => {
+        let op =
+            I64Op::from_code(code).unwrap_or_else(|| runtime_diagnostic_error(invalid_store()));
+        let diagnostic = match op {
+            I64Op::PopFront | I64Op::PopBack => {
                 Diagnostic::coded("AU4003", "cannot pop from an empty deque")
             }
-            Some(I64Op::HeapPop) => Diagnostic::coded("AU4003", "cannot pop from an empty heap"),
+            I64Op::HeapPop => Diagnostic::coded("AU4003", "cannot pop from an empty heap"),
             _ => invalid_store(),
         };
-        runtime_diagnostic_error(diagnostic)
+        fail_operation(diagnostic, op, word)
     })
 }
 

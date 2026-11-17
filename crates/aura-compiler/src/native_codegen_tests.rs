@@ -18230,6 +18230,6 @@ def main():
         .iter()
         .find(|function| function.name == "main")
         .unwrap();
-    let shapes = shapes::ProgramShapes::new(&module, std::iter::empty());
-    assert_eq!(ordered::word_local_roots(main, &shapes), ["local"]);
+    let shapes = super::shapes::ProgramShapes::new(&module, std::iter::empty());
+    assert_eq!(super::ordered::word_local_roots(main, &shapes), ["local"]);
 }

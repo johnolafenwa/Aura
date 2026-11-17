@@ -1,12 +1,12 @@
 from collections import Deque, Heap, SortedMap, SortedSet
-import sys
+import time
 
 
 def main():
     count = 8192
     mut result = 0
     mut deque = Deque[int64]()
-    mut start = sys.monotonic_time_ms()
+    mut start = time.monotonic()
     for i in range(count):
         if i % 2 == 0:
             deque.push_front(i)
@@ -17,20 +17,20 @@ def main():
             result += deque.pop_front()
         else:
             result += deque.pop_back()
-    print(f"deque {sys.monotonic_time_ms() - start} {result}")
+    print(f"deque {(time.monotonic() - start).to_ms()} {result}")
 
     mut heap = Heap[int64]()
     result = 0
-    start = sys.monotonic_time_ms()
+    start = time.monotonic()
     for i in range(count):
         heap.push((i * 40503) % count)
     for i in range(count):
         result += heap.pop() * i
-    print(f"heap {sys.monotonic_time_ms() - start} {result}")
+    print(f"heap {(time.monotonic() - start).to_ms()} {result}")
 
     mut map = SortedMap[int64, int64]()
     result = 0
-    start = sys.monotonic_time_ms()
+    start = time.monotonic()
     for i in range(count):
         map.set((i * 40503) % count, i)
     for i in range(count):
@@ -39,14 +39,14 @@ def main():
                 result += value
             case _:
                 assert false
-    print(f"map {sys.monotonic_time_ms() - start} {result}")
+    print(f"map {(time.monotonic() - start).to_ms()} {result}")
 
     mut seen = SortedSet[int64]()
     result = 0
-    start = sys.monotonic_time_ms()
+    start = time.monotonic()
     for i in range(count):
         seen.add((i * 40503) % count)
     for i in range(count):
         if seen.remove(i):
             result += i
-    print(f"set {sys.monotonic_time_ms() - start} {result}")
+    print(f"set {(time.monotonic() - start).to_ms()} {result}")

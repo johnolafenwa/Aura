@@ -33,13 +33,15 @@ def main():
         "Python": [sys.executable, str(Path(__file__).with_name("ordered.py"))],
     }
     samples = {name: [] for name in commands}
-    for name, command in commands.items():
+    for command in commands.values():
         run(command)
     # Alternate implementations between samples and keep their startup times
-    # outside the timed sections in the three workloads.
+    # outside the timed sections in all four workloads.
+    order = list(commands)
     for _ in range(7):
-        for name, command in commands.items():
-            samples[name].append(run(command))
+        for name in order:
+            samples[name].append(run(commands[name]))
+        order.append(order.pop(0))
     print("Workload\tAura ms\tRust ms\tPython ms\tAura/Rust\tAura/Python")
     for workload in CHECKSUMS:
         aura, rust, python = (

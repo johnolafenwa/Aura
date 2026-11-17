@@ -48,3 +48,16 @@ references. A call profile attributed 6.55 million instructions to
 class field lookups in the four workloads. The next optimization opens a
 local deque or heap once when its only uses are standard pushes, pops
 and release.
+
+With the confined storage optimization, all four checksums matched Rust
+and Python in every sample. Median Aura times for deque, heap, map and set
+were 0.132, 0.485, 4.941 and 2.963 ms. Their Rust ratios were 2.10, 0.90,
+2.23 and 2.17. The timings, reference implementations and workload
+definitions are in `benchmarks/ordered_collections/README.md`.
+
+Empty-pop tests compared the complete diagnostics. The optimized
+native operations initially omitted the standard method from the call
+chain. A pop now carries its method's definition position so the error
+can record the same frame as MIR. The fixtures exercise an empty deque
+and a drained heap. Ubuntu also caught two missing sibling-module
+qualifiers in the confinement test.
