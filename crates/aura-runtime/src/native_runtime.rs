@@ -8260,6 +8260,9 @@ pub extern "C-unwind" fn aura_direct_string_text_method(
         };
         let result = unsafe {
             with_value(value, |value| match value {
+                Value::String(text) if *method == "char_at" => {
+                    text_methods::char_at(text, text.is_ascii(), count)
+                }
                 Value::String(text) => text_methods::evaluate_text_method(
                     method,
                     text,
@@ -9561,6 +9564,39 @@ pub extern "C-unwind" fn aura_direct_collection_operation(
         }
         7 => {
             with_set_mut(collection, |set| set.elements.clear());
+            boxed_value(Value::Unit)
+        }
+        8..=14 => {
+            use crate::collection_index::{
+                set_algebra, SetAlgebra, SET_ALGEBRA_FIRST_OPCODE, SET_ALGEBRA_METHODS,
+            };
+            let method = SET_ALGEBRA_METHODS[(opcode - SET_ALGEBRA_FIRST_OPCODE) as usize];
+            let (element_type, result) = with_set(collection, |left| {
+                with_set(arg, |right| {
+                    (
+                        left.element_type.clone(),
+                        set_algebra(method, &left.elements, &right.elements),
+                    )
+                })
+            });
+            match result.expect("opcodes 8 to 14 name set-algebra methods") {
+                SetAlgebra::Elements(elements) => boxed_value(Value::Set(SetValue {
+                    element_type,
+                    elements,
+                })),
+                SetAlgebra::Holds(holds) => boxed_value(Value::Bool(holds)),
+            }
+        }
+        15 => {
+            let other = unsafe { consume_owned_value(arg) };
+            let Value::Set(other) = other else {
+                runtime_error("`update` requires another `set[T]` value");
+            };
+            with_set_mut(collection, |set| {
+                for element in other.elements.into_vec() {
+                    set.elements.insert(element);
+                }
+            });
             boxed_value(Value::Unit)
         }
         _ => runtime_error("unknown direct collection operation"),
@@ -16265,6 +16301,33 @@ host_builtin_entries! {
     owned "math::sin" => aura_host_math_sin(host_builtins::host_math_sin);
     owned "math::cos" => aura_host_math_cos(host_builtins::host_math_cos);
     owned "math::tan" => aura_host_math_tan(host_builtins::host_math_tan);
+    owned "math::sqrt" => aura_host_math_sqrt(host_builtins::host_math_sqrt);
+    owned "math::cbrt" => aura_host_math_cbrt(host_builtins::host_math_cbrt);
+    owned "math::asin" => aura_host_math_asin(host_builtins::host_math_asin);
+    owned "math::acos" => aura_host_math_acos(host_builtins::host_math_acos);
+    owned "math::atan" => aura_host_math_atan(host_builtins::host_math_atan);
+    owned "math::sinh" => aura_host_math_sinh(host_builtins::host_math_sinh);
+    owned "math::cosh" => aura_host_math_cosh(host_builtins::host_math_cosh);
+    owned "math::tanh" => aura_host_math_tanh(host_builtins::host_math_tanh);
+    owned "math::asinh" => aura_host_math_asinh(host_builtins::host_math_asinh);
+    owned "math::acosh" => aura_host_math_acosh(host_builtins::host_math_acosh);
+    owned "math::atanh" => aura_host_math_atanh(host_builtins::host_math_atanh);
+    owned "math::expm1" => aura_host_math_expm1(host_builtins::host_math_expm1);
+    owned "math::log1p" => aura_host_math_log1p(host_builtins::host_math_log1p);
+    owned "math::degrees" => aura_host_math_degrees(host_builtins::host_math_degrees);
+    owned "math::radians" => aura_host_math_radians(host_builtins::host_math_radians);
+    owned "math::atan2" => aura_host_math_atan2(host_builtins::host_math_atan2);
+    owned "math::hypot" => aura_host_math_hypot(host_builtins::host_math_hypot);
+    owned "math::copysign" => aura_host_math_copysign(host_builtins::host_math_copysign);
+    owned "math::is_nan" => aura_host_math_is_nan(host_builtins::host_math_is_nan);
+    owned "math::is_inf" => aura_host_math_is_inf(host_builtins::host_math_is_inf);
+    owned "math::is_finite" => aura_host_math_is_finite(host_builtins::host_math_is_finite);
+    owned "math::gcd" => aura_host_math_gcd(host_builtins::host_math_gcd);
+    owned "math::lcm" => aura_host_math_lcm(host_builtins::host_math_lcm);
+    owned "math::isqrt" => aura_host_math_isqrt(host_builtins::host_math_isqrt);
+    owned "math::factorial" => aura_host_math_factorial(host_builtins::host_math_factorial);
+    owned "math::comb" => aura_host_math_comb(host_builtins::host_math_comb);
+    owned "math::perm" => aura_host_math_perm(host_builtins::host_math_perm);
     owned "control::__retry_validate" => aura_host_control_retry_validate(host_builtins::host_control_retry_validate);
     owned "control::__retry_next_backoff" => aura_host_control_retry_next_backoff(host_builtins::host_control_retry_next_backoff);
     owned "control::__retry_cancel_if_requested" => aura_host_control_retry_cancel_if_requested(host_builtins::host_control_retry_cancel_if_requested);
@@ -16293,6 +16356,8 @@ host_builtin_entries! {
     owned "log::error" => aura_host_log_error(host_builtins::host_log_error);
     owned "trace::event" => aura_host_trace_event(host_builtins::host_trace_event);
     owned "bytes::hmac_sha256" => aura_host_bytes_hmac_sha256(host_builtins::host_bytes_hmac_sha256);
+    owned "bytes::encode" => aura_host_bytes_encode(host_builtins::host_bytes_encode);
+    owned "bytes::decode" => aura_host_bytes_decode(host_builtins::host_bytes_decode);
     owned "bytes::constant_time_eq" => aura_host_bytes_constant_time_eq(host_builtins::host_bytes_constant_time_eq);
     owned "gzip::compress" => aura_host_gzip_compress(host_builtins::host_gzip_compress);
     owned "gzip::decompress" => aura_host_gzip_decompress(host_builtins::host_gzip_decompress);

@@ -1,0 +1,25 @@
+def initials(name: str) -> str:
+    mut out = ""
+    for word in name.split(" "):
+        if len(word) > 0:
+            out += word[0]
+    return out
+
+
+def is_palindrome(text: str) -> bool:
+    count = len(text)
+    for i in range(count // 2):
+        if text[i] != text[count - 1 - i]:
+            return false
+    return true
+
+
+def main():
+    word = "naïve"
+    print(word[0])
+    print(word[2])
+    print(word[-1])
+    print(word.char_at(1))
+    print(initials("Ada King Lovelace"))
+    print(is_palindrome("été"))
+    print(is_palindrome("Aura"))

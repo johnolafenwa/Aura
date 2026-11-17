@@ -30936,3 +30936,104 @@ fn native_runtime_boxed_closure_keeps_its_inline_callable() {
         Value::Unit
     );
 }
+
+fn int_set(values: &[i64]) -> *mut OpaqueValue {
+    let mut elements = crate::collection_index::SetElements::new();
+    for value in values {
+        elements.insert(Value::Int(IntegerValue::from_i64(*value)));
+    }
+    boxed_value(Value::Set(SetValue {
+        element_type: crate::runtime_value::SharedType::from(Type::named("int64")),
+        elements,
+    }))
+}
+
+fn set_values(set: *mut OpaqueValue) -> Vec<Value> {
+    match unsafe { take_value(set) } {
+        Value::Set(set) => set.elements.iter().cloned().collect(),
+        other => panic!("expected a set, found {other:?}"),
+    }
+}
+
+fn int_values(values: &[i64]) -> Vec<Value> {
+    values
+        .iter()
+        .map(|value| Value::Int(IntegerValue::from_i64(*value)))
+        .collect()
+}
+
+#[test]
+fn direct_set_algebra_opcodes_read_both_sets_and_update_consumes_the_other() {
+    let left = int_set(&[4, 1, 2]);
+    let right = int_set(&[2, 9, 4]);
+    for (opcode, expected) in [
+        (8, int_values(&[4, 1, 2, 9])),
+        (9, int_values(&[4, 2])),
+        (10, int_values(&[1])),
+        (11, int_values(&[1, 9])),
+    ] {
+        let result = super::aura_direct_collection_operation(left, right, 0, opcode);
+        match unsafe { value_ref(result) } {
+            Value::Set(set) => assert_eq!(set.element_type, Type::named("int64")),
+            other => panic!("expected a set, found {other:?}"),
+        }
+        assert_eq!(set_values(result), expected, "opcode {opcode}");
+    }
+    for (opcode, other, expected) in [
+        (12, &[1, 2, 4, 8][..], true),
+        (12, &[1, 2][..], false),
+        (13, &[1, 4][..], true),
+        (13, &[1, 5][..], false),
+        (14, &[7, 8][..], true),
+        (14, &[7, 2][..], false),
+    ] {
+        let other = int_set(other);
+        let result = super::aura_direct_collection_operation(left, other, 0, opcode);
+        assert_eq!(
+            unsafe { take_value(result) },
+            Value::Bool(expected),
+            "opcode {opcode}"
+        );
+        unsafe { release_value(other) };
+    }
+    // Both operands are still whole.
+    assert_eq!(super::aura_direct_set_len(left), 3);
+    assert_eq!(super::aura_direct_set_len(right), 3);
+
+    expect_unit(super::aura_direct_collection_operation(left, right, 0, 15));
+    assert_eq!(set_values(left), int_values(&[4, 1, 2, 9]));
+
+    let wrong = run_lightweight_root_task(|| {
+        super::with_task_runtime_error_capture(|| {
+            let set = int_set(&[1]);
+            let _ = super::aura_direct_collection_operation(set, int_value(3), 0, 15);
+            Ok(Value::Unit)
+        })
+    })
+    .expect_err("`update` takes a set");
+    assert!(wrong
+        .message
+        .contains("`update` requires another `set[T]` value"));
+}
+
+#[test]
+fn direct_char_at_reads_one_character_and_traps_out_of_range() {
+    assert_eq!(
+        direct_text_method("char_at", "héllo", None, 1),
+        Value::string("é")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "hello", None, -1),
+        Value::string("o")
+    );
+    assert_eq!(
+        direct_text_method("char_at", "日本語", None, -3),
+        Value::string("日")
+    );
+    let opcode = crate::text_methods::text_method_opcode("char_at").expect("known text method");
+    for (text, index) in [("hello", 5), ("héllo", -6), ("", 0)] {
+        let trap = direct_text_method_trap(opcode, Value::string(text), None, index);
+        assert_eq!(trap.code, "AU4003");
+        assert!(trap.message.contains("is out of range for a string of"));
+    }
+}

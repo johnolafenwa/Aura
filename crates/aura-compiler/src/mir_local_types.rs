@@ -332,6 +332,17 @@ pub(super) fn builtin_member_argument_type(
         (BuiltinMember::VecExtend, 0) => list(class_args.first()?.clone()),
         (BuiltinMember::MapExtend, 0) => Type::Named("dict".to_string(), class_args.to_vec()),
         (
+            BuiltinMember::SetUnion
+            | BuiltinMember::SetIntersection
+            | BuiltinMember::SetDifference
+            | BuiltinMember::SetSymmetricDifference
+            | BuiltinMember::SetIsSubset
+            | BuiltinMember::SetIsSuperset
+            | BuiltinMember::SetIsDisjoint
+            | BuiltinMember::SetUpdate,
+            0,
+        ) => Type::Named("set".to_string(), class_args.to_vec()),
+        (
             BuiltinMember::FileWriteBytes
             | BuiltinMember::TcpStreamWriteBytes
             | BuiltinMember::WebSocketSendBytes

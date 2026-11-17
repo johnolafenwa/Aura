@@ -273,9 +273,10 @@ hierarchies in Python, you may not miss it.
 
 ## Strings
 
-`str` is Unicode, and `len(text)` counts Unicode scalar values. Strings are
-not indexable: `text[0]` is an error, but slices such as `text[1:4]` work and
-return a new string. Most methods have the names you expect, and a few have
+`str` is Unicode, and `len(text)` counts Unicode scalar values. `text[0]`
+and `text[-1]` give one character as a string, and slices such as
+`text[1:4]` return a new string. A byte string, `b"..."`, is a
+`list[uint8]`. Most methods have the names you expect, and a few have
 Aura names:
 
 | Python | Aura |

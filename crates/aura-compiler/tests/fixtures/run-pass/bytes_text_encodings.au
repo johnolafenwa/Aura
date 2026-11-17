@@ -1,0 +1,44 @@
+import bytes
+
+def show(text: str, encoding: str) -> None:
+    match bytes.encode(text, encoding):
+        case Ok(data):
+            match bytes.decode(data, encoding):
+                case Ok(back):
+                    print(encoding + " " + bytes.hex_encode(data) + " " + back)
+                case Err(_):
+                    print(encoding + " did not decode")
+        case Err(bytes.EncodingError.Unknown(name)):
+            print("unknown encoding " + name)
+        case Err(bytes.EncodingError.Unencodable(index)):
+            print(encoding + " cannot encode character " + str(index))
+        case Err(bytes.EncodingError.Invalid(index)):
+            print(encoding + " invalid at " + str(index))
+
+
+def main() -> None:
+    show("hé€", "utf-8")
+    show("hé€", "utf-8-sig")
+    show("hé€", "UTF-16")
+    show("hé€", "utf-16-le")
+    show("hé€", "utf_16_be")
+    show("h😀", "utf-16-le")
+    show("hé", "utf-32")
+    show("hé", "utf-32-le")
+    show("hé", "utf-32-be")
+    show("hé", "latin-1")
+    show("hé€", "windows-1252")
+    show("hi", "ascii")
+    show("hé€", "latin-1")
+    show("hé", "ascii")
+    show("hi", "ebcdic")
+    match bytes.decode(b"ab\xff", "ascii"):
+        case Err(bytes.EncodingError.Invalid(index)):
+            print("invalid byte at " + str(index))
+        case _:
+            print("unexpected")
+    match bytes.decode(b"\xff\xfeh\x00", "utf-16"):
+        case Ok(text):
+            print(text)
+        case Err(_):
+            print("unexpected")

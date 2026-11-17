@@ -97,6 +97,7 @@ safety boundary, diagnostics, and backend rules.
 | `str.lines` | `lines() -> list[str]` | Splits at each `\n` and removes one `\r` before each `\n`. A final line terminator adds no empty line. An empty string has no lines. |
 | `str.split_whitespace` | `split_whitespace() -> list[str]` | Splits on runs of Unicode whitespace and drops empty parts. |
 | `str.chars` | `chars() -> list[str]` | Each Unicode scalar value as a one-character string, in order. An empty string gives an empty list. |
+| `str.char_at`, `text[index]` | `char_at(index: int64) -> str` | The character at a position, as a one-character string. A negative index counts from the end. Traps with `AU4003` outside the string. Constant time for ASCII text. |
 | `str.find` | `find(text: str) -> int64 \| None` | Index of the first occurrence of `text`, counted in Unicode scalar values. O(n). Returns `None` when it is absent. An empty `text` returns `0`. |
 | `str.count` | `count(text: str) -> int64` | Number of non-overlapping occurrences of `text`. An empty `text` traps with `AU4003`. |
 | `str.repeat` | `repeat(count: int64) -> str` | Concatenates `count` copies. A negative `count` traps with `AU4003`. A result above the 64 MiB string limit traps with `AU4005` before it allocates. |
@@ -173,6 +174,21 @@ evaluation-order, diagnostic, and backend rules.
 | `math.sin` | `sin(value: float64) -> float64` | Sine in radians. |
 | `math.cos` | `cos(value: float64) -> float64` | Cosine in radians. |
 | `math.tan` | `tan(value: float64) -> float64` | Tangent in radians. |
+| `math.tau` | `float64` constant | Nearest binary64 value to 2 pi. |
+| `math.asin`, `math.acos`, `math.atan` | `(value: float64) -> float64` | Inverse sine, cosine, and tangent, in radians. `asin` and `acos` trap with `AU4001` outside `[-1, 1]`. |
+| `math.atan2` | `atan2(y: float64, x: float64) -> float64` | The angle of the point `(x, y)` in `[-pi, pi]`. |
+| `math.sinh`, `math.cosh`, `math.tanh` | `(value: float64) -> float64` | Hyperbolic functions. |
+| `math.asinh`, `math.acosh`, `math.atanh` | `(value: float64) -> float64` | Inverse hyperbolic functions. |
+| `math.sqrt`, `math.cbrt` | `(value: float64) -> float64` | Square and cube root. `sqrt` of a negative value traps with `AU4001`. |
+| `math.hypot` | `hypot(x: float64, y: float64) -> float64` | Length of the vector `(x, y)`. |
+| `math.expm1`, `math.log1p` | `(value: float64) -> float64` | `exp(value) - 1` and `log(1 + value)`, accurate near zero. |
+| `math.copysign` | `copysign(magnitude: float64, sign: float64) -> float64` | `magnitude` with the sign of `sign`. |
+| `math.degrees`, `math.radians` | `(value: float64) -> float64` | Angle conversion. |
+| `math.is_nan`, `math.is_inf`, `math.is_finite` | `(value: float64) -> bool` | Classification of a value. |
+| `math.gcd`, `math.lcm` | `(left: int64, right: int64) -> int64` | Greatest common divisor and least common multiple, never negative. |
+| `math.isqrt` | `isqrt(value: int64) -> int64` | Integer square root, rounded down. |
+| `math.factorial` | `factorial(value: int64) -> int64` | Exact factorial. Traps with `AU4002` above `factorial(20)`. |
+| `math.comb`, `math.perm` | `(count: int64, chosen: int64) -> int64` | Exact combinations and arrangements. |
 
 ## Memory
 
@@ -241,6 +257,8 @@ authentication with HMAC-SHA256.
 | `bytes.sha256_string` | `sha256_string(text: str) -> list[uint8]` | SHA-256 of the text's exact UTF-8 bytes. |
 | `bytes.hmac_sha256` | `hmac_sha256(key: list[uint8], message: list[uint8]) -> list[uint8]` | Fresh raw 32-byte RFC 2104 HMAC with SHA-256. The key may have any length. |
 | `bytes.constant_time_eq` | `constant_time_eq(left: list[uint8], right: list[uint8]) -> bool` | Byte equality in time that does not depend on where the lists differ. Use it to compare signatures. |
+| `bytes.encode` | `encode(text: str, encoding: str) -> Result[list[uint8], bytes.EncodingError]` | The text in a named encoding: UTF-8, UTF-16, UTF-32, Latin-1, ASCII, or Windows-1252. |
+| `bytes.decode` | `decode(value: list[uint8], encoding: str) -> Result[str, bytes.EncodingError]` | Strict decoding from a named encoding, with the offset of the first invalid byte on failure. |
 | `bytes.starts_with` | `starts_with(value: list[uint8], prefix: list[uint8]) -> bool` | Tests for a byte prefix. An empty `prefix` matches. |
 | `bytes.ends_with` | `ends_with(value: list[uint8], suffix: list[uint8]) -> bool` | Tests for a byte suffix. An empty `suffix` matches. |
 | `bytes.find` | `find(value: list[uint8], needle: list[uint8]) -> int64 \| None` | Byte index of the first occurrence of `needle`. Returns `None` when it is absent. An empty `needle` returns `0`. |
@@ -477,6 +495,12 @@ zone, RFC 3339 text, the pattern directives, and limits.
 | `set.add` | `add(value: own T) -> None` | Moves `value` into the set. |
 | `set.remove` | `remove(value: T) -> None` | Removes an equal value. A missing value traps with `AU4008`. |
 | `set.discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
+| `set.union`, `left \| right` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the ones only `other` has. |
+| `set.intersection`, `left & right` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` also has. |
+| `set.difference`, `left - right` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that `other` lacks. |
+| `set.symmetric_difference`, `left ^ right` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements in exactly one of the two sets. |
+| `set.is_subset`, `set.is_superset`, `set.is_disjoint` | `(other: set[T]) -> bool` | Whether every element of one set is in the other, or none is. |
+| `set.update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver. |
 | `set.clear` | `clear() -> None` | Removes all values. |
 | `set.reserve` | `reserve(additional: int64) -> None` | Makes room for at least `len() + additional` values. |
 | `set[T].with_capacity` | `with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |

@@ -1,0 +1,5 @@
+error[AU1001]: triple-quoted byte strings are not supported
+ --> crates/aura-compiler/tests/fixtures/parse-fail/bytes_literal_triple_quoted.au:2:12
+  |
+2 |     data = b"""abc"""
+  |            ^

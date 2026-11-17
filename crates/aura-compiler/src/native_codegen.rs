@@ -16162,7 +16162,7 @@ impl<'a> FunctionCompiler<'a> {
         let object = self.ensure_opaque(object)?;
         let zero = self.builder.iconst(types::I64, 0);
         let (argument, count) = match (op, args.first()) {
-            (RuntimeOp::Str(StrOp::Repeat), Some(argument)) => {
+            (RuntimeOp::Str(StrOp::Repeat | StrOp::CharAt), Some(argument)) => {
                 let count =
                     self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
                 let count = self.coerce_value(count, &DirectType::Scalar(ScalarKind::Int64))?;
@@ -17035,6 +17035,32 @@ impl<'a> FunctionCompiler<'a> {
                 let result = self.emit_collection_operation(call, set, Some(value.values[0]), None);
                 self.store_receiver_back(receiver_place, &object)?;
                 self.release_opaque_handle(result);
+                Ok(unit_value(&mut *self.builder))
+            }
+            SetOp::Union
+            | SetOp::Intersection
+            | SetOp::Difference
+            | SetOp::SymmetricDifference
+            | SetOp::IsSubset
+            | SetOp::IsSuperset
+            | SetOp::IsDisjoint => {
+                // The other set is read where it lies.
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let result = self.emit_collection_operation(call, set, Some(other.values[0]), None);
+                if matches!(op, SetOp::IsSubset | SetOp::IsSuperset | SetOp::IsDisjoint) {
+                    let boxed = self.owned_opaque_result(vec![result], Type::named("bool"));
+                    return self.coerce_value(boxed, &DirectType::Scalar(ScalarKind::Bool));
+                }
+                Ok(self.owned_opaque_result(vec![result], set_ty))
+            }
+            SetOp::Update => {
+                let loaded = self.load_operand(&args[0].value)?;
+                let other = self.ensure_opaque(loaded)?;
+                let other = self.transfer_owned_opaque_value(&other);
+                let result = self.emit_collection_operation(call, set, Some(other), None);
+                self.release_opaque_handle(result);
+                self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }
             SetOp::Clear => {

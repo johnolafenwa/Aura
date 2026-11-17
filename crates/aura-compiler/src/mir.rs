@@ -21818,6 +21818,34 @@ impl<'a> Lowerer<'a> {
                 if let Some(list) = self.lower_list_binary(expr, *op, left, right) {
                     return list;
                 }
+                if let Some(method) = self
+                    .infer_expr_type(left)
+                    .zip(self.infer_expr_type(right))
+                    .and_then(|(left_ty, right_ty)| {
+                        crate::call::set_binary_method(*op, &left_ty, &right_ty)
+                    })
+                {
+                    // `left | right` on sets is the member call
+                    // `left.union(right)`, and so on for `&`, `-`, and `^`.
+                    let call = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(Expr {
+                                kind: ExprKind::Member {
+                                    object: left.clone(),
+                                    field: method.to_string(),
+                                },
+                                span: expr.span,
+                            }),
+                            args: vec![Argument {
+                                name: None,
+                                value: (**right).clone(),
+                                span: right.span,
+                            }],
+                        },
+                        span: expr.span,
+                    };
+                    return self.lower_expr(&call);
+                }
                 if let Some((trait_name, field)) =
                     self.operator_trait_member_for_binary(*op, left, right)
                 {
@@ -21986,6 +22014,27 @@ impl<'a> Lowerer<'a> {
                 // type arguments.
                 if self.bound_method_info_at(object).is_some() {
                     return self.lower_expr(object);
+                }
+                if self.infer_expr_type(object) == Some(Type::named("str")) {
+                    // `text[index]` is the member call `text.char_at(index)`.
+                    let call = Expr {
+                        kind: ExprKind::Call {
+                            callee: Box::new(Expr {
+                                kind: ExprKind::Member {
+                                    object: object.clone(),
+                                    field: "char_at".to_string(),
+                                },
+                                span: expr.span,
+                            }),
+                            args: vec![Argument {
+                                name: None,
+                                value: (**index).clone(),
+                                span: index.span,
+                            }],
+                        },
+                        span: expr.span,
+                    };
+                    return self.lower_expr(&call);
                 }
                 if let Some(value) = self.lower_element_read_beside_loans(expr) {
                     return value;
@@ -30191,6 +30240,9 @@ impl<'a> Lowerer<'a> {
                 }
                 match self.infer_expr_type(object)? {
                     Type::Tuple(elements) => elements.get(tuple_constant_index(index)?).cloned(),
+                    Type::Named(name, args) if name == "str" && args.is_empty() => {
+                        Some(Type::Named(name, args))
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -30231,6 +30283,9 @@ impl<'a> Lowerer<'a> {
                 let right_ty = self.infer_expr_type(right)?;
                 let (left_ty, right_ty) =
                     adjusted_binary_operand_types(left, left_ty, right, right_ty);
+                if crate::call::set_binary_method(*op, &left_ty, &right_ty).is_some() {
+                    return Some(left_ty);
+                }
                 if let Some(list_ty) = list_binary_result_type(*op, &left_ty, &right_ty) {
                     return Some(list_ty);
                 }
@@ -31795,7 +31850,13 @@ fn mir_runtime_enum_name(program: &Program, enum_info: &crate::sema::EnumInfo) -
     let qualified_name = format!("{}.{}", enum_info.module_name, enum_info.decl.name);
     if matches!(
         qualified_name.as_str(),
-        "io.Error" | "process.Error" | "bytes.Error" | "gzip.Error" | "json.Value" | "json.Error"
+        "io.Error"
+            | "process.Error"
+            | "bytes.Error"
+            | "bytes.EncodingError"
+            | "gzip.Error"
+            | "json.Value"
+            | "json.Error"
     ) {
         return qualified_name;
     }

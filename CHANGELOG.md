@@ -99,6 +99,42 @@ in this file.
   `[[first], [second, third]]`, was rejected by the MIR validator when a
   row was read. A shorter row no longer poisons the positions it lacks.
 
+- Language: byte strings. `b"GET /\r\n"` and `b'\x89PNG'` are literals of
+  type `list[uint8]`. The body holds ASCII characters and escapes, and
+  `\xHH` is one byte (ADR-0111).
+
+- Language: `text[index]` reads one character of a `str` as a
+  one-character string, and `text.char_at(index)` is the same call. A
+  position counts Unicode scalar values, a negative one counts from the
+  end, and one outside the string traps with `AU4003`. ASCII text is read
+  in constant time. `text[0] = "x"` is now reported as `AU2003` with a
+  hint (ADR-0111).
+
+- Library: `bytes.encode(text, encoding)` and `bytes.decode(value,
+  encoding)` convert text through UTF-8, UTF-8 with a byte-order mark,
+  UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252. They return a
+  `Result` with the new `bytes.EncodingError`, which names an unknown
+  encoding, the first invalid byte, or the first character that cannot be
+  encoded (ADR-0111).
+
+- Library: set algebra. `set[T]` has `union`, `intersection`,
+  `difference`, `symmetric_difference`, `is_subset`, `is_superset`,
+  `is_disjoint`, and `update`. Between two sets of one element type the
+  operators `|`, `&`, `-`, and `^` are the first four, and `|=`, `&=`,
+  `-=`, and `^=` assign the result back. A result keeps insertion order
+  (ADR-0112).
+
+- Library: `math` has 27 more functions and the constant `tau`. On
+  `float64`: `sqrt`, `cbrt`, `asin`, `acos`, `atan`, `atan2`, `sinh`,
+  `cosh`, `tanh`, `asinh`, `acosh`, `atanh`, `expm1`, `log1p`, `hypot`,
+  `copysign`, `degrees`, `radians`, `is_nan`, `is_inf`, and `is_finite`.
+  On `int64`, exact: `gcd`, `lcm`, `isqrt`, `factorial`, `comb`, and
+  `perm`. A NaN argument gives NaN, an argument outside the domain traps
+  with `AU4001`, and a result that does not fit traps with `AU4002`
+  (ADR-0110).
+
+- Editor: the VS Code grammar highlights byte strings and their escapes.
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

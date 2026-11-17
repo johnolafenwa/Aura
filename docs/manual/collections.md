@@ -529,6 +529,14 @@ so they take time proportional to the set's size.
 | `remove` | `remove(value: T) -> None` | Removes an equal value. Traps with `AU4008` when the value is absent. |
 | `discard` | `discard(value: T) -> None` | Removes an equal value if one is present. |
 | `copy` | `copy() -> set[T]` | Returns independent owned storage. Requires clone-safe `T`. |
+| `union` | `union(other: set[T]) -> set[T]` | A new set with the receiver's elements, then the elements only `other` has. Also written `left \| right`. |
+| `intersection` | `intersection(other: set[T]) -> set[T]` | A new set with the receiver's elements that are also in `other`. Also written `left & right`. |
+| `difference` | `difference(other: set[T]) -> set[T]` | A new set with the receiver's elements that are not in `other`. Also written `left - right`. |
+| `symmetric_difference` | `symmetric_difference(other: set[T]) -> set[T]` | A new set with the elements only the receiver has, then the elements only `other` has. Also written `left ^ right`. |
+| `is_subset` | `is_subset(other: set[T]) -> bool` | `true` when every element of the receiver is in `other`. |
+| `is_superset` | `is_superset(other: set[T]) -> bool` | `true` when every element of `other` is in the receiver. |
+| `is_disjoint` | `is_disjoint(other: set[T]) -> bool` | `true` when the two sets share no element. |
+| `update` | `update(other: own set[T]) -> None` | Moves the elements of `other` into the receiver, after its own, skipping the ones it already has. |
 | `clear` | `clear() -> None` | Removes all values. |
 | `reserve` | `reserve(additional: int64) -> None` | Ensures room for `len() + additional` values. |
 | `with_capacity` | `set[T].with_capacity(minimum: int64) -> set[T]` | Creates an empty set with at least the requested capacity. |
@@ -546,6 +554,41 @@ def main():
 
 A non-empty set prints as `{first, second}` in its iteration order. An empty
 set prints as `set()`.
+
+### Set Algebra
+
+Two sets of the same element type combine with methods or with operators.
+Both operands are only read, and the result is a new set:
+
+<<< ../../examples/collections/set_algebra.au{aura}
+
+This program prints:
+
+```text
+either: ada, grace, linus, margaret
+both: grace
+backend only: ada, linus
+one team: ada, linus, margaret
+either: ada, grace, linus, margaret
+false
+true
+true
+5
+```
+
+- `|`, `&`, `-`, and `^` are `union`, `intersection`, `difference`, and
+  `symmetric_difference`. They keep their ordinary precedence, so `a | b & c`
+  is `a | (b & c)`. The compound forms `|=`, `&=`, `-=`, and `^=` assign the
+  result back.
+- The four that build a set copy elements, so `T` must be clone-safe, as for
+  `copy`. `update` moves elements and has no such requirement.
+- A result keeps the order the table states. `intersection` and `difference`
+  look up each element of the receiver in `other`, so they take time
+  proportional to the receiver's size. `is_disjoint` looks up each element of
+  the smaller set in the larger.
+- Sets of different element types do not combine. That is `AU2002`.
+- There are no comparison operators for subsets. Use `is_subset` and
+  `is_superset`.
 
 ## Equality, Copying, And Capacity
 
@@ -701,12 +744,11 @@ analysis and the language server use the same builtin signatures.
 These are not available:
 
 - mutable set iteration and direct dictionary iteration
-- set algebra and set relations
 - arbitrary user-defined iterables and generator expressions
 - slice assignment to a list or `str`
 - `sorted`, `reversed`, and `list` over a `str` or a dictionary
 - spans over `str`, `Array`, or a receiver field returned from a method
-- integer indexing of `str`
+- a double-ended queue, a heap, and sorted maps and sets
 
 Set order is not part of the API contract. Allocation is limited by host
 resources and the runtime's size caps.

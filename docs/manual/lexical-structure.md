@@ -392,11 +392,35 @@ pattern = r'\d+\.\d+'
 In a raw string, backslashes are content. A backslash may keep the active
 quote inside the value, and both characters remain. A raw string cannot end in
 an odd run of backslashes or contain a physical newline. Raw triple strings
-and byte strings are unavailable.
+are unavailable.
 
 Every string literal has type `str`. See [Types](/manual/types) for ownership
 and [Execution Model](/manual/execution-model#evaluation-order) for expression
 evaluation order.
+
+## Byte String Literals
+
+A lowercase `b` immediately followed by a single or double quote starts a
+byte string. It is single-line and has type `list[uint8]`:
+
+```aura
+import bytes
+
+def main():
+    line_end = b"\r\n"
+    magic = b'\x89PNG'
+    print(len(line_end))
+    print(bytes.hex_encode(magic))
+```
+
+The body holds printable ASCII characters and these escapes: `\n`, `\t`,
+`\r`, `\0`, `\\`, `\"`, `\'`, and `\xHH`. Each ASCII character is its byte,
+and `\xHH` is the byte `HH`. A character outside ASCII, a `\u{...}` escape,
+an unknown escape, a missing closing quote, and three quotes after the `b`
+are lexical errors. `b` not followed by a quote is an ordinary identifier.
+
+See [Bytes](/manual/bytes#byte-strings) for the value a byte string
+produces.
 
 ## F-Strings
 
@@ -577,7 +601,7 @@ These forms are unavailable:
 
 - raw triple strings
 - raw f-strings
-- byte strings
+- raw, triple-quoted, and formatted byte strings
 - single-quoted f-strings
 - block comments
 - semicolons

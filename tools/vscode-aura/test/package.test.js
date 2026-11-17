@@ -176,6 +176,23 @@ test("f-string interpolations are code, so editor suggestions fire inside braces
   }
 });
 
+test("extension grammar scopes byte strings and leaves the name b alone", async () => {
+  const tokenized = await tokenizeAura(
+    'data = b"GET\\r\\n\\xff" + b\'x\'\nb = 1\nrb = b\nname = "b"\n'
+  );
+  const first = scopesAt(tokenized, 0, "GET", 0);
+  assert.ok(first.includes("string.quoted.binary.double.aura"));
+  assert.ok(
+    scopesAt(tokenized, 0, "\\xff", 0).includes("constant.character.escape.aura")
+  );
+  assert.ok(scopesAt(tokenized, 0, "x", 1).includes("string.quoted.binary.single.aura"));
+  for (const line of [1, 2]) {
+    const scopes = scopesAt(tokenized, line, "b", 0);
+    assert.ok(!scopes.some((scope) => scope.startsWith("string.")), `line ${line}`);
+  }
+  assert.ok(scopesAt(tokenized, 3, "b", 0).includes("string.quoted.double.aura"));
+});
+
 test("extension grammar and snippets cover Aura string forms", () => {
   const extensionRoot = path.resolve(__dirname, "..");
   const grammar = JSON.parse(
@@ -186,6 +203,8 @@ test("extension grammar and snippets cover Aura string forms", () => {
   assert.ok(names.includes("string.quoted.triple.single.aura"));
   assert.ok(names.includes("string.quoted.raw.double.aura"));
   assert.ok(names.includes("string.quoted.raw.single.aura"));
+  assert.ok(names.includes("string.quoted.binary.double.aura"));
+  assert.ok(names.includes("string.quoted.binary.single.aura"));
   const fstring = grammar.repository.strings.patterns.find(
     (pattern) => pattern.name === "string.interpolated.double.aura"
   );

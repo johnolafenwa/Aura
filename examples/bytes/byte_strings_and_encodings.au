@@ -1,0 +1,35 @@
+import bytes
+
+
+def describe(text: str, encoding: str) -> str:
+    match bytes.encode(text, encoding):
+        case Ok(data):
+            return encoding + ": " + bytes.hex_encode(data)
+        case Err(bytes.EncodingError.Unencodable(index)):
+            return encoding + ": cannot hold character " + str(index)
+        case Err(bytes.EncodingError.Unknown(name)):
+            return "no encoding named " + name
+        case Err(bytes.EncodingError.Invalid(index)):
+            return encoding + ": invalid at " + str(index)
+
+
+def main():
+    # A byte string is a `list[uint8]`.
+    line_end = b"\r\n"
+    request = b"GET / HTTP/1.1" + line_end
+    print(len(request))
+    print(bytes.ends_with(request, line_end))
+    print(bytes.hex_encode(b"\x00\xff"))
+
+    print(describe("café", "utf-8"))
+    print(describe("café", "latin-1"))
+    print(describe("café", "utf-16-le"))
+    print(describe("café", "ascii"))
+    print(describe("café", "ebcdic"))
+
+    # Bytes written by an older Windows program.
+    match bytes.decode(b"\x93quoted\x94", "windows-1252"):
+        case Ok(text):
+            print(text)
+        case Err(_):
+            print("not Windows-1252")

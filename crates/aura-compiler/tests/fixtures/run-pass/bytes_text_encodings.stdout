@@ -1,0 +1,17 @@
+utf-8 68c3a9e282ac hé€
+utf-8-sig efbbbf68c3a9e282ac hé€
+UTF-16 fffe6800e900ac20 hé€
+utf-16-le 6800e900ac20 hé€
+utf_16_be 006800e920ac hé€
+utf-16-le 68003dd800de h😀
+utf-32 fffe000068000000e9000000 hé
+utf-32-le 68000000e9000000 hé
+utf-32-be 00000068000000e9 hé
+latin-1 68e9 hé
+windows-1252 68e980 hé€
+ascii 6869 hi
+latin-1 cannot encode character 2
+ascii cannot encode character 1
+unknown encoding ebcdic
+invalid byte at 2
+h

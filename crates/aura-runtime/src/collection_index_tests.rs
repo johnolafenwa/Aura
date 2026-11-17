@@ -793,3 +793,77 @@ fn slots_walk_the_entries_in_order_past_removed_ones() {
     assert_eq!(large.next_slot(usize::MAX), None);
     assert_eq!(DictEntries::new().next_slot(0), None);
 }
+
+fn set_of(values: &[i64]) -> SetElements {
+    let mut set = SetElements::new();
+    for value in values {
+        set.insert(int(*value));
+    }
+    set
+}
+
+fn algebra_elements(method: &str, left: &[i64], right: &[i64]) -> Vec<Value> {
+    match set_algebra(method, &set_of(left), &set_of(right)).expect("a set-algebra method") {
+        SetAlgebra::Elements(elements) => elements.iter().cloned().collect(),
+        SetAlgebra::Holds(_) => panic!("`{method}` builds a set"),
+    }
+}
+
+fn algebra_holds(method: &str, left: &[i64], right: &[i64]) -> bool {
+    match set_algebra(method, &set_of(left), &set_of(right)).expect("a set-algebra method") {
+        SetAlgebra::Holds(holds) => holds,
+        SetAlgebra::Elements(_) => panic!("`{method}` answers a question"),
+    }
+}
+
+#[test]
+fn set_algebra_keeps_the_receiver_order_then_the_other_sets() {
+    let ints = |values: &[i64]| values.iter().map(|value| int(*value)).collect::<Vec<_>>();
+    assert_eq!(
+        algebra_elements("union", &[4, 1, 2], &[2, 9, 1, 7]),
+        ints(&[4, 1, 2, 9, 7])
+    );
+    assert_eq!(
+        algebra_elements("intersection", &[4, 1, 2], &[2, 9, 4]),
+        ints(&[4, 2])
+    );
+    assert_eq!(
+        algebra_elements("difference", &[4, 1, 2], &[2, 9, 4]),
+        ints(&[1])
+    );
+    assert_eq!(
+        algebra_elements("symmetric_difference", &[4, 1, 2], &[2, 9, 4, 7]),
+        ints(&[1, 9, 7])
+    );
+    for method in [
+        "union",
+        "intersection",
+        "difference",
+        "symmetric_difference",
+    ] {
+        assert!(algebra_elements(method, &[], &[]).is_empty());
+    }
+    assert_eq!(algebra_elements("union", &[], &[3]), ints(&[3]));
+    assert!(algebra_elements("difference", &[3], &[3]).is_empty());
+    assert!(set_algebra("shuffle", &set_of(&[1]), &set_of(&[1])).is_none());
+    assert_eq!(SET_ALGEBRA_METHODS.len(), 7);
+    assert_eq!(SET_ALGEBRA_FIRST_OPCODE, 8);
+}
+
+#[test]
+fn set_relations_hold_for_empty_equal_and_nested_sets() {
+    assert!(algebra_holds("is_subset", &[], &[]));
+    assert!(algebra_holds("is_subset", &[], &[1]));
+    assert!(algebra_holds("is_subset", &[1, 2], &[2, 1]));
+    assert!(algebra_holds("is_subset", &[2], &[1, 2, 3]));
+    assert!(!algebra_holds("is_subset", &[1, 2, 3], &[1, 2]));
+    assert!(!algebra_holds("is_subset", &[1, 4], &[1, 2, 3]));
+    assert!(algebra_holds("is_superset", &[1, 2, 3], &[3, 1]));
+    assert!(algebra_holds("is_superset", &[1], &[]));
+    assert!(!algebra_holds("is_superset", &[1], &[1, 2]));
+    assert!(algebra_holds("is_disjoint", &[], &[]));
+    assert!(algebra_holds("is_disjoint", &[1, 2], &[3]));
+    assert!(algebra_holds("is_disjoint", &[3], &[1, 2]));
+    assert!(!algebra_holds("is_disjoint", &[1, 2, 3], &[3]));
+    assert!(!algebra_holds("is_disjoint", &[3], &[1, 2, 3]));
+}

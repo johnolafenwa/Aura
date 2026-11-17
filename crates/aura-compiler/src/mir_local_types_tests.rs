@@ -35,6 +35,18 @@ fn builtin_member_arguments_name_open_collection_types() {
             vec![text.clone(), int64.clone()],
             Some(named("dict", vec![text.clone(), int64.clone()])),
         ),
+        (
+            BuiltinMember::SetUpdate,
+            0,
+            vec![text.clone()],
+            Some(named("set", vec![text.clone()])),
+        ),
+        (
+            BuiltinMember::SetIsDisjoint,
+            0,
+            vec![int64.clone()],
+            Some(named("set", vec![int64.clone()])),
+        ),
         (BuiltinMember::FileWriteBytes, 0, vec![], Some(bytes())),
         (BuiltinMember::UdpSocketSendBytes, 1, vec![], Some(bytes())),
         (

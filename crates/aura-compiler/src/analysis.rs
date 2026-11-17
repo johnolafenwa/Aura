@@ -4242,7 +4242,8 @@ impl<'a> AnalysisBuilder<'a> {
                 | BuiltinMember::StringSplitWhitespace
                 | BuiltinMember::StringFind
                 | BuiltinMember::StringCount
-                | BuiltinMember::StringRepeat => {
+                | BuiltinMember::StringRepeat
+                | BuiltinMember::StringCharAt => {
                     crate::sema::text_convenience_result_type(builtin_member.name())
                 }
                 BuiltinMember::ArrayShape => {
@@ -4388,11 +4389,19 @@ impl<'a> AnalysisBuilder<'a> {
                 BuiltinMember::StringClone => Some(Type::named("str")),
                 BuiltinMember::SetLen => Some(Type::named("int64")),
                 BuiltinMember::SetIsEmpty => Some(Type::named("bool")),
-                BuiltinMember::SetClone => Some(receiver_type.clone()),
-                BuiltinMember::SetContains => Some(Type::named("bool")),
+                BuiltinMember::SetClone
+                | BuiltinMember::SetUnion
+                | BuiltinMember::SetIntersection
+                | BuiltinMember::SetDifference
+                | BuiltinMember::SetSymmetricDifference => Some(receiver_type.clone()),
+                BuiltinMember::SetContains
+                | BuiltinMember::SetIsSubset
+                | BuiltinMember::SetIsSuperset
+                | BuiltinMember::SetIsDisjoint => Some(Type::named("bool")),
                 BuiltinMember::SetInsert
                 | BuiltinMember::SetRemove
                 | BuiltinMember::SetDiscard
+                | BuiltinMember::SetUpdate
                 | BuiltinMember::SetClear
                 | BuiltinMember::SetReserve => Some(Type::Unit),
                 BuiltinMember::QueuePut | BuiltinMember::QueueTryPut => {
@@ -5356,6 +5365,7 @@ impl<'a> AnalysisBuilder<'a> {
                             "Array" => ty.type_arguments().first().cloned(),
                             "list" | "Span" => ty.type_arguments().first().cloned(),
                             "dict" => ty.type_arguments().get(1).cloned(),
+                            "str" => Some(ty.clone()),
                             _ => None,
                         },
                     })
@@ -5448,6 +5458,9 @@ impl<'a> AnalysisBuilder<'a> {
                 if let Some(result) = crate::call::list_binary_result_type(*op, &left_ty, &right_ty)
                 {
                     return Some(result);
+                }
+                if crate::call::set_binary_method(*op, &left_ty, &right_ty).is_some() {
+                    return Some(left_ty);
                 }
                 match op {
                     BinaryOp::And | BinaryOp::Or => Some(Type::named("bool")),
@@ -8294,6 +8307,7 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::StringFind,
         BuiltinMember::StringCount,
         BuiltinMember::StringRepeat,
+        BuiltinMember::StringCharAt,
         BuiltinMember::StringToBytes,
         BuiltinMember::StringClone,
         BuiltinMember::ScalarToString,
@@ -8326,6 +8340,14 @@ fn builtin_member_completions(receiver_type: &Type) -> Vec<AnalysisCompletion> {
         BuiltinMember::SetInsert,
         BuiltinMember::SetRemove,
         BuiltinMember::SetDiscard,
+        BuiltinMember::SetUnion,
+        BuiltinMember::SetIntersection,
+        BuiltinMember::SetDifference,
+        BuiltinMember::SetSymmetricDifference,
+        BuiltinMember::SetIsSubset,
+        BuiltinMember::SetIsSuperset,
+        BuiltinMember::SetIsDisjoint,
+        BuiltinMember::SetUpdate,
         BuiltinMember::SetClear,
         BuiltinMember::SetReserve,
         BuiltinMember::QueuePut,

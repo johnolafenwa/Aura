@@ -45,9 +45,9 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Ordinary and triple-quoted strings may use single or double quotes. F-strings use double quotes.
 - Raw strings are single-line. Raw triple strings, raw f-strings, and byte-string literals are not implemented.
 - F-strings use static format specifications. Dynamic width, nested fields, conversion flags, locale formatting, and the `g`, `G`, `n`, `c`, `#`, `0`, and `=` forms are not implemented.
-- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. It has no integer indexing. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
+- `str` has scalar-count `len()`, UTF-8 `byte_len()`, and owned Unicode-scalar slicing. `text[index]` and `char_at(index)` read one character by scalar position, in constant time for ASCII text and by a scan otherwise. A `str` cannot be changed through an index. `chars()` lists its scalars as one-character strings, and `ord()` and `chr()` convert between a one-character string and its scalar value.
 - One concatenated, formatted, or repeated `str` result is limited to 64 MiB. Aura checks each append before it happens and reports `AU4005` without committing an oversized partial result.
-- `list[uint8]` is the bytes type, and UTF-8 conversion is explicit. The reserved `encoding` argument, non-UTF-8 text codecs, byte-string literals, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
+- `list[uint8]` is the bytes type, and a byte string `b"..."` is a literal of it. Text conversion is explicit: UTF-8 through `to_bytes` and `from_bytes`, and UTF-16, UTF-32, Latin-1, ASCII, and Windows-1252 through `bytes.encode` and `bytes.decode`. Other text encodings, lossy decoding with a replacement character, triple-quoted and raw byte strings, URL-safe or unpadded base64, streaming codecs, incremental hashes, and hashes other than SHA-256 and HMAC-SHA256 are not implemented.
 
 ### Tuples
 
@@ -97,7 +97,7 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - Written slice endpoints use `int64`. Negative endpoints normalize once. Invalid or reversed ranges trap with `AU4003`. Endpoints are not clamped.
 - str slice endpoints count Unicode scalar values, and str slicing is O(n): it scans the text up to the end endpoint, or the whole text for a negative or omitted end.
 - Slice assignment to a list or `str` is a reserved `AU2005` form.
-- Arbitrary sliceable types, str integer indexing, grapheme slicing, and Python-style endpoint clamping are not available.
+- Arbitrary sliceable types, grapheme slicing and indexing, and Python-style endpoint clamping are not available.
 - List slicing requires clone-safe, repeatably observable elements.
 
 ### Collections And List Algorithms

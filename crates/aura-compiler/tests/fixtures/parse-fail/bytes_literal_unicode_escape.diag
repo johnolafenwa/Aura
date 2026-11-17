@@ -1,0 +1,5 @@
+error[AU1001]: a byte string has no `\u{...}` escape; write each byte as `\xNN`
+ --> crates/aura-compiler/tests/fixtures/parse-fail/bytes_literal_unicode_escape.au:2:12
+  |
+2 |     data = b"\u{e9}"
+  |            ^

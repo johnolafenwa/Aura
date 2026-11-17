@@ -20,6 +20,8 @@ pub enum TokenKind {
     /// records it as documentation.
     TripleStringLiteral(String),
     FStringLiteral(String),
+    /// A byte-string literal, `b"..."`: the bytes it spells.
+    BytesLiteral(Vec<u8>),
     Newline,
     Indent,
     Dedent,
@@ -912,6 +914,58 @@ fn tokenize_line(
                     tokens.push(simple(TokenKind::Minus, line_no, column));
                     index += 1;
                 }
+            }
+            'b' if matches!(chars.get(index + 1), Some((_, '"' | '\''))) => {
+                let quote = chars[index + 1].1;
+                if matches!(chars.get(index + 2), Some((_, next)) if *next == quote)
+                    && matches!(chars.get(index + 3), Some((_, next)) if *next == quote)
+                {
+                    return Err(lexical_error(
+                        Span::new(line_no, column),
+                        "triple-quoted byte strings are not supported",
+                    ));
+                }
+                index += 2;
+                let mut value = Vec::new();
+                while index < chars.len() {
+                    let (_, current) = chars[index];
+                    if current == quote {
+                        break;
+                    }
+                    if current == '\\' {
+                        if matches!(chars.get(index + 1), Some((_, 'u'))) {
+                            return Err(lexical_error(
+                                Span::new(line_no, column),
+                                "a byte string has no `\\u{...}` escape; write each byte as `\\xNN`",
+                            ));
+                        }
+                        let (decoded, next_index) =
+                            decode_escape(&chars, index + 1, line_no, column, "byte string")?;
+                        // Every escape but `\u` decodes to a scalar below 256.
+                        value.push(decoded as u8);
+                        index = next_index;
+                        continue;
+                    }
+                    if !current.is_ascii() || current == '\t' {
+                        return Err(lexical_error(
+                            Span::new(line_no, column),
+                            "a byte string holds ASCII characters and escapes only; write any other byte as `\\xNN`",
+                        ));
+                    }
+                    value.push(current as u8);
+                    index += 1;
+                }
+                if !matches!(chars.get(index), Some((_, current)) if *current == quote) {
+                    return Err(lexical_error(
+                        Span::new(line_no, column),
+                        "unterminated byte string literal",
+                    ));
+                }
+                index += 1;
+                tokens.push(Token {
+                    kind: TokenKind::BytesLiteral(value),
+                    span: Span::new(line_no, column),
+                });
             }
             'r' if matches!(chars.get(index + 1), Some((_, 'f')))
                 && matches!(chars.get(index + 2), Some((_, '"' | '\''))) =>

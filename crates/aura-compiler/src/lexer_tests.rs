@@ -1038,3 +1038,58 @@ fn delimited_match_layout_islands_reject_inconsistent_dedents() {
         error.message
     );
 }
+
+#[test]
+fn lexes_byte_strings_as_their_bytes() {
+    let tokens = kinds(concat!(
+        "plain = b\"GET /\"\n",
+        "single = b'a\"b'\n",
+        "escaped = b\"\\x00\\xff\\n\\t\\\\\\\"\"\n",
+        "empty = b\"\"\n",
+        "b = 1\n",
+        "bb = b\n",
+    ));
+    assert!(tokens.contains(&TokenKind::BytesLiteral(b"GET /".to_vec())));
+    assert!(tokens.contains(&TokenKind::BytesLiteral(b"a\"b".to_vec())));
+    assert!(tokens.contains(&TokenKind::BytesLiteral(vec![
+        0x00, 0xff, b'\n', b'\t', b'\\', b'"'
+    ])));
+    assert!(tokens.contains(&TokenKind::BytesLiteral(Vec::new())));
+    // `b` alone stays an identifier.
+    assert_eq!(
+        tokens
+            .iter()
+            .filter(|kind| **kind == TokenKind::Identifier("b".to_string()))
+            .count(),
+        2
+    );
+}
+
+#[test]
+fn byte_strings_reject_what_is_not_one_byte() {
+    for (source, message) in [
+        (
+            "value = b\"caf\u{e9}\"\n",
+            "a byte string holds ASCII characters and escapes only",
+        ),
+        (
+            "value = b\"\\u{e9}\"\n",
+            "a byte string has no `\\u{...}` escape",
+        ),
+        (
+            "value = b\"\"\"abc\"\"\"\n",
+            "triple-quoted byte strings are not supported",
+        ),
+        ("value = b\"abc\n", "unterminated byte string literal"),
+        ("value = b'abc", "unterminated byte string literal"),
+    ] {
+        let error = lex(source).expect_err(source);
+        assert_eq!(error.code, "AU1001", "{source}");
+        assert!(
+            error.message.contains(message),
+            "{source}: {}",
+            error.message
+        );
+    }
+    assert!(lex("value = b\"\\q\"\n").is_err());
+}
