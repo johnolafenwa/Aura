@@ -786,10 +786,11 @@ A callback can fail like any other Aura code, with an index out of range
 or an overflow. Aura does not unwind through the C function, which would
 not expect it. The callback returns zero to C, any later callbacks return
 zero without running, and the `qsort` call itself fails with the
-callback's error as soon as the C function returns. Two rules keep
-callbacks safe: the C library must call the function on the thread that
-made the foreign call, and the callback should not wait on a task or a
-queue.
+callback's error as soon as the C function returns. If the callback has a
+`with` block, its manager exits before C resumes. A manager around
+`qsort` exits after C returns. The C library must call the function on the
+thread that made the foreign call, and the callback should not wait on a
+task or a queue.
 
 ## When things go wrong at run time
 
