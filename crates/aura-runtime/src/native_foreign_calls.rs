@@ -903,13 +903,28 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_struct_into(
     })
 }
 
-/// The bytes before a C array [`aura_direct_ffi_pack_structs`] returns,
-/// which hold the array's byte length.
-const STRUCTS_HEADER: usize = 16;
+/// The task owns the buffer through its handle. A trap while packing another
+/// parameter or writing back a C result still releases it with the task ledger.
+#[repr(C, align(16))]
+struct StructArrayHeader {
+    bytes: usize,
+    owner: *mut OpaqueValue,
+}
 
 fn structs_block(bytes: usize) -> std::alloc::Layout {
-    std::alloc::Layout::from_size_align(STRUCTS_HEADER + bytes, 16)
-        .unwrap_or_else(|_| runtime_error("a C struct array is too large"))
+    bytes
+        .checked_add(std::mem::size_of::<StructArrayHeader>())
+        .and_then(|size| {
+            std::alloc::Layout::from_size_align(size, std::mem::align_of::<StructArrayHeader>())
+                .ok()
+        })
+        .unwrap_or_else(|| runtime_error("a C struct array is too large"))
+}
+
+unsafe extern "C" fn free_structs_block(block: *mut c_void) {
+    // SAFETY: the owning handle's final release is the only deallocation.
+    let header = unsafe { &*block.cast::<StructArrayHeader>() };
+    unsafe { std::alloc::dealloc(block.cast(), structs_block(header.bytes)) };
 }
 
 /// Stack storage available to one private copy of a read-only struct array.
@@ -935,22 +950,28 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_copy_structs(
     let array = if length <= FFI_STRUCT_SCRATCH_BYTES {
         scratch
     } else {
-        allocate_structs(length)
+        allocate_structs(length, free_structs_block)
     };
     // SAFETY: the destination has room for the complete source.
     unsafe { std::ptr::copy_nonoverlapping(data, array, length) };
     array
 }
 
-fn allocate_structs(length: usize) -> *mut u8 {
+fn allocate_structs(length: usize, release: FfiHandleDrop) -> *mut u8 {
     // SAFETY: the checked layout contains the header and the whole array.
     unsafe {
-        let block = std::alloc::alloc(structs_block(length));
-        if block.is_null() {
+        let header = std::alloc::alloc(structs_block(length)).cast::<StructArrayHeader>();
+        if header.is_null() {
             runtime_error("a C struct array could not be allocated");
         }
-        block.cast::<usize>().write(length);
-        block.add(STRUCTS_HEADER)
+        header.write(StructArrayHeader {
+            bytes: length,
+            owner: std::ptr::null_mut(),
+        });
+        let handle = FfiHandleValue::owned(String::new(), header.cast(), Some(release))
+            .expect("the checked C array allocation is non-null");
+        (*header).owner = boxed_value(Value::FfiHandle(handle));
+        header.add(1).cast()
     }
 }
 
@@ -977,7 +998,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_structs(
         if bytes.is_empty() {
             return std::ptr::null_mut();
         }
-        let array = allocate_structs(bytes.len());
+        let array = allocate_structs(bytes.len(), free_structs_block);
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), array, bytes.len());
         array
     })
@@ -1005,7 +1026,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_structs(
     }
     task_runtime_boundary(|| unsafe {
         let layout = foreign_layout(descriptor, descriptor_length);
-        let length = array.sub(STRUCTS_HEADER).cast::<usize>().read();
+        let length = (*array.cast::<StructArrayHeader>().sub(1)).bytes;
         let read = match c_values::unpack_elements(layout, slice::from_raw_parts(array, length)) {
             Ok(Value::Vec(read)) => read,
             Ok(_) => runtime_error("a C struct array did not read back as a list"),
@@ -1062,11 +1083,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_release_structs(array: *mut u8) 
     if array.is_null() {
         return;
     }
-    // SAFETY: the caller's contract; the header holds the byte length the
-    // block was allocated for.
-    unsafe {
-        let block = array.sub(STRUCTS_HEADER);
-        let length = block.cast::<usize>().read();
-        std::alloc::dealloc(block, structs_block(length));
-    }
+    // SAFETY: only a live allocation produced by allocate_structs reaches here.
+    let owner = unsafe { (*array.cast::<StructArrayHeader>().sub(1)).owner };
+    unsafe { super::aura_direct_release_value(owner) };
 }
