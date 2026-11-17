@@ -170,8 +170,10 @@ impl FunctionCompiler<'_> {
             return Ok(None);
         };
         let int = Type::named("int64");
-        if !self.program_shapes.is_standard_collection_method(function)
-            || types.is_empty()
+        let Some(method_span) = self.program_shapes.collection_method_span(function) else {
+            return Ok(None);
+        };
+        if types.is_empty()
             || !types.iter().all(|ty| ty == &int)
             || self.view_places.contains_key(place)
             || self.loan_locals.contains(place)
@@ -194,6 +196,13 @@ impl FunctionCompiler<'_> {
         let zero = self.builder.iconst(types::I64, 0);
         let code = self.builder.iconst(types::I64, op as i64);
         let mut words = [receiver, code, zero, zero];
+        if op.returns_number() {
+            // A pop takes no source argument. Its unused word carries the
+            // method's definition so a failure reproduces its Aura frame.
+            words[2] = self
+                .builder
+                .iconst(types::I64, I64Op::pop_site(method_span));
+        }
         for (word, arg) in words[2..].iter_mut().zip(args) {
             let value = self.load_operand_with_integer_hint(&arg.value, Some(ScalarKind::Int64))?;
             let value = self.coerce_value(value, &DirectType::Scalar(ScalarKind::Int64))?;

@@ -1,0 +1,5 @@
+from collections import Deque
+
+def main():
+    mut seq = Deque[int64]()
+    print(seq.pop_front())

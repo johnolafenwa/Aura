@@ -620,6 +620,29 @@ impl I64Op {
         })
     }
 
+    /// The source position passed in the argument word of a zero-argument
+    /// pop. These are positions in the compiler-supplied collections module.
+    pub fn pop_site(span: Span) -> i64 {
+        ((span.line as u64) << 32 | span.column as u64) as i64
+    }
+
+    pub(crate) fn pop_frame(self, site: i64) -> Option<(&'static str, Span)> {
+        if site == 0 {
+            return None;
+        }
+        let method = match self {
+            Self::PopFront => "collections::Deque.pop_front",
+            Self::PopBack => "collections::Deque.pop_back",
+            Self::HeapPop => "collections::Heap.pop",
+            _ => return None,
+        };
+        let bits = site as u64;
+        Some((
+            method,
+            Span::new((bits >> 32) as usize, bits as u32 as usize),
+        ))
+    }
+
     pub fn is_word_sequence(self) -> bool {
         matches!(
             self,
