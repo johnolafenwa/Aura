@@ -85,6 +85,12 @@ function declarationForLine(line, lineNumber) {
     },
     {
       pattern:
+        /^(\s*)((?:public\s+)?extern\s+"C"\s+union\s+)([A-Za-z_][A-Za-z0-9_]*)/,
+      kind: "class",
+      detail: 'extern "C" union'
+    },
+    {
+      pattern:
         /^(\s*)((?:public\s+)?extern\s+"C"\s+def\s+)([A-Za-z_][A-Za-z0-9_]*)/,
       kind: "function",
       detail: 'extern "C" function'

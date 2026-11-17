@@ -39,6 +39,16 @@ def main() -> int32:
     mut image = raylib.GenImageColor(WIDTH, HEIGHT, raylib.RAYWHITE)
     sky(image)
     raylib.ImageDrawCircle(image, 250, 50, 28, raylib.GOLD)
+    # A fan of triangles around its first point: a hill behind the house.
+    hill = [
+        raylib.Vector2(x=220.0, y=150.0),
+        raylib.Vector2(x=320.0, y=150.0),
+        raylib.Vector2(x=290.0, y=110.0),
+        raylib.Vector2(x=240.0, y=95.0),
+        raylib.Vector2(x=180.0, y=120.0),
+        raylib.Vector2(x=150.0, y=150.0),
+    ]
+    raylib.ImageDrawTriangleFan(image, hill, len(hill) as int32, raylib.LIME)
     raylib.ImageDrawRectangle(image, 0, 150, WIDTH, 50, raylib.DARKGREEN)
     raylib.ImageDrawRectangle(image, 60, 100, 80, 50, raylib.MAROON)
     raylib.ImageDrawLineEx(
@@ -71,6 +81,8 @@ def main() -> int32:
     print(f"picture.png is {saved.width} by {saved.height}")
     sun = raylib.GetImageColor(saved, 250, 50)
     print(f"the sun is {sun.r}, {sun.g}, {sun.b}")
+    hill_top = raylib.GetImageColor(saved, 240, 120)
+    print(f"the hill is {hill_top.r}, {hill_top.g}, {hill_top.b}")
     grass = raylib.GetImageColor(saved, 10, 190)
     print(f"the grass is {grass.r}, {grass.g}, {grass.b}")
     raylib.UnloadImage(saved)

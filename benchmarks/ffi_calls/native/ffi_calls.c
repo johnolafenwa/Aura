@@ -33,3 +33,25 @@ Vec2 fc_vec2_add(Vec2 a, Vec2 b) { Vec2 r = {a.x + b.x, a.y + b.y}; return r; }
 Triple fc_triple_next(Triple t) { Triple r = {t.b, t.c, t.a + 1}; return r; }
 void fc_vec2_move(Vec2 *v, double by) { v->x += by; v->y -= by; }
 int64_t fc_apply(int64_t (*f)(int64_t, int32_t), int64_t value) { return f(value, 3); }
+
+typedef struct { int32_t x, y; } Pixel;
+typedef struct { int32_t lanes[4]; } Samples;
+typedef union { int32_t code; uint32_t bits; } Word;
+
+int64_t fc_pixels(const Pixel *pixels, int32_t count) {
+    int64_t total = 0;
+    for (int32_t i = 0; i < count; ++i) total += pixels[i].x + pixels[i].y;
+    return total;
+}
+
+int64_t fc_samples(Samples s) {
+    return s.lanes[0] + s.lanes[1] + s.lanes[2] + s.lanes[3];
+}
+
+void fc_words(Word *words, int32_t count) {
+    for (int32_t i = 0; i < count; ++i) words[i].code = 2 * i + 1;
+}
+
+int64_t fc_text_callback(int64_t (*count)(const char *)) {
+    return count("caf\xc3\xa9");
+}

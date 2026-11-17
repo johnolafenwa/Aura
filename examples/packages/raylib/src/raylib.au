@@ -172,11 +172,24 @@ public extern "C" class MaterialMap:
     public value: float32
 
 
+public extern "C" class Material:
+    """Material, includes shader and maps."""
+    public shader: Shader
+    public maps: uint64
+    public params: array[float32, 4]
+
+
 public extern "C" class Transform:
     """Transform, vertex transformation data."""
     public translation: Vector3
     public rotation: Vector4
     public scale: Vector3
+
+
+public extern "C" class BoneInfo:
+    """Bone, skeletal animation bone."""
+    public name: array[int8, 32]
+    public parent: int32
 
 
 public extern "C" class ModelSkeleton:
@@ -197,6 +210,14 @@ public extern "C" class Model:
     public skeleton: ModelSkeleton
     public currentPose: uint64
     public boneMatrices: uint64
+
+
+public extern "C" class ModelAnimation:
+    """ModelAnimation, contains a full animation sequence."""
+    public name: array[int8, 32]
+    public boneCount: int32
+    public keyframeCount: int32
+    public keyframePoses: uint64
 
 
 public extern "C" class Ray:
@@ -252,10 +273,42 @@ public extern "C" class Music:
     public ctxData: uint64
 
 
+public extern "C" class VrDeviceInfo:
+    """VrDeviceInfo, Head-Mounted-Display device parameters."""
+    public hResolution: int32
+    public vResolution: int32
+    public hScreenSize: float32
+    public vScreenSize: float32
+    public eyeToScreenDistance: float32
+    public lensSeparationDistance: float32
+    public interpupillaryDistance: float32
+    public lensDistortionValues: array[float32, 4]
+    public chromaAbCorrection: array[float32, 4]
+
+
+public extern "C" class VrStereoConfig:
+    """VrStereoConfig, VR stereo rendering configuration for simulator."""
+    public projection: array[Matrix, 2]
+    public viewOffset: array[Matrix, 2]
+    public leftLensCenter: array[float32, 2]
+    public rightLensCenter: array[float32, 2]
+    public leftScreenCenter: array[float32, 2]
+    public rightScreenCenter: array[float32, 2]
+    public scale: array[float32, 2]
+    public scaleIn: array[float32, 2]
+
+
 public extern "C" class FilePathList:
     """File path list."""
     public count: uint32
     public paths: uint64
+
+
+public extern "C" class AutomationEvent:
+    """Automation event."""
+    public frame: uint32
+    public kind: uint32
+    public params: array[int32, 4]
 
 
 public extern "C" class AutomationEventList:
@@ -929,8 +982,20 @@ public extern "C" def BeginScissorMode(
 public extern "C" def EndScissorMode() -> None
 
 
+# Begin stereo rendering (requires VR simulator)
+public extern "C" def BeginVrStereoMode(config: VrStereoConfig) -> None
+
+
 # End stereo rendering (requires VR simulator)
 public extern "C" def EndVrStereoMode() -> None
+
+
+# Load VR stereo config for VR simulator device parameters
+public extern "C" def LoadVrStereoConfig(device: VrDeviceInfo) -> VrStereoConfig
+
+
+# Unload VR stereo config
+public extern "C" def UnloadVrStereoConfig(config: VrStereoConfig) -> None
 
 
 # Load shader from files and bind default locations
@@ -1359,6 +1424,10 @@ public extern "C" def StartAutomationEventRecording() -> None
 public extern "C" def StopAutomationEventRecording() -> None
 
 
+# Play a recorded automation event
+public extern "C" def PlayAutomationEvent(event: AutomationEvent) -> None
+
+
 # Check if a key has been pressed once
 public extern "C" def IsKeyPressed(key: int32) -> bool
 
@@ -1611,6 +1680,14 @@ public extern "C" def DrawLineEx(
     startPos: Vector2,
     endPos: Vector2,
     thick: float32,
+    color: Color,
+) -> None
+
+
+# Draw lines sequence (using gl lines)
+public extern "C" def DrawLineStrip(
+    points: ptr[Vector2],
+    pointCount: int32,
     color: Color,
 ) -> None
 
@@ -1888,6 +1965,22 @@ public extern "C" def DrawTriangleLines(
 ) -> None
 
 
+# Draw a triangle fan defined by points (first vertex is the center)
+public extern "C" def DrawTriangleFan(
+    points: ptr[Vector2],
+    pointCount: int32,
+    color: Color,
+) -> None
+
+
+# Draw a triangle strip defined by points
+public extern "C" def DrawTriangleStrip(
+    points: ptr[Vector2],
+    pointCount: int32,
+    color: Color,
+) -> None
+
+
 # Draw a regular polygon (Vector version)
 public extern "C" def DrawPoly(
     center: Vector2,
@@ -1915,6 +2008,53 @@ public extern "C" def DrawPolyLinesEx(
     radius: float32,
     rotation: float32,
     lineThick: float32,
+    color: Color,
+) -> None
+
+
+# Draw spline: Linear, minimum 2 points
+public extern "C" def DrawSplineLinear(
+    points: ptr[Vector2],
+    pointCount: int32,
+    thick: float32,
+    color: Color,
+) -> None
+
+
+# Draw spline: B-Spline, minimum 4 points
+public extern "C" def DrawSplineBasis(
+    points: ptr[Vector2],
+    pointCount: int32,
+    thick: float32,
+    color: Color,
+) -> None
+
+
+# Draw spline: Catmull-Rom, minimum 4 points
+public extern "C" def DrawSplineCatmullRom(
+    points: ptr[Vector2],
+    pointCount: int32,
+    thick: float32,
+    color: Color,
+) -> None
+
+
+# Draw spline: Quadratic Bezier, minimum 3 points (1 control point): [p1, c2,
+# p3, c4...]
+public extern "C" def DrawSplineBezierQuadratic(
+    points: ptr[Vector2],
+    pointCount: int32,
+    thick: float32,
+    color: Color,
+) -> None
+
+
+# Draw spline: Cubic Bezier, minimum 4 points (2 control points): [p1, c2, c3,
+# p4, c5, c6...]
+public extern "C" def DrawSplineBezierCubic(
+    points: ptr[Vector2],
+    pointCount: int32,
+    thick: float32,
     color: Color,
 ) -> None
 
@@ -2077,6 +2217,14 @@ public extern "C" def CheckCollisionPointLine(
     p1: Vector2,
     p2: Vector2,
     threshold: int32,
+) -> bool
+
+
+# Check if point is within a polygon described by array of vertices
+public extern "C" def CheckCollisionPointPoly(
+    point: Vector2,
+    points: ptr[Vector2],
+    pointCount: int32,
 ) -> bool
 
 
@@ -2410,6 +2558,14 @@ public extern "C" def LoadImagePalette(
 ) -> uint64
 
 
+# Unload color data loaded with LoadImageColors()
+public extern "C" def UnloadImageColors(colors: uint64) -> None
+
+
+# Unload colors palette loaded with LoadImagePalette()
+public extern "C" def UnloadImagePalette(colors: uint64) -> None
+
+
 # Get image alpha border rectangle
 public extern "C" def GetImageAlphaBorder(image: Image, threshold: float32) -> Rectangle
 
@@ -2572,6 +2728,25 @@ public extern "C" def ImageDrawTriangleLines(
     v1: Vector2,
     v2: Vector2,
     v3: Vector2,
+    color: Color,
+) -> None
+
+
+# Draw a triangle fan defined by points within an image (first vertex is the
+# center)
+public extern "C" def ImageDrawTriangleFan(
+    dst: mut Image,
+    points: ptr[Vector2],
+    pointCount: int32,
+    color: Color,
+) -> None
+
+
+# Draw a triangle strip defined by points within an image
+public extern "C" def ImageDrawTriangleStrip(
+    dst: mut Image,
+    points: ptr[Vector2],
+    pointCount: int32,
     color: Color,
 ) -> None
 
@@ -2854,6 +3029,10 @@ public extern "C" def LoadFontData(
     kind: int32,
     glyphCount: mut int32,
 ) -> uint64
+
+
+# Unload font chars info data (RAM)
+public extern "C" def UnloadFontData(glyphs: uint64, glyphCount: int32) -> None
 
 
 # Unload font from GPU memory (VRAM)
@@ -3167,6 +3346,14 @@ public extern "C" def DrawTriangle3D(
 ) -> None
 
 
+# Draw a triangle strip defined by points
+public extern "C" def DrawTriangleStrip3D(
+    points: ptr[Vector3],
+    pointCount: int32,
+    color: Color,
+) -> None
+
+
 # Draw cube
 public extern "C" def DrawCube(
     position: Vector3,
@@ -3423,6 +3610,23 @@ public extern "C" def UpdateMeshBuffer(
 public extern "C" def UnloadMesh(mesh: Mesh) -> None
 
 
+# Draw a 3d mesh with material and transform
+public extern "C" def DrawMesh(
+    mesh: Mesh,
+    material: Material,
+    transform: Matrix,
+) -> None
+
+
+# Draw multiple mesh instances with material and different transforms
+public extern "C" def DrawMeshInstanced(
+    mesh: Mesh,
+    material: Material,
+    transforms: ptr[Matrix],
+    instances: int32,
+) -> None
+
+
 # Compute mesh bounding box limits
 public extern "C" def GetMeshBoundingBox(mesh: Mesh) -> BoundingBox
 
@@ -3518,12 +3722,74 @@ public extern "C" def GenMeshHeightmap(heightmap: Image, size: Vector3) -> Mesh
 public extern "C" def GenMeshCubicmap(cubicmap: Image, cubeSize: Vector3) -> Mesh
 
 
+# Load materials from model file
+public extern "C" def LoadMaterials(fileName: cstr, materialCount: mut int32) -> uint64
+
+
+# Load default material (Supports: DIFFUSE, SPECULAR, NORMAL maps)
+public extern "C" def LoadMaterialDefault() -> Material
+
+
+# Check if a material is valid (shader assigned, map textures loaded in GPU)
+public extern "C" def IsMaterialValid(material: Material) -> bool
+
+
+# Unload material from GPU memory (VRAM)
+public extern "C" def UnloadMaterial(material: Material) -> None
+
+
+# Set texture for a material map type (MATERIAL_MAP_DIFFUSE,
+# MATERIAL_MAP_SPECULAR...)
+public extern "C" def SetMaterialTexture(
+    material: mut Material,
+    mapType: int32,
+    texture: Texture,
+) -> None
+
+
 # Set material for a mesh
 public extern "C" def SetModelMeshMaterial(
     model: mut Model,
     meshId: int32,
     materialId: int32,
 ) -> None
+
+
+# Load model animations from file
+public extern "C" def LoadModelAnimations(
+    fileName: cstr,
+    animCount: mut int32,
+) -> uint64
+
+
+# Update model animation pose (vertex buffers and bone matrices)
+public extern "C" def UpdateModelAnimation(
+    model: Model,
+    anim: ModelAnimation,
+    frame: float32,
+) -> None
+
+
+# Update model animation pose, blending two animations
+public extern "C" def UpdateModelAnimationEx(
+    model: Model,
+    animA: ModelAnimation,
+    frameA: float32,
+    animB: ModelAnimation,
+    frameB: float32,
+    blend: float32,
+) -> None
+
+
+# Unload animation array data
+public extern "C" def UnloadModelAnimations(
+    animations: uint64,
+    animCount: int32,
+) -> None
+
+
+# Check model animation skeleton match
+public extern "C" def IsModelAnimationValid(model: Model, anim: ModelAnimation) -> bool
 
 
 # Check collision between two spheres
@@ -3862,53 +4128,16 @@ public extern "C" def SetAudioStreamBufferSizeDefault(size: int32) -> None
 
 
 # Not bound: structs
-#   Material: array field `float[4]`
-#   BoneInfo: array field `char[32]`
-#   ModelAnimation: array field `char[32]`
-#   VrDeviceInfo: array field `float[4]`
-#   VrStereoConfig: array field `Matrix[2]`
-#   AutomationEvent: array field `int[4]`
 #
-# Not bound: 44 of 600 functions
-#   BeginVrStereoMode: uses `VrStereoConfig`, which has an array field `Matrix[2]`
-#   LoadVrStereoConfig: uses `VrDeviceInfo`, which has an array field `float[4]`
-#   UnloadVrStereoConfig: uses `VrStereoConfig`, which has an array field `Matrix[2]`
+# Not bound: 13 of 600 functions
 #   TraceLog: variadic
 #   SetTraceLogCallback: callback `TraceLogCallback`
 #   SetLoadFileDataCallback: callback `LoadFileDataCallback`
 #   SetSaveFileDataCallback: callback `SaveFileDataCallback`
 #   SetLoadFileTextCallback: callback `LoadFileTextCallback`
 #   SetSaveFileTextCallback: callback `SaveFileTextCallback`
-#   PlayAutomationEvent: uses `AutomationEvent`, which has an array field `int[4]`
-#   DrawLineStrip: array of structs `const Vector2 *`
-#   DrawTriangleFan: array of structs `const Vector2 *`
-#   DrawTriangleStrip: array of structs `const Vector2 *`
-#   DrawSplineLinear: array of structs `const Vector2 *`
-#   DrawSplineBasis: array of structs `const Vector2 *`
-#   DrawSplineCatmullRom: array of structs `const Vector2 *`
-#   DrawSplineBezierQuadratic: array of structs `const Vector2 *`
-#   DrawSplineBezierCubic: array of structs `const Vector2 *`
-#   CheckCollisionPointPoly: array of structs `const Vector2 *`
-#   UnloadImageColors: array of structs `Color *`
-#   UnloadImagePalette: array of structs `Color *`
-#   ImageDrawTriangleFan: array of structs `const Vector2 *`
-#   ImageDrawTriangleStrip: array of structs `const Vector2 *`
-#   GenImageFontAtlas: array of structs `const GlyphInfo *`
-#   UnloadFontData: array of structs `GlyphInfo *`
+#   GenImageFontAtlas: pointer to pointer `Rectangle **`
 #   TextFormat: variadic
-#   DrawTriangleStrip3D: array of structs `const Vector3 *`
-#   DrawMesh: uses `Material`, which has an array field `float[4]`
-#   DrawMeshInstanced: uses `Material`, which has an array field `float[4]`
-#   LoadMaterials: uses `Material`, which has an array field `float[4]`
-#   LoadMaterialDefault: uses `Material`, which has an array field `float[4]`
-#   IsMaterialValid: uses `Material`, which has an array field `float[4]`
-#   UnloadMaterial: uses `Material`, which has an array field `float[4]`
-#   SetMaterialTexture: uses `Material`, which has an array field `float[4]`
-#   LoadModelAnimations: uses `ModelAnimation`, which has an array field `char[32]`
-#   UpdateModelAnimation: uses `ModelAnimation`, which has an array field `char[32]`
-#   UpdateModelAnimationEx: uses `ModelAnimation`, which has an array field `char[32]`
-#   UnloadModelAnimations: uses `ModelAnimation`, which has an array field `char[32]`
-#   IsModelAnimationValid: uses `ModelAnimation`, which has an array field `char[32]`
 #   SetAudioStreamCallback: callback `AudioCallback`
 #   AttachAudioStreamProcessor: callback `AudioCallback`
 #   DetachAudioStreamProcessor: callback `AudioCallback`

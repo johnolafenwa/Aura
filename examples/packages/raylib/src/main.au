@@ -76,6 +76,8 @@ def main() -> int32:
     mut speed = raylib.Vector2(x=200.0, y=-240.0)
     mut score = 0
     mut frame = 0
+    # The last places of the ball, oldest first, drawn as its trail.
+    mut trail: list[raylib.Vector2] = []
 
     while not demo.finished(frame, limit):
         # A fixed step keeps a test run the same on every machine.
@@ -112,6 +114,10 @@ def main() -> int32:
             if standing[index]:
                 raylib.DrawRectangleRec(brick(index), brick_color(index))
         raylib.DrawRectangleRounded(paddle, 0.6, 8, raylib.DARKBLUE)
+        trail.append(ball)
+        if len(trail) > 12:
+            trail.pop(0)
+        raylib.DrawLineStrip(trail, len(trail) as int32, raylib.PINK)
         raylib.DrawCircleV(ball, BALL_RADIUS, raylib.MAROON)
         raylib.DrawText(f"score {score}", 20, 14, 24, raylib.DARKGRAY)
         raylib.DrawText("arrows, A and D, or the mouse", 470, 18, 18, raylib.GRAY)

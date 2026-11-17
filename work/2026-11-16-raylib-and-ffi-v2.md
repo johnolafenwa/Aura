@@ -67,6 +67,100 @@ Found on the way:
 Not run: macOS, Windows, arm64, and raylib on its default GLFW platform
 layer, which the CI step builds.
 
+## Step 2: Array Fields And Arrays Of Structs
+
+ADR-0106 records the decisions. What changed:
+
+- `name: array[T, N]` in an `extern "C"` class. The parser records the
+  lengths in `ClassDecl.c_arrays` and types the field `list[T]`. A class
+  with such a field, or one that holds such a class, is not `Copy`.
+- `ptr[Name]` and `mut ptr[Name]` for an `extern "C"` class. The call
+  takes a `list[Name]`, and an empty list passes a null pointer.
+- `crates/aura-runtime/src/c_values.rs` converts between Aura values and C
+  bytes for any layout. The interpreter always uses it. Built programs
+  keep their inline code for structs of plain scalars and call it through
+  `aura_direct_ffi_pack_struct` and its siblings for everything else.
+- On AArch64, a struct that does not fit the registers left is one LLVM
+  array argument, which LLVM places on the stack as AAPCS64 requires.
+- `CStruct::argument` no longer sends a struct to the stack because the
+  registers of a kind it does not use have run out. Before, a built
+  program passed `struct { int a, b; }` wrongly after nine `double`
+  arguments. The interpreter was right because libffi places arguments
+  itself.
+- The binding generator emits array fields and struct pointers, and the
+  binding covers 587 of 600 functions. The 13 left are 2 variadic
+  functions, 10 that take callbacks, and one with a `Rectangle **`
+  parameter.
+- The picture draws a hill with `ImageDrawTriangleFan`, the game draws the
+  ball's trail with `DrawLineStrip`, and the scene uses `DrawModelEx` and
+  `DrawMesh` with `LoadMaterialDefault`, whose `Material` has a
+  `float params[4]` field.
+
+Verification for step 2:
+
+- `cargo test -p aura-runtime --lib c_values c_layout native_foreign_calls`.
+- `cargo test -p aura-compiler --lib`.
+- `cargo test -p aura --test ffi_acceptance`: the fixture library tests
+  compare both backends for array fields, nested arrays, struct arrays
+  written back, wrong lengths, and structs after exhausted registers.
+- The three raylib programs on both backends under Xvfb.
+
+Not run: any arm64 or macOS machine. The generated AArch64 assembly was
+read against AAPCS64. Speed of the runtime conversion path is not yet
+measured; a list of structs is converted element by element on every
+call.
+
+## Step 3: Unions
+
+ADR-0107 records the decisions. What changed:
+
+- `extern "C" union Name:` parses into a class that holds
+  `bytes: list[uint8]`, a property and a `from_` function for each member,
+  and the private declarations those call. See
+  `Parser::parse_extern_union`.
+- `ffi_struct_layout` lays a union out from the fields of its
+  `__Name_members` class, and the checker sets the length of the `bytes`
+  default once layouts are known.
+- An extern function with the symbol `aura.reinterpret` reads the C bytes
+  of its one struct argument as its struct result. The interpreter does it
+  in `ffi::reinterpret` and built programs in
+  `compile_reinterpret`.
+- Exported extern functions carry module-qualified names in their C
+  layouts, so a value read from C in an importing module has the class
+  name the importer knows.
+- The editor analysis hides the generated declarations and lists a
+  union's members in the outline. The language server's recovery outline
+  and the VS Code grammar know `extern "C" union`.
+
+Verification for step 3:
+
+- `cargo test -p aura-compiler --lib` and `cargo test -p aura-runtime
+  --lib`. Three compiler tests fail on this machine with or without the
+  change: one needs a non-root user, and two float proofs need a newer Z3
+  than the 4.8.12 installed here.
+- `cargo test -p aura --test ffi_acceptance`: unions by value, by pointer,
+  as fields, in arrays, and through `ptr[Name]` against the fixture
+  library, the failure cases, and an SDL event loop.
+- `node --test ./test/*.test.js` in `tools/aura-language-server`.
+
+Not run: any arm64 or macOS machine. Unions of floats take a different
+path there, which the fixture's `UHfa` union exercises in CI.
+
+## Step 4: Text In Callbacks
+
+The foreign declaration uses `cstr` for a NUL-terminated C string. The
+named Aura function takes a `str`. Both backends copy and validate each
+argument. The C fixture checks empty and multibyte strings, two text
+arguments in one call, repeated callbacks, and the two `AU4005` failure
+cases. The GLFW example exercises the error callback and passes its
+window handle to the key callback as a `uint64`.
+
+ADR-0108, the manual, chapter 18, and the changelog describe the rule.
+The documentation generator is current. All 1,100 documentation blocks
+passed the example checker on x86-64 Linux (666 check-pass, 195
+check-fail and 239 fragments).
+
 ## Follow-Up
 
-Steps 2 to 5.
+Run the host and cross-platform tests and measure struct arrays, array
+fields, union reads, and text callbacks against Rust and Python.

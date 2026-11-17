@@ -6226,10 +6226,22 @@ impl<'a> AnalysisBuilder<'a> {
         // in the editor's file.
         let generated =
             |range: &AnalysisRange| range.line + 1 >= crate::sema::GENERATED_LINE_OFFSET;
-        if generated(&range) {
+        // The declarations behind an `extern "C" union` take the place of
+        // its `union` word, each at a column no written code reaches.
+        let stride = crate::diag::GENERATED_COLUMN_STRIDE;
+        if generated(&range) || range.start_character >= stride {
             return;
         }
-        let definition = definition.filter(|definition| !generated(definition));
+        let definition =
+            definition
+                .filter(|definition| !generated(definition))
+                .map(|mut definition| {
+                    if definition.start_character >= stride {
+                        definition.start_character %= stride;
+                        definition.end_character = definition.start_character + "union".len();
+                    }
+                    definition
+                });
         self.output.occurrences.push(AnalysisOccurrence {
             line: range.line,
             start_character: range.start_character,
@@ -6466,6 +6478,17 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
         })
         .collect::<Vec<_>>();
     for item in &module.items {
+        // The declarations the parser wrote for a union are not the
+        // user's to see.
+        let span = match item {
+            Item::Class(class) => Some(class.span),
+            Item::ExternFunction(function) => Some(function.span),
+            _ => None,
+        };
+        let hidden = matches!(item, Item::Class(class) if crate::ast::c_union_of_members_class(&class.name).is_some());
+        if hidden || span.is_some_and(|span| span.column >= crate::diag::GENERATED_COLUMN_STRIDE) {
+            continue;
+        }
         match item {
             Item::TypeAlias(alias) => symbols.push(symbol(
                 &alias.name,
@@ -6475,7 +6498,15 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
                 Vec::new(),
             )),
             Item::Class(class_decl) => {
-                let mut children = class_decl
+                // A union lists its members, which another class holds.
+                let members = class_decl.c_union.as_ref().and_then(|holder| {
+                    module.items.iter().find_map(|item| match item {
+                        Item::Class(class) if class.name == *holder => Some(class),
+                        _ => None,
+                    })
+                });
+                let mut children = members
+                    .unwrap_or(class_decl)
                     .fields
                     .iter()
                     .map(|field| {
@@ -6488,7 +6519,9 @@ fn symbols_from_module(module: &Module, source: &str) -> Vec<AnalysisSymbol> {
                         )
                     })
                     .collect::<Vec<_>>();
-                children.extend(method_symbols(&class_decl.methods, method_kind));
+                if members.is_none() {
+                    children.extend(method_symbols(&class_decl.methods, method_kind));
+                }
                 symbols.push(symbol(
                     &class_decl.name,
                     "class",

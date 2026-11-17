@@ -28,9 +28,43 @@ in this file.
   `Tensor.from_array`. See the Image Module page of the Manual and
   section 20.6 of the book (ADR-0114).
 
+- C callbacks accept NUL-terminated UTF-8 text. Declare the parameter
+  as `cstr` in the foreign signature and `str` in the named Aura
+  function. A null pointer or invalid UTF-8 raises `AU4005`.
+
+- FFI: an `extern "C"` class can hold a fixed-size C array. A field of
+  type `array[T, N]` is laid out as `T name[N]`, where `T` is a scalar,
+  another `extern "C"` class, or another array. In Aura code the field is
+  a `list[T]`, and it must hold exactly `N` elements when the struct
+  crosses, or the call fails with `AU4005`. A class with an array field is
+  not a `copy class`.
+
+- FFI: `extern "C" union Name:` declares a C union. In Aura it is a class
+  that holds the union's bytes in `bytes: list[uint8]`. Each member is a
+  read-only property, such as `event.key`, and has an associated function
+  that builds a union from it, such as `Event.from_key(value)`. `Name()`
+  is a union of zero bytes. A union crosses wherever an `extern "C"` class
+  does. SDL's event loop can now be written in Aura.
+
+- FFI: `ptr[Name]` and `mut ptr[Name]` pass a `list[Name]` of an
+  `extern "C"` class as a C array of structs, such as `const Vector2 *`.
+  The call copies the elements into the array and, for `mut`, back out of
+  it.
+
+- Fixed: on AArch64, a built program refused a foreign call whose struct
+  argument did not fit the registers that were left. It now passes the
+  struct on the stack as the C convention requires. raylib's `DrawModelEx`
+  and `DrawTexturePro` are such calls.
+
+- Fixed: a built program passed a struct of integers on the stack when
+  more than eight floating-point arguments came before it, and a struct of
+  floats when more than six integers did (eight on AArch64). C passes such
+  a struct in registers, so the foreign function read the wrong values.
+  The interpreter was not affected.
+
 - Examples: `examples/packages/raylib` binds the raylib graphics library
   through FFI. A script in the package generates the binding from
-  raylib's own API description, and it covers 556 of raylib 6.0's 600
+  raylib's own API description, and it covers 587 of raylib 6.0's 600
   functions. Three programs use it: a brick game with keyboard and mouse
   input, a 3D scene with a camera and a model, and a picture drawn into
   an image and written to a PNG. The package's README says how to install

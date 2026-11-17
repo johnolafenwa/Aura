@@ -17114,6 +17114,146 @@ def main() -> int32:
 }
 
 #[test]
+fn direct_ffi_codegen_reads_union_members_without_a_c_call() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+
+extern "C" class Pair:
+    low: uint32
+    high: uint32
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    text: array[uint8, 12]
+
+extern "C" def un_poll(event: mut Event) -> bool
+extern "C" def as_pair(key: Key) -> Pair symbol "aura.reinterpret"
+
+def main() -> int32:
+    mut event = Event()
+    if un_poll(event):
+        print(event.key.code)
+    made = Event.from_key(Key(kind=1, code=2))
+    print(made.kind)
+    print(Event.from_text(made.text).kind)
+    print(as_pair(Key(kind=3, code=4)).high)
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("a union should emit");
+    let referenced = object_referenced_symbols(&object);
+    let references = |symbol: &str| {
+        referenced
+            .iter()
+            .any(|name| name.trim_start_matches('_') == symbol)
+    };
+    for symbol in [
+        "un_poll",
+        "aura_direct_ffi_pack_struct",
+        "aura_direct_ffi_unpack_struct",
+    ] {
+        assert!(references(symbol), "the object should reference `{symbol}`");
+    }
+    // A member read is not a call of a C function.
+    assert!(!references(crate::ffi::REINTERPRET_SYMBOL));
+    assert!(!referenced.iter().any(|name| name.contains("__Event_")));
+}
+
+#[test]
+fn direct_ffi_codegen_packs_array_fields_and_struct_arrays_in_the_runtime() {
+    let module = lower_ffi_source_to_mir(
+        r#"
+extern "C" class Point:
+    x: float32
+    y: float32
+
+extern "C" class Shape:
+    tag: uint8
+    corners: array[Point, 2]
+
+extern "C" def sh_area(s: Shape) -> float32
+extern "C" def sh_make(tag: uint8) -> Shape
+extern "C" def sh_grow(s: mut Shape) -> None
+extern "C" def sh_total(points: ptr[Point], count: int32) -> float32
+extern "C" def sh_shift(points: mut ptr[Point], count: int32) -> None
+
+def main() -> int32:
+    mut shape = sh_make(1)
+    sh_grow(shape)
+    print(sh_area(shape))
+    mut points = [Point(x=1.0, y=2.0)]
+    sh_shift(points, 1)
+    print(sh_total(points, 1))
+    return 0
+"#,
+    );
+    let object = emit_host_object(&module).expect("array fields should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "sh_area",
+        "sh_make",
+        "sh_grow",
+        "sh_total",
+        "sh_shift",
+        "aura_direct_ffi_pack_struct",
+        "aura_direct_ffi_unpack_struct",
+        "aura_direct_ffi_unpack_struct_into",
+        "aura_direct_ffi_pack_structs",
+        "aura_direct_ffi_unpack_structs",
+        "aura_direct_ffi_release_structs",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    let extern_call = |name: &str| {
+        module
+            .functions
+            .iter()
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .find_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::Call {
+                            callee: CallTarget::Extern(call),
+                            ..
+                        },
+                    ..
+                } if call.symbol == name => Some(call.clone()),
+                _ => None,
+            })
+            .unwrap_or_else(|| panic!("`{name}` should be called"))
+    };
+    use crate::ffi::FfiType;
+    // A `ptr[Name]` is a pointer to structs whether or not C writes them.
+    for name in ["sh_total", "sh_shift"] {
+        let call = extern_call(name);
+        let point = call.params[0].c_struct.clone().expect("an element layout");
+        assert!(call.params[0].pointer && point.is_plain());
+        assert_eq!(
+            super::foreign::foreign_param_type(&call.params[0])
+                .expect("ptr[Point] is a boundary type")
+                .ffi_type,
+            FfiType::StructPointer(point.interned())
+        );
+    }
+    let shape = extern_call("sh_area").params[0]
+        .c_struct
+        .clone()
+        .expect("a struct");
+    assert!(!shape.is_plain());
+}
+
+#[test]
 fn direct_ffi_codegen_passes_named_functions_as_c_callbacks() {
     let module = lower_ffi_source_to_mir(
         r#"
@@ -17194,6 +17334,38 @@ def main() -> int32:
         "cb_map",
         "aura_direct_ffi_callback_guard",
         "aura_direct_ffi_callback_check",
+    ] {
+        assert!(
+            referenced
+                .iter()
+                .any(|name| name.trim_start_matches('_') == symbol),
+            "the object should reference `{symbol}`: {referenced:?}"
+        );
+    }
+
+    // C text reaches a callback as a pointer, which the body copies into
+    // a `str` and frees when the function returns.
+    let text = lower_ffi_source_to_mir(
+        r#"
+extern "C" def cb_words(visit: def(word: cstr, index: int32) -> int32) -> None
+
+def show(word: str, index: int32) -> int32:
+    print(word)
+    return index
+
+def main() -> int32:
+    cb_words(show)
+    return 0
+"#,
+    );
+    let callbacks = super::foreign::module_callbacks(&text);
+    let (entry, _) = super::foreign::callback_signatures(&callbacks[0].1);
+    assert_eq!(entry.params, [types::I64, types::I32]);
+    let object = emit_host_object(&text).expect("a text callback should emit");
+    let referenced = object_referenced_symbols(&object);
+    for symbol in [
+        "aura_direct_ffi_callback_text",
+        "aura_direct_ffi_release_callback_text",
     ] {
         assert!(
             referenced

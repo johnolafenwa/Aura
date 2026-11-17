@@ -24644,6 +24644,7 @@ def main() -> int32:
             field("on", CFieldKind::Scalar(FfiScalar::Bool)),
             field("level", CFieldKind::Scalar(FfiScalar::F32)),
         ],
+        union: false,
     };
     let outer = CStruct {
         name: "Outer".to_string(),
@@ -24651,6 +24652,7 @@ def main() -> int32:
             field("id", CFieldKind::Scalar(FfiScalar::I16)),
             field("flagged", CFieldKind::Struct(inner.clone())),
         ],
+        union: false,
     };
     let param = |passing| MirExternParam {
         name: "value".to_string(),
@@ -24726,6 +24728,239 @@ def main() -> int32:
             .expect_err("the value is not an instance of the struct");
         assert_eq!(error.code, "AU4005", "{}", error.message);
     }
+}
+
+#[test]
+fn ffi_unions_read_and_store_their_members_and_cross_through_libc() {
+    // `memcpy` fills a union through a pointer and `memcmp` reads an
+    // array of them.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Key:
+    kind: uint32
+    code: int32
+
+extern "C" union Event:
+    kind: uint32
+    key: Key
+    ratio: float64
+    text: array[uint8, 12]
+
+extern "C" def memcpy(to: mut Event, source: ptr[uint8], count: uint64) -> uint64
+extern "C" def memcmp(a: ptr[Event], b: ptr[uint8], count: uint64) -> int32
+
+def main() -> int32:
+    mut event = Event()
+    if len(event.bytes) != 16 or event.kind != 0:
+        return -1
+    source: list[uint8] = [7, 0, 0, 0, 254, 255, 255, 255, 65, 66]
+    memcpy(event, source, 10)
+    if event.kind != 7 or event.key.code != -2 or event.text[9] != 66:
+        return -2
+    made = Event.from_key(Key(kind=3, code=4))
+    if made.kind != 3 or made.bytes[4] != 4 or made.bytes[8] != 0:
+        return -3
+    if Event.from_ratio(1.0).bytes[7] != 63:
+        return -4
+    texts = [Event.from_text(event.text), Event.from_kind(9)]
+    same: list[uint8] = [7, 0, 0, 0, 254, 255, 255, 255, 65, 66, 0, 0, 0, 0, 0, 0, 9]
+    if memcmp(texts, same, 17) != 0:
+        return -5
+    event.bytes[0] = 8
+    return (event.kind as int32) * 10 + made.key.code
+"#,
+    );
+    let output = super::run_trusted(&module).expect("a union reads and stores its members");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(84));
+
+    for (body, code, message) in [
+        (
+            "    mut flag = Flag()\n    flag.bytes = [1, 2]\n    return flag.raw as int32",
+            "AU4005",
+            "C union `Flag` is 1 byte(s), but its `bytes` list has 2",
+        ),
+        (
+            "    flag = Flag.from_raw(2)\n    if flag.on:\n        return 1\n    return 0",
+            "AU4001",
+            "FFI call to `Flag.on` failed",
+        ),
+    ] {
+        let module = lower_ffi_runtime_source(&format!(
+            "extern \"C\" union Flag:\n    on: bool\n    raw: uint8\n\ndef main() -> int32:\n{body}\n"
+        ));
+        let error = super::run_trusted(&module).expect_err("the union does not read");
+        assert_eq!(error.code, code, "{}", error.message);
+        assert!(error.message.contains(message), "{}", error.message);
+    }
+}
+
+#[test]
+fn ffi_array_fields_and_struct_arrays_cross_through_libc() {
+    use crate::ffi::{FfiType, FfiValue};
+
+    // `memcpy` fills an array field through a pointer to its struct, and
+    // `qsort` reorders a C array of structs by their first field.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Buffer:
+    head: uint8
+    bytes: array[uint8, 6]
+    pairs: array[Pair, 2]
+
+extern "C" class Pair:
+    key: int32
+    value: int32
+
+extern "C" def memcpy(to: mut Buffer, source: ptr[uint8], count: uint64) -> uint64
+extern "C" def qsort(
+    base: mut ptr[Pair], count: uint64, size: uint64,
+    compare: def(a: mut int32, b: mut int32) -> int32
+) -> None
+extern "C" def memcmp(a: ptr[Pair], b: ptr[Pair], count: uint64) -> int32
+
+def ascending(a: mut int32, b: mut int32) -> int32:
+    return a - b
+
+def main() -> int32:
+    mut buffer = Buffer(
+        head=0,
+        bytes=[0, 0, 0, 0, 0, 0],
+        pairs=[Pair(key=0, value=0), Pair(key=0, value=0)],
+    )
+    source: list[uint8] = [9, 1, 2, 3, 4, 5, 6, 0, 7, 0, 0, 0, 8, 0, 0, 0]
+    memcpy(buffer, source, 16)
+    if buffer.head != 9 or buffer.bytes[5] != 6 or buffer.pairs[0].key != 7:
+        return -1
+    if buffer.pairs[0].value != 8 or buffer.pairs[1].key != 0:
+        return -2
+    mut pairs = [Pair(key=30, value=3), Pair(key=-10, value=1), Pair(key=20, value=2)]
+    qsort(pairs, 3, 8, ascending)
+    same = [Pair(key=-10, value=1), Pair(key=20, value=2), Pair(key=30, value=3)]
+    if memcmp(pairs, same, 24) != 0:
+        return -3
+    none: list[Pair] = []
+    if memcmp(none, none, 0) != 0:
+        return -4
+    return pairs[0].value * 100 + pairs[1].value * 10 + pairs[2].value
+"#,
+    );
+    let output = super::run_trusted(&module).expect("libc should fill and sort the structs");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(123));
+
+    // A list of another length does not cross as the array field.
+    let module = lower_ffi_runtime_source(
+        r#"
+extern "C" class Buffer:
+    bytes: array[uint8, 6]
+
+extern "C" def memcpy(to: mut Buffer, source: ptr[uint8], count: uint64) -> uint64
+
+def main() -> int32:
+    mut buffer = Buffer(bytes=[1, 2])
+    source: list[uint8] = [9]
+    memcpy(buffer, source, 1)
+    return 0
+"#,
+    );
+    let error = super::run_trusted(&module).expect_err("the list is too short");
+    assert_eq!(error.code, "AU4005");
+    assert!(
+        error
+            .message
+            .contains("C array field `bytes` holds 6 element(s), but the list has 2"),
+        "{}",
+        error.message
+    );
+
+    // A `ptr[Name]` parameter is a pointer to structs whatever its mode.
+    let pair = crate::c_layout::CStruct {
+        name: "Pair".to_string(),
+        fields: vec![crate::c_layout::CField {
+            name: "key".to_string(),
+            kind: crate::c_layout::CFieldKind::Scalar(crate::ffi::FfiScalar::I32),
+        }],
+        union: false,
+    };
+    let param = |passing| MirExternParam {
+        name: "pairs".to_string(),
+        passing,
+        ty: Type::Named("list".to_string(), vec![Type::named("Pair")]),
+        c_string: false,
+        pointer: true,
+        c_struct: Some(pair.clone()),
+    };
+    for passing in [MirReceiverKind::Borrow, MirReceiverKind::BorrowMut] {
+        assert_eq!(
+            super::ffi_type_for_extern_param(&param(passing)).expect("a struct pointer"),
+            FfiType::StructPointer(pair.interned())
+        );
+    }
+    let error = super::ffi_struct_elements_from_runtime(&Value::Bool(true), &pair)
+        .expect_err("a struct array is a list");
+    assert_eq!(error.code, "AU4005");
+    let empty = Value::Vec(aura_runtime::runtime_value::VecValue::new(
+        Type::named("Pair"),
+        Vec::<Value>::new().into(),
+    ));
+    assert_eq!(
+        super::ffi_struct_elements_from_runtime(&empty, &pair).expect("an empty list"),
+        FfiValue::Struct(pair.interned(), Vec::new())
+    );
+}
+
+#[test]
+fn ffi_callbacks_copy_the_c_text_they_receive() {
+    // `bsearch` hands its key to the comparison untouched, so the key is
+    // the C text here.
+    let program = |key: &str, body: &str| {
+        lower_ffi_runtime_source(&format!(
+            r#"
+extern "C" def bsearch(
+    key: ptr[uint8], base: ptr[int32], count: uint64, size: uint64,
+    compare: def(key: cstr, element: mut int32) -> int32
+) -> uint64
+
+def by_length(key: str, element: mut int32) -> int32:
+    if len(key) == 2:
+        return 2 - element
+    return -1
+
+def main() -> int32:
+    key: list[uint8] = {key}
+    values: list[int32] = [1, 2, 3]
+{body}
+"#
+        ))
+    };
+    let found = program(
+        "[104, 105, 0]",
+        "    if bsearch(key, values, 3, 4, by_length) == 0:\n        return -1\n    return 0",
+    );
+    let output = super::run_trusted(&found).expect("bsearch should pass the key as text");
+    let Value::Int(result) = output.value else {
+        panic!("main returns an integer");
+    };
+    assert_eq!(result.as_i128(), Some(0));
+
+    let invalid = program(
+        "[255, 0]",
+        "    bsearch(key, values, 3, 4, by_length)\n    return 0",
+    );
+    let error = super::run_trusted(&invalid).expect_err("the key is not UTF-8");
+    assert_eq!(error.code, "AU4005", "{}", error.message);
+    assert!(
+        error
+            .message
+            .contains("the C caller passed a cstr that is not valid UTF-8"),
+        "{}",
+        error.message
+    );
 }
 
 #[test]
@@ -24813,18 +25048,36 @@ def main() -> int32:
             params: vec![
                 CCallbackParam {
                     scalar: FfiScalar::I64,
-                    pointer: false
+                    pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::F32,
-                    pointer: true
+                    pointer: true,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::Bool,
-                    pointer: false
+                    pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::U16),
+        })
+    );
+    // C text is a pointer the callback copies into a `str`.
+    assert_eq!(
+        super::callback_signature(&function_type(
+            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            Type::Unit,
+        )),
+        Some(CCallback {
+            params: vec![CCallbackParam {
+                scalar: FfiScalar::U64,
+                pointer: false,
+                text: true,
+            }],
+            result: None,
         })
     );
     let nothing = function_type(Vec::new(), Type::Unit);
@@ -24838,7 +25091,7 @@ def main() -> int32:
     for ty in [
         Type::named("int32"),
         function_type(
-            vec![("str", aura_core::ops::ReceiverKind::Borrow)],
+            vec![("str", aura_core::ops::ReceiverKind::BorrowMut)],
             Type::Unit,
         ),
         function_type(Vec::new(), Type::named("str")),

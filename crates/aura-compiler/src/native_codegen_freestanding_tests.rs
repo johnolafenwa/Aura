@@ -597,6 +597,42 @@ export "C" def entry(seed: int32) -> float64:
 }
 
 #[test]
+fn a_struct_the_registers_cannot_hold_goes_to_the_stack_whole() {
+    // Seven floats leave one float register, and seven integers leave
+    // one general register. AArch64 passes each struct on the stack, and
+    // System V does the same.
+    let source = r#"
+extern "C" class Vec2:
+    x: float32
+    y: float32
+
+extern "C" class Wide:
+    lo: int64
+    hi: int64
+
+extern "C" def spill_floats(
+    a: float64, b: float64, c: float64, d: float64, e: float64, f: float64, g: float64,
+    v: Vec2, last: float64
+) -> float64
+extern "C" def spill_words(
+    a: int64, b: int64, c: int64, d: int64, e: int64, f: int64, g: int64,
+    w: Wide, last: int64
+) -> int64
+
+export "C" def entry(seed: int64) -> float64:
+    v = Vec2(x=1.5, y=2.5)
+    w = Wide(lo=seed, hi=seed + 1)
+    words = spill_words(1, 2, 3, 4, 5, 6, 7, w, 9)
+    return spill_floats(1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, v, 9.0) + (words as float64)
+"#;
+    for target in [FreestandingTarget::X86_64, FreestandingTarget::Aarch64] {
+        let (global, _, undefined) = symbols(&object(source, target));
+        assert_eq!(global, ["entry"]);
+        assert_eq!(undefined, ["aura_trap", "spill_floats", "spill_words"]);
+    }
+}
+
+#[test]
 fn scalar_foreign_calls_and_callbacks_compile_for_riscv() {
     let source = r#"
 extern "C" def apply(function: def(value: uint32, out: mut int16) -> uint32, value: uint32) -> uint32

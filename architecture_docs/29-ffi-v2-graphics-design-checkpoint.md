@@ -1,7 +1,14 @@
 # FFI v2 And raylib Design Checkpoint
 
 Status: **Open 2026-11-16.** Work proceeds on the defaults marked below.
-Each default stays open to change until the release that ships it.
+Sections A, C, and the AArch64 part of F are implemented and recorded in
+[ADR-0106](decisions/0106-c-array-fields-and-struct-arrays.md). Section B
+is implemented and recorded in [ADR-0107](decisions/0107-c-unions.md),
+with one change from B3: a union is built from a member with the
+associated function `Name.from_member(value)`, not `Name(member=value)`.
+Section E1 is implemented in
+[ADR-0108](decisions/0108-c-text-in-callbacks.md). Each default stays
+open to change until the release that ships it.
 
 This checkpoint covers two pieces of the graphics work: a maintained
 raylib package, and the FFI additions that C graphics libraries need. The

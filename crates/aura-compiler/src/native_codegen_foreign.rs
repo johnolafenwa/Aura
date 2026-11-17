@@ -210,8 +210,23 @@ impl NativeCodegen<'_> {
                 body_id,
                 &body,
                 &format!("callback body for `{name}`"),
-                |_, builder| {
-                    emit_callback_body(builder, &callback, target);
+                |codegen, builder| {
+                    // A `cstr` parameter is copied into a `str` for the
+                    // call, and the copy is released after it.
+                    let text = match callback.params.iter().any(|param| param.text) {
+                        true => Some(CallbackText {
+                            copy: codegen.runtime[RuntimeFn::FfiCallbackText],
+                            release: codegen.runtime[RuntimeFn::FfiReleaseCallbackText],
+                            name: string_data_id(
+                                builder.module(),
+                                &mut codegen.string_data,
+                                name.as_bytes(),
+                            )?,
+                            name_length: name.len(),
+                        }),
+                        false => None,
+                    };
+                    emit_callback_body(builder, &callback, target, text);
                     Ok(())
                 },
             )?;
@@ -282,6 +297,16 @@ impl NativeCodegen<'_> {
     }
 }
 
+/// What a callback's body needs to pass C text to its function: the
+/// runtime functions that copy the text and release the copy, and the
+/// name of the Aura function, for the report of text that is not valid.
+pub(super) struct CallbackText {
+    copy: FuncHandle,
+    release: FuncHandle,
+    name: DataHandle,
+    name_length: usize,
+}
+
 /// The code the guard runs: it calls the Aura function `target` with the
 /// words of the frame, and stores the result and what the function wrote
 /// to its `mut` parameters back to the frame.
@@ -289,6 +314,7 @@ pub(super) fn emit_callback_body(
     builder: &mut dyn FunctionBackend,
     callback: &CCallback,
     target: FuncHandle,
+    text: Option<CallbackText>,
 ) {
     let entry = builder.create_block();
     builder.append_block_params_for_function_params(entry);
@@ -297,17 +323,40 @@ pub(super) fn emit_callback_body(
     let frame = builder.block_params(entry)[0];
     let flags = MemFlags::trusted();
     let count = callback.params.len();
+    let text = text.map(|text| {
+        let name = builder.import_data(text.name);
+        (
+            builder.import_function(text.copy),
+            builder.import_function(text.release),
+            builder.symbol_value(types::I64, name),
+            builder.iconst(types::I64, text.name_length as i64),
+        )
+    });
+    let mut copies = Vec::new();
     let arguments = callback
         .params
         .iter()
         .enumerate()
         .map(|(index, param)| {
             let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
-            builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8)
+            let word = builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8);
+            match (text, param.text) {
+                (Some((copy, _, name, length)), true) => {
+                    let copy = builder.call(copy, &[word, name, length]).results[0];
+                    copies.push(copy);
+                    copy
+                }
+                _ => word,
+            }
         })
         .collect::<Vec<_>>();
     let target = builder.import_function(target);
     let results = builder.call(target, &arguments).results;
+    if let Some((_, release, ..)) = text {
+        for copy in copies {
+            builder.call(release, &[copy]);
+        }
+    }
     // The function returns its result, then one word for each `mut`
     // parameter in order.
     let written = callback.params.iter().filter(|param| param.pointer).count();
@@ -333,6 +382,12 @@ pub(super) fn foreign_param_type(
     }
     if param.c_string {
         return Ok(DirectFfiType::scalar(c_string_type(&param.ty)));
+    }
+    if let (true, Some(layout)) = (param.pointer, &param.c_struct) {
+        // `ptr[Name]` points to the first struct of a run.
+        return Ok(DirectFfiType::scalar(FfiType::StructPointer(
+            layout.interned(),
+        )));
     }
     if param.pointer {
         // `ptr[T]` lowers to `list[T]`, and `T` is a scalar.
@@ -433,8 +488,12 @@ enum ForeignWriteback {
     /// word at this address. The name is the handle's opaque type, and the
     /// last value is what the place held when the call began.
     Handle(String, Type, Val, Val),
-    /// The struct in the C copy at this address.
-    Struct(&'static CStruct, Val),
+    /// The struct in the C copy at this address. The value is what was
+    /// passed.
+    Struct(&'static CStruct, Val, ValueRef),
+    /// The structs in the C array at this address, which take the place
+    /// of the elements of the list that was passed.
+    Structs(&'static CStruct, Val, ValueRef),
 }
 
 /// The convention foreign calls follow on the machine being built for.
@@ -495,6 +554,12 @@ impl ForeignArguments {
             let indirect = self.signature.indirects.iter().find(|(at, _)| *at == index);
             match (indirect, ty) {
                 (Some((_, Indirect::ByValue { .. })), _) => {}
+                // A struct AArch64 put on the stack ends the use of the
+                // registers of its kind.
+                (Some((_, Indirect::Aggregate { element, .. })), _) => match element {
+                    ScalarType::F32 | ScalarType::F64 => float = 8,
+                    _ => general = 8,
+                },
                 // AArch64 has a register of its own for a result's address.
                 (Some((_, Indirect::Result { .. })), _) => {
                     general += usize::from(abi == CAbi::SysV64);
@@ -527,6 +592,10 @@ impl FunctionCompiler<'_> {
                 call.symbol,
                 args.len()
             ));
+        }
+
+        if call.symbol == crate::ffi::REINTERPRET_SYMBOL {
+            return self.compile_reinterpret(call, args, target);
         }
 
         let mut loaded = Vec::with_capacity(args.len());
@@ -577,7 +646,13 @@ impl FunctionCompiler<'_> {
                 FfiType::Out(scalar) => scalar.ffi_type(),
                 other => other,
             };
-            let is_struct = matches!(by_value, FfiType::Struct(_) | FfiType::StructPointer(_));
+            // A class of scalars crosses as its words. Any other struct,
+            // and a list of structs, crosses as a value the runtime packs.
+            let is_struct = !param.pointer
+                && matches!(
+                    by_value,
+                    FfiType::Struct(layout) | FfiType::StructPointer(layout) if layout.is_plain()
+                );
             let value = if foreign_scalar(by_value).is_some() || is_struct {
                 value
             } else {
@@ -633,6 +708,7 @@ impl FunctionCompiler<'_> {
         let mut text_copies = Vec::new();
         let mut list_copies = Vec::new();
         let mut flag_lists = Vec::new();
+        let mut struct_arrays = Vec::new();
         let mut writebacks = Vec::new();
         let mut given_up = Vec::new();
         for (index, (operand, place)) in loaded.into_iter().enumerate() {
@@ -706,15 +782,29 @@ impl FunctionCompiler<'_> {
                 }
                 FfiType::Struct(layout) => {
                     let slot = self.foreign_struct_slot(layout);
-                    self.store_foreign_struct(layout, &value, slot);
+                    self.store_foreign_struct(layout, &value, slot)?;
                     self.push_foreign_struct(layout, slot, &mut arguments)?;
                     continue;
                 }
+                FfiType::StructPointer(layout) if call.params[index].pointer => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let array = self.builder.call(
+                        self.runtime[RuntimeFn::FfiPackStructs],
+                        &[word, descriptor, length],
+                    );
+                    let array = array.results[0];
+                    arguments.push_word(array);
+                    struct_arrays.push(array);
+                    if call.params[index].passing != MirReceiverKind::BorrowMut {
+                        continue;
+                    }
+                    ForeignWriteback::Structs(layout, array, value)
+                }
                 FfiType::StructPointer(layout) => {
                     let slot = self.foreign_struct_slot(layout);
-                    self.store_foreign_struct(layout, &value, slot);
+                    self.store_foreign_struct(layout, &value, slot)?;
                     arguments.push_word(slot);
-                    ForeignWriteback::Struct(layout, slot)
+                    ForeignWriteback::Struct(layout, slot, value)
                 }
                 ffi_type => {
                     if ffi_type == FfiType::OpaqueHandle
@@ -796,12 +886,50 @@ impl FunctionCompiler<'_> {
                     );
                     self.foreign_nullable(handle.results[0], &union_type)?
                 }
-                ForeignWriteback::Struct(layout, slot) => {
+                ForeignWriteback::Struct(layout, slot, _) if layout.is_plain() => {
                     self.load_foreign_struct(layout, slot, expected.clone(), &call.symbol)?
+                }
+                // The runtime sets the fields of the instance that was
+                // passed, and the elements of the list that was passed.
+                ForeignWriteback::Struct(layout, slot, value) => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStructInto],
+                        &[
+                            value.values[0],
+                            descriptor,
+                            length,
+                            slot,
+                            symbol_ptr,
+                            symbol_len,
+                        ],
+                    );
+                    value
+                }
+                ForeignWriteback::Structs(layout, array, value) => {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStructs],
+                        &[
+                            value.values[0],
+                            descriptor,
+                            length,
+                            array,
+                            symbol_ptr,
+                            symbol_len,
+                        ],
+                    );
+                    value
                 }
             };
             let writeback = self.coerce_value(value, &expected)?;
             self.store_place(&place, writeback)?;
+        }
+        for array in struct_arrays {
+            self.builder
+                .call(self.runtime[RuntimeFn::FfiReleaseStructs], &[array]);
         }
 
         // A callback that failed under this call, or under an earlier one
@@ -827,7 +955,17 @@ impl FunctionCompiler<'_> {
                             .store(MemFlags::trusted(), *value, slot, offset);
                     }
                 }
-                self.load_foreign_struct(layout, slot, return_direct.clone(), &call.symbol)?
+                if layout.is_plain() {
+                    self.load_foreign_struct(layout, slot, return_direct.clone(), &call.symbol)?
+                } else {
+                    let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+                    let (symbol_ptr, symbol_len) = self.string_constant(call.symbol.as_bytes())?;
+                    let instance = self.builder.call(
+                        self.runtime[RuntimeFn::FfiUnpackStruct],
+                        &[descriptor, length, slot, symbol_ptr, symbol_len],
+                    );
+                    self.owned_opaque_result(vec![instance.results[0]], call.return_type.clone())
+                }
             }
             (Some(scalar), _) => {
                 self.foreign_scalar_result(&scalar, invocation.results[0], &call.symbol)?
@@ -848,6 +986,68 @@ impl FunctionCompiler<'_> {
         self.coerce_value(result, target)
     }
 
+    /// A member of an `extern "C" union` read or stored: the bytes of the
+    /// one struct argument, read as the struct of the result. No C
+    /// function is called. Where the argument is shorter than the result,
+    /// the rest is zero.
+    fn compile_reinterpret(
+        &mut self,
+        call: &MirExternCall,
+        args: &[MirArg],
+        target: &DirectType,
+    ) -> std::result::Result<ValueRef, String> {
+        let (from, to) = match (call.params.as_slice(), &call.c_struct_result) {
+            (
+                [MirExternParam {
+                    c_struct: Some(from),
+                    pointer: false,
+                    passing: MirReceiverKind::Borrow | MirReceiverKind::Value,
+                    ..
+                }],
+                Some(to),
+            ) => (from.interned(), to.interned()),
+            _ => {
+                return Err(format!(
+                    "direct backend reads `{}` only from one C struct into another",
+                    call.name
+                ));
+            }
+        };
+        let expected = ensure_direct_type(
+            &call.params[0].ty,
+            &self.classes,
+            &format!("extern parameter `{}`", call.params[0].name),
+        )?;
+        let value = self.load_operand_for_target(&args[0].value, &expected)?;
+        let value = self.coerce_value(value, &expected)?;
+        let value = if from.is_plain() {
+            value
+        } else {
+            self.ensure_opaque(value)?
+        };
+        let label = crate::ffi::reinterpret_label(&call.name);
+        let slot = self.foreign_struct_slot(if from.size() >= to.size() { from } else { to });
+        self.store_foreign_struct(from, &value, slot)?;
+        let return_direct = ensure_direct_type(
+            &call.return_type,
+            &self.classes,
+            &format!("extern return from `{}`", call.name),
+        )?;
+        let result = if to.is_plain() {
+            self.load_foreign_struct(to, slot, return_direct.clone(), &label)?
+        } else {
+            let (descriptor, length) = self.foreign_layout_descriptor(to)?;
+            let (symbol_ptr, symbol_len) = self.string_constant(label.as_bytes())?;
+            let instance = self.builder.call(
+                self.runtime[RuntimeFn::FfiUnpackStruct],
+                &[descriptor, length, slot, symbol_ptr, symbol_len],
+            );
+            self.owned_opaque_result(vec![instance.results[0]], call.return_type.clone())
+        };
+        let result = self.coerce_value(result, &return_direct)?;
+        self.coerce_value(result, target)
+    }
+
     /// The address of a new zeroed stack slot that holds one `layout`
     /// struct. The slot is a whole number of 8-byte words, so a register's
     /// piece of the struct loads and stores as one word.
@@ -863,15 +1063,41 @@ impl FunctionCompiler<'_> {
         address
     }
 
-    /// Stores the class value `value` at `slot` in the C layout. A class
-    /// value has one word per scalar field, in the order of the layout.
-    fn store_foreign_struct(&mut self, layout: &CStruct, value: &ValueRef, slot: Val) {
+    /// The JSON text of `layout` in the program's data, which the runtime
+    /// reads to pack and unpack a struct that is not one word per scalar.
+    fn foreign_layout_descriptor(
+        &mut self,
+        layout: &CStruct,
+    ) -> std::result::Result<(Val, Val), String> {
+        let text = serde_json::to_string(layout)
+            .map_err(|error| format!("direct backend cannot describe a C layout: {error}"))?;
+        self.string_constant(text.as_bytes())
+    }
+
+    /// Stores the class value `value` at `slot` in the C layout. A value
+    /// of a class of scalars has one word per scalar field, in the order
+    /// of the layout. Any other class is an instance the runtime packs.
+    fn store_foreign_struct(
+        &mut self,
+        layout: &CStruct,
+        value: &ValueRef,
+        slot: Val,
+    ) -> std::result::Result<(), String> {
+        if !layout.is_plain() {
+            let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+            self.builder.call(
+                self.runtime[RuntimeFn::FfiPackStruct],
+                &[value.values[0], descriptor, length, slot],
+            );
+            return Ok(());
+        }
         for (leaf, word) in layout.leaves().iter().zip(&value.values) {
             let scalar = foreign_scalar(leaf.scalar.ffi_type()).expect("a leaf is a scalar");
             let narrow = self.foreign_scalar_argument(&scalar, *word);
             self.builder
                 .store(MemFlags::trusted(), narrow, slot, leaf.offset as i32);
         }
+        Ok(())
     }
 
     /// The class value of type `ty` for the C struct at `slot`, which the
@@ -911,6 +1137,21 @@ impl FunctionCompiler<'_> {
                     let value = self.builder.load(ty, MemFlags::trusted(), slot, offset);
                     arguments.push(ty, Extension::None, value);
                 }
+            }
+            // AArch64 passes the pieces as one array, which LLVM keeps
+            // together on the stack.
+            CArgument::Stack if abi == CAbi::Aapcs64 => {
+                let CPassing::Registers(pieces) = layout.passing(abi) else {
+                    return Err(format!(
+                        "direct backend cannot pass C struct `{}` on the stack",
+                        layout.name
+                    ));
+                };
+                arguments.push_word(slot);
+                arguments.mark_last(Indirect::Aggregate {
+                    element: piece_type(pieces[0]).1,
+                    count: pieces.len() as u32,
+                });
             }
             CArgument::Stack => {
                 arguments.push_word(slot);

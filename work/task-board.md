@@ -37,6 +37,7 @@ Last updated: 2026-11-17
   `benchmarks/image_codec` against Rust and Pillow.
 - Left out: 16-bit samples, metadata, other formats, drawing.
 
+
 ## raylib graphics and FFI v2 (in progress)
 
 - Target: John's 2026-11-16 pick of a raylib example package, plus the FFI
@@ -44,16 +45,24 @@ Last updated: 2026-11-17
   arrays of structs. The design is in
   `architecture_docs/29-ffi-v2-graphics-design-checkpoint.md`, and the
   note is `2026-11-16-raylib-and-ffi-v2.md`.
-- Done: step 1, `examples/packages/raylib` on the FFI of 0.16. A generated
-  binding of 556 of raylib 6.0's 600 functions, a brick game, a 3D scene,
-  and a picture program, with acceptance tests on both backends and a CI
-  step that installs raylib and a virtual display.
-- Verification: the three programs run on both backends on x86-64 Linux
-  under Xvfb, and the saved frames were looked at. Not run on macOS,
-  Windows, or arm64 here.
-- Remaining: array fields, unions, arrays of structs, AArch64 struct
-  arguments that overflow the registers, `cstr` in callbacks, SDL2 and
-  GLFW acceptance tests, benchmarks, Manual and book pages, ADRs.
+- Done: step 1, `examples/packages/raylib` on the FFI of 0.16: a generated
+  binding, a brick game, a 3D scene, and a picture program, with
+  acceptance tests on both backends and a CI step that installs raylib and
+  a virtual display.
+- Done: step 2 (ADR-0106): `array[T, N]` fields, `ptr[Name]` for arrays of
+  structs, AArch64 struct arguments that overflow the registers, and a fix
+  for a struct placed on the stack when only the other kind of register
+  had run out. The binding now covers 587 of raylib 6.0's 600 functions.
+- Verification: unit tests in the runtime and compiler, and acceptance
+  tests against a C fixture library and raylib on both backends on x86-64
+  Linux under Xvfb. Not run on macOS, Windows, or arm64 here; the AArch64
+  call sequence was checked by reading the generated assembly.
+- Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
+  that runs an SDL event loop on both backends.
+- Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
+  acceptance test. The manual and chapter 18 cover the copying and
+  failure rules. Remaining work includes benchmarks and verification
+  across platforms.
 
 ## Three compiler defects from the book sections (complete)
 

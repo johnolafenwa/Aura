@@ -182,6 +182,9 @@ pub struct CCallbackParam {
     /// The parameter is a pointer to the scalar, which the callback reads
     /// and may write.
     pub pointer: bool,
+    /// The parameter is C text, `const char *`. Its scalar is the address,
+    /// a `U64`, and the callback gets a copy of the text as a `str`.
+    pub text: bool,
 }
 
 /// The C signature of a callback: a function the foreign code calls.
@@ -257,6 +260,22 @@ unsafe extern "C" fn callback_entry(
         Some(FfiScalar::I32) => *result = word as i32 as i64 as u64,
         Some(_) => *result = word,
     }
+}
+
+/// A copy of the C text at `address`, which a callback received.
+///
+/// # Safety
+///
+/// `address` is null or points to NUL-terminated bytes.
+pub unsafe fn callback_text(address: usize) -> Result<String, FfiError> {
+    if address == 0 {
+        return Err(FfiError::NullCallbackText);
+    }
+    // SAFETY: delegated to this function's caller.
+    unsafe { std::ffi::CStr::from_ptr(address as *const std::ffi::c_char) }
+        .to_str()
+        .map(str::to_owned)
+        .map_err(|_| FfiError::InvalidUtf8CallbackText)
 }
 
 /// The address of new code with the C signature `signature` that runs
@@ -454,6 +473,8 @@ pub enum FfiError {
     },
     NullCStringReturn,
     InvalidUtf8Return,
+    NullCallbackText,
+    InvalidUtf8CallbackText,
 }
 
 impl fmt::Display for FfiError {
@@ -507,6 +528,12 @@ impl fmt::Display for FfiError {
                 index + 1
             ),
             Self::NullCStringReturn => formatter.write_str("FFI function returned a null cstr"),
+            Self::NullCallbackText => {
+                formatter.write_str("the C caller passed a null pointer as a cstr")
+            }
+            Self::InvalidUtf8CallbackText => {
+                formatter.write_str("the C caller passed a cstr that is not valid UTF-8")
+            }
             Self::InvalidUtf8Return => {
                 formatter.write_str("FFI function returned a cstr that is not UTF-8")
             }
@@ -594,18 +621,62 @@ fn leading_bytes(words: &[u64], count: usize) -> Vec<u8> {
     unsafe { std::slice::from_raw_parts(words.as_ptr().cast::<u8>(), count) }.to_vec()
 }
 
-/// The libffi description of a C struct.
+/// The libffi description of a C struct or union.
+///
+/// libffi has structs of scalars and structs only. An array is described
+/// as a struct of its elements, which has the same layout and is passed
+/// the same way. A struct that is or holds a union is described by what
+/// decides how it is passed: its size, its alignment, and the class of
+/// each of its register pieces on this machine.
 fn struct_type(layout: &CStruct) -> Type {
+    if layout.holds_union() {
+        return overlapping_struct_type(layout);
+    }
     Type::structure(
         layout
             .fields
             .iter()
-            .map(|field| match &field.kind {
-                CFieldKind::Scalar(scalar) => scalar_type(*scalar),
-                CFieldKind::Struct(inner) => struct_type(inner),
-            })
+            .map(|field| field_type(&field.kind))
             .collect::<Vec<_>>(),
     )
+}
+
+fn field_type(kind: &CFieldKind) -> Type {
+    match kind {
+        CFieldKind::Scalar(scalar) => scalar_type(*scalar),
+        CFieldKind::Struct(inner) => struct_type(inner),
+        CFieldKind::Array(element, count) => Type::structure(vec![field_type(element); *count]),
+    }
+}
+
+/// A struct of scalars with the size, alignment, and register classes of
+/// `layout`, a struct that is or holds a union.
+fn overlapping_struct_type(layout: &CStruct) -> Type {
+    use crate::c_layout::{CAbi, CPassing, CPiece};
+    let align = layout.align();
+    let word = match align {
+        1 => FfiScalar::U8,
+        2 => FfiScalar::U16,
+        4 => FfiScalar::U32,
+        _ => FfiScalar::U64,
+    };
+    let words = |size: usize| std::iter::repeat_n(scalar_type(word), size / align);
+    let pieces = match CAbi::host().map(|abi| layout.passing(abi)) {
+        Some(CPassing::Registers(pieces)) => pieces,
+        _ => return Type::structure(words(layout.size()).collect::<Vec<_>>()),
+    };
+    let mut elements = Vec::new();
+    for piece in pieces {
+        match piece {
+            CPiece::Int { size, .. } => elements.extend(words(size)),
+            CPiece::Sse { size: 8, .. } if align == 8 => elements.push(Type::f64()),
+            CPiece::Sse { size, .. } => {
+                elements.extend(std::iter::repeat_n(Type::f32(), size / 4));
+            }
+            CPiece::Float { scalar, .. } => elements.push(scalar_type(scalar)),
+        }
+    }
+    Type::structure(elements)
 }
 
 fn scalar_type(scalar: FfiScalar) -> Type {
@@ -661,10 +732,13 @@ fn type_accepts_value(expected: FfiType, value: &FfiValue) -> bool {
             FfiType::Pointer(expected) | FfiType::PointerMut(expected),
             FfiValue::Elements(actual, _),
         ) => expected == *actual,
-        (
-            FfiType::Struct(expected) | FfiType::StructPointer(expected),
-            FfiValue::Struct(actual, bytes),
-        ) => expected == *actual && bytes.len() == expected.size(),
+        (FfiType::Struct(expected), FfiValue::Struct(actual, bytes)) => {
+            expected == *actual && bytes.len() == expected.size()
+        }
+        // A pointer reaches one struct or a run of them, one after another.
+        (FfiType::StructPointer(expected), FfiValue::Struct(actual, bytes)) => {
+            expected == *actual && bytes.len() % expected.size().max(1) == 0
+        }
         (FfiType::CString | FfiType::NullableCString, FfiValue::String(_)) => true,
         (FfiType::NullableCString | FfiType::NullableOpaqueHandle, FfiValue::Unit) => true,
         (FfiType::NullableOpaqueHandle, FfiValue::OpaqueHandle(_)) => true,
@@ -822,8 +896,13 @@ fn append_argument(
         }
         (FfiType::StructPointer(_), FfiValue::Struct(_, bytes)) => {
             let mut words = aligned_bytes(bytes, 1);
+            // An empty run passes a null pointer, as an empty view does.
+            let pointer = match bytes.is_empty() {
+                true => std::ptr::null_mut(),
+                false => words.as_mut_ptr().cast(),
+            };
             types.push(Type::pointer());
-            values.push(AbiArgument::MutPointer(words.as_mut_ptr().cast()));
+            values.push(AbiArgument::MutPointer(pointer));
             storage.structs.push((index, words));
         }
         (FfiType::OpaqueHandleOut, value) => {
@@ -1570,15 +1649,100 @@ pub unsafe fn call_process_symbol(
     signature: &FfiSignature,
     arguments: &mut [FfiValue],
 ) -> Result<FfiValue, FfiError> {
+    if symbol == REINTERPRET_SYMBOL {
+        return reinterpret(signature, arguments);
+    }
     let function = process_symbol(symbol)?;
     // SAFETY: delegated to this function's caller.
     unsafe { call_host_function(function, signature, arguments) }
+}
+
+/// The symbol of the extern functions the compiler declares for the
+/// members of an `extern "C" union`. A call of one is not a call into C:
+/// its result is the leading bytes of its argument, read as the result's
+/// struct, and zero bytes where the argument is shorter.
+pub const REINTERPRET_SYMBOL: &str = "aura.reinterpret";
+
+/// The name a failed read or store of a union member is reported under:
+/// `Name.member` for the function `__Name_get_member` the compiler
+/// declared for it.
+pub fn reinterpret_label(function: &str) -> String {
+    let name = function.strip_prefix("__").unwrap_or(function);
+    for marker in ["_get_", "_set_"] {
+        if let Some((union, member)) = name.split_once(marker) {
+            return format!("{union}.{member}");
+        }
+    }
+    name.to_string()
+}
+
+/// The result of a call of [`REINTERPRET_SYMBOL`].
+pub fn reinterpret(signature: &FfiSignature, arguments: &[FfiValue]) -> Result<FfiValue, FfiError> {
+    let ([FfiValue::Struct(_, bytes)], FfiType::Struct(result)) = (arguments, &signature.result)
+    else {
+        return Err(FfiError::ArityMismatch {
+            expected: 1,
+            actual: arguments.len(),
+        });
+    };
+    let mut bytes = bytes.clone();
+    bytes.resize(result.size(), 0);
+    Ok(FfiValue::Struct(result, bytes))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use std::ffi::c_void;
+
+    #[test]
+    fn a_reinterpret_call_reads_the_bytes_of_one_struct_as_another() {
+        use crate::c_layout::{CField, CFieldKind};
+        let layout = |name: &str, scalar: FfiScalar| {
+            CStruct {
+                name: name.to_string(),
+                fields: vec![CField {
+                    name: "value".to_string(),
+                    kind: CFieldKind::Scalar(scalar),
+                }],
+                union: false,
+            }
+            .interned()
+        };
+        let (narrow, wide) = (
+            layout("Narrow", FfiScalar::U16),
+            layout("Wide", FfiScalar::U64),
+        );
+        let call = |from: &'static CStruct, to: &'static CStruct, bytes: Vec<u8>| {
+            let signature = FfiSignature::new(vec![FfiType::Struct(from)], FfiType::Struct(to));
+            // SAFETY: the symbol names no C function.
+            unsafe {
+                call_process_symbol(
+                    REINTERPRET_SYMBOL,
+                    &signature,
+                    &mut [FfiValue::Struct(from, bytes)],
+                )
+            }
+        };
+        // A longer result is zero past the argument, and a shorter one is
+        // the leading bytes.
+        let Ok(FfiValue::Struct(_, bytes)) = call(narrow, wide, vec![1, 2]) else {
+            panic!("the call returns a struct");
+        };
+        assert_eq!(bytes, [1, 2, 0, 0, 0, 0, 0, 0]);
+        let Ok(FfiValue::Struct(_, bytes)) = call(wide, narrow, vec![9, 8, 7, 6, 5, 4, 3, 2])
+        else {
+            panic!("the call returns a struct");
+        };
+        assert_eq!(bytes, [9, 8]);
+        let scalar = FfiSignature::new(vec![FfiType::Struct(narrow)], FfiType::I32);
+        assert!(reinterpret(&scalar, &[FfiValue::Struct(narrow, vec![0, 0])]).is_err());
+        assert!(reinterpret(&scalar, &[]).is_err());
+
+        assert_eq!(reinterpret_label("__Event_get_kind"), "Event.kind");
+        assert_eq!(reinterpret_label("__Event_set_key"), "Event.key");
+        assert_eq!(reinterpret_label("as_pair"), "as_pair");
+    }
     use std::sync::atomic::{AtomicUsize, Ordering};
 
     static LAST_MUTABLE_BYTES_ADDRESS: AtomicUsize = AtomicUsize::new(0);
@@ -1828,6 +1992,7 @@ mod tests {
                     kind,
                 })
                 .collect(),
+            union: false,
         }
         .interned()
     }
@@ -1854,24 +2019,54 @@ mod tests {
     }
 
     #[test]
+    fn callback_text_copies_valid_c_text_and_names_what_is_not() {
+        let text = c"snow \u{2603}";
+        // SAFETY: each address is null or NUL-terminated bytes.
+        unsafe {
+            assert_eq!(
+                callback_text(text.as_ptr() as usize),
+                Ok("snow \u{2603}".to_string())
+            );
+            assert_eq!(callback_text(c"".as_ptr() as usize), Ok(String::new()));
+            assert_eq!(callback_text(0), Err(FfiError::NullCallbackText));
+            assert_eq!(
+                callback_text(c"\xc3".as_ptr() as usize),
+                Err(FfiError::InvalidUtf8CallbackText)
+            );
+        }
+        assert_eq!(
+            FfiError::NullCallbackText.to_string(),
+            "the C caller passed a null pointer as a cstr"
+        );
+        assert_eq!(
+            FfiError::InvalidUtf8CallbackText.to_string(),
+            "the C caller passed a cstr that is not valid UTF-8"
+        );
+    }
+
+    #[test]
     fn callbacks_run_a_handler_over_the_frame_of_each_call() {
         let signature = CCallback {
             params: vec![
                 CCallbackParam {
                     scalar: FfiScalar::I32,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::I16,
                     pointer: true,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::F32,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::Bool,
                     pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::I8),
@@ -1928,10 +2123,12 @@ mod tests {
                 CCallbackParam {
                     scalar: FfiScalar::F64,
                     pointer: false,
+                    text: false,
                 },
                 CCallbackParam {
                     scalar: FfiScalar::U64,
                     pointer: false,
+                    text: false,
                 },
             ],
             result: Some(FfiScalar::F64),
