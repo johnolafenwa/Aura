@@ -78,7 +78,9 @@ impl FunctionCompiler<'_> {
         // A handle never changes in place, so the instance shares the
         // handle's box instead of copying it.
         let word = self.transfer_opaque_arg(&loaded);
-        Ok(Some(self.owned_opaque_result(vec![word], target_ty.clone())))
+        Ok(Some(
+            self.owned_opaque_result(vec![word], target_ty.clone()),
+        ))
     }
 
     /// The type of `root` when it is an instance of a class that wraps a
@@ -101,13 +103,10 @@ impl FunctionCompiler<'_> {
         if let Some((operation, result)) = atom_operation(name) {
             let handle = self.load_operand(&args[0].value)?;
             let handle = self.ensure_opaque(handle)?;
-            let mut words = vec![
-                handle.values[0],
-                self.builder.iconst(types::I64, operation),
-            ];
+            let mut words = vec![handle.values[0], self.builder.iconst(types::I64, operation)];
             for argument in &args[1..] {
-                let value = self
-                    .load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+                let value =
+                    self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
                 let value = self.coerce_value(value, &DirectType::Scalar(ScalarKind::Int64))?;
                 words.push(value.values[0]);
             }

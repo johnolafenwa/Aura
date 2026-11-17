@@ -85,9 +85,10 @@ every later `lock()`, `replace`, and `set` traps with `AU4001`.
 value that a trap interrupted halfway through a change would hide the
 failure from the next reader.
 
-Code that stops a trap from ending its task must call
-`sync_host::abandon_held_cells`, which poisons what the task holds, since
-the frames that would have released the locks are gone.
+A recovery boundary records the lock depth on entry and poisons cells
+acquired in the discarded frames. Outer holders can still release their
+locks. [ADR-0103](0103-lock-lowering-and-native-storage.md) records the
+lowering and native storage rules.
 
 ### Waiting
 

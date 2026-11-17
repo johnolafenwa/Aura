@@ -9,11 +9,20 @@ out="${TMPDIR:-/tmp}/aura-shared-state"
 mkdir -p "$out"
 
 "$root/target/release/aura" build "$here/shared_state.au" -o "$out/shared_state_aura"
-rustc -C opt-level=3 -C overflow-checks=on -o "$out/shared_state_rust" "$here/shared_state.rs"
+rustc --edition=2021 -C opt-level=3 -C overflow-checks=on -o "$out/shared_state_rust" "$here/shared_state.rs"
 
-echo "== Aura"
-"$out/shared_state_aura"
-echo "== Rust"
-"$out/shared_state_rust"
-echo "== Python"
-python3 "$here/shared_state.py"
+export AURA_WORKERS="${AURA_WORKERS:-4}"
+
+run() {
+    local name="$1"
+    shift
+    echo "== $name"
+    "$@" | tee "$out/$name.txt"
+    awk '{$2=""; print}' "$out/$name.txt" > "$out/$name.checksums"
+}
+
+run Aura "$out/shared_state_aura"
+run Rust "$out/shared_state_rust"
+run Python python3 "$here/shared_state.py"
+diff -u "$out/Rust.checksums" "$out/Aura.checksums"
+diff -u "$out/Rust.checksums" "$out/Python.checksums"

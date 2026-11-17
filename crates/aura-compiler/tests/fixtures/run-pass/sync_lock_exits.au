@@ -1,0 +1,36 @@
+import sync
+
+
+def early(lock: sync.Mutex[int64]) -> int64:
+    with lock.lock() as value:
+        value += 1
+        return value
+
+
+def stop() -> Result[int64, str]:
+    return Result.Err("stop")
+
+
+def propagate(lock: sync.Mutex[int64]) -> Result[int64, str]:
+    with value = lock.lock():
+        value += 1
+        n = stop()?
+        return Result.Ok(n)
+
+
+def main() -> int32:
+    lock = sync.Mutex[int64](0)
+    print(early(lock))
+    for index in range(4):
+        with value = lock.lock():
+            value += 1
+            if index < 2:
+                continue
+            break
+    print(propagate(lock).is_err())
+    print(lock.replace(17))
+    lock.set(11)
+    with value = lock.lock():
+        print(value)
+    print(lock.is_poisoned())
+    return 0

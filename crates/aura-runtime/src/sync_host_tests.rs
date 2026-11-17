@@ -57,8 +57,6 @@ fn a_release_by_a_task_that_does_not_hold_the_cell_is_refused() {
         .join()
         .expect("the other thread");
     assert!(refused.is_err());
-    // The refused release still counted down the other thread's holder,
-    // which held nothing, so the count stayed at zero.
     cell.put(held).expect("the holder's release");
 }
 
@@ -187,7 +185,11 @@ fn a_handle_of_the_wrong_kind_is_refused() {
     assert!(cell != SyncValue::cell(int(1)));
     assert!(atom != SyncValue::atom(1));
     assert!(call("sync::__aura_atom_load", vec![int(1)]).is_err());
-    assert!(call("sync::__aura_atom_store", vec![Value::Sync(atom), Value::Bool(true)]).is_err());
+    assert!(call(
+        "sync::__aura_atom_store",
+        vec![Value::Sync(atom), Value::Bool(true)]
+    )
+    .is_err());
     assert!(sync_host_function("sync::__aura_missing").is_none());
 }
 
@@ -207,4 +209,28 @@ fn every_sync_host_function_checks_its_argument_count() {
     ] {
         assert!(call(name, Vec::new()).is_err(), "{name}");
     }
+}
+
+#[test]
+fn refusing_a_release_preserves_other_locks_held_by_the_task() {
+    let held = SyncValue::cell(int(7));
+    let unrelated = SyncValue::cell(int(9));
+    held.take().unwrap();
+    assert!(unrelated.put(int(8)).is_err());
+    abandon_held_cells();
+    assert!(held.is_poisoned().unwrap());
+}
+
+#[test]
+fn failure_inside_a_lock_scope_only_poisons_its_own_locks() {
+    let outer = SyncValue::cell(int(11));
+    let inner = SyncValue::cell(int(17));
+    let held = outer.take().unwrap();
+    let boundary = held_cell_depth();
+    inner.take().unwrap();
+    abandon_held_cells_since(boundary);
+    assert!(inner.is_poisoned().unwrap());
+    assert!(!outer.is_poisoned().unwrap());
+    outer.put(held).unwrap();
+    assert_eq!(held_cell_depth(), 0);
 }

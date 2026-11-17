@@ -4054,3 +4054,33 @@ def main():
         &["6 loop invariant failed"],
     );
 }
+
+#[test]
+fn fresh_sync_reads_do_not_preserve_a_previous_observation() {
+    let source = r#"import sync
+
+def observe(counter: sync.AtomicInt, guard: sync.Mutex[int64]):
+    first = counter.load()
+    second = counter.load()
+    assert first == second
+    with value = guard.lock():
+        value = 17
+    with next_value = guard.lock():
+        assert next_value == 17
+
+def main():
+    pass
+"#;
+    let Some(report) = verify(source) else { return };
+    for line in [6, 10] {
+        assert!(
+            report
+                .obligations
+                .iter()
+                .any(|check| check.span.line == line
+                    && check.kind.name() == "assert"
+                    && check.status != Status::Proved),
+            "shared read at line {line} must stay unproved: {report:#?}",
+        );
+    }
+}

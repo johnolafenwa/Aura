@@ -37,6 +37,7 @@ use crate::integer::{
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_reactor::IdHashMap;
+use crate::runtime_value::sync_host::GuardedValue;
 use crate::runtime_value::{
     append_string_checked, append_text_checked_with, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
@@ -20596,21 +20597,72 @@ fn with_sync_handle<T>(
     }
 }
 
-/// Locks the `sync.Cell` in `handle` and moves its value out. The lock may
-/// wait through the scheduler, which runs other tasks on this thread, so
-/// the wait holds a copy of the handle and no access to its box.
-fn locked_cell_value(handle: *mut OpaqueValue) -> std::result::Result<Value, Diagnostic> {
-    with_sync_handle(handle, "sync.Cell", Clone::clone).take()
+/// The exclusive, untracked box that a mutex carries between native
+/// callers. A taking task adopts the box and its reference in its ledger.
+pub(crate) struct GuardedNativeBox(std::ptr::NonNull<OpaqueValue>);
+
+impl Drop for GuardedNativeBox {
+    fn drop(&mut self) {
+        // SAFETY: the cell holds its only reference, outside any task ledger.
+        unsafe { release_untracked_value(self.0.as_ptr()) }
+    }
+}
+
+impl GuardedNativeBox {
+    /// The caller transfers one generated-code reference to the cell.
+    unsafe fn from_owned(ptr: *mut OpaqueValue) -> Self {
+        let header = unsafe { ptr.as_ref() }.unwrap_or_else(|| {
+            runtime_error("direct runtime received a null opaque value pointer")
+        });
+        let boxed =
+            if header.ref_count.load(Ordering::Acquire) == 1 && header.shared_lock().is_none() {
+                unregister_direct_owned_value(ptr);
+                ptr
+            } else {
+                let tag = unsafe { explicit_runtime_type_tag(ptr) };
+                let value = unsafe { consume_owned_value(ptr) };
+                untracked_boxed_value(value, tag)
+            };
+        // SAFETY: this value is unique and detached from every ledger.
+        Self(std::ptr::NonNull::new(boxed).expect("a box allocation has an address"))
+    }
+
+    fn into_owned(self) -> *mut OpaqueValue {
+        let ptr = self.0.as_ptr();
+        std::mem::forget(self);
+        #[cfg(all(debug_assertions, not(test)))]
+        // SAFETY: the task acquired the cell and owns this box exclusively.
+        unsafe {
+            (*ptr).owner_thread = direct_value_thread_identity();
+        }
+        register_direct_owned_value(ptr);
+        ptr
+    }
+
+    pub(crate) fn into_value(self) -> Value {
+        // As with any hand-over, adopt elements appended through a list view.
+        // SAFETY: this box's exclusively owned value is transferred once.
+        unsafe { consume_owned_value(self.into_owned()) }
+    }
+}
+
+/// A borrowed handle may guard only an immediate acquisition. If it must
+/// wait, the task takes its own reference and releases the box's read guard
+/// before yielding to the scheduler.
+fn locked_cell_value(handle: *mut OpaqueValue) -> std::result::Result<GuardedValue, Diagnostic> {
+    match with_sync_handle(handle, "sync.Cell", |handle| handle.try_take_guarded())? {
+        Some(value) => Ok(value),
+        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_guarded(),
+    }
 }
 
 /// Takes the lock of a `sync.Cell` and moves its value out.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_sync_cell_take(handle: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| {
-        match locked_cell_value(handle) {
-            Ok(value) => boxed_value(value),
-            Err(error) => runtime_diagnostic_error(error),
-        }
+    task_runtime_boundary(|| match locked_cell_value(handle) {
+        Ok(GuardedValue::Value(value)) => boxed_value(value),
+        Ok(GuardedValue::Native(value)) => value.into_owned(),
+        Err(error) => runtime_diagnostic_error(error),
     })
 }
 
@@ -20621,8 +20673,10 @@ pub extern "C-unwind" fn aura_direct_sync_cell_put(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        let value = unsafe { consume_owned_value(value) };
-        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| handle.put(value)) {
+        let value = GuardedValue::Native(unsafe { GuardedNativeBox::from_owned(value) });
+        if let Err(error) =
+            with_sync_handle(handle, "sync.Cell", |handle| handle.put_guarded(value))
+        {
             runtime_diagnostic_error(error)
         }
     })
@@ -20635,8 +20689,8 @@ pub extern "C-unwind" fn aura_direct_sync_cell_take_word(
     handle: *mut OpaqueValue,
     kind: i64,
 ) -> i64 {
-    task_runtime_boundary(|| {
-        match locked_cell_value(handle) {
+    task_runtime_boundary(
+        || match locked_cell_value(handle).map(GuardedValue::into_value) {
             Ok(Value::Bool(value)) if kind == 1 => i64::from(value),
             Ok(value) if kind == 0 => unbox_int64_of(&value),
             Ok(other) => runtime_error(format!(
@@ -20644,8 +20698,8 @@ pub extern "C-unwind" fn aura_direct_sync_cell_take_word(
                 value_type_name(&other)
             )),
             Err(error) => runtime_diagnostic_error(error),
-        }
-    })
+        },
+    )
 }
 
 /// [`aura_direct_sync_cell_put`] for the word
@@ -21506,19 +21560,30 @@ unsafe fn start_direct_task_call(call: DirectTaskCall) -> *mut OpaqueValue {
             args_address,
             claim_flag_address,
         };
-        let args = unsafe { &*(args_address as *const Vec<i64>) };
+        // The guard owns this buffer until the child has been submitted.
+        let args = unsafe { &mut *(args_address as *mut Vec<i64>) };
         let mut queue_producers = Vec::new();
-        for arg in args.iter().copied().filter(|arg| *arg != 0) {
+        for arg in args.iter_mut().filter(|arg| **arg != 0) {
+            let pointer = *arg as *mut OpaqueValue;
             unsafe {
-                with_value(arg as *mut OpaqueValue, |value| {
-                    collect_queue_values(value, &mut queue_producers)
+                let shares_box = !direct_task_arg_hands_over(pointer);
+                let sync_copy = with_value(pointer, |value| {
+                    if let Value::Sync(handle) = value {
+                        // The handle already owns synchronized storage. Give the
+                        // child its own wrapper so atomics need no second lock.
+                        if shares_box && !direct_value_is_frozen(pointer) {
+                            return Some(Value::Sync(handle.clone()));
+                        }
+                    }
+                    collect_queue_values(value, &mut queue_producers);
+                    None
                 });
-                // A value the buffer alone holds moves to the child, which
-                // takes it over unshared. Any other value the child may read
-                // while this task still holds the same handle, so both sides
-                // lock from here on.
-                if !direct_task_arg_hands_over(arg as *mut OpaqueValue) {
-                    share_direct_value(arg as *mut OpaqueValue);
+                if let Some(value) = sync_copy {
+                    let tag = explicit_runtime_type_tag(pointer);
+                    *arg = untracked_boxed_value(value, tag) as i64;
+                    release_untracked_value(pointer);
+                } else if shares_box {
+                    share_direct_value(pointer);
                 }
             }
         }

@@ -9,8 +9,9 @@ Last updated: 2026-11-17
 - Empty collection literals in generic class initializers keep their
   specialized element type. The compiler regression covers both a local
   class and an imported mutex. See `2026-11-17-shared-state.md`.
-- Remaining work includes performance comparisons, parity and verification
-  tests, the lock implementation decision, the book and editor support.
+- ADR-0103, the manual and Chapter 15 describe shared state. Runtime,
+  verifier, CLI and editor regressions cover lock release, handle transfer
+  and the multi-task example. Performance and verification gates are in progress.
 
 ## Book chapters on tensors and machine learning (complete)
 

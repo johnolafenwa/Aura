@@ -491,6 +491,18 @@ zone, RFC 3339 text, the pattern directives, and limits.
 The two stack-size methods are provisional. Their 256 KiB minimum is for tasks
 whose shallow stack use you have measured. It is not the default.
 
+### Shared State
+
+| Type | Operations |
+| --- | --- |
+| `sync.Mutex[T]` | `lock`, `replace`, `set`, `is_poisoned` |
+| `sync.AtomicInt` | `load`, `store`, `add`, `swap`, `compare_and_set` |
+| `sync.AtomicBool` | `load`, `store`, `swap`, `compare_and_set` |
+| `sync.Map[K, V]` | `get`, `set`, `remove`, `contains`, `len`, `clear`, `snapshot` |
+
+Copying one of these handles lets another task reach the same state.
+The [Sync Module](/manual/sync) lists signatures and locking rules.
+
 ## I/O And Filesystem
 
 [I/O Module](/manual/io) covers input and output on the standard streams.

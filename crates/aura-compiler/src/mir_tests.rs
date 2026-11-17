@@ -4267,6 +4267,16 @@ def main():
 }
 
 #[test]
+fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
+    let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
+    let output = crate::run_source(source).expect("early exits release the lock");
+    assert_eq!(
+        output.stdout,
+        include_str!("../tests/fixtures/run-pass/sync_lock_exits.stdout")
+    );
+}
+
+#[test]
 fn generic_initializer_collection_arguments_keep_the_specialized_element_type() {
     let source =
         include_str!("../tests/fixtures/run-pass/generic_initializer_collection_arguments.au");

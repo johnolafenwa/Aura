@@ -132,8 +132,8 @@ A read-modify-write of one key that must be atomic uses a
 
 - Runtime: one `Value::Sync` variant holding a cell (lock word, holder,
   stored value, a wait queue built on the existing scheduler wait) or an
-  atomic word. A per-worker list of held cells lets task completion
-  poison what a failed task still holds.
+  atomic word. Each task tracks the cells it holds so its completion
+  can poison them and wake their waiters.
 - Compiler: the `sync` builtin module declares two Copy host handle
   types and their host functions. `Mutex`, `Locked`, `AtomicInt`,
   `AtomicBool`, and `Map` are Aura source in `std/sync.au`.

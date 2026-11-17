@@ -86,8 +86,7 @@ pub(crate) use aliases::{expand_alias_callee, specialized_alias_callee};
 mod managers;
 pub(crate) use managers::{
     classify_manager, hidden_manager_binding, manager_method_call, manager_method_call_with,
-    ManagerEntry, ManagerExit, LOCK_PUT_METHOD, LOCK_TAKE_METHOD,
-    ManagerShape,
+    ManagerEntry, ManagerExit, ManagerShape, LOCK_PUT_METHOD, LOCK_TAKE_METHOD,
 };
 mod patterns;
 mod structural_patterns;
@@ -5843,27 +5842,27 @@ impl<'a> FunctionChecker<'a> {
 
         let mut body_locals = locals.clone();
         let managed_local = |ty: Type| LocalBinding {
-                ty,
-                assignable: true,
-                mutable_place: true,
-                managed_resource: true,
-                passing: ReceiverKind::Value,
-                borrow_origin: None,
-                borrowed_at: None,
-                match_borrow_place: None,
-                stale_match_borrow_place: None,
-                shared_match_scrutinee: None,
-                moved: false,
-                moved_at: None,
-                moved_fields: BTreeMap::new(),
-                frozen_places: BTreeMap::new(),
-                shared_match_places: BTreeMap::new(),
-                captured: false,
-                view: None,
-                closure_loans: Vec::new(),
-                narrowed: BTreeMap::new(),
-                stale_narrowing: BTreeMap::new(),
-            };
+            ty,
+            assignable: true,
+            mutable_place: true,
+            managed_resource: true,
+            passing: ReceiverKind::Value,
+            borrow_origin: None,
+            borrowed_at: None,
+            match_borrow_place: None,
+            stale_match_borrow_place: None,
+            shared_match_scrutinee: None,
+            moved: false,
+            moved_at: None,
+            moved_fields: BTreeMap::new(),
+            frozen_places: BTreeMap::new(),
+            shared_match_places: BTreeMap::new(),
+            captured: false,
+            view: None,
+            closure_loans: Vec::new(),
+            narrowed: BTreeMap::new(),
+            stale_narrowing: BTreeMap::new(),
+        };
         body_locals.insert(manager_binding, managed_local(value_ty));
         if let ManagerEntry::Lock { payload } = &shape.entry {
             body_locals.insert(

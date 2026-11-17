@@ -159,7 +159,10 @@ pub(crate) fn manager_method_call_with(
     span: crate::diag::Span,
 ) -> Expr {
     let mut call = manager_method_call(binding, method, span);
-    if let ExprKind::Call { args: call_args, .. } = &mut call.kind {
+    if let ExprKind::Call {
+        args: call_args, ..
+    } = &mut call.kind
+    {
         *call_args = args
             .into_iter()
             .map(|value| crate::ast::Argument {

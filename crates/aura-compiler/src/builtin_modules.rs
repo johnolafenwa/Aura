@@ -2061,9 +2061,21 @@ fn sync_namespace() -> ModuleNamespace {
                 atom(),
             ),
             atom_function("__aura_atom_load", Vec::new(), int64()),
-            atom_function("__aura_atom_store", vec![value_param("value", int64())], unit()),
-            atom_function("__aura_atom_add", vec![value_param("delta", int64())], int64()),
-            atom_function("__aura_atom_swap", vec![value_param("value", int64())], int64()),
+            atom_function(
+                "__aura_atom_store",
+                vec![value_param("value", int64())],
+                unit(),
+            ),
+            atom_function(
+                "__aura_atom_add",
+                vec![value_param("delta", int64())],
+                int64(),
+            ),
+            atom_function(
+                "__aura_atom_swap",
+                vec![value_param("value", int64())],
+                int64(),
+            ),
             atom_function(
                 "__aura_atom_compare_and_set",
                 vec![

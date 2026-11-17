@@ -3132,24 +3132,17 @@ impl<'a> AnalysisBuilder<'a> {
             .infer_expr_type(&with_stmt.value, scope)
             .unwrap_or(Type::Unit);
         let class_info = self.class_info_for_type_name(base_type_name(&manager_ty));
-        if let Ok(crate::sema::ManagerShape {
-            entry: crate::sema::ManagerEntry::Lock { payload },
-            ..
-        }) = crate::sema::classify_manager(&manager_ty, class_info)
-        {
-            return (payload, "mutable view");
-        }
-        if let Ok(crate::sema::ManagerShape {
-            entry: crate::sema::ManagerEntry::View { mutable },
-            ..
-        }) = crate::sema::classify_manager(&manager_ty, class_info)
-        {
-            if let Some(view_ty) = self
-                .resolve_member_type(&manager_ty, "__enter__")
-                .and_then(|member| member.ty)
-            {
-                return (view_ty, if mutable { "mutable view" } else { "view" });
+        match crate::sema::classify_manager(&manager_ty, class_info).map(|shape| shape.entry) {
+            Ok(crate::sema::ManagerEntry::Lock { payload }) => return (payload, "mutable view"),
+            Ok(crate::sema::ManagerEntry::View { mutable }) => {
+                if let Some(view_ty) = self
+                    .resolve_member_type(&manager_ty, "__enter__")
+                    .and_then(|member| member.ty)
+                {
+                    return (view_ty, if mutable { "mutable view" } else { "view" });
+                }
             }
+            _ => {}
         }
         (manager_ty, "local")
     }

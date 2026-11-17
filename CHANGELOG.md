@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- The `sync` module adds `Mutex[T]`, `AtomicInt`, `AtomicBool`, and
+  `Map[K, V]` for state shared between tasks. A `with` block around
+  `mutex.lock()` gives its body a mutable view of the guarded value.
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2

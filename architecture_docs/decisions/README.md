@@ -127,3 +127,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 100. [ADR-0100: Convolution from indexed reads and a product, and buffers and modes of a module](0100-tensor-convolution-buffers-and-modes.md) — Accepted; `conv2d` and pooling are Aura source over `index_select`, `matmul` and reductions; a `Collector` gathers buffers and mode flags; `Module.train()` and `eval()`
 101. [ADR-0101: `aura build --target` builds programs for other Linux machines](0101-linux-targets-for-aura-build.md) — Accepted; x86-64 and arm64, glibc and static musl, from a Linux host; a musl program links the C library the runtime ships; each target has its own runtime library
 102. [ADR-0102. Shared state handles](0102-shared-state-handles.md) records how tasks share mutexes, atomics, and maps.
+103. [ADR-0103. Lock lowering and native storage](0103-lock-lowering-and-native-storage.md) records how tasks acquire, release, and poison cells.

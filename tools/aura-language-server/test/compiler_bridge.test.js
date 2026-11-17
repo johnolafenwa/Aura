@@ -4736,6 +4736,41 @@ test("compiler bridge exposes control-plane module completions", async () => {
   }
 });
 
+test("sync completions and lock bindings use the guarded type", async () => {
+  const example = path.join(repoRoot, "examples", "concurrency", "shared_state.au");
+  const uri = `file://${example}`;
+  const source = fs.readFileSync(example, "utf8");
+  const lines = source.split("\n");
+  setWorkspaceRoots([repoRoot]);
+  const analysis = await analyzeWithCompiler(uri, source);
+  assert.deepEqual(analysis.diagnostics, []);
+  const declaration = lines.findIndex((line) => line.includes("with record = stats.lock()"));
+  const use = declaration + 1;
+  const column = lines[use].indexOf("record");
+  assert.match(compilerHoverAtPosition(analysis, use, column).value, /mutable view record: Stats/);
+  assert.deepEqual(compilerDefinitionAtPosition(uri, analysis, use, column).range.start, {
+    line: declaration,
+    character: lines[declaration].indexOf("record")
+  });
+
+  const complete = async (expression) => {
+    const prefix = [ "import sync", "", "def main():", "    counter = sync.AtomicInt(0)" ];
+    const line = `    ${expression}.`;
+    const text = [...prefix, line].join("\n");
+    return (await completeWithCompiler(uri, text, prefix.length, line.length, "."))
+      .map((item) => item.name);
+  };
+  const names = await complete("sync");
+  for (const name of ["Mutex", "AtomicInt", "AtomicBool", "Map"]) {
+    assert.ok(names.includes(name), `missing sync.${name}`);
+  }
+  assert.ok(names.every((name) => !name.startsWith("__aura_")));
+  const methods = await complete("counter");
+  for (const name of ["add", "load", "store", "swap", "compare_and_set"]) {
+    assert.ok(methods.includes(name), `missing counter.${name}`);
+  }
+});
+
 test("compiler bridge exposes the recursive json.Value contract", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-json-value-"));
   try {

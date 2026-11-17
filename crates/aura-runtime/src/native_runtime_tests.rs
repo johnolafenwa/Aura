@@ -26064,6 +26064,54 @@ unsafe extern "C-unwind" fn direct_task_returns_shared_flag(
     boxed_value(Value::Bool(shared))
 }
 
+unsafe extern "C-unwind" fn child_adds_through_confined_sync_handle(
+    args: *const i64,
+    count: usize,
+) -> *mut OpaqueValue {
+    assert_eq!(count, 1);
+    let argument = unsafe { *args } as *mut OpaqueValue;
+    let confined = unsafe { &*argument }.shared_lock().is_none();
+    super::aura_direct_sync_atom(argument, 2, 1, 0);
+    unsafe { release_value(argument) };
+    boxed_value(Value::Bool(confined))
+}
+
+#[test]
+fn sync_task_arguments_share_the_atomic_word_in_separate_boxes() {
+    let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
+    let outcome = run_lightweight_root_task(|| {
+        let argument = boxed_value(Value::Sync(crate::runtime_value::SyncValue::atom(40)));
+        let group = super::aura_direct_task_group_new();
+        let args = super::aura_direct_arg_buffer_new(1);
+        super::aura_direct_arg_buffer_store(args, 0, argument as i64);
+        let task = unsafe {
+            super::aura_direct_start_task_call(
+                child_adds_through_confined_sync_handle as *const () as usize as i64,
+                args,
+                1,
+                1,
+                group,
+                1,
+                0,
+                0,
+            )
+        };
+        let joined = super::aura_direct_task_join(task);
+        let result = unsafe { take_value(joined) };
+        assert_eq!(super::aura_direct_sync_atom(argument, 0, 0, 0), 41);
+        unsafe {
+            release_value(joined);
+            release_value(task);
+            release_value(group);
+            release_value(argument);
+        }
+        Ok(result)
+    })
+    .expect("the child completes");
+    assert!(matches!(outcome, Value::EnumVariant(variant)
+        if variant.payloads == vec![Value::Bool(true)].into()));
+}
+
 #[test]
 fn task_arguments_are_shared_before_the_child_starts() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
@@ -29241,6 +29289,29 @@ fn direct_sync_helpers_step_an_atom_and_move_a_cell_value() {
             release_value(value);
         }
     }
+}
+
+#[test]
+fn a_native_mutex_moves_the_same_collection_box_between_tasks() {
+    use crate::runtime_value::SyncValue;
+    let handle = SyncValue::cell(Value::Unit);
+    let cell = boxed_value(Value::Sync(handle.clone()));
+    let original = super::aura_direct_sync_cell_take(cell);
+    let items = super::aura_direct_vec_empty();
+    super::aura_direct_sync_cell_put(cell, items);
+    unsafe { release_value(original) };
+    let address = items as usize;
+    std::thread::spawn(move || {
+        let other = boxed_value(Value::Sync(handle));
+        let owned = super::aura_direct_sync_cell_take(other);
+        assert_eq!(owned as usize, address);
+        assert!(matches!(unsafe { value_ref(owned) }, Value::Vec(_)));
+        super::aura_direct_sync_cell_put(other, owned);
+        unsafe { release_value(other) };
+    })
+    .join()
+    .expect("the second task owns the box");
+    unsafe { release_value(cell) };
 }
 
 #[test]

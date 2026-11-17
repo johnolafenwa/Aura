@@ -10,33 +10,75 @@
 //! scheduler on the cell's wake queue, so it never blocks its worker thread.
 //!
 //! A task that ends while it holds a cell cannot put the value back: its
-//! stack is gone. Each holder counts the cells it holds. When a task ends
-//! with a count above zero, its holder token joins the dead holders, the
-//! waiting cells are woken, and a cell whose holder is dead is poisoned:
-//! every later take traps.
+//! stack is gone. The task keeps weak references to its held cells so its
+//! exit can poison each one and wake its waiters.
 
 use super::*;
 use std::cell::UnsafeCell;
-use std::collections::HashSet;
-use std::sync::atomic::{AtomicI64, AtomicU8, AtomicUsize};
+use std::sync::atomic::{AtomicI64, AtomicU8};
 
 const UNLOCKED: u8 = 0;
 const LOCKED: u8 = 1;
-const POISONED: u8 = 2;
+const CONTENDED: u8 = 2;
+const POISONED: u8 = 3;
 
 /// How many times a taker checks a locked cell before it waits through the
 /// scheduler. A critical section is usually shorter than a park and a wake.
 const SPIN_LIMIT: u32 = 96;
 
-/// What a task or thread needs to hold cells: a token no other live holder
-/// has, and how many cells it holds now.
+/// The active prefix contains the cells this task holds in acquisition
+/// order. Keeping slots up to the maximum nesting depth lets another
+/// acquisition of the same lock reuse its weak reference.
 #[derive(Default)]
 pub(crate) struct HolderState {
     token: Cell<u64>,
-    held: Cell<u32>,
+    held: RefCell<Vec<Weak<CellState>>>,
+    depth: Cell<usize>,
 }
 
 impl HolderState {
+    fn acquired(&self, cell: &Arc<CellState>) {
+        let depth = self.depth.get();
+        let mut held = self.held.borrow_mut();
+        match held.get_mut(depth) {
+            Some(slot) if std::ptr::eq(slot.as_ptr(), Arc::as_ptr(cell)) => {}
+            Some(slot) => *slot = Arc::downgrade(cell),
+            None => held.push(Arc::downgrade(cell)),
+        }
+        self.depth.set(depth + 1);
+        cell.holder.store(self.token(), Ordering::Relaxed);
+    }
+
+    fn released(&self, cell: &Arc<CellState>) {
+        let last = self.depth.get() - 1;
+        let mut held = self.held.borrow_mut();
+        if !std::ptr::eq(held[last].as_ptr(), Arc::as_ptr(cell)) {
+            // Host calls can return two cells in a different order.
+            let position = held[..last]
+                .iter()
+                .position(|slot| std::ptr::eq(slot.as_ptr(), Arc::as_ptr(cell)))
+                .expect("the current holder registered this cell");
+            held[position..=last].rotate_left(1);
+        }
+        self.depth.set(last);
+    }
+
+    fn abandon_since(&self, depth: usize) {
+        let end = self.depth.get();
+        if end <= depth {
+            return;
+        }
+        self.depth.set(depth);
+        for cell in self.held.borrow()[depth..end]
+            .iter()
+            .filter_map(Weak::upgrade)
+        {
+            if cell.state.swap(POISONED, Ordering::Release) == CONTENDED {
+                cell.wake_one();
+            }
+        }
+    }
+
     fn token(&self) -> u64 {
         let token = self.token.get();
         if token != 0 {
@@ -61,58 +103,49 @@ fn with_current_holder<T>(f: impl FnOnce(&HolderState) -> T) -> T {
     })
 }
 
-/// The tokens of holders that ended while they held a cell.
-fn dead_holders() -> &'static Mutex<HashSet<u64>> {
-    static DEAD: OnceLock<Mutex<HashSet<u64>>> = OnceLock::new();
-    DEAD.get_or_init(|| Mutex::new(HashSet::new()))
-}
-
-/// How many tokens `dead_holders` has. Zero in a program where no task has
-/// failed inside a lock, which lets a waiter skip the set's lock.
-static DEAD_HOLDER_COUNT: AtomicUsize = AtomicUsize::new(0);
-
-/// The cells some task is waiting on, to wake when a holder dies.
-fn waited_cells() -> &'static Mutex<Vec<Weak<CellState>>> {
-    static WAITED: OnceLock<Mutex<Vec<Weak<CellState>>>> = OnceLock::new();
-    WAITED.get_or_init(|| Mutex::new(Vec::new()))
-}
-
-/// Called when a lightweight task has ended, by return, trap, or
-/// cancellation. A task that still holds cells poisons them.
+/// Poisons every cell still held at task completion.
 pub(crate) fn holder_ended(holder: &HolderState) {
-    if holder.held.get() == 0 {
-        return;
-    }
-    holder.held.set(0);
-    lock_mutex(dead_holders()).insert(holder.token());
-    // A holder that lives on, such as a thread that runs one program after
-    // another, takes its next lock under a fresh token.
-    holder.token.set(0);
-    DEAD_HOLDER_COUNT.fetch_add(1, Ordering::SeqCst);
-    let waited = lock_mutex(waited_cells())
-        .iter()
-        .filter_map(Weak::upgrade)
-        .collect::<Vec<_>>();
-    for cell in waited {
-        cell.wake_one();
-    }
+    holder.abandon_since(0);
 }
 
-/// Poisons every cell the running task or thread holds. Code that stops a
-/// trap from ending its task calls this, because the frames that would
-/// have released the locks are gone.
+/// The boundary between a caller's locks and those a nested call acquires.
+pub fn held_cell_depth() -> usize {
+    with_current_holder(|holder| holder.depth.get())
+}
+
+/// Poisons only the locks whose frames have been abandoned.
+pub fn abandon_held_cells_since(depth: usize) {
+    with_current_holder(|holder| holder.abandon_since(depth));
+}
+
+/// Poisons every lock held by the current task.
 pub fn abandon_held_cells() {
-    with_current_holder(holder_ended);
+    abandon_held_cells_since(0);
+}
+
+/// A native caller can leave a unique generated-code box intact between
+/// critical sections. Interpreter and host callers move the value itself.
+pub(crate) enum GuardedValue {
+    Value(Value),
+    Native(crate::native_runtime::GuardedNativeBox),
+}
+
+impl GuardedValue {
+    pub(crate) fn into_value(self) -> Value {
+        match self {
+            Self::Value(value) => value,
+            Self::Native(guarded) => guarded.into_value(),
+        }
+    }
 }
 
 struct CellState {
     state: AtomicU8,
     /// The token of the holder, while locked.
     holder: AtomicU64,
-    waiters: AtomicUsize,
     /// The guarded value. Only the holder reads or writes it. `None` while
     /// the holder has it, and after poisoning.
-    value: UnsafeCell<Option<Value>>,
+    value: UnsafeCell<Option<GuardedValue>>,
     /// Made on first contention. A token in it wakes one waiter.
     wake: OnceLock<ChannelValue>,
 }
@@ -139,31 +172,8 @@ impl CellState {
             .is_ok()
     }
 
-    /// Whether the cell is poisoned, marking it so when its holder is dead.
     fn check_poisoned(&self) -> bool {
-        match self.state.load(Ordering::SeqCst) {
-            POISONED => return true,
-            UNLOCKED => return false,
-            _ => {}
-        }
-        if DEAD_HOLDER_COUNT.load(Ordering::SeqCst) == 0 {
-            return false;
-        }
-        let holder = self.holder.load(Ordering::SeqCst);
-        if !lock_mutex(dead_holders()).contains(&holder) {
-            return false;
-        }
-        // The dead holder never unlocks, so the cell is still locked by it
-        // unless another waiter marked it first.
-        if self.holder.load(Ordering::SeqCst) == holder {
-            let _ = self.state.compare_exchange(
-                LOCKED,
-                POISONED,
-                Ordering::SeqCst,
-                Ordering::SeqCst,
-            );
-        }
-        self.state.load(Ordering::SeqCst) == POISONED
+        self.state.load(Ordering::Acquire) == POISONED
     }
 }
 
@@ -213,8 +223,7 @@ impl SyncValue {
         Self(SyncHandle::Cell(Arc::new(CellState {
             state: AtomicU8::new(UNLOCKED),
             holder: AtomicU64::new(0),
-            waiters: AtomicUsize::new(0),
-            value: UnsafeCell::new(Some(value)),
+            value: UnsafeCell::new(Some(GuardedValue::Value(value))),
             wake: OnceLock::new(),
         })))
     }
@@ -249,33 +258,50 @@ impl SyncValue {
     /// Locks the cell and moves its value out, waiting while another task
     /// holds it.
     pub fn take(&self) -> Result<Value> {
-        let cell = self.as_cell("sync.__aura_cell_take")?;
-        // The holder is not kept borrowed across the wait: a waiting task
-        // yields, and the scheduler then changes the current task.
-        let token = with_current_holder(HolderState::token);
-        if !cell.try_lock() {
-            lock_contended(cell, token)?;
-        }
-        cell.holder.store(token, Ordering::Relaxed);
-        with_current_holder(|holder| holder.held.set(holder.held.get() + 1));
-        // SAFETY: this task holds the lock.
-        match unsafe { (*cell.value.get()).take() } {
-            Some(value) => Ok(value),
-            None => unreachable!("an unlocked cell holds its value"),
-        }
+        self.take_guarded().map(GuardedValue::into_value)
     }
 
-    /// Moves `value` into the cell and unlocks it. The caller is the holder
-    /// that `take` gave the previous value to.
+    pub(crate) fn take_guarded(&self) -> Result<GuardedValue> {
+        let cell = self.as_cell("sync.__aura_cell_take")?;
+        if !cell.try_lock() {
+            // The scheduler changes the current task while a waiter yields.
+            let token = with_current_holder(HolderState::token);
+            lock_contended(cell, token)?;
+        }
+        Ok(Self::take_locked(cell))
+    }
+
+    /// Takes the value without yielding, allowing a native caller to borrow
+    /// the handle in place while the box is accessible.
+    pub(crate) fn try_take_guarded(&self) -> Result<Option<GuardedValue>> {
+        let cell = self.as_cell("sync.__aura_cell_take")?;
+        Ok(cell.try_lock().then(|| Self::take_locked(cell)))
+    }
+
+    #[inline]
+    fn take_locked(cell: &Arc<CellState>) -> GuardedValue {
+        with_current_holder(|holder| holder.acquired(cell));
+        // SAFETY: this task just acquired the lock.
+        unsafe { (*cell.value.get()).take() }.expect("an unlocked cell holds its value")
+    }
+
+    /// Moves `value` into the cell and unlocks it.
     pub fn put(&self, value: Value) -> Result<()> {
+        self.put_guarded(GuardedValue::Value(value))
+    }
+
+    pub(crate) fn put_guarded(&self, value: GuardedValue) -> Result<()> {
         let cell = self.as_cell("sync.__aura_cell_put")?;
-        let token = with_current_holder(|holder| {
-            holder.held.set(holder.held.get().saturating_sub(1));
-            holder.token()
+        let owned = with_current_holder(|holder| {
+            if cell.holder.load(Ordering::Relaxed) != holder.token()
+                || !matches!(cell.state.load(Ordering::Relaxed), LOCKED | CONTENDED)
+            {
+                return false;
+            }
+            holder.released(cell);
+            true
         });
-        if cell.state.load(Ordering::Relaxed) != LOCKED
-            || cell.holder.load(Ordering::Relaxed) != token
-        {
+        if !owned {
             return Err(Diagnostic::coded(
                 "AU4001",
                 "internal error: a `sync.Mutex` was released by a task that does not hold it",
@@ -286,8 +312,7 @@ impl SyncValue {
             *cell.value.get() = Some(value);
         }
         cell.holder.store(0, Ordering::Relaxed);
-        cell.state.store(UNLOCKED, Ordering::SeqCst);
-        if cell.waiters.load(Ordering::SeqCst) != 0 {
+        if cell.state.swap(UNLOCKED, Ordering::Release) == CONTENDED {
             cell.wake_one();
         }
         Ok(())
@@ -299,7 +324,9 @@ impl SyncValue {
     }
 
     pub fn load(&self) -> Result<i64> {
-        Ok(self.as_atom("sync.__aura_atom_load")?.load(Ordering::SeqCst))
+        Ok(self
+            .as_atom("sync.__aura_atom_load")?
+            .load(Ordering::SeqCst))
     }
 
     pub fn store(&self, value: i64) -> Result<()> {
@@ -347,9 +374,7 @@ fn wrong_handle(call: &str, expected: &str, found: &str) -> Diagnostic {
 /// Takes a cell another holder has, or reports why it cannot be taken.
 #[cold]
 fn lock_contended(cell: &Arc<CellState>, token: u64) -> Result<()> {
-    if cell.state.load(Ordering::SeqCst) == LOCKED
-        && cell.holder.load(Ordering::SeqCst) == token
-    {
+    if cell.holder.load(Ordering::Relaxed) == token && !cell.check_poisoned() {
         return Err(relock_error());
     }
     for _ in 0..SPIN_LIMIT {
@@ -358,39 +383,45 @@ fn lock_contended(cell: &Arc<CellState>, token: u64) -> Result<()> {
         }
         std::hint::spin_loop();
     }
-    cell.waiters.fetch_add(1, Ordering::SeqCst);
-    lock_mutex(waited_cells()).push(Arc::downgrade(cell));
-    let outcome = loop {
-        if cell.try_lock() {
-            break Ok(());
-        }
-        if cell.check_poisoned() {
-            // Each waiter that finds the poison wakes the next one.
-            cell.wake_one();
-            break Err(poisoned_error());
-        }
-        let wake = cell.wake_queue();
-        let _ = wait_for_runtime_scheduler(
-            vec![wake.clone()],
-            false,
-            Vec::new(),
-            Vec::new(),
-            None,
-            None,
-        );
-        let _ = wake.try_recv();
-    };
-    {
-        let mut waited = lock_mutex(waited_cells());
-        if let Some(index) = waited
-            .iter()
-            .position(|waiting| std::ptr::eq(waiting.as_ptr(), Arc::as_ptr(cell)))
-        {
-            waited.swap_remove(index);
+    let wake = cell.wake_queue();
+    loop {
+        // The holder's release observes CONTENDED in the same atomic word
+        // it unlocks. A wake token sent before we park stays in the queue.
+        match cell.state.load(Ordering::Relaxed) {
+            POISONED => {
+                cell.wake_one();
+                return Err(poisoned_error());
+            }
+            UNLOCKED => {
+                if cell
+                    .state
+                    .compare_exchange(UNLOCKED, CONTENDED, Ordering::Acquire, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+            }
+            LOCKED => {
+                let _ = cell.state.compare_exchange(
+                    LOCKED,
+                    CONTENDED,
+                    Ordering::Relaxed,
+                    Ordering::Relaxed,
+                );
+            }
+            _ => {
+                let _ = wait_for_runtime_scheduler(
+                    vec![wake.clone()],
+                    false,
+                    Vec::new(),
+                    Vec::new(),
+                    None,
+                    None,
+                );
+                let _ = wake.try_recv();
+            }
         }
     }
-    cell.waiters.fetch_sub(1, Ordering::SeqCst);
-    outcome
 }
 
 fn int(value: i64) -> Value {
@@ -484,7 +515,10 @@ pub fn host_atom_swap(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
         .map(int)
 }
 
-pub fn host_atom_compare_and_set(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
+pub fn host_atom_compare_and_set(
+    args: Vec<Value>,
+    _program_args: Option<&[String]>,
+) -> Result<Value> {
     let name = "sync::__aura_atom_compare_and_set";
     host_expect_arity(name, &args, 3)?;
     handle_arg(&args, name)?
