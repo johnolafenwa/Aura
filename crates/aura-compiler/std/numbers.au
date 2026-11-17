@@ -135,10 +135,26 @@ public class BigInt:
         return big_of(wire)
 
     def binary(self, op: int64, rhs: BigInt) -> BigInt:
-        return big_of(numbers.__aura_big_binary(op, self.small(), self.words(), rhs.small(), rhs.words()))
+        return big_of(
+            numbers.__aura_big_binary(
+                op,
+                self.small(),
+                self.words(),
+                rhs.small(),
+                rhs.words(),
+            )
+        )
 
     def binary_int(self, op: int64, rhs: int64) -> BigInt:
-        return big_of(numbers.__aura_big_binary(op, self.small(), self.words(), rhs, list[uint64]()))
+        return big_of(
+            numbers.__aura_big_binary(
+                op,
+                self.small(),
+                self.words(),
+                rhs,
+                list[uint64](),
+            )
+        )
 
     public def is_zero(self) -> bool:
         """Whether this is 0."""
@@ -171,7 +187,12 @@ public class BigInt:
             if self.small() > rhs.small():
                 return 1
             return 0
-        return numbers.__aura_big_compare(self.small(), self.words(), rhs.small(), rhs.words())
+        return numbers.__aura_big_compare(
+            self.small(),
+            self.words(),
+            rhs.small(),
+            rhs.words(),
+        )
 
     public def pow(self, exponent: int64) -> BigInt:
         """This raised to `exponent`, which must not be negative."""
@@ -181,8 +202,23 @@ public class BigInt:
         """This raised to `exponent`, modulo `modulus`, without building the
         full power. The result has the sign of `modulus`."""
         if self.is_small() and exponent.is_small() and modulus.is_small():
-            return BigInt.from_int(numbers.__aura_small_pow_mod(self.small(), exponent.small(), modulus.small()))
-        return big_of(numbers.__aura_big_pow_mod(self.small(), self.words(), exponent.small(), exponent.words(), modulus.small(), modulus.words()))
+            return BigInt.from_int(
+                numbers.__aura_small_pow_mod(
+                    self.small(),
+                    exponent.small(),
+                    modulus.small(),
+                )
+            )
+        return big_of(
+            numbers.__aura_big_pow_mod(
+                self.small(),
+                self.words(),
+                exponent.small(),
+                exponent.words(),
+                modulus.small(),
+                modulus.words(),
+            )
+        )
 
     public def gcd(self, rhs: BigInt) -> BigInt:
         """The greatest common divisor, never negative."""
@@ -421,7 +457,19 @@ def decimal_sum(left: Decimal, small: int64, exponent: int64) -> Decimal:
             sum = first.wrapping_add(second)
             if sum == first.saturating_add(second):
                 return small_decimal(sum, power)
-    return decimal_of(numbers.__aura_dec_binary(0, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 0, 0))
+    return decimal_of(
+        numbers.__aura_dec_binary(
+            0,
+            left.small(),
+            left.words(),
+            left.power(),
+            small,
+            list[uint64](),
+            exponent,
+            0,
+            0,
+        )
+    )
 
 
 # `left` times the decimal `small * 10^exponent`.
@@ -430,14 +478,41 @@ def decimal_product(left: Decimal, small: int64, exponent: int64) -> Decimal:
         product = left.small().wrapping_mul(small)
         if product == left.small().saturating_mul(small):
             return small_decimal(product, left.power() + exponent)
-    return decimal_of(numbers.__aura_dec_binary(2, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 0, 0))
+    return decimal_of(
+        numbers.__aura_dec_binary(
+            2,
+            left.small(),
+            left.words(),
+            left.power(),
+            small,
+            list[uint64](),
+            exponent,
+            0,
+            0,
+        )
+    )
 
 
 # `left` divided by the decimal `small * 10^exponent`, to 28 digits.
 def decimal_quotient(left: Decimal, small: int64, exponent: int64) -> Decimal:
     if left.is_small() and small > 0 and left.small() % small == 0:
-        return small_decimal(left.small() // small, left.power().saturating_sub(exponent))
-    return decimal_of(numbers.__aura_dec_binary(3, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 28, 0))
+        return small_decimal(
+            left.small() // small,
+            left.power().saturating_sub(exponent),
+        )
+    return decimal_of(
+        numbers.__aura_dec_binary(
+            3,
+            left.small(),
+            left.words(),
+            left.power(),
+            small,
+            list[uint64](),
+            exponent,
+            28,
+            0,
+        )
+    )
 
 
 copy class SmallDecimal:
@@ -500,7 +575,13 @@ public class Decimal:
         """`coefficient` times ten to the power `exponent`."""
         if coefficient.is_small():
             return small_decimal(coefficient.small(), exponent)
-        return decimal_of(numbers.__aura_dec_normalize(coefficient.small(), coefficient.words(), exponent))
+        return decimal_of(
+            numbers.__aura_dec_normalize(
+                coefficient.small(),
+                coefficient.words(),
+                exponent,
+            )
+        )
 
     public def from_float(value: float64) -> Decimal | None:
         """The exact value of `value`, every binary digit kept, or `None`
@@ -545,7 +626,9 @@ public class Decimal:
         """The integer coefficient. It has no trailing zeros."""
         if self.is_small():
             return BigInt.from_int(self.small())
-        return big_of(numbers.__aura_big_binary(0, self.small(), self.words(), 0, list[uint64]()))
+        return big_of(
+            numbers.__aura_big_binary(0, self.small(), self.words(), 0, list[uint64]())
+        )
 
     public def exponent(self) -> int64:
         """The power of ten that scales the coefficient."""
@@ -560,22 +643,56 @@ public class Decimal:
             if self.small() > rhs.small():
                 return 1
             return 0
-        return numbers.__aura_dec_compare(self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power())
+        return numbers.__aura_dec_compare(
+            self.small(),
+            self.words(),
+            self.power(),
+            rhs.small(),
+            rhs.words(),
+            rhs.power(),
+        )
 
     public def divide(self, rhs: Decimal, digits: int64, rounding: Rounding) -> Decimal:
         """This divided by `rhs`, rounded to `digits` significant digits."""
-        return decimal_of(numbers.__aura_dec_binary(3, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), digits, rounding_code(rounding)))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                3,
+                self.small(),
+                self.words(),
+                self.power(),
+                rhs.small(),
+                rhs.words(),
+                rhs.power(),
+                digits,
+                rounding_code(rounding),
+            )
+        )
 
     public def round(self, places: int64, rounding: Rounding) -> Decimal:
         """This rounded to `places` digits after the point. A negative
         `places` rounds to tens, hundreds, and so on."""
         if places > -4611686018427387904 and self.power() >= -places:
             return self.copy()
-        return decimal_of(numbers.__aura_dec_round(self.small(), self.words(), self.power(), places, rounding_code(rounding)))
+        return decimal_of(
+            numbers.__aura_dec_round(
+                self.small(),
+                self.words(),
+                self.power(),
+                places,
+                rounding_code(rounding),
+            )
+        )
 
     public def to_big(self, rounding: Rounding) -> BigInt:
         """This rounded to an integer."""
-        return big_of(numbers.__aura_dec_integer(self.small(), self.words(), self.power(), rounding_code(rounding)))
+        return big_of(
+            numbers.__aura_dec_integer(
+                self.small(),
+                self.words(),
+                self.power(),
+                rounding_code(rounding),
+            )
+        )
 
     public def trunc(self) -> BigInt:
         """The integer left after dropping the fraction."""
@@ -592,12 +709,26 @@ public class Decimal:
     public def pow(self, exponent: int64) -> Decimal:
         """This raised to `exponent`, exactly. `exponent` must not be
         negative."""
-        return decimal_of(numbers.__aura_dec_binary(4, self.small(), self.words(), self.power(), exponent, list[uint64](), 0, 0, 0))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                4,
+                self.small(),
+                self.words(),
+                self.power(),
+                exponent,
+                list[uint64](),
+                0,
+                0,
+                0,
+            )
+        )
 
     public def sqrt(self, digits: int64) -> Decimal:
         """The square root to `digits` significant digits, rounded half to
         even. This must not be negative."""
-        return decimal_of(numbers.__aura_dec_sqrt(self.small(), self.words(), self.power(), digits))
+        return decimal_of(
+            numbers.__aura_dec_sqrt(self.small(), self.words(), self.power(), digits)
+        )
 
     public def to_float(self) -> float64:
         """The nearest `float64`. A value beyond the range of `float64`
@@ -610,8 +741,18 @@ public class Decimal:
         rounding gives zero. `places` must not be negative."""
         if places < 0:
             # The runtime reports the bad argument.
-            return numbers.__aura_dec_format(self.small(), self.words(), self.power(), -3)
-        return numbers.__aura_dec_format(self.small(), self.words(), self.power(), places)
+            return numbers.__aura_dec_format(
+                self.small(),
+                self.words(),
+                self.power(),
+                -3,
+            )
+        return numbers.__aura_dec_format(
+            self.small(),
+            self.words(),
+            self.power(),
+            places,
+        )
 
     public def to_plain(self) -> str:
         """The text of this with every digit written out and no exponent."""
@@ -629,35 +770,97 @@ impl Add[Decimal, Decimal] for Decimal:
     def add(self, rhs: Decimal) -> Decimal:
         if rhs.is_small():
             return decimal_sum(self, rhs.small(), rhs.power())
-        return decimal_of(numbers.__aura_dec_binary(0, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                0,
+                self.small(),
+                self.words(),
+                self.power(),
+                rhs.small(),
+                rhs.words(),
+                rhs.power(),
+                0,
+                0,
+            )
+        )
 
 
 impl Sub[Decimal, Decimal] for Decimal:
     def sub(self, rhs: Decimal) -> Decimal:
         if rhs.is_small() and rhs.small() != least_int():
             return decimal_sum(self, -rhs.small(), rhs.power())
-        return decimal_of(numbers.__aura_dec_binary(1, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                1,
+                self.small(),
+                self.words(),
+                self.power(),
+                rhs.small(),
+                rhs.words(),
+                rhs.power(),
+                0,
+                0,
+            )
+        )
 
 
 impl Mul[Decimal, Decimal] for Decimal:
     def mul(self, rhs: Decimal) -> Decimal:
         if rhs.is_small():
             return decimal_product(self, rhs.small(), rhs.power())
-        return decimal_of(numbers.__aura_dec_binary(2, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                2,
+                self.small(),
+                self.words(),
+                self.power(),
+                rhs.small(),
+                rhs.words(),
+                rhs.power(),
+                0,
+                0,
+            )
+        )
 
 
 impl Div[Decimal, Decimal] for Decimal:
     def div(self, rhs: Decimal) -> Decimal:
         if rhs.is_small():
             return decimal_quotient(self, rhs.small(), rhs.power())
-        return decimal_of(numbers.__aura_dec_binary(3, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 28, 0))
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                3,
+                self.small(),
+                self.words(),
+                self.power(),
+                rhs.small(),
+                rhs.words(),
+                rhs.power(),
+                28,
+                0,
+            )
+        )
 
 
 impl Neg[Decimal] for Decimal:
     def neg(self) -> Decimal:
         if self.is_small() and self.small() != least_int():
-            return Decimal(storage=SmallDecimal(number=-self.small(), exponent=self.power()))
-        return decimal_of(numbers.__aura_dec_binary(1, 0, list[uint64](), 0, self.small(), self.words(), self.power(), 0, 0))
+            return Decimal(
+                storage=SmallDecimal(number=-self.small(), exponent=self.power())
+            )
+        return decimal_of(
+            numbers.__aura_dec_binary(
+                1,
+                0,
+                list[uint64](),
+                0,
+                self.small(),
+                self.words(),
+                self.power(),
+                0,
+                0,
+            )
+        )
 
 
 impl Ord[Decimal] for Decimal:
@@ -726,10 +929,14 @@ public copy class Complex:
         mut root = 0.0
         if x >= y:
             ratio = y / x
-            root = math.sqrt(x) * math.sqrt((1.0 + math.sqrt(1.0 + ratio * ratio)) / 2.0)
+            root = math.sqrt(x) * math.sqrt(
+                (1.0 + math.sqrt(1.0 + ratio * ratio)) / 2.0
+            )
         else:
             ratio = x / y
-            root = math.sqrt(y) * math.sqrt((ratio + math.sqrt(1.0 + ratio * ratio)) / 2.0)
+            root = math.sqrt(y) * math.sqrt(
+                (ratio + math.sqrt(1.0 + ratio * ratio)) / 2.0
+            )
         if self.re >= 0.0:
             return Complex(re=root, im=self.im / (2.0 * root))
         return Complex(re=y / (2.0 * root), im=math.copysign(root, self.im))
@@ -767,7 +974,10 @@ impl Sub[Complex, Complex] for Complex:
 
 impl Mul[Complex, Complex] for Complex:
     def mul(self, rhs: Complex) -> Complex:
-        return Complex(re=self.re * rhs.re - self.im * rhs.im, im=self.re * rhs.im + self.im * rhs.re)
+        return Complex(
+            re=self.re * rhs.re - self.im * rhs.im,
+            im=self.re * rhs.im + self.im * rhs.re,
+        )
 
 
 impl Div[Complex, Complex] for Complex:
@@ -782,16 +992,28 @@ impl Div[Complex, Complex] for Complex:
             if scale >= 1.0:
                 a = self.re / scale
                 b = self.im / scale
-                return Complex(re=a * real_weight + b * imag_weight, im=b * real_weight - a * imag_weight)
-            return Complex(re=(self.re * real_weight + self.im * imag_weight) / scale, im=(self.im * real_weight - self.re * imag_weight) / scale)
+                return Complex(
+                    re=a * real_weight + b * imag_weight,
+                    im=b * real_weight - a * imag_weight,
+                )
+            return Complex(
+                re=(self.re * real_weight + self.im * imag_weight) / scale,
+                im=(self.im * real_weight - self.re * imag_weight) / scale,
+            )
         # Preserve the floating operation's rules for a zero or nonfinite divisor.
         if abs(rhs.re) >= abs(rhs.im):
             ratio = rhs.im / rhs.re
             denominator = rhs.re + rhs.im * ratio
-            return Complex(re=(self.re + self.im * ratio) / denominator, im=(self.im - self.re * ratio) / denominator)
+            return Complex(
+                re=(self.re + self.im * ratio) / denominator,
+                im=(self.im - self.re * ratio) / denominator,
+            )
         ratio = rhs.re / rhs.im
         denominator = rhs.re * ratio + rhs.im
-        return Complex(re=(self.re * ratio + self.im) / denominator, im=(self.im * ratio - self.re) / denominator)
+        return Complex(
+            re=(self.re * ratio + self.im) / denominator,
+            im=(self.im * ratio - self.re) / denominator,
+        )
 
 
 impl Neg[Complex] for Complex:
