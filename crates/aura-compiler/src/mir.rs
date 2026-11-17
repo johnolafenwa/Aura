@@ -15650,7 +15650,7 @@ impl<'a> Lowerer<'a> {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
                 // A structural `def` annotation leaves a closure its own
-                // type. Owned callable storage packs it (ADR-0104).
+                // type. Owned callable storage packs it (ADR-0115).
                 let storage_type = self
                     .infer_expr_type(&assign.value)
                     .filter(|ty| {
@@ -21933,6 +21933,13 @@ impl<'a> Lowerer<'a> {
                         .get(tuple_index)
                         .cloned()
                         .expect("tuple index bounds are validated by sema");
+                    if matches!(&element_type, Type::Callable(_)) {
+                        let Operand::Place(tuple) = self.lower_expr_at_sequence_point(object, None)
+                        else {
+                            unreachable!("tuple values are held in MIR places");
+                        };
+                        return Operand::Place(format!("{tuple}.{tuple_index}"));
+                    }
                     debug_assert!(
                         type_is_copy_in_program(&element_type, self.program),
                         "non-Copy tuple indices are rejected by sema"
@@ -24468,7 +24475,7 @@ impl<'a> Lowerer<'a> {
 
     /// Packs a function value, a lambda, a bound method or a closure
     /// written where the owned callable storage type `expected` is the
-    /// destination (ADR-0104). The value is lowered under the storage's
+    /// destination (ADR-0115). The value is lowered under the storage's
     /// contract and packed as the explicit constructor packs it. A value
     /// that is packed already moves as it is.
     fn lower_callable_destination(
@@ -25804,6 +25811,12 @@ impl<'a> Lowerer<'a> {
                 return Operand::Place(target);
             }
         }
+        let indexed = callee.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        });
+        let callee = indexed.as_ref().unwrap_or(callee);
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
@@ -29115,6 +29128,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        if let Some(indexed) = expr.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        }) {
+            return self.infer_expr_type(&indexed);
+        }
         if let Some(read) = self.narrowed_read(expr) {
             return Some(read.member_type);
         }

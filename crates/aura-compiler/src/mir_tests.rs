@@ -16548,3 +16548,10 @@ fn local_functions_share_the_lambda_capture_and_call_contract() {
     let output = crate::run_source(source).expect("local function bodies should run");
     assert_eq!(output.stdout, "4\n5\n14\n120\n11\n");
 }
+
+#[test]
+fn calling_indexed_closures_preserves_field_and_tuple_storage() {
+    let source = include_str!("../tests/fixtures/run-pass/callable_indexed_places.au");
+    let module = crate::lower_source_to_mir(source).expect("indexed closures should lower");
+    validate_loan_flow(&module).expect("calls borrow the callable from the indexed place");
+}

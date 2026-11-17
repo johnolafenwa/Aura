@@ -7635,7 +7635,7 @@ impl<'a> FunctionChecker<'a> {
 
     /// Checks one callable value against the owned storage type it packs
     /// into, for the explicit constructor and for a typed destination
-    /// (ADR-0104). `actual` is the value's own type and `name` is how
+    /// (ADR-0115). `actual` is the value's own type and `name` is how
     /// diagnostics spell the destination.
     fn check_callable_pack_value(
         &self,
@@ -7761,7 +7761,7 @@ impl<'a> FunctionChecker<'a> {
     }
 
     /// Types a value written where owned callable storage is expected
-    /// (ADR-0104). A function value, a lambda, a bound method or a closure
+    /// (ADR-0115). A function value, a lambda, a bound method or a closure
     /// packs there under the rules of the explicit constructor. A value that
     /// is packed already, or is not callable, keeps its own type for the
     /// destination to judge.
@@ -11255,6 +11255,13 @@ impl<'a> FunctionChecker<'a> {
         locals: &mut HashMap<String, LocalBinding>,
         expected: Option<&Type>,
     ) -> Result<Type> {
+        let indexed = callee.indexed_collection_callee(|object| {
+            self.type_of_expr_without_move_state(object, locals, None)
+                .is_ok_and(|ty| {
+                    vec_element_type(&ty).is_some() || map_key_value_types(&ty).is_some()
+                })
+        });
+        let callee = indexed.as_ref().unwrap_or(callee);
         // The parser preserves `f[T](...)` as `Specialize`, while a grouping
         // boundary necessarily leaves `(f[T])(...)` as `Group(Index(...))`.
         // Recover the same direct-call specialization only when the indexed
@@ -17235,7 +17242,7 @@ impl<'a> FunctionChecker<'a> {
                 ) {
                     return Err(self.unsupported_call_target_diagnostic(callee, span));
                 }
-                // A packed callable stored in a list or dict element is
+                // A packed callable stored in a collection or tuple element is
                 // called through a call-scoped shared read of that element;
                 // no second owner of the environment is created.
                 if let ExprKind::Index { object, index } = &grouped_expr(base_callee).kind {
@@ -17245,10 +17252,16 @@ impl<'a> FunctionChecker<'a> {
                     let element = self
                         .type_of_expr_without_move_state(object, locals, None)
                         .ok()
-                        .and_then(|object_ty| {
-                            vec_element_type(&object_ty).cloned().or_else(|| {
-                                map_key_value_types(&object_ty).map(|(_, value)| value.clone())
-                            })
+                        .and_then(|ty| match &ty {
+                            Type::Tuple(elements) => {
+                                let ExprKind::Int(index) = grouped_expr(index).kind else {
+                                    return None;
+                                };
+                                elements.get(usize::try_from(index).ok()?).cloned()
+                            }
+                            _ => vec_element_type(&ty).cloned().or_else(|| {
+                                map_key_value_types(&ty).map(|(_, value)| value.clone())
+                            }),
                         });
                     if let Some(Type::Callable(callable)) = element {
                         let object_ty = self.type_of_expr(object, locals)?;

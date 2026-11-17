@@ -1,21 +1,23 @@
 # Task Board
 
-Last updated: 2026-11-16
+Last updated: 2026-11-17
 
 ## First-class closures (in progress)
 
 - Target: John's 2026-11-16 approval of item 3 of the missing features
   list: a capturing closure needed an alias and a constructor call to be
   stored, and a lambda is one expression. The design is in
-  `architecture_docs/29-first-class-closures-design-checkpoint.md`.
+  `architecture_docs/30-first-class-closures-design-checkpoint.md`.
   Details are in `2026-11-16-first-class-closures.md`.
-- Done: step 1, ADR-0104. A callable value packs where a `Callable[...]`
+- Done: step 1, ADR-0115. A callable value packs where a `Callable[...]`
   type is expected, and a lambda captures a Copy parameter by value.
 - Verification: the compiler unit tests, the fixture suite and the callable
   integration suites on Linux, on both back ends.
 - Done: direct calls through stored closures. A closure in a field or a
   list element is called where it is kept, and `benchmarks/closures`
   compares the calls with Rust and Python.
+- Calls through `self.steps[index]` and tuple positions pass MIR validation.
+  Benchmark measurements are in `benchmarks/closures/README.md`.
 - Local functions with statement bodies and recursion are in development
   under ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
