@@ -243,25 +243,24 @@ impl CStruct {
             .unwrap_or(1)
     }
 
-    /// The byte offset of each field, in order, and the size of the struct
-    /// with its tail padding. Every member of a union is at offset 0, and
-    /// the union is as large as its largest member.
-    fn offsets(&self) -> (Vec<usize>, usize) {
-        let mut end = 0_usize;
-        let offsets = self
-            .fields
+    /// Places one field at its aligned offset and advances the struct's end.
+    fn place_field(&self, field: &CField, end: &mut usize) -> usize {
+        let offset = if self.union {
+            0
+        } else {
+            end.next_multiple_of(field.kind.align())
+        };
+        *end = (*end).max(offset + field.kind.size());
+        offset
+    }
+
+    /// Fields and their byte offsets in declaration order. All members of
+    /// a union start at byte zero.
+    pub(crate) fn fields_with_offsets(&self) -> impl Iterator<Item = (&CField, usize)> {
+        let mut end = 0;
+        self.fields
             .iter()
-            .map(|field| {
-                if self.union {
-                    end = end.max(field.kind.size());
-                    return 0;
-                }
-                let offset = end.next_multiple_of(field.kind.align());
-                end = offset + field.kind.size();
-                offset
-            })
-            .collect();
-        (offsets, end.next_multiple_of(self.align()))
+            .map(move |field| (field, self.place_field(field, &mut end)))
     }
 
     /// Whether the struct is scalars only, each at one offset: it is not a
@@ -273,12 +272,18 @@ impl CStruct {
 
     /// The size of the struct in bytes, as `sizeof` gives it.
     pub fn size(&self) -> usize {
-        self.offsets().1
+        let mut end = 0;
+        for field in &self.fields {
+            self.place_field(field, &mut end);
+        }
+        end.next_multiple_of(self.align())
     }
 
     /// The byte offset of each field, in order.
     pub fn field_offsets(&self) -> Vec<usize> {
-        self.offsets().0
+        self.fields_with_offsets()
+            .map(|(_, offset)| offset)
+            .collect()
     }
 
     /// Whether the struct is a union or holds one at any depth.
@@ -295,7 +300,7 @@ impl CStruct {
     }
 
     fn push_leaves(&self, base: usize, leaves: &mut Vec<CLeaf>) {
-        for (field, offset) in self.fields.iter().zip(self.field_offsets()) {
+        for (field, offset) in self.fields_with_offsets() {
             field.kind.push_leaves(base + offset, leaves);
         }
     }

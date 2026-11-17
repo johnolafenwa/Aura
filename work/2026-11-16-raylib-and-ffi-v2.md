@@ -160,7 +160,22 @@ The documentation generator is current. All 1,100 documentation blocks
 passed the example checker on x86-64 Linux (666 check-pass, 195
 check-fail and 239 fragments).
 
-## Follow-Up
+## Native Conversion And Cleanup
 
-Run the host and cross-platform tests and measure struct arrays, array
-fields, union reads, and text callbacks against Rust and Python.
+A callback that trapped while holding two C strings left two native boxes
+allocated. The regression checks the native allocation counters. The entry
+now frees each converted argument after the guarded body exits, including
+when conversion of a later argument or the Aura function traps. The C fixture
+finishes cleanup before Aura reports the trap. With two text arguments,
+the native regression reports 11 boxes allocated and 11 freed.
+
+A four-record array passed to C 64 times incurred 256 conversions from
+native records into Aura values. Generated code checks the C and Aura layouts
+and gives C a private copy of matching record storage. Other lists retain
+the field-by-field conversion. Small fixed scalar arrays can be copied
+directly from a typed class field after checking its storage and length.
+
+The three-language benchmark is in
+[`benchmarks/ffi_calls`](../benchmarks/ffi_calls/README.md#struct-arrays-array-fields-unions-and-text-callbacks).
+The Linux host links raylib 6.0, GLFW, SDL2 and SQLite under Xvfb.
+The full host suites and cross-platform CI are in progress.

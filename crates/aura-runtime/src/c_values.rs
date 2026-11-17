@@ -224,12 +224,20 @@ fn pack_kind(
                 });
             }
             let size = element.size();
-            // A byte array is the common case: text and raw buffers.
-            if let (CFieldKind::Scalar(FfiScalar::U8), Some(held)) =
-                (&**element, list.elements.as_uint8())
-            {
-                bytes[..*count].copy_from_slice(held);
-                return Ok(());
+            // A packed scalar list already has the C element widths. Read
+            // through its byte representation only while the list is borrowed.
+            if cfg!(target_endian = "little") {
+                if let CFieldKind::Scalar(scalar) = &**element {
+                    if let Some(source) = list.elements.scalars(scalar.list_form()) {
+                        let length = size * count;
+                        if length != 0 {
+                            // SAFETY: the form and length were checked above.
+                            let source = unsafe { std::slice::from_raw_parts(source, length) };
+                            bytes[..length].copy_from_slice(source);
+                        }
+                        return Ok(());
+                    }
+                }
             }
             for (index, held) in list.elements.iter().enumerate() {
                 pack_kind(&held, element, field, &mut bytes[index * size..])?;
@@ -280,7 +288,21 @@ pub fn pack(value: &Value, layout: &CStruct, bytes: &mut [u8]) -> Result<(), CVa
             .fields
             .get(UNION_BYTES_FIELD)
             .ok_or_else(mismatch)?;
-        let kind = CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), layout.size());
+        let size = layout.size();
+        if let Value::Vec(list) = &*held {
+            if let Some(source) = list.elements.as_uint8() {
+                if source.len() != size {
+                    return Err(CValueError::UnionLength {
+                        name: layout.name.clone(),
+                        expected: size,
+                        found: source.len(),
+                    });
+                }
+                bytes[..size].copy_from_slice(source);
+                return Ok(());
+            }
+        }
+        let kind = CFieldKind::Array(Box::new(CFieldKind::Scalar(FfiScalar::U8)), size);
         return pack_kind(&held, &kind, UNION_BYTES_FIELD, bytes).map_err(|error| match error {
             CValueError::Length {
                 expected, found, ..
@@ -292,7 +314,7 @@ pub fn pack(value: &Value, layout: &CStruct, bytes: &mut [u8]) -> Result<(), CVa
             other => other,
         });
     }
-    for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+    for (field, offset) in layout.fields_with_offsets() {
         let held = instance.fields.get(&field.name).ok_or_else(mismatch)?;
         pack_kind(&held, &field.kind, &field.name, &mut bytes[offset..])?;
     }
@@ -309,7 +331,7 @@ pub fn unpack(layout: &CStruct, bytes: &[u8]) -> Result<Value, CValueError> {
             Value::Vec(VecValue::new(Type::named("uint8"), elements)),
         );
     } else {
-        for (field, offset) in layout.fields.iter().zip(layout.field_offsets()) {
+        for (field, offset) in layout.fields_with_offsets() {
             fields.insert(
                 field.name.clone(),
                 unpack_kind(&field.kind, &bytes[offset..])?,

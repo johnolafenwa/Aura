@@ -52,6 +52,24 @@ pub(super) struct PlainRecord {
     partial_words: Vec<i32>,
 }
 
+impl PlainRecord {
+    /// Whether copying whole list elements, including their stride, produces
+    /// the bytes that C expects. Distinct native and C padding take the
+    /// field-by-field conversion path.
+    pub(super) fn matches_c_layout(&self, layout: &crate::c_layout::CStruct) -> bool {
+        if !layout.is_plain() || layout.size() as i64 != self.stride {
+            return false;
+        }
+        let leaves = layout.leaves();
+        leaves.len() == self.leaves.len()
+            && leaves.iter().zip(&self.leaves).all(|(c, native)| {
+                c.offset == native.offset as usize
+                    && super::foreign::foreign_scalar(c.scalar.ffi_type())
+                        .is_some_and(|scalar| scalar.kind == native.kind)
+            })
+    }
+}
+
 /// The records a module's code uses, by class name, and their cells.
 pub(super) struct PlainRecords {
     pub(super) env: LayoutEnv,

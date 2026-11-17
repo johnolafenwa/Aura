@@ -38,13 +38,14 @@ needed one of three things:
   is an `extern "C"` class, and pass a C array of the structs. The call
   writes the array before the foreign function runs and, for `mut`, reads
   it back after. An empty list passes a null pointer.
-- **One routine converts values to C bytes.** `c_values.rs` in the runtime
-  packs an instance, a list of instances, and an array field into the
-  layout `c_layout.rs` computes, and unpacks them. The interpreter calls
-  it for every struct. A built program calls it through runtime helpers
-  for a struct that is not one word per scalar and for a struct array, and
-  keeps its inline code for a class of scalars. The helper is given the
-  layout as text in the program's data and reads it once.
+- **Conversion uses the declared C layout.** The interpreter and native
+  runtime pack and unpack values with `c_values.rs` and `c_layout.rs`.
+  Native code passes plain structs in registers or memory according to the
+  host ABI. For a read-only struct pointer it can copy native list storage
+  when each scalar offset, width and stride matches C. For a small struct
+  holding a single scalar array, it checks the field's representation and
+  length before copying its bytes. A union's byte field uses the same check.
+  Other values use the runtime conversion and its diagnostics.
 - **Layout.** An array has the alignment of its element and `N` times its
   size. System V classifies each eightbyte from every scalar that
   overlaps it. AArch64 counts the scalars of an array toward the four a

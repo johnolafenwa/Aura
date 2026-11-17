@@ -89,6 +89,24 @@ pub enum FfiScalar {
 }
 
 impl FfiScalar {
+    /// The packed list representation with the same element bytes as C.
+    pub fn list_form(self) -> crate::list_elements::ListForm {
+        use crate::list_elements::ListForm;
+        match self {
+            Self::Bool => ListForm::Bool,
+            Self::I8 => ListForm::Int8,
+            Self::I16 => ListForm::Int16,
+            Self::I32 => ListForm::Int32,
+            Self::I64 => ListForm::Int64,
+            Self::U8 => ListForm::Uint8,
+            Self::U16 => ListForm::Uint16,
+            Self::U32 => ListForm::Uint32,
+            Self::U64 => ListForm::Uint64,
+            Self::F32 => ListForm::Float32,
+            Self::F64 => ListForm::Float64,
+        }
+    }
+
     /// The by-value boundary type of the scalar.
     pub fn ffi_type(self) -> FfiType {
         match self {
@@ -268,13 +286,23 @@ unsafe extern "C" fn callback_entry(
 ///
 /// `address` is null or points to NUL-terminated bytes.
 pub unsafe fn callback_text(address: usize) -> Result<String, FfiError> {
+    // SAFETY: the caller keeps the text live through the copy.
+    unsafe { checked_callback_text(address) }.map(str::to_owned)
+}
+
+/// The validated text, for conversion directly into an owned Aura string.
+///
+/// # Safety
+///
+/// `address` is null or points to NUL-terminated bytes valid for the lifetime
+/// of the returned string slice.
+pub(crate) unsafe fn checked_callback_text<'a>(address: usize) -> Result<&'a str, FfiError> {
     if address == 0 {
         return Err(FfiError::NullCallbackText);
     }
     // SAFETY: delegated to this function's caller.
     unsafe { std::ffi::CStr::from_ptr(address as *const std::ffi::c_char) }
         .to_str()
-        .map(str::to_owned)
         .map_err(|_| FfiError::InvalidUtf8CallbackText)
 }
 
