@@ -20733,6 +20733,31 @@ pub extern "C-unwind" fn aura_direct_sync_map_get_int64(
     })
 }
 
+/// A match on an integer map copies the word before releasing the cell.
+/// The presence flag distinguishes a stored zero from an absent key.
+///
+/// # Safety
+/// `out` points to writable storage for one aligned `i64`.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_sync_map_get_word(
+    handle: *mut OpaqueValue,
+    key: i64,
+    out: *mut i64,
+) -> i64 {
+    task_runtime_boundary(|| {
+        let found = match with_sync_handle(handle, "sync.Cell", |cell| cell.try_read_map_word(key))
+        {
+            Ok(Some(word)) => Ok(word),
+            Ok(None) => with_sync_handle(handle, "sync.Cell", Clone::clone).read_map_word(key),
+            Err(error) => Err(error),
+        }
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        // SAFETY: generated code provides an aligned slot for this call.
+        unsafe { out.write(found.unwrap_or(0)) };
+        i64::from(found.is_some())
+    })
+}
+
 /// Takes the lock of a `sync.Cell` and moves its value out.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_sync_cell_take(handle: *mut OpaqueValue) -> *mut OpaqueValue {

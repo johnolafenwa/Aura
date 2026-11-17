@@ -29343,6 +29343,35 @@ fn direct_sync_map_lookup_reads_the_same_dictionary_before_and_after_box_transfe
 }
 
 #[test]
+fn direct_sync_map_word_reads_copy_every_integer_and_distinguish_a_miss() {
+    use crate::runtime_value::SyncValue;
+    let map = super::aura_direct_map_empty();
+    for (key, value) in [(0, 0), (1, i64::MIN), (2, i64::MAX)] {
+        super::aura_direct_map_set_index_int64_pair(map, key, value);
+    }
+    let cell = boxed_value(Value::Sync(SyncValue::cell(unsafe { take_value(map) })));
+    for (key, expected) in [
+        (0, Some(0)),
+        (1, Some(i64::MIN)),
+        (2, Some(i64::MAX)),
+        (3, None),
+    ] {
+        let mut word = 42;
+        let present = unsafe { super::aura_direct_sync_map_get_word(cell, key, &mut word) };
+        assert_eq!((present != 0).then_some(word), expected);
+    }
+    let moved = super::aura_direct_sync_cell_take(cell);
+    super::aura_direct_sync_cell_put(cell, moved);
+    let mut word = 0;
+    assert_eq!(
+        unsafe { super::aura_direct_sync_map_get_word(cell, 2, &mut word) },
+        1
+    );
+    assert_eq!(word, i64::MAX);
+    unsafe { release_value(cell) };
+}
+
+#[test]
 fn guarded_words_round_trip_through_host_and_generic_callers() {
     use crate::runtime_value::SyncValue;
     for (kind, initial, changed) in [(0, 41, 42), (1, 0, 1)] {

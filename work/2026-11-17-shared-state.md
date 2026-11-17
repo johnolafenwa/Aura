@@ -96,3 +96,13 @@ copies the matching entry under the lock, then constructs the public
 `Lookup` after releasing the cell. The runtime tests cover maps in
 interpreter storage and detached native boxes, plus a hit and a miss in
 each representation.
+
+## Native Executable Size
+
+Task retirement originally linked the mutex poison and channel wake paths
+into programs that used no locks. A task now installs its own cleanup
+callback on its first acquisition. With the same Linux x86-64 compiler,
+source and linker flags, the stripped hello-world executable shrank from
+1,152,776 to 1,140,008 bytes. The native binary size check passed, and
+the linked symbols no longer include the held-cell poison routine or
+the channel registration and send routines.

@@ -110,9 +110,7 @@ impl HolderState {
             .iter()
             .filter_map(|entry| entry.cell.upgrade())
         {
-            if cell.state.swap(POISONED, Ordering::Release) == CONTENDED {
-                cell.wake_one();
-            }
+            cell.finish(POISONED);
         }
     }
 }
@@ -188,13 +186,18 @@ impl GuardedValue {
         slot: &Option<Self>,
         find: impl FnOnce(&MapValue) -> Option<&Value>,
     ) -> Result<Option<Value>> {
-        let map = match slot {
+        find(Self::map(slot)?)
+            .map(try_clone_array_containing_value)
+            .transpose()
+    }
+
+    fn map(slot: &Option<Self>) -> Result<&MapValue> {
+        match slot {
             Some(Self::Value(Value::Map(map))) => Some(map),
             Some(Self::Native(boxed)) => boxed.as_map(),
             _ => None,
         }
-        .ok_or_else(map_type_error)?;
-        find(map).map(try_clone_array_containing_value).transpose()
+        .ok_or_else(map_type_error)
     }
 
     pub(crate) fn take(slot: &mut Option<Self>) -> Self {
@@ -225,6 +228,52 @@ impl CellState {
 
     fn wake_one(&self) {
         let _ = self.wake_queue().try_send(Value::Unit);
+    }
+
+    fn finish(&self, state: u8) {
+        if self.state.swap(state, Ordering::Release) == CONTENDED {
+            self.wake_one();
+        }
+    }
+
+    /// This read runs entirely in Rust without suspending the task or invoking
+    /// Aura code. The result owns its word before the cell wakes another reader.
+    fn read_locked_map_word(&self, key: i64) -> Result<Option<i64>> {
+        struct ReadGuard<'a> {
+            cell: &'a CellState,
+            exit: u8,
+        }
+        impl Drop for ReadGuard<'_> {
+            fn drop(&mut self) {
+                self.cell.finish(self.exit);
+            }
+        }
+
+        let mut guard = ReadGuard {
+            cell: self,
+            exit: POISONED,
+        };
+        // SAFETY: the caller acquired the cell; the guard releases it.
+        let map = GuardedValue::map(unsafe { &*self.value.get() })?;
+        let word = match map.entries.value_of_i64(key) {
+            None => None,
+            Some(Value::Int(integer)) => Some(
+                integer
+                    .as_i128()
+                    .and_then(|n| i64::try_from(n).ok())
+                    .ok_or_else(|| {
+                        Diagnostic::coded("AU4001", "sync.Map.get expected an int64 value")
+                    })?,
+            ),
+            Some(_) => {
+                return Err(Diagnostic::coded(
+                    "AU4001",
+                    "sync.Map.get expected an int64 value",
+                ))
+            }
+        };
+        guard.exit = UNLOCKED;
+        Ok(word)
     }
 
     fn try_lock(&self) -> bool {
@@ -369,6 +418,22 @@ impl SyncValue {
         read(unsafe { &mut *cell.value.get() })
     }
 
+    /// The outer option distinguishes a contended cell from a missing key.
+    pub(crate) fn try_read_map_word(&self, key: i64) -> Result<Option<Option<i64>>> {
+        let cell = self.as_cell("sync.__aura_map_get")?;
+        cell.try_lock()
+            .then(|| cell.read_locked_map_word(key))
+            .transpose()
+    }
+
+    pub(crate) fn read_map_word(&self, key: i64) -> Result<Option<i64>> {
+        let cell = self.as_cell("sync.__aura_map_get")?;
+        if !cell.try_lock() {
+            lock_contended(cell)?;
+        }
+        cell.read_locked_map_word(key)
+    }
+
     /// Moves `value` into the cell and unlocks it.
     pub fn put(&self, value: Value) -> Result<()> {
         self.put_with(|slot| *slot = Some(GuardedValue::Value(value)))
@@ -385,9 +450,7 @@ impl SyncValue {
         }
         // SAFETY: this task holds the lock.
         write(unsafe { &mut *cell.value.get() });
-        if cell.state.swap(UNLOCKED, Ordering::Release) == CONTENDED {
-            cell.wake_one();
-        }
+        cell.finish(UNLOCKED);
         Ok(())
     }
 

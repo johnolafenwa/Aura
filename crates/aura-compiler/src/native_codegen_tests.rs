@@ -17686,5 +17686,9 @@ fn direct_sync_map_lookup_passes_an_integer_key_without_boxing() {
         symbols.contains("aura_direct_sync_map_get_int64"),
         "{symbols:?}"
     );
+    assert!(
+        symbols.contains("aura_direct_sync_map_get_word"),
+        "{symbols:?}"
+    );
     assert!(symbols.contains("aura_host_sync_map_get"), "{symbols:?}");
 }

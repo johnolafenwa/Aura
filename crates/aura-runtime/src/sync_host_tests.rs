@@ -335,3 +335,27 @@ fn standard_mutex_and_atomic_wrappers_render_as_opaque_handles() {
         "Mutex()"
     );
 }
+
+#[test]
+fn an_integer_map_read_checks_ownership_and_poisons_a_malformed_cell() {
+    let cell = SyncValue::cell(int(44));
+    let held = cell.take().unwrap();
+    assert_eq!(cell.try_read_map_word(1).unwrap(), None);
+    assert!(cell
+        .read_map_word(1)
+        .unwrap_err()
+        .message
+        .contains("already holds"));
+    cell.put(held).unwrap();
+    assert!(cell
+        .read_map_word(1)
+        .unwrap_err()
+        .message
+        .contains("dictionary"));
+    assert!(cell.is_poisoned().unwrap());
+    assert!(cell
+        .read_map_word(1)
+        .unwrap_err()
+        .message
+        .contains("poisoned"));
+}
