@@ -129,3 +129,4 @@ progress on `codex/batch-1-phase-1`. Option removal remains phase 2.
 110. [ADR-0110: `math` gains inverse and hyperbolic functions, and exact integer functions](0110-math-inverse-hyperbolic-and-integer-functions.md) — Accepted; 27 functions and `tau`; NaN passes through, a domain error is `AU4001`, overflow is `AU4002`
 111. [ADR-0111: Byte-string literals, integer indexing of `str`, and text encodings](0111-byte-strings-str-indexing-and-text-encodings.md) — Accepted; `b"..."` is a `list[uint8]`; `text[i]` is a one-character `str`; `bytes.encode` and `bytes.decode` for eleven encodings
 112. [ADR-0112: Set algebra as methods and operators of `set[T]`](0112-set-algebra.md) — Accepted; `union`, `intersection`, `difference`, `symmetric_difference`, three relations, `update`, and `|`, `&`, `-`, `^`
+113. [ADR-0113, exact integers, decimals and complex numbers](0113-numbers-module.md)

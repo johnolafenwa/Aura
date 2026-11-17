@@ -1587,6 +1587,7 @@ maintained surface by area and states how it may change.
   no operating system, exported C functions, and the trap hook.
 - [Memory Module](/manual/mem): plain, volatile, and atomic access to
   integers at a raw address.
+- [Numbers Module](/manual/numbers) covers arbitrary-size integers, exact decimal arithmetic, and complex numbers.
 - [Math Module](/manual/math): exact binary64 constants and scalar rounding,
   power, exponential, logarithmic, and trigonometric functions, with explicit
   domain and overflow behavior.
@@ -1816,6 +1817,12 @@ ownership, diagnostics, and backend behavior.
 | `Array.matmul` | `matmul(other: Array[T]) -> Array[T]` | Matrix product of `[n, k]` with `[k, m]` or `[k]`, or of `[k]` with `[k, m]`. Other shapes are `AU4007`, and integer overflow is `AU4002`. |
 | integer Array wrapping methods | `wrapping_add(rhs)`, `wrapping_sub(rhs)`, `wrapping_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
 | integer Array saturating methods | `saturating_add(rhs)`, `saturating_sub(rhs)`, `saturating_mul(rhs)` | `rhs` is an Array whose shape broadcasts or a scalar of the same element type. Returns a fresh Array. |
+
+## Numbers
+
+`numbers.BigInt`, `numbers.Decimal`, and `numbers.Complex` provide arbitrary-size
+integers, exact decimal arithmetic, and complex numbers. The module also exports
+`factorial` and the decimal rounding modes. [Numbers Module](/manual/numbers)
 
 ## Math
 
@@ -6713,6 +6720,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | integer `/` rejection, floor division/remainder, exact float-context integer literals, `.to_float()`, and shortest-roundtrip float printing | lexer/parser/integer/runtime-value unit tests plus `integer_true_division_*`, `floor_division_and_modulo`, `float_context_integer_literals`, `integer_to_float_rounding`, `float_shortest_roundtrip_printing`, and `float32_rendering` fixtures |
 | Decimal separators and hexadecimal/binary/octal integer literals; exact-width bitwise operators; checked, wrapping, and saturating shifts; exact count typing/ranges; compound-store ordering; and MIR/direct parity | focused lexer/parser/sema/integer/MIR/native/runtime tests; literal and shift failure fixtures; the `bitwise_power` runtime fixture; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | [Math Module](/manual/math) scalar constants and functions: exact immutable `float64` constant bits, generic once-initialized module storage, exact function signatures, checked `int64` rounding conversions, IEEE-754 identity and exceptional-value classification, finite overflow and domain diagnostics, left-to-right once-only evaluation, and MIR/direct parity | `math_namespace_exposes_exact_generic_float64_constants`, `math_namespace_exposes_the_exact_float64_function_contract`, `math_host_builtins_follow_the_ratified_finite_contract`, `math_host_builtins_classify_every_exception_family`, `math_analysis_exposes_qualified_and_aliased_constant_details`, `math_analysis_completes_and_hovers_the_exact_public_surface`, and focused semantic tests; the `math_module_constants`, `math_module_functions`, and `math_log_domain` fixtures; `examples/numbers/scalar_math.au`; compiler-bridge coverage; and the forced MIR/direct parity matrix |
+| Arbitrary-size integer arithmetic, decimal normalization and rounding, and complex arithmetic | The `numbers_values` fixture exercises both execution engines, including an optional result, list storage and task transfer. Runtime tests cover signed magnitudes and halfway rounding. |
 | Power, `round`, and `divmod`: right-associative precedence, exact numeric types, checked integer results, ties-to-even conversion, paired floor quotient/remainder, runtime classification, one-time evaluation, and MIR/direct parity | focused parser/sema/integer/runtime-value/MIR/native tests; `numeric_round_divmod`, `bitwise_power`, and numeric failure fixtures; `examples/numbers/bit_packing.au`; language-server and extension coverage; and the forced MIR/direct parity matrix |
 | Exact triple-quoted and raw string forms plus static f-string format specifications: delimiter and escape rules, no whitespace normalization, Unicode-scalar width and string precision, sign-aware numeric zero padding, type-directed numeric codes, binary32 identity, left-to-right evaluation, focused raw/triple-f diagnostics, formatter preservation, and MIR/direct parity | focused lexer/parser/sema/runtime-value/MIR/native tests; `string_literal_forms_and_format_specs`, `fstring_zero_padding`, and `fstring_*` rejection fixtures; `examples/strings/literal_forms_and_formatting.au`; compiler-bridge and extension grammar/snippet tests; and the forced MIR/direct parity matrix |
 | Match guards, or-patterns, and top-level catch-all bindings: exact-`bool` guards, left-to-right alternatives, identical alternative bindings, guarded-arm reachability and exhaustiveness, delayed `match own` extraction, mutable candidate writeback before false continuation/failure/trap and every selected-arm exit, complete-scrutinee binding capabilities, and MIR/direct parity | focused parser/sema/MIR/analysis tests; the `match_guard*`, `match_own*`, `match_mut_guard*`, `match_root_binding_patterns`, `or_pattern*`, guarded-exhaustiveness, and `match_expression_class_variant_pattern` fixtures; `examples/enums/match_guards_and_or_patterns.au`; compiler-bridge tests; and the forced MIR/direct parity matrix |
@@ -7862,8 +7870,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numbers And Durations
 
-- Integers are fixed-width.
-- Aura has no arbitrary-precision integer, implicit width promotion, rotate operator, literal suffix, hexadecimal floating literal, or distinct unsigned-right-shift operator.
+- Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
+- Integer operations require explicit width conversion. Rotate operators, literal suffixes, hexadecimal floating literals and a distinct unsigned-right-shift operator are outside the current syntax.
 - Power is builtin-only.
 - `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
@@ -18693,8 +18701,8 @@ use the same host math library for finite results.
 ## Limits And Implementation-Defined Behavior
 
 The module covers scalar `float64` and `int64` only. It has no `float32`
-forms and no complex, decimal, arbitrary-precision, vectorized, or random
-operations. The integer functions do not widen: a result outside `int64` is
+forms. For complex, decimal, and arbitrary-size integer arithmetic, use
+the [Numbers Module](/manual/numbers). The integer functions do not widen: a result outside `int64` is
 `AU4002`. The logarithm functions take one value and have no alternate-base
 form.
 
@@ -19566,6 +19574,91 @@ The fixed resource caps are an accepted design decision. So is the policy for in
 These are known current limitations: the repeated-header representation, the missing close operation on WebSocket listeners, incomplete WebSocket cancellation, and discarded WebSocket close errors. The protocol surface is exactly the API on this page.
 
 Design records: [ADR-0018: Fixed resource read limits](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0018-fixed-resource-read-limits.md) and [ADR-0019: Duration conversion and timer policy](https://github.com/johnolafenwa/Aura/blob/main/architecture_docs/decisions/0019-duration-conversion-and-timer-policy.md).
+
+## Source: docs/manual/numbers.md
+
+# Numbers Module
+
+Import `numbers` for arbitrary-size integers, exact decimal arithmetic, and
+complex arithmetic. Convert values explicitly before combining them. A
+literal such as `3` has type `int64`.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+## BigInt
+
+`BigInt.from_int(n)` takes an `int64`. `BigInt.parse(text)` reads a signed
+decimal integer and returns `BigInt | None`. For another base, pass a radix
+from 2 through 36 to `BigInt.parse_radix(text, radix)`. Digits may include
+upper- or lowercase letters. Omit any base prefix.
+`BigInt.from_float(x)` truncates a finite `float64` toward zero and returns
+`None` for infinity or NaN.
+
+| Operation | Result |
+| --- | --- |
+| `a + b`, `a - b`, `a * b`, `-a` | Exact integer arithmetic. |
+| `a // b`, `a % b`, `a.divmod(b)` | Floor quotient, remainder with the sign of the divisor, or both. |
+| `a.pow(exponent)`, `a.pow_mod(exponent, modulus)` | Integer power with a nonnegative `int64` exponent, or modular power with `BigInt` arguments. |
+| `a.gcd(b)`, `a.lcm(b)`, `a.sqrt()` | Nonnegative greatest common divisor, least common multiple, or floor square root. |
+| `a.bit_and(b)`, `a.bit_or(b)`, `a.bit_xor(b)` | Bitwise arithmetic with a two's-complement interpretation for negative integers. |
+| `a.shift_left(count)`, `a.shift_right(count)` | Shift by a nonnegative `int64`. Right shift rounds toward negative infinity. |
+| `a.bit_length()`, `a.is_even()`, `a.sign()`, `a.is_zero()` | Magnitude bits, parity, sign from -1 to 1, or zero test. |
+| `a.compare(b)`, `a.abs()`, `a.copy()` | Ordering from -1 to 1, absolute value, or a separate equal value. |
+| `a.to_int()`, `a.to_float()`, `a.to_radix(radix)` | `int64 | None`, nearest `float64`, or signed text in the chosen radix. |
+| `numbers.factorial(n)` | The factorial of a nonnegative `int64`, returned as a `BigInt`. |
+
+Use `str(a)` for decimal text and the usual comparison operators for two
+`BigInt` values.
+
+## Decimal
+
+A `Decimal` holds an integer coefficient times ten raised to a signed
+exponent. `Decimal.from_parts(BigInt.from_int(1995), -2)` represents 19.95
+exactly. `from_int` and `from_big` lift integers. `Decimal.parse(text)`
+accepts a sign, decimal point, and optional exponent and returns
+`Decimal | None`. `Decimal.from_float(x)` preserves the exact binary value
+of a finite float. To represent a price, start with decimal text or integer
+parts.
+
+Addition, subtraction, multiplication and nonnegative integer powers are
+exact. The runtime removes trailing zeros from the coefficient, so equal
+values compare equal independent of the input scale. Zero has exponent
+zero. `a.coefficient()` and `a.exponent()` expose these normalized parts.
+
+| Operation | Result |
+| --- | --- |
+| `a / b` | Quotient rounded to 28 significant digits, with ties to even. |
+| `a.divide(b, digits, rounding)` | Quotient rounded to the requested number of significant digits. |
+| `a.round(places, rounding)` | Rounds to decimal places. Negative places round to tens, hundreds, and beyond. |
+| `a.sqrt(digits)`, `a.pow(exponent)` | Positive square root rounded to significant digits, or exact nonnegative integer power. |
+| `a.to_big(rounding)`, `a.trunc()`, `a.floor()`, `a.ceil()` | An integer rounded in the requested direction. |
+| `a.to_plain()`, `a.to_fixed(places)` | Unscaled display text, or fixed-point text rounded half to even with exactly the requested decimal places. |
+| `a.to_float()`, `str(a)` | A `float64` or a decimal string which may use exponent notation. |
+| `a.compare(b)`, `a.abs()`, `a.copy()`, `a.sign()`, `a.is_zero()` | Ordering, absolute value, a separate equal value, sign, or zero test. |
+
+`Rounding.HalfEven` chooses the nearest value and sends a tie to the even
+last digit. `HalfUp` sends a tie away from zero and `HalfDown` toward zero.
+`Up` and `Down` always round away from or toward zero. `Floor` and
+`Ceiling` round toward negative and positive infinity. Decimal arithmetic
+uses the precision and rounding mode of the particular operation.
+
+## Complex
+
+`Complex(re=x, im=y)` stores two `float64` components. Both fields are
+public. Use `+`, `-`, `*`, `/`, unary `-`, and equality on complex values.
+`from_polar(radius, angle)` takes an angle in radians. `abs()` returns the
+magnitude and `arg()` the angle. `conj()` negates the imaginary component.
+`exp()`, `log()`, `sqrt()`, and `pow(exponent)` calculate complex functions
+using the principal branch. `is_finite()` tests both components.
+
+## Limits
+
+Invalid text gives `None`. An invalid arithmetic argument such as a zero
+integer divisor or a negative factorial gives `AU4001`. Decimal division and
+square root accept 1 to 1,000,000 significant digits. A normalized decimal
+exponent must lie between −2⁶² and 2⁶² inclusive. An exponent outside that
+range traps with `AU4002`. A requested power, shift, factorial or decimal
+scale which exceeds the runtime's construction limit traps with `AU4005`.
 
 ## Source: docs/manual/numeric-arrays.md
 
@@ -30387,6 +30480,22 @@ and then look at how to convert between them, which in Aura you always do
 yourself. Lists,
 dictionaries, and sets get a chapter of their own,
 [Chapter 8](/book/ch08-00-collections).
+
+## Exact Numbers
+
+Suppose we sell three tickets at 19.95 each. We can keep the price exact
+from the input through the receipt by storing 1995 cents and a decimal
+exponent of −2. The program also computes a factorial larger than an
+`int64` and squares the imaginary unit.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+`Decimal.from_parts` reads those digits as 19.95. We convert the quantity
+with `Decimal.from_int(3)` so both sides of the multiplication have the
+same type. The multiplication preserves the exact value and `to_fixed(2)`
+writes `59.85` on the receipt. For a large integer read from a file, we
+can use `BigInt.parse(text)` and match on the result before computing with
+it. [Numbers Module](/manual/numbers)
 
 ## Integers
 
@@ -65838,6 +65947,15 @@ so that the first week with Aura is less of a negotiation with the compiler.
 
 If you have read the book from the start, you have already met all of these.
 Treat this as the cheat sheet you hand a Python colleague.
+
+## Python Numeric Types
+
+When a Python integer grows beyond 64 bits, its storage grows with it. In
+Aura we choose `numbers.BigInt` for that range. For prices we use
+`numbers.Decimal.parse("19.95")` and match the result, or construct the
+value from a coefficient and exponent. We pass precision and rounding to
+individual operations. For Python's `1j`, write
+`numbers.Complex(re=0.0, im=1.0)`. [Numbers Module](/manual/numbers)
 
 ## Scripts and `main`
 

@@ -4702,6 +4702,7 @@ test("compiler bridge exposes control-plane module completions", async () => {
       "trace",
       "control",
       "gzip",
+      "numbers",
       "regex",
       "time",
       "simd",
@@ -4738,6 +4739,11 @@ test("compiler bridge exposes control-plane module completions", async () => {
     const simdNames = await completionNames("simd");
     for (const expected of ["F64x2", "F64x4", "F32x4", "F32x8", "I64x2", "I64x4"]) {
       assert.ok(simdNames.has(expected), `simd completion should include ${expected}`);
+    }
+
+    const numberNames = await completionNames("numbers");
+    for (const expected of ["BigInt", "Decimal", "Complex", "Rounding", "factorial"]) {
+      assert.ok(numberNames.has(expected), `numbers completion should include ${expected}`);
     }
 
     const regexNames = await completionNames("regex");

@@ -1,0 +1,10 @@
+from numbers import BigInt, Complex, Decimal, factorial
+
+
+def main() -> None:
+    print(str(factorial(30)))
+    price = Decimal.from_parts(BigInt.from_int(1995), -2)
+    quantity = Decimal.from_int(3)
+    print((price * quantity).to_fixed(2))
+    i = Complex(re=0.0, im=1.0)
+    print((i * i).re)
