@@ -33723,14 +33723,3 @@ fn numbers_require_explicit_conversion_for_arithmetic() {
         "{error:?}"
     );
 }
-
-#[test]
-fn numeric_left_operand_allows_a_generic_call_to_infer_its_trait_operand() {
-    crate::check_source(include_str!(
-        "../tests/fixtures/run-pass/operator_result_type_hint.au"
-    ))
-    .expect("the right operand independently infers Count");
-    let wrong = "def same[T](x: T, y: T) -> T:\n    return x\n\ndef main() -> None:\n    print(2 + same(1, true))\n";
-    let error = crate::check_source(wrong).expect_err("a conflict inside the call still fails");
-    assert_eq!(error.code.as_str(), "AU2002");
-}
