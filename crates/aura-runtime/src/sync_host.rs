@@ -34,6 +34,9 @@ pub(crate) struct HolderState {
     held: RefCell<Vec<HeldCell>>,
     epoch: Cell<u64>,
     depth: Cell<usize>,
+    /// Installed on acquisition. Task retirement in programs without
+    /// mutexes can link without the channel wake and poisoning code.
+    on_exit: Cell<Option<fn(&HolderState)>>,
 }
 
 struct HeldCell {
@@ -56,6 +59,7 @@ impl HolderState {
             }
             slot.epoch = epoch;
         } else {
+            self.on_exit.set(Some(Self::abandon_all));
             held.push(HeldCell {
                 cell: Arc::downgrade(cell),
                 epoch,
@@ -87,6 +91,10 @@ impl HolderState {
         }
         self.depth.set(last);
         true
+    }
+
+    fn abandon_all(&self) {
+        self.abandon_since(HeldCellMark(0));
     }
 
     fn abandon_since(&self, mark: HeldCellMark) {
@@ -123,7 +131,9 @@ fn with_current_holder<T>(f: impl FnOnce(&HolderState) -> T) -> T {
 
 /// Poisons every cell still held at task completion.
 pub(crate) fn holder_ended(holder: &HolderState) {
-    holder.abandon_since(HeldCellMark(0));
+    if let Some(poison) = holder.on_exit.get() {
+        poison(holder);
+    }
 }
 
 /// Marks the start of a recovery call on this task. A caller can release
