@@ -59,3 +59,11 @@ and out-of-order release across a recovery boundary. The language server
 passed all 159 tests. The two backends previously rendered a mutex
 differently. The manual and a fixture specify `<sync-handle>` for direct
 and nested rendering.
+
+## Local Names
+
+The Windows compiler fixture suite found five existing programs defining
+their own `Cell` enum that failed MIR validation. Linux reproduced the
+same failure with either `Cell` or `Atom` as a local enum. The shared
+state module's two host handles now keep their qualified runtime names.
+The regression declares both enums and calls the imported atomic counter.

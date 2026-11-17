@@ -31533,12 +31533,18 @@ fn tuple_target_ranges(elements: &[BindingTarget], arity: usize) -> Vec<std::ops
     crate::ast::rest_element_ranges(&is_rest, arity).expect("checked tuple targets fit their value")
 }
 
-fn is_builtin_class(class: &crate::sema::ClassInfo) -> bool {
-    class.is_builtin
+fn mir_class_has_local_name(program: &Program, class: &crate::sema::ClassInfo) -> bool {
+    if class.is_builtin {
+        // The sync runtime identifies its handles as sync.Cell and sync.Atom.
+        // Older host classes retain their established, unqualified names.
+        class.module_name != "sync"
+    } else {
+        class.module_name == program.module_name
+    }
 }
 
 fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         class.decl.name.clone()
     } else {
         format!("{}.{}", class.module_name, class.decl.name)
@@ -31616,7 +31622,7 @@ fn mir_class_method_name(
     class: &crate::sema::ClassInfo,
     method_name: &str,
 ) -> String {
-    if class.module_name == program.module_name || is_builtin_class(class) {
+    if mir_class_has_local_name(program, class) {
         format!("{}.{}", class.decl.name, method_name)
     } else {
         format!("{}::{}.{}", class.module_name, class.decl.name, method_name)
@@ -31632,7 +31638,7 @@ fn mir_class_type_name(
         .builtin_constructor()
         .map(|constructor| constructor.qualified_name().to_string())
         .unwrap_or_else(|| {
-            if class.module_name == program.module_name || is_builtin_class(class) {
+            if mir_class_has_local_name(program, class) {
                 fallback.to_string()
             } else {
                 format!("{}.{}", class.module_name, class.decl.name)

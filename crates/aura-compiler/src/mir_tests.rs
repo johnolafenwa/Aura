@@ -4267,6 +4267,32 @@ def main():
 }
 
 #[test]
+fn sync_handles_do_not_claim_local_enum_names() {
+    let source = r#"
+import sync
+
+enum Cell:
+    Open
+
+enum Atom:
+    Ready
+
+def main():
+    print(Cell.Open)
+    print(Atom.Ready)
+    print(sync.AtomicInt(12).load())
+"#;
+    let mir = crate::lower_source_to_mir(source).expect("user enums keep their local names");
+    for name in ["sync.Cell", "sync.Atom"] {
+        assert!(mir.classes.iter().any(|class| class.name == name));
+    }
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        "Cell.Open\nAtom.Ready\n12\n"
+    );
+}
+
+#[test]
 fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
     for (source, code) in [
         (
@@ -4286,7 +4312,8 @@ fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
 #[test]
 fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
-    crate::lower_source_to_mir(source).expect("lock error edges have explicit ownership");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    validate_loan_flow(&module).expect("lock error edges have explicit ownership");
     let output = crate::run_source(source).expect("early exits release the lock");
     assert_eq!(
         output.stdout,
