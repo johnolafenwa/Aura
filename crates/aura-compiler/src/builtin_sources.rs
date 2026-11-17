@@ -150,6 +150,12 @@ fn merge(host: &mut ModuleNamespace, part: ModuleNamespace) {
         host.functions
             .retain(|name, _| !name.starts_with("__aura_"));
         host.classes.remove("__Store");
+        // The canonical type registry follows transitive imports as well
+        // as direct exports. Keep the raw self import's internal shape for
+        // lowering without publishing it as a nameable type annotation.
+        if let Some(raw) = host.imported_modules.get_mut("collections") {
+            raw.classes.remove("__Store");
+        }
     }
     host.closures.extend(part.closures);
     host.comprehensions.extend(part.comprehensions);

@@ -17663,3 +17663,63 @@ fn leaf_method_call_fixtures_emit_directly() {
         emit_host_object(&mir).expect("leaf call fixture should emit directly");
     }
 }
+
+#[test]
+fn primitive_ordered_operations_use_the_native_receiver_abi() {
+    let source = r#"
+from collections import Deque, Heap, SortedMap, SortedSet
+
+def main():
+    mut q = Deque[int64]()
+    q.push_front(4)
+    print(q.pop_back())
+    mut h = Heap[int64].max()
+    h.push(8)
+    print(h.pop())
+    mut m = SortedMap[int64, int64]()
+    m.set(7, 9)
+    print(m.get(7))
+    mut s = SortedSet[int64]()
+    s.add(2)
+    print(s.remove(2))
+"#;
+    let module = lower_source_to_mir(source).expect("ordered receiver operations lower");
+    let object = emit_host_object(&module).expect("ordered receiver operations compile");
+    let symbols = exact_referenced_symbols(&object);
+    assert!(symbols.contains("aura_direct_ordered_i64"));
+    assert!(symbols.contains("aura_direct_ordered_i64_lookup"));
+    assert!(symbols.contains("aura_direct_ordered_local_words"));
+    assert!(symbols.contains("aura_direct_ordered_local_step"));
+}
+
+#[test]
+fn ordered_word_view_requires_a_fresh_confined_receiver() {
+    let module = lower_source_to_mir(
+        r#"
+from collections import Deque
+
+def main():
+    mut local = Deque[int64]()
+    local.push_back(4)
+    print(local.pop_back())
+    mut shared = Deque[int64]()
+    shared.push_back(7)
+    mut saved: list[Deque[int64]] = []
+    saved.append(shared)
+    mut copy = saved.pop()
+    print(copy.pop_back())
+    for i in range(3):
+        mut repeated = Deque[int64]()
+        repeated.push_front(i)
+        print(repeated.pop_front())
+"#,
+    )
+    .expect("confinement fixture lowers");
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    let shapes = shapes::ProgramShapes::new(&module, std::iter::empty());
+    assert_eq!(ordered::word_local_roots(main, &shapes), ["local"]);
+}

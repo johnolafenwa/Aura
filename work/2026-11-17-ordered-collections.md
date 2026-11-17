@@ -39,3 +39,12 @@ Both negative storage diagnostics matched their snapshots. The four
 runtime storage tests, native host argument-count checks and all 18
 manual examples passed. The benchmark runner checks a checksum for every
 collection and language before reporting medians.
+
+The first direct ABI stored each concrete int64 in one word. Against
+Rust on 8,192 keys, this reduced sorted map to 2.46 times Rust and
+sorted set to 2.06 times Rust. Heap still took 4.46 times Rust and
+deque took 31.27 times Rust. All four workloads beat the Python
+references. A call profile attributed 6.55 million instructions to
+class field lookups in the four workloads. The next optimization opens a
+local deque or heap once when its only uses are standard pushes, pops
+and release.

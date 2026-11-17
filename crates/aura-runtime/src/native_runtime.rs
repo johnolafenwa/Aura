@@ -15814,6 +15814,13 @@ pub extern "C-unwind" fn aura_direct_task_arg_buffer_disarm(id: i64) {
     })
 }
 
+#[path = "ordered_collections_native.rs"]
+mod ordered_collections_native;
+pub use ordered_collections_native::{
+    aura_direct_ordered_i64, aura_direct_ordered_i64_lookup, aura_direct_ordered_local_step,
+    aura_direct_ordered_local_words,
+};
+
 /// Runs a host builtin that takes owned arguments from generated code.
 fn run_owned_host_builtin(
     args_ptr: *mut i64,

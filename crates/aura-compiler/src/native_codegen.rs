@@ -2113,6 +2113,15 @@ impl<'a> NativeCodegen<'a> {
             })
             .cloned()
             .collect::<HashSet<_>>();
+        let mut ordered_word_views = HashMap::new();
+        for local in ordered::word_local_roots(function, &self.program_shapes) {
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, types::I64);
+            let zero = builder.iconst(types::I64, 0);
+            builder.def_var(variable, zero);
+            ordered_word_views.insert(local, variable);
+        }
         let mut key_loops = HashMap::new();
         let mut key_loop_keys = HashMap::new();
         for (list, key_loop) in
@@ -2311,6 +2320,7 @@ impl<'a> NativeCodegen<'a> {
             node_read_maps,
             key_loops,
             key_loop_keys,
+            ordered_word_views,
             lent_entry_copies,
             lent_fused_copies: HashSet::new(),
             shadow_fused_copies: HashSet::new(),
@@ -3831,6 +3841,8 @@ struct FunctionCompiler<'a> {
     key_loops: HashMap<String, (key_loops::KeyLoop, Var, Var)>,
     /// The key local of each of `key_loops`, with its keys copy.
     key_loop_keys: HashMap<String, String>,
+    /// The packed backing of a freshly constructed, unaliased word sequence.
+    ordered_word_views: HashMap<String, Var>,
     fused_entry_copies: HashMap<String, Var>,
     /// Each retained handle with the retain that made it and the handle it
     /// retained. A consumer that copies the value into its slot turns the
@@ -4790,6 +4802,15 @@ impl<'a> FunctionCompiler<'a> {
         );
         self.shaped_boxes.clear();
         self.fresh_str_copies.clear();
+        // Clear the cached backing when its owning local is initialized or dropped.
+        if let Instruction::Assign { target: place, .. } | Instruction::Release { place } =
+            instruction
+        {
+            if let Some(&cache) = self.ordered_word_views.get(place) {
+                let zero = self.builder.iconst(types::I64, 0);
+                self.builder.def_var(cache, zero);
+            }
+        }
         if !self.element_promotions.is_empty() {
             if let Some(temps) = self
                 .element_promotions
@@ -9716,6 +9737,20 @@ impl<'a> FunctionCompiler<'a> {
     ) -> std::result::Result<ValueRef, String> {
         if let Some(result) = self.compile_borrowed_element_member_call(object, callee, args)? {
             return Ok(result);
+        }
+        if let (
+            Operand::Place(place),
+            MemberCallee::Method {
+                dispatch: MethodDispatch::Static { function },
+                ..
+            },
+        ) = (object, callee)
+        {
+            if receiver_place == Some(place.as_str()) {
+                if let Some(result) = self.compile_ordered_i64_method(function, place, args)? {
+                    return Ok(result);
+                }
+            }
         }
         if let MemberCallee::Method { field, dispatch } = callee {
             if let Some(result) =
@@ -20579,6 +20614,8 @@ mod range_loops;
 #[path = "native_codegen_shadow_reads.rs"]
 mod shadow_reads;
 
+#[path = "native_codegen_ordered.rs"]
+mod ordered;
 #[path = "native_codegen_plain.rs"]
 mod plain;
 #[path = "native_codegen_shapes.rs"]

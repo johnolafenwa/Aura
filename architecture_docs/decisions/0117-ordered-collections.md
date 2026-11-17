@@ -33,6 +33,22 @@ store and takes a private copy when another value still holds the snapshot.
 The hidden host functions are visible only to the standard module. Classes
 with custom ordering continue to use their Aura `Ord` methods.
 
+For a local collection of `int64`, generated code passes the receiver and
+integer arguments to the runtime directly. The deque and heaps keep one
+word per element. The B-tree keeps word keys and payloads. Source calls
+and direct calls access the same field, including calls through a generic
+function or a containing class. A mutable receiver in a projected place
+uses the ordinary write-back path.
+
+A fresh local word deque or heap can retain its packed storage address
+between pushes and pops. MIR checks every use in the function. The root
+must be constructed once, and every use must be a standard push, pop or
+release. Copies, captures, loans, arguments, other methods, projections,
+constructor loops and debug builds use the guarded receiver path. The
+runtime detaches snapshots before opening the backing store and declines
+shared receivers. The root owns the allocation until release, including
+when the element buffer grows or a task yields.
+
 ## Ownership and access
 
 Insertion moves a value into storage. A pop or removal transfers ownership

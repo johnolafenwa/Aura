@@ -162,3 +162,122 @@ fn operations_reject_wrong_storage_and_arguments() {
     assert!(map_bound(vec![map.clone(), number(0), number(7)], None).is_err());
     assert!(deque_get(vec![map, number(0)], None).is_err());
 }
+
+#[test]
+fn native_scalar_stores_round_trip_through_standard_operations() {
+    let mut queue = I64Op::PushFront.new_store(false);
+    queue.write_i64(I64Op::PushFront, 12, 0).unwrap();
+    let saved = Value::CollectionStore(queue.clone());
+    assert_eq!(queue.write_i64(I64Op::PopBack, 0, 0).unwrap(), Some(12));
+    assert_eq!(
+        call(deque_get, vec![saved, number(-1)]).render(),
+        "Lookup.Found(12)"
+    );
+
+    for maximum in [false, true] {
+        let mut heap = I64Op::HeapPush.new_store(maximum);
+        heap.write_i64(I64Op::HeapPush, 11, 0).unwrap();
+        let state = call(heap_push, vec![Value::CollectionStore(heap), number(4)]);
+        let (_, first) = split(call(heap_take, vec![state]));
+        assert_eq!(first, number(if maximum { 11 } else { 4 }));
+    }
+
+    for (create, unit) in [(I64Op::MapSet, false), (I64Op::SetAdd, true)] {
+        let mut tree = create.new_store(false);
+        tree.write_i64(create, 3, 7).unwrap();
+        tree.write_i64(create, 1, 9).unwrap();
+        let state = Value::CollectionStore(tree);
+        assert_eq!(call(len, vec![state.clone()]), number(2));
+        assert_eq!(
+            call(map_has, vec![state.clone(), number(1)]),
+            Value::Bool(true)
+        );
+        let expected = if unit {
+            "Lookup.Found((1, None))"
+        } else {
+            "Lookup.Found((1, 9))"
+        };
+        assert_eq!(
+            call(map_bound, vec![state.clone(), number(2), number(0)]).render(),
+            expected
+        );
+        let (remaining, removed) = split(call(map_take, vec![state, number(3)]));
+        assert_eq!(
+            removed.render(),
+            if unit {
+                "Lookup.Found(None)"
+            } else {
+                "Lookup.Found(7)"
+            }
+        );
+        assert_eq!(call(len, vec![remaining]), number(1));
+    }
+}
+
+#[test]
+fn scalar_layouts_compare_and_iterate_like_the_general_store() {
+    for (kind, op) in [
+        (0, I64Op::PushBack),
+        (1, I64Op::HeapPush),
+        (2, I64Op::HeapPush),
+        (3, I64Op::MapSet),
+    ] {
+        let mut general = call(new, vec![number(kind)]);
+        let mut packed = op.new_store(kind == 2);
+        for n in [5, 1, 8, 3] {
+            packed.write_i64(op, n, n + 10).unwrap();
+            general = match kind {
+                0 => call(deque_push, vec![general, number(n), Value::Bool(false)]),
+                1 | 2 => call(heap_push, vec![general, number(n)]),
+                _ => call(map_put, vec![general, number(n), number(n + 10)]),
+            };
+        }
+        let state = Value::CollectionStore(packed);
+        assert_eq!(general, state);
+        if kind == 3 {
+            for (op, arguments) in [
+                (
+                    map_range as host_builtins::HostBuiltinFn,
+                    vec![number(2), number(8)],
+                ),
+                (map_bound, vec![number(4), number(1)]),
+                (map_edge, vec![Value::Bool(true)]),
+                (map_drain, vec![]),
+            ] {
+                let with_state = |state: Value| {
+                    let mut args = vec![state];
+                    args.extend(arguments.clone());
+                    call(op, args)
+                };
+                assert_eq!(with_state(general.clone()), with_state(state.clone()));
+            }
+        }
+    }
+}
+
+#[test]
+fn confined_words_detach_once_and_survive_buffer_growth() {
+    for (push, pop, descending) in [
+        (I64Op::PushBack, I64Op::PopFront, false),
+        (I64Op::HeapPush, I64Op::HeapPop, false),
+        (I64Op::HeapPush, I64Op::HeapPop, true),
+    ] {
+        let mut store = push.new_store(descending);
+        store.write_i64(push, 0, 0).unwrap();
+        let snapshot = store.clone();
+        let address = store.local_words().unwrap();
+        // SAFETY: store stays live and is only accessed through this
+        // address until the final pop. Its earlier snapshot is detached.
+        unsafe {
+            for value in 1..1024 {
+                assert_eq!(Store::local_step(address, push as i64, value), Some(0));
+            }
+            for value in 0..1024 {
+                let expected = if descending { 1023 - value } else { value };
+                assert_eq!(Store::local_step(address, pop as i64, 0), Some(expected));
+            }
+            assert_eq!(Store::local_step(address, pop as i64, 0), None);
+        }
+        assert_eq!(call(len, vec![Value::CollectionStore(snapshot)]), number(1));
+    }
+}
