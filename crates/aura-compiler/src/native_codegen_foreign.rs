@@ -51,7 +51,7 @@ pub(super) struct ForeignScalar {
     /// How the narrow C type fills a full register.
     extension: Extension,
     /// The Aura scalar the value is on this side.
-    kind: ScalarKind,
+    pub(super) kind: ScalarKind,
 }
 
 pub(super) fn foreign_scalar(ffi_type: FfiType) -> Option<ForeignScalar> {
@@ -216,7 +216,6 @@ impl NativeCodegen<'_> {
                     let text = match callback.params.iter().any(|param| param.text) {
                         true => Some(CallbackText {
                             copy: codegen.runtime[RuntimeFn::FfiCallbackText],
-                            release: codegen.runtime[RuntimeFn::FfiReleaseCallbackText],
                             name: string_data_id(
                                 builder.module(),
                                 &mut codegen.string_data,
@@ -250,10 +249,16 @@ impl NativeCodegen<'_> {
         let arguments = builder.block_params(entry);
         let flags = MemFlags::trusted();
         let count = callback.params.len();
-        let slot = builder.create_sized_stack_slot((count as u32 + 1) * 8, 3);
+        // The guarded body records each completed text copy after the result
+        // word. The entry owns the copies even if conversion or the call traps.
+        let texts = callback.params.iter().filter(|param| param.text).count();
+        let frame_words = count + 1 + texts;
+        let slot = builder.create_sized_stack_slot(frame_words as u32 * 8, 3);
         let frame = builder.stack_addr(types::I64, slot, 0);
         let zero = builder.iconst(types::I64, 0);
-        builder.store(flags, zero, frame, count as i32 * 8);
+        for index in count..frame_words {
+            builder.store(flags, zero, frame, index as i32 * 8);
+        }
         // A null pointer argument reads and writes this word instead.
         let spare = builder.create_sized_stack_slot(8, 3);
         let spare = builder.stack_addr(types::I64, spare, 0);
@@ -278,6 +283,13 @@ impl NativeCodegen<'_> {
         let body = builder.func_addr(types::I64, body);
         let guard = builder.import_function(self.runtime[RuntimeFn::FfiCallbackGuard]);
         builder.call(guard, &[body, frame]);
+        if texts != 0 {
+            let release = builder.import_function(self.runtime[RuntimeFn::FfiReleaseCallbackText]);
+            for index in (count + 1)..frame_words {
+                let copy = builder.load(types::I64, flags, frame, index as i32 * 8);
+                builder.call(release, &[copy]);
+            }
+        }
 
         for (index, address) in pointees {
             let scalar = foreign_scalar(callback.params[index].scalar.ffi_type())
@@ -298,11 +310,10 @@ impl NativeCodegen<'_> {
 }
 
 /// What a callback's body needs to pass C text to its function: the
-/// runtime functions that copy the text and release the copy, and the
+/// runtime function that copies the text, and the
 /// name of the Aura function, for the report of text that is not valid.
 pub(super) struct CallbackText {
     copy: FuncHandle,
-    release: FuncHandle,
     name: DataHandle,
     name_length: usize,
 }
@@ -327,12 +338,11 @@ pub(super) fn emit_callback_body(
         let name = builder.import_data(text.name);
         (
             builder.import_function(text.copy),
-            builder.import_function(text.release),
             builder.symbol_value(types::I64, name),
             builder.iconst(types::I64, text.name_length as i64),
         )
     });
-    let mut copies = Vec::new();
+    let mut next_copy = count + 1;
     let arguments = callback
         .params
         .iter()
@@ -341,9 +351,10 @@ pub(super) fn emit_callback_body(
             let scalar = foreign_scalar(param.scalar.ffi_type()).expect("a callback takes scalars");
             let word = builder.load(scalar.kind.signature_type(), flags, frame, index as i32 * 8);
             match (text, param.text) {
-                (Some((copy, _, name, length)), true) => {
+                (Some((copy, name, length)), true) => {
                     let copy = builder.call(copy, &[word, name, length]).results[0];
-                    copies.push(copy);
+                    builder.store(flags, copy, frame, next_copy as i32 * 8);
+                    next_copy += 1;
                     copy
                 }
                 _ => word,
@@ -352,11 +363,6 @@ pub(super) fn emit_callback_body(
         .collect::<Vec<_>>();
     let target = builder.import_function(target);
     let results = builder.call(target, &arguments).results;
-    if let Some((_, release, ..)) = text {
-        for copy in copies {
-            builder.call(release, &[copy]);
-        }
-    }
     // The function returns its result, then one word for each `mut`
     // parameter in order.
     let written = callback.params.iter().filter(|param| param.pointer).count();
@@ -423,22 +429,7 @@ pub(super) fn foreign_param_type(
 
 /// The list access code of a list that keeps `scalar` elements unboxed.
 fn scalar_list_access(scalar: crate::ffi::FfiScalar) -> i64 {
-    use crate::ffi::FfiScalar as Scalar;
-    use aura_runtime::native_runtime::DirectListAccess as Access;
-    let access = match scalar {
-        Scalar::Bool => Access::Bool,
-        Scalar::I8 => Access::Int8,
-        Scalar::I16 => Access::Int16,
-        Scalar::I32 => Access::Int32,
-        Scalar::I64 => Access::Int64,
-        Scalar::U8 => Access::Uint8,
-        Scalar::U16 => Access::Uint16,
-        Scalar::U32 => Access::Uint32,
-        Scalar::U64 => Access::Uint64,
-        Scalar::F32 => Access::Float32,
-        Scalar::F64 => Access::Float64,
-    };
-    access as i64
+    i64::from(scalar.list_form().access())
 }
 
 /// The boundary type of the result of a foreign call.
@@ -788,13 +779,38 @@ impl FunctionCompiler<'_> {
                 }
                 FfiType::StructPointer(layout) if call.params[index].pointer => {
                     let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
-                    let array = self.builder.call(
-                        self.runtime[RuntimeFn::FfiPackStructs],
-                        &[word, descriptor, length],
-                    );
-                    let array = array.results[0];
+                    let mut fast_record = None;
+                    if call.params[index].passing != MirReceiverKind::BorrowMut && layout.is_plain()
+                    {
+                        let element = ensure_direct_type(
+                            &Type::named(&layout.name),
+                            &self.classes,
+                            "foreign struct array element",
+                        )?;
+                        fast_record = self
+                            .plain_record(&element)?
+                            .filter(|record| record.matches_c_layout(layout));
+                    }
+                    let (array, allocation) = if let Some(record) = fast_record {
+                        self.copy_foreign_record_list(
+                            word,
+                            &record,
+                            layout.size(),
+                            descriptor,
+                            length,
+                        )
+                    } else {
+                        let packed = self
+                            .builder
+                            .call(
+                                self.runtime[RuntimeFn::FfiPackStructs],
+                                &[word, descriptor, length],
+                            )
+                            .results[0];
+                        (packed, packed)
+                    };
                     arguments.push_word(array);
-                    struct_arrays.push(array);
+                    struct_arrays.push(allocation);
                     if call.params[index].passing != MirReceiverKind::BorrowMut {
                         continue;
                     }
@@ -858,7 +874,7 @@ impl FunctionCompiler<'_> {
                 .call(self.runtime[RuntimeFn::FfiReleaseCString], &[copy]);
         }
         for copy in list_copies {
-            self.release_foreign_list_copy(copy);
+            self.release_foreign_allocation(copy, RuntimeFn::ReleaseValue);
         }
         // A C function can leave any byte in a `bool` it writes through.
         for list in flag_lists {
@@ -928,8 +944,7 @@ impl FunctionCompiler<'_> {
             self.store_place(&place, writeback)?;
         }
         for array in struct_arrays {
-            self.builder
-                .call(self.runtime[RuntimeFn::FfiReleaseStructs], &[array]);
+            self.release_foreign_allocation(array, RuntimeFn::FfiReleaseStructs);
         }
 
         // A callback that failed under this call, or under an earlier one
@@ -1085,10 +1100,16 @@ impl FunctionCompiler<'_> {
     ) -> std::result::Result<(), String> {
         if !layout.is_plain() {
             let (descriptor, length) = self.foreign_layout_descriptor(layout)?;
+            let fast = self.copy_foreign_array_field(layout, value, slot)?;
             self.builder.call(
                 self.runtime[RuntimeFn::FfiPackStruct],
                 &[value.values[0], descriptor, length, slot],
             );
+            if let Some(done) = fast {
+                self.builder.jump(done, &[]);
+                self.builder.switch_to_block(done);
+                self.builder.seal_block(done);
+            }
             return Ok(());
         }
         for (leaf, word) in layout.leaves().iter().zip(&value.values) {
@@ -1098,6 +1119,104 @@ impl FunctionCompiler<'_> {
                 .store(MemFlags::trusted(), narrow, slot, leaf.offset as i32);
         }
         Ok(())
+    }
+
+    /// Copies a single fixed-width scalar array straight from its list into
+    /// the C slot. A union uses this same path for its byte field. Every
+    /// missing field, length mismatch or other storage form falls through
+    /// to the conversion that implements the diagnostics.
+    fn copy_foreign_array_field(
+        &mut self,
+        layout: &CStruct,
+        value: &ValueRef,
+        slot: Val,
+    ) -> std::result::Result<Option<Blk>, String> {
+        use crate::c_layout::{CFieldKind, UNION_BYTES_FIELD};
+        use crate::ffi::FfiScalar;
+
+        let (name, scalar, count) = if layout.union {
+            (UNION_BYTES_FIELD, FfiScalar::U8, layout.size())
+        } else {
+            let [field] = layout.fields.as_slice() else {
+                return Ok(None);
+            };
+            let CFieldKind::Array(element, count) = &field.kind else {
+                return Ok(None);
+            };
+            let CFieldKind::Scalar(scalar) = element.as_ref() else {
+                return Ok(None);
+            };
+            (field.name.as_str(), *scalar, *count)
+        };
+        let bytes = count * scalar.size();
+        // The constant-size loads below are for small by-value aggregates.
+        if bytes > 128 || bytes == 0 {
+            return Ok(None);
+        }
+        let array = DirectType::Opaque(Type::Named(
+            "list".into(),
+            vec![aura_runtime::c_values::kind_type(&CFieldKind::Scalar(
+                scalar,
+            ))],
+        ));
+        let Some((_, field)) = self.class_slot(&value.ty, &[name], &array)? else {
+            return Ok(None);
+        };
+        let object = value.values[0];
+        let has_class = self.builder.create_block();
+        let has_field = self.builder.create_block();
+        let copy = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let done = self.builder.create_block();
+        self.builder.set_cold_block(slow);
+        self.emit_class_check(object, field.access, slow, has_class);
+        self.builder.switch_to_block(has_class);
+        self.builder.seal_block(has_class);
+        let block = self.class_block(object);
+        let list = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), block, field.offset);
+        self.builder.brif(list, has_field, &[], slow, &[]);
+        self.builder.switch_to_block(has_field);
+        self.builder.seal_block(has_field);
+        let view = aura_runtime::native_runtime::direct_list_layout();
+        let access = self
+            .builder
+            .uload32(MemFlags::trusted(), list, view.access_offset);
+        let matches = self
+            .builder
+            .icmp_imm(IntCC::Equal, access, scalar_list_access(scalar));
+        let held = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), list, view.len_offset);
+        let right_len = self.builder.icmp_imm(IntCC::Equal, held, count as i64);
+        let ready = self.builder.band(matches, right_len);
+        self.builder.brif(ready, copy, &[], slow, &[]);
+        self.builder.switch_to_block(copy);
+        self.builder.seal_block(copy);
+        let data = self
+            .builder
+            .load(types::I64, MemFlags::trusted(), list, view.elements_offset);
+        // C padding was zeroed with the slot. Copy just the occupied bytes,
+        // allowing a byte or narrow scalar array to have any alignment.
+        let mut offset = 0;
+        for (width, ty) in [
+            (8, types::I64),
+            (4, types::I32),
+            (2, types::I16),
+            (1, types::I8),
+        ] {
+            while offset + width <= bytes {
+                let word = self.builder.load(ty, MemFlags::new(), data, offset as i32);
+                self.builder
+                    .store(MemFlags::new(), word, slot, offset as i32);
+                offset += width;
+            }
+        }
+        self.builder.jump(done, &[]);
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        Ok(Some(done))
     }
 
     /// The class value of type `ty` for the C struct at `slot`, which the
@@ -1377,18 +1496,73 @@ impl FunctionCompiler<'_> {
         (pointer, copy)
     }
 
+    /// Copies native records with a matching C layout to a private buffer.
+    /// A boxed or shared list takes the ordinary field conversion path.
+    /// The second result is the allocation to release, or zero for scratch.
+    fn copy_foreign_record_list(
+        &mut self,
+        list: Val,
+        record: &super::plain::PlainRecord,
+        stride: usize,
+        descriptor: Val,
+        length: Val,
+    ) -> (Val, Val) {
+        let direct_layout = aura_runtime::native_runtime::direct_list_layout();
+        let fast = self.builder.create_block();
+        let slow = self.builder.create_block();
+        let join = self.builder.create_block();
+        let pointer = self.builder.append_block_param(join, types::I64);
+        let allocation = self.builder.append_block_param(join, types::I64);
+        self.builder.set_cold_block(slow);
+        self.emit_plain_list_check(list, record, &direct_layout, slow, fast);
+
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let count = self.list_view_word(list, super::list_snapshots::ViewWord::Len);
+        let data = self.list_view_word(list, super::list_snapshots::ViewWord::Elements);
+        let bytes = self.builder.imul_imm(count, stride as i64);
+        let capacity = aura_runtime::native_runtime::foreign_calls::FFI_STRUCT_SCRATCH_BYTES;
+        let slot = self.builder.create_sized_stack_slot(capacity as u32, 3);
+        let scratch = self.builder.stack_addr(types::I64, slot, 0);
+        let copied = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::FfiCopyStructs],
+                &[data, bytes, scratch],
+            )
+            .results[0];
+        let heap = self.builder.icmp(IntCC::NotEqual, copied, scratch);
+        let null = self.builder.iconst(types::I64, 0);
+        let owned = self.builder.select(heap, copied, null);
+        self.builder.jump(join, &[copied, owned]);
+
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        let packed = self
+            .builder
+            .call(
+                self.runtime[RuntimeFn::FfiPackStructs],
+                &[list, descriptor, length],
+            )
+            .results[0];
+        self.builder.jump(join, &[packed, packed]);
+
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+        (pointer, allocation)
+    }
+
     /// Releases the list the runtime made to lay a pointer argument's
     /// elements out as a C array. A list that lent its own elements made
     /// none, which is the common case, so the release sits on a cold path.
-    fn release_foreign_list_copy(&mut self, copy: Val) {
+    fn release_foreign_allocation(&mut self, copy: Val, helper: RuntimeFn) {
         let release = self.builder.create_block();
         let done = self.builder.create_block();
         self.builder.set_cold_block(release);
         self.builder.brif(copy, release, &[], done, &[]);
         self.builder.switch_to_block(release);
         self.builder.seal_block(release);
-        self.builder
-            .call(self.runtime[RuntimeFn::ReleaseValue], &[copy]);
+        self.builder.call(self.runtime[helper], &[copy]);
         self.builder.jump(done, &[]);
         self.builder.switch_to_block(done);
         self.builder.seal_block(done);

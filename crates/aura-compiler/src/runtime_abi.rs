@@ -408,6 +408,7 @@ runtime_functions! {
     FfiPackStruct => ("aura_direct_ffi_pack_struct", [I64, I64, I64, I64], None),
     FfiUnpackStruct => ("aura_direct_ffi_unpack_struct", [I64, I64, I64, I64, I64], Some(I64)),
     FfiUnpackStructInto => ("aura_direct_ffi_unpack_struct_into", [I64, I64, I64, I64, I64, I64], None),
+    FfiCopyStructs => ("aura_direct_ffi_copy_structs", [I64, I64, I64], Some(I64)),
     FfiPackStructs => ("aura_direct_ffi_pack_structs", [I64, I64, I64], Some(I64)),
     FfiUnpackStructs => ("aura_direct_ffi_unpack_structs", [I64, I64, I64, I64, I64, I64], None),
     FfiReleaseStructs => ("aura_direct_ffi_release_structs", [I64], None),

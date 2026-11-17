@@ -704,17 +704,55 @@ fn a_callback_failure_waits_for_the_foreign_call_to_return() {
 }
 
 #[test]
+fn a_runtime_trap_returns_through_each_c_callback_guard_before_exiting_the_task() {
+    use super::{aura_direct_ffi_callback_check, aura_direct_ffi_callback_guard};
+    use std::sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    };
+
+    unsafe extern "C-unwind" fn fail(_: *mut u64) {
+        super::task_runtime_boundary(|| super::runtime_error("callback trapped"));
+    }
+    unsafe extern "C-unwind" fn nested(frame: *mut u64) {
+        unsafe { aura_direct_ffi_callback_guard(fail, frame) };
+        // The inner foreign call returned and can finish its own cleanup.
+        unsafe { frame.write(1) };
+        aura_direct_ffi_callback_check();
+    }
+
+    let returned = Arc::new(AtomicBool::new(false));
+    let from_c = Arc::clone(&returned);
+    let diagnostic = capture_diagnostic(move || {
+        let mut frame = 0;
+        unsafe { aura_direct_ffi_callback_guard(nested, &mut frame) };
+        assert_eq!(frame, 1);
+        from_c.store(true, Ordering::Relaxed);
+        aura_direct_ffi_callback_check();
+    });
+    assert!(returned.load(Ordering::Relaxed));
+    assert_eq!(diagnostic.message, "callback trapped");
+}
+
+#[test]
 fn a_callback_copies_the_c_text_it_receives() {
     let function = "show";
     unsafe {
         let text =
             aura_direct_ffi_callback_text(c"caf\u{e9}".as_ptr(), function.as_ptr(), function.len());
         assert_eq!(rendered(text), "caf\u{e9}");
+        with_value(text, |value| {
+            let Value::String(text) = value else {
+                panic!("expected callback text")
+            };
+            assert_eq!(text.capacity(), crate::text::INLINE_CAPACITY);
+        });
         // The box is frozen: a release leaves it, and the callback's body
         // frees it.
         aura_direct_release_value(text);
         assert_eq!(rendered(text), "caf\u{e9}");
         aura_direct_ffi_release_callback_text(text);
+        aura_direct_ffi_release_callback_text(std::ptr::null_mut());
     }
 
     type Work = fn();
@@ -979,6 +1017,30 @@ fn flagged(on: bool, bytes: &[u8]) -> Value {
 
 fn rendered(value: *mut OpaqueValue) -> String {
     unsafe { with_value(value, |value| value.render()) }
+}
+
+#[test]
+fn matching_record_layouts_copy_to_private_stack_or_heap_storage() {
+    use super::{aura_direct_ffi_copy_structs, FFI_STRUCT_SCRATCH_BYTES};
+
+    let input = [47_u8; FFI_STRUCT_SCRATCH_BYTES + 1];
+    let mut scratch = [0_u8; FFI_STRUCT_SCRATCH_BYTES];
+    for length in [0, 1, FFI_STRUCT_SCRATCH_BYTES, input.len()] {
+        unsafe {
+            let copy = aura_direct_ffi_copy_structs(input.as_ptr(), length, scratch.as_mut_ptr());
+            if length == 0 {
+                assert!(copy.is_null());
+                continue;
+            }
+            assert_eq!(copy == scratch.as_mut_ptr(), length <= scratch.len());
+            assert_eq!(slice::from_raw_parts(copy, length), &input[..length]);
+            copy.write(19);
+            assert_eq!(input[0], 47);
+            if copy != scratch.as_mut_ptr() {
+                aura_direct_ffi_release_structs(copy);
+            }
+        }
+    }
 }
 
 #[test]

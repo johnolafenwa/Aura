@@ -19,8 +19,8 @@ use std::str;
 use aura_core::diag::Diagnostic;
 
 use super::{
-    boxed_value, free_frozen_direct_value, freeze_direct_value, runtime_diagnostic_error,
-    runtime_error, task_runtime_boundary, value_mut, value_type_name, with_value, OpaqueValue,
+    allocate_box, boxed_value, free_frozen_direct_value, runtime_diagnostic_error, runtime_error,
+    task_runtime_boundary, value_mut, value_type_name, with_value, OpaqueValue,
 };
 use crate::c_layout::CStruct;
 use crate::c_values::{self, CValueError};
@@ -656,11 +656,9 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_check_flags(
 }
 
 thread_local! {
-    /// The failure of a callback that ran under the foreign call this
-    /// thread is in. `aura_direct_ffi_callback_check` raises it again when
-    /// the foreign function has returned.
-    static CALLBACK_FAILURE: std::cell::RefCell<Option<Box<dyn std::any::Any + Send>>> =
-        const { std::cell::RefCell::new(None) };
+    /// Most workers never receive a failed C callback. This hint keeps
+    /// ordinary foreign calls on those workers from looking up task state.
+    static MAY_HAVE_CALLBACK_FAILURE: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
 }
 
 /// Runs the body of a callback that C code called. `body` is generated
@@ -681,21 +679,31 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
     body: unsafe extern "C-unwind" fn(*mut u64),
     frame: *mut u64,
 ) {
-    if CALLBACK_FAILURE.with(|failure| failure.borrow().is_some()) {
+    let previous = super::with_direct_task_runtime_state(|state| {
+        if state.foreign_callback_failure.is_some() {
+            return None;
+        }
+        Some(std::mem::replace(&mut state.foreign_callback_active, true))
+    });
+    let Some(previous) = previous else {
         return;
-    }
+    };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
-    if let Err(payload) = outcome {
-        CALLBACK_FAILURE.set(Some(payload));
-    }
+    super::with_direct_task_runtime_state(|state| {
+        state.foreign_callback_active = previous;
+        if let Err(payload) = outcome {
+            state.foreign_callback_failure = Some(payload);
+            MAY_HAVE_CALLBACK_FAILURE.set(true);
+        }
+    });
 }
 
 /// A new `str` that holds a copy of the C text a callback received.
 /// `function` names the Aura function the callback runs. The box is
 /// frozen, as the box of a `str` literal is: the function borrows it, a
 /// release of it does nothing, and anything that keeps the text copies it.
-/// The callback's body frees it with
-/// [`aura_direct_ffi_release_callback_text`] when the function returns.
+/// The callback entry frees it with [`aura_direct_ffi_release_callback_text`]
+/// after the guarded body returns or traps.
 ///
 /// # Safety
 ///
@@ -708,12 +716,15 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
     function_length: usize,
 ) -> *mut OpaqueValue {
     task_runtime_boundary(|| unsafe {
-        match crate::ffi::callback_text(text as usize) {
+        match crate::ffi::checked_callback_text(text as usize) {
             Ok(text) => {
-                let boxed = boxed_value(Value::String(text.into()));
-                // The box is new and confined to this thread.
-                freeze_direct_value(boxed);
-                boxed
+                // This string has no mutable list view or ledger entry. It
+                // is born frozen and is owned by the callback entry alone.
+                let mut boxed = OpaqueValue::new(Value::String(text.into()), None);
+                *boxed.ref_count.get_mut() = super::FROZEN_REFERENCES;
+                *boxed.shared_lock.get_mut() =
+                    std::ptr::from_ref(&super::FROZEN_VALUE_LOCK).cast_mut();
+                allocate_box(boxed)
             }
             Err(failure) => {
                 foreign_call_failure(metadata_text(function, function_length), "AU4005", failure)
@@ -726,19 +737,25 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
 ///
 /// # Safety
 ///
-/// `text` came from that function and has not been freed.
+/// `text` is null or came from that function and has not been freed.
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_release_callback_text(text: *mut OpaqueValue) {
-    // SAFETY: the caller's contract. Nothing else holds the frozen box.
-    unsafe { free_frozen_direct_value(text) }
+    if !text.is_null() {
+        // SAFETY: the caller's contract. Nothing else holds the frozen box.
+        unsafe { free_frozen_direct_value(text) }
+    }
 }
 
 /// Raises the failure of a callback that ran under the foreign call that
 /// has just returned, when there is one.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
-    if let Some(payload) = CALLBACK_FAILURE.take() {
-        std::panic::resume_unwind(payload);
+    if MAY_HAVE_CALLBACK_FAILURE.get() {
+        if let Some(payload) =
+            super::with_direct_task_runtime_state(|state| state.foreign_callback_failure.take())
+        {
+            task_runtime_boundary(|| std::panic::resume_unwind(payload));
+        }
     }
 }
 
@@ -883,6 +900,48 @@ fn structs_block(bytes: usize) -> std::alloc::Layout {
         .unwrap_or_else(|_| runtime_error("a C struct array is too large"))
 }
 
+/// Stack storage available to one private copy of a read-only struct array.
+pub const FFI_STRUCT_SCRATCH_BYTES: usize = 128;
+
+/// Copies records whose native layout and stride match C into private storage.
+/// The result is null for an empty list, `scratch` for a small list, or a
+/// heap array the caller frees with [`aura_direct_ffi_release_structs`].
+///
+/// # Safety
+///
+/// `data` holds `length` initialized bytes and does not overlap `scratch`,
+/// which has room for [`FFI_STRUCT_SCRATCH_BYTES`] bytes.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_ffi_copy_structs(
+    data: *const u8,
+    length: usize,
+    scratch: *mut u8,
+) -> *mut u8 {
+    if length == 0 {
+        return std::ptr::null_mut();
+    }
+    let array = if length <= FFI_STRUCT_SCRATCH_BYTES {
+        scratch
+    } else {
+        allocate_structs(length)
+    };
+    // SAFETY: the destination has room for the complete source.
+    unsafe { std::ptr::copy_nonoverlapping(data, array, length) };
+    array
+}
+
+fn allocate_structs(length: usize) -> *mut u8 {
+    // SAFETY: the checked layout contains the header and the whole array.
+    unsafe {
+        let block = std::alloc::alloc(structs_block(length));
+        if block.is_null() {
+            runtime_error("a C struct array could not be allocated");
+        }
+        block.cast::<usize>().write(length);
+        block.add(STRUCTS_HEADER)
+    }
+}
+
 /// A new C array of the layout `descriptor` describes that holds the
 /// elements of the list `value`, or null for an empty list. The caller
 /// frees it with [`aura_direct_ffi_release_structs`].
@@ -906,12 +965,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_pack_structs(
         if bytes.is_empty() {
             return std::ptr::null_mut();
         }
-        let block = std::alloc::alloc(structs_block(bytes.len()));
-        if block.is_null() {
-            runtime_error("a C struct array could not be allocated");
-        }
-        block.cast::<usize>().write(bytes.len());
-        let array = block.add(STRUCTS_HEADER);
+        let array = allocate_structs(bytes.len());
         std::ptr::copy_nonoverlapping(bytes.as_ptr(), array, bytes.len());
         array
     })

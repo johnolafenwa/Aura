@@ -147,10 +147,10 @@ as a `bool` field of a struct does.
   LLVM places it on the stack as the convention requires. The build
   error of FFI v1 goes away.
 
-Classes of scalars keep the generated-code path of FFI v1. A class with
-an array or a union, a union itself, and a struct array cross through one
-shared routine in the runtime that both backends call, so they agree by
-construction.
+The native backend keeps the generated code of FFI v1 for scalar structs.
+It can copy a read-only list of matching native records or a small fixed
+scalar array by its verified layout. The shared runtime conversion handles
+other representations and reports shape and length errors.
 
 ## G. The raylib Package
 

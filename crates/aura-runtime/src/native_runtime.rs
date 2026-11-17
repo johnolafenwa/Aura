@@ -547,6 +547,10 @@ impl std::hash::Hasher for AddressHasher {
 
 struct DirectTaskRuntimeState {
     runtime_error_capture: bool,
+    /// While a callback is running the C caller must regain control before a
+    /// trap or cancellation can abandon this task's native frames.
+    foreign_callback_active: bool,
+    foreign_callback_failure: Option<Box<dyn std::any::Any + Send>>,
     cleanup_stack: Vec<DirectCleanupRegistration>,
     next_cleanup_id: i64,
     cleanup_draining: bool,
@@ -686,6 +690,8 @@ impl Default for DirectTaskRuntimeState {
     fn default() -> Self {
         Self {
             runtime_error_capture: false,
+            foreign_callback_active: false,
+            foreign_callback_failure: None,
             cleanup_stack: Vec::new(),
             next_cleanup_id: 1,
             cleanup_draining: false,
@@ -5245,6 +5251,9 @@ fn try_emit_internal_structured_diagnostic(diagnostic: &Diagnostic) -> InternalD
 fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
     let mut diagnostic = diagnostic.into_runtime_trap();
     capture_direct_runtime_frames_once(&mut diagnostic);
+    if with_direct_task_runtime_state(|state| state.foreign_callback_active) {
+        std::panic::panic_any(LightweightTaskFailureSignal(diagnostic));
+    }
     if direct_cleanup_is_draining() {
         // An exit trapped while the cleanups drain. A trap already unwinding
         // the task stays primary; otherwise this one becomes the failure. The
@@ -5300,6 +5309,11 @@ fn with_task_runtime_error_capture<T>(f: impl FnOnce() -> T) -> T {
 fn task_runtime_boundary<T>(f: impl FnOnce() -> T) -> T {
     match std::panic::catch_unwind(std::panic::AssertUnwindSafe(f)) {
         Ok(value) => value,
+        // The callback guard is the nearest boundary. A forced task exit
+        // here would bypass C's cleanup and the entry's argument releases.
+        Err(payload) if with_direct_task_runtime_state(|state| state.foreign_callback_active) => {
+            std::panic::resume_unwind(payload)
+        }
         Err(payload) if payload.is::<TaskCancelledSignal>() => {
             if direct_runtime_error_capture_enabled() {
                 drain_direct_cleanup_stack();

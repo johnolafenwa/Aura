@@ -670,6 +670,7 @@ def main() -> int32:
 
 const FIXTURE_LIBRARY: &str = r#"
 #include <stdbool.h>
+#include <stdio.h>
 #include <stdint.h>
 #include <stdlib.h>
 #include <string.h>
@@ -1085,6 +1086,11 @@ int32_t fx_each_word(const char *text, int32_t (*visit)(int32_t index, const cha
 void fx_log(void (*sink)(const char *message, double value, const char *unit)) {
     sink("speed", 2.5, "m/s"); sink("", -1.0, "caf\xc3\xa9");
 }
+void fx_log_with_cleanup(void (*sink)(const char *, double, const char *)) {
+    fx_log(sink);
+    puts("C finished cleanup");
+    fflush(stdout);
+}
 void fx_text_null(void (*sink)(const char *message)) { sink(NULL); }
 void fx_text_bad(void (*sink)(const char *message)) { sink("\xff\xfe"); }
 "#;
@@ -1403,6 +1409,7 @@ extern "C" def fx_events_fill(events: mut ptr[UEvent], count: int32) -> None
 extern "C" def fx_flag_raw(raw: uint8) -> UFlag
 extern "C" def fx_each_word(text: cstr, visit: def(index: int32, word: cstr) -> int32) -> int32
 extern "C" def fx_log(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
+extern "C" def fx_log_with_cleanup(sink: def(message: cstr, value: float64, unit: cstr) -> None) -> None
 extern "C" def fx_text_null(sink: def(message: cstr) -> None) -> None
 extern "C" def fx_text_bad(sink: def(message: cstr) -> None) -> None
 "#;
@@ -2403,6 +2410,75 @@ not failing: open 1 closed [1, 2, 3, 4, 7, 5, 6, 8, 9, 10, 211, 22, 22, 22, 31]\
 ";
     assert_eq!(String::from_utf8_lossy(&mir.stdout), expected);
     assert_eq!(String::from_utf8_lossy(&direct.stdout), expected);
+}
+
+/// Executes a native fixture with allocation and representation counters enabled.
+fn native_stats(
+    source: &Path,
+) -> (
+    Output,
+    aura_compiler::runtime_value::representation_stats::RepresentationStats,
+) {
+    use aura_compiler::runtime_value::representation_stats::RepresentationStats;
+
+    let output = Command::new(aura_bin())
+        .args(["run", "--backend", "direct"])
+        .arg(source)
+        .env("AURA_RUNTIME_STATS", "1")
+        .output()
+        .expect("the native program should start");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    let (_, stats) = stderr
+        .lines()
+        .find_map(RepresentationStats::parse_report_line)
+        .unwrap_or_else(|| panic!("the native program should report allocation counts: {stderr}"));
+    (output, stats)
+}
+
+#[test]
+fn a_read_only_pointer_to_native_records_copies_their_storage() {
+    let (_package, source) = fixture_package(
+        r#"
+def main() -> int32:
+    points = [Pt(x=1.0, y=2.0), Pt(x=3.0, y=4.0)]
+    mut total: float32 = 0.0
+    for i in range(64):
+        total += fx_points_sum(points, 2)
+    print(total)
+    return 0
+"#,
+    );
+    let (direct, stats) = native_stats(&source);
+    assert_success(&direct, "passing native records to C");
+    assert_eq!(direct.stdout, b"640.0\n");
+    // Constructing the two records can convert them once at setup.
+    assert!(stats.conversions <= 2, "{stats:?}");
+    assert_eq!(stats.opaque_boxes, stats.freed_boxes);
+}
+
+#[test]
+fn a_trap_in_a_text_callback_releases_its_arguments() {
+    let (_package, source) = fixture_package(
+        r#"
+def log(message: str, value: float64, unit: str) -> None:
+    assert value < 0.0, "callback stopped"
+
+def main() -> int32:
+    fx_log_with_cleanup(log)
+    return 0
+"#,
+    );
+    let interpreted = run_mir(&source);
+    assert!(!interpreted.status.success());
+    assert_eq!(interpreted.stdout, b"C finished cleanup\n");
+    let (direct, stats) = native_stats(&source);
+    assert_eq!(direct.stdout, interpreted.stdout);
+    let stderr = String::from_utf8_lossy(&direct.stderr);
+    assert!(
+        !direct.status.success() && stderr.contains("callback stopped"),
+        "{stderr}"
+    );
+    assert_eq!(stats.opaque_boxes, stats.freed_boxes, "{stderr}");
 }
 
 #[test]

@@ -17195,6 +17195,7 @@ def main() -> int32:
         "aura_direct_ffi_pack_struct",
         "aura_direct_ffi_unpack_struct",
         "aura_direct_ffi_unpack_struct_into",
+        "aura_direct_ffi_copy_structs",
         "aura_direct_ffi_pack_structs",
         "aura_direct_ffi_unpack_structs",
         "aura_direct_ffi_release_structs",

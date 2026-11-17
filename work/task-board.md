@@ -25,8 +25,11 @@ Last updated: 2026-11-17
   that runs an SDL event loop on both backends.
 - Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
   acceptance test. The manual and chapter 18 cover the copying and
-  failure rules. Remaining work includes benchmarks and verification
-  across platforms.
+  failure rules. Native callback cleanup also covers a trap in a callback.
+- The FFI v2 benchmark covers struct arrays, fixed array fields, union
+  reads, and UTF-8 callbacks. Native record arrays with a matching C
+  layout copy directly into a call buffer. Host and platform verification
+  are in progress.
 
 ## Book chapters on tensors and machine learning (complete)
 
