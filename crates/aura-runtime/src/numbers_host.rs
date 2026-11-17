@@ -233,6 +233,39 @@ fn normalized(mut coefficient: BigInt, mut exponent: i64) -> Result<(BigInt, i64
 /// The largest magnitude of a decimal exponent: 2^62.
 const MAX_EXPONENT: u64 = 1 << 62;
 
+/// A normalized word-sized result, or None when the caller must use the
+/// arbitrary-precision operation (which also handles out-of-range exponents).
+pub(crate) fn small_decimal_binary(
+    multiply: bool,
+    a: i64,
+    a_power: i64,
+    b: i64,
+    b_power: i64,
+) -> Option<[i64; 2]> {
+    let (mut value, mut power) = if multiply {
+        (a.checked_mul(b)?, a_power.checked_add(b_power)?)
+    } else if a == 0 {
+        (b, b_power)
+    } else if b == 0 {
+        (a, a_power)
+    } else {
+        let power = a_power.min(b_power);
+        let scale = |value: i64, exponent: i64| {
+            let gap = u32::try_from(exponent.abs_diff(power)).ok()?;
+            value.checked_mul(10i64.checked_pow(gap)?)
+        };
+        (scale(a, a_power)?.checked_add(scale(b, b_power)?)?, power)
+    };
+    if value == 0 {
+        return Some([0, 0]);
+    }
+    while value % 10 == 0 {
+        value /= 10;
+        power = power.checked_add(1)?;
+    }
+    (power.unsigned_abs() <= MAX_EXPONENT).then_some([value, power])
+}
+
 fn decimal_wire(coefficient: BigInt, exponent: i64) -> Result<Value> {
     let (coefficient, exponent) = normalized(coefficient, exponent)?;
     if exponent.unsigned_abs() > MAX_EXPONENT {
@@ -420,10 +453,9 @@ pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
     result.extend([1, negative, 0, 0]);
     let mut carry = false;
     for (&x, &y) in longer[HEADER..].iter().zip(&shorter[HEADER..]) {
-        let (sum, overflow) = x.overflowing_add(y);
-        let (sum, overflow_carry) = sum.overflowing_add(u64::from(carry));
+        let (sum, next) = x.carrying_add(y, carry);
         result.push(sum);
-        carry = overflow || overflow_carry;
+        carry = next;
     }
     for &x in &longer[shorter.len()..] {
         let (sum, next) = x.overflowing_add(u64::from(carry));
@@ -447,27 +479,45 @@ pub fn host_big_add_words(args: Vec<Value>, _: Option<&[String]>) -> Result<Valu
 }
 
 pub(crate) fn small_pow_mod(base: i64, exponent: i64, modulus: i64) -> Result<i64> {
-    let mut exponent = u64::try_from(exponent)
+    let exponent = u64::try_from(exponent)
         .map_err(|_| domain("`BigInt.pow_mod` needs an exponent of 0 or more"))?;
-    if modulus == 0 {
+    let magnitude = modulus.unsigned_abs();
+    if magnitude == 0 {
         return Err(domain("division by zero"));
     }
-    let magnitude = i128::from(modulus.unsigned_abs());
-    let mut factor = i128::from(base).rem_euclid(magnitude);
-    let mut result = 1 % magnitude;
-    while exponent > 0 {
-        if exponent & 1 != 0 {
-            result = result * factor % magnitude;
+    fn power(
+        mut base: u64,
+        mut exponent: u64,
+        modulus: u64,
+        multiply: impl Fn(u64, u64) -> u64,
+    ) -> u64 {
+        let mut result = 1 % modulus;
+        while exponent != 0 {
+            if exponent & 1 != 0 {
+                result = multiply(result, base);
+            }
+            exponent >>= 1;
+            if exponent != 0 {
+                base = multiply(base, base);
+            }
         }
-        exponent >>= 1;
-        if exponent != 0 {
-            factor = factor * factor % magnitude;
-        }
+        result
     }
+    let factor = i128::from(base).rem_euclid(i128::from(magnitude)) as u64;
+    // Every reduced product fits a word for these moduli. Larger moduli
+    // use a double-width product before reduction.
+    let result = if u32::try_from(magnitude).is_ok() {
+        power(factor, exponent, magnitude, |x, y| (x * y) % magnitude)
+    } else {
+        power(factor, exponent, magnitude, |x, y| {
+            ((u128::from(x) * u128::from(y)) % u128::from(magnitude)) as u64
+        })
+    };
     if modulus < 0 && result != 0 {
-        result -= magnitude;
+        Ok((i128::from(result) - i128::from(magnitude)) as i64)
+    } else {
+        Ok(result as i64)
     }
-    Ok(result as i64)
 }
 
 pub fn host_small_pow_mod(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {

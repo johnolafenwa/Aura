@@ -410,6 +410,7 @@ runtime_functions! {
     MonotonicTimeMs => ("aura_direct_monotonic_time_ms", [], Some(I64)),
     BigAddWords => ("aura_direct_big_add_words", [I64, I64], Some(I64)),
     SmallPowMod => ("aura_direct_small_pow_mod", [I64, I64, I64], Some(I64)),
+    SmallDecimalBinary => ("aura_direct_small_decimal_binary", [I64, I64, I64, I64, I64, I64], Some(I64)),
     RegexScalar => ("aura_direct_regex_scalar", [I64, I64, I64], Some(I64)),
     RegexSearch => ("aura_direct_regex_search", [I64, I64, I64], Some(I64)),
     RegexReplace => ("aura_direct_regex_replace", [I64, I64, I64, I64], Some(I64)),

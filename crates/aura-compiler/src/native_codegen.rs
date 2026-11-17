@@ -15298,6 +15298,88 @@ impl<'a> FunctionCompiler<'a> {
         Ok(())
     }
 
+    /// Keep compact arithmetic in the caller. Both operands are borrowed and
+    /// the scalar branch owns no handles. The ordinary method performs every
+    /// promotion and supplies its usual owned result on the other branch.
+    fn call_numeric_method(
+        &mut self,
+        name: &str,
+        receiver: &DirectType,
+        callee: FuncRef,
+        args: &[Val],
+    ) -> Vec<Val> {
+        let operation = match name {
+            "Add[numbers.BigInt, numbers.BigInt] for numbers.BigInt.add"
+            | "Add[numbers.Decimal, numbers.Decimal] for numbers.Decimal.add" => BinaryOp::Add,
+            "Sub[numbers.BigInt, numbers.BigInt] for numbers.BigInt.sub" => BinaryOp::Sub,
+            "Mul[numbers.BigInt, numbers.BigInt] for numbers.BigInt.mul"
+            | "Mul[numbers.Decimal, numbers.Decimal] for numbers.Decimal.mul" => BinaryOp::Mul,
+            _ => return self.builder.call(callee, args).results,
+        };
+        let Some(union) = receiver.owned_union() else {
+            return self.builder.call(callee, args).results;
+        };
+        let scalar_index = union.members.iter().position(|member| {
+            member.ty == DirectType::Scalar(ScalarKind::Int64)
+                || matches!(&member.ty, DirectType::PlainClass(class) if class.class_name == "numbers.SmallDecimal")
+        });
+        let Some(scalar_index) = scalar_index else {
+            return self.builder.call(callee, args).results;
+        };
+        let count = receiver.value_count();
+        debug_assert_eq!(args.len(), 2 * count);
+        let (left, right) = args.split_at(count);
+        let fallback = self.builder.create_block();
+        let done = self.builder.create_block();
+        for _ in 0..count {
+            self.builder.append_block_param(done, types::I64);
+        }
+        let tag = self.builder.iconst(types::I64, scalar_index as i64);
+        let a_small = self.builder.icmp(IntCC::Equal, left[0], tag);
+        let b_small = self.builder.icmp(IntCC::Equal, right[0], tag);
+        let both_small = self.builder.band(a_small, b_small);
+        if count == 2 {
+            let (value, overflow) = match operation {
+                BinaryOp::Add => self.builder.sadd_overflow(left[1], right[1]),
+                BinaryOp::Sub => self.builder.ssub_overflow(left[1], right[1]),
+                _ => self.builder.smul_overflow(left[1], right[1]),
+            };
+            let fits = self.builder.icmp_imm(IntCC::Equal, overflow, 0);
+            let inline = self.builder.band(both_small, fits);
+            self.builder
+                .brif(inline, done, &[tag, value], fallback, &[]);
+        } else {
+            let calculate = self.builder.create_block();
+            let found = self.builder.create_block();
+            self.builder.brif(both_small, calculate, &[], fallback, &[]);
+            self.builder.switch_to_block(calculate);
+            self.builder.seal_block(calculate);
+            let slot = self.builder.create_sized_stack_slot(16, 3);
+            let out = self.builder.stack_addr(types::I64, slot, 0);
+            let multiply = self
+                .builder
+                .iconst(types::I64, i64::from(operation == BinaryOp::Mul));
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::SmallDecimalBinary],
+                &[multiply, left[1], left[2], right[1], right[2], out],
+            );
+            let fits = self.builder.icmp_imm(IntCC::NotEqual, call.results[0], 0);
+            self.builder.brif(fits, found, &[], fallback, &[]);
+            self.builder.switch_to_block(found);
+            self.builder.seal_block(found);
+            let coefficient = self.builder.load(types::I64, MemFlags::new(), out, 0);
+            let exponent = self.builder.load(types::I64, MemFlags::new(), out, 8);
+            self.builder.jump(done, &[tag, coefficient, exponent]);
+        }
+        self.builder.switch_to_block(fallback);
+        self.builder.seal_block(fallback);
+        let result = self.builder.call(callee, args).results;
+        self.builder.jump(done, &result);
+        self.builder.switch_to_block(done);
+        self.builder.seal_block(done);
+        self.builder.block_params(done)
+    }
+
     /// Calls the method `function` MIR resolved for a member call, with
     /// the receiver first. A `mut self` receiver writes back to its place.
     fn compile_method_call(
@@ -15401,8 +15483,8 @@ impl<'a> FunctionCompiler<'a> {
         }
         let mutable_sinks = self.install_sinks_for_places(&mutable_sink_places)?;
         let func_ref = self.sinkless_callee(&method_function_name, func_ref, &mutable_sinks);
-        let inst = self.builder.call(func_ref, &lowered_args);
-        let results = inst.results;
+        let results =
+            self.call_numeric_method(function, &receiver_expected, func_ref, &lowered_args);
         self.release_active_mutable_sinks(mutable_sinks.0, mutable_sinks.1);
         let (result, mut writebacks) = self.split_call_results(&method_function_name, results)?;
         if keeps_shape {
@@ -15866,6 +15948,47 @@ impl<'a> FunctionCompiler<'a> {
                     ),
                     other => (other.clone(), direct_type_to_type(other)),
                 };
+                if object.ty == DirectType::Scalar(ScalarKind::Int64)
+                    && matches!(
+                        op,
+                        ScalarOp::WrappingAdd
+                            | ScalarOp::WrappingSub
+                            | ScalarOp::WrappingMul
+                            | ScalarOp::SaturatingAdd
+                            | ScalarOp::SaturatingSub
+                            | ScalarOp::SaturatingMul
+                    )
+                {
+                    let rhs = self.load_operand_for_target(&argument.value, &target)?;
+                    let rhs = self.coerce_value(rhs, &target)?.values[0];
+                    let lhs = object.values[0];
+                    let value = match op {
+                        ScalarOp::WrappingAdd => self.builder.iadd(lhs, rhs),
+                        ScalarOp::WrappingSub => self.builder.isub(lhs, rhs),
+                        ScalarOp::WrappingMul => self.builder.imul(lhs, rhs),
+                        _ => {
+                            let (result, overflow) = match op {
+                                ScalarOp::SaturatingAdd => self.builder.sadd_overflow(lhs, rhs),
+                                ScalarOp::SaturatingSub => self.builder.ssub_overflow(lhs, rhs),
+                                _ => self.builder.smul_overflow(lhs, rhs),
+                            };
+                            let sign = if op == ScalarOp::SaturatingMul {
+                                self.builder.bxor(lhs, rhs)
+                            } else {
+                                lhs
+                            };
+                            let negative = self.builder.icmp_imm(IntCC::SignedLessThan, sign, 0);
+                            let min = self.builder.iconst(types::I64, i64::MIN);
+                            let max = self.builder.iconst(types::I64, i64::MAX);
+                            let limit = self.builder.select(negative, min, max);
+                            self.builder.select(overflow, limit, result)
+                        }
+                    };
+                    return Ok(ValueRef {
+                        values: vec![value],
+                        ty: target,
+                    });
+                }
                 let left = self.ensure_opaque(object)?;
                 let right = self.load_operand_as_opaque_direct(&argument.value, &target)?;
                 let mut words = vec![left.values[0], right.values[0]];
