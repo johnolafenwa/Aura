@@ -1,9 +1,9 @@
 //! The arbitrary-precision kernels behind the `numbers` module.
 //!
 //! `numbers.BigInt` and `numbers.Decimal` are Aura classes. A value that
-//! fits `int64` is held in the class's `small` field with an empty `digits`
-//! list, and Aura source computes on it directly. Every other value keeps
-//! its magnitude in `digits`, and the functions here do the arithmetic.
+//! fits `int64` uses the scalar member of the private storage union. The
+//! other member keeps the magnitude in a packed list. Most host calls take
+//! a scalar plus a list (empty for small values).
 //!
 //! A result travels back as one `list[uint64]`, the wire form:
 //!
@@ -15,7 +15,7 @@
 //! | 3 | the magnitude of the decimal exponent |
 //! | 4.. | the magnitude, least significant 64 bits first, at least one |
 //!
-//! A big value's `digits` field is the wire form itself, so a result is
+//! The list member of a big value is the wire form itself, so a result is
 //! stored without a copy. A function that cannot produce a value, such as a
 //! parse of malformed text, returns an empty list.
 
@@ -94,7 +94,9 @@ fn text_argument<'a>(name: &str, value: &'a Value) -> Result<&'a str> {
 /// The elements of a `list[uint64]` argument.
 fn words<'a>(name: &str, value: &'a Value) -> Result<Cow<'a, [u64]>> {
     let Value::Vec(list) = value else {
-        return Err(domain(format!("`{name}` expects a `list[uint64]` argument")));
+        return Err(domain(format!(
+            "`{name}` expects a `list[uint64]` argument"
+        )));
     };
     if let ListElements::Uint64(words) = &list.elements {
         return Ok(Cow::Borrowed(words));
@@ -161,19 +163,13 @@ fn no_value() -> Value {
 
 /// The wire form of `value` with decimal exponent `exponent`.
 fn wire(value: &BigInt, exponent: i64) -> Value {
-    let (sign, limbs) = value.to_u64_digits();
-    let negative = sign == Sign::Minus;
-    let small = match limbs.as_slice() {
-        [] => true,
-        [limb] => *limb <= i64::MAX as u64 || (negative && *limb == 1 << 63),
-        _ => false,
-    };
+    let limbs = value.iter_u64_digits();
     let mut out = Vec::with_capacity(HEADER + limbs.len().max(1));
-    out.push(u64::from(!small));
-    out.push(u64::from(negative));
+    out.push(u64::from(value.to_i64().is_none()));
+    out.push(u64::from(value.is_negative()));
     out.push(u64::from(exponent < 0));
     out.push(exponent.unsigned_abs());
-    if limbs.is_empty() {
+    if value.is_zero() {
         out.push(0);
     } else {
         out.extend(limbs);
@@ -395,6 +391,96 @@ pub fn host_big_compare(args: Vec<Value>, _program_args: Option<&[String]>) -> R
     Ok(int_value(order as i64))
 }
 
+/// Adds the two non-inline operands without importing them into a second
+/// array of digits. The common sign and limb order are already known.
+pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
+    let a = words("BigInt.add", left)?;
+    let b = words("BigInt.add", right)?;
+    if a.len() <= HEADER || b.len() <= HEADER {
+        return Err(domain("BigInt.add received an incomplete magnitude"));
+    }
+    if a[1] != b[1] {
+        let signed = |words: &[u64]| {
+            let sign = if words[1] == 1 {
+                Sign::Minus
+            } else {
+                Sign::Plus
+            };
+            BigInt::from_biguint(sign, magnitude(&words[HEADER..]))
+        };
+        return Ok(wire(&(signed(&a) + signed(&b)), 0));
+    }
+    let negative = u64::from(a[1] == 1);
+    let (longer, shorter) = if a.len() >= b.len() {
+        (&a, &b)
+    } else {
+        (&b, &a)
+    };
+    let mut result = Vec::with_capacity(longer.len() + 1);
+    result.extend([1, negative, 0, 0]);
+    let mut carry = false;
+    for (&x, &y) in longer[HEADER..].iter().zip(&shorter[HEADER..]) {
+        let (sum, overflow) = x.overflowing_add(y);
+        let (sum, overflow_carry) = sum.overflowing_add(u64::from(carry));
+        result.push(sum);
+        carry = overflow || overflow_carry;
+    }
+    for &x in &longer[shorter.len()..] {
+        let (sum, next) = x.overflowing_add(u64::from(carry));
+        result.push(sum);
+        carry = next;
+    }
+    if carry {
+        result.push(1);
+    }
+    // The private host function may also be called on two small wire
+    // values. Preserve the canonical result at that boundary.
+    if let [_, _, _, _, limb] = result.as_slice() {
+        result[0] = u64::from(*limb > (i64::MAX as u64) + negative);
+    }
+    Ok(word_list(result))
+}
+
+pub fn host_big_add_words(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    expect_arity("BigInt.add", &args, 2)?;
+    add_big_words(&args[0], &args[1])
+}
+
+pub(crate) fn small_pow_mod(base: i64, exponent: i64, modulus: i64) -> Result<i64> {
+    let mut exponent = u64::try_from(exponent)
+        .map_err(|_| domain("`BigInt.pow_mod` needs an exponent of 0 or more"))?;
+    if modulus == 0 {
+        return Err(domain("division by zero"));
+    }
+    let magnitude = i128::from(modulus.unsigned_abs());
+    let mut factor = i128::from(base).rem_euclid(magnitude);
+    let mut result = 1 % magnitude;
+    while exponent > 0 {
+        if exponent & 1 != 0 {
+            result = result * factor % magnitude;
+        }
+        exponent >>= 1;
+        if exponent != 0 {
+            factor = factor * factor % magnitude;
+        }
+    }
+    if modulus < 0 && result != 0 {
+        result -= magnitude;
+    }
+    Ok(result as i64)
+}
+
+pub fn host_small_pow_mod(args: Vec<Value>, _: Option<&[String]>) -> Result<Value> {
+    let name = "BigInt.pow_mod";
+    expect_arity(name, &args, 3)?;
+    small_pow_mod(
+        int_argument(name, &args[0])?,
+        int_argument(name, &args[1])?,
+        int_argument(name, &args[2])?,
+    )
+    .map(int_value)
+}
+
 /// `numbers::__aura_big_pow_mod(base.., exponent.., modulus..)`.
 pub fn host_big_pow_mod(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "BigInt.pow_mod";
@@ -437,24 +523,33 @@ pub fn host_big_unary(args: Vec<Value>, _program_args: Option<&[String]>) -> Res
     Ok(wire(&result, 0))
 }
 
-/// The product of `1..=count`, multiplied as a balanced tree so that the
-/// operands of each product have about the same size.
+/// Multiply the odd parts in a balanced tree, then insert all powers of
+/// two at once. Each leaf accumulates in a word when its product fits.
 fn factorial(count: u64) -> BigInt {
-    fn product(low: u64, high: u64) -> BigUint {
-        if high - low < 16 {
-            let mut result = BigUint::one();
-            for factor in low..=high {
-                result *= factor;
-            }
-            return result;
+    fn odd_product(low: u64, high: u64) -> BigUint {
+        let terms = (high - low) / 2 + 1;
+        if terms * u64::from(high.ilog2() + 1) <= 64 {
+            return BigUint::from((low..=high).step_by(2).product::<u64>());
         }
-        let middle = low + (high - low) / 2;
-        product(low, middle) * product(middle + 1, high)
+        let middle = low + 2 * (terms / 2);
+        odd_product(low, middle - 2) * odd_product(middle, high)
     }
     if count < 2 {
         return BigInt::one();
     }
-    BigInt::from(product(2, count))
+    let mut inner = BigUint::one();
+    let mut outer = BigUint::one();
+    let mut first_odd = 3;
+    for shift in (0..count.ilog2()).rev() {
+        let limit = count >> shift;
+        let last_odd = (limit - 1) | 1;
+        if last_odd >= first_odd {
+            inner *= odd_product(first_odd, last_odd);
+            first_odd = last_odd + 2;
+        }
+        outer *= &inner;
+    }
+    BigInt::from(outer << (count - u64::from(count.count_ones())))
 }
 
 /// `numbers::__aura_big_bits(small, digits)`: the bits of the magnitude.
@@ -548,8 +643,7 @@ fn exact_float(value: f64) -> Option<(BigInt, i64)> {
 pub fn host_big_from_float(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
     let name = "BigInt.from_float";
     expect_arity(name, &args, 1)?;
-    let Some((coefficient, exponent)) = exact_float(float_argument(name, &args[0])?.trunc())
-    else {
+    let Some((coefficient, exponent)) = exact_float(float_argument(name, &args[0])?.trunc()) else {
         return Ok(no_value());
     };
     // A truncated float is an integer, so the scale divides it exactly.
@@ -636,14 +730,7 @@ pub fn host_dec_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
     let (coefficient, exponent) = match op {
         0 | 1 => {
             let (left, right, exponent) = aligned(left, right)?;
-            (
-                if op == 0 {
-                    left + right
-                } else {
-                    left - right
-                },
-                exponent,
-            )
+            (if op == 0 { left + right } else { left - right }, exponent)
         }
         2 => (
             left.0 * right.0,
@@ -655,11 +742,10 @@ pub fn host_dec_binary(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
         }
         4 => {
             // `right` is an integer written with exponent 0.
-            let power = right
-                .0
-                .to_u32()
-                .filter(|_| right.1 == 0)
-                .ok_or_else(|| domain("`Decimal.pow` needs an exponent from 0 to 4294967295"))?;
+            let power =
+                right.0.to_u32().filter(|_| right.1 == 0).ok_or_else(|| {
+                    domain("`Decimal.pow` needs an exponent from 0 to 4294967295")
+                })?;
             if left.0.bits() > 1 {
                 result_bits_fit(left.0.bits().saturating_mul(u64::from(power)))?;
             }
@@ -927,6 +1013,8 @@ type HostFunction = fn(Vec<Value>, Option<&[String]>) -> Result<Value>;
 pub fn numbers_host_function(name: &str) -> Option<HostFunction> {
     Some(match name {
         "numbers::__aura_big_binary" => host_big_binary,
+        "numbers::__aura_big_add_words" => host_big_add_words,
+        "numbers::__aura_small_pow_mod" => host_small_pow_mod,
         "numbers::__aura_big_compare" => host_big_compare,
         "numbers::__aura_big_pow_mod" => host_big_pow_mod,
         "numbers::__aura_big_unary" => host_big_unary,

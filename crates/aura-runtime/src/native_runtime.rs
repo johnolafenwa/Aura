@@ -16021,6 +16021,8 @@ host_builtin_entries! {
     borrowed "http::__aura_close" => aura_host_http_close(|args| direct_http("http::__aura_close", crate::runtime_value::http_client::host_http_close, args));
     owned "http::__aura_idle_connections" => aura_host_http_idle_connections(crate::runtime_value::http_client::host_http_idle_connections);
     owned "http::__aura_close_idle" => aura_host_http_close_idle(crate::runtime_value::http_client::host_http_close_idle);
+    owned "numbers::__aura_big_add_words" => aura_host_numbers_big_add_words(crate::numbers_host::host_big_add_words);
+    owned "numbers::__aura_small_pow_mod" => aura_host_numbers_small_pow_mod(crate::numbers_host::host_small_pow_mod);
     owned "numbers::__aura_big_binary" => aura_host_numbers_big_binary(crate::numbers_host::host_big_binary);
     owned "numbers::__aura_big_compare" => aura_host_numbers_big_compare(crate::numbers_host::host_big_compare);
     owned "numbers::__aura_big_pow_mod" => aura_host_numbers_big_pow_mod(crate::numbers_host::host_big_pow_mod);
@@ -20625,6 +20627,32 @@ fn direct_text<T>(name: &str, handle: *mut OpaqueValue, read: impl FnOnce(&str) 
             )),
         })
     }
+}
+
+/// Reads both lists by reference. Only the sum acquires new storage.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_big_add_words(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // Both handles are borrowed for the duration of the call.
+        let sum = unsafe {
+            with_value(left, |a| {
+                with_value(right, |b| crate::numbers_host::add_big_words(a, b))
+            })
+        }
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(sum)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_small_pow_mod(base: i64, exponent: i64, modulus: i64) -> i64 {
+    task_runtime_boundary(|| {
+        crate::numbers_host::small_pow_mod(base, exponent, modulus)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
 }
 
 /// `regex.Regex.is_match`, `count`, and the group index of a name: the

@@ -84,19 +84,22 @@ fn big_binary_computes_every_operation() {
         "-9223372036854775808"
     );
     assert_eq!(big_text(binary(1, HUGE, HUGE)), "0");
-    assert_eq!(
-        big_text(binary(2, HUGE, "-1000")),
-        format!("-{HUGE}000")
-    );
+    assert_eq!(big_text(binary(2, HUGE, "-1000")), format!("-{HUGE}000"));
     assert_eq!(big_text(binary(3, "-7", "2")), "-4");
     assert_eq!(big_text(binary(4, "-7", "2")), "1");
     assert_eq!(big_text(binary(3, "7", "-2")), "-4");
     assert_eq!(big_text(binary(4, "7", "-2")), "-1");
     assert_eq!(big_text(binary(5, "-48", "18")), "6");
-    assert_eq!(big_text(binary(6, "2", "100")), (BigInt::one() << 100u32).to_string());
+    assert_eq!(
+        big_text(binary(6, "2", "100")),
+        (BigInt::one() << 100u32).to_string()
+    );
     assert_eq!(big_text(binary(6, "0", "0")), "1");
     assert_eq!(big_text(binary(6, "-1", "4294967295")), "-1");
-    assert_eq!(big_text(binary(7, "3", "70")), (BigInt::from(3) << 70u32).to_string());
+    assert_eq!(
+        big_text(binary(7, "3", "70")),
+        (BigInt::from(3) << 70u32).to_string()
+    );
     assert_eq!(big_text(binary(7, "0", "1000000000000")), "0");
     assert_eq!(big_text(binary(8, "-9", "1")), "-5");
     assert_eq!(big_text(binary(8, HUGE, "1000")), "0");
@@ -240,9 +243,8 @@ fn big_parse_reads_signs_and_radixes() {
 
 #[test]
 fn big_format_writes_any_radix() {
-    let format = |value: &str, radix: i64| {
-        host_big_format(args([&big(value), &[int(radix)]]), None)
-    };
+    let format =
+        |value: &str, radix: i64| host_big_format(args([&big(value), &[int(radix)]]), None);
     assert_eq!(format(HUGE, 10).expect("text"), text(HUGE));
     assert_eq!(format("-255", 16).expect("text"), text("-ff"));
     assert_eq!(format("5", 2).expect("text"), text("101"));
@@ -252,8 +254,7 @@ fn big_format_writes_any_radix() {
 
 #[test]
 fn big_float_conversions_round_and_truncate() {
-    let to_float =
-        |value: &str| host_big_to_float(args([&big(value)]), None).expect("a float");
+    let to_float = |value: &str| host_big_to_float(args([&big(value)]), None).expect("a float");
     assert_eq!(to_float("-3"), Value::Float(-3.0));
     assert_eq!(to_float(HUGE), Value::Float(1.2345678901234568e38));
     let enormous = format!("1{}", "0".repeat(400));
@@ -263,7 +264,10 @@ fn big_float_conversions_round_and_truncate() {
     let from_float = |value: f64| host_big_from_float(vec![Value::Float(value)], None);
     assert_eq!(big_text(from_float(-2.9)), "-2");
     assert_eq!(big_text(from_float(0.5)), "0");
-    assert_eq!(big_text(from_float(1e30)), "1000000000000000019884624838656");
+    assert_eq!(
+        big_text(from_float(1e30)),
+        "1000000000000000019884624838656"
+    );
     assert_eq!(big_text(from_float(5e-324)), "0");
     assert!(list_words(&from_float(f64::NAN).expect("a list")).is_empty());
     assert!(list_words(&from_float(f64::NEG_INFINITY).expect("a list")).is_empty());
@@ -293,42 +297,81 @@ fn dec_binary(
 fn decimal_arithmetic_is_exact_and_normalized() {
     assert_eq!(dec_text(dec_binary(0, ("1", -1), ("2", -1), 0, 0)), "3e-1");
     assert_eq!(dec_text(dec_binary(0, ("5", -1), ("5", -1), 0, 0)), "1e0");
-    assert_eq!(dec_text(dec_binary(0, ("1", 30), ("1", -30), 0, 0)), format!("1{}1e-30", "0".repeat(59)));
+    assert_eq!(
+        dec_text(dec_binary(0, ("1", 30), ("1", -30), 0, 0)),
+        format!("1{}1e-30", "0".repeat(59))
+    );
     assert_eq!(dec_text(dec_binary(0, ("0", 0), ("7", 5), 0, 0)), "7e5");
     assert_eq!(dec_text(dec_binary(0, ("7", 5), ("0", 0), 0, 0)), "7e5");
     assert_eq!(dec_text(dec_binary(1, ("1", 0), ("1", -3), 0, 0)), "999e-3");
     assert_eq!(dec_text(dec_binary(1, ("15", -1), ("15", -1), 0, 0)), "0e0");
     assert_eq!(dec_text(dec_binary(2, ("15", -1), ("2", 0), 0, 0)), "3e0");
-    assert_eq!(dec_text(dec_binary(2, (HUGE, -10), ("-1", 4), 0, 0)), format!("-{HUGE}e-6"));
-    assert_eq!(dec_text(dec_binary(4, ("11", -1), ("10", 0), 0, 0)), "25937424601e-10");
+    assert_eq!(
+        dec_text(dec_binary(2, (HUGE, -10), ("-1", 4), 0, 0)),
+        format!("-{HUGE}e-6")
+    );
+    assert_eq!(
+        dec_text(dec_binary(4, ("11", -1), ("10", 0), 0, 0)),
+        "25937424601e-10"
+    );
     assert_eq!(dec_text(dec_binary(4, ("0", 0), ("0", 0), 0, 0)), "1e0");
     assert_eq!(code(dec_binary(4, ("2", 0), ("-1", 0), 0, 0)), "AU4001");
     assert_eq!(code(dec_binary(4, ("2", 0), ("5", -1), 0, 0)), "AU4001");
-    assert_eq!(code(dec_binary(4, ("3", 0), ("4294967295", 0), 0, 0)), "AU4005");
+    assert_eq!(
+        code(dec_binary(4, ("3", 0), ("4294967295", 0), 0, 0)),
+        "AU4005"
+    );
     assert_eq!(code(dec_binary(9, ("2", 0), ("1", 0), 0, 0)), "AU4001");
-    assert_eq!(code(dec_binary(0, ("1", 500_000_000), ("1", 0), 0, 0)), "AU4005");
-    assert_eq!(code(dec_binary(0, ("1", i64::MAX), ("1", i64::MIN), 0, 0)), "AU4005");
-    assert_eq!(code(dec_binary(2, ("1", i64::MAX), ("1", i64::MAX), 0, 0)), "AU4002");
-    assert_eq!(code(dec_binary(2, ("1", i64::MAX), ("1", 1), 0, 0)), "AU4002");
+    assert_eq!(
+        code(dec_binary(0, ("1", 500_000_000), ("1", 0), 0, 0)),
+        "AU4005"
+    );
+    assert_eq!(
+        code(dec_binary(0, ("1", i64::MAX), ("1", i64::MIN), 0, 0)),
+        "AU4005"
+    );
+    assert_eq!(
+        code(dec_binary(2, ("1", i64::MAX), ("1", i64::MAX), 0, 0)),
+        "AU4002"
+    );
+    assert_eq!(
+        code(dec_binary(2, ("1", i64::MAX), ("1", 1), 0, 0)),
+        "AU4002"
+    );
     assert_eq!(code(host_dec_binary(Vec::new(), None)), "AU4001");
 }
 
 #[test]
 fn decimal_division_rounds_to_the_requested_digits() {
-    assert_eq!(dec_text(dec_binary(3, ("1", 0), ("3", 0), 5, 0)), "33333e-5");
-    assert_eq!(dec_text(dec_binary(3, ("2", 0), ("3", 0), 5, 0)), "66667e-5");
-    assert_eq!(dec_text(dec_binary(3, ("-2", 0), ("3", 0), 5, 3)), "-66666e-5");
+    assert_eq!(
+        dec_text(dec_binary(3, ("1", 0), ("3", 0), 5, 0)),
+        "33333e-5"
+    );
+    assert_eq!(
+        dec_text(dec_binary(3, ("2", 0), ("3", 0), 5, 0)),
+        "66667e-5"
+    );
+    assert_eq!(
+        dec_text(dec_binary(3, ("-2", 0), ("3", 0), 5, 3)),
+        "-66666e-5"
+    );
     assert_eq!(dec_text(dec_binary(3, ("10", 0), ("4", 0), 28, 0)), "25e-1");
     assert_eq!(dec_text(dec_binary(3, ("1", 0), ("8", 0), 2, 0)), "12e-2");
     assert_eq!(dec_text(dec_binary(3, ("1", 0), ("8", 0), 2, 1)), "13e-2");
     assert_eq!(dec_text(dec_binary(3, ("3", 0), ("8", 0), 2, 0)), "38e-2");
     assert_eq!(dec_text(dec_binary(3, ("999", 0), ("1", 0), 2, 0)), "1e3");
-    assert_eq!(dec_text(dec_binary(3, ("1", 100), ("7", -100), 3, 0)), "143e197");
+    assert_eq!(
+        dec_text(dec_binary(3, ("1", 100), ("7", -100), 3, 0)),
+        "143e197"
+    );
     assert_eq!(dec_text(dec_binary(3, ("0", 0), ("7", 0), 3, 0)), "0e0");
     assert_eq!(dec_text(dec_binary(3, (HUGE, 0), ("3", 0), 1, 0)), "4e37");
     assert_eq!(code(dec_binary(3, ("1", 0), ("0", 0), 5, 0)), "AU4001");
     assert_eq!(code(dec_binary(3, ("1", 0), ("3", 0), 0, 0)), "AU4001");
-    assert_eq!(code(dec_binary(3, ("1", 0), ("3", 0), 1_000_001, 0)), "AU4001");
+    assert_eq!(
+        code(dec_binary(3, ("1", 0), ("3", 0), 1_000_001, 0)),
+        "AU4001"
+    );
     assert_eq!(code(dec_binary(3, ("1", 0), ("3", 0), 5, 7)), "AU4001");
 }
 
@@ -344,9 +387,15 @@ fn every_rounding_mode_picks_its_side() {
     let cases: [(&str, [&str; 7]); 6] = [
         ("25", ["2e0", "3e0", "2e0", "2e0", "3e0", "2e0", "3e0"]),
         ("35", ["4e0", "4e0", "3e0", "3e0", "4e0", "3e0", "4e0"]),
-        ("-25", ["-2e0", "-3e0", "-2e0", "-2e0", "-3e0", "-3e0", "-2e0"]),
+        (
+            "-25",
+            ["-2e0", "-3e0", "-2e0", "-2e0", "-3e0", "-3e0", "-2e0"],
+        ),
         ("26", ["3e0", "3e0", "3e0", "2e0", "3e0", "2e0", "3e0"]),
-        ("-21", ["-2e0", "-2e0", "-2e0", "-2e0", "-3e0", "-3e0", "-2e0"]),
+        (
+            "-21",
+            ["-2e0", "-2e0", "-2e0", "-2e0", "-3e0", "-3e0", "-2e0"],
+        ),
         ("20", ["2e0", "2e0", "2e0", "2e0", "2e0", "2e0", "2e0"]),
     ];
     for (coefficient, expected) in cases {
@@ -369,11 +418,17 @@ fn every_rounding_mode_picks_its_side() {
     assert_eq!(round(("5", -1), 0, 0), "0e0");
     assert_eq!(round(("5", -3), 0, 1), "0e0");
     assert_eq!(
-        code(host_dec_round(args([&dec("1", -5), &[int(2), int(9)]]), None)),
+        code(host_dec_round(
+            args([&dec("1", -5), &[int(2), int(9)]]),
+            None
+        )),
         "AU4001"
     );
     assert_eq!(
-        code(host_dec_round(args([&dec("1", -5), &[int(i64::MIN), int(0)]]), None)),
+        code(host_dec_round(
+            args([&dec("1", -5), &[int(i64::MIN), int(0)]]),
+            None
+        )),
         "AU4002"
     );
     assert_eq!(code(host_dec_round(Vec::new(), None)), "AU4001");
@@ -412,9 +467,7 @@ fn decimal_to_integer_and_normal_form() {
     assert_eq!(integer(("12", 3), 0), "12000");
     assert_eq!(code(host_dec_integer(Vec::new(), None)), "AU4001");
 
-    let normal = |value: (&str, i64)| {
-        host_dec_normalize(args([&dec(value.0, value.1)]), None)
-    };
+    let normal = |value: (&str, i64)| host_dec_normalize(args([&dec(value.0, value.1)]), None);
     assert_eq!(dec_text(normal(("1200", -2))), "12e0");
     assert_eq!(dec_text(normal(("0", 77))), "0e0");
     assert_eq!(dec_text(normal(("1024", 0))), "1024e0");
@@ -434,8 +487,21 @@ fn decimal_parse_reads_points_and_exponents() {
     assert_eq!(dec_text(parse("1e+2")), "1e2");
     assert_eq!(dec_text(parse("000")), "0e0");
     for bad in [
-        "", ".", "-", "e5", "1e", "1e+", "1e5.0", "1.2.3", "1,5", " 1", "NaN", "inf", "1e99999999999999999999",
-        "0x10", "1_0",
+        "",
+        ".",
+        "-",
+        "e5",
+        "1e",
+        "1e+",
+        "1e5.0",
+        "1.2.3",
+        "1,5",
+        " 1",
+        "NaN",
+        "inf",
+        "1e99999999999999999999",
+        "0x10",
+        "1_0",
     ] {
         assert!(
             list_words(&parse(bad).expect("a list")).is_empty(),
@@ -495,10 +561,7 @@ fn decimal_float_conversions() {
         dec_text(from_float(0.1)),
         "1000000000000000055511151231257827021181583404541015625e-55"
     );
-    assert_eq!(
-        dec_text(from_float(5e-324)).len(),
-        "e-1074".len() + 751
-    );
+    assert_eq!(dec_text(from_float(5e-324)).len(), "e-1074".len() + 751);
     assert!(list_words(&from_float(f64::INFINITY).expect("a list")).is_empty());
     assert!(list_words(&from_float(f64::NAN).expect("a list")).is_empty());
     assert_eq!(code(host_dec_from_float(Vec::new(), None)), "AU4001");
@@ -525,6 +588,8 @@ fn decimal_square_roots() {
 fn every_host_function_has_a_name() {
     for name in [
         "big_binary",
+        "big_add_words",
+        "small_pow_mod",
         "big_compare",
         "big_pow_mod",
         "big_unary",
@@ -558,10 +623,65 @@ fn digit_counts_and_powers() {
     assert_eq!(decimal_digits(&BigInt::from(-999)), 3);
     assert_eq!(decimal_digits(&BigInt::from(u64::MAX)), 20);
     assert_eq!(decimal_digits(&HUGE.parse().expect("an integer")), 39);
-    assert_eq!(code(power_of_ten(MAX_SCALE_DIGITS + 1).map(|_| int(0))), "AU4005");
+    assert_eq!(
+        code(power_of_ten(MAX_SCALE_DIGITS + 1).map(|_| int(0))),
+        "AU4005"
+    );
     assert_eq!(factorial(1), BigInt::one());
     assert!(exact_float(f64::NAN).is_none());
     let (coefficient, exponent) = exact_float(-0.75).expect("a finite float");
     assert_eq!(exponent, -53);
     assert_eq!(dec_text(decimal_wire(coefficient, exponent)), "-75e-2");
+}
+
+#[test]
+fn small_modular_powers_use_floor_remainders_at_both_word_limits() {
+    for base in [i64::MIN, -19, -1, 0, 1, 17, i64::MAX] {
+        for exponent in [0, 1, 2, 31, 65537, i64::MAX] {
+            for modulus in [i64::MIN, -23, -1, 1, 13, i64::MAX] {
+                let expected =
+                    BigInt::from(base).modpow(&BigInt::from(exponent), &BigInt::from(modulus));
+                assert_eq!(
+                    small_pow_mod(base, exponent, modulus).unwrap(),
+                    expected.to_i64().unwrap()
+                );
+            }
+        }
+    }
+    assert!(small_pow_mod(1, -1, 3).is_err());
+    assert!(small_pow_mod(1, 4, 0).is_err());
+    assert_eq!(
+        factorial(1000),
+        (1..=1000_u32).map(BigInt::from).product::<BigInt>()
+    );
+}
+
+#[test]
+fn adding_magnitudes_propagates_carries_and_cancels_opposite_signs() {
+    for (a, b) in [
+        (
+            "340282366920938463463374607431768211455",
+            "18446744073709551617",
+        ),
+        (
+            "-340282366920938463463374607431768211455",
+            "-18446744073709551617",
+        ),
+        (
+            "340282366920938463463374607431768211455",
+            "-340282366920938463463374607431768211455",
+        ),
+        (
+            "18446744073709551617",
+            "-340282366920938463463374607431768211455",
+        ),
+    ] {
+        let a: BigInt = a.parse().unwrap();
+        let b: BigInt = b.parse().unwrap();
+        assert_eq!(
+            unwire(&add_big_words(&wire(&a, 0), &wire(&b, 0)).unwrap()).0,
+            a + b
+        );
+    }
+    assert!(add_big_words(&empty(), &empty()).is_err());
 }

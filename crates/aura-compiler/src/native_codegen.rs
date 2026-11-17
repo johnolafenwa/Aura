@@ -481,6 +481,25 @@ struct PlainClassField {
 }
 
 impl DirectType {
+    /// A number wraps one union field. Its tag and payload travel as the
+    /// class's own words, so only its large member holds a reference.
+    fn owned_union(&self) -> Option<&DirectUnionType> {
+        let union = match self {
+            Self::Union(union) => union,
+            Self::PlainClass(class) => {
+                let [field] = class.fields.as_slice() else {
+                    return None;
+                };
+                let Self::Union(union) = &field.ty else {
+                    return None;
+                };
+                union
+            }
+            _ => return None,
+        };
+        union.owns_handles().then_some(union)
+    }
+
     fn abi_types(&self) -> Vec<ScalarType> {
         match self {
             DirectType::Scalar(kind) => vec![kind.signature_type()],
@@ -3117,6 +3136,7 @@ fn function_op_arg_layout(op: FunctionOp, index: usize) -> FunctionOpArgLayout {
         FunctionOp::RngNew
         | FunctionOp::RandomSecureInt
         | FunctionOp::RandomSecureBytes
+        | FunctionOp::SmallPowMod
         | FunctionOp::DurationMilliseconds
         | FunctionOp::DurationSeconds
         | FunctionOp::DurationMinutes
@@ -3154,6 +3174,7 @@ fn function_op_result_layout(op: FunctionOp) -> FunctionOpResultLayout {
         | FunctionOp::TimeFailed
         | FunctionOp::RegexIsMatch => FunctionOpResultLayout::Scalar(ScalarKind::Bool),
         FunctionOp::RandomSecureInt
+        | FunctionOp::SmallPowMod
         | FunctionOp::MonotonicTimeMs
         | FunctionOp::TimeParsedSeconds
         | FunctionOp::TimeParsedNanos
@@ -4059,17 +4080,15 @@ impl<'a> FunctionCompiler<'a> {
     }
 
     fn temporary_owns_union(&self, value: &ValueRef) -> bool {
-        matches!(value.ty, DirectType::Union(_))
+        value.ty.owned_union().is_some()
             && self.layout_scratch.unions.contains_key(&value.values[0])
     }
 
     fn mark_temporary_union_owned(&mut self, value: &ValueRef) {
-        if let DirectType::Union(union) = &value.ty {
-            if union.owns_handles() {
-                self.layout_scratch
-                    .unions
-                    .insert(value.values[0], (value.values.clone(), union.clone()));
-            }
+        if let Some(union) = value.ty.owned_union() {
+            self.layout_scratch
+                .unions
+                .insert(value.values[0], (value.values.clone(), union.clone()));
         }
     }
 
@@ -4131,8 +4150,7 @@ impl<'a> FunctionCompiler<'a> {
             self.clear_temporary_union_owned(value);
             return value.values.clone();
         }
-        if let DirectType::Union(union) = &value.ty {
-            let union = union.clone();
+        if let Some(union) = value.ty.owned_union().cloned() {
             self.retain_union_words(&union, &value.values);
         }
         value.values.clone()
@@ -4273,7 +4291,7 @@ impl<'a> FunctionCompiler<'a> {
     fn transfer_values(&mut self, value: &ValueRef) -> Vec<Val> {
         match &value.ty {
             DirectType::Opaque(_) => vec![self.transfer_opaque_arg(value)],
-            DirectType::Union(union) if union.owns_handles() => self.transfer_union_words(value),
+            ty if ty.owned_union().is_some() => self.transfer_union_words(value),
             DirectType::Callable(_) => self.transfer_callable_words(value),
             _ => value.values.clone(),
         }
@@ -4299,11 +4317,11 @@ impl<'a> FunctionCompiler<'a> {
         {
             return Ok(());
         }
+        if let Some(union) = ty.owned_union() {
+            self.release_union_words(union, &words);
+            return Ok(());
+        }
         match &ty {
-            DirectType::Union(union) => {
-                let union = union.clone();
-                self.release_union_words(&union, &words);
-            }
             DirectType::Callable(_) => self.release_callable_words(&words),
             _ if self.lent_places.contains(name) => {
                 let owned = self.owned_lent_word(words[0]);
@@ -4934,13 +4952,13 @@ impl<'a> FunctionCompiler<'a> {
                     ty: DirectType::Opaque(ty),
                 }
             }
-            DirectType::Union(union) if union.owns_handles() => {
+            ty if ty.owned_union().is_some() => {
                 if self.temporary_owns_union(&value) {
                     self.clear_temporary_union_owned(&value);
                     value
                 } else {
-                    let union = union.clone();
-                    self.retain_union_words(&union, &value.values);
+                    let union = ty.owned_union().expect("matched an owning union");
+                    self.retain_union_words(union, &value.values);
                     let fresh = self.fresh_words(value);
                     self.retained_unions.insert(fresh.values[0]);
                     fresh
@@ -8664,9 +8682,7 @@ impl<'a> FunctionCompiler<'a> {
     fn mark_call_result_owned(&mut self, value: &ValueRef) {
         match &value.ty {
             DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(value)
-            }
+            ty if ty.owned_union().is_some() => self.mark_temporary_union_owned(value),
             DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
             _ => {}
         }
@@ -11663,6 +11679,13 @@ impl<'a> FunctionCompiler<'a> {
                     || matches!(source_ty, Type::TypeParam(_))
                 {
                     return self.unbox_inline_union(&union, value.values[0]);
+                }
+            }
+            if matches!(&value.ty, DirectType::PlainClass(_)) && value.ty.owned_union().is_some() {
+                let boxed_ty = DirectType::Opaque(direct_type_to_type(&value.ty));
+                if union.members.iter().any(|member| member.ty == boxed_ty) {
+                    let boxed = self.ensure_opaque(value)?;
+                    return self.coerce_value_at(boxed, target, span);
                 }
             }
             // A bare member value lifts into the union it is a member of
@@ -15145,14 +15168,7 @@ impl<'a> FunctionCompiler<'a> {
                 ty,
             });
             let value = writebacks.last().expect("just pushed writeback");
-            match &value.ty {
-                DirectType::Opaque(_) => self.mark_temporary_opaque_owned(value),
-                DirectType::Union(union) if union.owns_handles() => {
-                    self.mark_temporary_union_owned(value)
-                }
-                DirectType::Callable(_) => self.mark_temporary_callable_owned(value),
-                _ => {}
-            }
+            self.mark_call_result_owned(value);
             cursor += count;
         }
         let result = ValueRef {
@@ -15160,14 +15176,7 @@ impl<'a> FunctionCompiler<'a> {
             ty: result_ty,
         };
         // The callee exported one owned reference; the caller adopts it.
-        match &result.ty {
-            DirectType::Callable(_) => self.mark_temporary_callable_owned(&result),
-            DirectType::Opaque(_) => self.mark_temporary_opaque_owned(&result),
-            DirectType::Union(union) if union.owns_handles() => {
-                self.mark_temporary_union_owned(&result)
-            }
-            _ => {}
-        }
+        self.mark_call_result_owned(&result);
         Ok((result, writebacks))
     }
 
@@ -19472,8 +19481,7 @@ fn direct_ffi_type_for_source(
 fn layout_owns_handles(ty: &DirectType) -> bool {
     match ty {
         DirectType::Opaque(_) | DirectType::Callable(_) => true,
-        DirectType::Union(union) => union.owns_handles(),
-        DirectType::Scalar(_) | DirectType::PlainClass(_) => false,
+        other => other.owned_union().is_some(),
     }
 }
 
@@ -19514,7 +19522,18 @@ fn direct_type_inner(
                         matches!(candidate, Type::Named(name, _) if classes.contains_key(name))
                     })
                     .unwrap_or_else(|| member.clone());
-                members.push(direct_type_inner(&resolved, classes, visiting)?);
+                let layout = direct_type_inner(&resolved, classes, visiting)?;
+                // A union payload holds at most one layer of ownership
+                // tags. Box a number at this boundary and recover its
+                // private storage words on the next concrete read.
+                let layout = if matches!(&layout, DirectType::PlainClass(_))
+                    && layout.owned_union().is_some()
+                {
+                    DirectType::Opaque(resolved)
+                } else {
+                    layout
+                };
+                members.push(layout);
             }
             Some(DirectType::Union(DirectUnionType::new(ty.clone(), members)))
         }
@@ -19550,12 +19569,12 @@ fn direct_type_inner(
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     };
-                    let owns_handles = match &field_ty {
-                        DirectType::Opaque(_) | DirectType::Callable(_) => true,
-                        DirectType::Union(union) => union.owns_handles(),
-                        _ => false,
-                    };
-                    if owns_handles {
+                    let numeric_storage =
+                        matches!(name.as_str(), "numbers.BigInt" | "numbers.Decimal")
+                            && class.fields.len() == 1
+                            && field.name == "storage"
+                            && matches!(field_ty, DirectType::Union(_));
+                    if layout_owns_handles(&field_ty) && !numeric_storage {
                         visiting.remove(name);
                         return Some(DirectType::Opaque(Type::Named(name.clone(), vec![])));
                     }

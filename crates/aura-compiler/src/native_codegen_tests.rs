@@ -17663,3 +17663,37 @@ fn leaf_method_call_fixtures_emit_directly() {
         emit_host_object(&mir).expect("leaf call fixture should emit directly");
     }
 }
+
+#[test]
+fn numbers_pass_small_values_in_registers_and_box_at_nested_union_boundaries() {
+    let big = Type::named("numbers.BigInt");
+    let words = Type::Named("list".into(), vec![Type::named("uint64")]);
+    let storage = Type::normalize_union(
+        vec![Type::named("int64"), words],
+        "numbers",
+        &Default::default(),
+    )
+    .unwrap();
+    let classes = HashMap::from([(
+        "numbers.BigInt".into(),
+        crate::mir::MirClass {
+            name: "numbers.BigInt".into(),
+            type_params: vec![],
+            fields: vec![class_field("storage", storage)],
+            methods: vec![],
+            copy: false,
+        },
+    )]);
+    let ty = direct_type(&big, &classes).unwrap();
+    assert!(matches!(ty, DirectType::PlainClass(_)));
+    assert!(super::layout_owns_handles(&ty));
+    assert_eq!(ty.abi_types(), vec![types::I64, types::I64]);
+    let optional = aura_core::types::optional_type(big.clone());
+    let Some(DirectType::Union(optional)) = direct_type(&optional, &classes) else {
+        panic!("a concrete optional is inline");
+    };
+    assert!(optional
+        .members
+        .iter()
+        .any(|member| member.ty == DirectType::Opaque(big.clone())));
+}

@@ -3052,8 +3052,8 @@ fn telemetry_namespace(name: &str) -> ModuleNamespace {
 }
 
 /// The host functions under the Aura source of `numbers` (`std/numbers.au`).
-/// An integer travels as its `small` and `digits` fields, and a decimal adds
-/// its exponent. Each result is the wire list `numbers_host.rs` describes.
+/// Most host calls take a scalar and magnitude words, plus an exponent for
+/// a decimal. Large results use the wire list described in `numbers_host.rs`.
 fn numbers_namespace() -> ModuleNamespace {
     let int64 = || type_ref("int64", Vec::new());
     let float64 = || type_ref("float64", Vec::new());
@@ -3083,6 +3083,23 @@ fn numbers_namespace() -> ModuleNamespace {
         "numbers",
         vec![
             function(
+                "__aura_big_add_words",
+                vec![vec![
+                    borrow_param("left", words()),
+                    borrow_param("right", words()),
+                ]],
+                words(),
+            ),
+            function(
+                "__aura_small_pow_mod",
+                vec![
+                    scalar("base", int64()),
+                    scalar("exponent", int64()),
+                    scalar("modulus", int64()),
+                ],
+                int64(),
+            ),
+            function(
                 "__aura_big_binary",
                 vec![scalar("op", int64()), integer("left"), integer("right")],
                 words(),
@@ -3105,10 +3122,7 @@ fn numbers_namespace() -> ModuleNamespace {
             function("__aura_big_bits", vec![integer("value")], int64()),
             function(
                 "__aura_big_parse",
-                vec![
-                    vec![borrow_param("text", text())],
-                    scalar("radix", int64()),
-                ],
+                vec![vec![borrow_param("text", text())], scalar("radix", int64())],
                 words(),
             ),
             function(

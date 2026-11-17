@@ -2603,6 +2603,8 @@ function_ops! {
         Ord => ("ord", StringOrd),
         Chr => ("chr", StringChr),
         MonotonicTimeMs => ("sys::monotonic_time_ms", MonotonicTimeMs),
+        BigAddWords => ("numbers::__aura_big_add_words", BigAddWords),
+        SmallPowMod => ("numbers::__aura_small_pow_mod", SmallPowMod),
         RegexIsMatch => ("regex::__aura_is_match", RegexScalar),
         RegexCount => ("regex::__aura_count", RegexScalar),
         RegexGroupIndex => ("regex::__aura_group_index", RegexScalar),
