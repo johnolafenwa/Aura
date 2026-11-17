@@ -3479,7 +3479,7 @@ fn fstring_map_comprehension_preserves_exact_nested_source_spans() {
     assert_eq!(args[0].span, Span::new(1, 64));
     let ExprKind::Lambda {
         params: lambda_params,
-        body,
+        body: crate::ast::ClosureBody::Expression(body),
         ..
     } = &args[0].value.kind
     else {

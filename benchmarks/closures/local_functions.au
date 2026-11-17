@@ -1,0 +1,27 @@
+import sys
+
+type Step = Callable[def(value: int64) -> int64]
+
+
+def measure_lambda(seed: int64, count: int64) -> None:
+    step: Step = lambda value: (value * 3 + seed) & 1048575
+    mut result = 1
+    start = sys.monotonic_time_ms()
+    for index in range(count):
+        result = step(result)
+    print(f"lambda {count} {sys.monotonic_time_ms() - start} {result}")
+
+
+def measure_local(seed: int64, count: int64) -> None:
+    def step(value: int64) -> int64:
+        return (value * 3 + seed) & 1048575
+    mut result = 1
+    start = sys.monotonic_time_ms()
+    for index in range(count):
+        result = step(result)
+    print(f"local {count} {sys.monotonic_time_ms() - start} {result}")
+
+
+def main() -> None:
+    measure_local(7, 48000000)
+    measure_lambda(7, 48000000)

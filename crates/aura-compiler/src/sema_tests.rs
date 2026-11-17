@@ -34133,7 +34133,7 @@ fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
         (
             include_str!("../tests/fixtures/check-fail/local_function_capture_escape.au"),
             "AU3010",
-            "view",
+            "live shared loan",
         ),
     ];
     for (source, code, message) in cases {

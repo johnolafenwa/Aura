@@ -3101,10 +3101,11 @@ impl<'a> FunctionChecker<'a> {
 
     /// Whether this checker is checking a class initializer's body.
     fn checks_initializer(&self) -> bool {
-        !self.local_function_body && matches!(
-            &self.closure_owner,
-            ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
-        )
+        !self.local_function_body
+            && matches!(
+                &self.closure_owner,
+                ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
+            )
     }
 
     fn with_closure_owner(mut self, owner: ClosureOwner) -> Self {

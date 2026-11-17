@@ -11,4 +11,10 @@ an explicit mutable loan. The baseline compiler rejected its first local
 mutated state, reassignment of the declared name and escape of a capture
 loan. Editor coverage checks visibility and navigation inside the body.
 
-Verification is in progress.
+The MIR interpreter and optimized native executable produced identical
+output for the positive fixture. All three negative fixtures produced their
+expected diagnostics. The native runtime came from the stored-call build,
+which has the same runtime sources. All 159 language-server tests and the capture-list grammar
+test passed. All 1,096 documentation examples passed. Z3 proved both assertions in a local function's two branches
+and reported a real overflow for an unbounded counter. Full-suite checks
+are in progress.

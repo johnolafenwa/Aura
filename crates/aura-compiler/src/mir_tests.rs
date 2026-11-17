@@ -16708,6 +16708,16 @@ def main():
 #[test]
 fn local_functions_share_the_lambda_capture_and_call_contract() {
     let source = include_str!("../tests/fixtures/run-pass/local_function_bodies.au");
+    let module = crate::lower_source_to_mir(source).expect("local functions should lower");
+    let recursive = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("walker::__lambda"))
+        .expect("recursive closure body");
+    assert!(recursive
+        .local_types
+        .iter()
+        .all(|local| local.name != "walk"));
     let output = crate::run_source(source).expect("local function bodies should run");
     assert_eq!(output.stdout, "4\n5\n14\n120\n11\n");
 }

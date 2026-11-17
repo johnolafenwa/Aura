@@ -13557,6 +13557,9 @@ impl<'a> Lowerer<'a> {
                 );
                 lowerer.recursive_local = Some((name.clone(), info.clone()));
                 lowerer.lower_stmts(statements);
+                // The recursive name resolves directly to this function. It has
+                // a type during lowering but occupies no slot in the environment.
+                lowerer.local_types.remove(name);
             }
         }
         self.generated_functions
@@ -20516,7 +20519,9 @@ impl<'a> Lowerer<'a> {
         };
         if name != "list"
             || args.len() != 1
-            || !(crate::mir_copies::lendable_loop_element(&args[0]) || args[0].is_trait_object())
+            || !(crate::mir_copies::lendable_loop_element(&args[0])
+                || args[0].is_trait_object()
+                || crate::mir_copies::shared_callable_element(&args[0]))
         {
             return false;
         }

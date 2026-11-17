@@ -19927,7 +19927,7 @@ A function body starts with bindings for its ordinary parameters. A method body 
 
 Parameter names, `self`, local bindings, loop bindings, `with` bindings, and pattern bindings all live in the function's value namespace. A use is valid only after the binding is introduced on the current control-flow path.
 
-Aura 0.16 does not support local function, class, enum, or trait declarations. An item lives at module level or as a member of an enclosing declaration that permits it.
+A local `def` introduces an immutable function name in its enclosing block. Its parameters and locals belong to a new function scope. Classes, enums, and traits are declared at module level or as members of declarations that permit them. See [Closures](/manual/closures).
 
 ## Local Bindings
 

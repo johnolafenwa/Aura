@@ -17868,11 +17868,12 @@ def main() -> None:
     rule = Rule(weight=3, step=make_adder(7))
     mut acc = rule.step(1)
     steps: list[Step] = [make_adder(1), make_adder(2)]
+    acc = steps[0](acc)
     for step in steps:
         acc = step(acc)
     mut tallies: list[Tally] = [counter(1)]
     for tally in mut tallies:
-        acc = tally(acc)
+        acc = tally(acc & 7)
     mut board = Board(tallies=[counter(2)])
     for tally in mut board.tallies:
         acc = tally(acc)
