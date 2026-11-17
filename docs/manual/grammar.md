@@ -321,9 +321,9 @@ contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
-Item declarations are module-level. They are not statements and cannot appear
-inside function or control-flow suites. `public` is not allowed on an
-implementation block.
+Item declarations appear at module level. A `def` inside a function introduces
+a local closure using the statement grammar below. `public` is not allowed on
+an implementation block.
 
 A type alias is recognized contextually. A module-level line that reads
 `type`, an identifier, optional bounded type parameters, and `=` declares a
@@ -425,7 +425,7 @@ A function type spells a complete callable contract, for example
 
 A literal or expression after `=` in a type is rejected with `AU1101`.
 
-The same `*` boundary rule applies to declaration and lambda parameter lists.
+The same `*` boundary rule applies to declaration and lambda parameter lists. A local function requires a type for each parameter and a written result type. Local-function parameters take no defaults.
 A list has at most one `*`, it must be followed by at least one named
 parameter, and it adds no variadics.
 
@@ -679,7 +679,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = assignment-statement
+    = local-function-statement
+    | assignment-statement
     | view-statement
     | return-statement
     | assert-statement
@@ -694,6 +695,10 @@ statement
     | expression-statement ;
 
 statement-end = NEWLINE | DEDENT | EOF ;
+
+local-function-statement
+    = "def", identifier, [ lambda-capture-list ], "(", [ parameter-list ], ")",
+      "->", type, ":", NEWLINE, suite ;
 
 assignment-statement
     = [ "mut" ], assignment-target,

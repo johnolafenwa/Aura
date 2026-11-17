@@ -1,0 +1,6 @@
+error[AU2015]: callable contract mismatch: a Consuming value cannot be packed as Shared `Callable`; a call kind may only weaken
+ --> crates/aura-compiler/tests/fixtures/check-fail/local_function_consuming_branch_packing.au:13:12
+   |
+13 |     return read
+   |            ^
+  = help: preserve identical complete contracts at bare destinations; apply safe restrictions through an explicit thin alias or owned callable constructor such as `Alias(function)`

@@ -24,3 +24,6 @@ def main() -> None:
     print(total)
     chosen = choose_step(1)
     print(chosen(9))
+    def identity(identity: int64) -> int64:
+        return identity
+    print(identity(7))

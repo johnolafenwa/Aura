@@ -6141,3 +6141,60 @@ fn byte_strings_parse_to_a_byte_list_expression() {
     parse_stmt_from("b\"x\"\n").expect("a byte string is an expression");
     parse_stmt_from("send(b\"\", b'\\n')\n").expect("byte strings are arguments");
 }
+
+#[test]
+fn local_function_signatures_and_statement_bodies_are_preserved() {
+    let Item::Function(outer) = parse_item_from(
+        "def outer() -> None:\n    def update[mut total](value: own str, *, delta: int64) -> int64:\n        total += delta\n        return total\n",
+    ).expect("local function with a capture and two statements") else { panic!("function") };
+    let [Stmt::Assign(binding)] = outer.body.as_slice() else {
+        panic!("local declaration")
+    };
+    assert!(!binding.mutable);
+    let ExprKind::Lambda {
+        captures: Some(captures),
+        params,
+        body: crate::ast::ClosureBody::Function { name, statements },
+    } = &binding.value.kind
+    else {
+        panic!("closure body")
+    };
+    assert_eq!(name, "update");
+    assert_eq!(captures[0].name, "total");
+    assert_eq!(captures[0].mode, ParamMode::BorrowMut);
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(matches!(
+        statements.as_slice(),
+        [Stmt::Assign(_), Stmt::Return(_)]
+    ));
+    let TypeRefKind::Function {
+        params,
+        view_return,
+        ..
+    } = &binding.annotation.as_ref().unwrap().kind
+    else {
+        panic!("written function signature")
+    };
+    assert_eq!(params[0].name.as_deref(), Some("value"));
+    assert_eq!(params[0].mode, ParamMode::Own);
+    assert!(params[1].keyword_only);
+    assert!(view_return.is_none());
+}
+
+#[test]
+fn local_function_signatures_require_a_result_and_exclude_defaults_and_views() {
+    for (header, message) in [
+        ("def inner(x: int64):", "needs a written return type"),
+        ("def inner(x: int64 = 1) -> int64:", "cannot have defaults"),
+        (
+            "def inner(x: int64) -> view int64 from x:",
+            "cannot return a view",
+        ),
+    ] {
+        let source = format!("def outer() -> None:\n    {header}\n        return x\n");
+        let error = parse_item_from(&source).expect_err(&source);
+        assert_eq!(error.code, "AU1101");
+        assert!(error.message.contains(message), "{error:?}");
+    }
+}

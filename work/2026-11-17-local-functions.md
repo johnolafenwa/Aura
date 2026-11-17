@@ -18,3 +18,17 @@ which has the same runtime sources. All 159 language-server tests and the captur
 test passed. All 1,096 documentation examples passed. Z3 proved both assertions in a local function's two branches
 and reported a real overflow for an unbounded counter. Full-suite checks
 are in progress.
+
+A recursive name resolves to a direct call, so the generated function has
+no runtime slot for its own name. Native code for a local function and a
+lambda with the same captured arithmetic now has the same hot path.
+Measurements are in `benchmarks/closures/README.md`. A parameter can
+shadow the local function's name. Shared recursion over a captured list,
+mutation of private state and calling a captured list element by a
+captured index produced matching MIR and native output.
+
+The call kind accounts for captures consumed on an early return. The
+checker had previously discarded the move state of returning branches,
+which allowed a recursively called closure to consume its environment on
+one branch. The regression covers a local function whose base case moves
+a captured list.

@@ -1765,6 +1765,7 @@ impl<'a> FunctionChecker<'a> {
             named.iter().all(|name| self.type_params.contains_key(name))
         });
         let outer_mutated_captures = std::mem::take(&mut *self.mutated_captures.borrow_mut());
+        let mut moved_on_return = BTreeSet::new();
         let return_type = match body {
             crate::ast::ClosureBody::Expression(value) => {
                 self.reject_mutable_returned_view_value(value, &mut lambda_locals, false)?;
@@ -1797,16 +1798,20 @@ impl<'a> FunctionChecker<'a> {
                         "a local function cannot yield",
                     ));
                 }
-                let self_type = Type::Function {
-                    params: param_contracts.clone(),
-                    return_type: Box::new(result.clone()),
-                };
-                lambda_locals.insert(name.clone(), LocalBinding::local_function(self_type));
+                if !params.iter().any(|param| param.name == *name) {
+                    let self_type = Type::Function {
+                        params: param_contracts.clone(),
+                        return_type: Box::new(result.clone()),
+                    };
+                    lambda_locals.insert(name.clone(), LocalBinding::local_function(self_type));
+                }
                 let mut body_checker = self.with_module_name(self.module_name);
-                body_checker.local_function_body = true;
+                let returns = std::rc::Rc::new(std::cell::RefCell::new(BTreeSet::new()));
+                body_checker.local_return_moves = Some(std::rc::Rc::clone(&returns));
                 body_checker.recursion_measure = std::rc::Rc::new(std::cell::RefCell::new(None));
                 let flow =
                     body_checker.check_block(statements, &mut lambda_locals, result, 0, true)?;
+                moved_on_return = std::mem::take(&mut *returns.borrow_mut());
                 if *result != Type::Unit && flow != super::BlockFlow::AlwaysReturns {
                     return Err(Diagnostic::coded_at(
                         "AU2002",
@@ -1828,9 +1833,10 @@ impl<'a> FunctionChecker<'a> {
             ) && mutated_captures.contains(&capture.name);
         }
         let call_kind = if captures.iter().any(|capture| {
-            lambda_locals
-                .get(&capture.name)
-                .is_some_and(|binding| binding.moved || !binding.moved_fields.is_empty())
+            moved_on_return.contains(&capture.name)
+                || lambda_locals
+                    .get(&capture.name)
+                    .is_some_and(|binding| binding.moved || !binding.moved_fields.is_empty())
         }) {
             ClosureCallKind::Consuming
         } else if captures
@@ -1843,6 +1849,7 @@ impl<'a> FunctionChecker<'a> {
         };
         if let crate::ast::ClosureBody::Function { name, statements } = body {
             if call_kind != ClosureCallKind::Repeatable
+                && !params.iter().any(|param| param.name == *name)
                 && super::block_references_name(statements, name)
             {
                 return Err(Diagnostic::coded_at("AU3003", span,

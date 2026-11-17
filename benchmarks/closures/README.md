@@ -33,3 +33,20 @@ than three times the Rust wall time on this worker.
 The Rust programs use `Box<dyn Fn>` and `Box<dyn FnMut>`. The
 last two cases include optimizer decisions about inlining and
 allocation. Their timings describe the entire loop.
+
+## Direct local calls
+
+`local_functions.au` applies the same captured operation 48,000,000 times
+through a local `def` and a typed lambda. Build it with `aura build
+--backend direct benchmarks/closures/local_functions.au` and run the
+resulting executable. Both loops print checksum 473,089.
+
+On the Linux worker above, five runs of native code from `d1d76285`
+gave a median of 448 ms for the local function and 487 ms for the lambda.
+The debug-built compiler emitted optimized native code. Both invoke
+adapters have the same arithmetic and control flow, including the checked
+multiply and add and their cold error paths. Callgrind measured 27.64 and
+28.00 instructions per call respectively, subtracting a 16,000-call run
+from a 32,000-call run of each form. Keeping a recursive name in
+a runtime slot had previously forced a frame on every successful call,
+with respective medians of 1,079 and 459 ms.

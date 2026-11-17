@@ -1675,7 +1675,10 @@ struct FunctionChecker<'a> {
     rng_clone_obligations: Rc<RefCell<BTreeSet<String>>>,
     array_equality_obligations: Rc<RefCell<BTreeSet<String>>>,
     expr_result_entries: Rc<RefCell<HashMap<usize, ExprResultEntry>>>,
-    local_function_body: bool,
+    /// Captures a local function has moved on a returning branch. A
+    /// returned branch does not otherwise contribute its move state to
+    /// the statements that follow it.
+    local_return_moves: Option<Rc<RefCell<BTreeSet<String>>>>,
     closure_owner: ClosureOwner,
     closure_infos: Rc<RefCell<BTreeMap<ClosureId, ClosureInfo>>>,
     comprehension_infos: Rc<RefCell<BTreeMap<ComprehensionId, ComprehensionInfo>>>,
@@ -2885,7 +2888,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             array_equality_obligations: Rc::new(RefCell::new(BTreeSet::new())),
             expr_result_entries: Rc::new(RefCell::new(HashMap::new())),
-            local_function_body: false,
+            local_return_moves: None,
             closure_owner: ClosureOwner::TopLevel,
             closure_infos: Rc::new(RefCell::new(BTreeMap::new())),
             comprehension_infos: Rc::new(RefCell::new(BTreeMap::new())),
@@ -2931,7 +2934,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
-            local_function_body: self.local_function_body,
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -2981,7 +2984,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
-            local_function_body: self.local_function_body,
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3027,7 +3030,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: self.rng_clone_obligations.clone(),
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
-            local_function_body: self.local_function_body,
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3073,7 +3076,7 @@ impl<'a> FunctionChecker<'a> {
             rng_clone_obligations: sink,
             array_equality_obligations: self.array_equality_obligations.clone(),
             expr_result_entries: self.expr_result_entries.clone(),
-            local_function_body: self.local_function_body,
+            local_return_moves: self.local_return_moves.clone(),
             closure_owner: self.closure_owner.clone(),
             closure_infos: self.closure_infos.clone(),
             comprehension_infos: self.comprehension_infos.clone(),
@@ -3101,7 +3104,7 @@ impl<'a> FunctionChecker<'a> {
 
     /// Whether this checker is checking a class initializer's body.
     fn checks_initializer(&self) -> bool {
-        !self.local_function_body
+        self.local_return_moves.is_none()
             && matches!(
                 &self.closure_owner,
                 ClosureOwner::ClassMethod { method_name, .. } if method_name == INITIALIZER_NAME
@@ -5401,6 +5404,17 @@ impl<'a> FunctionChecker<'a> {
                         if let Some(value) = &return_stmt.value {
                             self.consume_value_expr(value, locals)?;
                         }
+                    }
+                    if let Some(moves) = &self.local_return_moves {
+                        moves.borrow_mut().extend(
+                            locals
+                                .iter()
+                                .filter(|(_, binding)| {
+                                    binding.captured
+                                        && (binding.moved || !binding.moved_fields.is_empty())
+                                })
+                                .map(|(name, _)| name.clone()),
+                        );
                     }
                     flow = BlockFlow::AlwaysReturns;
                     break;
