@@ -33754,6 +33754,44 @@ fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
             "AU3010",
             "live shared loan",
         ),
+        (
+            r#"def main() -> None:
+    for n in range(3):
+        def stop() -> None:
+            break
+        stop()
+"#,
+            "AU2999",
+            "only allowed inside a loop",
+        ),
+        (
+            r#"def main() -> None:
+    def compute(x: int64) -> int64:
+        if x == 0:
+            return x
+"#,
+            "AU2002",
+            "must return `int64` on every path",
+        ),
+        (
+            r#"def main() -> None:
+    def identity(value: int64) -> int64:
+        next = identity
+        return value
+"#,
+            "AU2005",
+            "target of a direct call",
+        ),
+        (
+            r#"def main() -> None:
+    def one(value: int64) -> int64:
+        return twice(value)
+    def twice(value: int64) -> int64:
+        return value * 2
+"#,
+            "AU2001",
+            "unknown function `twice`",
+        ),
     ];
     for (source, code, message) in cases {
         let error = crate::check_source(source).expect_err("invalid local function usage");

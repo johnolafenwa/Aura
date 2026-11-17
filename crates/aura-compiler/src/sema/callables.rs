@@ -1797,11 +1797,13 @@ impl<'a> FunctionChecker<'a> {
                         "a local function cannot yield",
                     ));
                 }
-                let self_type = Type::Function {
-                    params: param_contracts.clone(),
-                    return_type: Box::new(result.clone()),
-                };
-                lambda_locals.insert(name.clone(), LocalBinding::local_function(self_type));
+                if !params.iter().any(|param| param.name == *name) {
+                    let self_type = Type::Function {
+                        params: param_contracts.clone(),
+                        return_type: Box::new(result.clone()),
+                    };
+                    lambda_locals.insert(name.clone(), LocalBinding::local_function(self_type));
+                }
                 let mut body_checker = self.with_module_name(self.module_name);
                 body_checker.local_function_body = true;
                 body_checker.recursion_measure = std::rc::Rc::new(std::cell::RefCell::new(None));
