@@ -20944,7 +20944,25 @@ impl<'a> Lowerer<'a> {
                 .expect("comprehension filter should be inside its clause loop")
                 .continue_label
                 .clone();
-            let condition = self.lower_expr_with_expected(filter, Some(&Type::named("bool")));
+            // A loan that the filter takes, such as the element behind
+            // `names[i].len()`, ends before the branch: neither path reads
+            // it again, and the loop may run no iteration at all.
+            self.loan_scopes.push(Vec::new());
+            let mut condition = self.lower_expr_with_expected(filter, Some(&Type::named("bool")));
+            if self
+                .loan_scopes
+                .last()
+                .is_some_and(|scope| !scope.is_empty())
+                && matches!(condition, Operand::Place(_))
+            {
+                let kept = self.new_typed_temp(Type::named("bool"));
+                self.emit(Instruction::Assign {
+                    target: kept.clone(),
+                    value: Rvalue::Use(condition),
+                });
+                condition = Operand::Place(kept);
+            }
+            self.end_innermost_loan_scope();
             self.terminate(Terminator::Branch {
                 condition,
                 then_label: self.label(pass_block),
@@ -20965,7 +20983,25 @@ impl<'a> Lowerer<'a> {
             self.lower_comprehension_clause(output, clauses, clause_index + 1, result_place, info);
             return;
         }
+        // The output expression's loans end with the iteration that took
+        // them. Left to the enclosing statement they would end after the
+        // loop, on a path where no iteration began them.
+        self.loan_scopes.push(Vec::new());
         self.lower_comprehension_output(output, result_place, &info.result_type);
+        self.end_innermost_loan_scope();
+    }
+
+    /// Ends the loans of the innermost loan scope and leaves that scope.
+    fn end_innermost_loan_scope(&mut self) {
+        let loans = self.loan_scopes.pop().unwrap_or_default();
+        if !self.current_terminated() {
+            for loan in loans.iter().rev() {
+                if self.view_sources.contains_key(loan) {
+                    self.emit(Instruction::EndLoan { loan: loan.clone() });
+                }
+            }
+        }
+        self.remove_loans_from_lowering_state(&loans.into_iter().collect());
     }
 
     fn lower_comprehension_output(
@@ -27685,9 +27721,13 @@ impl<'a> Lowerer<'a> {
                         Some(element.clone())
                     } else {
                         // An argument whose own type is open, such as an
-                        // empty literal, takes the parameter's type.
+                        // empty literal, takes the parameter's type. So does
+                        // a list literal: its numbers have no kind of their
+                        // own, and the checker gave them the parameter's.
                         let inferred = self.infer_expr_type(&argument.value);
-                        if inferred.as_ref().is_none_or(type_contains_unknown) {
+                        if inferred.as_ref().is_none_or(type_contains_unknown)
+                            || matches!(argument.value.kind, ExprKind::List(_))
+                        {
                             local_types::builtin_member_argument_type(
                                 builtin_member,
                                 index,

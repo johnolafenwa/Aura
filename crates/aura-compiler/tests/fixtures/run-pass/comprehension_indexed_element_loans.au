@@ -1,0 +1,21 @@
+# A comprehension whose output or filter reads a list element by index.
+# The element's loan ends inside the iteration that took it, also when
+# the loop runs no iteration.
+class Entry:
+    name: str
+    tags: list[str]
+
+def main():
+    ids = ["a", "bc", "def"]
+    print([ids[i].clone() for i in range(2)])
+    print([ids[i].clone() for i in [2, 0]])
+    print([ids[i].clone() for i in range(0)])
+    print([i for i in range(3) if ids[i].len() > 1])
+    print([ids[i].clone() for i in range(3) if ids[i].len() != 2 if ids[i] != "def"])
+    print({ids[i].clone() for i in range(1)})
+    print({ids[i].clone(): ids[i].len() for i in range(3)})
+    print([ids[i].clone() + ids[j] for i in range(2) for j in range(2) if ids[j].len() > i])
+    entries = [Entry(name="x", tags=["p", "q"]), Entry(name="y", tags=[])]
+    print([entries[i].name.clone() for i in range(2) if entries[i].tags.len() == 0])
+    print([entries[i].tags[0].clone() for i in range(1)])
+    print(ids)
