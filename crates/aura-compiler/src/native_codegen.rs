@@ -2356,7 +2356,8 @@ impl<'a> NativeCodegen<'a> {
             function_refs,
             leaf_refs,
             recovery_refs,
-            checked_scalar_body: self.recovery_functions.get(&function.name) == Some(&func_id),
+            checked_scalar_body: (self.recovery_functions.get(&function.name) == Some(&func_id))
+                .then_some(func_id),
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -3747,7 +3748,7 @@ struct FunctionCompiler<'a> {
     /// no write-through sink to hand over calls.
     leaf_refs: HashMap<String, FuncRef>,
     recovery_refs: HashMap<String, FuncRef>,
-    checked_scalar_body: bool,
+    checked_scalar_body: Option<FuncHandle>,
     function_thunk_refs: HashMap<String, FuncRef>,
     /// The entry code of each callback the module passes to C.
     callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
@@ -4842,37 +4843,42 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
         self.enter_snapshot_block(&block.label);
-        if self.checked_scalar_body {
-            if let Terminator::AssertFail {
+        if let (
+            Some(id),
+            Terminator::AssertFail {
                 message,
                 span,
                 kind,
                 ..
-            } = &block.terminator
-            {
-                // Eligibility proved every instruction here only formats
-                // assertion operands, which control.Trap does not expose.
-                let message = match message {
-                    Some(Operand::String(text)) => text.as_str(),
-                    None => "assertion failed",
-                    _ => return Err("expected a literal recovered assertion".to_string()),
-                };
-                let (ptr, len) = self.string_constant(message.as_bytes())?;
-                let (line, column) = self.span_values(Some(*span));
-                let descriptor = self.frameless_descriptor.expect("scalar body descriptor");
-                let kind = self.builder.iconst(types::I64, kind.word());
-                let error = self
-                    .builder
-                    .call(
-                        self.runtime[RuntimeFn::RecoverAssertion],
-                        &[descriptor, ptr, len, line, column, kind],
-                    )
-                    .results[0];
-                let mut words = return_ty.zero_values(self.builder);
-                words.push(error);
-                self.builder.return_(&words);
-                return Ok(());
-            }
+            },
+        ) = (self.checked_scalar_body, &block.terminator)
+        {
+            // Eligibility proved every instruction here only formats
+            // assertion operands, which control.Trap does not expose.
+            let message = match message {
+                Some(Operand::String(text)) => text.as_str(),
+                None => "assertion failed",
+                _ => return Err("expected a literal recovered assertion".to_string()),
+            };
+            // All data for this checked leaf's failure belongs to
+            // this source site. Its frozen Result can be shared.
+            let key = format!("\0recovered check {} {}", id.0, block.label);
+            let cell = word_cell(self.tag_cells, self.builder, &key)?;
+            let (ptr, len) = self.string_constant(message.as_bytes())?;
+            let (line, column) = self.span_values(Some(*span));
+            let descriptor = self.frameless_descriptor.expect("scalar body descriptor");
+            let kind = self.builder.iconst(types::I64, kind.word());
+            let error = self
+                .builder
+                .call(
+                    self.runtime[RuntimeFn::RecoverAssertion],
+                    &[cell, descriptor, ptr, len, line, column, kind],
+                )
+                .results[0];
+            let mut words = return_ty.zero_values(self.builder);
+            words.push(error);
+            self.builder.return_(&words);
+            return Ok(());
         }
 
         let mut skipped = 0;
@@ -6110,7 +6116,7 @@ impl<'a> FunctionCompiler<'a> {
         if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
         }
-        if self.checked_scalar_body {
+        if self.checked_scalar_body.is_some() {
             let success = self.builder.iconst(types::I64, 0);
             return_values.push(success);
         }

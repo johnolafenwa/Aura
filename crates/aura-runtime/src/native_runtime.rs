@@ -6719,13 +6719,13 @@ fn lock_direct_module_constants(
 /// The layout slots that hold a shared variant box, and the cells of
 /// borrowed `str` literals, which the program's end frees with the module
 /// constants.
-fn shared_unit_variant_slots() -> &'static Mutex<Vec<&'static std::sync::atomic::AtomicUsize>> {
+fn frozen_program_value_slots() -> &'static Mutex<Vec<&'static std::sync::atomic::AtomicUsize>> {
     static SLOTS: OnceLock<Mutex<Vec<&'static std::sync::atomic::AtomicUsize>>> = OnceLock::new();
     SLOTS.get_or_init(|| Mutex::new(Vec::new()))
 }
 
 fn clear_direct_module_constants() {
-    for slot in shared_unit_variant_slots()
+    for slot in frozen_program_value_slots()
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner)
         .drain(..)
@@ -7014,22 +7014,30 @@ pub unsafe extern "C-unwind" fn aura_direct_string_literal_cell(
     let Some(cell) = (unsafe { cell.as_ref() }) else {
         return aura_direct_string_literal(ptr, len);
     };
+    frozen_program_value(cell, || {
+        boxed_value(Value::String(literal_str(ptr, len).into()))
+    })
+}
+
+/// Publishes one immutable box for this program-lifetime data word. A lost
+/// race frees its private candidate. Program teardown resets the word and
+/// frees the winning box after all its readers have finished.
+fn frozen_program_value(
+    cell: &'static std::sync::atomic::AtomicUsize,
+    build: impl FnOnce() -> *mut OpaqueValue,
+) -> *mut OpaqueValue {
     let stored = cell.load(Ordering::Acquire);
     if stored != 0 {
         return stored as *mut OpaqueValue;
     }
     task_runtime_boundary(|| {
-        let boxed = boxed_value(Value::String(literal_str(ptr, len).into()));
+        let boxed = build();
         // SAFETY: the box is new and confined to this thread, and the cell
         // publishes it with a release store.
         unsafe { freeze_direct_value(boxed) };
         match cell.compare_exchange(0, boxed as usize, Ordering::AcqRel, Ordering::Acquire) {
             Ok(_) => {
-                // SAFETY: the cell is a word of the program's data, which
-                // lives until the process exits.
-                let cell: &'static std::sync::atomic::AtomicUsize =
-                    unsafe { &*(cell as *const std::sync::atomic::AtomicUsize) };
-                shared_unit_variant_slots()
+                frozen_program_value_slots()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(cell);
@@ -15233,7 +15241,7 @@ pub unsafe extern "C-unwind" fn aura_direct_enum_new_typed(
             // SAFETY: no other thread saw the box this thread lost with.
             |lost| unsafe { free_frozen_direct_value(lost as *mut OpaqueValue) },
             |slot| {
-                shared_unit_variant_slots()
+                frozen_program_value_slots()
                     .lock()
                     .unwrap_or_else(std::sync::PoisonError::into_inner)
                     .push(slot);
@@ -22083,14 +22091,16 @@ fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) 
 
 /// The result of a failed assertion in a recovered scalar leaf. Such a leaf
 /// neither calls out nor acquires resources. Its constant descriptor is its
-/// complete call chain, and the caller owns the box returned here.
+/// complete call chain. Readers of the frozen Result get independent Trap
+/// values when they take or copy its payload.
 ///
 /// # Safety
 ///
-/// Generated code passes a registered program-lifetime frame descriptor and
-/// the UTF-8 bytes of a string constant.
+/// Generated code passes a dedicated program-lifetime cell, a registered
+/// frame descriptor and the UTF-8 bytes of a string constant.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_recover_assertion(
+pub unsafe extern "C-unwind" fn aura_direct_recover_assertion_cell(
+    cell: *const std::sync::atomic::AtomicUsize,
     descriptor: *const DirectFrameDescriptor,
     message_ptr: *const u8,
     message_len: usize,
@@ -22098,16 +22108,20 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_assertion(
     column: i64,
     kind: i64,
 ) -> *mut OpaqueValue {
-    let descriptor = unsafe { &*descriptor };
-    descriptor.ensure_validated();
-    let message = decode_bytes(message_ptr, message_len);
-    let mut diagnostic = direct_assert_diagnostic(message, line, column, kind);
-    diagnostic
-        .call_frames
-        .push(descriptor.frame().materialize());
-    boxed_value(result_err(crate::runtime_value::recovered_trap_value(
-        diagnostic,
-    )))
+    // SAFETY: the program owns this cell until it finishes.
+    let cell = unsafe { &*cell };
+    frozen_program_value(cell, || {
+        let descriptor = unsafe { &*descriptor };
+        descriptor.ensure_validated();
+        let message = decode_bytes(message_ptr, message_len);
+        let mut diagnostic = direct_assert_diagnostic(message, line, column, kind);
+        diagnostic
+            .call_frames
+            .push(descriptor.frame().materialize());
+        boxed_value(result_err(crate::runtime_value::recovered_trap_value(
+            diagnostic,
+        )))
+    })
 }
 
 /// Private direct-backend assertion ABI for the compiler-proven two-operand

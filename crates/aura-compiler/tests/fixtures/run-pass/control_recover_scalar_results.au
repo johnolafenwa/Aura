@@ -21,7 +21,7 @@ def saved(ok: bool) -> Result[bool, control.Trap]:
 
 def main() -> None:
     for index in range(4):
-        match control.recover(invert, index % 2 == 0):
+        match own control.recover(invert, index % 2 == 0):
             case Ok(value):
                 print(value)
             case Err(trap):
@@ -30,6 +30,9 @@ def main() -> None:
                 assert trap.line == 5 and trap.column == 5
                 assert len(trap.frames) == 1 and trap.frames[0] == "invert at 4:1"
                 print(trap.message)
+                mut changed = trap
+                changed.message = "changed"
+                assert changed.message == "changed"
         match control.recover(halve, 7.0):
             case Ok(value):
                 print(value == 3.5)
