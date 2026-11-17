@@ -16260,7 +16260,7 @@ fn native_runtime_direct_call_depth_is_isolated_across_suspended_tasks() {
                         }
                         let _ = task_release.recv_with_cancellation(None, None);
                         assert_eq!(
-                            super::direct_runtime_call_frames(),
+                            super::direct_runtime_call_frames().0,
                             vec![RuntimeCallFrame {
                                 function,
                                 span: runtime_source_span(&path, index + 1, 1),
@@ -16371,7 +16371,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                                 stack,
                                 "a task keeps one frame stack across yields"
                             );
-                            let frames = super::direct_runtime_call_frames();
+                            let frames = super::direct_runtime_call_frames().0;
                             assert_eq!(frames.len(), level + 1);
                             for (offset, frame) in frames.iter().enumerate() {
                                 let expected = level - offset;
@@ -16393,7 +16393,7 @@ fn native_runtime_frame_stacks_stay_exact_across_task_switches() {
                         for remaining in (0..descriptors.len()).rev() {
                             unsafe { generated_exit(stack) };
                             super::aura_direct_yield_now();
-                            assert_eq!(super::direct_runtime_call_frames().len(), remaining);
+                            assert_eq!(super::direct_runtime_call_frames().0.len(), remaining);
                         }
                         Value::Unit
                     }))
@@ -16467,7 +16467,7 @@ fn native_runtime_sinks_and_returned_views_send_frame_pushes_to_the_runtime() {
             super::aura_direct_take_returned_view_projection(projection.as_ptr(), projection.len());
         assert_eq!(selected, 0);
         unsafe { super::aura_direct_exit_call() };
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         assert!(unsafe { super::DirectFrameStack::generated_push(stack, caller as *const _) });
         assert!(unsafe { super::DirectFrameStack::generated_pop(stack) });
 
@@ -16577,7 +16577,7 @@ fn native_runtime_call_frames_push_pop_and_snapshot_once_before_cleanup() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("call-frame probe should complete");
@@ -16858,7 +16858,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             0,
             "entering a descriptor frame must not materialize diagnostics"
         );
-        let frames = super::direct_runtime_call_frames();
+        let frames = super::direct_runtime_call_frames().0;
         assert_eq!(frames.len(), 2);
         assert_eq!(frames[0].function, "helper");
         assert_eq!(frames[0].span.path.as_deref(), Some("/workspace/main.au"));
@@ -16868,7 +16868,7 @@ fn native_runtime_frame_descriptor_validates_once_and_materializes_its_frame() {
             super::aura_direct_exit_call();
             super::aura_direct_exit_call();
         }
-        assert!(super::direct_runtime_call_frames().is_empty());
+        assert!(super::direct_runtime_call_frames().0.is_empty());
         Ok::<_, Diagnostic>(Value::Unit)
     })
     .expect("descriptor frame probe should complete");
@@ -20882,13 +20882,13 @@ fn native_runtime_discarded_frame_state_is_absent_when_the_same_task_key_is_reus
                 b"old_child".len(),
             );
         }
-        assert_eq!(super::direct_runtime_call_frames().len(), 1);
+        assert_eq!(super::direct_runtime_call_frames().0.len(), 1);
         assert_eq!(super::direct_runtime_task_ancestry().len(), 1);
 
         super::discard_current_direct_task_runtime_state();
         super::with_direct_task_runtime_scope(|| {
             assert!(
-                super::direct_runtime_call_frames().is_empty(),
+                super::direct_runtime_call_frames().0.is_empty(),
                 "a reused task identity must start with no retired call frames"
             );
             assert!(
@@ -22932,7 +22932,7 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
     // SAFETY: the test owns the stack until it frees it below.
     let storage = unsafe { &mut *stack.as_ptr() };
     assert!(!storage.pop_call());
-    assert!(storage.materialize_innermost_first().is_empty());
+    assert!(storage.materialize_innermost_first().0.is_empty());
     for index in 0..3 {
         storage.push_owned(Box::new(DirectRuntimeCallFrame {
             function: DirectFrameText::shared(format!("frame{index}")),
@@ -22940,14 +22940,17 @@ fn direct_frame_metadata_materializes_call_frames_and_task_ancestry() {
         }));
     }
     assert_eq!(storage.len(), 3);
-    let innermost_first = storage.materialize_innermost_first();
+    let innermost_first = storage.materialize_innermost_first().0;
     assert_eq!(innermost_first[0].function, "frame2");
     assert_eq!(innermost_first[2].span.start, Span::new(1, 1));
     assert!(storage.pop_call());
-    assert_eq!(storage.materialize_innermost_first()[0].function, "frame1");
+    assert_eq!(
+        storage.materialize_innermost_first().0[0].function,
+        "frame1"
+    );
     assert!(storage.pop_call());
     assert_eq!(storage.len(), 1);
-    assert_eq!(storage.materialize_innermost_first().len(), 1);
+    assert_eq!(storage.materialize_innermost_first().0.len(), 1);
     assert!(storage.pop_call());
     assert!(!storage.pop_call());
     // SAFETY: nothing uses the stack after this.

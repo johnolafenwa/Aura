@@ -2835,12 +2835,21 @@ impl MirRuntime {
                     let inner = chain.clone().take(TRACE_FRAMES_PER_END);
                     let outer = chain.skip(total - TRACE_FRAMES_PER_END);
                     error.call_frames = inner.chain(outer).cloned().collect();
-                    error.set_omitted_call_frames(TRACE_FRAMES_PER_END, total - 2 * TRACE_FRAMES_PER_END);
+                    error.set_omitted_call_frames(
+                        TRACE_FRAMES_PER_END,
+                        total - 2 * TRACE_FRAMES_PER_END,
+                    );
                 }
             };
             if self.generator_body {
                 GENERATOR_RESUMERS.with(|frames| {
-                    snapshot(frames.borrow().last().map(Vec::as_slice).unwrap_or_default())
+                    snapshot(
+                        frames
+                            .borrow()
+                            .last()
+                            .map(Vec::as_slice)
+                            .unwrap_or_default(),
+                    )
                 });
             } else {
                 snapshot(&[]);
