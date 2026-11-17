@@ -7827,6 +7827,26 @@ pub extern "C-unwind" fn aura_direct_string_trim(value: *mut OpaqueValue) -> *mu
     })
 }
 
+/// Returns the Unicode scalar at a signed character index.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_string_scalar_at(value: *mut OpaqueValue, index: i64) -> i64 {
+    task_runtime_boundary(|| {
+        let scalar = unsafe {
+            with_unlisted_value(value, |value| match value {
+                Value::String(text) => text_methods::scalar_at(text, text.is_ascii(), index),
+                other => Err(Diagnostic::new(format!(
+                    "expected `str`, found `{}`",
+                    value_type_name(other)
+                ))),
+            })
+        };
+        match scalar {
+            Ok(ch) => i64::from(u32::from(ch)),
+            Err(error) => runtime_diagnostic_error(error),
+        }
+    })
+}
+
 /// Dispatches one `str` text-convenience method. `opcode` indexes
 /// `text_methods::TEXT_METHOD_NAMES`. `argument` is an owned `str` handle or
 /// null; `count` is the scalar argument of `repeat`.

@@ -4733,6 +4733,10 @@ impl<'a> FunctionCompiler<'a> {
                 skipped = fused - 1;
                 continue;
             }
+            if self.compile_indexed_str_comparison(&block.instructions[instruction_index..])? {
+                skipped = 2;
+                continue;
+            }
             if self.opens_with_try_read(&block.instructions[instruction_index..]) {
                 if let Instruction::Assign {
                     target,
@@ -7492,6 +7496,79 @@ impl<'a> FunctionCompiler<'a> {
             values: vec![inst.results[0]],
             ty: DirectType::Scalar(ScalarKind::Bool),
         }))
+    }
+
+    /// A character immediately compared against a one-scalar literal and then
+    /// released has no observable string identity. Keep its scalar in a word.
+    fn compile_indexed_str_comparison(
+        &mut self,
+        instructions: &[Instruction],
+    ) -> std::result::Result<bool, String> {
+        let [Instruction::Assign {
+            target: character,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Runtime {
+                            op: RuntimeOp::Str(StrOp::CharAt),
+                            receiver: Some(Operand::Place(text)),
+                            ..
+                        },
+                    args,
+                    ..
+                },
+        }, Instruction::Assign {
+            target,
+            value: Rvalue::Binary {
+                op, left, right, ..
+            },
+        }, Instruction::Release { place }, ..] = instructions
+        else {
+            return Ok(false);
+        };
+        if place != character || !character.starts_with("%t") {
+            return Ok(false);
+        }
+        let condition = match op {
+            BinaryOp::Eq => IntCC::Equal,
+            BinaryOp::NotEq => IntCC::NotEqual,
+            _ => return Ok(false),
+        };
+        let ((Operand::Place(compared), Operand::String(literal))
+        | (Operand::String(literal), Operand::Place(compared))) = (left, right)
+        else {
+            return Ok(false);
+        };
+        let mut scalars = literal.chars();
+        let (Some(literal), None) = (scalars.next(), scalars.next()) else {
+            return Ok(false);
+        };
+        let [argument] = args.as_slice() else {
+            return Ok(false);
+        };
+        if compared != character || text.contains('.') || argument.writeback_place.is_some() {
+            return Ok(false);
+        }
+        let text = self.load_place(text)?;
+        let index =
+            self.load_operand_with_integer_hint(&argument.value, Some(ScalarKind::Int64))?;
+        let index = self.coerce_value(index, &DirectType::Scalar(ScalarKind::Int64))?;
+        let actual = self.builder.call(
+            self.runtime[RuntimeFn::StringScalarAt],
+            &[text.values[0], index.values[0]],
+        );
+        let comparison =
+            self.builder
+                .icmp_imm(condition, actual.results[0], i64::from(u32::from(literal)));
+        let word = self.builder.uextend(types::I64, comparison);
+        self.store_place(
+            target,
+            ValueRef {
+                values: vec![word],
+                ty: DirectType::Scalar(ScalarKind::Bool),
+            },
+        )?;
+        Ok(true)
     }
 
     /// Compares a `str` value with a string literal without boxing the

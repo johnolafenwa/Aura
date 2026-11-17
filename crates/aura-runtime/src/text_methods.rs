@@ -274,6 +274,11 @@ pub fn evaluate_bytes_search(name: &str, value: &[u8], pattern: &[u8]) -> Value 
 /// negative index counts from the end. ASCII text, which `ascii` reports,
 /// is read at the byte; other text is walked from the nearer end.
 pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
+    scalar_at(text, ascii, index).map(Value::string)
+}
+
+/// Selects a Unicode scalar without materializing a one-character string.
+pub(crate) fn scalar_at(text: &str, ascii: bool, index: i64) -> Result<char> {
     let out_of_range = |length: usize| {
         Diagnostic::coded(
             "AU4003",
@@ -288,7 +293,7 @@ pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
             Some(index)
         };
         return match position.and_then(|position| usize::try_from(position).ok()) {
-            Some(position) if position < length => Ok(Value::string(&text[position..position + 1])),
+            Some(position) if position < length => Ok(char::from(text.as_bytes()[position])),
             _ => Err(out_of_range(length)),
         };
     }
@@ -303,7 +308,7 @@ pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
             .and_then(|position| text.chars().nth(position))
     };
     match found {
-        Some(scalar) => Ok(Value::string(scalar)),
+        Some(scalar) => Ok(scalar),
         None => Err(out_of_range(text.chars().count())),
     }
 }

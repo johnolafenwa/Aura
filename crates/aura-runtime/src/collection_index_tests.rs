@@ -833,6 +833,29 @@ fn union_with_a_subset_shares_the_receivers_storage_until_a_write() {
 }
 
 #[test]
+fn indexed_union_appends_in_insertion_order_across_removed_slots() {
+    let mut left = set_of(&(0..40).collect::<Vec<_>>());
+    let mut right = set_of(&(25..65).rev().collect::<Vec<_>>());
+    left.remove(&int(3));
+    right.remove(&int(43));
+    right.insert(int(3));
+    let Some(SetAlgebra::Elements(union)) = set_algebra("union", &left, &right) else {
+        panic!("union should return a set");
+    };
+    let expected = (0..40)
+        .filter(|n| *n != 3)
+        .chain((40..65).rev().filter(|n| *n != 43))
+        .chain([3])
+        .map(int)
+        .collect::<Vec<_>>();
+    assert_eq!(union.iter().cloned().collect::<Vec<_>>(), expected);
+    assert_eq!(union.len(), expected.len());
+    assert!(expected.iter().all(|key| union.contains_key(key)));
+    assert!(!left.contains_key(&int(64)));
+    assert!(!right.contains_key(&int(43)));
+}
+
+#[test]
 fn set_algebra_keeps_the_receiver_order_then_the_other_sets() {
     let ints = |values: &[i64]| values.iter().map(|value| int(*value)).collect::<Vec<_>>();
     assert_eq!(

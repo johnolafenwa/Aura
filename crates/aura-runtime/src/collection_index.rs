@@ -1305,6 +1305,64 @@ impl DictEntries {
 }
 
 impl SetElements {
+    /// Keeps the left-hand insertion order and appends previously absent right-hand
+    /// entries. An indexed source already holds every key's hash.
+    fn union(&self, other: &Self) -> Self {
+        let (EagerRef::Large(left), EagerRef::Large(right)) = (self.eager(), other.eager()) else {
+            let mut result = self.clone();
+            for element in other.iter() {
+                let (found, hash) =
+                    result.probe(|| hash_value(element), |key| key_equals(key, element));
+                if found.is_none() {
+                    result.push_new_hashed(element.clone(), hash);
+                }
+            }
+            return result;
+        };
+        if Arc::ptr_eq(left, right) {
+            return self.clone();
+        }
+
+        let mut missing = Vec::new();
+        let mut additional = 0;
+        for &(hash, slot) in right.index.iter() {
+            let element = right.slots[slot].as_ref().expect("indexed set entry");
+            let found = left.index.find(hash, |&(other_hash, candidate)| {
+                other_hash == hash
+                    && key_equals(
+                        left.slots[candidate].as_ref().expect("indexed set entry"),
+                        element,
+                    )
+            });
+            if found.is_none() {
+                if missing.is_empty() {
+                    missing.resize(right.slots.len(), None);
+                }
+                missing[slot] = Some(hash);
+                additional += 1;
+            }
+        }
+        if missing.is_empty() {
+            return self.clone();
+        }
+
+        let mut result = (**left).clone();
+        result.slots.reserve(additional);
+        result.index.reserve(additional, |&(hash, _)| hash);
+        for (element, hash) in right.slots.iter().zip(missing) {
+            if let Some(hash) = hash {
+                let slot = result.slots.len();
+                result.slots.push(element.clone());
+                result
+                    .index
+                    .insert_unique(hash, (hash, slot), |&(hash, _)| hash);
+            }
+        }
+        Self {
+            storage: Storage::Large(Arc::new(result)),
+        }
+    }
+
     /// Adds `element` unless an equal one is present. Returns whether it was added.
     pub fn insert(&mut self, element: Value) -> bool {
         match self.probe(
@@ -1460,13 +1518,7 @@ pub fn set_algebra(method: &str, left: &SetElements, right: &SetElements) -> Opt
         inner.len() <= outer.len() && inner.iter().all(|element| outer.contains_key(element))
     };
     Some(match method {
-        "union" => {
-            let mut result = left.clone();
-            for element in right.iter() {
-                result.insert(element.clone());
-            }
-            SetAlgebra::Elements(result)
-        }
+        "union" => SetAlgebra::Elements(left.union(right)),
         "intersection" => collect(&mut left.iter().filter(|element| right.contains_key(element))),
         "difference" => collect(&mut left.iter().filter(|element| !right.contains_key(element))),
         "symmetric_difference" => collect(
