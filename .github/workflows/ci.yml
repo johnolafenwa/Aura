@@ -515,3 +515,58 @@ jobs:
             packs/aura-v*-target-x86_64-unknown-linux-musl.tar.gz \
             packs/aura-v*-target-aarch64-unknown-linux-gnu.tar.gz \
             packs/aura-v*-target-aarch64-unknown-linux-musl.tar.gz
+
+  integration-benchmarks:
+    name: Measure ${{ matrix.suite }}
+    if: ${{ !cancelled() && github.event_name == 'pull_request' && github.event.pull_request.number == 309 }}
+    needs: native-binaries
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 4
+      matrix:
+        suite: [collections_text, closures, failure_recovery, ffi_calls, image_codec, numbers, ordered_collections, shared_state]
+    steps:
+      - name: Check out benchmark sources
+        uses: actions/checkout@de0fac2e4500dabe0009e67214ff5f5447ce83dd # v6.0.2
+        with:
+          persist-credentials: false
+      - name: Download the release compiler from this run
+        uses: actions/download-artifact@70fc10c6e5e1ce46ad2ea6f2b72d43f7d47b13c3 # v8.0.0
+        with:
+          name: target-packs-X64
+          path: ${{ runner.temp }}/packs
+      - name: Select the GNU/Linux compiler
+        run: |
+          for archive in "$RUNNER_TEMP"/packs/aura-v*-x86_64-unknown-linux-gnu.tar.gz; do
+            if [[ "$archive" == *-target-* ]]; then continue; fi
+            tar -xzf "$archive" -C "$RUNNER_TEMP"
+            prefix=$(basename "$archive" .tar.gz)
+            "$RUNNER_TEMP/$prefix/bin/aura" --version
+            echo "AURA=$RUNNER_TEMP/$prefix/bin/aura" >> "$GITHUB_ENV"
+          done
+      - name: Install the image benchmark's Python dependencies
+        if: matrix.suite == 'image_codec'
+        run: |
+          python3 -m venv "$RUNNER_TEMP/image-python"
+          "$RUNNER_TEMP/image-python/bin/pip" install 'pillow==12.3.0' 'numpy==2.5.3'
+          echo "$RUNNER_TEMP/image-python/bin" >> "$GITHUB_PATH"
+      - name: Measure the three implementations
+        env:
+          SUITE: ${{ matrix.suite }}
+        run: |
+          test -x "$AURA"
+          rustc --version
+          python3 --version
+          nproc
+          args=()
+          rounds=1
+          case "$SUITE" in
+            ffi_calls) args=(v2); rounds=3 ;;
+            closures|shared_state|collections_text) rounds=3 ;;
+          esac
+          for ((trial=1; trial<=rounds; trial++)); do
+            echo "Trial $trial"
+            bash "benchmarks/$SUITE/run.sh" "${args[@]}"
+          done
