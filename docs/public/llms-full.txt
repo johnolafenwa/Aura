@@ -4941,6 +4941,8 @@ Conditional and `match` expressions cannot merge capturing closures from several
 - Captures that fit in three words live in the value itself. A wider environment lives in one checked block, and a failure to allocate it raises `AU4005`.
 - A call goes through the descriptor without boxing.
 - The value is boxed into a runtime function value only where it leaves generated code: when it is stored into a container, started as a task, passed to a runtime helper, or handed to a generic frame whose contract differs in layout.
+- A boxed Shared or Mutable value keeps its four words. A call through a class field or a list element reaches those words where the field or the list keeps them and calls through the descriptor, with no copy of the stored value. A `for` loop over a list of Shared callables binds each element as its four words.
+- The captures of a boxed value become runtime values only when runtime code reads them, such as a task start or the MIR interpreter's helpers.
 - This layout makes no FFI or ABI stability claim.
 
 A `TaskCallable[...]` value is a stored task target. Every `TaskGroup` start method takes it by move for one child call, whether it is Shared, Mutable, or Consuming. A Mutable target's captures are child-owned state, with no writeback to the parent. See [Concurrency](/manual/concurrency).

@@ -1378,7 +1378,7 @@ impl<'a> FunctionChecker<'a> {
                 .and_then(|modes| modes.get(&name))
                 .map(|(mode, _)| *mode);
             // A Copy value behind a shared or mutable parameter is read once,
-            // when the closure is created (ADR-0104).
+            // when the closure is created (ADR-0115).
             let copied_from_loan = explicit_mode.is_none()
                 && binding.passing != ReceiverKind::Value
                 && binding.view.is_none()

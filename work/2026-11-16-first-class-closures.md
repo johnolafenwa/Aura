@@ -6,9 +6,9 @@ John approved item 3 of the missing features list on 2026-11-16: closures
 are second-class. A capturing closure could be stored only through an
 alias of a `Callable[...]` type called as a constructor, and a lambda is
 one expression with no statement body. The design is in
-`architecture_docs/29-first-class-closures-design-checkpoint.md`.
+`architecture_docs/30-first-class-closures-design-checkpoint.md`.
 
-## Step 1: Packing At Typed Destinations (ADR-0104)
+## Step 1: Packing At Typed Destinations (ADR-0115)
 
 Work completed:
 
@@ -75,7 +75,7 @@ Verification:
 
 ## Follow-up
 
-- Step 2: local `def` statements (ADR-0105).
+- Step 2: local `def` statements (ADR-0116).
 - Benchmarks against Rust `Box<dyn Fn>` and Python closures.
 - Indexed call regression tests and current benchmark evidence are in
   `2026-11-17-indexed-closure-calls.md`.
