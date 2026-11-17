@@ -73,3 +73,11 @@ that affect any program, not only the planned `collections` module.
 
 Step 2 is the `numbers` module. Step 3 is `collections`, after the
 field-list and generic-list costs are removed.
+
+## Editor Verification On 2026-11-17
+
+Both hosted verify jobs failed the same exact-list assertion for set
+members. The compiler returned all eight new methods. The test now
+expects those names and checks the signatures for producing a set,
+testing a relation, and updating a set in place. All 158 language server
+tests passed on Linux with the compiler built from this branch.

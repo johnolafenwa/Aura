@@ -4403,7 +4403,11 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     );
     assert.deepEqual(
       [...setNames].sort(),
-      ["add", "clear", "copy", "discard", "is_empty", "len", "remove", "reserve"]
+      [
+        "add", "clear", "copy", "difference", "discard", "intersection",
+        "is_disjoint", "is_empty", "is_subset", "is_superset", "len",
+        "remove", "reserve", "symmetric_difference", "union", "update"
+      ]
     );
     const setLengthCompletions = setCompletions.filter((item) => item.name === "len");
     assert.equal(
@@ -4423,6 +4427,9 @@ test("compiler bridge exposes canonical set members and tuple-shaped dict items"
     assert.equal(setDetails.get("discard"), "discard(value: T) -> None");
     assert.equal(setDetails.get("copy"), "copy() -> set[T]");
     assert.equal(setDetails.get("reserve"), "reserve(additional: int64) -> None");
+    assert.equal(setDetails.get("union"), "union(other: set[T]) -> set[T]");
+    assert.equal(setDetails.get("is_subset"), "is_subset(other: set[T]) -> bool");
+    assert.equal(setDetails.get("update"), "update(other: own set[T]) -> None");
 
     const entriesOccurrence = analysis.occurrences.find(
       (occurrence) =>

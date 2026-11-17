@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-16
+Last updated: 2026-11-17
 
 ## Collections, text, and numbers (step 1 of 3 complete)
 
@@ -15,6 +15,9 @@ Last updated: 2026-11-16
 - Next: step 2, the `numbers` module (`BigInt`, `Decimal`, `Complex`).
   Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
   the cost of list operations on a class field is removed.
+
+- The language server suite passes all 158 tests on Linux after updating
+  the set completion list and checking its result and argument types.
 
 ## Book chapters on tensors and machine learning (complete)
 
