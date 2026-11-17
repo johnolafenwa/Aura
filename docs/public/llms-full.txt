@@ -12857,7 +12857,10 @@ The native backend emits the C call itself. The interpreter builds each call
 at run time. They agree on argument layout, ownership, mutable views,
 results, and Aura diagnostics. The maintained `examples/packages/sqlite_notes` package binds the system
 SQLite library with handles, `drop` functions, C text, out-parameters, and
-a callback. The maintained `examples/packages/ffi_getpid`
+a callback. The maintained `examples/packages/raylib` package binds the
+raylib graphics library: its programs open a window, draw in 2D and 3D,
+read the keyboard and mouse, and write an image. The maintained
+`examples/packages/ffi_getpid`
 package and the FFI acceptance tests run the same declarations on both.
 
 A foreign call from a built program costs about what the same call costs

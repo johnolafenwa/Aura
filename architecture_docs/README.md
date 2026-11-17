@@ -60,6 +60,7 @@ date of that decision, not the state of the implementation today.
 - [26-batch-8-design-checkpoint.md](26-batch-8-design-checkpoint.md): the multicore runtime
 - [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
 - [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
+- [29-ffi-v2-graphics-design-checkpoint.md](29-ffi-v2-graphics-design-checkpoint.md): FFI v2 for graphics libraries and the raylib package
 - [31-shared-state-design-checkpoint.md](31-shared-state-design-checkpoint.md) covers shared mutexes, atomics, and maps.
 - [33-failure-recovery-design-checkpoint.md](33-failure-recovery-design-checkpoint.md): trap recovery and call depth
 

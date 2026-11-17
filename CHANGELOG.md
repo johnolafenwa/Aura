@@ -28,6 +28,14 @@ in this file.
   `Tensor.from_array`. See the Image Module page of the Manual and
   section 20.6 of the book (ADR-0114).
 
+- Examples: `examples/packages/raylib` binds the raylib graphics library
+  through FFI. A script in the package generates the binding from
+  raylib's own API description, and it covers 556 of raylib 6.0's 600
+  functions. Three programs use it: a brick game with keyboard and mouse
+  input, a 3D scene with a camera and a model, and a picture drawn into
+  an image and written to a PNG. The package's README says how to install
+  raylib and run them.
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR
