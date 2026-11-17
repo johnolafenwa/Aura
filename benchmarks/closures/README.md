@@ -37,9 +37,16 @@ allocation. Their timings describe the entire loop.
 ## Direct local calls
 
 `local_functions.au` applies the same captured operation 48,000,000 times
-through a local `def` and a typed lambda. Build it with `aura build
---backend direct benchmarks/closures/local_functions.au` and run the
-resulting executable. Both loops print checksum 473,089.
+through a local `def` and a typed lambda. Run `bash benchmarks/closures/run.sh local`
+to compare both Aura forms with a native Rust capturing closure and a Python
+nested function. All four loops print checksum 473,089. The Rust version
+passes the seed and iteration count through `black_box` before it starts
+the timer.
+
+In three rotating runs on the same logical CPU, native code from `d1d76285`
+took a median of 220 ms for the local function and 150 ms for the lambda.
+Rust 1.95.0 took 80 ms and Python 3.12.14 took 10,872 ms. The local function
+took 2.75 times the Rust wall time on this shared worker.
 
 On the Linux worker above, five runs of native code from `d1d76285`
 gave a median of 448 ms for the local function and 487 ms for the lambda.
