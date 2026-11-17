@@ -14,7 +14,7 @@ def stop() -> Result[int64, str]:
 def propagate(lock: sync.Mutex[int64]) -> Result[int64, str]:
     with value = lock.lock():
         value += 1
-        n = stop()?
+        n = try stop()
         return Result.Ok(n)
 
 

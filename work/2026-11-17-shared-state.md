@@ -24,15 +24,21 @@ lock in addition to their atomic word.
 
 Each task tracks the cells it holds and validates ownership before
 removing a cell. A new runtime boundary can poison only cells acquired
-since a recorded depth. Child tasks receive independent wrappers around
+since the recorded acquisition epoch. A unit regression covers releasing
+an outer lock before acquiring an inner one. Child tasks receive independent wrappers around
 the same synchronized state. Native collection locks can transfer the
 unique box between critical sections. ADR-0103 gives the storage and
 waiting rules.
 
 The editor regression covers module and method completion, the type of
 the lock binding and its definition in the example. The CLI test compares
-the example's five output lines across both backends. Verification checks
-that atomic reads and successive lock blocks each see fresh values.
+the example's five output lines across both backends. The verifier regression passed. Atomic reads and successive lock blocks
+each see fresh values.
+
+The first Linux verify job found that the source identity checker
+misclassified the declaration of the synchronized map as a builtin type
+use. The checker now recognizes copy-class declarations. All ten identity
+tests passed, including checks for unqualified collection names.
 
 ## Verification In Progress
 

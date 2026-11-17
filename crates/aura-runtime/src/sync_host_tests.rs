@@ -226,11 +226,24 @@ fn failure_inside_a_lock_scope_only_poisons_its_own_locks() {
     let outer = SyncValue::cell(int(11));
     let inner = SyncValue::cell(int(17));
     let held = outer.take().unwrap();
-    let boundary = held_cell_depth();
+    let boundary = mark_held_cells();
     inner.take().unwrap();
     abandon_held_cells_since(boundary);
     assert!(inner.is_poisoned().unwrap());
     assert!(!outer.is_poisoned().unwrap());
     outer.put(held).unwrap();
-    assert_eq!(held_cell_depth(), 0);
+    assert_eq!(with_current_holder(|holder| holder.depth.get()), 0);
+}
+
+#[test]
+fn a_released_outer_lock_does_not_hide_a_new_lock_from_recovery() {
+    let outer = SyncValue::cell(Value::Unit);
+    let inner = SyncValue::cell(Value::Unit);
+    let outer_value = outer.take().unwrap();
+    let boundary = mark_held_cells();
+    outer.put(outer_value).unwrap();
+    inner.take().unwrap();
+    abandon_held_cells_since(boundary);
+    assert!(inner.is_poisoned().unwrap());
+    assert!(!outer.is_poisoned().unwrap());
 }
