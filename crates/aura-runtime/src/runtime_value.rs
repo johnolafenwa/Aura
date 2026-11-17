@@ -4988,6 +4988,11 @@ pub fn try_clone_array_containing_value(value: &Value) -> Result<Value> {
                         }))
                     }
                 }
+                Value::Instance(instance)
+                    if matches!(instance.fields, InstanceFields::Recovered(_)) =>
+                {
+                    Some(Value::Instance(instance.clone()))
+                }
                 // An instance kept in its layout copies its block, as it
                 // does at the top.
                 Value::Instance(instance) if instance.fields.typed().is_some() => {
@@ -11287,7 +11292,11 @@ impl Clone for Value {
             Self::CollectionStore(state) => Self::CollectionStore(state.clone()),
             Self::FfiHandle(value) => Self::FfiHandle(value.clone()),
             Self::Instance(value) => {
-                representation_stats::note_cloned_elements(value.fields.len());
+                // Cloning an immutable Trap shares its snapshot. Counting
+                // its fields would format the diagnostic without a reader.
+                if !matches!(value.fields, InstanceFields::Recovered(_)) {
+                    representation_stats::note_cloned_elements(value.fields.len());
+                }
                 Self::Instance(value.clone())
             }
             Self::EnumVariant(value) => Self::EnumVariant(value.clone()),

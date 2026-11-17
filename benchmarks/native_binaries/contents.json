@@ -29,6 +29,12 @@
     "mir_interpreter": [
       "aura_compiler::mir_runtime::"
     ],
+    "recovery": [
+      "runtime_value::recovered_trap_value",
+      "runtime_value::recovered_trap_fields",
+      "native_runtime::stop_exit_at_recovered_call",
+      "native_runtime::recycle_recovered_state"
+    ],
     "rustls": [
       "rustls::",
       "rustls_pki_types::",
@@ -81,6 +87,7 @@
     "hello_world": {
       "source": "examples/basics/hello_world.au",
       "absent": [
+        "recovery",
         "aws_lc",
         "llvm",
         "parser",
