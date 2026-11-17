@@ -5870,6 +5870,8 @@ pub extern "C-unwind" fn aura_direct_runtime_init(
     source_ptr: *const u8,
     source_len: usize,
 ) {
+    #[cfg(all(target_os = "linux", target_env = "musl"))]
+    crate::runtime_value::remember_initial_environment();
     initialize_internal_diagnostic_channels();
     crate::runtime_value::representation_stats::start_ownership_counting_if_requested();
     // Standard output allocates its 1 KiB line buffer on first use. A

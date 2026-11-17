@@ -49,3 +49,11 @@ conversion of samples to floats.
 - JPEG decoding on several threads, which would be the way past
   libjpeg-turbo.
 - Timings on macOS and Windows. The numbers are from x86-64 Linux only.
+
+## Integration On 2026-11-17
+
+The original Linux verify job passed. On macOS the compiler library test
+`lightweight_tasks_scale_to_thousands_of_waiting_tasks` exceeded its
+15-second readiness deadline. The other platform jobs passed. Main at
+`02b1104f` includes the book fixes. The image branch incorporates that
+commit and regenerates the documentation for the combined source.

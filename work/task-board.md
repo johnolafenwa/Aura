@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-16
+Last updated: 2026-11-17
 
 ## The `image` module (complete)
 
@@ -13,6 +13,17 @@ Last updated: 2026-11-16
   Pillow, the example under `aura run` and in a built binary, and
   `benchmarks/image_codec` against Rust and Pillow.
 - Left out: 16-bit samples, metadata, other formats, drawing.
+
+## Three compiler defects from the book sections (complete)
+
+- Target: John's 2026-11-16 ask to fix the defects the book work found.
+  Details are in `2026-11-16-book-compiler-defects.md`.
+- Done: comprehension element loans end inside their iteration, an inline
+  number list takes the byte type of a method parameter, and a static
+  musl program reads its arguments from its first stack without `/proc`.
+- Verification: the three repros on both backends, new unit tests, a
+  run-pass fixture, and the cross-target test, which runs the musl program
+  in a bare `chroot`.
 
 ## Book chapters on tensors and machine learning (complete)
 
@@ -38,7 +49,7 @@ Last updated: 2026-11-16
 - Verification: every listing shown with output run with the released
   0.16.0 compiler and compared with the page, `check_doc_examples.py`, and
   the `llms.txt` generator.
-- Found and not fixed: three compiler defects listed in the note.
+- Found: three compiler defects listed in the note, fixed on 2026-11-16.
 
 ## Documentation audit against 0.16 (complete)
 
