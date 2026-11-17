@@ -13298,9 +13298,9 @@ impl<'a> FunctionCompiler<'a> {
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         let expected = self.local_type(name)?;
-        // A lookup slot holds a payload's box, which its `Lookup` type
-        // must not tag.
-        let value = if self.lookup_slots.contains(name) {
+        // These locals may hold a payload box or the null success marker.
+        // The declared enum describes the original MIR value.
+        let value = if self.lookup_slots.contains(name) || self.recovery_slots.contains_key(name) {
             value
         } else {
             self.coerce_value(value, &expected)?
