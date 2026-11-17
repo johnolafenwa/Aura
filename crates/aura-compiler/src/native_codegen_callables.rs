@@ -927,25 +927,42 @@ impl NativeCodegen<'_> {
                 .iter()
                 .take(key.captures)
                 .any(|param| param.passing == MirReceiverKind::BorrowMut);
-        if takes_sinks {
-            // The caller says in the mask whether it handed any over.
+        let target_ref = builder.import_function(target_id);
+        let results = if takes_sinks {
             let handed = builder.band_imm(supplied_mask, SINKS_HANDED_OVER);
-            let claim_block = builder.create_block();
-            let claimed_block = builder.create_block();
-            builder.brif(handed, claim_block, &[], claimed_block, &[]);
-            builder.switch_to_block(claim_block);
-            builder.seal_block(claim_block);
+            let claim = builder.create_block();
+            let unclaimed = builder.create_block();
+            builder.brif(handed, claim, &[], unclaimed, &[]);
+            builder.switch_to_block(claim);
+            builder.seal_block(claim);
             let claim_sinks =
                 builder.import_function(self.runtime[RuntimeFn::ClaimIndirectMutableSinks]);
             let capture_count = builder.iconst(types::I64, key.captures as i64);
             builder.call(claim_sinks, &[capture_count]);
-            builder.jump(claimed_block, &[]);
-            builder.switch_to_block(claimed_block);
-            builder.seal_block(claimed_block);
-        }
-        let target_ref = builder.import_function(target_id);
-        let inst = builder.call(target_ref, &lowered_args);
-        let results = inst.results;
+            if let Some(sinkless) = self.sinkless_functions.get(&key.function) {
+                let done = builder.create_block();
+                for ty in signature_for(&function, &self.classes)?.returns {
+                    builder.append_block_param(done, ty);
+                }
+                let with_sinks = builder.call(target_ref, &lowered_args).results;
+                builder.jump(done, &with_sinks);
+                builder.switch_to_block(unclaimed);
+                builder.seal_block(unclaimed);
+                let sinkless = builder.import_function(*sinkless);
+                let without_sinks = builder.call(sinkless, &lowered_args).results;
+                builder.jump(done, &without_sinks);
+                builder.switch_to_block(done);
+                builder.seal_block(done);
+                builder.block_params(done)
+            } else {
+                builder.jump(unclaimed, &[]);
+                builder.switch_to_block(unclaimed);
+                builder.seal_block(unclaimed);
+                builder.call(target_ref, &lowered_args).results
+            }
+        } else {
+            builder.call(target_ref, &lowered_args).results
+        };
         let return_count = return_ty.value_count();
         let mut returned = marshal_direct_values(
             self,
