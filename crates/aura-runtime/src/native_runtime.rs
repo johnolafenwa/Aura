@@ -6419,7 +6419,7 @@ pub extern "C-unwind" fn aura_direct_function_callable(
     abi_key: i64,
 ) -> i64 {
     unsafe {
-        with_value(function, |value| match value {
+        with_unlisted_value(function, |value| match value {
             Value::Function(function) => function
                 .direct_callable
                 .as_ref()
@@ -6441,7 +6441,10 @@ pub extern "C-unwind" fn aura_direct_vec_callable(
     abi_key: i64,
 ) -> i64 {
     unsafe {
-        with_value(vec, |value| {
+        // A list containing functions stores whole values or boxes. Only
+        // scalar and typed lists can have pending native appends, and
+        // neither representation can provide a callable.
+        with_unlisted_value(vec, |value| {
             let Value::Vec(vector) = value else {
                 return 0;
             };
@@ -6476,7 +6479,7 @@ pub unsafe extern "C-unwind" fn aura_direct_vec_callable_copy(
     dst: *mut i64,
 ) -> i64 {
     unsafe {
-        with_value(vec, |value| {
+        with_unlisted_value(vec, |value| {
             let Value::Vec(vector) = value else {
                 return 0;
             };

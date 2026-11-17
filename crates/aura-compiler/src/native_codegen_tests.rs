@@ -17677,12 +17677,19 @@ class Rule:
 class Board:
     tallies: list[Tally]
 
+class Count:
+    value: int64
+
+    def add(mut self, amount: int64) -> int64:
+        self.value += amount
+        return self.value
+
 def make_adder(amount: int64) -> Step:
     return lambda value: value + amount
 
 def counter(start: int64) -> Tally:
-    mut count = start
-    return lambda [own count] amount: count + amount
+    count = Count(value=start)
+    return lambda [own count] amount: count.add(amount)
 
 def main() -> None:
     rule = Rule(weight=3, step=make_adder(7))
@@ -17701,11 +17708,29 @@ def main() -> None:
 "#;
     let module = lower_source_to_mir(source).expect("stored callables should lower");
     let object = emit_unoptimized_object(&module).expect("stored callables should emit");
+    let wrapper = module
+        .functions
+        .iter()
+        .find(|function| function.name.starts_with("counter::__lambda_"))
+        .expect("closure that mutates a capture");
+    let wrapper_symbol = format!("{}__nosinks", super::mangle_symbol(&wrapper.name));
+    let defined = object_defined_aura_functions(&object);
+    assert!(
+        defined.contains(&wrapper_symbol),
+        "{wrapper_symbol} must preserve the caller's sink-free path"
+    );
+    let references = object_function_referenced_symbols(&object, &wrapper_symbol);
+    assert!(
+        references
+            .iter()
+            .any(|name| name.ends_with("aura_fn_Count_add__leaf")),
+        "{references:?}"
+    );
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");
     for runtime_symbol in [
         // A field's box gives the kept words of its callable.
         "aura_direct_function_callable",
-        // A loop over Shared callables copies each element's words.
+        // Reading a Shared element as an owned value copies its words.
         "aura_direct_vec_callable_copy",
         // A call through a loan of a Mutable element reaches the words in
         // the list.
