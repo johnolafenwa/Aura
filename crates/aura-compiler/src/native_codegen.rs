@@ -9444,6 +9444,25 @@ impl<'a> FunctionCompiler<'a> {
         args: &[MirArg],
     ) -> std::result::Result<ValueRef, String> {
         let name = builtin.name();
+        if let Some(operation) = aura_runtime::runtime_value::host_builtins::INTEGER_MATH_CALLS
+            .iter()
+            .position(|&(qualified, _, arity)| qualified == name && arity == args.len())
+        {
+            let operation = self.builder.iconst(types::I64, operation as i64);
+            let left = self.load_word(&args[0], ScalarKind::Int64, true)?;
+            let right = match args.get(1) {
+                Some(arg) => self.load_word(arg, ScalarKind::Int64, true)?,
+                None => self.builder.iconst(types::I64, 0),
+            };
+            let call = self.builder.call(
+                self.runtime[RuntimeFn::MathInteger],
+                &[operation, left, right],
+            );
+            return Ok(ValueRef {
+                values: call.results,
+                ty: DirectType::Scalar(ScalarKind::Int64),
+            });
+        }
         if lookups::is_str_from_bytes(builtin) {
             let slot = self.lookup_payload == Some(false);
             if let Some(text) = self.compile_text_from_byte_slice(args)? {

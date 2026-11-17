@@ -817,6 +817,22 @@ fn algebra_holds(method: &str, left: &[i64], right: &[i64]) -> bool {
 }
 
 #[test]
+fn union_with_a_subset_shares_the_receivers_storage_until_a_write() {
+    let left = set_of(&(0..64).collect::<Vec<_>>());
+    let right = set_of(&[9, 2, 31]);
+    let Some(SetAlgebra::Elements(mut union)) = set_algebra("union", &left, &right) else {
+        panic!("union produces a set");
+    };
+    assert!(std::ptr::eq(
+        left.iter().next().unwrap(),
+        union.iter().next().unwrap()
+    ));
+    union.insert(int(64));
+    assert!(!left.contains_key(&int(64)));
+    assert_eq!(union.len(), 65);
+}
+
+#[test]
 fn set_algebra_keeps_the_receiver_order_then_the_other_sets() {
     let ints = |values: &[i64]| values.iter().map(|value| int(*value)).collect::<Vec<_>>();
     assert_eq!(

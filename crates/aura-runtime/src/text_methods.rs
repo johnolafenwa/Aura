@@ -288,9 +288,7 @@ pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
             Some(index)
         };
         return match position.and_then(|position| usize::try_from(position).ok()) {
-            Some(position) if position < length => Ok(Value::String(
-                text[position..position + 1].to_string().into(),
-            )),
+            Some(position) if position < length => Ok(Value::string(&text[position..position + 1])),
             _ => Err(out_of_range(length)),
         };
     }
@@ -305,7 +303,7 @@ pub fn char_at(text: &str, ascii: bool, index: i64) -> Result<Value> {
             .and_then(|position| text.chars().nth(position))
     };
     match found {
-        Some(scalar) => Ok(Value::String(scalar.to_string().into())),
+        Some(scalar) => Ok(Value::string(scalar)),
         None => Err(out_of_range(text.chars().count())),
     }
 }

@@ -1460,7 +1460,13 @@ pub fn set_algebra(method: &str, left: &SetElements, right: &SetElements) -> Opt
         inner.len() <= outer.len() && inner.iter().all(|element| outer.contains_key(element))
     };
     Some(match method {
-        "union" => collect(&mut left.iter().chain(right.iter())),
+        "union" => {
+            let mut result = left.clone();
+            for element in right.iter() {
+                result.insert(element.clone());
+            }
+            SetAlgebra::Elements(result)
+        }
         "intersection" => collect(&mut left.iter().filter(|element| right.contains_key(element))),
         "difference" => collect(&mut left.iter().filter(|element| !right.contains_key(element))),
         "symmetric_difference" => collect(

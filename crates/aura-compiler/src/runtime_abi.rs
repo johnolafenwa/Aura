@@ -408,6 +408,7 @@ runtime_functions! {
     FfiCallbackGuard => ("aura_direct_ffi_callback_guard", [I64, I64], None),
     FfiCallbackCheck => ("aura_direct_ffi_callback_check", [], None),
     MonotonicTimeMs => ("aura_direct_monotonic_time_ms", [], Some(I64)),
+    MathInteger => ("aura_direct_math_integer", [I64, I64, I64], Some(I64)),
     RegexScalar => ("aura_direct_regex_scalar", [I64, I64, I64], Some(I64)),
     RegexSearch => ("aura_direct_regex_search", [I64, I64, I64], Some(I64)),
     RegexReplace => ("aura_direct_regex_replace", [I64, I64, I64, I64], Some(I64)),
