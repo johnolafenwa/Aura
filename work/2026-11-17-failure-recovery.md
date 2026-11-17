@@ -23,7 +23,17 @@ survive a failed call.
 
 ## Verification
 
-Release comparisons, the compiler and runtime library suites, and the
-editor tests are in progress. The benchmark in
+The separate nested cleanup fixture produced the same 17 lines on MIR and
+the Linux native backend. It checks a direct call and the named-argument
+path, order of exits, the innermost source location and the recovery
+boundary's call chain.
+
+All 24 checked listings in the edited pages passed. The compiler-backed
+editor test passed after failing on the missing completion. Z3 proved the
+valid recovered call and returned AU5101 for the invalid precondition.
+A freestanding build reported AU2052 at the recovery call.
+
+Release comparisons and the compiler and runtime library suites are in
+progress. The benchmark in
 `benchmarks/failure_recovery/` times successful calls and traps separately
 and checks the outcomes in all three languages.
