@@ -4951,8 +4951,8 @@ A `from self` result has no value type. A bound method that returns a view of it
 
 ### Language Limits
 
-- Closures are expression-only and contextually typed.
-- They do not support statement bodies, inline parameter types, defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, or lifetime-bearing structural callable types.
+- Lambdas have one expression and obtain their parameter types from context. A local `def` has a written signature and a statement body.
+- Both forms exclude parameter defaults, generics, implicit reference capture, trait objects, use as an FFI callback, asynchronous syntax, returned loan closures, and lifetime-bearing structural callable types.
 - Owned callable storage holds owned captures only. Loan captures stay in local loan closures.
 - A stored callable may return a view of one explicit parameter, but never of a captured receiver.
 - Explicit capture lists accept local identifiers. Project a field into a named view before capturing it.
@@ -13824,7 +13824,7 @@ def main():
 
 ## Grammar
 
-[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Ordinary functions are module items. Nested function declarations are not accepted. [Closures](/manual/closures) specifies expression lambdas.
+[Grammar](/manual/grammar) is normative for function and method declarations, generic parameters and bounds, receiver and ordinary parameter forms, defaults, owned return annotations, and call arguments. Module functions are items. A local `def` binds a closure in the enclosing function. A lambda creates a closure in an expression. [Closures](/manual/closures)
 
 ## Typing Rules
 
@@ -13895,16 +13895,15 @@ Aura has none of these:
 - trait-object function interactions
 - Aura variadic functions
 - overloads
-- nested functions
 - mutable-parameter task targets
 
-[Closures](/manual/closures) specifies expression lambdas. They do not add nested item declarations. Written function types express bare shared, `mut`, and `own` parameter contracts.
+Written function types express bare shared, `mut`, and `own` parameter contracts. Local functions use those same parameter modes. [Closures](/manual/closures)
 
 Runtime calls are limited to 256 nested Aura frames. The host process's exit representation may narrow the requested `int32` after it leaves Aura. Function binding and evaluation order are otherwise not implementation-defined.
 
 ## Status
 
-The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. By-value expression closures are implemented.
+The contracts described above are implemented for functions, methods, generics, capture-free function values, default arguments, named arguments, ordinary owned returns, returned views, inferred clone-safety, task targets, and entrypoints. Lambdas and local functions support captures.
 
 The fixture `crates/aura-compiler/tests/fixtures/run-pass/explicit_and_default_argument_order.au` pins the supplied and default argument evaluation and capture rules on both backends.
 
@@ -15542,9 +15541,9 @@ contract-clause
     = ( "requires" | "ensures" ), expression, NEWLINE ;
 ```
 
-Item declarations are module-level. They are not statements and cannot appear
-inside function or control-flow suites. `public` is not allowed on an
-implementation block.
+Item declarations appear at module level. A `def` inside a function introduces
+a local closure using the statement grammar below. `public` is not allowed on
+an implementation block.
 
 A type alias is recognized contextually. A module-level line that reads
 `type`, an identifier, optional bounded type parameters, and `=` declares a
@@ -15646,7 +15645,7 @@ A function type spells a complete callable contract, for example
 
 A literal or expression after `=` in a type is rejected with `AU1101`.
 
-The same `*` boundary rule applies to declaration and lambda parameter lists.
+The same `*` boundary rule applies to declaration and lambda parameter lists. A local function requires a type for each parameter and a written result type. Local-function parameters take no defaults.
 A list has at most one `*`, it must be followed by at least one named
 parameter, and it adds no variadics.
 
@@ -15900,7 +15899,8 @@ suite
     | INDENT, docstring, { statement }, DEDENT ;
 
 statement
-    = assignment-statement
+    = local-function-statement
+    | assignment-statement
     | view-statement
     | return-statement
     | assert-statement
@@ -15915,6 +15915,10 @@ statement
     | expression-statement ;
 
 statement-end = NEWLINE | DEDENT | EOF ;
+
+local-function-statement
+    = "def", identifier, [ lambda-capture-list ], "(", [ parameter-list ], ")",
+      "->", type, ":", NEWLINE, suite ;
 
 assignment-statement
     = [ "mut" ], assignment-target,
@@ -24406,6 +24410,7 @@ Aura 0.16 has these statements:
 - binding and assignment
 - local `view` bindings
 - expression statements
+- local `def`
 - `return`
 - `assert`
 - `if` / `elif` / `else`
@@ -24414,7 +24419,7 @@ Aura 0.16 has these statements:
 - `with`
 - `break`, `continue`, and `pass`
 
-Class, enum, function, trait, and implementation declarations are items, not statements. Items appear only at module level. Declaration members such as fields, enum variants, and methods appear only in the item bodies that permit them. Aura does not support nested functions, classes, enums, traits, or implementations.
+A local `def` binds a closure in the enclosing block. Its parameters, result type, captures, and statement body are described in [Closures](/manual/closures). Class, enum, trait, and implementation declarations live at module level. Fields, variants, and methods live in the item bodies that permit them.
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 

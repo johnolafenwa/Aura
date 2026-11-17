@@ -9,6 +9,7 @@ Aura 0.16 has these statements:
 - binding and assignment
 - local `view` bindings
 - expression statements
+- local `def`
 - `return`
 - `assert`
 - `if` / `elif` / `else`
@@ -17,7 +18,7 @@ Aura 0.16 has these statements:
 - `with`
 - `break`, `continue`, and `pass`
 
-Class, enum, function, trait, and implementation declarations are items, not statements. Items appear only at module level. Declaration members such as fields, enum variants, and methods appear only in the item bodies that permit them. Aura does not support nested functions, classes, enums, traits, or implementations.
+A local `def` binds a closure in the enclosing block. Its parameters, result type, captures, and statement body are described in [Closures](/manual/closures). Class, enum, trait, and implementation declarations live at module level. Fields, variants, and methods live in the item bodies that permit them.
 
 A compound statement header ends with `:` and `NEWLINE`. An indented suite follows it. A suite contains one or more statements:
 
