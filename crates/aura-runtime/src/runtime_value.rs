@@ -18849,13 +18849,89 @@ pub fn host_process_args() -> Vec<String> {
     // learns the arguments of such a program only from glibc. The kernel
     // keeps them too.
     #[cfg(all(target_os = "linux", target_env = "musl"))]
-    if let Ok(command_line) = std::fs::read("/proc/self/cmdline") {
-        return command_line_args(&command_line);
+    {
+        if let Ok(command_line) = std::fs::read("/proc/self/cmdline") {
+            return command_line_args(&command_line);
+        }
+        // A container or an early boot stage may have no `/proc`. The
+        // arguments still sit on the program's first stack page.
+        let environment = INITIAL_ENVIRONMENT.load(std::sync::atomic::Ordering::Relaxed);
+        // SAFETY: the pointer was read from `environ` when the program
+        // started, before anything could replace the kernel's array.
+        if let Some(args) = unsafe { initial_stack_args(environment.cast_const()) } {
+            return args;
+        }
     }
     std::env::args_os()
         .skip(1)
         .map(|argument| argument.to_string_lossy().into_owned())
         .collect()
+}
+
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+static INITIAL_ENVIRONMENT: std::sync::atomic::AtomicPtr<usize> =
+    std::sync::atomic::AtomicPtr::new(std::ptr::null_mut());
+
+/// Keeps the environment array the kernel placed above the arguments, so
+/// that `sys.args()` can find them without `/proc`. A compiled program
+/// calls this first thing in `main`: a later `setenv` may move `environ`.
+#[cfg(all(target_os = "linux", target_env = "musl"))]
+pub fn remember_initial_environment() {
+    extern "C" {
+        static environ: *mut usize;
+    }
+    // SAFETY: `environ` is a plain pointer that libc set before `main`.
+    let environment = unsafe { environ };
+    let _ = INITIAL_ENVIRONMENT.compare_exchange(
+        std::ptr::null_mut(),
+        environment,
+        std::sync::atomic::Ordering::Relaxed,
+        std::sync::atomic::Ordering::Relaxed,
+    );
+}
+
+/// The arguments after the program name, read from the stack the kernel
+/// built for the program: the argument count, a pointer for each argument,
+/// a null word, and then the environment array.
+///
+/// Walks down from the environment array and stops at the word that holds
+/// the number of pointers passed on the way. Returns `None` when the words
+/// do not have that shape.
+///
+/// # Safety
+///
+/// `environment` must be null or the environment array of that first
+/// stack, with every argument pointer naming a NUL-terminated string.
+#[cfg_attr(not(all(target_os = "linux", target_env = "musl")), allow(dead_code))]
+unsafe fn initial_stack_args(environment: *const usize) -> Option<Vec<String>> {
+    // No address this low is mapped, so a smaller word is never a pointer.
+    const LOWEST_ADDRESS: usize = 4096;
+    if environment.is_null() || unsafe { *environment.sub(1) } != 0 {
+        return None;
+    }
+    let mut count = 0usize;
+    loop {
+        let word = unsafe { *environment.sub(count + 2) };
+        if word == count {
+            break;
+        }
+        if word < LOWEST_ADDRESS {
+            return None;
+        }
+        count += 1;
+    }
+    let arguments = unsafe { std::slice::from_raw_parts(environment.sub(count + 1), count) };
+    Some(
+        arguments
+            .iter()
+            .skip(1)
+            .map(|argument| {
+                unsafe { std::ffi::CStr::from_ptr(*argument as *const std::ffi::c_char) }
+                    .to_string_lossy()
+                    .into_owned()
+            })
+            .collect(),
+    )
 }
 
 /// The arguments after the program name in the kernel's record of a

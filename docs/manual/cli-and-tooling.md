@@ -194,7 +194,8 @@ aura build --target aarch64-unknown-linux-gnu -o app-arm64 app.au
   source. On x86-64 the cross-language programs measured take 0.94 to
   1.09 times as long. The runtime copies and compares memory with its own
   routines, because musl's are slow.
-- A musl program reads its arguments from `/proc/self/cmdline`.
+- A musl program reads its arguments from `/proc/self/cmdline`, and from
+  its own first stack page where `/proc` is not mounted.
 - A musl program cannot load a shared library when it runs. Native
   libraries that packages name under `[ffi]` must be static.
 - The link runs a C compiler driver. A target of the build machine's

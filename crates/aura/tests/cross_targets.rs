@@ -285,7 +285,56 @@ fn programs_build_and_run_for_the_listed_targets() {
             "{target}: {}",
             stderr(&failed)
         );
+
+        // A static program also finds its arguments where `/proc` is not
+        // mounted, as in a bare `chroot` or an early boot stage.
+        if target.ends_with("-musl") && target.starts_with(std::env::consts::ARCH) {
+            match run_in_bare_root(&workspace, &program, PROGRAM_ARGS) {
+                Some(ran) => {
+                    assert!(ran.status.success(), "{target}: {}", stderr(&ran));
+                    assert_eq!(
+                        String::from_utf8_lossy(&ran.stdout),
+                        PROGRAM_OUTPUT,
+                        "{target}"
+                    );
+                }
+                None => eprintln!("{target}: no way to change the root directory, skipped"),
+            }
+        }
     }
+}
+
+/// Runs a static program with a new directory as its root, so that it
+/// sees no `/proc`. Changing the root needs the superuser: the caller is
+/// it, or `sudo` grants it without a password as on a CI runner.
+/// Otherwise there is nothing to run.
+fn run_in_bare_root(workspace: &Workspace, program: &Path, args: &[&str]) -> Option<Output> {
+    let succeeds =
+        |command: &mut Command| command.output().is_ok_and(|output| output.status.success());
+    let is_superuser = Command::new("id")
+        .arg("-u")
+        .output()
+        .is_ok_and(|output| output.stdout == b"0\n");
+    let mut command = if is_superuser {
+        Command::new("chroot")
+    } else if succeeds(Command::new("sudo").args(["-n", "true"])) {
+        let mut command = Command::new("sudo");
+        command.args(["-n", "chroot"]);
+        command
+    } else {
+        return None;
+    };
+    let root = workspace.path.join("bare-root");
+    fs::create_dir_all(&root).expect("the bare root should be made");
+    fs::copy(program, root.join("program")).expect("the program should be copied");
+    Some(
+        command
+            .arg(&root)
+            .arg("/program")
+            .args(args)
+            .output()
+            .expect("chroot should start"),
+    )
 }
 
 #[test]
