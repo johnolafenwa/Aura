@@ -1282,9 +1282,13 @@ impl<'a> AnalysisBuilder<'a> {
                         }
                         crate::ast::ClosureBody::Function { statements, .. } => {
                             self.accumulate_scope_from_stmts(statements, target_line, scope);
-                            self.extend_lambda_scope_from_stmts(statements, target_line, character, scope);
+                            self.extend_lambda_scope_from_stmts(
+                                statements,
+                                target_line,
+                                character,
+                                scope,
+                            );
                         }
-
                     }
                 }
             }

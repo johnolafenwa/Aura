@@ -1,0 +1,14 @@
+def main() -> None:
+    labels = ["alpha", "beta"]
+    def label(depth: int64) -> str:
+        if depth == 0:
+            return labels[1].clone()
+        return label(depth - 1)
+    print(label(3))
+    mut total = 0
+    def add(amount: int64) -> int64:
+        total += amount
+        return total
+    print(add(3))
+    print(add(2))
+    print(total)

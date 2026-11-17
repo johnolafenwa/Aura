@@ -1481,8 +1481,11 @@ impl<'a> FunctionChecker<'a> {
                 continue;
             };
             if binding.local_function == Some(super::LocalFunctionBinding::RecursiveCall) {
-                return Err(Diagnostic::coded_at("AU2005", capture_span,
-                    "a local function can use itself only as the target of a direct call"));
+                return Err(Diagnostic::coded_at(
+                    "AU2005",
+                    capture_span,
+                    "a local function can use itself only as the target of a direct call",
+                ));
             }
             self.ensure_pattern_binding_not_stale(&name, capture_span, binding)?;
             if binding.moved {
@@ -1756,7 +1759,8 @@ impl<'a> FunctionChecker<'a> {
                 let mut body_checker = self.with_module_name(self.module_name);
                 body_checker.local_function_body = true;
                 body_checker.recursion_measure = std::rc::Rc::new(std::cell::RefCell::new(None));
-                let flow = body_checker.check_block(statements, &mut lambda_locals, result, 0, true)?;
+                let flow =
+                    body_checker.check_block(statements, &mut lambda_locals, result, 0, true)?;
                 if *result != Type::Unit && flow != super::BlockFlow::AlwaysReturns {
                     return Err(Diagnostic::coded_at(
                         "AU2002",
