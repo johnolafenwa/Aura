@@ -115,7 +115,7 @@ fn recovered_trap_copies_share_an_unformatted_snapshot_until_mutation() {
     let super::InstanceFields::Recovered(snapshot) = &original.fields else {
         panic!("immutable diagnostic snapshot");
     };
-    assert!(snapshot.fields.get().is_none());
+    assert!(std::sync::LazyLock::get(&snapshot.fields).is_none());
     assert_eq!(
         copy.fields.remove("message"),
         Some(Value::string("original"))

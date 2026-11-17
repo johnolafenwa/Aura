@@ -21658,6 +21658,7 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_begin(
     jump_buffer: *mut u8,
     target: i64,
 ) -> i64 {
+    crate::runtime_value::DIRECT_RECOVERY_EXIT.get_or_init(|| stop_exit_at_recovered_call);
     let key = direct_task_runtime_key();
     let mut state = RECOVERED_CALL_STATES
         .with(|states| states.borrow_mut().pop())
@@ -21818,7 +21819,8 @@ fn recovered_call_takes_exit() -> bool {
 /// other exit, such as cancellation, ends each recovered call around it
 /// in turn, runs the caller's `with` exits, and returns so that the exit
 /// goes on.
-pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
+fn stop_exit_at_recovered_call() {
+    let generator_depth = crate::runtime_value::running_generator_depth();
     loop {
         let key = direct_task_runtime_key();
         let call = DIRECT_TASK_RUNTIME_STATES.with(|states| {
