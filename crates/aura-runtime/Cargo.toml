@@ -22,6 +22,9 @@ libffi = "5.1.1"
 memchr = "2"
 jpeg-encoder = { version = "0.7.1", features = ["simd"] }
 mio = { version = "0.8", features = ["os-ext", "os-poll", "net"] }
+num-bigint = "0.5.1"
+num-integer = "0.1.47"
+num-traits = "0.2.19"
 png = "0.18.1"
 regex = "1.13.1"
 rustls = { version = "0.23", default-features = false, features = ["logging", "ring", "std", "tls12"] }

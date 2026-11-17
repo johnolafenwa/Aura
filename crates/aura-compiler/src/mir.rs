@@ -17726,10 +17726,10 @@ impl<'a> Lowerer<'a> {
             .collect::<BTreeSet<_>>();
         let unmatched_cleanup =
             (!ending_loans.is_empty()).then(|| self.new_block("match_no_arm_cleanup"));
-        // A checked match is exhaustive, so no value reaches the end of the
-        // arm tests. An initializer states this explicitly: definite
-        // initialization proves its object complete only along the arms.
-        let unmatched = if self.initializer_self {
+        // Initializers need the impossible path for definite initialization.
+        // Checked union matches cover every tag, so this path must not invent
+        // a default return for a function whose arms all return a value.
+        let unmatched = if self.initializer_self || matches!(scrutinee_ty, Some(Type::Union(_))) {
             self.new_block("match_unmatched")
         } else {
             after_block

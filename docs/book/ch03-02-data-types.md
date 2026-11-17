@@ -280,6 +280,22 @@ does, the fix is one conversion, which we'll see shortly. Function calls
 follow the same rule: passing an `int32` to a parameter declared as `int64` is
 an error (`AU2002`), not a widening.
 
+## Exact Numbers
+
+Suppose we sell three tickets at 19.95 each. We can keep the price exact
+from the input through the receipt by storing 1995 cents and a decimal
+exponent of −2. The program also computes a factorial larger than an
+`int64` and squares the imaginary unit.
+
+<<< ../../examples/numbers/exact_numbers.au{aura}
+
+`Decimal.from_parts` reads those digits as 19.95. We convert the quantity
+with `Decimal.from_int(3)` so both sides of the multiplication have the
+same type. The multiplication preserves the exact value and `to_fixed(2)`
+writes `59.85` on the receipt. For a large integer read from a file, we
+can use `BigInt.parse(text)` and match on the result before computing with
+it. [Numbers Module](/manual/numbers)
+
 ## Booleans
 
 The `bool` type has two values, `true` and `false`. They are lowercase, and

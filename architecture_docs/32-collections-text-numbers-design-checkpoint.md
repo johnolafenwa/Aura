@@ -56,7 +56,7 @@ Owner's calls in step 1:
 - **No subset comparison operators.** `a <= b` is left out in favour of
   `is_subset`.
 
-## Step 2: `numbers` (planned)
+## Step 2: `numbers`
 
 A source module `numbers` with three types.
 
@@ -73,9 +73,9 @@ A source module `numbers` with three types.
 - `Complex`: a Copy class of two `float64` with the arithmetic
   operators, `abs`, `arg`, `conj`, `exp`, `sqrt`, and `polar`.
 
-The module declares the operator traits it needs. Whether `| & ^ << >>
-**` gain traits is decided in that step, because `BigInt` is the first
-type that wants them.
+The module supplies the arithmetic operator traits it needs.
+Bitwise operations, shifts and powers have named methods.
+[ADR-0113](decisions/0113-numbers-module.md) records the representation and precision rules.
 
 Owner's calls in step 2:
 

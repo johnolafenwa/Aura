@@ -99,6 +99,8 @@ in this file.
   `[[first], [second, third]]`, was rejected by the MIR validator when a
   row was read. A shorter row no longer poisons the positions it lacks.
 
+- The `numbers` module supplies arbitrary-size `BigInt`, exact `Decimal` with explicit rounding, and two-component `Complex` arithmetic.
+
 - Language: byte strings. `b"GET /\r\n"` and `b'\x89PNG'` are literals of
   type `list[uint8]`. The body holds ASCII characters and escapes, and
   `\xHH` is one byte (ADR-0111).

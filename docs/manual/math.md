@@ -221,8 +221,8 @@ use the same host math library for finite results.
 ## Limits And Implementation-Defined Behavior
 
 The module covers scalar `float64` and `int64` only. It has no `float32`
-forms and no complex, decimal, arbitrary-precision, vectorized, or random
-operations. The integer functions do not widen: a result outside `int64` is
+forms. For complex, decimal, and arbitrary-size integer arithmetic, use
+the [Numbers Module](/manual/numbers). The integer functions do not widen: a result outside `int64` is
 `AU4002`. The logarithm functions take one value and have no alternate-base
 form.
 

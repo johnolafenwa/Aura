@@ -1194,6 +1194,7 @@ pub fn host_builtin_function(name: &str) -> Option<HostBuiltinFn> {
                 .or_else(|| tensor_host::tensor_host_function(other))
                 .or_else(|| sync_host::sync_host_function(other))
                 .or_else(|| image_host::image_host_function(other))
+                .or_else(|| crate::numbers_host::numbers_host_function(other))
         }
     };
     Some(function)

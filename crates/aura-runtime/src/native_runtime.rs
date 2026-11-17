@@ -16440,6 +16440,27 @@ host_builtin_entries! {
     borrowed "image::__aura_flip" => aura_host_image_flip(|args| direct_image("image::__aura_flip", args));
     borrowed "image::__aura_to_array" => aura_host_image_to_array(|args| direct_image("image::__aura_to_array", args));
     borrowed "image::__aura_from_array" => aura_host_image_from_array(|args| direct_image("image::__aura_from_array", args));
+    owned "numbers::__aura_big_add_words" => aura_host_numbers_big_add_words(crate::numbers_host::host_big_add_words);
+    owned "numbers::__aura_small_pow_mod" => aura_host_numbers_small_pow_mod(crate::numbers_host::host_small_pow_mod);
+    owned "numbers::__aura_big_binary" => aura_host_numbers_big_binary(crate::numbers_host::host_big_binary);
+    owned "numbers::__aura_big_compare" => aura_host_numbers_big_compare(crate::numbers_host::host_big_compare);
+    owned "numbers::__aura_big_pow_mod" => aura_host_numbers_big_pow_mod(crate::numbers_host::host_big_pow_mod);
+    owned "numbers::__aura_big_unary" => aura_host_numbers_big_unary(crate::numbers_host::host_big_unary);
+    owned "numbers::__aura_big_bits" => aura_host_numbers_big_bits(crate::numbers_host::host_big_bits);
+    owned "numbers::__aura_big_parse" => aura_host_numbers_big_parse(crate::numbers_host::host_big_parse);
+    owned "numbers::__aura_big_format" => aura_host_numbers_big_format(crate::numbers_host::host_big_format);
+    owned "numbers::__aura_big_to_float" => aura_host_numbers_big_to_float(crate::numbers_host::host_big_to_float);
+    owned "numbers::__aura_big_from_float" => aura_host_numbers_big_from_float(crate::numbers_host::host_big_from_float);
+    owned "numbers::__aura_dec_binary" => aura_host_numbers_dec_binary(crate::numbers_host::host_dec_binary);
+    owned "numbers::__aura_dec_compare" => aura_host_numbers_dec_compare(crate::numbers_host::host_dec_compare);
+    owned "numbers::__aura_dec_round" => aura_host_numbers_dec_round(crate::numbers_host::host_dec_round);
+    owned "numbers::__aura_dec_integer" => aura_host_numbers_dec_integer(crate::numbers_host::host_dec_integer);
+    owned "numbers::__aura_dec_normalize" => aura_host_numbers_dec_normalize(crate::numbers_host::host_dec_normalize);
+    owned "numbers::__aura_dec_parse" => aura_host_numbers_dec_parse(crate::numbers_host::host_dec_parse);
+    owned "numbers::__aura_dec_format" => aura_host_numbers_dec_format(crate::numbers_host::host_dec_format);
+    owned "numbers::__aura_dec_to_float" => aura_host_numbers_dec_to_float(crate::numbers_host::host_dec_to_float);
+    owned "numbers::__aura_dec_from_float" => aura_host_numbers_dec_from_float(crate::numbers_host::host_dec_from_float);
+    owned "numbers::__aura_dec_sqrt" => aura_host_numbers_dec_sqrt(crate::numbers_host::host_dec_sqrt);
     owned "regex::__aura_compile" => aura_host_regex_compile(crate::runtime_value::regex_host::host_regex_compile);
     owned "regex::__aura_pattern" => aura_host_regex_pattern(crate::runtime_value::regex_host::host_regex_pattern);
     owned "regex::__aura_escape" => aura_host_regex_escape(crate::runtime_value::regex_host::host_regex_escape);
@@ -21211,6 +21232,32 @@ pub extern "C-unwind" fn aura_direct_sync_cell_put_word(
         if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| handle.put(value)) {
             runtime_diagnostic_error(error)
         }
+    })
+}
+
+/// Reads both lists by reference. Only the sum acquires new storage.
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_big_add_words(
+    left: *mut OpaqueValue,
+    right: *mut OpaqueValue,
+) -> *mut OpaqueValue {
+    task_runtime_boundary(|| {
+        // Both handles are borrowed for the duration of the call.
+        let sum = unsafe {
+            with_value(left, |a| {
+                with_value(right, |b| crate::numbers_host::add_big_words(a, b))
+            })
+        }
+        .unwrap_or_else(|error| runtime_diagnostic_error(error));
+        boxed_value(sum)
+    })
+}
+
+#[cfg_attr(not(coverage), no_mangle)]
+pub extern "C-unwind" fn aura_direct_small_pow_mod(base: i64, exponent: i64, modulus: i64) -> i64 {
+    task_runtime_boundary(|| {
+        crate::numbers_host::small_pow_mod(base, exponent, modulus)
+            .unwrap_or_else(|error| runtime_diagnostic_error(error))
     })
 }
 

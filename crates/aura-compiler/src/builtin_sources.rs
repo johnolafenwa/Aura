@@ -20,6 +20,7 @@ const SIMD_SOURCE: &str = include_str!("../std/simd.au");
 const REGEX_SOURCE: &str = include_str!("../std/regex.au");
 const TIME_SOURCE: &str = include_str!("../std/time.au");
 const HTTP_SOURCE: &str = include_str!("../std/http.au");
+const NUMBERS_SOURCE: &str = include_str!("../std/numbers.au");
 const TENSOR_SOURCE: &str = include_str!("../std/tensor.au");
 const SYNC_SOURCE: &str = include_str!("../std/sync.au");
 const CONTROL_SOURCE: &str = include_str!("../std/control.au");
@@ -38,6 +39,7 @@ fn module_source(name: &str) -> Option<&'static str> {
         "sync" => Some(SYNC_SOURCE),
         "control" => Some(CONTROL_SOURCE),
         "image" => Some(IMAGE_SOURCE),
+        "numbers" => Some(NUMBERS_SOURCE),
         _ => None,
     }
 }

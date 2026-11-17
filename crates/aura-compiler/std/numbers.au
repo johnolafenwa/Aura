@@ -1,0 +1,799 @@
+# The builtin `numbers` module: integers of any size, exact decimal
+# numbers, and complex numbers (ADR-0113). The compiler checks this file as
+# module `numbers` and merges its public items with the host functions that
+# `builtin_modules.rs` declares.
+#
+# A small value occupies the scalar member of its private storage union.
+# The other member holds the signed magnitude in the wire form described
+# in numbers_host.rs. Arithmetic preserves the canonical choice of member.
+import math
+import numbers
+
+
+public trait Sub[Rhs, Out]:
+    """Subtraction of `Rhs`, producing `Out`. `-` calls `sub` when no builtin
+    subtraction applies."""
+    def sub(self, rhs: Rhs) -> Out
+
+
+public trait Mul[Rhs, Out]:
+    """Multiplication by `Rhs`, producing `Out`. `*` calls `mul` when no
+    builtin multiplication applies."""
+    def mul(self, rhs: Rhs) -> Out
+
+
+public trait Div[Rhs, Out]:
+    """Division by `Rhs`, producing `Out`. `/` calls `div` when no builtin
+    division applies."""
+    def div(self, rhs: Rhs) -> Out
+
+
+public trait FloorDiv[Rhs, Out]:
+    """Floor division by `Rhs`, producing `Out`. `//` calls `floor_div` when
+    no builtin division applies."""
+    def floor_div(self, rhs: Rhs) -> Out
+
+
+public trait Mod[Rhs, Out]:
+    """The remainder of floor division by `Rhs`, producing `Out`. `%` calls
+    `mod` when no builtin remainder applies."""
+    def mod(self, rhs: Rhs) -> Out
+
+
+public trait Neg[Out]:
+    """Negation, producing `Out`. Unary `-` calls `neg` when no builtin
+    negation applies."""
+    def neg(self) -> Out
+
+
+# The least `int64`, which has no positive counterpart.
+def least_int() -> int64:
+    return -9223372036854775807 - 1
+
+
+# The `int64` a wire list holds when its first word is 0.
+def wire_small(wire: list[uint64]) -> int64:
+    magnitude = wire[4]
+    if wire[1] == 0:
+        return magnitude as int64
+    if magnitude == 9223372036854775808:
+        return least_int()
+    return -(magnitude as int64)
+
+
+# The decimal exponent a wire list holds.
+def wire_exponent(wire: list[uint64]) -> int64:
+    if wire[2] == 0:
+        return wire[3] as int64
+    return -(wire[3] as int64)
+
+
+def big_of(wire: own list[uint64]) -> BigInt:
+    if wire[0] == 0:
+        return BigInt(storage=wire_small(wire))
+    return BigInt(storage=wire)
+
+
+public class BigInt:
+    """An integer of any size. Arithmetic never overflows: a result grows
+    to the size it needs."""
+    storage: int64 | list[uint64]
+
+    def is_small(self) -> bool:
+        match self.storage:
+            case int64 as _number:
+                return true
+            case list[uint64] as _words:
+                return false
+
+    def small(self) -> int64:
+        match self.storage:
+            case int64 as n:
+                return n
+            case list[uint64] as _words:
+                return 0
+
+    def words(self) -> list[uint64]:
+        match self.storage:
+            case int64 as _number:
+                return list[uint64]()
+            case list[uint64] as digits:
+                return digits.copy()
+
+    public def copy(self) -> BigInt:
+        """Another `BigInt` with the same value."""
+        match self.storage:
+            case int64 as n:
+                return BigInt(storage=n)
+            case list[uint64] as digits:
+                return BigInt(storage=digits.copy())
+
+    public def from_int(value: int64) -> BigInt:
+        """The `BigInt` equal to `value`."""
+        return BigInt(storage=value)
+
+    public def from_float(value: float64) -> BigInt | None:
+        """`value` with its fraction dropped, or `None` for NaN or an
+        infinity."""
+        wire = numbers.__aura_big_from_float(value)
+        if wire.len() == 0:
+            return None
+        return big_of(wire)
+
+    public def parse(text: str) -> BigInt | None:
+        """The integer `text` writes in decimal, with an optional sign, or
+        `None` when `text` is anything else."""
+        return BigInt.parse_radix(text, 10)
+
+    public def parse_radix(text: str, radix: int64) -> BigInt | None:
+        """The integer `text` writes in base `radix`, from 2 to 36, with an
+        optional sign and no prefix. Letters stand for the digits from ten,
+        in either case."""
+        wire = numbers.__aura_big_parse(text, radix)
+        if wire.len() == 0:
+            return None
+        return big_of(wire)
+
+    def binary(self, op: int64, rhs: BigInt) -> BigInt:
+        return big_of(numbers.__aura_big_binary(op, self.small(), self.words(), rhs.small(), rhs.words()))
+
+    def binary_int(self, op: int64, rhs: int64) -> BigInt:
+        return big_of(numbers.__aura_big_binary(op, self.small(), self.words(), rhs, list[uint64]()))
+
+    public def is_zero(self) -> bool:
+        """Whether this is 0."""
+        return self.small() == 0 and self.is_small()
+
+    public def sign(self) -> int64:
+        """-1, 0, or 1 as this is negative, zero, or positive."""
+        if self.is_small():
+            if self.small() > 0:
+                return 1
+            if self.small() < 0:
+                return -1
+            return 0
+        if self.words()[1] == 1:
+            return -1
+        return 1
+
+    public def abs(self) -> BigInt:
+        """The absolute value."""
+        if self.sign() < 0:
+            return self.neg()
+        return self.copy()
+
+    public def compare(self, rhs: BigInt) -> int64:
+        """-1, 0, or 1 as this is less than, equal to, or greater than
+        `rhs`."""
+        if self.is_small() and rhs.is_small():
+            if self.small() < rhs.small():
+                return -1
+            if self.small() > rhs.small():
+                return 1
+            return 0
+        return numbers.__aura_big_compare(self.small(), self.words(), rhs.small(), rhs.words())
+
+    public def pow(self, exponent: int64) -> BigInt:
+        """This raised to `exponent`, which must not be negative."""
+        return self.binary_int(6, exponent)
+
+    public def pow_mod(self, exponent: BigInt, modulus: BigInt) -> BigInt:
+        """This raised to `exponent`, modulo `modulus`, without building the
+        full power. The result has the sign of `modulus`."""
+        if self.is_small() and exponent.is_small() and modulus.is_small():
+            return BigInt.from_int(numbers.__aura_small_pow_mod(self.small(), exponent.small(), modulus.small()))
+        return big_of(numbers.__aura_big_pow_mod(self.small(), self.words(), exponent.small(), exponent.words(), modulus.small(), modulus.words()))
+
+    public def gcd(self, rhs: BigInt) -> BigInt:
+        """The greatest common divisor, never negative."""
+        return self.binary(5, rhs)
+
+    public def lcm(self, rhs: BigInt) -> BigInt:
+        """The least common multiple, never negative."""
+        return self.binary(12, rhs)
+
+    public def divmod(self, rhs: BigInt) -> (BigInt, BigInt):
+        """The floor quotient and its remainder, as `//` and `%` give
+        them."""
+        return (self.binary(3, rhs), self.binary(4, rhs))
+
+    public def sqrt(self) -> BigInt:
+        """The greatest integer whose square is at most this. This must not
+        be negative."""
+        return big_of(numbers.__aura_big_unary(0, self.small(), self.words()))
+
+    public def bit_length(self) -> int64:
+        """The bits the magnitude needs. Zero needs none."""
+        return numbers.__aura_big_bits(self.small(), self.words())
+
+    public def shift_left(self, count: int64) -> BigInt:
+        """This times two to the power `count`."""
+        return self.binary_int(7, count)
+
+    public def shift_right(self, count: int64) -> BigInt:
+        """This divided by two to the power `count`, rounded toward negative
+        infinity."""
+        return self.binary_int(8, count)
+
+    public def bit_and(self, rhs: BigInt) -> BigInt:
+        """The bitwise AND, with a negative value read in two's
+        complement."""
+        return self.binary(9, rhs)
+
+    public def bit_or(self, rhs: BigInt) -> BigInt:
+        """The bitwise OR, with a negative value read in two's complement."""
+        return self.binary(10, rhs)
+
+    public def bit_xor(self, rhs: BigInt) -> BigInt:
+        """The bitwise XOR, with a negative value read in two's
+        complement."""
+        return self.binary(11, rhs)
+
+    public def is_even(self) -> bool:
+        """Whether two divides this."""
+        if self.is_small():
+            return self.small() % 2 == 0
+        return self.words()[4] % 2 == 0
+
+    public def to_int(self) -> int64 | None:
+        """This as an `int64`, or `None` when it does not fit."""
+        if self.is_small():
+            return self.small()
+        return None
+
+    public def to_float(self) -> float64:
+        """The nearest `float64`. A value beyond the range of `float64` gives
+        an infinity."""
+        if self.is_small():
+            return self.small().to_float()
+        return numbers.__aura_big_to_float(self.small(), self.words())
+
+    public def to_radix(self, radix: int64) -> str:
+        """The text of this in base `radix`, from 2 to 36, with lowercase
+        letters and a leading `-` when negative."""
+        return numbers.__aura_big_format(self.small(), self.words(), radix)
+
+
+impl Display for BigInt:
+    def display(self) -> str:
+        if self.is_small():
+            return str(self.small())
+        return numbers.__aura_big_format(self.small(), self.words(), 10)
+
+
+impl Add[BigInt, BigInt] for BigInt:
+    def add(self, rhs: BigInt) -> BigInt:
+        if self.is_small() and rhs.is_small():
+            sum = self.small().wrapping_add(rhs.small())
+            if sum == self.small().saturating_add(rhs.small()):
+                return BigInt(storage=sum)
+        match self.storage:
+            case list[uint64] as left:
+                match rhs.storage:
+                    case list[uint64] as right:
+                        return big_of(numbers.__aura_big_add_words(left, right))
+                    case int64 as _number:
+                        pass
+            case int64 as _number:
+                pass
+        return self.binary(0, rhs)
+
+
+impl Sub[BigInt, BigInt] for BigInt:
+    def sub(self, rhs: BigInt) -> BigInt:
+        if self.is_small() and rhs.is_small():
+            difference = self.small().wrapping_sub(rhs.small())
+            if difference == self.small().saturating_sub(rhs.small()):
+                return BigInt(storage=difference)
+        return self.binary(1, rhs)
+
+
+impl Mul[BigInt, BigInt] for BigInt:
+    def mul(self, rhs: BigInt) -> BigInt:
+        if self.is_small() and rhs.is_small():
+            product = self.small().wrapping_mul(rhs.small())
+            if product == self.small().saturating_mul(rhs.small()):
+                return BigInt(storage=product)
+        return self.binary(2, rhs)
+
+
+impl FloorDiv[BigInt, BigInt] for BigInt:
+    def floor_div(self, rhs: BigInt) -> BigInt:
+        if self.is_small() and rhs.is_small() and rhs.small() > 0:
+            return BigInt(storage=self.small() // rhs.small())
+        return self.binary(3, rhs)
+
+
+impl Mod[BigInt, BigInt] for BigInt:
+    def mod(self, rhs: BigInt) -> BigInt:
+        if self.is_small() and rhs.is_small() and rhs.small() > 0:
+            return BigInt(storage=self.small() % rhs.small())
+        return self.binary(4, rhs)
+
+
+impl Neg[BigInt] for BigInt:
+    def neg(self) -> BigInt:
+        if self.is_small() and self.small() != least_int():
+            return BigInt(storage=-self.small())
+        return BigInt.from_int(0).binary(1, self)
+
+
+impl Ord[BigInt] for BigInt:
+    def lt(self, rhs: BigInt) -> bool:
+        return self.compare(rhs) < 0
+
+    def le(self, rhs: BigInt) -> bool:
+        return self.compare(rhs) <= 0
+
+    def gt(self, rhs: BigInt) -> bool:
+        return self.compare(rhs) > 0
+
+    def ge(self, rhs: BigInt) -> bool:
+        return self.compare(rhs) >= 0
+
+
+public def factorial(value: int64) -> BigInt:
+    """`value!` as a `BigInt`. `value` must not be negative."""
+    return big_of(numbers.__aura_big_unary(1, value, list[uint64]()))
+
+
+public enum Rounding:
+    """How a `Decimal` operation picks between the two nearest results."""
+    HalfEven
+    HalfUp
+    HalfDown
+    Down
+    Up
+    Floor
+    Ceiling
+
+
+def rounding_code(rounding: Rounding) -> int64:
+    match rounding:
+        case Rounding.HalfEven:
+            return 0
+        case Rounding.HalfUp:
+            return 1
+        case Rounding.HalfDown:
+            return 2
+        case Rounding.Down:
+            return 3
+        case Rounding.Up:
+            return 4
+        case Rounding.Floor:
+            return 5
+        case Rounding.Ceiling:
+            return 6
+
+
+def decimal_of(wire: own list[uint64]) -> Decimal:
+    exponent = wire_exponent(wire)
+    if wire[0] == 0:
+        return Decimal(storage=SmallDecimal(number=wire_small(wire), exponent=exponent))
+    return Decimal(storage=wire)
+
+
+# The decimal `coefficient * 10^exponent` in normal form: no trailing zeros
+# in the coefficient, and exponent 0 for zero.
+def small_decimal(coefficient: int64, exponent: int64) -> Decimal:
+    if coefficient == 0:
+        return Decimal(storage=SmallDecimal(number=0, exponent=0))
+    mut value = coefficient
+    mut power = exponent
+    while value % 10 == 0:
+        value = value // 10
+        power += 1
+    if power > 4611686018427387904 or power < -4611686018427387904:
+        # The runtime reports the overflow.
+        return decimal_of(numbers.__aura_dec_normalize(value, list[uint64](), power))
+    return Decimal(storage=SmallDecimal(number=value, exponent=power))
+
+
+# `value * 10^count`, or the least `int64`, which no such product equals,
+# when the product does not fit.
+def scaled(value: int64, count: int64) -> int64:
+    mut result = value
+    mut left = count
+    while left > 0:
+        next = result.wrapping_mul(10)
+        if next != result.saturating_mul(10):
+            return least_int()
+        result = next
+        left -= 1
+    return result
+
+
+# `left` plus the decimal `small * 10^exponent`.
+def decimal_sum(left: Decimal, small: int64, exponent: int64) -> Decimal:
+    if left.is_small():
+        gap = left.power().saturating_sub(exponent)
+        mut first = left.small()
+        mut second = small
+        mut power = exponent
+        if gap > 0 and gap <= 18:
+            first = scaled(first, gap)
+        elif gap < 0 and gap >= -18:
+            second = scaled(second, -gap)
+            power = left.power()
+        elif gap != 0:
+            first = least_int()
+        if first != least_int() and second != least_int():
+            sum = first.wrapping_add(second)
+            if sum == first.saturating_add(second):
+                return small_decimal(sum, power)
+    return decimal_of(numbers.__aura_dec_binary(0, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 0, 0))
+
+
+# `left` times the decimal `small * 10^exponent`.
+def decimal_product(left: Decimal, small: int64, exponent: int64) -> Decimal:
+    if left.is_small():
+        product = left.small().wrapping_mul(small)
+        if product == left.small().saturating_mul(small):
+            return small_decimal(product, left.power() + exponent)
+    return decimal_of(numbers.__aura_dec_binary(2, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 0, 0))
+
+
+# `left` divided by the decimal `small * 10^exponent`, to 28 digits.
+def decimal_quotient(left: Decimal, small: int64, exponent: int64) -> Decimal:
+    if left.is_small() and small > 0 and left.small() % small == 0:
+        return small_decimal(left.small() // small, left.power().saturating_sub(exponent))
+    return decimal_of(numbers.__aura_dec_binary(3, left.small(), left.words(), left.power(), small, list[uint64](), exponent, 28, 0))
+
+
+copy class SmallDecimal:
+    number: int64
+    exponent: int64
+
+
+public class Decimal:
+    """An exact decimal number: an integer coefficient of any size times a
+    power of ten. Addition, subtraction, and multiplication are exact.
+    Division rounds to 28 significant digits. Equal numbers are equal
+    values: `1.50` and `1.5` are the same `Decimal`."""
+    storage: SmallDecimal | list[uint64]
+
+    def is_small(self) -> bool:
+        match self.storage:
+            case SmallDecimal as _value:
+                return true
+            case list[uint64] as _words:
+                return false
+
+    def small(self) -> int64:
+        match self.storage:
+            case SmallDecimal as value:
+                return value.number
+            case list[uint64] as _words:
+                return 0
+
+    def power(self) -> int64:
+        match self.storage:
+            case SmallDecimal as value:
+                return value.exponent
+            case list[uint64] as digits:
+                return wire_exponent(digits)
+
+    def words(self) -> list[uint64]:
+        match self.storage:
+            case SmallDecimal as _value:
+                return list[uint64]()
+            case list[uint64] as digits:
+                return digits.copy()
+
+    public def copy(self) -> Decimal:
+        """Another `Decimal` with the same value."""
+        match self.storage:
+            case SmallDecimal as value:
+                return Decimal(storage=value)
+            case list[uint64] as digits:
+                return Decimal(storage=digits.copy())
+
+    public def from_int(value: int64) -> Decimal:
+        """The `Decimal` equal to `value`."""
+        return small_decimal(value, 0)
+
+    public def from_big(value: BigInt) -> Decimal:
+        """The `Decimal` equal to `value`."""
+        return Decimal.from_parts(value, 0)
+
+    public def from_parts(coefficient: BigInt, exponent: int64) -> Decimal:
+        """`coefficient` times ten to the power `exponent`."""
+        if coefficient.is_small():
+            return small_decimal(coefficient.small(), exponent)
+        return decimal_of(numbers.__aura_dec_normalize(coefficient.small(), coefficient.words(), exponent))
+
+    public def from_float(value: float64) -> Decimal | None:
+        """The exact value of `value`, every binary digit kept, or `None`
+        for NaN or an infinity. `from_float(0.1)` is not `0.1`."""
+        wire = numbers.__aura_dec_from_float(value)
+        if wire.len() == 0:
+            return None
+        return decimal_of(wire)
+
+    public def parse(text: str) -> Decimal | None:
+        """The number `text` writes: an optional sign, digits with an
+        optional point, and an optional exponent such as `e-3`. `None` when
+        `text` is anything else."""
+        wire = numbers.__aura_dec_parse(text)
+        if wire.len() == 0:
+            return None
+        return decimal_of(wire)
+
+    public def is_zero(self) -> bool:
+        """Whether this is 0."""
+        return self.small() == 0 and self.is_small()
+
+    public def sign(self) -> int64:
+        """-1, 0, or 1 as this is negative, zero, or positive."""
+        if self.is_small():
+            if self.small() > 0:
+                return 1
+            if self.small() < 0:
+                return -1
+            return 0
+        if self.words()[1] == 1:
+            return -1
+        return 1
+
+    public def abs(self) -> Decimal:
+        """The absolute value."""
+        if self.sign() < 0:
+            return self.neg()
+        return self.copy()
+
+    public def coefficient(self) -> BigInt:
+        """The integer coefficient. It has no trailing zeros."""
+        if self.is_small():
+            return BigInt.from_int(self.small())
+        return big_of(numbers.__aura_big_binary(0, self.small(), self.words(), 0, list[uint64]()))
+
+    public def exponent(self) -> int64:
+        """The power of ten that scales the coefficient."""
+        return self.power()
+
+    public def compare(self, rhs: Decimal) -> int64:
+        """-1, 0, or 1 as this is less than, equal to, or greater than
+        `rhs`."""
+        if self.is_small() and rhs.is_small() and self.power() == rhs.power():
+            if self.small() < rhs.small():
+                return -1
+            if self.small() > rhs.small():
+                return 1
+            return 0
+        return numbers.__aura_dec_compare(self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power())
+
+    public def divide(self, rhs: Decimal, digits: int64, rounding: Rounding) -> Decimal:
+        """This divided by `rhs`, rounded to `digits` significant digits."""
+        return decimal_of(numbers.__aura_dec_binary(3, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), digits, rounding_code(rounding)))
+
+    public def round(self, places: int64, rounding: Rounding) -> Decimal:
+        """This rounded to `places` digits after the point. A negative
+        `places` rounds to tens, hundreds, and so on."""
+        if places > -4611686018427387904 and self.power() >= -places:
+            return self.copy()
+        return decimal_of(numbers.__aura_dec_round(self.small(), self.words(), self.power(), places, rounding_code(rounding)))
+
+    public def to_big(self, rounding: Rounding) -> BigInt:
+        """This rounded to an integer."""
+        return big_of(numbers.__aura_dec_integer(self.small(), self.words(), self.power(), rounding_code(rounding)))
+
+    public def trunc(self) -> BigInt:
+        """The integer left after dropping the fraction."""
+        return self.to_big(Rounding.Down)
+
+    public def floor(self) -> BigInt:
+        """The greatest integer that is not greater than this."""
+        return self.to_big(Rounding.Floor)
+
+    public def ceil(self) -> BigInt:
+        """The least integer that is not less than this."""
+        return self.to_big(Rounding.Ceiling)
+
+    public def pow(self, exponent: int64) -> Decimal:
+        """This raised to `exponent`, exactly. `exponent` must not be
+        negative."""
+        return decimal_of(numbers.__aura_dec_binary(4, self.small(), self.words(), self.power(), exponent, list[uint64](), 0, 0, 0))
+
+    public def sqrt(self, digits: int64) -> Decimal:
+        """The square root to `digits` significant digits, rounded half to
+        even. This must not be negative."""
+        return decimal_of(numbers.__aura_dec_sqrt(self.small(), self.words(), self.power(), digits))
+
+    public def to_float(self) -> float64:
+        """The nearest `float64`. A value beyond the range of `float64`
+        gives an infinity."""
+        return numbers.__aura_dec_to_float(self.small(), self.words(), self.power())
+
+    public def to_fixed(self, places: int64) -> str:
+        """The text of this with exactly `places` digits after the point,
+        rounded half to even. A negative value keeps its minus sign when
+        rounding gives zero. `places` must not be negative."""
+        if places < 0:
+            # The runtime reports the bad argument.
+            return numbers.__aura_dec_format(self.small(), self.words(), self.power(), -3)
+        return numbers.__aura_dec_format(self.small(), self.words(), self.power(), places)
+
+    public def to_plain(self) -> str:
+        """The text of this with every digit written out and no exponent."""
+        return numbers.__aura_dec_format(self.small(), self.words(), self.power(), -2)
+
+
+impl Display for Decimal:
+    def display(self) -> str:
+        if self.is_small() and self.power() == 0:
+            return str(self.small())
+        return numbers.__aura_dec_format(self.small(), self.words(), self.power(), -1)
+
+
+impl Add[Decimal, Decimal] for Decimal:
+    def add(self, rhs: Decimal) -> Decimal:
+        if rhs.is_small():
+            return decimal_sum(self, rhs.small(), rhs.power())
+        return decimal_of(numbers.__aura_dec_binary(0, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+
+
+impl Sub[Decimal, Decimal] for Decimal:
+    def sub(self, rhs: Decimal) -> Decimal:
+        if rhs.is_small() and rhs.small() != least_int():
+            return decimal_sum(self, -rhs.small(), rhs.power())
+        return decimal_of(numbers.__aura_dec_binary(1, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+
+
+impl Mul[Decimal, Decimal] for Decimal:
+    def mul(self, rhs: Decimal) -> Decimal:
+        if rhs.is_small():
+            return decimal_product(self, rhs.small(), rhs.power())
+        return decimal_of(numbers.__aura_dec_binary(2, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 0, 0))
+
+
+impl Div[Decimal, Decimal] for Decimal:
+    def div(self, rhs: Decimal) -> Decimal:
+        if rhs.is_small():
+            return decimal_quotient(self, rhs.small(), rhs.power())
+        return decimal_of(numbers.__aura_dec_binary(3, self.small(), self.words(), self.power(), rhs.small(), rhs.words(), rhs.power(), 28, 0))
+
+
+impl Neg[Decimal] for Decimal:
+    def neg(self) -> Decimal:
+        if self.is_small() and self.small() != least_int():
+            return Decimal(storage=SmallDecimal(number=-self.small(), exponent=self.power()))
+        return decimal_of(numbers.__aura_dec_binary(1, 0, list[uint64](), 0, self.small(), self.words(), self.power(), 0, 0))
+
+
+impl Ord[Decimal] for Decimal:
+    def lt(self, rhs: Decimal) -> bool:
+        return self.compare(rhs) < 0
+
+    def le(self, rhs: Decimal) -> bool:
+        return self.compare(rhs) <= 0
+
+    def gt(self, rhs: Decimal) -> bool:
+        return self.compare(rhs) > 0
+
+    def ge(self, rhs: Decimal) -> bool:
+        return self.compare(rhs) >= 0
+
+
+public copy class Complex:
+    """A complex number of two `float64` parts."""
+    public re: float64
+    public im: float64
+
+    public def from_polar(radius: float64, angle: float64) -> Complex:
+        """The number `radius` from the origin at `angle` radians."""
+        return Complex(re=radius * math.cos(angle), im=radius * math.sin(angle))
+
+    public def abs(self) -> float64:
+        """The distance from the origin."""
+        return math.hypot(self.re, self.im)
+
+    public def arg(self) -> float64:
+        """The angle from the positive real axis, in `[-pi, pi]`."""
+        return math.atan2(self.im, self.re)
+
+    public def conj(self) -> Complex:
+        """The conjugate: the imaginary part negated."""
+        return Complex(re=self.re, im=-self.im)
+
+    public def exp(self) -> Complex:
+        """e raised to this."""
+        size = math.exp(self.re)
+        return Complex(re=size * math.cos(self.im), im=size * math.sin(self.im))
+
+    public def log(self) -> Complex:
+        """The principal natural logarithm. Its imaginary part lies in
+        `[-pi, pi]`. Zero has none."""
+        return Complex(re=math.log(self.abs()), im=self.arg())
+
+    public def sqrt(self) -> Complex:
+        """The principal square root, the one whose real part is not
+        negative."""
+        if self.re == 0.0 and self.im == 0.0:
+            return Complex(re=0.0, im=self.im)
+        x = abs(self.re)
+        y = abs(self.im)
+        if math.is_inf(y):
+            return Complex(re=math.inf, im=self.im)
+        if math.is_inf(x):
+            if self.re > 0.0:
+                if math.is_nan(self.im):
+                    return Complex(re=x, im=self.im)
+                return Complex(re=x, im=math.copysign(0.0, self.im))
+            if math.is_nan(self.im):
+                return Complex(re=self.im, im=math.copysign(x, self.im))
+            return Complex(re=0.0, im=math.copysign(x, self.im))
+        # Factor the larger component out of the sum before taking its root.
+        mut root = 0.0
+        if x >= y:
+            ratio = y / x
+            root = math.sqrt(x) * math.sqrt((1.0 + math.sqrt(1.0 + ratio * ratio)) / 2.0)
+        else:
+            ratio = x / y
+            root = math.sqrt(y) * math.sqrt((ratio + math.sqrt(1.0 + ratio * ratio)) / 2.0)
+        if self.re >= 0.0:
+            return Complex(re=root, im=self.im / (2.0 * root))
+        return Complex(re=y / (2.0 * root), im=math.copysign(root, self.im))
+
+    public def pow(self, exponent: Complex) -> Complex:
+        """This raised to `exponent`, by the principal logarithm. Zero to
+        the power zero is one, and zero to any other power is zero."""
+        if self.re == 0.0 and self.im == 0.0:
+            if exponent.re == 0.0 and exponent.im == 0.0:
+                return Complex(re=1.0, im=0.0)
+            return Complex(re=0.0, im=0.0)
+        return (self.log() * exponent).exp()
+
+    public def is_finite(self) -> bool:
+        """Whether neither part is NaN or an infinity."""
+        return math.is_finite(self.re) and math.is_finite(self.im)
+
+
+impl Display for Complex:
+    def display(self) -> str:
+        if self.im < 0.0 or (self.im == 0.0 and math.copysign(1.0, self.im) < 0.0):
+            return str(self.re) + "-" + str(-self.im) + "i"
+        return str(self.re) + "+" + str(self.im) + "i"
+
+
+impl Add[Complex, Complex] for Complex:
+    def add(self, rhs: Complex) -> Complex:
+        return Complex(re=self.re + rhs.re, im=self.im + rhs.im)
+
+
+impl Sub[Complex, Complex] for Complex:
+    def sub(self, rhs: Complex) -> Complex:
+        return Complex(re=self.re - rhs.re, im=self.im - rhs.im)
+
+
+impl Mul[Complex, Complex] for Complex:
+    def mul(self, rhs: Complex) -> Complex:
+        return Complex(re=self.re * rhs.re - self.im * rhs.im, im=self.re * rhs.im + self.im * rhs.re)
+
+
+impl Div[Complex, Complex] for Complex:
+    def div(self, rhs: Complex) -> Complex:
+        scale = max(abs(rhs.re), abs(rhs.im))
+        if math.is_finite(scale) and scale > 0.0:
+            x = rhs.re / scale
+            y = rhs.im / scale
+            norm = x * x + y * y
+            real_weight = x / norm
+            imag_weight = y / norm
+            if scale >= 1.0:
+                a = self.re / scale
+                b = self.im / scale
+                return Complex(re=a * real_weight + b * imag_weight, im=b * real_weight - a * imag_weight)
+            return Complex(re=(self.re * real_weight + self.im * imag_weight) / scale, im=(self.im * real_weight - self.re * imag_weight) / scale)
+        # Preserve the floating operation's rules for a zero or nonfinite divisor.
+        if abs(rhs.re) >= abs(rhs.im):
+            ratio = rhs.im / rhs.re
+            denominator = rhs.re + rhs.im * ratio
+            return Complex(re=(self.re + self.im * ratio) / denominator, im=(self.im - self.re * ratio) / denominator)
+        ratio = rhs.re / rhs.im
+        denominator = rhs.re * ratio + rhs.im
+        return Complex(re=(self.re * ratio + self.im) / denominator, im=(self.im * ratio - self.re) / denominator)
+
+
+impl Neg[Complex] for Complex:
+    def neg(self) -> Complex:
+        return Complex(re=-self.re, im=-self.im)

@@ -18,8 +18,8 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 
 ### Numbers And Durations
 
-- Integers are fixed-width.
-- Aura has no arbitrary-precision integer, implicit width promotion, rotate operator, literal suffix, hexadecimal floating literal, or distinct unsigned-right-shift operator.
+- Builtin integer types have fixed widths. For arbitrary-size integers use `numbers.BigInt`. [Numbers Module](/manual/numbers)
+- Integer operations require explicit width conversion. Rotate operators, literal suffixes, hexadecimal floating literals and a distinct unsigned-right-shift operator are outside the current syntax.
 - Power is builtin-only.
 - `round` has no digit-count overload.
 - Non-numeric casts are not implemented.
