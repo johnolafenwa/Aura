@@ -21,8 +21,11 @@ Entering the block takes the guarded value into a second local. The user binding
 borrows that local mutably. Normal control flow, including early exits,
 ends the borrow and moves the value back before leaving the block.
 
-The scheduler identifies the current holder by task. It keeps the held
-cells in acquisition order. This same list checks release ownership and
+The scheduler identifies the current holder by task. The first acquired
+cell installs an exit callback on that task. Task retirement can then
+poison live cells and wake waiters. Programs that never acquire a cell
+can link without the mutex wake code. The task keeps its held cells in
+acquisition order. This same list checks release ownership and
 recursive locking. If a task fails, it poisons its active cells
 and signals their wait queues. An inner recovery scope can record its
 starting epoch. A trap affects only locks acquired since the mark, even

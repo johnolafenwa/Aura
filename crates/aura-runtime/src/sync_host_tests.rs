@@ -115,6 +115,23 @@ fn a_holder_that_ends_poisons_the_cell_and_wakes_its_waiters() {
 }
 
 #[test]
+fn only_a_task_that_acquired_a_cell_installs_exit_cleanup() {
+    let active = HolderState::default();
+    let idle = HolderState::default();
+    assert!(active.on_exit.get().is_none());
+    let guarded = SyncValue::cell(int(7));
+    let cell = guarded.as_cell("lock").unwrap();
+    assert!(cell.try_lock());
+    active.acquired(cell);
+    assert!(active.on_exit.get().is_some());
+    holder_ended(&idle);
+    assert!(idle.on_exit.get().is_none());
+    assert!(!guarded.is_poisoned().unwrap());
+    holder_ended(&active);
+    assert!(guarded.is_poisoned().unwrap());
+}
+
+#[test]
 fn a_holder_that_ends_with_nothing_held_poisons_nothing() {
     let holder = HolderState::default();
     holder_ended(&holder);
