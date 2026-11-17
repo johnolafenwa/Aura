@@ -1214,7 +1214,11 @@ pub(crate) fn host_bytes_arg<'a>(
     index: usize,
     call: &str,
 ) -> Result<Cow<'a, [u8]>> {
-    let elements = runtime_uint8_elements(&args[index], &call.replace("::", "."))?;
+    host_byte_slice(&args[index], &call.replace("::", "."))
+}
+
+fn host_byte_slice<'a>(value: &'a Value, call: &str) -> Result<Cow<'a, [u8]>> {
+    let elements = runtime_uint8_elements(value, call)?;
     match elements.as_uint8() {
         Some(bytes) => Ok(Cow::Borrowed(bytes)),
         None => host_bytes_from_runtime_elements(elements).map(Cow::Owned),
@@ -1345,7 +1349,7 @@ fn host_encoding_arg(
     args: &[Value],
     call: &str,
 ) -> Result<std::result::Result<crate::text_encodings::Encoding, Value>> {
-    let name = host_string_value_ref(&args[1], 1, &call.replace("::", "."))?;
+    let name = host_string_value_ref(&args[1], 1, call)?;
     Ok(crate::text_encodings::Encoding::from_name(name)
         .ok_or_else(|| encoding_error_value("Unknown", Value::string(name.to_string()))))
 }
@@ -1355,16 +1359,20 @@ fn encoding_error_index(index: usize) -> Value {
 }
 
 pub fn host_bytes_encode(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    use crate::text_encodings::{encode, EncodingError};
     let name = "bytes::encode";
     host_expect_arity(name, &args, 2)?;
     let text = host_string_value_ref(&args[0], 0, "bytes.encode")?;
-    let encoding = match host_encoding_arg(&args, name)? {
+    let encoding = match host_encoding_arg(&args, "bytes.encode")? {
         Ok(encoding) => encoding,
         Err(unknown) => return Ok(unknown),
     };
+    encode_text_result(text, encoding)
+}
+
+fn encode_text_result(text: &str, encoding: crate::text_encodings::Encoding) -> Result<Value> {
+    use crate::text_encodings::{encode, EncodingError};
     match encode(text, encoding) {
-        Ok(bytes) => host_bytes_value(bytes, name).map(result_ok),
+        Ok(bytes) => host_bytes_value(bytes, "bytes.encode").map(result_ok),
         Err(EncodingError::Unencodable { index } | EncodingError::Invalid { index }) => Ok(
             encoding_error_value("Unencodable", encoding_error_index(index)),
         ),
@@ -1372,19 +1380,36 @@ pub fn host_bytes_encode(args: Vec<Value>, _program_args: Option<&[String]>) -> 
 }
 
 pub fn host_bytes_decode(args: Vec<Value>, _program_args: Option<&[String]>) -> Result<Value> {
-    use crate::text_encodings::{decode, EncodingError};
     let name = "bytes::decode";
     host_expect_arity(name, &args, 2)?;
-    let bytes = host_bytes_arg(&args, 0, name)?;
-    let encoding = match host_encoding_arg(&args, name)? {
+    let bytes = host_byte_slice(&args[0], "bytes.decode")?;
+    let encoding = match host_encoding_arg(&args, "bytes.decode")? {
         Ok(encoding) => encoding,
         Err(unknown) => return Ok(unknown),
     };
-    match decode(&bytes, encoding) {
+    decode_text_result(&bytes, encoding)
+}
+
+fn decode_text_result(bytes: &[u8], encoding: crate::text_encodings::Encoding) -> Result<Value> {
+    use crate::text_encodings::{decode, EncodingError};
+    match decode(bytes, encoding) {
         Ok(text) => Ok(result_ok(Value::string(text))),
         Err(EncodingError::Invalid { index } | EncodingError::Unencodable { index }) => {
             Ok(encoding_error_value("Invalid", encoding_error_index(index)))
         }
+    }
+}
+
+/// Converts one borrowed value when native code has resolved the encoding name.
+pub(crate) fn text_codec(
+    value: &Value,
+    encoding: crate::text_encodings::Encoding,
+    decode: bool,
+) -> Result<Value> {
+    if decode {
+        decode_text_result(&host_byte_slice(value, "bytes.decode")?, encoding)
+    } else {
+        encode_text_result(host_string_value_ref(value, 0, "bytes.encode")?, encoding)
     }
 }
 
