@@ -56,3 +56,35 @@ trapping call paths, and the caller's ability to update and reacquire its lock.
 
 The interpreter and the Linux native executable matched the eight expected
 lines of `recover_nested_mutex`. Both also matched `control_recover_cleanup`.
+
+## Early Exits And Output
+
+A fixture that propagates a typed error while holding a mutex reproduced
+a retained lock on the interpreter. The error path now releases its
+managers in reverse order and preserves the original error when a
+fallible manager also returns an error. The native ownership pass treats
+a propagating `try` before an unreachable terminator as a possible return.
+
+The runtime tests pass for copied handles, transfer of a collection box
+and out-of-order release across a recovery boundary. The language server
+passed all 159 tests. The two backends previously rendered a mutex
+differently. The manual and a fixture specify `<sync-handle>` for direct
+and nested rendering.
+
+## Local Names
+
+The Windows compiler fixture suite found five existing programs defining
+their own `Cell` enum that failed MIR validation. Linux reproduced the
+same failure with either `Cell` or `Atom` as a local enum. The shared
+state module's two host handles now keep their qualified runtime names.
+The regression declares both enums and calls the imported atomic counter.
+
+## Lock Cost
+
+A preliminary native run identified repeated wrapper tag changes in
+`mutex.lock()` and copies of a general runtime value around each integer
+step. Lowering now retains the original cell for the block. A custom
+factory still runs once, and rebinding the source variable in the body
+still releases the original mutex. Native integer and boolean steps read
+and write the word in its guarded slot; tests cross between native word,
+boxed, and interpreter accesses to the same cell.

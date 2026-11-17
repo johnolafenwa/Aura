@@ -12,7 +12,8 @@ import sync
 Every type here is a Copy handle, as a `Queue[T]` is. Copying a handle
 copies a reference to the same shared state, not the state. A handle is
 `Transfer`, so it can be a task argument, a `Queue` item, a field of a
-class, or a module constant.
+class, or a module constant. Printing a handle shows `<sync-handle>`.
+Read the value through its methods or inside a lock block to display it.
 
 ## Public API
 

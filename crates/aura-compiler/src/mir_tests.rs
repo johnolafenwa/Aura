@@ -4267,8 +4267,78 @@ def main():
 }
 
 #[test]
+fn sync_handles_do_not_claim_local_enum_names() {
+    let source = r#"
+import sync
+
+enum Cell:
+    Open
+
+enum Atom:
+    Ready
+
+def main():
+    print(Cell.Open)
+    print(Atom.Ready)
+    print(sync.AtomicInt(12).load())
+"#;
+    let mir = crate::lower_source_to_mir(source).expect("user enums keep their local names");
+    assert!(
+        mir.classes.iter().all(|class| !matches!(
+            class.name.as_str(),
+            "Cell" | "Atom" | "sync.Cell" | "sync.Atom"
+        )),
+        "opaque host handles have no record layout"
+    );
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        "Cell.Open\nAtom.Ready\n12\n"
+    );
+}
+
+#[test]
+fn sync_checks_the_guarded_payload_and_prevents_views_escaping_the_lock() {
+    for (source, code) in [
+        (
+            include_str!("../tests/fixtures/check-fail/sync_nontransfer_payload.au"),
+            "AU3008",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/sync_guarded_view_escape.au"),
+            "AU3010",
+        ),
+    ] {
+        let error = crate::check_source(source).expect_err("an invalid guarded value");
+        assert_eq!(error.code, code);
+    }
+}
+
+#[test]
+fn direct_lock_entries_remember_the_receiver_and_evaluate_custom_factories() {
+    let source = include_str!("../tests/fixtures/run-pass/sync_lock_binding.au");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    let main = module
+        .functions
+        .iter()
+        .find(|function| function.name == "main")
+        .unwrap();
+    for step in ["sync::__aura_cell_take", "sync::__aura_cell_put"] {
+        assert!(main.blocks.iter().flat_map(|block| &block.instructions).any(|instruction| matches!(
+            instruction,
+            Instruction::Assign { value: Rvalue::Call { callee: CallTarget::Runtime { op: RuntimeOp::Host(builtin), .. }, .. }, .. } if builtin.name() == step
+        )), "lock entries call {step} directly");
+    }
+    assert_eq!(
+        crate::run_source(source).unwrap().stdout,
+        include_str!("../tests/fixtures/run-pass/sync_lock_binding.stdout")
+    );
+}
+
+#[test]
 fn sync_lock_exits_publish_the_value_before_leaving_the_block() {
     let source = include_str!("../tests/fixtures/run-pass/sync_lock_exits.au");
+    let module = crate::lower_source_to_mir(source).unwrap();
+    validate_loan_flow(&module).expect("lock error edges have explicit ownership");
     let output = crate::run_source(source).expect("early exits release the lock");
     assert_eq!(
         output.stdout,
@@ -9339,7 +9409,7 @@ fn lowerer_module_resolution_and_rendering_helpers_cover_imported_paths() {
         value: Operand::Int(1),
     });
     lowerer.with_stack.push("resource".to_string());
-    lowerer.emit_cleanup_range(0, true);
+    lowerer.emit_cleanup_range(0, true, 0);
     lowerer.terminate(Terminator::Return(Operand::Int(0)));
     assert!(lowerer.current_terminated());
     lowerer.switch_to(block);

@@ -2475,8 +2475,9 @@ fn function_ownership(
             live_in: RootSet::new(width),
         }));
     }
-    // A block that ends the program releases nothing: the abort reclaims
-    // every value, and an initializer may not mention `self` there.
+    // An abort reclaims every value, and an initializer may not mention
+    // `self` there. A preceding `try` can return before the abort, so its
+    // error edge still needs ownership accounting.
     let doomed = function
         .blocks
         .iter()
@@ -2484,7 +2485,10 @@ fn function_ownership(
             matches!(
                 block.terminator,
                 Terminator::Unreachable | Terminator::AssertFail { .. }
-            )
+            ) && !block
+                .instructions
+                .iter()
+                .any(|instruction| try_releases(instruction).is_some())
         })
         .collect::<Vec<_>>();
     let edge_def = |from: usize, successor: usize| {

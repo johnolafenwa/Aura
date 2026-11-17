@@ -78,7 +78,10 @@ def dict_alone() -> None:
     _ = dict_steps(table, DICT_STEPS)
     elapsed = sys.monotonic_time_ms() - start
     with entries = table.lock():
-        print(f"dict {elapsed} {entries.len()}")
+        mut total = 0
+        for key in range(CACHE_KEYS):
+            total += entries[key]
+        print(f"dict {elapsed} {entries.len()} {total}")
 
 
 def lock_shared() -> None:

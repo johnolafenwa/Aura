@@ -38,6 +38,9 @@ pub(super) fn handle_class_field_by_name<'a>(
     name: &str,
     classes: &'a HashMap<String, MirClass>,
 ) -> Option<&'a crate::mir::MirClassField> {
+    if !crate::runtime_value::sync_host::is_handle_class(name) {
+        return None;
+    }
     let [field] = classes.get(name)?.fields.as_slice() else {
         return None;
     };

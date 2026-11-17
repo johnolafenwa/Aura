@@ -160,6 +160,8 @@ pub fn abandon_held_cells() {
 pub(crate) enum GuardedValue {
     Value(Value),
     Native(crate::native_runtime::GuardedNativeBox),
+    Int64(i64),
+    Bool(bool),
 }
 
 impl GuardedValue {
@@ -167,7 +169,13 @@ impl GuardedValue {
         match self {
             Self::Value(value) => value,
             Self::Native(guarded) => guarded.into_value(),
+            Self::Int64(word) => int(word),
+            Self::Bool(flag) => Value::Bool(flag),
         }
+    }
+
+    pub(crate) fn take(slot: &mut Option<Self>) -> Self {
+        slot.take().expect("an unlocked cell holds its value")
     }
 }
 
@@ -220,6 +228,15 @@ fn relock_error() -> Diagnostic {
     Diagnostic::coded(
         "AU4001",
         "this task already holds the lock: a `sync.Mutex` cannot be locked again by its holder",
+    )
+}
+
+/// Standard library wrapper classes whose native representation is the
+/// handle itself. Local classes keep their declared fields and rendering.
+pub fn is_handle_class(name: &str) -> bool {
+    matches!(
+        name,
+        "sync.Mutex" | "sync.Locked" | "sync.Map" | "sync.AtomicInt" | "sync.AtomicBool"
     )
 }
 
@@ -290,39 +307,48 @@ impl SyncValue {
     /// Locks the cell and moves its value out, waiting while another task
     /// holds it.
     pub fn take(&self) -> Result<Value> {
-        self.take_guarded().map(GuardedValue::into_value)
+        self.take_with(|slot| GuardedValue::take(slot).into_value())
     }
 
-    pub(crate) fn take_guarded(&self) -> Result<GuardedValue> {
+    pub(crate) fn take_with<T>(
+        &self,
+        read: impl FnOnce(&mut Option<GuardedValue>) -> T,
+    ) -> Result<T> {
         let cell = self.as_cell("sync.__aura_cell_take")?;
         if !cell.try_lock() {
             // The scheduler changes the current task while a waiter yields.
             let token = with_current_holder(HolderState::token);
             lock_contended(cell, token)?;
         }
-        Ok(Self::take_locked(cell))
+        Ok(Self::take_locked(cell, read))
     }
 
     /// Takes the value without yielding, allowing a native caller to borrow
     /// the handle in place while the box is accessible.
-    pub(crate) fn try_take_guarded(&self) -> Result<Option<GuardedValue>> {
+    pub(crate) fn try_take_with<T>(
+        &self,
+        read: impl FnOnce(&mut Option<GuardedValue>) -> T,
+    ) -> Result<Option<T>> {
         let cell = self.as_cell("sync.__aura_cell_take")?;
-        Ok(cell.try_lock().then(|| Self::take_locked(cell)))
+        Ok(cell.try_lock().then(|| Self::take_locked(cell, read)))
     }
 
     #[inline]
-    fn take_locked(cell: &Arc<CellState>) -> GuardedValue {
+    fn take_locked<T>(
+        cell: &Arc<CellState>,
+        read: impl FnOnce(&mut Option<GuardedValue>) -> T,
+    ) -> T {
         with_current_holder(|holder| holder.acquired(cell));
         // SAFETY: this task just acquired the lock.
-        unsafe { (*cell.value.get()).take() }.expect("an unlocked cell holds its value")
+        read(unsafe { &mut *cell.value.get() })
     }
 
     /// Moves `value` into the cell and unlocks it.
     pub fn put(&self, value: Value) -> Result<()> {
-        self.put_guarded(GuardedValue::Value(value))
+        self.put_with(|slot| *slot = Some(GuardedValue::Value(value)))
     }
 
-    pub(crate) fn put_guarded(&self, value: GuardedValue) -> Result<()> {
+    pub(crate) fn put_with(&self, write: impl FnOnce(&mut Option<GuardedValue>)) -> Result<()> {
         let cell = self.as_cell("sync.__aura_cell_put")?;
         let owned = with_current_holder(|holder| {
             if cell.holder.load(Ordering::Relaxed) != holder.token()
@@ -340,9 +366,7 @@ impl SyncValue {
             ));
         }
         // SAFETY: this task holds the lock.
-        unsafe {
-            *cell.value.get() = Some(value);
-        }
+        write(unsafe { &mut *cell.value.get() });
         cell.holder.store(0, Ordering::Relaxed);
         if cell.state.swap(UNLOCKED, Ordering::Release) == CONTENDED {
             cell.wake_one();

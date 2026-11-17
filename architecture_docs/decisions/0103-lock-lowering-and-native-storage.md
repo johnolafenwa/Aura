@@ -14,7 +14,10 @@ worker must then be able to wait for that lock without blocking the worker.
 ## Decision
 
 The checker recognizes the standard library's `sync.Locked[T]` manager.
-Entering the block takes its value into a hidden local. The user binding
+Lowering keeps its cell in a hidden local until block exit. For the
+standard `mutex.lock()` call it reads the mutex's cell directly. A custom
+factory or other manager expression runs once before its cell is read.
+Entering the block takes the guarded value into a second local. The user binding
 borrows that local mutably. Normal control flow, including early exits,
 ends the borrow and moves the value back before leaving the block.
 
@@ -36,7 +39,9 @@ handle in one machine word. The wrapper owns a reference to the runtime
 cell or atomic word. When a task receives a copied handle, it can use its
 own wrapper while both tasks continue to access the same underlying state.
 Atomic operations use sequentially consistent ordering. Integer and
-boolean lock payloads cross the runtime boundary as words. For other
+boolean lock payloads cross the runtime boundary as words and stay as
+words in the native cell. A generic or interpreter caller can also take
+these values through the usual boxed interface. For other
 payloads the mutex can transfer a unique native box to the next holder.
 A box with another owner first supplies an independent value.
 

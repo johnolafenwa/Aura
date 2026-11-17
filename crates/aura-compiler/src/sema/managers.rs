@@ -123,8 +123,7 @@ pub(crate) fn describe_hidden_manager(
 
 /// The methods of `sync.Locked[T]` that lowering calls to take the lock and
 /// to release it.
-pub(crate) const LOCK_TAKE_METHOD: &str = "__aura_take";
-pub(crate) const LOCK_PUT_METHOD: &str = "__aura_put";
+const LOCK_TAKE_METHOD: &str = "__aura_take";
 
 /// The compiler-named local that holds the value of a locked `sync.Mutex`
 /// for the body of its `with` item.
@@ -149,30 +148,6 @@ pub(crate) fn lock_item_payload(ty: &Type, class_info: Option<&ClassInfo>) -> Op
         [payload] if is_lock => Some(payload.clone()),
         _ => None,
     }
-}
-
-/// The synthesized `binding.method(args)` call on a manager.
-pub(crate) fn manager_method_call_with(
-    binding: &str,
-    method: &str,
-    args: Vec<Expr>,
-    span: crate::diag::Span,
-) -> Expr {
-    let mut call = manager_method_call(binding, method, span);
-    if let ExprKind::Call {
-        args: call_args, ..
-    } = &mut call.kind
-    {
-        *call_args = args
-            .into_iter()
-            .map(|value| crate::ast::Argument {
-                name: None,
-                value,
-                span,
-            })
-            .collect();
-    }
-    call
 }
 
 /// The synthesized `binding.method()` call that enters or exits a manager.

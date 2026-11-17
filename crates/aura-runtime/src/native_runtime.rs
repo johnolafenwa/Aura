@@ -21115,7 +21115,7 @@ fn with_sync_handle<T>(
     read: impl FnOnce(&crate::runtime_value::SyncValue) -> T,
 ) -> T {
     unsafe {
-        with_value(handle, |value| match value {
+        with_unlisted_value(handle, |value| match value {
             Value::Sync(handle) => read(handle),
             other => runtime_error(format!(
                 "expected `{expected}`, found `{}`",
@@ -21177,20 +21177,25 @@ impl GuardedNativeBox {
 /// A borrowed handle may guard only an immediate acquisition. If it must
 /// wait, the task takes its own reference and releases the box's read guard
 /// before yielding to the scheduler.
-fn locked_cell_value(handle: *mut OpaqueValue) -> std::result::Result<GuardedValue, Diagnostic> {
-    match with_sync_handle(handle, "sync.Cell", |handle| handle.try_take_guarded())? {
+fn with_locked_cell<T>(
+    handle: *mut OpaqueValue,
+    read: impl Fn(&mut Option<GuardedValue>) -> T,
+) -> std::result::Result<T, Diagnostic> {
+    match with_sync_handle(handle, "sync.Cell", |handle| handle.try_take_with(&read))? {
         Some(value) => Ok(value),
-        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_guarded(),
+        None => with_sync_handle(handle, "sync.Cell", Clone::clone).take_with(read),
     }
 }
 
 /// Takes the lock of a `sync.Cell` and moves its value out.
 #[cfg_attr(not(coverage), no_mangle)]
 pub extern "C-unwind" fn aura_direct_sync_cell_take(handle: *mut OpaqueValue) -> *mut OpaqueValue {
-    task_runtime_boundary(|| match locked_cell_value(handle) {
-        Ok(GuardedValue::Value(value)) => boxed_value(value),
-        Ok(GuardedValue::Native(value)) => value.into_owned(),
-        Err(error) => runtime_diagnostic_error(error),
+    task_runtime_boundary(|| {
+        with_locked_cell(handle, |slot| match GuardedValue::take(slot) {
+            GuardedValue::Native(value) => value.into_owned(),
+            other => boxed_value(other.into_value()),
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
     })
 }
 
@@ -21201,10 +21206,10 @@ pub extern "C-unwind" fn aura_direct_sync_cell_put(
     value: *mut OpaqueValue,
 ) {
     task_runtime_boundary(|| {
-        let value = GuardedValue::Native(unsafe { GuardedNativeBox::from_owned(value) });
-        if let Err(error) =
-            with_sync_handle(handle, "sync.Cell", |handle| handle.put_guarded(value))
-        {
+        let value = unsafe { GuardedNativeBox::from_owned(value) };
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| {
+            handle.put_with(|slot| *slot = Some(GuardedValue::Native(value)))
+        }) {
             runtime_diagnostic_error(error)
         }
     })
@@ -21217,17 +21222,31 @@ pub extern "C-unwind" fn aura_direct_sync_cell_take_word(
     handle: *mut OpaqueValue,
     kind: i64,
 ) -> i64 {
-    task_runtime_boundary(
-        || match locked_cell_value(handle).map(GuardedValue::into_value) {
-            Ok(Value::Bool(value)) if kind == 1 => i64::from(value),
-            Ok(value) if kind == 0 => unbox_int64_of(&value),
-            Ok(other) => runtime_error(format!(
-                "a lock that guards a `bool` held `{}`",
-                value_type_name(&other)
-            )),
-            Err(error) => runtime_diagnostic_error(error),
-        },
-    )
+    task_runtime_boundary(|| {
+        with_locked_cell(handle, |slot| {
+            let word = match slot.as_ref() {
+                Some(GuardedValue::Int64(word)) if kind == 0 => *word,
+                Some(GuardedValue::Bool(flag)) if kind == 1 => i64::from(*flag),
+                _ => return guarded_word_from_value(GuardedValue::take(slot).into_value(), kind),
+            };
+            *slot = None;
+            word
+        })
+        .unwrap_or_else(|error| runtime_diagnostic_error(error))
+    })
+}
+
+/// The initial payload, or one deposited by an interpreter or generic caller.
+#[cold]
+fn guarded_word_from_value(value: Value, kind: i64) -> i64 {
+    match value {
+        Value::Bool(value) if kind == 1 => i64::from(value),
+        value if kind == 0 => unbox_int64_of(&value),
+        other => runtime_error(format!(
+            "a lock that guards a `bool` held `{}`",
+            value_type_name(&other)
+        )),
+    }
 }
 
 /// [`aura_direct_sync_cell_put`] for the word
@@ -21239,12 +21258,15 @@ pub extern "C-unwind" fn aura_direct_sync_cell_put_word(
     word: i64,
 ) {
     task_runtime_boundary(|| {
-        let value = if kind == 1 {
-            Value::Bool(word != 0)
-        } else {
-            Value::Int(IntegerValue::from_i64(word))
-        };
-        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| handle.put(value)) {
+        if let Err(error) = with_sync_handle(handle, "sync.Cell", |handle| {
+            handle.put_with(|slot| {
+                *slot = Some(if kind == 1 {
+                    GuardedValue::Bool(word != 0)
+                } else {
+                    GuardedValue::Int64(word)
+                });
+            })
+        }) {
             runtime_diagnostic_error(error)
         }
     })
