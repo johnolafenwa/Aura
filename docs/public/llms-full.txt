@@ -6549,7 +6549,7 @@ Each row names a reference area and the tests, fixtures, and maintained examples
 | Delimiter continuation, ignored continuation indentation, expression-match layout islands, trailing-comma/backslash/single-line-string boundaries, and pairing diagnostics | focused lexer/parser tests; `newline_continuation*` and delimiter parse/run fixtures; `examples/basics/multiline_expressions.au`; compiler-bridge and extension indentation tests; and the MIR/direct parity matrix |
 | Parenthesized tuple values/types, recursive assignment/loop targets and patterns, function returns, left-to-right capture, recursive Copy, whole-source non-Copy moves, shared leaf provenance, copy-only constant indexing, canonical rendering, same-type recursive structural `==`/`!=` with non-consuming reads, retained ordering rejection, and mutable-writeback rejections | focused lexer/parser/sema/MIR/native/runtime tests; the `tuple_structural_equality`, `tuple_equality_contextual_literals`, and retained `tuple_ordering_rejected` fixtures; other `tuple_*` parse/check/run fixtures; `examples/basics/tuples.au`; the compiler-bridge tuple equality/ordering regression; and the MIR/direct parity matrix |
 | grammar and parser limits | `crates/aura-compiler/src/parser_tests.rs`, `tests/fixtures/parse-pass`, `tests/fixtures/parse-fail` |
-| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; named-function callbacks over scalars; and reserved raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
+| [FFI](/manual/ffi) package authorization and root dependency reports; bodyless extern/opaque grammar; fixed-width scalar, null-empty and pointer-length view ABI; same-length mutable copy-in/out and post-call writeback; opaque ownership and non-Transfer rules; direct-call-only process-global lookup; Unix MIR/direct parity; LSP/editor support; named-function callbacks over scalars and NUL-terminated text; and reserved raw pointers/variadics | focused lexer/parser/package/sema/analysis/MIR/native/runtime tests; `crates/aura-compiler/tests/ffi_frontend.rs`; `crates/aura/tests/ffi_acceptance.rs`; `examples/packages/ffi_getpid`; language-server recovery/compiler-bridge tests; extension grammar/snippet tests; and the forced backend parity matrix |
 | Conditional-expression precedence, exact-bool conditions, arm unification/context, lazy condition-first selection, conservative branch moves, analysis, and backend parity | focused conditional parser/sema/MIR/analysis tests; `conditional_expression_*` check/parse fixtures; `conditional_expressions` run fixture and example; compiler-bridge coverage; and the MIR/direct parity matrix |
 | Membership containers and delegation, chained-comparison precedence, at-most-once operand evaluation, short-circuiting, conservative chain checking, and backend parity | `comparison_chains_keep_every_operator_at_one_precedence_level`, `membership_tests_read_supported_containers_and_reject_the_rest`, and `comparison_chains_evaluate_each_operand_once_and_short_circuit`; `membership_*` check-fail and `membership_and_comparison_chains` check-pass fixtures; the `membership_and_comparison_chains` run fixture and example; five Python-shaped acceptance fixtures; and the MIR/direct parity matrix |
 | `enumerate`/`zip` loop-form recognition, operand domain, bare shared default, `int64` positions, shortest-operand `zip` termination, shadowing, function-wide per-loop binding-slot isolation under heterogeneous binding-name reuse, and backend parity | `enumerate_and_zip_iterate_in_lockstep_over_the_bare_loop_default`, `heterogeneous_ordinary_for_bindings_use_distinct_scoped_typed_slots`, `every_ordinary_for_form_uses_a_fresh_scoped_target_slot`, and `ordinary_for_target_scope_starts_after_iterable_evaluation`; `enumerate_requires_indexable_iterable` and `zip_rejects_ownership_modifiers` check-fail fixtures; the reversed heterogeneous `enumerate_and_zip` fixture; `tuple_for_pattern_queue` for recursive target reuse; `list_mut_iteration` and `iteration_element_loan_write_through` for write-through on fallthrough, `continue`, `break`, and explicit return; the maintained example; and the MIR/direct parity matrix |
@@ -7826,11 +7826,11 @@ This page lists what the Aura compiler, runtime, and tools do not implement toda
 - The foreign function interface (FFI) is package-only and requires `[package] allow_ffi = true`. A root package also reports every reachable FFI-enabled dependency under exact `[ffi] dependencies`.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically. There is no static-library or per-declaration library setting.
 - Calls run synchronously on the current worker.
-- The accepted ABI is limited to fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list, C structs of scalars by value and by pointer, temporary str and byte pointer-length views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
-- A callback is a named top-level function over scalars. Closures, text, lists, structs, and handles do not cross in a callback.
-- There is no variadic, raw-pointer arithmetic, returned view, C union, bit-field or array field, array of structs, or async offload.
+- The ABI accepts fixed-width scalars, pointers to one scalar, pointers to scalar or struct arrays, C structs and unions, temporary text and byte views, same-length mutable byte views, NUL-terminated `cstr` text, and opaque handles. Empty views use `(NULL, 0)`.
+- A callback is a named top-level function. Its parameters can be scalars, pointers to one scalar, or NUL-terminated UTF-8 text declared as `cstr`. Declare a handle parameter as `uint64`. The result is a scalar or `None`.
+- Variadic functions, pointer arithmetic, returned views, C bit-fields, and asynchronous foreign calls are unavailable. C union members are read-only.
 - A `cstr` result is copied and never freed. A result the caller must free needs an opaque handle.
-- The only unions that cross are exactly `Handle | None` and `cstr | None`. See [FFI](/manual/ffi).
+- The nullable Aura types that cross are `Handle | None` and `cstr | None`. A C union uses an `extern "C" union` declaration. See [FFI](/manual/ffi).
 - A false C signature or a misbehaving native function is outside Aura's safety guarantees and may terminate or corrupt the process.
 
 ### Tasks
@@ -12542,17 +12542,26 @@ def main() -> int32:
 | --- | --- | --- |
 | `value: T` | `T` | a scalar by value |
 | `value: mut T` | `T *` | a pointer to one scalar, read on entry and written back on return |
+| `value: cstr` | `const char *` | NUL-terminated UTF-8 text, copied into a `str` before the Aura function runs |
 | `-> T` | `T` | a scalar result |
 | `-> None` | `void` | no result |
 
 `T` is any scalar type of the [Scalars](#scalars) table.
 
+Declare a text parameter as `cstr` in the foreign declaration and as
+`str` in the Aura function. The C library owns the source bytes. The
+callback can clone its string to keep it after the call. A pointer to a
+single NUL byte gives the empty string. A null pointer or invalid UTF-8
+raises `AU4005` when the enclosing foreign call returns. A callback
+returns a scalar or `None`.
+
 - **Named functions only.** The argument names a top-level function with
   exactly the declared parameter and result types. A lambda, a closure, a
   method, a generic function, and a function held in a variable are
   `AU2005`. C receives a plain code address, so the function has no
-  captured values. A `void *` user-data parameter that C passes through is
-  declared `uint64`.
+  captured values. Declare a handle such as GLFW's `GLFWwindow *` or a
+  `void *` user-data parameter as `uint64` in both callback signatures.
+  The callback receives the address as a number.
 - **Pointer parameters.** `mut T` is also the spelling for `const T *`. A
   null pointer reads as zero and is not written.
 - **Booleans.** A `bool` argument from C is `true` for any nonzero byte.
@@ -12568,9 +12577,9 @@ def main() -> int32:
   later callbacks return zero without running, and the foreign call fails
   with the callback's diagnostic when the C function returns.
 
-A callback parameter or result of any other type is `AU2002`: text, lists,
-structs, and handles do not cross in a callback. An extern function cannot
-return a function, and a callback parameter cannot be `own` or `mut`.
+List, struct, and opaque-handle callback parameters produce `AU2002`.
+The function-pointer parameter of the extern declaration uses the default
+passing mode.
 
 ### Opaque Handles
 
@@ -12819,8 +12828,8 @@ FFI does not:
 - pass typed pointers to anything but one scalar, one struct, one handle,
   or the elements of a list of scalars or structs
 - accept variadics
-- pass a closure as a callback, or pass text, lists, structs, or handles to
-  one
+- pass a closure as a callback, pass a list or struct to one, or return
+  text from one
 - offer asynchronous foreign calls
 
 Aura does not infer C ABI layout outside the tables above.
@@ -12846,7 +12855,7 @@ Implemented:
 - `array[T, N]` fields of an `extern "C"` class
 - `ptr[Name]` and `mut ptr[Name]` pointers to the elements of a struct list
 - `extern "C" union` declarations, passed wherever a struct is
-- named functions passed as C callbacks
+- named functions passed as C callbacks, including callbacks taking `cstr`
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of
@@ -25964,7 +25973,7 @@ See [Language Specification](/manual/language-specification) and [Conformance](/
 ### Foreign Functions
 
 - Explicitly authorized packages may use FFI v1, the version 1 foreign function interface.
-- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to the elements of a scalar list or an Array, C structs of scalars, pointer-length str and byte views, NUL-terminated `cstr` text, opaque handles, and callbacks that name a top-level function over scalars.
+- Bodyless `extern "C"` functions call C symbols synchronously. They pass fixed-width scalars, pointers to one scalar, pointers to elements of lists or Arrays, C structs with scalar or fixed-size array fields, C unions, pointer-length text and byte views, NUL-terminated `cstr` text, and opaque handles. A named top-level callback accepts scalars, pointers to one scalar, and `cstr` parameters.
 - Libraries are named in the manifest's `[ffi]` table and linked dynamically.
 - FFI-enabled dependencies must be visible in the root manifest's exact `[ffi] dependencies` report.
 - Externs are direct-call-only.
@@ -56315,15 +56324,34 @@ $ aura run src/sorting.au
 `qsort` hands its comparison function two `const void *` pointers. We know
 they point at `int32` elements, so the callback type says `mut int32`: a
 pointer to one number, which Aura reads on the way in. A plain `int32`
-parameter would be a number passed by value. A callback takes and returns
-scalars only.
+parameter would be a number passed by value.
+
+GLFW gives its error callback a code and a message. We declare the
+message as `cstr` where C calls us, then use an ordinary `str` in the
+function that prints it.
+
+```aura fragment
+extern "C" def glfwSetErrorCallback(
+    callback: def(code: int32, description: cstr) -> None
+) -> uint64
+
+def report_error(code: int32, description: str) -> None:
+    print(f"GLFW error {code}: {description}")
+```
+
+Pass `report_error` to `glfwSetErrorCallback`. Aura copies the bytes up
+to the first NUL and checks their UTF-8 encoding before calling
+`report_error`. GLFW can reuse its buffer as soon as the callback
+returns. A null pointer or invalid UTF-8 causes the foreign call that
+invoked the callback to fail with `AU4005`.
 
 The argument must be a function we name, defined at the top level of a
 module. C receives a bare code address with nowhere to keep captured
 variables, so a lambda or a closure is a compile error. C libraries usually
 make up for that with a `void *user_data` parameter that they pass back to
 the callback untouched. Declare it `uint64`, and use it to carry an index
-or a key.
+or a key. A handle passed into a callback, such as the window in a GLFW
+key callback, is also declared `uint64`.
 
 A callback can fail like any other Aura code, with an index out of range
 or an overflow. Aura does not unwind through the C function, which would

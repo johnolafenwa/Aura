@@ -645,17 +645,26 @@ def main() -> int32:
 | --- | --- | --- |
 | `value: T` | `T` | a scalar by value |
 | `value: mut T` | `T *` | a pointer to one scalar, read on entry and written back on return |
+| `value: cstr` | `const char *` | NUL-terminated UTF-8 text, copied into a `str` before the Aura function runs |
 | `-> T` | `T` | a scalar result |
 | `-> None` | `void` | no result |
 
 `T` is any scalar type of the [Scalars](#scalars) table.
 
+Declare a text parameter as `cstr` in the foreign declaration and as
+`str` in the Aura function. The C library owns the source bytes. The
+callback can clone its string to keep it after the call. A pointer to a
+single NUL byte gives the empty string. A null pointer or invalid UTF-8
+raises `AU4005` when the enclosing foreign call returns. A callback
+returns a scalar or `None`.
+
 - **Named functions only.** The argument names a top-level function with
   exactly the declared parameter and result types. A lambda, a closure, a
   method, a generic function, and a function held in a variable are
   `AU2005`. C receives a plain code address, so the function has no
-  captured values. A `void *` user-data parameter that C passes through is
-  declared `uint64`.
+  captured values. Declare a handle such as GLFW's `GLFWwindow *` or a
+  `void *` user-data parameter as `uint64` in both callback signatures.
+  The callback receives the address as a number.
 - **Pointer parameters.** `mut T` is also the spelling for `const T *`. A
   null pointer reads as zero and is not written.
 - **Booleans.** A `bool` argument from C is `true` for any nonzero byte.
@@ -671,9 +680,9 @@ def main() -> int32:
   later callbacks return zero without running, and the foreign call fails
   with the callback's diagnostic when the C function returns.
 
-A callback parameter or result of any other type is `AU2002`: text, lists,
-structs, and handles do not cross in a callback. An extern function cannot
-return a function, and a callback parameter cannot be `own` or `mut`.
+List, struct, and opaque-handle callback parameters produce `AU2002`.
+The function-pointer parameter of the extern declaration uses the default
+passing mode.
 
 ### Opaque Handles
 
@@ -922,8 +931,8 @@ FFI does not:
 - pass typed pointers to anything but one scalar, one struct, one handle,
   or the elements of a list of scalars or structs
 - accept variadics
-- pass a closure as a callback, or pass text, lists, structs, or handles to
-  one
+- pass a closure as a callback, pass a list or struct to one, or return
+  text from one
 - offer asynchronous foreign calls
 
 Aura does not infer C ABI layout outside the tables above.
@@ -949,7 +958,7 @@ Implemented:
 - `array[T, N]` fields of an `extern "C"` class
 - `ptr[Name]` and `mut ptr[Name]` pointers to the elements of a struct list
 - `extern "C" union` declarations, passed wherever a struct is
-- named functions passed as C callbacks
+- named functions passed as C callbacks, including callbacks taking `cstr`
 - direct calls from built programs, and library loading in the interpreter
 - `Handle | None` results and parameters, and `mut Handle | None`
 - `drop` functions that release an opaque handle the program lets go of

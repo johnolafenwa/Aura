@@ -146,6 +146,21 @@ Verification for step 3:
 Not run: any arm64 or macOS machine. Unions of floats take a different
 path there, which the fixture's `UHfa` union exercises in CI.
 
+## Step 4: Text In Callbacks
+
+The foreign declaration uses `cstr` for a NUL-terminated C string. The
+named Aura function takes a `str`. Both backends copy and validate each
+argument. The C fixture checks empty and multibyte strings, two text
+arguments in one call, repeated callbacks, and the two `AU4005` failure
+cases. The GLFW example exercises the error callback and passes its
+window handle to the key callback as a `uint64`.
+
+ADR-0108, the manual, chapter 18, and the changelog describe the rule.
+The documentation generator is current. All 1,100 documentation blocks
+passed the example checker on x86-64 Linux (666 check-pass, 195
+check-fail and 239 fragments).
+
 ## Follow-Up
 
-`cstr` in callbacks, a GLFW test, and benchmarks.
+Run the host and cross-platform tests and measure struct arrays, array
+fields, union reads, and text callbacks against Rust and Python.

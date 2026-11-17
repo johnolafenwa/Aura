@@ -753,15 +753,34 @@ $ aura run src/sorting.au
 `qsort` hands its comparison function two `const void *` pointers. We know
 they point at `int32` elements, so the callback type says `mut int32`: a
 pointer to one number, which Aura reads on the way in. A plain `int32`
-parameter would be a number passed by value. A callback takes and returns
-scalars only.
+parameter would be a number passed by value.
+
+GLFW gives its error callback a code and a message. We declare the
+message as `cstr` where C calls us, then use an ordinary `str` in the
+function that prints it.
+
+```aura fragment
+extern "C" def glfwSetErrorCallback(
+    callback: def(code: int32, description: cstr) -> None
+) -> uint64
+
+def report_error(code: int32, description: str) -> None:
+    print(f"GLFW error {code}: {description}")
+```
+
+Pass `report_error` to `glfwSetErrorCallback`. Aura copies the bytes up
+to the first NUL and checks their UTF-8 encoding before calling
+`report_error`. GLFW can reuse its buffer as soon as the callback
+returns. A null pointer or invalid UTF-8 causes the foreign call that
+invoked the callback to fail with `AU4005`.
 
 The argument must be a function we name, defined at the top level of a
 module. C receives a bare code address with nowhere to keep captured
 variables, so a lambda or a closure is a compile error. C libraries usually
 make up for that with a `void *user_data` parameter that they pass back to
 the callback untouched. Declare it `uint64`, and use it to carry an index
-or a key.
+or a key. A handle passed into a callback, such as the window in a GLFW
+key callback, is also declared `uint64`.
 
 A callback can fail like any other Aura code, with an index out of range
 or an overflow. Aura does not unwind through the C function, which would

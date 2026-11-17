@@ -1,6 +1,6 @@
 # Task Board
 
-Last updated: 2026-11-16
+Last updated: 2026-11-17
 
 ## raylib graphics and FFI v2 (in progress)
 
@@ -23,8 +23,10 @@ Last updated: 2026-11-16
   call sequence was checked by reading the generated assembly.
 - Done: step 3 (ADR-0107): `extern "C" union`, with an acceptance test
   that runs an SDL event loop on both backends.
-- Remaining: `cstr` in callbacks, a GLFW acceptance test, benchmarks
-  against Rust and Python.
+- Step 4 (ADR-0108) adds `cstr` parameters to callbacks and a GLFW
+  acceptance test. The manual and chapter 18 cover the copying and
+  failure rules. Remaining work includes benchmarks and verification
+  across platforms.
 
 ## Book chapters on tensors and machine learning (complete)
 

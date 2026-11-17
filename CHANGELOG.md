@@ -7,6 +7,10 @@ in this file.
 
 ## Unreleased
 
+- C callbacks accept NUL-terminated UTF-8 text. Declare the parameter
+  as `cstr` in the foreign signature and `str` in the named Aura
+  function. A null pointer or invalid UTF-8 raises `AU4005`.
+
 - FFI: an `extern "C"` class can hold a fixed-size C array. A field of
   type `array[T, N]` is laid out as `T name[N]`, where `T` is a scalar,
   another `extern "C"` class, or another array. In Aura code the field is
