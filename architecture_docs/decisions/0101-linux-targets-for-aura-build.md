@@ -96,7 +96,9 @@ machine it runs on, and a linker that reads that machine's objects.
   as their glibc builds. The runtime's own allocator is used on both.
 - The runtime reads a musl program's arguments from `/proc/self/cmdline`.
   Rust's standard library learns the arguments of a program whose `main`
-  is not Rust's only from glibc.
+  is not Rust's only from glibc. Where `/proc` is not mounted, the runtime
+  reads them from the stack the kernel built: it keeps `environ` when the
+  program starts and walks down from it to the argument count.
 - The compiler picks the target through one process-wide setting, like the
   target CPU. One `aura build` process builds for one target.
 
