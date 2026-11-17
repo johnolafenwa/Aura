@@ -1414,7 +1414,7 @@ impl<'a> NativeCodegen<'a> {
                 id,
                 &signature,
                 "a recovered scalar function",
-                |codegen, builder| codegen.emit_function(builder, function, id, true),
+                |codegen, builder| codegen.emit_function(builder, function, id, true, None),
             )?;
         }
         let Some(sinkless_id) = self.sinkless_functions.get(&function.name).copied() else {

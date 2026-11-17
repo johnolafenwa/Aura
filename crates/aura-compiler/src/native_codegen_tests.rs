@@ -25,6 +25,7 @@ use crate::mir::{
     MirFunction, MirLocalType, MirMapEntry, MirMatchArm, MirParam, Operand, Rvalue, Terminator,
 };
 use crate::native_backend::{types, CallConv, FunctionBackend, Signature, Var};
+use crate::runtime_abi::RuntimeFn;
 use crate::sema::Type;
 use crate::{lower_path_to_mir, lower_source_to_mir};
 
@@ -18109,10 +18110,10 @@ fn recovered_numeric_calls_transfer_the_embedded_handle() {
     let symbols = object_function_referenced_symbols(&object, "aura_fn_main");
     assert!(symbols
         .iter()
-        .any(|name| name.contains("aura_direct_start_task_call")));
+        .any(|name| name.contains(RuntimeFn::StartTaskCall.symbol())));
     assert!(symbols
         .iter()
-        .all(|name| !name.contains("aura_direct_recover_begin")));
+        .all(|name| !name.contains(RuntimeFn::RecoverBegin.symbol())));
 }
 
 #[test]
