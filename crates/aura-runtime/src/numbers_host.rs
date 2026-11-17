@@ -851,6 +851,7 @@ pub fn host_dec_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             return Err(domain("`Decimal.to_fixed` needs 0 or more places"));
         }
         places => {
+            let negative = coefficient.is_negative();
             let (rounded, rounded_exponent) = rounded_to_places(coefficient, exponent, places, 0)?;
             // Bring the coefficient to exactly `places` digits.
             let target = -places;
@@ -861,7 +862,11 @@ pub fn host_dec_format(args: Vec<Value>, _program_args: Option<&[String]>) -> Re
             } else {
                 rounded
             };
-            plain(&padded, target)?
+            let mut text = plain(&padded, target)?;
+            if negative && padded.is_zero() {
+                text.insert(0, '-');
+            }
+            text
         }
     };
     Ok(Value::string(text))

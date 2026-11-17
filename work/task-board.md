@@ -12,7 +12,7 @@ Last updated: 2026-11-16
   `bytes.encode` and `bytes.decode`, and set algebra (ADR-0110 to 0112).
 - Verification: runtime and compiler library tests, fixtures recorded on
   both backends, `check_doc_examples.py`, and the extension grammar tests.
-- Next: step 2, the `numbers` module (`BigInt`, `Decimal`, `Complex`).
+- Step 2 is in progress. See [the numbers work note](2026-11-17-numbers.md) for runtime tests and performance work.
   Step 3, `collections` (`Deque`, `Heap`, `SortedMap`, `SortedSet`), after
   the cost of list operations on a class field is removed.
 

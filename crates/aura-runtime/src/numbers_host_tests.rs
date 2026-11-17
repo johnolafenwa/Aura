@@ -148,18 +148,19 @@ fn big_binary_reports_bad_operands() {
 fn word_lists_are_read_from_either_list_form() {
     let general = Value::Vec(VecValue::new(
         Type::named("uint64"),
-        ListElements::from_values(
+        ListElements::Values(
             [1u64, 0, 0, 0, 5, 1]
                 .iter()
                 .map(|word| Value::Int(IntegerValue::from_u64(*word)))
-                .collect(),
+                .collect::<Vec<_>>()
+                .into(),
         ),
     ));
     let read = list_words(&general);
     assert_eq!(read, vec![1, 0, 0, 0, 5, 1]);
     let mixed = Value::Vec(VecValue::new(
         Type::named("str"),
-        ListElements::from_values(vec![text("x")]),
+        ListElements::Values(vec![text("x")].into()),
     ));
     assert!(words("test", &mixed).is_err());
     assert!(words("test", &int(1)).is_err());

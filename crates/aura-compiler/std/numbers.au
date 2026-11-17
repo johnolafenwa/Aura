@@ -629,7 +629,8 @@ public class Decimal:
 
     public def to_fixed(self, places: int64) -> str:
         """The text of this with exactly `places` digits after the point,
-        rounded half to even. `places` must not be negative."""
+        rounded half to even. A negative value keeps its minus sign when
+        rounding gives zero. `places` must not be negative."""
         if places < 0:
             # The runtime reports the bad argument.
             return numbers.__aura_dec_format(self.small, self.digits, self.power, -3)
