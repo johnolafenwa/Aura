@@ -10,7 +10,7 @@ expected = ["4269323", "20827", "124999750000", "10018095003163", "11970000.00",
 commands = {
     "Aura": [sys.argv[1]],
     "Rust": [sys.argv[2]],
-    "Python": [sys.executable, str(Path(__file__).with_name("numbers.py"))],
+    "Python": [sys.executable, str(Path(__file__).with_name("main.py"))],
 }
 repeats = int(os.environ.get("REPEATS", "3"))
 if repeats <= 0:
