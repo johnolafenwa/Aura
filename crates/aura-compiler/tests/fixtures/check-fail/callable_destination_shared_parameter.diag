@@ -1,0 +1,7 @@
+error[AU3002]: lambda cannot capture shared parameter `items` by value
+ --> crates/aura-compiler/tests/fixtures/check-fail/callable_destination_shared_parameter.au:2:20
+  |
+2 |     return lambda: items.len()
+  |                    ^
+  = related crates/aura-compiler/tests/fixtures/check-fail/callable_destination_shared_parameter.au:1:10: shared parameter `items` is declared here
+  = help: clone `items` into an owned local before creating the lambda, or declare the enclosing parameter as `own list[int64]`

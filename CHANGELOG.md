@@ -70,6 +70,19 @@ in this file.
   an image and written to a PNG. The package's README says how to install
   raylib and run them.
 
+- Language: a closure is stored without ceremony. A lambda, a function, a
+  bound method, or a local that holds a closure packs where a
+  `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
+  binding, an argument, a field, a list, set, or dictionary element, a
+  `return`, and each arm of a conditional or `match` expression. A type
+  alias called as a constructor is no longer needed, and `AU2015` no longer
+  reports implicit erased storage. The constructor stays valid and is still
+  how a packed value is restricted to a weaker contract.
+- Language: a lambda without a capture list captures a Copy parameter of
+  the enclosing function by value, so `def make(n: int64)` can return
+  `lambda value: value + n`. A parameter that is not Copy still needs `own`
+  or a clone and reports `AU3002`.
+
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as
   `[ids[i].clone() for i in range(2)]`, failed with AU4001 "invalid MIR

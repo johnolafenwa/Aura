@@ -198,7 +198,6 @@ one required, in these cases:
   literal, or a generic observation that would need an invented common contract
 - a lambda that does not meet its expected contract
 - an invalid thin-alias adaptation
-- implicit erased storage into `Callable[...]`
 - a packed call kind that would strengthen
 
 The message names the difference. A safe restriction requires an explicit

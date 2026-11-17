@@ -826,6 +826,11 @@ const ADDITIONAL_EXAMPLE_CASES: &[(&str, &str, &str)] = &[
         "evaluate offset(100)\nevaluate offset(10)\napply offset(10)\napply offset(100)\n112\ncall 2\ncall 1\ncall 0\n0\n",
     ),
     (
+        "examples/basics/stored_closures.au",
+        include_str!("../../../examples/basics/stored_closures.au"),
+        "slow: 1\nover the limit: 2\n1\n12\ntrue\n",
+    ),
+    (
         "examples/basics/retry_decorator.au",
         include_str!("../../../examples/basics/retry_decorator.au"),
         "8080\nattempt 1 failed\nattempt 2 failed\nbad port http\n",
