@@ -744,6 +744,9 @@ struct NativeCodegen<'a> {
     /// The frameless second body of each function that has one (see
     /// `leaf_variant`).
     leaf_functions: HashMap<String, FuncHandle>,
+    /// Scalar bodies whose only failure is an explicit check. Their
+    /// recovered entry returns the scalar and an optional error.
+    recovery_functions: HashMap<String, FuncHandle>,
     function_thunks: HashMap<String, FuncHandle>,
     function_default_binders: HashMap<String, FuncHandle>,
     callable_shapes: HashMap<CallableShapeKey, CallableShape>,
@@ -1016,6 +1019,26 @@ impl<'a> NativeCodegen<'a> {
         let mut functions = HashMap::new();
         let mut function_thunks = HashMap::new();
         let mut leaf_functions = HashMap::new();
+        let mut recovery_functions = HashMap::new();
+        let recovered_targets = module
+            .functions
+            .iter()
+            .chain(module.top_level.iter())
+            .flat_map(|function| &function.blocks)
+            .flat_map(|block| &block.instructions)
+            .filter_map(|instruction| match instruction {
+                Instruction::Assign {
+                    value:
+                        Rvalue::StartTask {
+                            recover: true,
+                            function: Operand::Function { name, .. },
+                            ..
+                        },
+                    ..
+                } => Some(name.as_str()),
+                _ => None,
+            })
+            .collect::<HashSet<_>>();
         let mut function_default_binders = HashMap::new();
         let mut cleanup_thunks = HashMap::new();
         let mut function_return_types = HashMap::new();
@@ -1071,6 +1094,19 @@ impl<'a> NativeCodegen<'a> {
                 }
             } else if small_leaf(function) && frameless_leaf(function, &classes) {
                 object.mark_inline(func_id);
+            }
+            if freestanding.is_none()
+                && recovered_targets.contains(function.name.as_str())
+                && checked_scalar_leaf(function, &classes)
+            {
+                let mut signature = signature.clone();
+                signature.returns.push(types::I64);
+                let symbol = format!("aura_recovered_{}", mangle_symbol(&function.name));
+                let id = object
+                    .declare_function(&symbol, Linkage::Local, &signature)
+                    .map_err(|error| format!("failed to declare recovered function: {error}"))?;
+                object.mark_inline(id);
+                recovery_functions.insert(function.name.clone(), id);
             }
             let thunk_signature = thunk_signature();
             if freestanding.is_none() {
@@ -1200,6 +1236,7 @@ impl<'a> NativeCodegen<'a> {
             object: Some(object),
             functions,
             leaf_functions,
+            recovery_functions,
             function_thunks,
             function_default_binders,
             callable_shapes,
@@ -1368,6 +1405,16 @@ impl<'a> NativeCodegen<'a> {
             &format!("direct function `{}`", function.name),
             |codegen, builder| codegen.emit_function(builder, function, func_id, false),
         )?;
+        if let Some(id) = self.recovery_functions.get(&function.name).copied() {
+            let mut signature = signature.clone();
+            signature.returns.push(types::I64);
+            self.define_body(
+                id,
+                &signature,
+                "a recovered scalar function",
+                |codegen, builder| codegen.emit_function(builder, function, id, true),
+            )?;
+        }
         let Some(leaf_id) = self.leaf_functions.get(&function.name).copied() else {
             return Ok(());
         };
@@ -1793,6 +1840,12 @@ impl<'a> NativeCodegen<'a> {
             let func_ref = builder.import_function(*func_id);
             function_refs.insert(name.clone(), func_ref);
         }
+        let mut recovery_refs = HashMap::new();
+        let mut functions = self.recovery_functions.iter().collect::<Vec<_>>();
+        functions.sort_by_key(|(name, _)| *name);
+        for (name, id) in functions {
+            recovery_refs.insert(name.clone(), builder.import_function(*id));
+        }
         let mut leaf_refs = HashMap::new();
         let mut leaf_functions = self.leaf_functions.iter().collect::<Vec<_>>();
         leaf_functions.sort_by(|left, right| left.0.cmp(right.0));
@@ -1835,6 +1888,61 @@ impl<'a> NativeCodegen<'a> {
             Some(_) => freestanding::trap_path(&current_function_path, &self.program_path),
             None => current_function_path,
         };
+
+        // For a local match of a plain scalar recovered call, keep Ok's
+        // unboxed return and Err's ordinary boxed Result separately.
+        let recovery_names = lookups::recovery_payload_slots(function, |value| {
+            let Rvalue::StartTask {
+                recover: true,
+                function: Operand::Function { name, .. },
+                args,
+                ..
+            } = value
+            else {
+                return false;
+            };
+            (cfg!(unix) || self.recovery_functions.contains_key(name))
+                && self.functions.contains_key(name)
+                && matches!(
+                    self.function_return_types.get(name),
+                    Some(DirectType::Scalar(_))
+                )
+                && self.function_param_types.get(name).is_some_and(|params| {
+                    args.len() == params.len()
+                        && params.iter().all(|ty| matches!(ty, DirectType::Scalar(_)))
+                })
+                && args
+                    .iter()
+                    .all(|arg| arg.name.is_none() && arg.writeback_place.is_none())
+                && self
+                    .function_writeback_types
+                    .get(name)
+                    .is_none_or(Vec::is_empty)
+        });
+        let mut recovery_slots = HashMap::new();
+        let mut names = recovery_names.into_iter().collect::<Vec<_>>();
+        names.sort();
+        for name in names {
+            let Some(DirectType::Opaque(Type::Named(result, args))) = variable_types.get(&name)
+            else {
+                continue;
+            };
+            let [ok, _] = args.as_slice() else {
+                continue;
+            };
+            let Some(DirectType::Scalar(kind)) = direct_type(ok, &self.classes) else {
+                continue;
+            };
+            if result != "Result" {
+                continue;
+            }
+            let variable = Var(variable_index as u32);
+            variable_index += 1;
+            builder.declare_var(variable, kind.signature_type());
+            let zero = kind.zero_value(builder);
+            builder.def_var(variable, zero);
+            recovery_slots.insert(name, (variable, kind));
+        }
 
         let lookup_slots = lookups::lookup_payload_slots(function)
             .into_iter()
@@ -2013,7 +2121,8 @@ impl<'a> NativeCodegen<'a> {
                 })
         });
         let shaped_locals = shapes::shaped_locals(function, &self.program_shapes, |local| {
-            lookup_slots.contains(local)
+            recovery_slots.contains_key(local)
+                || lookup_slots.contains(local)
                 || lent_places.contains(local)
                 || lent_element_reads.lists.contains_key(local)
                 || lent_element_reads.payloads.contains_key(local)
@@ -2265,6 +2374,8 @@ impl<'a> NativeCodegen<'a> {
             next_variable_index: variable_index,
             function_refs,
             leaf_refs,
+            recovery_refs,
+            checked_scalar_body: self.recovery_functions.get(&function.name) == Some(&func_id),
             function_thunk_refs,
             callback_refs,
             cleanup_thunk_refs,
@@ -2296,6 +2407,7 @@ impl<'a> NativeCodegen<'a> {
             loan_locals: explicit_locals.loans,
             closed_matches: explicit_locals.closed_matches,
             lookup_slots,
+            recovery_slots,
             text_byte_slices: lookups::text_byte_slices(function),
             byte_slice_words: HashMap::new(),
             deferred_byte_slice: None,
@@ -3669,6 +3781,8 @@ struct FunctionCompiler<'a> {
     /// The frameless second bodies (see `leaf_variant`), which a call with
     /// no write-through sink to hand over calls.
     leaf_refs: HashMap<String, FuncRef>,
+    recovery_refs: HashMap<String, FuncRef>,
+    checked_scalar_body: bool,
     function_thunk_refs: HashMap<String, FuncRef>,
     /// The entry code of each callback the module passes to C.
     callback_refs: HashMap<foreign::CallbackKey, FuncRef>,
@@ -3731,6 +3845,9 @@ struct FunctionCompiler<'a> {
     /// The `Lookup` temporaries kept as the found value's box or null. See
     /// `lookups::lookup_payload_slots`.
     lookup_slots: HashSet<String>,
+    /// The success value of a match-only recovered call. Its ordinary
+    /// temporary holds null on success and the genuine boxed Result on failure.
+    recovery_slots: HashMap<String, (Var, ScalarKind)>,
     /// The slices of a list of bytes that only the `str.from_bytes` right
     /// after each reads, which native code does not make. See
     /// `lookups::text_byte_slices`.
@@ -4763,6 +4880,38 @@ impl<'a> FunctionCompiler<'a> {
             block.label
         );
         self.enter_snapshot_block(&block.label);
+        if self.checked_scalar_body {
+            if let Terminator::AssertFail {
+                message,
+                span,
+                kind,
+                ..
+            } = &block.terminator
+            {
+                // Eligibility proved every instruction here only formats
+                // assertion operands, which control.Trap does not expose.
+                let message = match message {
+                    Some(Operand::String(text)) => text.as_str(),
+                    None => "assertion failed",
+                    _ => return Err("expected a literal recovered assertion".to_string()),
+                };
+                let (ptr, len) = self.string_constant(message.as_bytes())?;
+                let (line, column) = self.span_values(Some(*span));
+                let descriptor = self.frameless_descriptor.expect("scalar body descriptor");
+                let kind = self.builder.iconst(types::I64, kind.word());
+                let error = self
+                    .builder
+                    .call(
+                        self.runtime[RuntimeFn::RecoverAssertion],
+                        &[descriptor, ptr, len, line, column, kind],
+                    )
+                    .results[0];
+                let mut words = return_ty.zero_values(self.builder);
+                words.push(error);
+                self.builder.return_(&words);
+                return Ok(());
+            }
+        }
 
         let mut skipped = 0;
         for (instruction_index, instruction) in block.instructions.iter().enumerate() {
@@ -5767,6 +5916,8 @@ impl<'a> FunctionCompiler<'a> {
                     && !self.lookup_slots.contains(target.as_str())
                 {
                     self.compile_lent_assign(target, value)?;
+                } else if let Some(&(slot, _)) = self.recovery_slots.get(target.as_str()) {
+                    self.compile_recovery_slot_assign(target, slot, value)?;
                 } else if self.lookup_slots.contains(target.as_str()) {
                     self.compile_lookup_slot_assign(target, value)?;
                 } else if self.text_byte_slices.contains(target.as_str()) {
@@ -5879,6 +6030,10 @@ impl<'a> FunctionCompiler<'a> {
                 arms,
                 otherwise,
             } => {
+                let recovery_slot = matches!(
+                    scrutinee,
+                    Operand::Place(place) if self.recovery_slots.contains_key(place.as_str())
+                );
                 let lookup_slot = matches!(
                     scrutinee,
                     Operand::Place(place) if self.lookup_slots.contains(place.as_str())
@@ -5915,7 +6070,14 @@ impl<'a> FunctionCompiler<'a> {
                         return Ok(());
                     }
                     let next_block = self.builder.create_block();
-                    let matched = if lookup_slot {
+                    let matched = if recovery_slot {
+                        let test = if arm.variant_name.as_deref() == Some("Ok") {
+                            IntCC::Equal
+                        } else {
+                            IntCC::NotEqual
+                        };
+                        self.builder.icmp_imm(test, scrutinee.values[0], 0)
+                    } else if lookup_slot {
                         // A slot is null exactly when the key was missing or
                         // the receive got no item.
                         let found = lookups::is_payload_variant(arm.variant_name.as_deref());
@@ -6122,6 +6284,10 @@ impl<'a> FunctionCompiler<'a> {
         self.release_boxed_copy_roots()?;
         if self.frameless_descriptor.is_none() {
             emit_frame_pop(self.builder, &self.runtime);
+        }
+        if self.checked_scalar_body {
+            let success = self.builder.iconst(types::I64, 0);
+            return_values.push(success);
         }
         self.builder.return_(&return_values);
         Ok(())
@@ -6691,6 +6857,14 @@ impl<'a> FunctionCompiler<'a> {
                 index,
             } => {
                 if let Operand::Place(place) | Operand::MovePlace(place) = scrutinee {
+                    if variant_name == "Ok" && *index == 0 {
+                        if let Some(&(variable, kind)) = self.recovery_slots.get(place.as_str()) {
+                            return Ok(ValueRef {
+                                values: vec![self.builder.use_var(variable)],
+                                ty: DirectType::Scalar(kind),
+                            });
+                        }
+                    }
                     if self.lookup_slots.contains(place.as_str()) {
                         let moved = matches!(scrutinee, Operand::MovePlace(_));
                         return self.compile_lookup_slot_payload(place, moved);
@@ -13742,9 +13916,9 @@ impl<'a> FunctionCompiler<'a> {
     /// union, drops the value the root held.
     fn store_root(&mut self, name: &str, value: ValueRef) -> std::result::Result<(), String> {
         let expected = self.local_type(name)?;
-        // A lookup slot holds a payload's box, which its `Lookup` type
-        // must not tag.
-        let value = if self.lookup_slots.contains(name) {
+        // These locals may hold a payload box or the null success marker.
+        // The declared enum describes the original MIR value.
+        let value = if self.lookup_slots.contains(name) || self.recovery_slots.contains_key(name) {
             value
         } else {
             self.coerce_value(value, &expected)?
@@ -14511,6 +14685,10 @@ impl<'a> FunctionCompiler<'a> {
         };
         let target_ty = self.type_of_place(target)?;
         let lent = self.lent_places.contains(place.as_str());
+        if self.recovery_slots.contains_key(place.as_str()) {
+            // The rvalue reads Ok directly from its scalar variable.
+            return Ok(None);
+        }
         if self.lookup_slots.contains(place.as_str()) {
             // The slot keeps the found value's box until its release, so a
             // scalar is read out of the box where it lies.
@@ -14657,6 +14835,32 @@ impl<'a> FunctionCompiler<'a> {
                 ty: target_ty,
             },
         )
+    }
+
+    fn compile_recovery_slot_assign(
+        &mut self,
+        target: &str,
+        slot: Var,
+        value: &Rvalue,
+    ) -> std::result::Result<(), String> {
+        let result_type = self.type_of_place(target)?;
+        let result = match value {
+            Rvalue::Use(Operand::MovePlace(source)) => {
+                let (source_slot, _) = self
+                    .recovery_slots
+                    .get(source)
+                    .copied()
+                    .ok_or_else(|| format!("missing scalar recovery storage for `{source}`"))?;
+                let value = self.builder.use_var(source_slot);
+                self.builder.def_var(slot, value);
+                self.take_place(source)?
+            }
+            Rvalue::StartTask { function, args, .. } => self
+                .compile_recovered_call(function, args, &result_type, Some(slot))?
+                .ok_or_else(|| "direct backend lost a scalar recovered call".to_string())?,
+            _ => return Err("direct backend expected a recovered call or a move".to_string()),
+        };
+        self.store_place(target, result)
     }
 
     /// Compiles the slice of one of `text_byte_slices` to its words alone,
@@ -18031,7 +18235,7 @@ impl<'a> FunctionCompiler<'a> {
             target,
         } = task;
         if mode.recover {
-            if let Some(result) = self.compile_recovered_call(function, args, target)? {
+            if let Some(result) = self.compile_recovered_call(function, args, target, None)? {
                 return Ok(result);
             }
         }
@@ -18208,13 +18412,19 @@ impl<'a> FunctionCompiler<'a> {
         function: &Operand,
         args: &[MirArg],
         target: &DirectType,
+        success_slot: Option<Var>,
     ) -> std::result::Result<Option<ValueRef>, String> {
-        if !cfg!(unix) {
-            return Ok(None);
-        }
         let Operand::Function { name, .. } = function else {
             return Ok(None);
         };
+        let checked_body = self
+            .recovery_refs
+            .get(name)
+            .copied()
+            .filter(|_| success_slot.is_some());
+        if !cfg!(unix) && checked_body.is_none() {
+            return Ok(None);
+        }
         let DirectType::Opaque(result_type) = target else {
             return Ok(None);
         };
@@ -18267,6 +18477,13 @@ impl<'a> FunctionCompiler<'a> {
                 words.extend(value.values.iter().copied());
             }
         }
+        if let (Some(callee), Some(slot)) = (checked_body, success_slot) {
+            let call = self.builder.call(callee, &words);
+            self.builder.def_var(slot, call.results[0]);
+            return Ok(Some(
+                self.owned_opaque_result(vec![call.results[1]], result_type.clone()),
+            ));
+        }
         let slot = self.builder.create_sized_stack_slot(
             aura_runtime::native_runtime::DIRECT_RECOVER_JUMP_BUFFER_BYTES,
             4,
@@ -18316,21 +18533,27 @@ impl<'a> FunctionCompiler<'a> {
         self.builder
             .call(self.runtime[RuntimeFn::RecoverEnd], &[moved]);
         self.mark_temporary_opaque_owned(&returned);
-        let ok = match self.construct_variant_in_place_from_values(
-            result_type,
-            "Ok",
-            std::slice::from_ref(&returned),
-        )? {
-            Some(ok) => ok,
-            None => self.compile_enum_variant_from_values(
-                "Result",
+        if let Some(slot) = success_slot {
+            self.builder.def_var(slot, returned.values[0]);
+            let null = self.builder.iconst(types::I64, 0);
+            self.builder.jump(done, &[null]);
+        } else {
+            let ok = match self.construct_variant_in_place_from_values(
+                result_type,
                 "Ok",
-                vec![returned],
-                result_type.clone(),
-            )?,
-        };
-        self.clear_temporary_opaque_owned(&ok);
-        self.builder.jump(done, &[ok.values[0]]);
+                std::slice::from_ref(&returned),
+            )? {
+                Some(ok) => ok,
+                None => self.compile_enum_variant_from_values(
+                    "Result",
+                    "Ok",
+                    vec![returned],
+                    result_type.clone(),
+                )?,
+            };
+            self.clear_temporary_opaque_owned(&ok);
+            self.builder.jump(done, &[ok.values[0]]);
+        }
 
         self.builder.switch_to_block(trap_block);
         self.builder.seal_block(trap_block);
@@ -18732,6 +18955,90 @@ fn small_leaf(function: &MirFunction) -> bool {
             .map(|block| block.instructions.len())
             .sum::<usize>()
             <= LEAF_INLINE_INSTRUCTIONS
+}
+
+/// A recovered entry can return an error directly if every instruction
+/// outside a failed check is a total scalar operation. A failed check has a
+/// literal message and only renders scalar operands for the richer diagnostic
+/// of an uncaught check. Calls, cleanup, loops and implicit traps keep their
+/// full recovery boundary.
+fn checked_scalar_leaf(function: &MirFunction, classes: &HashMap<String, MirClass>) -> bool {
+    let scalar = |ty: &Type| matches!(direct_type(ty, classes), Some(DirectType::Scalar(_)));
+    if !small_leaf(function)
+        || function.receiver.is_some()
+        || takes_mutable(function)
+        || !scalar(&function.return_type)
+        || !function.params.iter().all(|param| scalar(&param.ty))
+    {
+        return false;
+    }
+    let local_scalar = |place: &str| {
+        function
+            .local_types
+            .iter()
+            .any(|local| local.name == place && scalar(&local.ty))
+            || function
+                .params
+                .iter()
+                .any(|param| param.name == place && scalar(&param.ty))
+    };
+    let plain = |operand: &Operand| match operand {
+        Operand::Place(place) | Operand::MovePlace(place) => local_scalar(place),
+        Operand::Int(_) | Operand::Float(_) | Operand::Bool(_) | Operand::Unit => true,
+        _ => false,
+    };
+    function.blocks.iter().all(|block| {
+        if let Terminator::AssertFail { message, .. } = &block.terminator {
+            return matches!(message, None | Some(Operand::String(_)))
+                && block
+                    .instructions
+                    .iter()
+                    .all(|instruction| match instruction {
+                        Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                        Instruction::Assign {
+                            value: Rvalue::FormatString { parts },
+                            ..
+                        } => parts.iter().all(|part| match part {
+                            crate::mir::MirFormatPart::Literal(_) => true,
+                            crate::mir::MirFormatPart::Value(value)
+                            | crate::mir::MirFormatPart::Int64(value) => plain(value),
+                            _ => false,
+                        }),
+                        _ => false,
+                    });
+        }
+        let total = block
+            .instructions
+            .iter()
+            .all(|instruction| match instruction {
+                Instruction::SourceLocation { .. } | Instruction::SourceName { .. } => true,
+                Instruction::Assign { target, value } if local_scalar(target) => match value {
+                    Rvalue::Use(value) => plain(value),
+                    Rvalue::Unary {
+                        value,
+                        trap: crate::mir::ArithmeticTrap::None,
+                        ..
+                    } => plain(value),
+                    Rvalue::Binary {
+                        left,
+                        right,
+                        trap: crate::mir::ArithmeticTrap::None,
+                        ..
+                    } => plain(left) && plain(right),
+                    _ => false,
+                },
+                _ => false,
+            });
+        total
+            && match &block.terminator {
+                Terminator::Return(value)
+                | Terminator::Branch {
+                    condition: value, ..
+                } => plain(value),
+                Terminator::Goto(_) => true,
+                _ => false,
+            }
+    })
 }
 
 /// The body rule of `frameless_leaf`.

@@ -64,6 +64,7 @@ runtime_functions! {
     EnterCall => ("aura_direct_enter_frame", [I64], None),
     ExitCall => ("aura_direct_exit_call", [], None),
     StackExhausted => ("aura_direct_stack_exhausted", [], None),
+    RecoverAssertion => ("aura_direct_recover_assertion", [I64, I64, I64, I64, I64, I64], Some(I64)),
     RecoverBegin => ("aura_direct_recover_begin", [I64, I64], Some(I64)),
     RecoverAdopt => ("aura_direct_recover_adopt", [I64], None),
     RecoverEnd => ("aura_direct_recover_end", [I64], Some(I64)),

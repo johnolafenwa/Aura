@@ -5426,14 +5426,23 @@ fn runtime_diagnostic_error(diagnostic: Diagnostic) -> ! {
         });
         std::panic::panic_any(CleanupTrapSignal);
     }
+    // A generated trap with no pending exits can return its diagnostic
+    // directly. Only a cleanup can replace the primary failure or add notes.
+    // C completes its call before a surrounding recovered call takes a callback trap.
+    let direct_recovery = leaf
+        && recovered_call_takes_exit()
+        && with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_none());
+    if direct_recovery
+        && with_direct_task_runtime_state(|state| {
+            state.cleanup_stack.is_empty() && state.manager_exit_failures.is_empty()
+        })
+    {
+        fail_current_lightweight_task(diagnostic)
+    }
     let _primary_guard = DirectPrimaryDiagnosticGuard::install(diagnostic.clone());
     drain_direct_cleanup_stack();
     let diagnostic = attach_direct_manager_exit_failures(diagnostic);
-    // Let the callback return to C before a surrounding recovered call takes the trap.
-    if leaf
-        && recovered_call_takes_exit()
-        && with_direct_task_runtime_state(|state| state.foreign_callback_cleanup_base.is_none())
-    {
+    if direct_recovery {
         // The exit is taken where it is recorded, and the frames from here
         // to the generated code that trapped are abandoned with it.
         fail_current_lightweight_task(diagnostic)
@@ -22222,7 +22231,7 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
         }
         Err(crate::runtime_value::IsolatedFailure::Trap(trap)) => {
             sync_host::abandon_held_cells_since(locks);
-            result_err(crate::runtime_value::recovered_trap_value(&trap))
+            result_err(crate::runtime_value::recovered_trap_value(trap))
         }
         Err(crate::runtime_value::IsolatedFailure::Exit(exit)) => {
             // The task is cancelled. The function's exits already ran, and
@@ -22364,25 +22373,36 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_end(
     if moved {
         register_direct_owned_value(returned);
     }
-    let Some(mut state) = state else {
-        return returned;
-    };
+    if let Some(state) = state {
+        recycle_recovered_state(state);
+    }
+    returned
+}
+
+/// Both successful and trapped calls can reuse an empty child ledger.
+/// Drop states with pending work or a large abandoned stack immediately.
+fn recycle_recovered_state(mut state: Box<DirectTaskRuntimeState>) {
     let clean = state.foreign_callback_cleanup_base.is_none()
         && state.foreign_callback_failure.is_none()
         && state.owned_values().is_empty()
         && state.cleanup_stack.is_empty()
-        && state.call_depth() == 0
+        && state.frames().entry_count() <= frame_stack::DIRECT_FRAME_STACK_INLINE_ENTRIES
+        && !state.cleanup_draining
         && state.returned_views.is_empty()
         && state.pending_mutable_sinks.is_none()
         && state.mutable_sinks.is_empty()
-        && state.manager_exit_failures.is_empty()
-        && state.primary_runtime_diagnostic.is_none();
+        && state.manager_exit_failures.is_empty();
     if !clean {
-        // A call that returned owns nothing more. Release whatever it
-        // left, as a finished task's state is released.
         release_direct_task_runtime_state(state);
-        return returned;
+        return;
     }
+    // A jump abandons active calls, including any owned frame records.
+    while state.frames_mut().pop_call() {}
+    if state.frames().entry_count() != 0 {
+        release_direct_task_runtime_state(state);
+        return;
+    }
+    state.primary_runtime_diagnostic = None;
     if state.task_ancestry.len != 0 {
         state.task_ancestry = DirectTaskAncestry::default();
     }
@@ -22393,7 +22413,6 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_end(
             states.push(state);
         }
     });
-    returned
 }
 
 /// Makes the caller's state current again and returns the state of the
@@ -22464,15 +22483,13 @@ pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
         // The function's exits ran before it recorded the exit. Its state
         // goes as a failed task's does.
         if let Some(state) = leave_recovered_call() {
-            release_direct_task_runtime_state(state);
+            recycle_recovered_state(state);
         }
         match exit.into_trap() {
             Ok(trap) => {
                 sync_host::abandon_held_cells_since(locks);
-                let result = boxed_value(result_err(crate::runtime_value::recovered_trap_value(
-                    &trap,
-                )));
-                drop(trap);
+                let result =
+                    boxed_value(result_err(crate::runtime_value::recovered_trap_value(trap)));
                 RECOVERED_TRAP.with(|slot| slot.set(result));
                 // SAFETY: `_setjmp` filled the buffer in a generated frame
                 // that is still active below this one, and the frames in
@@ -22724,6 +22741,35 @@ fn direct_assert_diagnostic(message: String, line: i64, column: i64, kind: i64) 
         Some(span) => Diagnostic::coded_at(code, span, message),
         None => Diagnostic::coded(code, message),
     }
+}
+
+/// The result of a failed assertion in a recovered scalar leaf. Such a leaf
+/// neither calls out nor acquires resources. Its constant descriptor is its
+/// complete call chain, and the caller owns the box returned here.
+///
+/// # Safety
+///
+/// Generated code passes a registered program-lifetime frame descriptor and
+/// the UTF-8 bytes of a string constant.
+#[cfg_attr(not(coverage), no_mangle)]
+pub unsafe extern "C-unwind" fn aura_direct_recover_assertion(
+    descriptor: *const DirectFrameDescriptor,
+    message_ptr: *const u8,
+    message_len: usize,
+    line: i64,
+    column: i64,
+    kind: i64,
+) -> *mut OpaqueValue {
+    let descriptor = unsafe { &*descriptor };
+    descriptor.ensure_validated();
+    let message = decode_bytes(message_ptr, message_len);
+    let mut diagnostic = direct_assert_diagnostic(message, line, column, kind);
+    diagnostic
+        .call_frames
+        .push(descriptor.frame().materialize());
+    boxed_value(result_err(crate::runtime_value::recovered_trap_value(
+        diagnostic,
+    )))
 }
 
 /// Private direct-backend assertion ABI for the compiler-proven two-operand

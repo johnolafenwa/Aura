@@ -95,6 +95,59 @@ fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
 }
 
 #[test]
+fn recovered_scalar_assertion_reports_the_leaf_and_owns_its_result() {
+    super::with_direct_task_runtime_scope(|| {
+        let descriptor = leaked_frame_descriptor(4, 1, b"validate.au", b"validate");
+        let message = b"invalid cost";
+        let result = unsafe {
+            super::aura_direct_recover_assertion(
+                descriptor,
+                message.as_ptr(),
+                message.len(),
+                8,
+                5,
+                0,
+            )
+        };
+        assert_eq!(
+            super::with_direct_task_runtime_state(|state| state.owned_values().count(result)),
+            1
+        );
+        unsafe {
+            super::with_value(result, |value| {
+                let Value::EnumVariant(variant) = value else {
+                    panic!("result variant");
+                };
+                assert_eq!(variant.variant_name, "Err");
+                let payload = variant.payloads.get(0).unwrap();
+                let Value::Instance(trap) = payload.as_ref() else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("code").unwrap().as_ref(),
+                    &Value::string("AU4001")
+                );
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+                assert_eq!(
+                    trap.fields.get("path").unwrap().as_ref(),
+                    &Value::string("validate.au")
+                );
+                let fields = trap.fields.map();
+                assert!(
+                    matches!(&fields["frames"], Value::Vec(frames) if frames.elements.to_vec() == [Value::string("validate at 4:1")])
+                );
+            });
+        }
+        unsafe {
+            super::aura_direct_release_value(result);
+        }
+    });
+}
+
+#[test]
 fn recovered_calls_move_owned_values_across_nested_boundaries() {
     super::with_direct_task_runtime_scope(|| {
         let argument = super::boxed_value(Value::string("owned argument"));

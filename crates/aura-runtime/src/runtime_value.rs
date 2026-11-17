@@ -1105,6 +1105,29 @@ pub use crate::native_runtime::TypedFields;
 pub enum InstanceFields {
     Map(BTreeMap<String, Value>),
     Typed(TypedFields),
+    /// Recovered failure details are formatted when Aura first reads a field.
+    Recovered(Arc<RecoveredTrapFields>),
+}
+
+/// An immutable snapshot of the failed call. Copies share the snapshot until
+/// their first write, when they become ordinary independent field maps.
+pub struct RecoveredTrapFields {
+    diagnostic: Mutex<Option<Diagnostic>>,
+    fields: OnceLock<BTreeMap<String, Value>>,
+}
+
+impl RecoveredTrapFields {
+    fn map(&self) -> &BTreeMap<String, Value> {
+        self.fields.get_or_init(|| {
+            let diagnostic = self
+                .diagnostic
+                .lock()
+                .expect("trap details lock poisoned")
+                .take()
+                .expect("trap details are initialized once");
+            recovered_trap_fields(diagnostic)
+        })
+    }
 }
 
 impl Default for InstanceFields {
@@ -1171,7 +1194,7 @@ impl InstanceFields {
     pub fn typed(&self) -> Option<&TypedFields> {
         match self {
             Self::Typed(typed) => Some(typed),
-            Self::Map(_) => None,
+            Self::Map(_) | Self::Recovered(_) => None,
         }
     }
 
@@ -1181,6 +1204,7 @@ impl InstanceFields {
     pub fn map(&self) -> &BTreeMap<String, Value> {
         match self {
             Self::Map(fields) => fields,
+            Self::Recovered(details) => details.map(),
             Self::Typed(typed) => panic!(
                 "instance of `{}` keeps its fields in its layout",
                 typed.layout().class_name()
@@ -1192,19 +1216,23 @@ impl InstanceFields {
     /// fields there. Generated code then reads the instance through the
     /// runtime, so only paths that are rare take it.
     pub fn map_mut(&mut self) -> &mut BTreeMap<String, Value> {
+        if let Self::Recovered(details) = self {
+            *self = Self::Map(details.map().clone());
+        }
         if let Self::Typed(typed) = self {
             let typed = std::mem::replace(typed, TypedFields::new(typed.layout()));
             *self = Self::Map(typed.into_map());
         }
         match self {
             Self::Map(fields) => fields,
-            Self::Typed(_) => unreachable!("the layout was turned into a map"),
+            Self::Typed(_) | Self::Recovered(_) => unreachable!("the layout was turned into a map"),
         }
     }
 
     pub fn len(&self) -> usize {
         match self {
             Self::Map(fields) => fields.len(),
+            Self::Recovered(details) => details.map().len(),
             Self::Typed(typed) => typed.len(),
         }
     }
@@ -1216,6 +1244,7 @@ impl InstanceFields {
     pub fn contains_key(&self, name: &str) -> bool {
         match self {
             Self::Map(fields) => fields.contains_key(name),
+            Self::Recovered(details) => details.map().contains_key(name),
             Self::Typed(typed) => typed.contains_key(name),
         }
     }
@@ -1223,6 +1252,7 @@ impl InstanceFields {
     pub fn get(&self, name: &str) -> Option<Cow<'_, Value>> {
         match self {
             Self::Map(fields) => fields.get(name).map(Cow::Borrowed),
+            Self::Recovered(details) => details.map().get(name).map(Cow::Borrowed),
             Self::Typed(typed) => typed.get(name),
         }
     }
@@ -1230,6 +1260,7 @@ impl InstanceFields {
     pub fn iter(&self) -> InstanceFieldIter<'_> {
         match self {
             Self::Map(fields) => InstanceFieldIter::Map(fields.iter()),
+            Self::Recovered(details) => InstanceFieldIter::Map(details.map().iter()),
             Self::Typed(typed) => InstanceFieldIter::Typed(Box::new(typed.iter())),
         }
     }
@@ -1238,6 +1269,7 @@ impl InstanceFields {
     pub fn keys(&self) -> Box<dyn DoubleEndedIterator<Item = &str> + '_> {
         match self {
             Self::Map(fields) => Box::new(fields.keys().map(String::as_str)),
+            Self::Recovered(details) => Box::new(details.map().keys().map(String::as_str)),
             Self::Typed(typed) => Box::new(typed.keys()),
         }
     }
@@ -1260,6 +1292,10 @@ impl InstanceFields {
                 Ok(())
             }
             Self::Typed(typed) => typed.insert(name, value),
+            Self::Recovered(_) => {
+                self.map_mut().insert(name.to_string(), value);
+                Ok(())
+            }
         }
     }
 
@@ -1267,6 +1303,7 @@ impl InstanceFields {
         match self {
             Self::Map(fields) => fields.remove(name),
             Self::Typed(typed) => typed.remove(name),
+            Self::Recovered(_) => self.map_mut().remove(name),
         }
     }
 }
@@ -4611,6 +4648,10 @@ pub(crate) fn is_clone_leaf(value: &Value) -> bool {
             | Value::Unit
             | Value::String(_)
             | Value::Duration(_)
+            | Value::Instance(InstanceValue {
+                fields: InstanceFields::Recovered(_),
+                ..
+            })
     )
 }
 
@@ -18740,11 +18781,22 @@ pub const RECOVERED_TRAP_CLASS: &str = "control.Trap";
 /// The `control.Trap` that `control.recover` returns for `trap`
 /// (ADR-0104): its code, message, path, line, column, and call chain,
 /// innermost first. The fields are those `std/control.au` declares.
-pub fn recovered_trap_value(trap: &Diagnostic) -> Value {
-    let innermost = trap.call_frames.first();
-    let path = innermost
-        .and_then(|frame| frame.span.path.clone())
-        .or_else(|| trap.render_path.clone())
+pub fn recovered_trap_value(trap: Diagnostic) -> Value {
+    Value::Instance(InstanceValue {
+        class_name: RuntimeName::from_static(RECOVERED_TRAP_CLASS),
+        fields: InstanceFields::Recovered(Arc::new(RecoveredTrapFields {
+            diagnostic: Mutex::new(Some(trap)),
+            fields: OnceLock::new(),
+        })),
+    })
+}
+
+fn recovered_trap_fields(mut trap: Diagnostic) -> BTreeMap<String, Value> {
+    let path = trap
+        .call_frames
+        .first_mut()
+        .and_then(|frame| frame.span.path.take())
+        .or_else(|| trap.render_path.take())
         .unwrap_or_default();
     let (line, column) = trap.span.map_or((0, 0), |span| {
         (span.line as i64, span.written().column as i64)
@@ -18764,9 +18816,9 @@ pub fn recovered_trap_value(trap: &Diagnostic) -> Value {
             frame.span.start.written().column
         )));
     }
-    let fields = BTreeMap::from([
-        ("code".to_string(), Value::string(trap.code.clone())),
-        ("message".to_string(), Value::string(trap.message.clone())),
+    BTreeMap::from([
+        ("code".to_string(), Value::string(trap.code)),
+        ("message".to_string(), Value::string(trap.message)),
         ("path".to_string(), Value::string(path)),
         ("line".to_string(), Value::Int(IntegerValue::from_i64(line))),
         (
@@ -18781,11 +18833,7 @@ pub fn recovered_trap_value(trap: &Diagnostic) -> Value {
                 str_view: Default::default(),
             }),
         ),
-    ]);
-    Value::Instance(InstanceValue {
-        class_name: RuntimeName::from_static(RECOVERED_TRAP_CLASS),
-        fields: fields.into(),
-    })
+    ])
 }
 
 pub fn result_ok(value: Value) -> Value {

@@ -92,8 +92,10 @@ typing device only. Neither call exists at run time.
 `recover` set and no group, so ownership checking, specialisation of a
 generic target and thunk generation are the task start's own.
 
-**The trap value.** The runtime builds the `control.Trap` instance from
-the diagnostic. No Aura code runs between the trap and the `Err`.
+**The trap value.** The runtime keeps an immutable snapshot of the diagnostic.
+The first field access formats its source position and call chain. Copies
+share the snapshot until mutation gives the changed instance its own fields.
+No Aura code runs between the trap and the `Err`.
 
 **Interpreter.** The function runs in place, in a runtime forked from the
 caller's (the same cheap fork a generator body uses). A trap is a Rust
@@ -106,7 +108,14 @@ exit. For the length of the call the function gets a frame stack, cleanup
 stack and ownership ledger of its own, installed under the caller's task
 identity, so that "everything the call owned" is exactly one ledger.
 
-There are two ways to run the function.
+For a small scalar function whose only possible failures are literal
+assertions or contract checks, the compiler can return the scalar and an
+error directly to a local match. Such a function cannot call out, register
+cleanup, loop or acquire resources. A failed check describes the callee
+using its source descriptor. The ordinary entry point and every other use
+of the function keep their usual behavior.
+
+The other calls use one of these boundaries.
 
 - *Direct call.* When the target is a named function with positional
   arguments on a Unix target, generated code saves a jump buffer in its

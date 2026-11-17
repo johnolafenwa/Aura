@@ -56,7 +56,7 @@ fn recovered_trap_exposes_the_innermost_path_position_and_shortened_chain() {
         })
         .collect();
     diagnostic.set_omitted_call_frames(1, 7);
-    let Value::Instance(trap) = super::recovered_trap_value(&diagnostic) else {
+    let Value::Instance(trap) = super::recovered_trap_value(diagnostic) else {
         panic!("expected a control.Trap");
     };
     assert_eq!(trap.class_name.as_str(), "control.Trap");
@@ -86,7 +86,7 @@ fn recovered_trap_without_frames_or_location_uses_documented_defaults() {
     let mut diagnostic = Diagnostic::coded("AU4005", "stack exhausted");
     for path in [None, Some("program.au".to_string())] {
         diagnostic.render_path = path.clone();
-        let Value::Instance(trap) = super::recovered_trap_value(&diagnostic) else {
+        let Value::Instance(trap) = super::recovered_trap_value(diagnostic.clone()) else {
             panic!("expected a control.Trap");
         };
         let fields = trap.fields.map();
@@ -101,6 +101,39 @@ fn recovered_trap_without_frames_or_location_uses_documented_defaults() {
         );
         assert!(matches!(&fields["frames"], Value::Vec(frames) if frames.elements.is_empty()));
     }
+}
+
+#[test]
+fn recovered_trap_copies_share_an_unformatted_snapshot_until_mutation() {
+    let trap = super::recovered_trap_value(Diagnostic::coded("AU4001", "original"));
+    let Value::Instance(mut copy) = super::try_clone_array_containing_value(&trap).unwrap() else {
+        panic!("trap instance");
+    };
+    let Value::Instance(original) = trap else {
+        panic!("trap instance");
+    };
+    let super::InstanceFields::Recovered(snapshot) = &original.fields else {
+        panic!("immutable diagnostic snapshot");
+    };
+    assert!(snapshot.fields.get().is_none());
+    assert_eq!(
+        copy.fields.remove("message"),
+        Some(Value::string("original"))
+    );
+    copy.fields.insert("code", Value::string("copy")).unwrap();
+    assert!(!copy.fields.contains_key("message"));
+    assert_eq!(
+        original.fields.get("message").unwrap().as_ref(),
+        &Value::string("original")
+    );
+    assert_eq!(
+        original.fields.get("code").unwrap().as_ref(),
+        &Value::string("AU4001")
+    );
+    assert_eq!(
+        original.fields.keys().collect::<Vec<_>>(),
+        ["code", "column", "frames", "line", "message", "path"]
+    );
 }
 
 /// The payload of a `T | None` union value, `None` when the value is absent.

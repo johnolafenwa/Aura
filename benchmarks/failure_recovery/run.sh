@@ -8,9 +8,8 @@ trap 'rm -rf "$out"' EXIT
 
 "$aura" build --backend direct -o "$out/recover_aura" "$here/recover.au" >/dev/null
 rustc -C opt-level=3 -C panic=unwind -o "$out/recover_rust" "$here/recover.rs"
-echo "== aura"
-"$out/recover_aura"
-echo "== rust"
-"$out/recover_rust"
-echo "== python"
-python3 "$here/recover.py"
+runner=()
+if [[ -n ${AURA_BENCH_RUNNER:-} ]]; then
+    runner=("$AURA_BENCH_RUNNER")
+fi
+"${runner[@]}" python3 "$here/measure.py" "$out/recover_aura" "$out/recover_rust" "$here/recover.py"

@@ -7045,7 +7045,7 @@ impl MirRuntime {
                     crate::runtime_value::sync_host::abandon_held_cells_since(locks);
                     let trap = runtime.annotate_runtime_trap_once(trap);
                     crate::runtime_value::result_err(crate::runtime_value::recovered_trap_value(
-                        &trap,
+                        trap,
                     ))
                 }
             });
@@ -12124,6 +12124,14 @@ fn array_coordinates_from_runtime(value: &Value) -> Result<Box<[i64]>> {
 fn owns_generator(value: &Value) -> bool {
     match value {
         Value::Generator(_) => true,
+        Value::Instance(instance)
+            if matches!(
+                instance.fields,
+                crate::runtime_value::InstanceFields::Recovered(_)
+            ) =>
+        {
+            false
+        }
         Value::Instance(instance) => {
             instance.class_name == "iter.Generator"
                 || instance.fields.iter().any(|(_, v)| owns_generator(&v))
@@ -12154,6 +12162,9 @@ impl MirRuntime {
                             self.close_released_generators(field)?;
                         }
                     }
+                    // A recovered snapshot contains only text, integers and a
+                    // list of text. Mutation first converts it to an ordinary map.
+                    crate::runtime_value::InstanceFields::Recovered(_) => {}
                     crate::runtime_value::InstanceFields::Typed(_) => {
                         for (_, field) in instance.fields.iter() {
                             if let Value::Generator(generator) = field.as_ref() {
