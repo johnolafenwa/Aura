@@ -449,20 +449,35 @@ pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
     } else {
         (&b, &a)
     };
+    // Allocate the output once. Updating initialized digits in place keeps
+    // capacity and allocator checks out of the carry chain.
     let mut result = Vec::with_capacity(longer.len() + 1);
-    result.extend([1, negative, 0, 0]);
-    let mut carry = false;
-    for (&x, &y) in longer[HEADER..].iter().zip(&shorter[HEADER..]) {
-        let (sum, next) = x.carrying_add(y, carry);
-        result.push(sum);
-        carry = next;
+    result.extend_from_slice(longer);
+    result[..HEADER].copy_from_slice(&[1, negative, 0, 0]);
+    let (common, remaining) = result[HEADER..].split_at_mut(shorter.len() - HEADER);
+    let mut carry = 0u8;
+    for (digit, &rhs) in common.iter_mut().zip(&shorter[HEADER..]) {
+        #[cfg(target_arch = "x86_64")]
+        {
+            // ADC is in the baseline x86-64 ISA and writes only this digit.
+            carry = unsafe { std::arch::x86_64::_addcarry_u64(carry, *digit, rhs, digit) };
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let (value, next) = digit.carrying_add(rhs, carry != 0);
+            *digit = value;
+            carry = u8::from(next);
+        }
     }
-    for &x in &longer[shorter.len()..] {
-        let (sum, next) = x.overflowing_add(u64::from(carry));
-        result.push(sum);
-        carry = next;
+    for digit in remaining {
+        if carry == 0 {
+            break;
+        }
+        let (value, next) = digit.overflowing_add(1);
+        *digit = value;
+        carry = u8::from(next);
     }
-    if carry {
+    if carry != 0 {
         result.push(1);
     }
     // The private host function may also be called on two small wire
