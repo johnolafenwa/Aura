@@ -45,6 +45,8 @@ On the Linux worker above, five runs of native code from `d1d76285`
 gave a median of 448 ms for the local function and 487 ms for the lambda.
 The debug-built compiler emitted optimized native code. Both invoke
 adapters have the same arithmetic and control flow, including the checked
-multiply and add and their cold error paths. Keeping a recursive name in
+multiply and add and their cold error paths. Callgrind measured 27.64 and
+28.00 instructions per call respectively, subtracting a 16,000-call run
+from a 32,000-call run of each form. Keeping a recursive name in
 a runtime slot had previously forced a frame on every successful call,
 with respective medians of 1,079 and 459 ms.

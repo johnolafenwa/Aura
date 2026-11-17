@@ -33740,6 +33740,16 @@ fn callable_destination_keeps_every_packing_rule() {
 fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
     let cases = [
         (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_branch_packing.au"),
+            "AU2015",
+            "a call kind may only weaken",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_consuming_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
             include_str!("../tests/fixtures/check-fail/local_function_mutable_recursion.au"),
             "AU3003",
             "pass the state as a mut parameter",

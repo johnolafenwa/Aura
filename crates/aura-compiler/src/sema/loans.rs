@@ -2710,7 +2710,7 @@ impl<'a> FunctionChecker<'a> {
     }
 
     pub(super) fn current_view_return(&self) -> Option<&crate::ast::ViewReturn> {
-        if self.local_function_body {
+        if self.local_return_moves.is_some() {
             return None;
         }
         match &self.closure_owner {
