@@ -9486,11 +9486,21 @@ impl<'a> FunctionCompiler<'a> {
             .call(self.runtime[RuntimeFn::ArgBufferNew], &[count]);
         let buffer = buffer_call.results[0];
         for (index, loaded) in loaded_args.iter().enumerate() {
+            // The private collection operations consume their store. Keeping a
+            // second reference here would detach its entire snapshot on every
+            // update, even when the source program owns it exclusively.
+            let mode = if name.starts_with("collections::")
+                && builtin.metadata().params[index].passing == ReceiverKind::Value
+                && self.temporary_owns_opaque(loaded)
+            {
+                self.clear_temporary_opaque_owned(loaded);
+                RuntimeFn::ArgBufferStoreOwned
+            } else {
+                RuntimeFn::ArgBufferStore
+            };
             let index = self.builder.iconst(types::I64, index as i64);
-            self.builder.call(
-                self.runtime[RuntimeFn::ArgBufferStore],
-                &[buffer, index, loaded.values[0]],
-            );
+            self.builder
+                .call(self.runtime[mode], &[buffer, index, loaded.values[0]]);
         }
         let entry = self.host_builtin_ref(builtin)?;
         let call = self.builder.call(entry, &[buffer, count]);
