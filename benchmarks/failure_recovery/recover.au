@@ -8,7 +8,7 @@ def checked(value: int64) -> int64:
 
 
 def main() -> None:
-    passes: int64 = 1000000
+    passes: int64 = 10000000
     failures: int64 = 100000
     samples: list[int64] = [(i * 37) % 257 for i in range(256)]
     mut sum: int64 = 0
@@ -20,7 +20,7 @@ def main() -> None:
             case Err(trap):
                 assert false, trap.describe()
     elapsed = (time.monotonic() - start).to_seconds() * 1000.0
-    assert sum == 127639971
+    assert sum == 1276406149
     print(f"success {passes} {elapsed} {sum}")
 
     mut trapped: int64 = 0

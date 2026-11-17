@@ -7,7 +7,7 @@ def checked(value):
 
 
 def main():
-    passes, failures = 1_000_000, 100_000
+    passes, failures = 10_000_000, 100_000
     samples = [(i * 37) % 257 for i in range(256)]
     total = 0
     start = perf_counter_ns()
@@ -17,7 +17,7 @@ def main():
         except AssertionError:
             raise RuntimeError("expected success")
     elapsed = (perf_counter_ns() - start) / 1_000_000
-    assert total == 127639971
+    assert total == 1276406149
     print(f"success {passes} {elapsed:.3f} {total}")
 
     trapped = 0

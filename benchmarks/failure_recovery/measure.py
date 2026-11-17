@@ -12,7 +12,7 @@ def main():
     repeats = int(environ.get("AURA_BENCH_REPEATS", "5"))
     if repeats < 1:
         raise ValueError("AURA_BENCH_REPEATS must be positive")
-    counts = {"success": (1_000_000, 127_639_971), "trap": (100_000, 100_000)}
+    counts = {"success": (10_000_000, 1_276_406_149), "trap": (100_000, 100_000)}
     times = {}
     for sample in range(repeats):
         start = sample % len(commands)
