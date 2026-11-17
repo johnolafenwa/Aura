@@ -144,7 +144,7 @@ fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
                 );
             });
         }
-        let first = super::aura_direct_variant_payload(result, 0);
+        let first = super::aura_direct_variant_take_payload(result, 0);
         let second = super::aura_direct_variant_payload(result, 0);
         unsafe {
             super::value_mut(first, |value| {
