@@ -95,3 +95,17 @@ implementations produce the same checksums. The native integer math
 entry passes its operands and result as machine words. A set union
 reuses the receiver's storage until a new key is inserted, and an
 ASCII string index can reuse an immutable one-character box.
+
+A one-character comparison after an indexed read now uses the selected
+Unicode scalar directly. When the string is an immutable ASCII literal,
+the compiler can read its constant bytes after checking the signed index.
+A mutation, a writable loan or an unknown receiver keeps runtime indexing.
+Tests exercise non-ASCII text, negative indices and replacement of a
+local through a mutable argument. An out-of-range Unicode index produced
+the same AU4003 and two source frames on both backends.
+
+Large set unions reuse the existing hash index. They retain the receiver's
+order, append new right-hand entries in order and preserve either input
+across later writes. Removing slots before union is covered by a runtime
+regression. All 1,321 runtime tests passed across a full run and an isolated
+rerun of the resolver timeout test.

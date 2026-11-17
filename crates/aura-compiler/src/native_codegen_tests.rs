@@ -1864,6 +1864,24 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn indexed_ascii_bindings_exclude_writable_and_nonliteral_strings() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_literal_bindings.au");
+    let mir = lower_source_to_mir(source).expect("literal reads and writable strings lower");
+    let literals = |name: &str| {
+        let function = mir.functions.iter().find(|f| f.name == name).unwrap();
+        super::lookups::indexed_ascii_literals(function)
+    };
+    assert_eq!(
+        literals("immutable").get("text").map(String::as_str),
+        Some("abc")
+    );
+    for name in ["mutable", "conditional", "unicode"] {
+        assert!(literals(name).is_empty(), "{name}");
+    }
+    emit_unoptimized_object(&mir).expect("literal reads compile");
+}
+
+#[test]
 fn indexed_text_compares_as_a_unicode_scalar() {
     let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
     let mir = lower_source_to_mir(source).expect("string comparisons lower");
