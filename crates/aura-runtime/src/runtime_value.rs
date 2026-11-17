@@ -20,7 +20,7 @@ use std::process::{
 };
 use std::rc::Rc;
 use std::sync::atomic::{AtomicBool, AtomicU32, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, Once, OnceLock, Weak};
+use std::sync::{Arc, Condvar, LazyLock, Mutex, MutexGuard, Once, OnceLock, Weak};
 use std::thread;
 use std::time::{Duration as StdDuration, Instant};
 
@@ -1112,21 +1112,15 @@ pub enum InstanceFields {
 /// An immutable snapshot of the failed call. Copies share the snapshot until
 /// their first write, when they become ordinary independent field maps.
 pub struct RecoveredTrapFields {
-    diagnostic: Mutex<Option<Diagnostic>>,
-    fields: OnceLock<BTreeMap<String, Value>>,
+    fields: LazyLock<BTreeMap<String, Value>, TrapFieldInitializer>,
 }
+
+// Only a program that constructs a Trap needs to link its diagnostic formatter.
+type TrapFieldInitializer = Box<dyn FnOnce() -> BTreeMap<String, Value> + Send + Sync>;
 
 impl RecoveredTrapFields {
     fn map(&self) -> &BTreeMap<String, Value> {
-        self.fields.get_or_init(|| {
-            let diagnostic = self
-                .diagnostic
-                .lock()
-                .expect("trap details lock poisoned")
-                .take()
-                .expect("trap details are initialized once");
-            recovered_trap_fields(diagnostic)
-        })
+        &self.fields
     }
 }
 
@@ -9282,11 +9276,17 @@ where
     }
 }
 
+/// Installed by the first generated call that establishes a recovery boundary.
+/// Programs without one can discard the native trap-to-result implementation.
+pub(crate) static DIRECT_RECOVERY_EXIT: OnceLock<fn()> = OnceLock::new();
+
 fn yield_current_lightweight_task(wait: TaskYield) -> Option<RuntimeSchedulerWakeReason> {
     // An exit inside a call that `control.recover` runs in generated code
     // stops at that call. This returns only when the exit goes further.
     if matches!(wait, TaskYield::Exit) {
-        crate::native_runtime::stop_exit_at_recovered_call(generator::running_generator_depth());
+        if let Some(stop) = DIRECT_RECOVERY_EXIT.get() {
+            stop();
+        }
     }
     // A wait inside a generator body goes to the context that resumed it.
     let wait = match generator::generator_wait(wait) {
@@ -18785,8 +18785,7 @@ pub fn recovered_trap_value(trap: Diagnostic) -> Value {
     Value::Instance(InstanceValue {
         class_name: RuntimeName::from_static(RECOVERED_TRAP_CLASS),
         fields: InstanceFields::Recovered(Arc::new(RecoveredTrapFields {
-            diagnostic: Mutex::new(Some(trap)),
-            fields: OnceLock::new(),
+            fields: LazyLock::new(Box::new(move || recovered_trap_fields(trap))),
         })),
     })
 }

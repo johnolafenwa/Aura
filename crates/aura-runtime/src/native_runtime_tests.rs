@@ -95,24 +95,50 @@ fn recovered_calls_do_not_reuse_an_unfinished_foreign_callback() {
 }
 
 #[test]
-fn recovered_scalar_assertion_reports_the_leaf_and_owns_its_result() {
+fn recovered_scalar_assertion_shares_its_result_and_copies_the_trap() {
+    // Program teardown clears its frozen values; isolate it from other
+    // runtime tests which initialize independent programs.
+    const HELPER: &str = "recovered_scalar_shared_result";
+    if std::env::var("AURA_DIRECT_RUNTIME_HELPER").as_deref() != Ok(HELPER) {
+        let output = std::process::Command::new(std::env::current_exe().unwrap())
+            .args(["--exact", "native_runtime::tests::recovered_scalar_assertion_shares_its_result_and_copies_the_trap"])
+            .env("AURA_DIRECT_RUNTIME_HELPER", HELPER).output().unwrap();
+        assert!(
+            output.status.success(),
+            "{}",
+            String::from_utf8_lossy(&output.stdout)
+        );
+        return;
+    }
+
     super::with_direct_task_runtime_scope(|| {
         let descriptor = leaked_frame_descriptor(4, 1, b"validate.au", b"validate");
+        static CELL: std::sync::atomic::AtomicUsize = std::sync::atomic::AtomicUsize::new(0);
         let message = b"invalid cost";
-        let result = unsafe {
-            super::aura_direct_recover_assertion(
-                descriptor,
-                message.as_ptr(),
-                message.len(),
-                8,
-                5,
-                0,
-            )
+        let address = descriptor as usize;
+        let start = std::sync::Barrier::new(2);
+        let read = || {
+            start.wait();
+            unsafe {
+                super::aura_direct_recover_assertion_cell(
+                    &CELL,
+                    address as *const _,
+                    message.as_ptr(),
+                    message.len(),
+                    8,
+                    5,
+                    0,
+                ) as usize
+            }
         };
-        assert_eq!(
-            super::with_direct_task_runtime_state(|state| state.owned_values().count(result)),
-            1
-        );
+        let (left, right) = std::thread::scope(|scope| {
+            let first = scope.spawn(&read);
+            let second = scope.spawn(&read);
+            (first.join().unwrap(), second.join().unwrap())
+        });
+        assert_eq!(left, right);
+        let result = left as *mut OpaqueValue;
+        assert!(super::direct_value_is_frozen(result));
         unsafe {
             super::with_value(result, |value| {
                 let Value::EnumVariant(variant) = value else {
@@ -141,9 +167,32 @@ fn recovered_scalar_assertion_reports_the_leaf_and_owns_its_result() {
                 );
             });
         }
+        let first = super::aura_direct_variant_payload(result, 0);
+        let second = super::aura_direct_variant_payload(result, 0);
         unsafe {
+            super::value_mut(first, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                trap.fields
+                    .insert("message", Value::string("changed"))
+                    .unwrap();
+            });
+            super::with_value(second, |value| {
+                let Value::Instance(trap) = value else {
+                    panic!("trap instance");
+                };
+                assert_eq!(
+                    trap.fields.get("message").unwrap().as_ref(),
+                    &Value::string("invalid cost")
+                );
+            });
+            super::aura_direct_release_value(first);
+            super::aura_direct_release_value(second);
             super::aura_direct_release_value(result);
         }
+        super::clear_direct_module_constants();
+        assert_eq!(CELL.load(std::sync::atomic::Ordering::Acquire), 0);
     });
 }
 

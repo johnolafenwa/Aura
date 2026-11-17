@@ -112,7 +112,10 @@ For a small scalar function whose only possible failures are literal
 assertions or contract checks, the compiler can return the scalar and an
 error directly to a local match. Such a function cannot call out, register
 cleanup, loop or acquire resources. A failed check describes the callee
-using its source descriptor. The ordinary entry point and every other use
+using its source descriptor. Each such site keeps its immutable failure
+result in a program-data cell, just as the runtime shares a string literal.
+Extracting the diagnostic gives the caller a value it can change. Program
+teardown releases each initialized cell. The ordinary entry point and every other use
 of the function keep their usual behavior.
 
 The other calls use one of these boundaries.
