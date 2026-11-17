@@ -2823,11 +2823,29 @@ impl MirRuntime {
     }
 
     fn annotate_runtime_trap_once(&self, mut error: Diagnostic) -> Diagnostic {
-        if error.capture_runtime_frames_once(
-            self.call_chain(),
-            self.task_ancestry.iter().rev().cloned().collect(),
-        ) {
-            error.shorten_call_frames(TRACE_FRAMES_PER_END);
+        if error.capture_runtime_frames_once(Vec::new(), Vec::new()) {
+            // A trap propagates through each suspended interpreter call. Take
+            // its snapshot once, copying only the frames the diagnostic keeps.
+            let mut snapshot = |outer: &[RuntimeCallFrame]| {
+                let chain = self.call_stack.iter().rev().chain(outer.iter());
+                let total = self.call_stack.len() + outer.len();
+                if total <= 2 * TRACE_FRAMES_PER_END {
+                    error.call_frames = chain.cloned().collect();
+                } else {
+                    let inner = chain.clone().take(TRACE_FRAMES_PER_END);
+                    let outer = chain.skip(total - TRACE_FRAMES_PER_END);
+                    error.call_frames = inner.chain(outer).cloned().collect();
+                    error.set_omitted_call_frames(TRACE_FRAMES_PER_END, total - 2 * TRACE_FRAMES_PER_END);
+                }
+            };
+            if self.generator_body {
+                GENERATOR_RESUMERS.with(|frames| {
+                    snapshot(frames.borrow().last().map(Vec::as_slice).unwrap_or_default())
+                });
+            } else {
+                snapshot(&[]);
+            }
+            error.task_ancestry = self.task_ancestry.iter().rev().cloned().collect();
         }
         error
     }

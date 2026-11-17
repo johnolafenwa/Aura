@@ -34,6 +34,24 @@ const CONTROL_FLOW_SOURCE: &str = include_str!("../../../examples/control_flow.a
 static IO_EXAMPLE_LOCK: Mutex<()> = Mutex::new(());
 
 #[test]
+fn recover_rejects_invalid_targets_and_arguments() {
+    for (case, code) in [
+        ("argument_move", "AU3001"),
+        ("file_result", "AU3008"),
+        ("missing_target", "AU2004"),
+        ("mut_parameter", "AU3002"),
+        ("named_target", "AU2004"),
+        ("type_args", "AU2004"),
+    ] {
+        let fixture = Path::new(env!("CARGO_MANIFEST_DIR")).join(format!(
+            "tests/fixtures/check-fail/control_recover_{case}.au"
+        ));
+        let error = check_path(&fixture).expect_err(case);
+        assert_eq!(error.code, code, "{case}: {error:?}");
+    }
+}
+
+#[test]
 fn public_sha256_hex_is_lowercase_and_preserves_leading_zeroes() {
     assert_eq!(
         sha256_hex(b""),
@@ -2304,7 +2322,10 @@ fn mir_runtime_reports_unbounded_recursion_before_overflowing_the_host_stack() {
         "call stack exhausted while calling `count_down`"
     );
     assert!(
-        error.help.iter().any(|help| help.contains("start_with_stack")),
+        error
+            .help
+            .iter()
+            .any(|help| help.contains("start_with_stack")),
         "{error:?}"
     );
     // The chain keeps both ends and counts the middle.
@@ -2315,7 +2336,7 @@ fn mir_runtime_reports_unbounded_recursion_before_overflowing_the_host_stack() {
     assert!(omitted > 0);
     assert_eq!(error.call_frames.len(), 256);
     assert_eq!(error.call_frames.last().unwrap().function, "main");
-    let rendered = error.to_string();
+    let rendered = error.render_with_source("recursion.au", source);
     assert!(rendered.contains("more calls ..."), "{rendered}");
 }
 

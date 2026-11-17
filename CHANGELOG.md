@@ -7,6 +7,13 @@ in this file.
 
 ## Unreleased
 
+- `control.recover(function, arguments...)` returns the function's value in
+  `Ok` or the diagnostic from a trapped call in `Err`. The call runs in the
+  current task and cleans up its own scopes on failure.
+- Recursive calls can continue past 256 frames. A call that exhausts the
+  available stack traps with AU4005. Deep diagnostics record how many
+  intervening calls were omitted.
+
 - Documentation: the book has six new chapters on machine learning with
   the `tensor` module. They cover tensors and gradients, learning from
   data, neural networks, a transformer trained from scratch, running GPT-2

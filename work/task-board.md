@@ -1,6 +1,15 @@
 # Task Board
 
-Last updated: 2026-11-15
+Last updated: 2026-11-17
+
+## Failure recovery (in progress)
+
+- Bring the `control.recover` API and stack-bounded recursion to both
+  backends. See `2026-11-17-failure-recovery.md`.
+- The interpreter and native compiler agree on the task/cancellation
+  fixture. Six compiler fixtures cover incorrect inputs and moves.
+- Compiler and runtime tests, editor checks and release benchmarks are
+  underway. The shared branch collects this work.
 
 ## Book chapters on tensors and machine learning (complete)
 

@@ -1,0 +1,16 @@
+import control
+
+
+def parse_line(line: str) -> (str, str):
+    parts = line.split("=")
+    return (parts[0].trim(), parts[1].trim())
+
+
+def main():
+    for line in ["port = 9000", "verbose", "workers = 4"]:
+        match own control.recover(parse_line, line.clone()):
+            case Ok(pair):
+                (key, value) = pair
+                print(f"{key} -> {value}")
+            case Err(trap):
+                print(f"skipping {line} ({trap.code})")

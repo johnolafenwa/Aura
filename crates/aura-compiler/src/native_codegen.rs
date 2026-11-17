@@ -17646,9 +17646,14 @@ impl<'a> FunctionCompiler<'a> {
             self.builder
                 .call(self.runtime[RuntimeFn::RecoverAdopt], &[*handle]);
         }
-        let resumed = self
-            .builder
-            .call(self.runtime[RuntimeFn::RecoverSetJump], &[buffer]);
+        let set_jump = declare_runtime_function(
+            self.builder.module(),
+            crate::runtime_abi::RECOVER_SET_JUMP,
+            &[types::I64],
+            Some(types::I32),
+        )?;
+        let set_jump = self.builder.import_function(set_jump);
+        let resumed = self.builder.call(set_jump, &[buffer]);
         let trapped = self
             .builder
             .icmp_imm(IntCC::NotEqual, resumed.results[0], 0);
@@ -17656,8 +17661,7 @@ impl<'a> FunctionCompiler<'a> {
         let trap_block = self.builder.create_block();
         let done = self.builder.create_block();
         let result = self.builder.append_block_param(done, types::I64);
-        self.builder
-            .brif(trapped, trap_block, &[], call_block, &[]);
+        self.builder.brif(trapped, trap_block, &[], call_block, &[]);
 
         self.builder.switch_to_block(call_block);
         self.builder.seal_block(call_block);

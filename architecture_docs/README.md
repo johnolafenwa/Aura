@@ -60,7 +60,7 @@ date of that decision, not the state of the implementation today.
 - [26-batch-8-design-checkpoint.md](26-batch-8-design-checkpoint.md): the multicore runtime
 - [27-trait-objects-design-checkpoint.md](27-trait-objects-design-checkpoint.md): trait objects
 - [28-freestanding-design-checkpoint.md](28-freestanding-design-checkpoint.md): freestanding builds
-- [29-failure-recovery-design-checkpoint.md](29-failure-recovery-design-checkpoint.md): trap recovery and call depth
+- [33-failure-recovery-design-checkpoint.md](33-failure-recovery-design-checkpoint.md): trap recovery and call depth
 
 Accepted language and runtime decisions are recorded separately in
 [`decisions/`](decisions/README.md). The architecture chapters describe the

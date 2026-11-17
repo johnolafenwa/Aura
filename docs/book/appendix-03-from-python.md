@@ -208,11 +208,12 @@ see every place it happens.
 `is None` and `is not None`. The compiler narrows the type after the test, so
 there is no `Optional` unwrapping to do by hand.
 
-Some failures are not recoverable values: an index out of range, a failed
-`assert`, integer overflow, division by zero. Those *trap*, stopping the task
-with an `AU40xx` diagnostic and an Aura call chain, much like an uncaught
-exception would. The difference is that you cannot catch a trap, so it is
-reserved for bugs, not for conditions a program should handle.
+An index out of range, a failed `assert`, integer overflow and division by
+zero each raise a *trap*. A trap ends the task by default and reports an
+`AU40xx` diagnostic with a call chain. At a plug-in or request boundary
+we can use `control.recover(function, arguments...)`. It runs the function
+in the current task and returns either its value in `Ok` or its diagnostic
+in `Err`. [Chapter 9](/book/ch09-01-traps) builds a working example.
 
 ## Classes, without inheritance
 

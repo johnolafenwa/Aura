@@ -1,6 +1,6 @@
 # To trap or not to trap
 
-You now have two ways for a function to fail. It can trap, which ends the task
+You now have two ways for a function to fail. It can trap, which ends the current call
 with a diagnostic, or it can return `Result.Err`, which hands the problem to
 its caller. Neither is better in general. Each one makes a different promise,
 and choosing well is mostly a matter of asking one question about the failure:
@@ -157,11 +157,10 @@ gives you the list of places to decide.
 Tests are the third place, and there trapping is the whole mechanism. A failed
 `assert` in a test is how the test reports failure, as [Chapter
 11](/book/ch11-00-testing) shows. Tests also push in the other direction,
-though. Aura's test runner has no way to say "this case should trap", because
-nothing in Aura can catch a trap. A function that returns `Result.Err` for bad
-input can be tested directly: call it and match on the error. That makes
-`Result` the easier design to test, which is one more reason to use it at your
-program's edges.
+though. When a trap is part of the contract, a test can call the function
+through `control.recover` and assert on the diagnostic code in the `Err`
+arm. For an expected error, call the function directly and match on its
+`Result`. That lets the test use the same error type as the caller.
 
 ## A few rules of thumb
 

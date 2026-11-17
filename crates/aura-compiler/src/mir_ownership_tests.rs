@@ -191,6 +191,7 @@ fn reads_and_projections_borrow() {
     );
     assert_eq!(
         roles(&assign(Rvalue::StartTask {
+            recover: false,
             returns_handle: true,
             result_is_copy: false,
             stack_size: Some(place("size")),

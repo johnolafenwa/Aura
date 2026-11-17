@@ -55,8 +55,8 @@ same code for both:
   `TaskCallable`.
 - Arguments and the return value are `Transfer`.
 - A non-Copy argument moves into the call. A Copy argument is copied.
-- A parameter cannot be `mut`: nothing the call does is visible to the
-  caller except its return value.
+- A parameter cannot be `mut`. External effects, including writes to a
+  file or sends to a queue, survive a trap.
 
 These rules are what make recovery sound. When the call traps, everything
 it built is thrown away, and the rules guarantee that the caller holds no

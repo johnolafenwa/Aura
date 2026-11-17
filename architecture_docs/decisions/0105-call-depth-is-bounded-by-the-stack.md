@@ -58,7 +58,8 @@ existed; the count in front of it is removed.
   memory once it is touched.
 - A started task keeps its 768 KiB default, and `start_with_stack` sets
   another size.
-- A function run by `control.recover` gets 16 MiB natively.
+- A native recovery call uses the caller's stack on the direct path. A
+  recovered call running as a coroutine gets 16 MiB.
 
 On the development machine a one-argument recursive function reaches
 about 2,090,000 nested calls natively and about 23,000 under `aura run`

@@ -322,9 +322,12 @@ impl FunctionCompiler<'_> {
         variant_name: &str,
         payloads: &[Operand],
     ) -> std::result::Result<Option<ValueRef>, String> {
-        self.construct_variant_in_place_with(ty, variant_name, payloads.len(), |this, index, direct| {
-            this.load_operand_for_target(&payloads[index], direct)
-        })
+        self.construct_variant_in_place_with(
+            ty,
+            variant_name,
+            payloads.len(),
+            |this, index, direct| this.load_operand_for_target(&payloads[index], direct),
+        )
     }
 
     /// As `construct_variant_in_place`, with payloads that are already

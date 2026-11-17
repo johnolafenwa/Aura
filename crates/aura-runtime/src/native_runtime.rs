@@ -6063,9 +6063,7 @@ pub extern "C-unwind" fn aura_direct_stack_exhausted() {
     let (exhausted, frame) = with_direct_task_runtime_state(|state| {
         state.refresh_stack_limit();
         let exhausted = direct_stack_is_exhausted(state.frames().stack_limit());
-        let frame = exhausted
-            .then(|| state.frames().innermost())
-            .flatten();
+        let frame = exhausted.then(|| state.frames().innermost()).flatten();
         (exhausted, frame)
     });
     if !exhausted {
@@ -21636,7 +21634,10 @@ extern "C" {
 /// the calling frame, which stays active until `aura_direct_recover_end`
 /// or a trap ends the call.
 #[cfg_attr(not(coverage), no_mangle)]
-pub unsafe extern "C-unwind" fn aura_direct_recover_begin(jump_buffer: *mut u8, target: i64) -> i64 {
+pub unsafe extern "C-unwind" fn aura_direct_recover_begin(
+    jump_buffer: *mut u8,
+    target: i64,
+) -> i64 {
     let key = direct_task_runtime_key();
     let mut state = RECOVERED_CALL_STATES
         .with(|states| states.borrow_mut().pop())
@@ -21814,8 +21815,9 @@ pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
         }
         match exit.into_trap() {
             Ok(trap) => {
-                let result =
-                    boxed_value(result_err(crate::runtime_value::recovered_trap_value(&trap)));
+                let result = boxed_value(result_err(crate::runtime_value::recovered_trap_value(
+                    &trap,
+                )));
                 drop(trap);
                 RECOVERED_TRAP.with(|slot| slot.set(result));
                 // SAFETY: `_setjmp` filled the buffer in a generated frame

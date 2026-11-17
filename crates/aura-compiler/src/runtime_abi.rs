@@ -66,7 +66,6 @@ runtime_functions! {
     StackExhausted => ("aura_direct_stack_exhausted", [], None),
     RecoverBegin => ("aura_direct_recover_begin", [I64, I64], Some(I64)),
     RecoverAdopt => ("aura_direct_recover_adopt", [I64], None),
-    RecoverSetJump => ("_setjmp", [I64], Some(I32)),
     RecoverEnd => ("aura_direct_recover_end", [I64], Some(I64)),
     RecoverTrapped => ("aura_direct_recover_trapped", [], Some(I64)),
     SetReturnedViewProjection => ("aura_direct_set_returned_view_projection", [I64, I64], None),

@@ -359,8 +359,12 @@ fn a_deep_chain_materializes_both_ends_and_counts_the_middle() {
     let (frames, omitted) = stack.get().materialize_innermost_first();
     assert_eq!(omitted, 1_000);
     assert_eq!(frames.len(), 2 * per_end);
-    assert!(frames[..per_end].iter().all(|frame| frame.function == "inner"));
-    assert!(frames[per_end..].iter().all(|frame| frame.function == "outer"));
+    assert!(frames[..per_end]
+        .iter()
+        .all(|frame| frame.function == "inner"));
+    assert!(frames[per_end..]
+        .iter()
+        .all(|frame| frame.function == "outer"));
     assert_eq!(
         stack.get().innermost().map(|frame| frame.function),
         Some("inner".to_string())

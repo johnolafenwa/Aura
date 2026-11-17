@@ -9908,6 +9908,7 @@ fn mir_runtime_task_detection_helpers_cover_task_and_process_shapes() {
         vec![Instruction::Assign {
             target: "task".to_string(),
             value: Rvalue::StartTask {
+                recover: false,
                 returns_handle: true,
                 result_is_copy: true,
                 stack_size: None,
@@ -20314,6 +20315,7 @@ fn mir_function_value_runtime_rejects_missing_targets_defaults_and_malformed_tas
         args: &'a [MirArg],
     ) -> super::StartTaskRequest<'a> {
         super::StartTaskRequest {
+            recover: false,
             returns_handle: false,
             result_is_repeatable: true,
             stack_size: None,
@@ -22682,6 +22684,7 @@ fn json_host_calls_reject_non_json_values_and_extra_arguments() {
 fn process_run_materialization_and_loan_expansion_ignore_task_starts_and_safepoints() {
     assert!(!super::rvalue_materializes_process_run(
         &Rvalue::StartTask {
+            recover: false,
             returns_handle: false,
             result_is_copy: true,
             stack_size: None,

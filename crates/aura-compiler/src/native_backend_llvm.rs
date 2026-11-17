@@ -1585,9 +1585,7 @@ impl FunctionBackend for LlvmFunction<'_> {
 
     fn signature_of(&mut self, callee: FuncRef) -> SigRef {
         let function = self.ir.func_refs[callee.0 as usize];
-        let signature = self.module.functions[function.0 as usize]
-            .signature
-            .clone();
+        let signature = self.module.functions[function.0 as usize].signature.clone();
         self.import_signature(signature)
     }
 

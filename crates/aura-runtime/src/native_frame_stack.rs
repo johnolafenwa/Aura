@@ -295,7 +295,10 @@ impl DirectFrameStack {
             .iter()
             .rev();
         let outermost = words[..DIRECT_TRACE_FRAMES_PER_END].iter().rev();
-        (innermost.chain(outermost).map(materialize).collect(), omitted)
+        (
+            innermost.chain(outermost).map(materialize).collect(),
+            omitted,
+        )
     }
 
     fn update_flags(&mut self) {

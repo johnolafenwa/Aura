@@ -4694,6 +4694,40 @@ test("compiler bridge exposes control-plane module completions", async () => {
       assert.ok(timeNames.has(expected), `time completion should include ${expected}`);
     }
 
+    const controlItems = await completions("control");
+    const recoverDetail = "recover(function, arguments...) -> Result[T, control.Trap]";
+    assert.equal(controlItems.find((item) => item.name === "recover")?.detail, recoverDetail);
+    assert.ok(controlItems.some((item) => item.name === "Trap"));
+    assert.ok(!controlItems.some((item) => item.name === "__aura_caught"));
+
+    const recoverySource = [
+      "import control as ctl",
+      "def checked(value: int64) -> int64:",
+      "    return value",
+      "def main():",
+      "    result = ctl.recover(checked, 1)",
+      "    match result:",
+      "        case Ok(value):",
+      "            print(value)",
+      "        case Err(trap):",
+      "            print(trap.describe())"
+    ].join("\n");
+    const recovery = await analyzeWithCompiler(mainUri, recoverySource);
+    assert.deepEqual(recovery.diagnostics, []);
+    const at = (line, word) => compilerHoverAtPosition(
+      recovery, line, recoverySource.split("\n")[line].indexOf(word)
+    )?.value;
+    assert.ok(at(4, "recover")?.includes(recoverDetail));
+    assert.ok(at(5, "result")?.includes("Result[int64, control.Trap]"));
+    assert.ok(at(9, "describe")?.includes("describe("));
+    const fieldSource = recoverySource.replace("trap.describe()", "trap.");
+    const fields = await completeWithCompiler(
+      mainUri, fieldSource, 9, fieldSource.split("\n")[9].indexOf("trap.") + 5, "."
+    );
+    for (const name of ["code", "message", "path", "line", "column", "frames", "describe"]) {
+      assert.ok(fields.some((field) => field.name === name), `expected Trap member ${name}`);
+    }
+
     const retryCompletion = (await completions("control")).find(
       (completion) => completion.name === "retry"
     );

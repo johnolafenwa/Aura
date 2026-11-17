@@ -1020,18 +1020,6 @@ impl Diagnostic {
         self.details.omitted_call_frames = (omitted > 0).then_some((before, omitted));
     }
 
-    /// Keeps the `per_end` innermost and the `per_end` outermost of
-    /// `call_frames`, which are innermost first, and records how many
-    /// calls between them were dropped.
-    pub fn shorten_call_frames(&mut self, per_end: usize) {
-        let total = self.call_frames.len();
-        if self.details.omitted_call_frames.is_some() || total <= 2 * per_end {
-            return;
-        }
-        self.details.call_frames.drain(per_end..total - per_end);
-        self.set_omitted_call_frames(per_end, total - 2 * per_end);
-    }
-
     pub fn structured(&self, path: &str) -> StructuredDiagnostic {
         let path = match self.trap_module_path(path) {
             Some(frame_path) => display_source_path(frame_path),
@@ -1071,9 +1059,7 @@ impl Diagnostic {
                     applicability: edit.applicability.clone(),
                 })
                 .collect(),
-            call_frames_omitted: self
-                .omitted_call_frames
-                .map_or(0, |(_, omitted)| omitted),
+            call_frames_omitted: self.omitted_call_frames.map_or(0, |(_, omitted)| omitted),
             call_frames: visible_call_frames(&self.call_frames)
                 .into_iter()
                 .map(|frame| StructuredRuntimeCallFrame {
@@ -1274,9 +1260,7 @@ fn stable_code_for_message(message: &str) -> &'static str {
         "AU4004"
     } else if lower.starts_with("call stack exhausted") {
         "AU4005"
-    } else if lower.starts_with("runtime ")
-        || lower.contains("runtime trap")
-    {
+    } else if lower.starts_with("runtime ") || lower.contains("runtime trap") {
         "AU4001"
     } else if lower.starts_with("unknown ") || lower.contains("not found") {
         "AU2001"

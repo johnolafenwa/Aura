@@ -2,7 +2,7 @@
 
 A trap is a failure nobody planned for: an index out of bounds, a failed
 `assert`, an integer overflow, a division by zero, an exhausted call stack.
-A trap ends the task it happens in. This page covers the two ways a program
+A trap ends the task unless a recovery call contains it. This page covers the two ways a program
 keeps going after one, and the rule that bounds how deeply calls may nest.
 
 Errors a program expects are not traps. They are `Result` values, and `try`
@@ -11,7 +11,7 @@ or `?` passes them along. See
 
 ## `control.recover`
 
-```python
+```aura
 import control
 
 def parse(text: str) -> int64:
@@ -80,10 +80,12 @@ function value: it can be called, and it cannot be stored or passed.
 
 A non-Copy argument moves into the call, exactly as it moves into a started
 task. A Copy argument is copied. A closure's captures move with the closure.
-Nothing the call does is visible to the caller except the value it returns.
+A failed call leaves its external effects in place. For example, text it
+printed stays on stdout and values sent to a queue stay sent.
 
 When the call traps, everything it owned is released, including the
-arguments. A caller that needs a value afterwards passes a copy, such as `text.clone()` or `items.copy()`.
+arguments. A caller that needs a value afterwards passes a copy, such as
+`text.clone()` or `items.copy()`.
 
 These rules are what make recovery safe. The caller never holds a view or a
 half-written value that the failed call was in the middle of changing.
@@ -103,9 +105,10 @@ The call runs to its end before `control.recover` returns. It runs in the
 calling task: it starts no task, needs no `TaskGroup`, and blocking
 operations inside it suspend the calling task as usual.
 
-Cancellation is not a trap. When the calling task is cancelled while the call
-runs, the call's `with` exits run and the task ends as a cancelled task.
-`sys.exit` is not a trap either.
+The callee observes the calling task's cancellation. A cancellation-aware
+operation can return a value such as `QueueReceive.Cancelled`, which the
+callee can handle. An actual task exit propagates through the recovery
+call. The same applies to `sys.exit`.
 
 A call may itself call `control.recover`. Each recovery returns the traps of
 its own call.
@@ -138,7 +141,7 @@ less than a task, and it reports the code, position and call chain, where
 
 ## Call Depth
 
-Nothing limits the number of nested calls except the stack they run on. A
+Stack space bounds nested calls. A
 call that would not fit traps:
 
 ```text
@@ -180,7 +183,9 @@ not zero.
 | --- | --- |
 | `AU2002` | An argument does not match the function's parameter, or the function is not callable. |
 | `AU2004` | `control.recover` was given explicit type arguments. |
-| `AU2015` | An argument, capture or return type does not implement `Transfer`, or a parameter is `mut`. |
+| `AU3001` | The caller reuses an owned argument after moving it into the call. |
+| `AU3002` | The target takes a `mut` parameter. |
+| `AU3008` | An argument, capture or return type cannot cross a task boundary. |
 | `AU2052` | A freestanding build calls `control.recover`. |
 | `AU4005` | A call would not fit on the stack, or the stack for a recovered call cannot be allocated. |
 
@@ -191,5 +196,5 @@ built programs. The measured depths differ, as the table above shows.
 
 ## Status
 
-Maintained in Aura 0.17. ADR-0104 records the recovery design and ADR-0105
+See the Unreleased section of the changelog for availability. ADR-0104 records the recovery design and ADR-0105
 the call depth rule.

@@ -122,12 +122,13 @@ Aura has no assertion-stripping mode, optimization flag, environment switch, or 
 
 Message contents are kept exactly. The human diagnostic renderer adds its normal `error[AU4001]` prefix and source context. When the condition qualifies for introspection, it also adds the bounded operand notes.
 
-Assertion failure ends the current Aura execution path. It is not a catchable exception. Use `Result` for recoverable validation.
+A failed assertion ends the current call. An enclosing `control.recover`
+returns its diagnostic in `Err`. Use `Result` for expected validation
+failures. See [Recovering From Traps](/manual/failure-recovery).
 
 ## Status
 
 Both assertion forms are accepted, with the sequencing, cleanup, top-level, and no-strip behavior on this page. Aura 0.16 includes the bounded two-operand diagnostic.
 
-Aura 0.16 has no exception statements, no `raise`, and no catchable assertion failures.
 
 Design record: `architecture_docs/decisions/0024-assertion-evaluation-and-diagnostic-policy.md` for the assertion forms and their behavior, and `architecture_docs/decisions/0045-testing-framework-and-assertion-introspection.md` for operand introspection.

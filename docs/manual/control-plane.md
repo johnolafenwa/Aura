@@ -137,7 +137,9 @@ and TOML metadata, counters, and structured events.
 
 ## Retry
 
-Import `control` for the eager retry helper:
+Import `control` for the eager retry helper. To run a function once and
+inspect a trap, use `control.recover`. [Recovering From Traps](/manual/failure-recovery)
+covers the call and its diagnostic fields.
 
 | API | Signature |
 | --- | --- |

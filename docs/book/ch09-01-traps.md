@@ -86,7 +86,7 @@ The final `1` comes from `echo $?`. A trapped program always exits with status
 ## What traps
 
 Index errors aren't the only failures that trap. Every one of the following
-stops the task with a diagnostic, and none of them can be ignored by accident.
+produces a diagnostic. An unhandled trap ends the current task.
 
 Integer arithmetic is checked. If a result doesn't fit its type, Aura traps
 with `AU4002` instead of wrapping around:
@@ -228,7 +228,7 @@ world, as we'll see in [To trap or not to trap](/book/ch09-03-to-trap-or-not).
 
 ## What happens when a task traps
 
-A trap stops the task it happens in. It doesn't stop instantly, though: before
+By default a trap stops the task it happens in. It doesn't stop instantly, though: before
 the task ends, Aura runs any cleanup that the task had registered with `with`.
 Here's a lock file that has to be removed however the block ends:
 
@@ -312,42 +312,34 @@ The second task trapped on the same `parts[1]` as before. Its trap became a
 `TaskResult.Error` value in `main`, and `main` carried on. This is how a server
 keeps running when one request handler hits a bug: the handler's task is the
 unit that fails. Don't worry about the task group syntax yet; [Chapter
-15](/book/ch15-00-concurrency) builds it up properly. The point here is the
-boundary. A trap always ends a whole task, and the only place you can observe
-it is from outside that task.
+15](/book/ch15-00-concurrency) explains how tasks work together.
 
-## No catching
+## Recovering a call
 
-If you've written Python, you may be reaching for `try` and `except` to wrap
-`parse_line` and recover from the bad line. Aura doesn't have them, and the
-compiler tells you so:
+Suppose our loader calls a parser supplied by a plug-in. We want to record
+which lines the parser failed on and keep reading. We can give the parser
+one line at a time with `control.recover`. Let's reuse the first version of
+`parse_line` so we can see what happens to its indexing trap.
 
-```aura check-fail:AU2005
-def parse_port(text: str) -> int64:
-    try:
-        return int(text)
-    except ValueError:
-        return 8080
-```
+<<< ../../examples/error_handling/recover.au{aura}
 
 ```console
-$ aura check src/main.au
-error[AU2005]: `try`/`except` is not supported; use `Result` with `match` today
- --> src/main.au:2:5
-  |
-2 |     try:
-  |     ^
+$ aura run examples/error_handling/recover.au
+port -> 9000
+skipping verbose (AU4003)
+workers -> 4
 ```
 
-There is no way, inside a task, to catch a trap and continue. Aura does this
-deliberately. A trap means the program reached a state its author didn't plan
-for. Code that catches every failure and carries on tends to carry on with
-half-updated data, and the real bug shows up later somewhere unrelated. By
-making traps uncatchable, Aura guarantees that when one happens you see it, at
-the line where it happened, with the values that caused it.
+We pass the function itself, then the arguments it will receive. The loop
+borrows each line, so we clone the string to give the parser an owned copy.
+`control.recover` runs it in the current task. When the parser returns its
+pair, we receive `Ok(pair)`. When the missing equals sign leads it past the
+end of the list, cleanup runs inside the call and we receive `Err(trap)`.
+Our loop can inspect the code, message, location and call chain before
+moving on to the next line. An earlier print or write still happened.
 
-That leaves our settings loader in an awkward spot. A line without `=` isn't a
-bug in our program. It's a mistake in a file that some person wrote, and a good
-loader should report it politely and keep its own state intact. For failures
-like that, Aura has a second mechanism, and it's the subject of the next
-section.
+If we own the parser, a line without an equals sign is something we can
+detect and explain to the person who wrote the file. In the next section
+we'll give our parser a return type that says exactly what can go wrong.
+The [Manual](/manual/failure-recovery) has the rules for passing values
+across a recovery call.

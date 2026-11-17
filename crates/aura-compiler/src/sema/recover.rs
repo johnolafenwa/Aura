@@ -25,6 +25,9 @@ use super::Type;
 pub(crate) const MODULE: &str = "control";
 /// The member a program calls.
 pub(crate) const RECOVER: &str = "recover";
+pub(crate) const SIGNATURE: &str = "recover(function, arguments...) -> Result[T, control.Trap]";
+pub(crate) const SUMMARY: &str =
+    "Runs the function in the current task and returns its value or the trap that ended the call.";
 /// The operation `recover` is rewritten to.
 pub(crate) const RECOVER_RAW: &str = "recover:raw";
 /// The function that turns the operation's result into `Result[T, Trap]`.

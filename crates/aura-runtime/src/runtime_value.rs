@@ -6369,7 +6369,10 @@ pub fn enter_thread_stack_bounds(stack_size: usize) -> ThreadStackBounds {
         .saturating_sub(stack_size)
         .saturating_add(THREAD_STACK_MARGIN)
         .min(base);
-    ThreadStackBounds(enter_task_stack_bounds(TaskStackBounds { usable_limit, base }))
+    ThreadStackBounds(enter_task_stack_bounds(TaskStackBounds {
+        usable_limit,
+        base,
+    }))
 }
 
 /// Declares a stack whose writable part ends at `floor`, until the guard
