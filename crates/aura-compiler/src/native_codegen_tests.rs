@@ -1929,6 +1929,28 @@ fn direct_path_named_random_keeps_user_rng_constructors_out_of_builtin_runtime()
 }
 
 #[test]
+fn indexed_text_compares_as_a_unicode_scalar() {
+    let source = include_str!("../tests/fixtures/run-pass/indexed_str_comparison.au");
+    let mir = lower_source_to_mir(source).expect("string comparisons lower");
+    let object = emit_unoptimized_object(&mir).expect("string comparisons emit");
+    for name in ["aura_fn_matches", "aura_fn_different"] {
+        let symbols = object_function_referenced_symbols(&object, name);
+        assert!(
+            symbols
+                .iter()
+                .any(|s| s.contains("aura_direct_string_scalar_at")),
+            "{symbols:?}"
+        );
+        assert!(
+            symbols
+                .iter()
+                .all(|s| !s.contains("aura_direct_string_text_method")),
+            "{symbols:?}"
+        );
+    }
+}
+
+#[test]
 fn integer_math_passes_words_to_the_runtime() {
     let source = r#"
 import math

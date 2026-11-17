@@ -143,6 +143,7 @@ runtime_functions! {
     StringStripSuffix => ("aura_direct_string_strip_suffix", [I64, I64], Some(I64)),
     StringTrim => ("aura_direct_string_trim", [I64], Some(I64)),
     StringJoin => ("aura_direct_string_join", [I64, I64], Some(I64)),
+    StringScalarAt => ("aura_direct_string_scalar_at", [I64, I64], Some(I64)),
     StringTextMethod => ("aura_direct_string_text_method", [I64, I64, I64, I64], Some(I64)),
     StringifyValue => ("aura_direct_stringify_value", [I64], Some(I64)),
     RegisterDisplay => ("aura_direct_register_display", [I64, I64, I64], None),

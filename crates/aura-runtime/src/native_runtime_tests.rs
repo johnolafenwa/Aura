@@ -31294,6 +31294,40 @@ fn direct_index_reuses_an_immutable_box_for_the_same_ascii_character() {
 }
 
 #[test]
+fn direct_string_scalar_reads_signed_indices_and_preserves_errors() {
+    let text = string_value("a😀z");
+    assert_eq!(super::aura_direct_string_scalar_at(text, -2), 0x1f600);
+    assert_eq!(
+        super::aura_direct_string_scalar_at(text, 0),
+        i64::from(b'a')
+    );
+    unsafe { release_value(text) };
+    for (value, index, expected) in [
+        (
+            Value::string("a😀z"),
+            i64::MIN,
+            "out of range for a string of 3 characters",
+        ),
+        (
+            Value::string(""),
+            0,
+            "out of range for a string of 0 characters",
+        ),
+        (Value::Bool(false), 0, "expected `str`"),
+    ] {
+        let error = run_lightweight_root_task(move || {
+            super::with_task_runtime_error_capture(|| {
+                let value = boxed_value(value);
+                super::aura_direct_string_scalar_at(value, index);
+                Ok(Value::Unit)
+            })
+        })
+        .expect_err("invalid scalar selection traps");
+        assert!(error.message.contains(expected), "{error:?}");
+    }
+}
+
+#[test]
 fn direct_char_at_reads_one_character_and_traps_out_of_range() {
     assert_eq!(
         direct_text_method("char_at", "héllo", None, 1),
