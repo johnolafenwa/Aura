@@ -46,6 +46,9 @@ needed one of three things:
   holding a single scalar array, it checks the field's representation and
   length before copying its bytes. A union's byte field uses the same check.
   Other values use the runtime conversion and its diagnostics.
+- **The native task owns heap-allocated array copies.** A successful call
+  releases its copy as soon as writeback finishes. If a later argument or a
+  value written by C fails validation, task cleanup releases the same allocation.
 - **Layout.** An array has the alignment of its element and `N` times its
   size. System V classifies each eightbyte from every scalar that
   overlaps it. AArch64 counts the scalars of an array toward the four a
@@ -82,12 +85,12 @@ needed one of three things:
 
 - The raylib binding covers 587 of 600 functions. What is left is
   variadic functions and callbacks that take C text or `void *`.
-- A struct with an array field costs a runtime call and a copy of each
-  element on every crossing, where a class of scalars costs a store and a
-  load per field.
+- A small struct containing one fixed scalar array can cross through a
+  checked bulk copy. Other array fields use runtime conversion.
 - A `ptr[Name]` call costs time linear in the list.
 - `ClassDecl` records the array lengths of an `extern "C"` class in
   `c_arrays`, and `CFieldKind` has an `Array` case, which tools that read
   the AST or MIR as JSON see.
-- Unions, C text in callbacks, variadic functions, and closures as
-  callbacks stay open. The design checkpoint lists them.
+- ADR-0107 added read-only union members and ADR-0108 added C text in named
+  callbacks. The design checkpoint defers variadic functions, closures as
+  callbacks, assignable union members, and zero-copy struct lists.

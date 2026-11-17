@@ -1192,6 +1192,43 @@ fn a_struct_with_an_array_field_is_packed_and_unpacked_by_the_runtime() {
 }
 
 #[test]
+fn an_invalid_c_writeback_releases_its_array_with_the_failed_task() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static FREED: AtomicBool = AtomicBool::new(false);
+    unsafe extern "C" fn release(block: *mut c_void) {
+        FREED.store(true, Ordering::Relaxed);
+        unsafe { super::free_structs_block(block) };
+    }
+    unsafe extern "C-unwind" fn fail(_args: *const i64, _count: usize) -> *mut OpaqueValue {
+        let descriptor = flagged_layout();
+        let values = boxed_value(Value::Vec(VecValue::new(
+            Type::named("Flagged"),
+            ListElements::from(vec![flagged(true, &[1, 2, 3])]),
+        )));
+        let array = super::allocate_structs(4, release);
+        unsafe {
+            array.copy_from_nonoverlapping([9_u8, 1, 2, 3].as_ptr(), 4);
+            aura_direct_ffi_unpack_structs(
+                values,
+                descriptor.as_ptr(),
+                descriptor.len(),
+                array,
+                b"probe".as_ptr(),
+                5,
+            );
+        }
+        panic!("the corrupt boolean should trap")
+    }
+    let diagnostic =
+        super::super::run_direct_root_task(fail).expect_err("the C writeback should trap");
+    assert_eq!(diagnostic.code, "AU4001");
+    assert!(
+        FREED.load(Ordering::Relaxed),
+        "the failed task must release the C array"
+    );
+}
+
+#[test]
 fn a_mutable_struct_array_keeps_native_field_access_after_c_writes_it() {
     use crate::native_runtime::{register_class_layout, TypedFields, FIRST_CLASS_ACCESS};
     use crate::runtime_value::InstanceFields;

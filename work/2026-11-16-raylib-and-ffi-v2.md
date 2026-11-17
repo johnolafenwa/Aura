@@ -180,6 +180,9 @@ the field-by-field conversion. Small fixed scalar arrays can be copied
 directly from a typed class field after checking its storage and length.
 A mutable array written by C keeps the native field layout of its class
 elements so later reads of union members can use their byte fields.
+The native task also owns each heap-backed C array copy until the call
+releases it. A regression writes 9 into a C boolean and checks that the
+failed task releases the array while reporting the invalid writeback.
 
 The three-language benchmark is in
 [`benchmarks/ffi_calls`](../benchmarks/ffi_calls/README.md#struct-arrays-array-fields-unions-and-text-callbacks).
