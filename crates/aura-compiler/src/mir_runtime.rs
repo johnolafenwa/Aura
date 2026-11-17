@@ -6997,6 +6997,7 @@ impl MirRuntime {
             // `control.recover` (ADR-0104): the function runs here, in a
             // runtime of its own, so a trap leaves this runtime's calls as
             // they are. A cancelled task unwinds past this as a panic.
+            let locks = crate::runtime_value::sync_host::mark_held_cells();
             let mut runtime = self.fork_for_recovered_call();
             let outcome = if is_closure {
                 runtime.call_function_for_target(&function, None, bound_args, None)
@@ -7012,6 +7013,7 @@ impl MirRuntime {
             return Ok(match outcome {
                 Ok(value) => crate::runtime_value::result_ok(value),
                 Err(trap) => {
+                    crate::runtime_value::sync_host::abandon_held_cells_since(locks);
                     let trap = runtime.annotate_runtime_trap_once(trap);
                     crate::runtime_value::result_err(crate::runtime_value::recovered_trap_value(
                         &trap,

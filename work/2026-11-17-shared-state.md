@@ -45,3 +45,14 @@ tests passed, including checks for unqualified collection names.
 The full comparative benchmark checks each phase's result across Aura,
 Rust and Python. Runtime and compiler testing, the cross-backend CLI and
 editor checks, and hosted CI are in progress.
+
+## Recovery inside a lock
+
+A recovered direct call and a recovered stored callable each left an inner
+mutex locked after an assertion failed. The interpreter and native runtime
+now mark the caller's held locks on entry and poison only the locks the
+failed call still holds. The regression checks a successful call, both
+trapping call paths, and the caller's ability to update and reacquire its lock.
+
+The interpreter and the Linux native executable matched the eight expected
+lines of `recover_nested_mutex`. Both also matched `control_recover_cleanup`.

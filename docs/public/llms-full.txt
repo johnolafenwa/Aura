@@ -12042,6 +12042,10 @@ A trap inside a task the call started is that task's failure, reported by its
 `TaskGroup` under the usual rules. It becomes the recovered call's trap only
 when the group's scope exit raises it there.
 
+If a callee traps while holding a `sync.Mutex`, later attempts to acquire
+that mutex report `AU4001`. Locks that its caller already held stay valid.
+See [Sync Module](./sync.md).
+
 ### Tasks Or `control.recover`
 
 A started task already contains a trap: `task.result()` returns
@@ -26270,6 +26274,9 @@ changed, and the value is lost with the task. The mutex is then poisoned:
 every later `lock()`, `replace`, and `set` traps with `AU4001`, and tasks
 already waiting for the lock trap the same way. `is_poisoned()` reports
 the state without trapping.
+
+A trap caught by `control.recover` poisons a mutex the recovered call
+still holds. A mutex the caller already held stays available to that caller.
 
 ### Generators
 

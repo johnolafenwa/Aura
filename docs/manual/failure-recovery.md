@@ -117,6 +117,10 @@ A trap inside a task the call started is that task's failure, reported by its
 `TaskGroup` under the usual rules. It becomes the recovered call's trap only
 when the group's scope exit raises it there.
 
+If a callee traps while holding a `sync.Mutex`, later attempts to acquire
+that mutex report `AU4001`. Locks that its caller already held stay valid.
+See [Sync Module](./sync.md).
+
 ### Tasks Or `control.recover`
 
 A started task already contains a trap: `task.result()` returns

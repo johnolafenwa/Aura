@@ -116,6 +116,9 @@ every later `lock()`, `replace`, and `set` traps with `AU4001`, and tasks
 already waiting for the lock trap the same way. `is_poisoned()` reports
 the state without trapping.
 
+A trap caught by `control.recover` poisons a mutex the recovered call
+still holds. A mutex the caller already held stays available to that caller.
+
 ### Generators
 
 A generator that yields inside a lock block keeps the lock until the

@@ -1,0 +1,45 @@
+import control
+import sync
+
+
+type Worker = TaskCallable[def(cell: sync.Mutex[int64], fail: bool) -> int64]
+
+
+def change(cell: sync.Mutex[int64], fail: bool) -> int64:
+    with value = cell.lock():
+        updated = value + 1
+        value = updated
+        assert not fail, "inner lock failed"
+        return updated
+
+
+def main() -> None:
+    outer = sync.Mutex[int64](10)
+    inner = sync.Mutex[int64](20)
+    with value = outer.lock():
+        match control.recover(change, inner, false):
+            case Ok(updated):
+                print(updated)
+            case Err(trap):
+                print(trap.message)
+        match control.recover(change, inner, true):
+            case Ok(updated):
+                print(updated)
+            case Err(trap):
+                print(trap.message)
+        print(inner.is_poisoned())
+        print(outer.is_poisoned())
+        value += 1
+    with value = outer.lock():
+        print(value)
+
+    dynamic = Worker(change)
+    other = sync.Mutex[int64](30)
+    with value = outer.lock():
+        match control.recover(dynamic, other, true):
+            case Ok(updated):
+                print(updated)
+            case Err(trap):
+                print(trap.message)
+        print(other.is_poisoned())
+        print(outer.is_poisoned())

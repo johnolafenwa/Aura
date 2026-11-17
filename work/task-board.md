@@ -13,6 +13,9 @@ Last updated: 2026-11-17
   verifier, CLI and editor regressions cover lock release, handle transfer
   and the multi-task example. Performance and verification gates are in progress.
 
+- Combined verification with failure recovery covers a mutex held by the caller
+  and a second mutex abandoned by a recovered call. See the shared-state note.
+
 ## Failure recovery (in progress)
 
 - Bring the `control.recover` API and stack-bounded recursion to both

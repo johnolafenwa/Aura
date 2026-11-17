@@ -37,7 +37,7 @@ use crate::integer::{
 use crate::list_elements::{ElementRefMut, ListElements};
 use crate::randomness::{self, SecureRandomError};
 use crate::runtime_reactor::IdHashMap;
-use crate::runtime_value::sync_host::GuardedValue;
+use crate::runtime_value::sync_host::{self, GuardedValue, HeldCellMark};
 use crate::runtime_value::{
     append_string_checked, append_text_checked_with, cancel_current_lightweight_task_boundary,
     cast_numeric_value, claim_task_result_observations, clear_current_task_native_slot,
@@ -576,6 +576,8 @@ struct DirectRecoveredCall {
     /// How many generator bodies were running when the call began. A trap
     /// stops at the call only on the machine stack the call began on.
     generator_depth: usize,
+    /// Locks the caller held before invoking the recovered function.
+    locks: HeldCellMark,
     /// The caller's state, which the function's state stands in for.
     caller: Box<DirectTaskRuntimeState>,
 }
@@ -21736,6 +21738,7 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
             unsafe { consume_direct_task_result(result_ptr, result_is_copy) }
         }))
     };
+    let locks = sync_host::mark_held_cells();
     let caller_state = &mut caller as *mut CallerState;
     let outcome = crate::runtime_value::run_isolated(
         body,
@@ -21754,6 +21757,7 @@ unsafe fn recover_direct_call(spawn: DirectTaskSpawn) -> *mut OpaqueValue {
             result_ok(value)
         }
         Err(crate::runtime_value::IsolatedFailure::Trap(trap)) => {
+            sync_host::abandon_held_cells_since(locks);
             result_err(crate::runtime_value::recovered_trap_value(&trap))
         }
         Err(crate::runtime_value::IsolatedFailure::Exit(exit)) => {
@@ -21824,6 +21828,7 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_begin(
         .with(|states| states.borrow_mut().pop())
         .unwrap_or_else(|| boxed_direct_task_runtime_state(true, DirectTaskAncestry::default()));
     let generator_depth = crate::runtime_value::running_generator_depth();
+    let locks = sync_host::mark_held_cells();
     DIRECT_TASK_RUNTIME_STATES.with(|states| {
         let mut states = states.borrow_mut();
         let caller = states.get_or_default(key);
@@ -21846,6 +21851,7 @@ pub unsafe extern "C-unwind" fn aura_direct_recover_begin(
         states.get_or_default(key).recovered_call = Some(DirectRecoveredCall {
             jump_buffer,
             generator_depth,
+            locks,
             caller,
         });
         set_current_task_native_slot(frames.as_ptr().cast());
@@ -21975,9 +21981,9 @@ pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
         let call = DIRECT_TASK_RUNTIME_STATES.with(|states| {
             let mut states = states.borrow_mut();
             let call = states.get_mut(key)?.recovered_call.as_ref()?;
-            Some((call.jump_buffer, call.generator_depth))
+            Some((call.jump_buffer, call.generator_depth, call.locks))
         });
-        let Some((jump_buffer, began_at_depth)) = call else {
+        let Some((jump_buffer, began_at_depth, locks)) = call else {
             return;
         };
         if began_at_depth != generator_depth {
@@ -21996,6 +22002,7 @@ pub(crate) fn stop_exit_at_recovered_call(generator_depth: usize) {
         }
         match exit.into_trap() {
             Ok(trap) => {
+                sync_host::abandon_held_cells_since(locks);
                 let result = boxed_value(result_err(crate::runtime_value::recovered_trap_value(
                     &trap,
                 )));
