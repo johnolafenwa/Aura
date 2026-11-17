@@ -22,7 +22,8 @@ borrows that local mutably. Normal control flow, including early exits,
 ends the borrow and moves the value back before leaving the block.
 
 The scheduler identifies the current holder by task. It keeps the held
-cells in acquisition order. If a task fails, it poisons its active cells
+cells in acquisition order. This same list checks release ownership and
+recursive locking. If a task fails, it poisons its active cells
 and signals their wait queues. An inner recovery scope can record its
 starting epoch. A trap affects only locks acquired since the mark, even
 when a caller releases an earlier lock in the meantime.

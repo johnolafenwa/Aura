@@ -31,7 +31,6 @@ const SPIN_LIMIT: u32 = 96;
 /// acquisition of the same lock reuse its weak reference.
 #[derive(Default)]
 pub(crate) struct HolderState {
-    token: Cell<u64>,
     held: RefCell<Vec<HeldCell>>,
     epoch: Cell<u64>,
     depth: Cell<usize>,
@@ -63,21 +62,31 @@ impl HolderState {
             });
         }
         self.depth.set(depth + 1);
-        cell.holder.store(self.token(), Ordering::Relaxed);
     }
 
-    fn released(&self, cell: &Arc<CellState>) {
-        let last = self.depth.get() - 1;
+    fn holds(&self, cell: &Arc<CellState>) -> bool {
+        self.held.borrow()[..self.depth.get()]
+            .iter()
+            .any(|slot| std::ptr::eq(slot.cell.as_ptr(), Arc::as_ptr(cell)))
+    }
+
+    fn released(&self, cell: &Arc<CellState>) -> bool {
+        let Some(last) = self.depth.get().checked_sub(1) else {
+            return false;
+        };
         let mut held = self.held.borrow_mut();
         if !std::ptr::eq(held[last].cell.as_ptr(), Arc::as_ptr(cell)) {
             // Host calls can return two cells in a different order.
-            let position = held[..last]
+            let Some(position) = held[..last]
                 .iter()
                 .position(|slot| std::ptr::eq(slot.cell.as_ptr(), Arc::as_ptr(cell)))
-                .expect("the current holder registered this cell");
+            else {
+                return false;
+            };
             held[position..=last].rotate_left(1);
         }
         self.depth.set(last);
+        true
     }
 
     fn abandon_since(&self, mark: HeldCellMark) {
@@ -97,17 +106,6 @@ impl HolderState {
                 cell.wake_one();
             }
         }
-    }
-
-    fn token(&self) -> u64 {
-        let token = self.token.get();
-        if token != 0 {
-            return token;
-        }
-        static NEXT_HOLDER_TOKEN: AtomicU64 = AtomicU64::new(1);
-        let token = NEXT_HOLDER_TOKEN.fetch_add(1, Ordering::Relaxed);
-        self.token.set(token);
-        token
     }
 }
 
@@ -181,8 +179,6 @@ impl GuardedValue {
 
 struct CellState {
     state: AtomicU8,
-    /// The token of the holder, while locked.
-    holder: AtomicU64,
     /// The guarded value. Only the holder reads or writes it. `None` while
     /// the holder has it, and after poisoning.
     value: UnsafeCell<Option<GuardedValue>>,
@@ -271,7 +267,6 @@ impl SyncValue {
     pub fn cell(value: Value) -> Self {
         Self(SyncHandle::Cell(Arc::new(CellState {
             state: AtomicU8::new(UNLOCKED),
-            holder: AtomicU64::new(0),
             value: UnsafeCell::new(Some(GuardedValue::Value(value))),
             wake: OnceLock::new(),
         })))
@@ -317,8 +312,7 @@ impl SyncValue {
         let cell = self.as_cell("sync.__aura_cell_take")?;
         if !cell.try_lock() {
             // The scheduler changes the current task while a waiter yields.
-            let token = with_current_holder(HolderState::token);
-            lock_contended(cell, token)?;
+            lock_contended(cell)?;
         }
         Ok(Self::take_locked(cell, read))
     }
@@ -350,15 +344,7 @@ impl SyncValue {
 
     pub(crate) fn put_with(&self, write: impl FnOnce(&mut Option<GuardedValue>)) -> Result<()> {
         let cell = self.as_cell("sync.__aura_cell_put")?;
-        let owned = with_current_holder(|holder| {
-            if cell.holder.load(Ordering::Relaxed) != holder.token()
-                || !matches!(cell.state.load(Ordering::Relaxed), LOCKED | CONTENDED)
-            {
-                return false;
-            }
-            holder.released(cell);
-            true
-        });
+        let owned = with_current_holder(|holder| holder.released(cell));
         if !owned {
             return Err(Diagnostic::coded(
                 "AU4001",
@@ -367,7 +353,6 @@ impl SyncValue {
         }
         // SAFETY: this task holds the lock.
         write(unsafe { &mut *cell.value.get() });
-        cell.holder.store(0, Ordering::Relaxed);
         if cell.state.swap(UNLOCKED, Ordering::Release) == CONTENDED {
             cell.wake_one();
         }
@@ -429,8 +414,8 @@ fn wrong_handle(call: &str, expected: &str, found: &str) -> Diagnostic {
 
 /// Takes a cell another holder has, or reports why it cannot be taken.
 #[cold]
-fn lock_contended(cell: &Arc<CellState>, token: u64) -> Result<()> {
-    if cell.holder.load(Ordering::Relaxed) == token && !cell.check_poisoned() {
+fn lock_contended(cell: &Arc<CellState>) -> Result<()> {
+    if with_current_holder(|holder| holder.holds(cell)) {
         return Err(relock_error());
     }
     for _ in 0..SPIN_LIMIT {

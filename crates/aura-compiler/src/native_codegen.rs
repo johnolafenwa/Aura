@@ -21829,6 +21829,6 @@ fn is_name_only_runtime_type(ty: &Type) -> bool {
         ty,
         Type::Named(name, args)
             if args.is_empty()
-                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration")
+                && matches!(name.as_str(), "str" | "bool" | "float32" | "float64" | "Duration" | "sync.Cell" | "sync.Atom")
     )
 }
