@@ -14,6 +14,7 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, BTreeSet};
 
 const JSON_SOURCE: &str = include_str!("../std/json.au");
+const COLLECTIONS_SOURCE: &str = include_str!("../std/collections.au");
 const ITER_SOURCE: &str = include_str!("../std/iter.au");
 const PRELUDE_SOURCE: &str = include_str!("../std/prelude.au");
 const SIMD_SOURCE: &str = include_str!("../std/simd.au");
@@ -26,6 +27,7 @@ fn module_source(name: &str) -> Option<&'static str> {
     match name {
         "json" => Some(JSON_SOURCE),
         "iter" => Some(ITER_SOURCE),
+        "collections" => Some(COLLECTIONS_SOURCE),
         "prelude" => Some(PRELUDE_SOURCE),
         "simd" => Some(SIMD_SOURCE),
         "regex" => Some(REGEX_SOURCE),
@@ -73,17 +75,41 @@ fn source_part(name: &str) -> Option<ModuleNamespace> {
         .unwrap_or_else(|error| panic!("builtin `{name}` source should parse: {error:?}"));
     let imported_bindings = crate::builtin_imports_with(&module, false)
         .unwrap_or_else(|error| panic!("builtin `{name}` imports should resolve: {error:?}"));
+    // A library source can implement traits from another source module.
+    // The registry must include the dependency's impls and associated types
+    // as well as its imported names. A module's self-import names its host
+    // namespace and must not recursively compile the source being checked.
+    let mut module_registry = crate::builtin_modules::builtin_module_registry();
+    for dependency in imported_source_parts(&module) {
+        if dependency != name {
+            if let (Some(namespace), Some(part)) = (
+                module_registry.get_mut(&dependency),
+                source_part(&dependency),
+            ) {
+                merge(namespace, part);
+            }
+        }
+    }
     let program = crate::sema::check_with_context(
         module,
         ModuleContext {
             module_name: name.to_string(),
             imported_bindings,
-            module_registry: crate::builtin_modules::builtin_module_registry(),
+            module_registry,
             is_entry_module: false,
         },
     )
     .unwrap_or_else(|error| panic!("builtin `{name}` source should check: {error:?}"));
-    let namespace = crate::exported_namespace(&[name.to_string()], &program);
+    let mut namespace = crate::exported_namespace(&[name.to_string()], &program);
+    for class in namespace
+        .classes
+        .values_mut()
+        .chain(namespace.all_classes.values_mut())
+    {
+        if class.module_name == name {
+            class.is_builtin_source = true;
+        }
+    }
     CHECKED.with(|checked| {
         checked
             .borrow_mut()

@@ -1,0 +1,6 @@
+from collections import SortedMap
+
+
+def main():
+    table = SortedMap[list[str], int64]()
+    print(table.len())

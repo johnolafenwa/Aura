@@ -6131,6 +6131,7 @@ fn analysis_helper_functions_cover_formatting_ranges_and_builtin_surface() {
     let class_info = ClassInfo {
         module_name: "<test>".to_string(),
         is_builtin: false,
+        is_builtin_source: false,
         decl: ClassDecl {
             public: true,
             copy: false,

@@ -7169,3 +7169,24 @@ test("persistent compiler service sets AURA_OFFLINE=1 by default without overrid
     }
   }
 });
+
+test("compiler bridge completes ordered collection methods and their signatures", async () => {
+  const uri = `file://${path.join(repoRoot, "examples/collections/delivery_queue.au")}`;
+  const declarations = [
+    "from collections import Deque, Heap, SortedMap, SortedSet",
+    "def inspect(queue: Deque[str], heap: Heap[int64], stops: SortedMap[int64, str], days: SortedSet[str]):"
+  ];
+  setWorkspaceRoots([repoRoot]);
+  for (const [binding, method, signature] of [
+    ["queue", "push_front", "value"],
+    ["heap", "into_sorted", "list["],
+    ["stops", "range", "high"],
+    ["days", "ceiling", "Lookup["]
+  ]) {
+    const line = `    ${binding}.`;
+    const entries = await completeWithCompiler(uri, [...declarations, line].join("\n"), 2, line.length, ".");
+    const item = entries?.find((entry) => entry.name === method);
+    assert.ok(item, `missing ${binding}.${method}`);
+    assert.ok(item.detail.includes(signature), item.detail);
+  }
+});

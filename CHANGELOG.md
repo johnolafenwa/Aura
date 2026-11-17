@@ -7,6 +7,9 @@ in this file.
 
 ## Unreleased
 
+- The `collections` module adds `Deque`, `Heap`, `SortedMap` and `SortedSet`.
+  Maps and sets support ordered iteration, floor, ceiling and half-open ranges.
+
 - Language: byte strings. `b"GET /\r\n"` and `b'\x89PNG'` are literals of
   type `list[uint8]`. The body holds ASCII characters and escapes, and
   `\xHH` is one byte (ADR-0111).

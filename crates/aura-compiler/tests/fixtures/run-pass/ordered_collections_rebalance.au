@@ -1,0 +1,48 @@
+from collections import Deque, Heap, SortedMap, SortedSet
+
+
+def main():
+    mut map = SortedMap[int64, int64]()
+    for i in range(215):
+        key = (i * 47) % 215
+        map.set(key, key * 2)
+    assert map.len() == 215
+    assert map.range(100, 105).len() == 5
+    for i in range(215):
+        key = (i * 71) % 215
+        assert map.contains(key)
+        match own map.remove(key):
+            case Found(value):
+                assert value == key * 2
+            case _:
+                assert false
+        assert not map.contains(key)
+        assert map.len() == 214 - i
+    assert map.first() == Lookup[(int64, int64)].Missing
+    map.set(1, 3)
+    print(map.first())
+
+    mut deque = Deque[int64]()
+    for i in range(100):
+        deque.push_back(i)
+    for i in range(50):
+        assert deque.pop_front() == i
+        assert deque.pop_back() == 99 - i
+    assert deque.len() == 0
+    deque.push_front(3)
+    deque.clear()
+    print(deque.get(-1))
+
+    mut set = SortedSet[int64]()
+    mut heap = Heap[int64]()
+    for i in range(100):
+        key = (i * 17) % 100
+        set.add(key)
+        heap.push(key)
+    for i in range(100):
+        assert heap.pop() == i
+    print(heap.peek())
+    print(set.get(999))
+    print(set.get(17))
+    print(set.floor(32))
+    print(set.ceiling(90))

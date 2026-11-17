@@ -8013,6 +8013,7 @@ fn class_info(name: &str, copy: bool, field_specs: Vec<(&str, Type, bool)>) -> C
     ClassInfo {
         module_name: "<test>".to_string(),
         is_builtin: false,
+        is_builtin_source: false,
         decl: class_decl(name, copy, decl_fields),
         type_param_bounds: BTreeMap::new(),
         fields,

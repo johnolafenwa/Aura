@@ -12756,6 +12756,52 @@ impl<'a> FunctionCompiler<'a> {
 
     /// The address of the element at `position` in unboxed storage whose
     /// elements are `stride` bytes wide.
+    /// Swaps scalar slots in one unshared list view. A shared backing store,
+    /// non-scalar representation, or invalid index takes the regular swap.
+    fn emit_scalar_list_swap(
+        &mut self,
+        list: Val,
+        first: Val,
+        second: Val,
+        kind: ScalarElement,
+        function: FuncRef,
+    ) {
+        let layout = aura_runtime::native_runtime::direct_list_layout();
+        let (access, stride) = scalar_list_slot(kind);
+        let slow = self.builder.create_block();
+        let fast = self.builder.create_block();
+        let write = self.builder.create_block();
+        let join = self.builder.create_block();
+        self.emit_list_access_check(list, access, &layout, slow, fast);
+        self.builder.switch_to_block(fast);
+        self.builder.seal_block(fast);
+        let left = self.emit_list_view_bounds_check(list, first, &layout, slow);
+        let right = self.emit_list_view_bounds_check(list, second, &layout, slow);
+        let capacity = self
+            .builder
+            .uload32(MemFlags::trusted(), list, layout.capacity_offset);
+        let writable = self.builder.icmp_imm(IntCC::NotEqual, capacity, 0);
+        self.builder.brif(writable, write, &[], slow, &[]);
+
+        self.builder.switch_to_block(write);
+        self.builder.seal_block(write);
+        let elements = self.list_view_word(list, list_snapshots::ViewWord::Elements);
+        let left = self.scalar_list_element(elements, left, stride);
+        let right = self.scalar_list_element(elements, right, stride);
+        let a = self.load_scalar_list_element(kind, left);
+        let b = self.load_scalar_list_element(kind, right);
+        self.store_scalar_list_element(kind, b, left);
+        self.store_scalar_list_element(kind, a, right);
+        self.builder.jump(join, &[]);
+
+        self.builder.switch_to_block(slow);
+        self.builder.seal_block(slow);
+        self.builder.call(function, &[list, first, second]);
+        self.builder.jump(join, &[]);
+        self.builder.switch_to_block(join);
+        self.builder.seal_block(join);
+    }
+
     fn scalar_list_element(&mut self, elements: Val, position: Val, stride: i64) -> Val {
         let offset = if stride == 1 {
             position
@@ -16234,7 +16280,11 @@ impl<'a> FunctionCompiler<'a> {
             ListOp::Swap => {
                 let first = self.load_word(args[0], int64, false)?;
                 let second = self.load_word(args[1], int64, false)?;
-                self.builder.call(function, &[list, first, second]);
+                if let Some(kind) = ScalarElement::of(&element_ty) {
+                    self.emit_scalar_list_swap(list, first, second, kind, function);
+                } else {
+                    self.builder.call(function, &[list, first, second]);
+                }
                 self.store_receiver_back(receiver_place, &object)?;
                 Ok(unit_value(&mut *self.builder))
             }

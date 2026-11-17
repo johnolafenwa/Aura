@@ -1,0 +1,6 @@
+from collections import Heap
+
+
+def main():
+    queue = Heap[list[int64]]()
+    print(queue.len())

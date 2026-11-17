@@ -21874,26 +21874,21 @@ impl<'a> Lowerer<'a> {
                 if self.bound_method_info_at(object).is_some() {
                     return self.lower_expr(object);
                 }
-                if self.infer_expr_type(object) == Some(Type::named("str")) {
-                    // `text[index]` is the member call `text.char_at(index)`.
-                    let call = Expr {
-                        kind: ExprKind::Call {
-                            callee: Box::new(Expr {
-                                kind: ExprKind::Member {
-                                    object: object.clone(),
-                                    field: "char_at".to_string(),
-                                },
-                                span: expr.span,
-                            }),
-                            args: vec![Argument {
-                                name: None,
-                                value: (**index).clone(),
-                                span: index.span,
-                            }],
-                        },
-                        span: expr.span,
+                if let Some(Type::Named(name, _)) = self.infer_expr_type(object) {
+                    let method = if name == "str" {
+                        Some("char_at")
+                    } else if self
+                        .resolve_class_info(&name)
+                        .is_some_and(crate::sema::ClassInfo::is_deque)
+                    {
+                        Some("at")
+                    } else {
+                        None
                     };
-                    return self.lower_expr(&call);
+                    if let Some(method) = method {
+                        return self
+                            .lower_expr(&Expr::indexed_member(object, index, method, expr.span));
+                    }
                 }
                 if let Some(value) = self.lower_element_read_beside_loans(expr) {
                     return value;
@@ -29934,6 +29929,13 @@ impl<'a> Lowerer<'a> {
                     Type::Named(name, args) if name == "str" && args.is_empty() => {
                         Some(Type::Named(name, args))
                     }
+                    Type::Named(name, args)
+                        if self
+                            .resolve_class_info(&name)
+                            .is_some_and(crate::sema::ClassInfo::is_deque) =>
+                    {
+                        args.first().cloned()
+                    }
                     Type::Named(name, args) if name == "list" && args.len() == 1 => {
                         Some(args[0].clone())
                     }
@@ -30202,10 +30204,24 @@ impl<'a> Lowerer<'a> {
         actual: &Type,
         bound: &TraitBound,
     ) -> Option<std::collections::HashMap<String, Type>> {
-        if trait_impl.trait_name != bound.trait_name
-            || trait_impl.trait_args.len() != bound.trait_args.len()
-        {
+        if trait_impl.trait_args.len() != bound.trait_args.len() {
             return None;
+        }
+        if trait_impl.trait_name != bound.trait_name {
+            // Exported bounds name their defining module. Resolve the impl's
+            // local spelling there, including imports and aliases. A same-name
+            // trait declared elsewhere must not satisfy this bound.
+            let (module, name) = bound.trait_name.rsplit_once('.')?;
+            let info = if trait_impl.module_name == self.program.module_name {
+                self.program.traits.get(&trait_impl.trait_name)
+            } else {
+                self.module_namespace(&trait_impl.module_name)?
+                    .all_traits
+                    .get(&trait_impl.trait_name)
+            }?;
+            if info.module_name != module || info.decl.name != name {
+                return None;
+            }
         }
         let mut type_params = BTreeSet::new();
         collect_type_params_from_type(&trait_impl.for_type, &mut type_params);

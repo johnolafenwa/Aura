@@ -87,7 +87,7 @@ Owner's calls in step 2:
   result cannot be exact. Python's thread-local context has no place to
   live in Aura.
 
-## Step 3: `collections` (planned)
+## Step 3: `collections`
 
 A source module `collections` with four types.
 
@@ -104,12 +104,18 @@ The survey said "ordered map". `dict` already keeps insertion order,
 so the missing type is the one ordered by key, and it is named for
 that.
 
-Before the types are written in Aura, the step removes the two costs
+ADR-0117 records the source module and its ownership rules. The step targets the two costs
 measured above: list operations on a field of `self`, and comparisons
 and swaps in generic code over a list. Those fixes help every program
 with a list in a class, not only this module. If they cannot reach the
 bar, the fallback is to implement the four types in the runtime, as
 `set` is, and the checkpoint is revised before that work starts.
+
+The initial source implementation passed randomized-order tree splits and
+merges, but the release binary took 379 ms for 65,536 deque pushes and pops
+and 6,671 ms for the heap workload. Both missed the standing target. The
+runtime fallback applies to storage operations on built-in ordered keys.
+User-defined ordering still calls the Aura `Ord` implementation.
 
 Owner's calls in step 3:
 

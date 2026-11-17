@@ -1,0 +1,24 @@
+from collections import Deque, Heap, SortedMap, SortedSet
+
+
+def main():
+    mut waiting = Deque[str]()
+    waiting.push_back("museum")
+    waiting.push_front("station")
+    print(waiting.pop_front())
+
+    mut minutes = Heap[int64].from_list([12, 5, 9])
+    print(minutes.pop())
+
+    mut stops = SortedMap[int64, str]()
+    stops.set(15, "bridge")
+    stops.set(5, "station")
+    stops.set(30, "museum")
+    for minute, place in own stops.range(0, 20):
+        print(f"{minute} {place}")
+
+    mut days = SortedSet[str]()
+    days.add("Wednesday")
+    days.add("Monday")
+    days.add("Monday")
+    print(days.first())
