@@ -75,8 +75,13 @@ Last updated: 2026-11-17
   type is expected, and a lambda captures a Copy parameter by value.
 - Verification: the compiler unit tests, the fixture suite and the callable
   integration suites on Linux, on both back ends.
-- Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0116), then benchmarks against Rust and Python.
+- Done: direct calls through stored closures. A closure in a field or a
+  list element is called where it is kept, and `benchmarks/closures`
+  compares the calls with Rust and Python.
+- Calls through `self.steps[index]` and tuple positions pass MIR validation.
+  Benchmark measurements are in `benchmarks/closures/README.md`.
+- Local functions with statement bodies and recursion are in development
+  under ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
 ## Three compiler defects from the book sections (complete)
 

@@ -5623,12 +5623,67 @@ fn rebase_container_result_callables(
         }
         return results;
     }
+    // A possible element that holds a container at some step of `rest`,
+    // with other element keys there, lacks `rest` only because that
+    // container is shorter or keyed otherwise, such as the shorter rows of
+    // a list of lists. It has nothing at that position to mistake for a
+    // callable, so it does not poison the suffix. The declared element type
+    // says which steps are container elements: a tuple position is not one.
+    let declared = match context.place_type(function, receiver) {
+        Ok(Some(Type::Named(name, args)))
+            if (name == "list" || name == "set") && args.len() == 1 =>
+        {
+            callable_identities_in_type(&args[0], context)
+        }
+        Ok(Some(Type::Named(name, args))) if name == "dict" && args.len() == 2 => {
+            callable_identities_in_type(&args[1], context)
+        }
+        _ => Vec::new(),
+    }
+    .into_iter()
+    .map(|(suffix, _)| suffix)
+    .collect::<Vec<_>>();
+    let step_is_container_element = |segments: &[&str], step: usize| {
+        declared.iter().any(|suffix| {
+            let declared = suffix.split('.').skip(1).collect::<Vec<_>>();
+            declared.len() > step
+                && declared[step] == ANY_ELEMENT_PROJECTION
+                && declared[..step]
+                    .iter()
+                    .zip(&segments[..step])
+                    .all(|(declared, actual)| {
+                        declared == actual
+                            || (*declared == ANY_ELEMENT_PROJECTION
+                                && callable_segment_is_element_key(actual))
+                    })
+        })
+    };
+    let lacks_only_a_nested_element = |key: &str, rest: &str| {
+        let segments = rest.split('.').skip(1).collect::<Vec<_>>();
+        (0..segments.len())
+            .filter(|step| {
+                callable_segment_is_element_key(segments[*step])
+                    && step_is_container_element(&segments, *step)
+            })
+            .any(|step| {
+                by_suffix.iter().any(|(other, per_key)| {
+                    let other = other.split('.').skip(1).collect::<Vec<_>>();
+                    per_key.contains_key(key)
+                        && other.len() > step
+                        && other[..step] == segments[..step]
+                        && callable_segment_is_element_key(other[step])
+                })
+            })
+    };
     for (rest, per_key) in &by_suffix {
         let candidates = selected
             .iter()
             .filter_map(|key| per_key.get(key))
             .collect::<Vec<_>>();
-        let callable = if candidates.len() != selected.len() {
+        let lacking = selected
+            .iter()
+            .any(|key| !per_key.contains_key(key) && !lacks_only_a_nested_element(key, rest));
+        let callable = if lacking {
             unknown_validated_callable()
         } else {
             merge_validated_callables(candidates.into_iter())
@@ -8564,6 +8619,32 @@ fn validate_loan_instruction(
                     active_children: 0,
                 },
             );
+            // A loan of an element that is or holds a callable carries the
+            // identities the collection records for the elements the
+            // selector may reach, so a call through the loan is checked
+            // against them as a call through a copy of the element is.
+            if projection.is_empty() {
+                let selected = [MirArg {
+                    name: None,
+                    value: selector.clone(),
+                    writeback_place: None,
+                }];
+                let identities = rebase_container_result_callables(
+                    function,
+                    source,
+                    INTERNAL_VEC_INDEX_FIELD,
+                    &selected,
+                    loan,
+                    context,
+                    state,
+                );
+                state.authoritative_callables.retain(|place, _| {
+                    place
+                        .strip_prefix(loan.as_str())
+                        .is_none_or(|rest| !rest.is_empty() && !rest.starts_with('.'))
+                });
+                state.authoritative_callables.extend(identities);
+            }
         }
         Instruction::ReborrowElement {
             loan,
@@ -9036,7 +9117,7 @@ fn validate_loan_instruction(
             // A returned view may select any of several sources at runtime:
             // identities merge across sources and a suffix some source lacks
             // is poisoned.
-            let callable_sources = grouped
+            let merged_sources = grouped
                 .into_iter()
                 .map(|(place, callables)| {
                     let callable = if callables.len() != sources_with_identity.len() {
@@ -9047,6 +9128,15 @@ fn validate_loan_instruction(
                     (place, callable)
                 })
                 .collect::<Vec<_>>();
+            // An element loan records the identities of the element it
+            // selects when it begins. They name the value read, where the
+            // loan's source names the whole collection.
+            let element_identities = rebase_authoritative_callables(loan, target, state);
+            let callable_sources = if element_identities.is_empty() {
+                merged_sources
+            } else {
+                element_identities
+            };
             let borrowed_origins = context
                 .place_type(function, target)?
                 .is_some_and(|ty| context.type_is_definitely_noncopy(&ty))
@@ -12271,6 +12361,8 @@ struct Lowerer<'a> {
     /// The MIR name of the function whose arguments are being lowered next,
     /// so an omitted default calls that function's generated default helper.
     default_helper_owner: Option<String>,
+    /// A local function's lexical name and the shared captures forwarded by direct recursion.
+    recursive_local: Option<(String, ClosureInfo)>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -12554,6 +12646,7 @@ impl<'a> Lowerer<'a> {
             function_name,
             module_name,
             default_helper_owner: None,
+            recursive_local: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -13364,7 +13457,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         params: &[crate::ast::LambdaParam],
-        body: &Expr,
+        body: &crate::ast::ClosureBody,
     ) -> Operand {
         let info = self
             .closure_info_at(expr.span)
@@ -13436,12 +13529,27 @@ impl<'a> Lowerer<'a> {
         // The body is lowered as a `return` statement, so the hidden loans
         // its expression takes (`lambda: items[0].area()` lends `items[0]`
         // to the call) end before the function returns.
-        let stmt = Stmt::Return(crate::ast::ReturnStmt {
-            value: Some(body.clone()),
-            view: None,
-            span: body.span,
-        });
-        lowerer.lower_stmts(std::slice::from_ref(&stmt));
+        match body {
+            crate::ast::ClosureBody::Expression(expr) => {
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some((**expr).clone()),
+                    view: None,
+                    span: expr.span,
+                });
+                lowerer.lower_stmts(std::slice::from_ref(&stmt));
+            }
+            crate::ast::ClosureBody::Function { name, statements } => {
+                lowerer.local_types.insert(
+                    name.clone(),
+                    Type::Function {
+                        params: info.params.clone(),
+                        return_type: Box::new(info.return_type.clone()),
+                    },
+                );
+                lowerer.recursive_local = Some((name.clone(), info.clone()));
+                lowerer.lower_stmts(statements);
+            }
+        }
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
@@ -21889,6 +21997,13 @@ impl<'a> Lowerer<'a> {
                         .get(tuple_index)
                         .cloned()
                         .expect("tuple index bounds are validated by sema");
+                    if matches!(&element_type, Type::Callable(_)) {
+                        let Operand::Place(tuple) = self.lower_expr_at_sequence_point(object, None)
+                        else {
+                            unreachable!("tuple values are held in MIR places");
+                        };
+                        return Operand::Place(format!("{tuple}.{tuple_index}"));
+                    }
                     debug_assert!(
                         type_is_copy_in_program(&element_type, self.program),
                         "non-Copy tuple indices are rejected by sema"
@@ -25814,6 +25929,37 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some((name, info)) = &self.recursive_local {
+            if matches!(&grouped_mir_expr(callee).kind, ExprKind::Name(called) if called == name) {
+                let info = info.clone();
+                let mut forwarded = info
+                    .captures
+                    .iter()
+                    .map(|capture| MirArg {
+                        name: None,
+                        value: Operand::Place(self.render_local_name(&capture.name)),
+                        writeback_place: None,
+                    })
+                    .collect::<Vec<_>>();
+                forwarded.extend(self.lower_function_value_args(args, &info.params, callee.span));
+                let target = self.new_typed_temp(info.return_type);
+                self.emit(Instruction::Assign {
+                    target: target.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(self.function_name.to_string()),
+                        args: forwarded,
+                        type_args: Default::default(),
+                    },
+                });
+                return Operand::Place(target);
+            }
+        }
+        let indexed = callee.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        });
+        let callee = indexed.as_ref().unwrap_or(callee);
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {
@@ -29111,6 +29257,13 @@ impl<'a> Lowerer<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr) -> Option<Type> {
+        if let Some(indexed) = expr.indexed_collection_callee(|object| {
+            self.infer_expr_type(object).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        }) {
+            return self.infer_expr_type(&indexed);
+        }
         if let Some(read) = self.narrowed_read(expr) {
             return Some(read.member_type);
         }

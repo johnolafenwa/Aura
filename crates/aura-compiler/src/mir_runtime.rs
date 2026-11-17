@@ -910,7 +910,7 @@ struct StartTaskRequest<'a> {
 }
 
 fn mir_function_value(name: &str, signature: &Type) -> Value {
-    Value::Function(Box::new(FunctionValue {
+    Value::Function(Arc::new(FunctionValue {
         name: name.to_string(),
         signature: signature.clone(),
         source_path: None,
@@ -918,6 +918,7 @@ fn mir_function_value(name: &str, signature: &Type) -> Value {
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     }))
 }
 
@@ -3390,12 +3391,12 @@ impl MirRuntime {
             }
             (Value::Function(function), Type::Function { .. }) => {
                 let mut function = function.clone();
-                function.signature = ty.clone();
+                Arc::make_mut(&mut function).signature = ty.clone();
                 Value::Function(function)
             }
             (Value::Function(function), Type::Closure { .. }) => {
                 let mut function = function.clone();
-                function.signature = ty.clone();
+                Arc::make_mut(&mut function).signature = ty.clone();
                 Value::Function(function)
             }
             (Value::Union(_), _) | (_, Type::Union(_)) => {
@@ -4702,7 +4703,7 @@ impl MirRuntime {
                     });
                 }
                 let metadata = self.functions.get(function);
-                Ok(RvalueOutcome::Value(Value::Function(Box::new(
+                Ok(RvalueOutcome::Value(Value::Function(Arc::new(
                     FunctionValue {
                         name: function.clone(),
                         signature: signature.clone(),
@@ -4715,6 +4716,7 @@ impl MirRuntime {
                         closure_environment: Some(Arc::new(ClosureEnvironment::new(
                             captured, *consuming,
                         ))),
+                        direct_callable: None,
                     },
                 ))))
             }
@@ -6739,7 +6741,7 @@ impl MirRuntime {
         };
         let evaluated_args = evaluate_named_args(args, env)?;
         self.evaluate_function_value_with_args(
-            *function_value,
+            Arc::unwrap_or_clone(function_value),
             evaluated_args,
             expected_return_type,
             env,

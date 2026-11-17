@@ -34,6 +34,80 @@ use crate::mir::{
 };
 use crate::runtime_ops::{DictOp, ListOp, RuntimeOp, SetOp};
 
+/// The loan reads of `function` whose value is only called: each maps the
+/// temporary it fills to the loan it reads. The temporary is filled by one
+/// `ReadLoan`, named as the callee of the call that follows it in the same
+/// block, released right after that call, and named nowhere else. Only
+/// plain moves of values into other temporaries may stand between the read
+/// and the call. Native code calls such a callee through the loan, where
+/// its collection keeps it, and makes no copy.
+pub(super) fn called_loan_reads(function: &MirFunction) -> HashMap<String, String> {
+    let mut mentions = HashMap::<&str, usize>::new();
+    for block in &function.blocks {
+        for instruction in &block.instructions {
+            let mut places = Vec::new();
+            instruction_place_mentions(instruction, &mut places);
+            for place in places {
+                *mentions.entry(root(place)).or_default() += 1;
+            }
+        }
+        for place in terminator_place_mentions(&block.terminator) {
+            *mentions.entry(root(place)).or_default() += 1;
+        }
+    }
+    let mut reads = HashMap::new();
+    for block in &function.blocks {
+        for (index, instruction) in block.instructions.iter().enumerate() {
+            let Instruction::ReadLoan { target, loan } = instruction else {
+                continue;
+            };
+            if target.contains('.') || loan.contains('.') {
+                continue;
+            }
+            let mut rest = block.instructions[index + 1..].iter();
+            let call = rest.find(|later| {
+                !matches!(
+                    later,
+                    Instruction::Assign {
+                        target: moved,
+                        value: Rvalue::Use(operand),
+                    } if moved != target
+                        && moved != loan
+                        && !matches!(
+                            operand,
+                            Operand::Place(place) | Operand::MovePlace(place)
+                                if root(place) == target || root(place) == loan
+                        )
+                )
+            });
+            let called = matches!(
+                call,
+                Some(Instruction::Assign {
+                    value: Rvalue::Call {
+                        callee: CallTarget::Value(Operand::Place(callee)),
+                        args,
+                        ..
+                    },
+                    ..
+                }) if callee == target
+                    && args.iter().all(|arg| !matches!(
+                        &arg.value,
+                        Operand::Place(place) | Operand::MovePlace(place) if root(place) == target
+                    ))
+            );
+            let released = matches!(
+                rest.next(),
+                Some(Instruction::Release { place }) if place == target
+            );
+            // The read, the call, and the release.
+            if called && released && mentions.get(target.as_str()) == Some(&3) {
+                reads.insert(target.clone(), loan.clone());
+            }
+        }
+    }
+    reads
+}
+
 /// The lent element and payload reads of one function.
 #[derive(Debug, Default)]
 pub(super) struct LentElements {

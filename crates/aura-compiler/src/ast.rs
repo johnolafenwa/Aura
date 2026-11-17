@@ -451,6 +451,65 @@ pub struct OldValue {
 }
 
 impl Expr {
+    /// A bracket followed by a call is parsed as type arguments when its
+    /// contents could name types. For a collection value the same spelling
+    /// selects an element, so reconstruct its ordinary index expression.
+    pub(crate) fn indexed_collection_callee(
+        &self,
+        is_collection: impl FnOnce(&Expr) -> bool,
+    ) -> Option<Expr> {
+        let ExprKind::Specialize { expr, type_args } = &self.kind else {
+            return None;
+        };
+        let [index] = type_args.as_slice() else {
+            return None;
+        };
+        if !is_collection(expr) {
+            return None;
+        }
+        fn index_expression(reference: &TypeRef) -> Option<Expr> {
+            let (path, arguments) = reference.named_parts()?;
+            if reference.indirect {
+                return None;
+            }
+            let mut parts = path.split('.');
+            let name = parts.next()?.to_owned();
+            let span = reference.span;
+            let mut value = Expr {
+                kind: ExprKind::Name(name),
+                span,
+            };
+            for field in parts {
+                value = Expr {
+                    kind: ExprKind::Member {
+                        object: Box::new(value),
+                        field: field.to_owned(),
+                    },
+                    span,
+                };
+            }
+            if let [index] = arguments {
+                value = Expr {
+                    kind: ExprKind::Index {
+                        object: Box::new(value),
+                        index: Box::new(index_expression(index)?),
+                    },
+                    span,
+                };
+            } else if !arguments.is_empty() {
+                return None;
+            }
+            Some(value)
+        }
+        Some(Expr {
+            kind: ExprKind::Index {
+                object: expr.clone(),
+                index: Box::new(index_expression(index)?),
+            },
+            span: self.span,
+        })
+    }
+
     /// Calls `visit` on each direct child expression, in source order.
     pub fn for_each_child_mut(&mut self, visit: &mut dyn FnMut(&mut Expr)) {
         match &mut self.kind {
@@ -511,7 +570,13 @@ impl Expr {
                 visit(condition);
                 visit(else_expr);
             }
-            ExprKind::Lambda { body, .. } => visit(body),
+            ExprKind::Lambda { body, .. } => {
+                // Statement suites have a separate lexical scope. Passes that
+                // rewrite statements enter them through their block walkers.
+                if let crate::ast::ClosureBody::Expression(value) = body {
+                    visit(value);
+                }
+            }
             ExprKind::Call { callee, args } => {
                 visit(callee);
                 for arg in args {
@@ -1091,6 +1156,14 @@ pub struct LambdaParam {
     pub span: Span,
 }
 
+/// The expression of a lambda or the statement suite of a named local function.
+#[derive(Clone, Debug, Serialize)]
+#[serde(untagged)]
+pub enum ClosureBody {
+    Expression(Box<Expr>),
+    Function { name: String, statements: Vec<Stmt> },
+}
+
 #[derive(Clone, Debug, Serialize)]
 pub struct LambdaCapture {
     pub name: String,
@@ -1162,7 +1235,7 @@ pub enum ExprKind {
     Lambda {
         captures: Option<Vec<LambdaCapture>>,
         params: Vec<LambdaParam>,
-        body: Box<Expr>,
+        body: ClosureBody,
     },
     Call {
         callee: Box<Expr>,

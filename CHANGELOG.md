@@ -70,6 +70,8 @@ in this file.
   an image and written to a PNG. The package's README says how to install
   raylib and run them.
 
+- A local `def` declares a typed closure with a statement body. It can take an explicit capture list and call itself when its environment permits shared calls.
+
 - Language: a closure is stored without ceremony. A lambda, a function, a
   bound method, or a local that holds a closure packs where a
   `Callable[...]` or `TaskCallable[...]` type is expected: an annotated
@@ -82,6 +84,20 @@ in this file.
   the enclosing function by value, so `def make(n: int64)` can return
   `lambda value: value + n`. A parameter that is not Copy still needs `own`
   or a clone and reports `AU3002`.
+- Compiler: a call through a closure kept in a class field or a list
+  element is direct. The stored value keeps the closure's four words, and
+  the call reaches them where the field or the list keeps them. A field
+  call costs about 76 instructions where it cost about 8,400, and a `for`
+  loop over a `list[Callable[...]]` about 128 an element. A call of a
+  closure with mutable captures no longer asks the runtime for mutable
+  sinks its caller never handed over.
+- Fixed: a `for` loop over `mut` elements of a list of Mutable callables,
+  `for tally in mut tallies: tally(1)`, was rejected by the MIR validator
+  with "no authoritative callable contract". An element loan now carries
+  the callable identities of its collection.
+- Fixed: a nested list of callables whose rows differ in length, such as
+  `[[first], [second, third]]`, was rejected by the MIR validator when a
+  row was read. A shorter row no longer poisons the positions it lacks.
 
 - Fixed: a comprehension whose output or filter reads a list element by
   index and calls a method on it, such as

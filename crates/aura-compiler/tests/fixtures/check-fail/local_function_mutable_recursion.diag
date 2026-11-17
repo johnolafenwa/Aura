@@ -1,0 +1,1 @@
+error[AU3003]: local function `step` cannot call itself while it mutates or consumes captures

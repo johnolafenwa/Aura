@@ -32,6 +32,8 @@ pub(super) struct CallableShape {
     pub(super) drop: FuncHandle,
     pub(super) retain: FuncHandle,
     pub(super) box_value: FuncHandle,
+    /// Boxes the value with every capture as a runtime value.
+    pub(super) box_captures: FuncHandle,
     /// The static signature the value carries when boxed.
     pub(super) signature: Type,
     /// Direct types of the leading capture parameters.
@@ -57,7 +59,39 @@ pub(super) const DESCRIPTOR_RETAIN: i32 = 16;
 pub(super) const DESCRIPTOR_BOX: i32 = 24;
 pub(super) const DESCRIPTOR_ENV_WORDS: i32 = 32;
 pub(super) const DESCRIPTOR_INLINE: i32 = 40;
-const DESCRIPTOR_BYTES: usize = 48;
+/// The adapter the runtime calls to box a kept inline callable with its
+/// captures (`aura_runtime::runtime_value::DirectCallable`).
+pub(super) const DESCRIPTOR_BOX_CAPTURES: i32 = 48;
+const DESCRIPTOR_BYTES: usize = 56;
+
+/// The bit of an `invoke` adapter's supplied mask that says the caller
+/// handed over mutable sinks for the callee to claim. The low bits name
+/// the supplied parameters.
+pub(super) const SINKS_HANDED_OVER: i64 = i64::MIN;
+
+/// A key for the direct signature of a contract's `invoke` adapter. A
+/// boxed callable keeps the key of the contract it was made for, and a
+/// caller reaches its inline form only with the same key.
+pub(super) fn contract_abi_key(
+    param_types: &[DirectType],
+    mutable_params: &[bool],
+    return_ty: &DirectType,
+) -> i64 {
+    let mut text = String::new();
+    for (ty, mutable) in param_types.iter().zip(mutable_params) {
+        text.push_str(&render_direct_type(ty));
+        text.push(if *mutable { '!' } else { ',' });
+    }
+    text.push_str("->");
+    text.push_str(&render_direct_type(return_ty));
+    // FNV-1a, so the key depends on nothing but the text.
+    let mut hash = 0xcbf2_9ce4_8422_2325u64;
+    for byte in text.bytes() {
+        hash ^= u64::from(byte);
+        hash = hash.wrapping_mul(0x0000_0100_0000_01b3);
+    }
+    hash as i64
+}
 
 /// `drop(callable_ptr)`, `retain(callable_ptr)`.
 pub(super) fn callable_unary_signature() -> Signature {
@@ -233,6 +267,14 @@ pub(super) fn declare_callable_shapes(
             ),
             "failed to declare callable box adapter: {}"
         );
+        let box_captures = try_or_string_error!(
+            object.declare_function(
+                &format!("{stem}_box_captures"),
+                Linkage::Local,
+                &callable_box_signature()
+            ),
+            "failed to declare callable capture box adapter: {}"
+        );
         shapes.insert(
             key,
             CallableShape {
@@ -241,6 +283,7 @@ pub(super) fn declare_callable_shapes(
                 drop,
                 retain,
                 box_value,
+                box_captures,
                 signature,
                 capture_types,
                 env_words,
@@ -468,7 +511,8 @@ impl NativeCodegen<'_> {
             let shape = self.callable_shapes[&key].clone();
             self.define_callable_drop(&shape)?;
             self.define_callable_retain(&shape)?;
-            self.define_callable_box(&key, &shape)?;
+            self.define_callable_box(&key, &shape, shape.box_value, true)?;
+            self.define_callable_box(&key, &shape, shape.box_captures, false)?;
             self.define_callable_invoke(&key, &shape)?;
             self.define_callable_descriptor(&shape)?;
         }
@@ -490,6 +534,7 @@ impl NativeCodegen<'_> {
             (DESCRIPTOR_DROP, shape.drop),
             (DESCRIPTOR_RETAIN, shape.retain),
             (DESCRIPTOR_BOX, shape.box_value),
+            (DESCRIPTOR_BOX_CAPTURES, shape.box_captures),
         ] {
             data.write_function_addr(offset as u32, func_id);
         }
@@ -589,16 +634,23 @@ impl NativeCodegen<'_> {
     /// Boxes the inline callable into today's `Value::Function` (with a
     /// `ClosureEnvironment` when it has captures); the inline value stays
     /// alive, so its handles are retained into the box.
+    /// `keep_inline` is set for the adapter compiled code calls. A
+    /// repeatable callable then keeps a copy of its inline words in the
+    /// boxed value, so a compiled caller that reads the value back calls
+    /// through them, and the captures are boxed only when runtime code asks
+    /// for them, through the adapter defined with `keep_inline` unset.
     fn define_callable_box(
         &mut self,
         key: &CallableShapeKey,
         shape: &CallableShape,
+        adapter: FuncHandle,
+        keep_inline: bool,
     ) -> std::result::Result<(), String> {
         self.define_body(
-            shape.box_value,
+            adapter,
             &callable_box_signature(),
             "callable box adapter",
-            |codegen, builder| codegen.emit_callable_box(builder, key, shape),
+            |codegen, builder| codegen.emit_callable_box(builder, key, shape, keep_inline),
         )
     }
 
@@ -607,6 +659,7 @@ impl NativeCodegen<'_> {
         builder: &mut dyn FunctionBackend,
         key: &CallableShapeKey,
         shape: &CallableShape,
+        keep_inline: bool,
     ) -> std::result::Result<(), String> {
         let function = self
             .module
@@ -669,6 +722,39 @@ impl NativeCodegen<'_> {
             ],
         );
         let function_handle = call.results[0];
+        if keep_inline && !key.consuming {
+            // The boxed value takes a reference of its own to the captures.
+            let slot =
+                builder.create_sized_stack_slot((8 * (1 + CALLABLE_ENVIRONMENT_WORDS)) as u32, 3);
+            let kept = builder.stack_addr(types::I64, slot, 0);
+            for index in 0..=CALLABLE_ENVIRONMENT_WORDS {
+                let offset = (index as i32) * 8;
+                let word = builder.load(types::I64, MemFlags::new(), callable_ptr, offset);
+                builder.store(MemFlags::new(), word, kept, offset);
+            }
+            let retain = builder.import_function(shape.retain);
+            builder.call(retain, &[kept]);
+            let mutable = function
+                .params
+                .iter()
+                .take(key.captures)
+                .any(|param| param.passing == MirReceiverKind::BorrowMut);
+            let count = builder.iconst(types::I64, key.captures as i64);
+            let abi_key = builder.iconst(
+                types::I64,
+                contract_abi_key(
+                    &shape.contract_param_types,
+                    &shape.contract_mutable_params,
+                    &shape.contract_return_ty,
+                ),
+            );
+            let mutable = builder.iconst(types::I64, i64::from(mutable));
+            let deferred = builder.import_function(self.runtime[RuntimeFn::ClosureValueDeferred]);
+            let call = builder.call(deferred, &[function_handle, kept, count, abi_key, mutable]);
+            let boxed = call.results[0];
+            builder.return_(&[boxed]);
+            return Ok(());
+        }
         if key.captures == 0 {
             builder.return_(&[function_handle]);
             return Ok(());
@@ -832,10 +918,31 @@ impl NativeCodegen<'_> {
 
         // A caller's indirect sink handoff (public sinks by contract index,
         // capture sinks by capture index) becomes the callee's own sink list.
-        let claim_sinks =
-            builder.import_function(self.runtime[RuntimeFn::ClaimIndirectMutableSinks]);
-        let capture_count = builder.iconst(types::I64, key.captures as i64);
-        builder.call(claim_sinks, &[capture_count]);
+        // A caller hands sinks over only for a mutable parameter of the
+        // contract or a mutable capture, so a callable with neither has
+        // nothing to claim.
+        let takes_sinks = shape.contract_mutable_params.iter().any(|mutable| *mutable)
+            || function
+                .params
+                .iter()
+                .take(key.captures)
+                .any(|param| param.passing == MirReceiverKind::BorrowMut);
+        if takes_sinks {
+            // The caller says in the mask whether it handed any over.
+            let handed = builder.band_imm(supplied_mask, SINKS_HANDED_OVER);
+            let claim_block = builder.create_block();
+            let claimed_block = builder.create_block();
+            builder.brif(handed, claim_block, &[], claimed_block, &[]);
+            builder.switch_to_block(claim_block);
+            builder.seal_block(claim_block);
+            let claim_sinks =
+                builder.import_function(self.runtime[RuntimeFn::ClaimIndirectMutableSinks]);
+            let capture_count = builder.iconst(types::I64, key.captures as i64);
+            builder.call(claim_sinks, &[capture_count]);
+            builder.jump(claimed_block, &[]);
+            builder.switch_to_block(claimed_block);
+            builder.seal_block(claimed_block);
+        }
         let target_ref = builder.import_function(target_id);
         let inst = builder.call(target_ref, &lowered_args);
         let results = inst.results;
@@ -1257,6 +1364,39 @@ impl NativeCodegen<'_> {
         let callable_ptr = params[0];
         let supplied_mask = params[1];
         let handle = builder.load(types::I64, MemFlags::new(), callable_ptr, 8);
+        // A value boxed from an inline callable of this contract keeps its
+        // inline words. Their `invoke` takes this adapter's own signature.
+        let abi_key = builder.iconst(
+            types::I64,
+            contract_abi_key(
+                &contract.param_types,
+                &contract.mutable_params,
+                &contract.return_ty,
+            ),
+        );
+        let lookup = builder.import_function(self.runtime[RuntimeFn::FunctionCallable]);
+        let call = builder.call(lookup, &[handle, abi_key]);
+        let inline_ptr = call.results[0];
+        let has_inline = builder.icmp_imm(IntCC::NotEqual, inline_ptr, 0);
+        let inline_block = builder.create_block();
+        let boxed_block = builder.create_block();
+        builder.brif(has_inline, inline_block, &[], boxed_block, &[]);
+        builder.switch_to_block(inline_block);
+        builder.seal_block(inline_block);
+        let descriptor = builder.load(types::I64, MemFlags::new(), inline_ptr, 0);
+        let invoke = builder.load(types::I64, MemFlags::new(), descriptor, DESCRIPTOR_INVOKE);
+        let invoke_signature = builder.import_signature(contract_invoke_signature(
+            &contract.param_types,
+            &contract.mutable_params,
+            &contract.return_ty,
+        ));
+        let mut forwarded = vec![inline_ptr];
+        forwarded.extend_from_slice(&params[1..]);
+        let call = builder.call_indirect(invoke_signature, invoke, &forwarded);
+        let results = call.results;
+        builder.return_(&results);
+        builder.switch_to_block(boxed_block);
+        builder.seal_block(boxed_block);
         let count = contract.param_types.len();
         let buffer_slot = builder.create_sized_stack_slot((8 * count.max(1)) as u32, 3);
         let buffer = builder.stack_addr(types::I64, buffer_slot, 0);

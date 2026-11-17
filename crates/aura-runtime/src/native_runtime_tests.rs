@@ -18,9 +18,9 @@ use crate::randomness::SecureRandomError;
 #[cfg_attr(not(unix), allow(unused_imports))]
 use crate::runtime_value::{
     run_lightweight_root_task, spawn_lightweight_task, ArrayDType, ArrayStorage, ArrayValue,
-    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, EnumVariantValue,
-    FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot, InstanceValue,
-    LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
+    CancellationContext, ChannelValue, ClosureCaptureValue, ClosureEnvironment, DirectCallable,
+    EnumVariantValue, FileValue, FunctionValue, HttpListenerValue, HttpResponseValue, HttpSnapshot,
+    InstanceValue, LightweightTaskFailureSignal, MapValue, ModuleNamespaceValue, ProcessChildValue,
     ProcessCompletedValue, ProcessStdioConfig, ProcessSupervisorValue, RangeValue, RngValue,
     SetValue, TaskCancelledSignal, TaskGroupValue, TaskValue, TaskWaitStatus, TcpListenerValue,
     TcpStreamValue, TlsListenerValue, TlsStreamValue, TupleValue, UdpDatagramValue, UdpSocketValue,
@@ -610,7 +610,7 @@ fn adr0038_cleanup_and_mutable_sink_ids_roll_over_without_using_zero() {
 fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_capture".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -623,6 +623,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let captures = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_arg_buffer_store_owned(captures, 0, int_value(17) as i64);
@@ -663,7 +664,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
     );
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let plain = boxed_value(Value::Function(Box::new(FunctionValue {
+            let plain = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "plain".to_string(),
                 signature: Type::Function {
                     params: Vec::new(),
@@ -674,6 +675,7 @@ fn adr0038_direct_closure_capture_abi_covers_mutability_and_errors() {
                 direct_thunk: None,
                 direct_default_binder: None,
                 closure_environment: None,
+                direct_callable: None,
             })));
             super::aura_direct_closure_capture(plain, 0);
         }),
@@ -829,7 +831,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         }],
         return_type: Box::new(Type::named("int32")),
     };
-    let callback = boxed_value(Value::Function(Box::new(FunctionValue {
+    let callback = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "double".to_string(),
         signature,
         source_path: Some("/workspace/array.au".to_string()),
@@ -837,6 +839,7 @@ fn direct_array_abi_uses_typed_storage_kernels_and_callback_thunks() {
         direct_thunk: Some(direct_array_double_thunk as *const () as usize as i64),
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let mapped = super::aura_direct_array_map(array, callback, 0, 19, 21);
     assert_eq!(
@@ -5115,7 +5118,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         ],
         return_type: Box::new(Type::named("int64")),
     };
-    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+    let function = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "selected".to_string(),
         signature: Type::Function {
             params: vec![
@@ -5148,6 +5151,7 @@ fn direct_runtime_type_tags_preserve_generic_identity_through_clone() {
         direct_thunk: Some(11),
         direct_default_binder: Some(22),
         closure_environment: None,
+        direct_callable: None,
     })));
     let encoded = super::canonical_runtime_type_name(&concrete_function_signature);
     super::aura_direct_tag_value_type(function, encoded.as_ptr(), encoded.len());
@@ -5462,7 +5466,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         ClosureCaptureMode::Copy,
         ClosureCallKind::Repeatable,
     );
-    let value = boxed_value(Value::Function(Box::new(FunctionValue {
+    let value = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "predicate".to_string(),
         signature: actual.clone(),
         source_path: Some("/workspace/closure.au".to_string()),
@@ -5470,6 +5474,7 @@ fn direct_closure_type_matching_preserves_callable_and_capture_contracts() {
         direct_thunk: Some(1),
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let wildcard = Type::TypeParam("T".to_string());
     let matching = closure(
@@ -5620,7 +5625,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         release_value(ordinary_value);
     }
 
-    let missing_targets = boxed_value(Value::Function(Box::new(FunctionValue {
+    let missing_targets = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "declaration-only".to_string(),
         signature,
         source_path: None,
@@ -5628,6 +5633,7 @@ fn direct_function_value_abi_rejects_invalid_signatures_and_missing_native_targe
         direct_thunk: None,
         direct_default_binder: None,
         closure_environment: None,
+        direct_callable: None,
     })));
     let missing_targets_address = missing_targets as usize;
     assert_eq!(
@@ -17301,7 +17307,7 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
                     b"parent".len(),
                 );
             }
-            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+            let function = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "runtime_selected_child".to_string(),
                 signature: Type::Function {
                     params: Vec::new(),
@@ -17312,6 +17318,7 @@ fn native_runtime_function_value_task_handoff_uses_selected_callable_metadata() 
                 direct_thunk: Some(direct_task_frame_trap as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let args = super::aura_direct_arg_buffer_new(0);
             let group = super::aura_direct_task_group_new();
@@ -17392,7 +17399,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
     let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
         super::with_direct_task_runtime_scope(|| {
             let capture_type = Type::named("int64");
-            let function = boxed_value(Value::Function(Box::new(FunctionValue {
+            let function = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "capturing_child".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -17420,6 +17427,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let args = super::aura_direct_arg_buffer_new(0);
             let group = super::aura_direct_task_group_new();
@@ -17477,7 +17485,7 @@ fn native_runtime_closure_task_handoff_transfers_capture_ownership_to_child() {
 #[test]
 fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semantics() {
     fn closure_task_value(name: &str, captured: i64, consuming: bool) -> *mut OpaqueValue {
-        boxed_value(Value::Function(Box::new(FunctionValue {
+        boxed_value(Value::Function(Arc::new(FunctionValue {
             name: name.to_string(),
             signature: Type::Closure {
                 params: Box::new(Vec::new()),
@@ -17513,6 +17521,7 @@ fn native_runtime_closure_task_handoff_preserves_repeatable_and_one_shot_semanti
                 }],
                 consuming,
             ))),
+            direct_callable: None,
         })))
     }
 
@@ -17643,7 +17652,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
     let claim_flag_baseline = super::direct_task_claim_flag_live_count();
     let result = crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
         super::with_direct_task_runtime_scope(|| {
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "retryable_child".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -17671,6 +17680,7 @@ fn native_runtime_closure_task_rejects_negative_public_arity_then_allows_valid_r
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let group = super::aura_direct_task_group_new();
             let closure_address = closure as usize;
@@ -17760,7 +17770,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
         crate::runtime_value::run_lightweight_root_task_with_worker_count(2, move || {
             super::with_direct_task_runtime_scope(|| {
                 Ok(super::with_task_runtime_error_capture(|| {
-                    let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+                    let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                         name: "detached_closure".to_string(),
                         signature: Type::Closure {
                             params: Box::new(Vec::new()),
@@ -17788,6 +17798,7 @@ fn native_runtime_detached_closure_task_surfaces_unobserved_trap_and_cleans_capt
                             }],
                             true,
                         ))),
+                        direct_callable: None,
                     })));
                     let group = super::aura_direct_task_group_new();
                     let detached = unsafe {
@@ -18112,7 +18123,7 @@ fn native_runtime_function_value_task_handoff_rejects_invalid_spawn_path_utf8() 
 fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_thunks() {
     let _claim_flag_guard = super::direct_task_claim_flag_test_guard();
     let non_callable = int_value(7);
-    let missing_thunk = boxed_value(Value::Function(Box::new(FunctionValue {
+    let missing_thunk = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "declaration-only".to_string(),
         signature: Type::Function {
             params: Vec::new(),
@@ -18123,6 +18134,7 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
         direct_thunk: None,
         direct_default_binder: Some(1),
         closure_environment: None,
+        direct_callable: None,
     })));
     let group = super::aura_direct_task_group_new();
 
@@ -18172,7 +18184,7 @@ fn native_runtime_function_value_task_handoff_rejects_noncallables_and_missing_t
 fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let repeatable = boxed_value(Value::Function(Box::new(FunctionValue {
+            let repeatable = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_repeatable".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
@@ -18208,6 +18220,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
 
             let mut first_args = [int_value(5) as i64];
@@ -18257,7 +18270,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
 
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let consuming = boxed_value(Value::Function(Box::new(FunctionValue {
+            let consuming = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_consuming".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18285,6 +18298,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
                     }],
                     true,
                 ))),
+                direct_callable: None,
             })));
             let first = super::aura_direct_function_call(consuming, std::ptr::null_mut(), 0);
             assert_eq!(expect_int(first), 19);
@@ -18301,7 +18315,7 @@ fn native_runtime_closure_calls_preserve_results_writebacks_and_call_kind() {
 fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebacks() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_mixed_args".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![
@@ -18346,6 +18360,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
                     }],
                     false,
                 ))),
+                direct_callable: None,
             })));
             let mut public_args = [int_value(3) as i64, int_value(4) as i64];
             let called = super::aura_direct_function_call(closure, public_args.as_mut_ptr(), 2);
@@ -18385,7 +18400,7 @@ fn native_runtime_closure_call_moves_owned_args_and_copies_only_mutable_writebac
 fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid_inputs() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let zero_capture_base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let zero_capture_base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_zero".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18398,6 +18413,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let zero_capture = super::aura_direct_closure_value(
                 zero_capture_base,
@@ -18429,7 +18445,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 
     assert_eq!(
         capture_direct_boundary_error_message(|| {
-            let invalid_count_base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let invalid_count_base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_invalid".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18442,6 +18458,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
                 direct_thunk: Some(direct_zero_capture_closure as *const () as usize as i64),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             super::aura_direct_closure_value(
                 invalid_count_base,
@@ -18471,7 +18488,7 @@ fn native_runtime_closure_construction_handles_zero_captures_and_reports_invalid
 fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
     let result = run_lightweight_root_task(|| {
         super::with_direct_task_runtime_scope(|| {
-            let ordinary = boxed_value(Value::Function(Box::new(FunctionValue {
+            let ordinary = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "selected".to_string(),
                 signature: Type::Function {
                     params: vec![FunctionParamContract {
@@ -18490,6 +18507,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                     direct_test_default_binder as *const () as usize as i64,
                 ),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let ordinary_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(ordinary, ordinary_args, 1, 0);
@@ -18507,7 +18525,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                 free_arg_buffer(ordinary_args, 1);
             }
 
-            let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+            let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_no_defaults".to_string(),
                 signature: Type::Closure {
                     params: Box::new(vec![FunctionParamContract {
@@ -18528,6 +18546,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
                     direct_test_default_binder as *const () as usize as i64,
                 ),
                 closure_environment: Some(Arc::new(ClosureEnvironment::new(Vec::new(), false))),
+                direct_callable: None,
             })));
             let closure_args = super::aura_direct_arg_buffer_new(1);
             super::aura_direct_function_bind_defaults(closure, closure_args, 1, 0);
@@ -18560,7 +18579,7 @@ fn native_runtime_selected_default_callbacks_bind_functions_and_closures() {
 #[test]
 fn native_runtime_indirect_call_and_default_callback_traps_identify_invalid_selection() {
     fn selected_function(thunk: Option<i64>, default_binder: Option<i64>) -> *mut OpaqueValue {
-        boxed_value(Value::Function(Box::new(FunctionValue {
+        boxed_value(Value::Function(Arc::new(FunctionValue {
             name: "selected".to_string(),
             signature: Type::Function {
                 params: Vec::new(),
@@ -18571,6 +18590,7 @@ fn native_runtime_indirect_call_and_default_callback_traps_identify_invalid_sele
             direct_thunk: thunk,
             direct_default_binder: default_binder,
             closure_environment: None,
+            direct_callable: None,
         })))
     }
 
@@ -18666,7 +18686,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
         }]),
         call_kind: aura_core::types::ClosureCallKind::Consuming,
     };
-    let function = boxed_value(Value::Function(Box::new(FunctionValue {
+    let function = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "main::__lambda_trap".to_string(),
         signature,
         source_path: Some("/workspace/main.au".to_string()),
@@ -18683,6 +18703,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
             }],
             false,
         ))),
+        direct_callable: None,
     })));
     let function_address = function as usize;
 
@@ -18729,7 +18750,7 @@ fn native_runtime_trapping_closure_call_releases_combined_buffer_without_mut_wri
 fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
     let result = run_lightweight_root_task(move || {
         super::with_direct_task_runtime_scope(|| {
-            let base = boxed_value(Value::Function(Box::new(FunctionValue {
+            let base = boxed_value(Value::Function(Arc::new(FunctionValue {
                 name: "main::__lambda_uncalled".to_string(),
                 signature: Type::Closure {
                     params: Box::new(Vec::new()),
@@ -18748,6 +18769,7 @@ fn native_runtime_uncalled_closure_releases_owned_capture_environment() {
                 direct_thunk: Some(1),
                 direct_default_binder: Some(1),
                 closure_environment: None,
+                direct_callable: None,
             })));
             let capture = string_value("never called");
             let captures = super::aura_direct_arg_buffer_new(1);
@@ -22844,7 +22866,7 @@ fn coverage_native_runtime_queue_group_iteration_reports_value_closed_and_cancel
 
 #[test]
 fn coverage_native_runtime_closure_capture_and_timer_errors_preserve_diagnostics() {
-    let closure = boxed_value(Value::Function(Box::new(FunctionValue {
+    let closure = boxed_value(Value::Function(Arc::new(FunctionValue {
         name: "empty_capture".to_string(),
         signature: Type::Closure {
             params: Box::new(Vec::new()),
@@ -22857,6 +22879,7 @@ fn coverage_native_runtime_closure_capture_and_timer_errors_preserve_diagnostics
         direct_thunk: Some(test_native_thunk as *const () as usize as i64),
         direct_default_binder: Some(1),
         closure_environment: Some(Arc::new(ClosureEnvironment::new(Vec::new(), false))),
+        direct_callable: None,
     })));
     let closure_address = closure as usize;
     let missing_capture = capture_direct_boundary_diagnostic(move || {
@@ -30650,4 +30673,239 @@ fn direct_array_fill_set_slice_and_update_entries_change_the_boxed_array() {
         let _ = super::aura_direct_array_full(99, shape, super::aura_direct_box_i32(0), 3, 4);
     });
     assert_eq!(dtype.code, "AU4001", "{}", dtype.message);
+}
+
+static INLINE_CALLABLE_DROPS: std::sync::atomic::AtomicUsize =
+    std::sync::atomic::AtomicUsize::new(0);
+
+unsafe extern "C-unwind" fn inline_callable_test_drop(_words: *mut i64) {
+    INLINE_CALLABLE_DROPS.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+}
+
+fn inline_callable_test_function() -> *mut OpaqueValue {
+    boxed_value(Value::Function(Arc::new(FunctionValue {
+        name: "main::__lambda_inline".to_string(),
+        signature: Type::Function {
+            params: Vec::new(),
+            return_type: Box::new(Type::named("int64")),
+        },
+        source_path: None,
+        entry_span: Span::new(1, 1),
+        direct_thunk: None,
+        direct_default_binder: None,
+        closure_environment: None,
+        direct_callable: None,
+    })))
+}
+
+/// Boxes the one capture of the test callable, which is the integer in its
+/// second word.
+unsafe extern "C-unwind" fn inline_callable_test_box(words: *mut i64) -> *mut OpaqueValue {
+    let captures = super::aura_direct_arg_buffer_new(1);
+    let capture = int_value(unsafe { *words.add(1) });
+    super::aura_direct_arg_buffer_store_owned(captures, 0, capture as i64);
+    super::aura_direct_closure_value(
+        inline_callable_test_function(),
+        captures,
+        1,
+        std::ptr::null(),
+        0,
+    )
+}
+
+fn inline_callable_test_words(capture: i64) -> [i64; 4] {
+    let mut descriptor = [0usize; 7];
+    descriptor[DirectCallable::DESCRIPTOR_DROP / 8] =
+        inline_callable_test_drop as unsafe extern "C-unwind" fn(*mut i64) as usize;
+    descriptor[DirectCallable::DESCRIPTOR_BOX_CAPTURES / 8] = inline_callable_test_box
+        as unsafe extern "C-unwind" fn(*mut i64) -> *mut OpaqueValue
+        as usize;
+    let descriptor = Box::leak(Box::new(descriptor));
+    [descriptor.as_ptr() as i64, capture, 0, 0]
+}
+
+#[test]
+fn native_runtime_boxed_closure_keeps_its_inline_callable() {
+    let result = run_lightweight_root_task(move || {
+        super::with_direct_task_runtime_scope(|| {
+            let drops = || INLINE_CALLABLE_DROPS.load(std::sync::atomic::Ordering::SeqCst);
+            let before = drops();
+
+            // A Shared closure keeps its words after runtime code reads a
+            // capture.
+            let words = inline_callable_test_words(41);
+            let shared = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                1,
+                7,
+                0,
+            );
+            let inline = super::aura_direct_function_callable(shared, 7);
+            assert_ne!(inline, 0);
+            assert_eq!(unsafe { *(inline as *const i64).add(1) }, 41);
+            assert_eq!(super::aura_direct_function_callable(shared, 8), 0);
+            let number = int_value(1);
+            assert_eq!(super::aura_direct_function_callable(number, 7), 0);
+            unsafe {
+                super::with_value(shared, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    let environment = function
+                        .closure_environment
+                        .as_ref()
+                        .expect("a capturing closure has an environment");
+                    assert_eq!(environment.capture_count(), 1);
+                    assert_eq!(
+                        environment.capture_value(0).expect("capture"),
+                        Value::Int(IntegerValue::from_signed(41))
+                    );
+                    assert_eq!(environment.capture_count(), 1);
+                    let callable = function.direct_callable.as_ref().expect("inline callable");
+                    assert_eq!(callable.capture_count(), 1);
+                    assert!(!callable.is_mutable());
+                    assert!(format!("{callable:?}").contains("DirectCallable"));
+                });
+            }
+            assert_ne!(super::aura_direct_function_callable(shared, 7), 0);
+            assert_eq!(drops(), before);
+            unsafe {
+                release_value(shared);
+                release_value(number);
+            }
+            assert_eq!(drops(), before + 1);
+
+            // A Mutable closure moves its state to the boxed captures.
+            let words = inline_callable_test_words(5);
+            let mutable = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                1,
+                7,
+                1,
+            );
+            assert_ne!(super::aura_direct_function_callable(mutable, 7), 0);
+            unsafe {
+                super::with_value(mutable, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    let environment = function
+                        .closure_environment
+                        .as_ref()
+                        .expect("a capturing closure has an environment");
+                    assert_eq!(
+                        environment.capture_value(0).expect("capture"),
+                        Value::Int(IntegerValue::from_signed(5))
+                    );
+                    assert!(function
+                        .direct_callable
+                        .as_ref()
+                        .expect("inline callable")
+                        .live_words()
+                        .is_none());
+                });
+            }
+            assert_eq!(super::aura_direct_function_callable(mutable, 7), 0);
+            assert_eq!(drops(), before + 2);
+            unsafe {
+                release_value(mutable);
+            }
+            assert_eq!(drops(), before + 2);
+
+            // A list element is called in place or copied as its words.
+            static INLINE_CALLABLE_RETAINS: AtomicUsize = AtomicUsize::new(0);
+            unsafe extern "C-unwind" fn retain(_words: *mut i64) {
+                INLINE_CALLABLE_RETAINS.fetch_add(1, Ordering::SeqCst);
+            }
+            let element = |capture: i64, mutable: i64| {
+                let words = inline_callable_test_words(capture);
+                // SAFETY: the test descriptor is seven writable words.
+                unsafe {
+                    (words[0] as *mut usize)
+                        .add(DirectCallable::DESCRIPTOR_RETAIN / 8)
+                        .write(retain as unsafe extern "C-unwind" fn(*mut i64) as usize);
+                }
+                let boxed = super::aura_direct_closure_value_deferred(
+                    inline_callable_test_function(),
+                    words.as_ptr(),
+                    1,
+                    7,
+                    mutable,
+                );
+                unsafe { super::consume_owned_value(boxed) }
+            };
+            let list = boxed_value(Value::Vec(VecValue {
+                element_type: Type::named("Unknown").into(),
+                elements: vec![
+                    element(11, 0),
+                    element(12, 1),
+                    Value::Int(IntegerValue::from_signed(3)),
+                ]
+                .into(),
+                str_view: Default::default(),
+            }));
+            let at = |index: i64, key: i64| super::aura_direct_vec_callable(list, index, key);
+            assert_eq!(unsafe { *(at(0, 7) as *const i64).add(1) }, 11);
+            assert_eq!(unsafe { *(at(-2, 7) as *const i64).add(1) }, 12);
+            assert_eq!(at(0, 8), 0);
+            assert_eq!(at(2, 7), 0);
+            assert_eq!(at(3, 7), 0);
+            let other = int_value(1);
+            assert_eq!(super::aura_direct_vec_callable(other, 0, 7), 0);
+            let mut copy = [0i64; 4];
+            let copied = |index: i64, key: i64, copy: &mut [i64; 4]| unsafe {
+                super::aura_direct_vec_callable_copy(list, index, key, copy.as_mut_ptr())
+            };
+            assert_eq!(copied(0, 7, &mut copy), 1);
+            assert_eq!(copy[1], 11);
+            assert_eq!(INLINE_CALLABLE_RETAINS.load(Ordering::SeqCst), 1);
+            // A Mutable callable, another contract, a value that is not a
+            // callable, and a missing element are not copied.
+            let mut untouched = [0i64; 4];
+            assert_eq!(copied(1, 7, &mut untouched), 0);
+            assert_eq!(copied(0, 8, &mut untouched), 0);
+            assert_eq!(copied(2, 7, &mut untouched), 0);
+            assert_eq!(copied(9, 7, &mut untouched), 0);
+            assert_eq!(
+                unsafe {
+                    super::aura_direct_vec_callable_copy(other, 0, 7, untouched.as_mut_ptr())
+                },
+                0
+            );
+            assert_eq!(untouched, [0i64; 4]);
+            let before_list = drops();
+            unsafe {
+                release_value(list);
+                release_value(other);
+            }
+            assert_eq!(drops(), before_list + 2);
+
+            // A callable with no captures has no environment.
+            let words = inline_callable_test_words(0);
+            let plain = super::aura_direct_closure_value_deferred(
+                inline_callable_test_function(),
+                words.as_ptr(),
+                0,
+                7,
+                0,
+            );
+            unsafe {
+                super::with_value(plain, |value| {
+                    let Value::Function(function) = value else {
+                        panic!("expected a function value");
+                    };
+                    assert!(function.closure_environment.is_none());
+                });
+                release_value(plain);
+            }
+            assert_eq!(drops(), before + 5);
+            Ok(Value::Unit)
+        })
+    });
+    assert_eq!(
+        result.expect("inline callable checks should complete"),
+        Value::Unit
+    );
 }
