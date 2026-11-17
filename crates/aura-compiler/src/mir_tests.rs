@@ -4283,9 +4283,13 @@ def main():
     print(sync.AtomicInt(12).load())
 "#;
     let mir = crate::lower_source_to_mir(source).expect("user enums keep their local names");
-    for name in ["sync.Cell", "sync.Atom"] {
-        assert!(mir.classes.iter().any(|class| class.name == name));
-    }
+    assert!(
+        mir.classes.iter().all(|class| !matches!(
+            class.name.as_str(),
+            "Cell" | "Atom" | "sync.Cell" | "sync.Atom"
+        )),
+        "opaque host handles have no record layout"
+    );
     assert_eq!(
         crate::run_source(source).unwrap().stdout,
         "Cell.Open\nAtom.Ready\n12\n"

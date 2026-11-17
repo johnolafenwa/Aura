@@ -10802,7 +10802,11 @@ fn lower_unresolved_functions(program: &Program) -> MirModule {
     push_imported_module_functions(program, &mut functions, &mut seen_function_names);
 
     let mut classes = Vec::new();
-    for class in program.classes.values() {
+    for class in program
+        .classes
+        .values()
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         let fields = class
             .decl
@@ -11216,7 +11220,12 @@ fn push_imported_module_classes_from_namespace(
         .all_classes
         .values()
         .filter(|class| class.module_name == namespace.path);
-    for class in namespace.classes.values().chain(private_classes) {
+    for class in namespace
+        .classes
+        .values()
+        .chain(private_classes)
+        .filter(|class| !is_sync_host_handle(class))
+    {
         let class_name = mir_runtime_class_name(program, class);
         if !seen_class_names.insert(class_name.clone()) {
             continue;
@@ -31533,14 +31542,14 @@ fn tuple_target_ranges(elements: &[BindingTarget], arity: usize) -> Vec<std::ops
     crate::ast::rest_element_ranges(&is_rest, arity).expect("checked tuple targets fit their value")
 }
 
+/// These declarations give the checker a type for each opaque runtime handle.
+/// Emitting an empty MIR record for one would give it a zero-field layout.
+fn is_sync_host_handle(class: &crate::sema::ClassInfo) -> bool {
+    class.is_builtin && class.module_name == "sync"
+}
+
 fn mir_class_has_local_name(program: &Program, class: &crate::sema::ClassInfo) -> bool {
-    if class.is_builtin {
-        // The sync runtime identifies its handles as sync.Cell and sync.Atom.
-        // Older host classes retain their established, unqualified names.
-        class.module_name != "sync"
-    } else {
-        class.module_name == program.module_name
-    }
+    !is_sync_host_handle(class) && (class.is_builtin || class.module_name == program.module_name)
 }
 
 fn mir_runtime_class_name(program: &Program, class: &crate::sema::ClassInfo) -> String {
