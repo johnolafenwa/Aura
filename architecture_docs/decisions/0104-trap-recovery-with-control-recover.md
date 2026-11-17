@@ -114,9 +114,9 @@ error directly to a local match. Such a function cannot call out, register
 cleanup, loop or acquire resources. A failed check describes the callee
 using its source descriptor. Each such site keeps its immutable failure
 result in a program-data cell, just as the runtime shares a string literal.
-Extracting the diagnostic gives the caller a value it can change. Program
-teardown releases each initialized cell. The ordinary entry point and every other use
-of the function keep their usual behavior.
+Extracting the diagnostic gives the caller a value it can change. The first
+field read formats the saved diagnostic. A write detaches that copy before
+changing it. Program teardown releases each initialized cell.
 
 The other calls use one of these boundaries.
 
@@ -140,6 +140,10 @@ The other calls use one of these boundaries.
 A trap that happens inside a generator body or another coroutine that the
 function started is that coroutine's exit first: its stack is retired,
 and the exit continues outward until it reaches the recovered call.
+
+The first full direct call installs the task-exit handler that converts a
+trap back into a result. A program that never establishes such a boundary
+can leave the handler out of its executable.
 
 Measured on x86-64 Linux, per call: see the benchmark table in
 `benchmarks/failure_recovery/README.md`.
