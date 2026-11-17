@@ -1176,6 +1176,16 @@ def main() -> None:
 }
 
 #[test]
+fn compact_numeric_arithmetic_emits_scalar_decimal_calls() {
+    let source = include_str!("../tests/fixtures/run-pass/numbers_word_arithmetic.au");
+    let module = lower_source_to_mir(source).unwrap();
+    let referenced = object_referenced_symbols(&emit_host_object(&module).unwrap());
+    assert!(referenced
+        .iter()
+        .any(|symbol| symbol.contains("aura_direct_small_decimal_binary")));
+}
+
+#[test]
 fn direct_dynamic_binary_opcodes_match_the_runtime_abi() {
     for (operator, opcode) in [
         (BinaryOp::Add, 0),

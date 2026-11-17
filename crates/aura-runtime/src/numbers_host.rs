@@ -29,8 +29,8 @@ use num_traits::{One, Signed, ToPrimitive, Zero};
 use crate::diag::{Diagnostic, Result};
 use crate::integer::IntegerValue;
 use crate::list_elements::ListElements;
-use crate::runtime_value::{Value, VecValue};
-use aura_core::types::Type;
+use crate::runtime_value::{SharedType, Value, VecValue};
+use std::sync::OnceLock;
 
 /// The words before the magnitude in the wire form.
 const HEADER: usize = 4;
@@ -154,7 +154,14 @@ fn word_list(words: Vec<u64>) -> Value {
     } else {
         ListElements::Uint64(words.into())
     };
-    Value::Vec(VecValue::new(Type::named("uint64"), elements))
+    static WORD_TYPE: OnceLock<SharedType> = OnceLock::new();
+    Value::Vec(VecValue {
+        element_type: WORD_TYPE
+            .get_or_init(|| SharedType::named("uint64"))
+            .clone(),
+        elements,
+        str_view: Default::default(),
+    })
 }
 
 fn no_value() -> Value {
@@ -449,20 +456,47 @@ pub(crate) fn add_big_words(left: &Value, right: &Value) -> Result<Value> {
     } else {
         (&b, &a)
     };
+    // Allocate the output once. Updating initialized digits in place keeps
+    // capacity and allocator checks out of the carry chain.
     let mut result = Vec::with_capacity(longer.len() + 1);
-    result.extend([1, negative, 0, 0]);
-    let mut carry = false;
-    for (&x, &y) in longer[HEADER..].iter().zip(&shorter[HEADER..]) {
-        let (sum, next) = x.carrying_add(y, carry);
-        result.push(sum);
-        carry = next;
+    result.extend_from_slice(longer);
+    result[..HEADER].copy_from_slice(&[1, negative, 0, 0]);
+    let (common, remaining) = result[HEADER..].split_at_mut(shorter.len() - HEADER);
+    #[inline]
+    fn add_digit(carry: u8, digit: &mut u64, rhs: u64) -> u8 {
+        #[cfg(target_arch = "x86_64")]
+        {
+            std::arch::x86_64::_addcarry_u64(carry, *digit, rhs, digit)
+        }
+        #[cfg(not(target_arch = "x86_64"))]
+        {
+            let (value, next) = digit.carrying_add(rhs, carry != 0);
+            *digit = value;
+            u8::from(next)
+        }
     }
-    for &x in &longer[shorter.len()..] {
-        let (sum, next) = x.overflowing_add(u64::from(carry));
-        result.push(sum);
-        carry = next;
+    let mut carry = 0;
+    // The fixed group lets the compiler carry the processor flag through
+    // consecutive digits before the loop comparison changes it.
+    let (groups, tail) = common.as_chunks_mut::<8>();
+    let (rhs_groups, rhs_tail) = shorter[HEADER..].as_chunks::<8>();
+    for (group, rhs) in groups.iter_mut().zip(rhs_groups) {
+        for index in 0..8 {
+            carry = add_digit(carry, &mut group[index], rhs[index]);
+        }
     }
-    if carry {
+    for (digit, &rhs) in tail.iter_mut().zip(rhs_tail) {
+        carry = add_digit(carry, digit, rhs);
+    }
+    for digit in remaining {
+        if carry == 0 {
+            break;
+        }
+        let (value, next) = digit.overflowing_add(1);
+        *digit = value;
+        carry = u8::from(next);
+    }
+    if carry != 0 {
         result.push(1);
     }
     // The private host function may also be called on two small wire
