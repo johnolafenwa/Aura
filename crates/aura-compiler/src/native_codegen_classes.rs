@@ -105,13 +105,6 @@ impl PlainRecords {
         if !class.type_params.is_empty() {
             return None;
         }
-        // A class that wraps a `sync` handle is that handle's box (see
-        // `native_codegen_sync.rs`), not a block of fields.
-        if let [(_, Type::Named(handle, _))] = class.fields.as_slice() {
-            if matches!(handle.as_str(), "sync.Cell" | "sync.Atom") {
-                return None;
-            }
-        }
         let ty = Type::named(class_name);
         let mut builder = LayoutBuilder::new(&self.env);
         let root = builder.layout(&ty).ok()?;

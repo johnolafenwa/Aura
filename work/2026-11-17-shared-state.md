@@ -82,3 +82,8 @@ The integer dictionary workload also boxed each key for an indexed store.
 The native entry now accepts both words, probes the existing index by
 integer value, and preserves insertion order and copy-on-write snapshots.
 The benchmark checks the final values as well as the number of entries.
+
+A native parity run also exposed a mutex field in a user record being
+treated as an inline record. The common layout plan now stores the
+handle word in nested positions as well as at the root. The custom
+manager fixture exercises the field through both backends.
