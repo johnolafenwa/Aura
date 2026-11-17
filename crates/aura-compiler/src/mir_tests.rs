@@ -16541,3 +16541,10 @@ fn callable_destination_lowers_to_the_packing_instruction() {
     // A value that is packed already moves without a second packing.
     assert_eq!(packs("apply"), 0);
 }
+
+#[test]
+fn local_functions_share_the_lambda_capture_and_call_contract() {
+    let source = include_str!("../tests/fixtures/run-pass/local_function_bodies.au");
+    let output = crate::run_source(source).expect("local function bodies should run");
+    assert_eq!(output.stdout, "4\n5\n14\n120\n11\n");
+}

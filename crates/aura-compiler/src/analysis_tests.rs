@@ -8357,7 +8357,11 @@ fn lambda_scope_navigation_follows_every_expression_container_to_its_structural_
         panic!("expected callback assignment");
     };
     let mut lambda = assign.value.clone();
-    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+    let ExprKind::Lambda {
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = &mut lambda.kind
+    else {
         panic!("expected checked lambda expression");
     };
     body.span = Span::new(9, 1);
@@ -8591,7 +8595,11 @@ fn lambda_scope_navigation_reaches_assignment_targets_and_assert_operands() {
         panic!("expected callback assignment");
     };
     let mut lambda = assign.value.clone();
-    let ExprKind::Lambda { body, .. } = &mut lambda.kind else {
+    let ExprKind::Lambda {
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = &mut lambda.kind
+    else {
         panic!("expected checked lambda expression");
     };
     body.span = Span::new(9, 1);

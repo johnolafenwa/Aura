@@ -57,7 +57,7 @@ pub(super) struct LambdaCallableContext<'a> {
 pub(super) struct LambdaTypingRequest<'a> {
     pub(super) explicit_captures: Option<&'a [crate::ast::LambdaCapture]>,
     pub(super) params: &'a [LambdaParam],
-    pub(super) body: &'a Expr,
+    pub(super) body: &'a crate::ast::ClosureBody,
     pub(super) span: crate::diag::Span,
     pub(super) expected: Option<&'a Type>,
     pub(super) callable_context: Option<LambdaCallableContext<'a>>,
@@ -182,7 +182,16 @@ pub(super) fn default_argument_references_param(
                 .filter(|name| !shadowed.contains(name))
                 .cloned()
                 .collect::<Vec<_>>();
-            default_argument_references_param(body, &visible)
+            match body {
+                crate::ast::ClosureBody::Expression(value) => {
+                    default_argument_references_param(value, &visible)
+                }
+                crate::ast::ClosureBody::Function { name, statements } => {
+                    visible.into_iter().find(|candidate| {
+                        candidate != name && super::block_references_name(statements, candidate)
+                    })
+                }
+            }
         }
     }
 }
@@ -984,6 +993,137 @@ impl<'a> FunctionChecker<'a> {
         Ok(())
     }
 
+    pub(super) fn collect_closure_body_uses(
+        body: &crate::ast::ClosureBody,
+        bound: &BTreeSet<String>,
+        seen: &mut BTreeSet<String>,
+        captures: &mut Vec<(String, crate::diag::Span)>,
+    ) {
+        match body {
+            crate::ast::ClosureBody::Expression(value) => {
+                Self::collect_lambda_capture_uses(value, bound, seen, captures)
+            }
+            crate::ast::ClosureBody::Function { name, statements } => {
+                let mut bound = bound.clone();
+                bound.insert(name.clone());
+                Self::collect_block_capture_uses(statements, bound, seen, captures);
+            }
+        }
+    }
+
+    fn collect_block_capture_uses(
+        statements: &[crate::ast::Stmt],
+        mut bound: BTreeSet<String>,
+        seen: &mut BTreeSet<String>,
+        captures: &mut Vec<(String, crate::diag::Span)>,
+    ) {
+        use crate::ast::{AssignTarget, Stmt};
+        for stmt in statements {
+            let mut read =
+                |expr: &Expr| Self::collect_lambda_capture_uses(expr, &bound, seen, captures);
+            match stmt {
+                Stmt::Assign(assign) => {
+                    read(&assign.value);
+                    match &assign.target {
+                        AssignTarget::Name(name) => {
+                            if !assign.mutable
+                                && assign.annotation.is_none()
+                                && !bound.contains(name)
+                                && seen.insert(name.clone())
+                            {
+                                captures.push((name.clone(), assign.span));
+                            }
+                            bound.insert(name.clone());
+                        }
+                        AssignTarget::Member { object, .. } => read(object),
+                        AssignTarget::Index { object, index } => {
+                            read(object);
+                            read(index);
+                        }
+                    }
+                }
+                Stmt::Destructure(stmt) => {
+                    read(&stmt.value);
+                    collect_binding_target_names(&stmt.target, &mut bound);
+                }
+                Stmt::View(stmt) => {
+                    read(&stmt.source);
+                    bound.insert(stmt.name.clone());
+                }
+                Stmt::Assert(stmt) => {
+                    read(&stmt.condition);
+                    if let Some(message) = &stmt.message {
+                        read(message);
+                    }
+                }
+                Stmt::Expr(stmt) => read(&stmt.expr),
+                Stmt::Return(stmt) => {
+                    if let Some(value) = &stmt.value {
+                        read(value);
+                    }
+                }
+                Stmt::If(stmt) => {
+                    for branch in &stmt.branches {
+                        Self::collect_lambda_capture_uses(
+                            &branch.condition,
+                            &bound,
+                            seen,
+                            captures,
+                        );
+                        Self::collect_block_capture_uses(
+                            &branch.body,
+                            bound.clone(),
+                            seen,
+                            captures,
+                        );
+                    }
+                    if let Some(body) = &stmt.else_body {
+                        Self::collect_block_capture_uses(body, bound.clone(), seen, captures);
+                    }
+                }
+                Stmt::Match(stmt) => {
+                    read(&stmt.scrutinee);
+                    for arm in &stmt.arms {
+                        let mut inner = bound.clone();
+                        Self::collect_pattern_binding_names(&arm.pattern, &mut inner);
+                        if let Some(guard) = &arm.guard {
+                            Self::collect_lambda_capture_uses(guard, &inner, seen, captures);
+                        }
+                        Self::collect_block_capture_uses(&arm.body, inner, seen, captures);
+                    }
+                }
+                Stmt::While(stmt) => {
+                    read(&stmt.condition);
+                    for clause in &stmt.contracts {
+                        read(&clause.condition);
+                    }
+                    Self::collect_block_capture_uses(&stmt.body, bound.clone(), seen, captures);
+                }
+                Stmt::For(stmt) => {
+                    read(&stmt.iterable);
+                    let mut inner = bound.clone();
+                    collect_binding_target_names(&stmt.target, &mut inner);
+                    for clause in &stmt.contracts {
+                        Self::collect_lambda_capture_uses(
+                            &clause.condition,
+                            &inner,
+                            seen,
+                            captures,
+                        );
+                    }
+                    Self::collect_block_capture_uses(&stmt.body, inner, seen, captures);
+                }
+                Stmt::With(stmt) => {
+                    read(&stmt.value);
+                    let mut inner = bound.clone();
+                    inner.insert(stmt.binding.clone());
+                    Self::collect_block_capture_uses(&stmt.body, inner, seen, captures);
+                }
+                Stmt::Pass(_) | Stmt::Break(_) | Stmt::Continue(_) => {}
+            }
+        }
+    }
+
     pub(super) fn collect_lambda_capture_uses(
         expr: &Expr,
         bound: &BTreeSet<String>,
@@ -999,7 +1139,7 @@ impl<'a> FunctionChecker<'a> {
             ExprKind::Lambda { params, body, .. } => {
                 let mut nested_bound = bound.clone();
                 nested_bound.extend(params.iter().map(|param| param.name.clone()));
-                Self::collect_lambda_capture_uses(body, &nested_bound, seen, captures);
+                Self::collect_closure_body_uses(body, &nested_bound, seen, captures);
             }
             ExprKind::Group(inner)
             | ExprKind::Try(inner)
@@ -1270,7 +1410,7 @@ impl<'a> FunctionChecker<'a> {
             .collect::<BTreeSet<_>>();
         let mut seen = BTreeSet::new();
         let mut capture_uses = Vec::new();
-        Self::collect_lambda_capture_uses(body, &bound, &mut seen, &mut capture_uses);
+        Self::collect_closure_body_uses(body, &bound, &mut seen, &mut capture_uses);
 
         // An imported module is a namespace, not a value: a lambda names it
         // without capturing it.
@@ -1340,6 +1480,10 @@ impl<'a> FunctionChecker<'a> {
             let Some(binding) = locals.get(&name).filter(|_| !is_module(&name)) else {
                 continue;
             };
+            if binding.local_function == Some(super::LocalFunctionBinding::RecursiveCall) {
+                return Err(Diagnostic::coded_at("AU2005", capture_span,
+                    "a local function can use itself only as the target of a direct call"));
+            }
             self.ensure_pattern_binding_not_stale(&name, capture_span, binding)?;
             if binding.moved {
                 return Err(self.moved_value_diagnostic(&name, capture_span, binding));
@@ -1471,7 +1615,13 @@ impl<'a> FunctionChecker<'a> {
                 name.clone(),
                 LocalBinding {
                     ty: binding.ty.clone(),
-                    assignable: false,
+                    assignable: matches!(body, crate::ast::ClosureBody::Function { .. })
+                        && (mode == ClosureCaptureMode::MutableView
+                            || (binding.assignable
+                                && matches!(
+                                    mode,
+                                    ClosureCaptureMode::Copy | ClosureCaptureMode::Move
+                                ))),
                     mutable_place: mode == ClosureCaptureMode::MutableView,
                     managed_resource: false,
                     passing: match mode {
@@ -1497,6 +1647,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: mode != ClosureCaptureMode::MutableView,
                     view: None,
                     closure_loans: Vec::new(),
@@ -1545,6 +1696,7 @@ impl<'a> FunctionChecker<'a> {
                     moved_fields: BTreeMap::new(),
                     frozen_places: BTreeMap::new(),
                     shared_match_places: BTreeMap::new(),
+                    local_function: None,
                     captured: false,
                     view: None,
                     closure_loans: Vec::new(),
@@ -1563,32 +1715,58 @@ impl<'a> FunctionChecker<'a> {
             super::types::collect_type_params_from_type(expected, &mut named);
             named.iter().all(|name| self.type_params.contains_key(name))
         });
-        self.reject_mutable_returned_view_value(body, &mut lambda_locals, false)?;
-        self.reject_owned_view_value(body, &mut lambda_locals, "an owned lambda result")?;
-        // Owned captures mutated by the body make the closure Mutable (C2);
-        // the set is scoped to this lambda so nested lambdas do not leak.
         let outer_mutated_captures = std::mem::take(&mut *self.mutated_captures.borrow_mut());
-        let return_type = self.type_of_expr_hint(body, &mut lambda_locals, expected_return)?;
-        if let Some(expected_return) = expected_return {
-            if return_type != *expected_return {
-                return Err(Diagnostic::coded_at(
-                    "AU2002",
-                    body.span,
-                    format!("lambda body has type `{return_type}`, expected `{expected_return}`"),
-                ));
+        let return_type = match body {
+            crate::ast::ClosureBody::Expression(value) => {
+                self.reject_mutable_returned_view_value(value, &mut lambda_locals, false)?;
+                self.reject_owned_view_value(value, &mut lambda_locals, "an owned lambda result")?;
+                let result = self.type_of_expr_hint(value, &mut lambda_locals, expected_return)?;
+                if expected_return.is_some_and(|expected| *expected != result) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        value.span,
+                        format!(
+                            "lambda body has type `{result}`, expected `{}`",
+                            expected_return.unwrap()
+                        ),
+                    ));
+                }
+                if type_contains_loan_closure(&result) {
+                    return Err(Diagnostic::coded_at("AU3010", value.span,
+                        "a closure cannot return another closure containing a live view")
+                        .with_help("keep the loan-bearing closure in its matching inferred local and call it directly"));
+                }
+                self.consume_value_expr(value, &mut lambda_locals)?;
+                result
             }
-        }
-        if type_contains_loan_closure(&return_type) {
-            return Err(Diagnostic::coded_at(
-                "AU3010",
-                body.span,
-                "a closure cannot return another closure containing a live view",
-            )
-            .with_help(
-                "keep the loan-bearing closure in its matching inferred local and call it directly",
-            ));
-        }
-        self.consume_value_expr(body, &mut lambda_locals)?;
+            crate::ast::ClosureBody::Function { name, statements } => {
+                let result = expected_return.expect("a local function has a declared result");
+                if super::generators::body_yields(statements) {
+                    return Err(Diagnostic::coded_at(
+                        "AU2005",
+                        span,
+                        "a local function cannot yield",
+                    ));
+                }
+                let self_type = Type::Function {
+                    params: param_contracts.clone(),
+                    return_type: Box::new(result.clone()),
+                };
+                lambda_locals.insert(name.clone(), LocalBinding::local_function(self_type));
+                let mut body_checker = self.with_module_name(self.module_name);
+                body_checker.local_function_body = true;
+                body_checker.recursion_measure = std::rc::Rc::new(std::cell::RefCell::new(None));
+                let flow = body_checker.check_block(statements, &mut lambda_locals, result, 0, true)?;
+                if *result != Type::Unit && flow != super::BlockFlow::AlwaysReturns {
+                    return Err(Diagnostic::coded_at(
+                        "AU2002",
+                        span,
+                        format!("local function `{name}` must return `{result}` on every path"),
+                    ));
+                }
+                result.clone()
+            }
+        };
         let mutated_captures = std::mem::replace(
             &mut *self.mutated_captures.borrow_mut(),
             outer_mutated_captures,
@@ -1613,6 +1791,15 @@ impl<'a> FunctionChecker<'a> {
         } else {
             ClosureCallKind::Repeatable
         };
+        if let crate::ast::ClosureBody::Function { name, statements } = body {
+            if call_kind != ClosureCallKind::Repeatable
+                && super::block_references_name(statements, name)
+            {
+                return Err(Diagnostic::coded_at("AU3003", span,
+                    format!("local function `{name}` cannot call itself while it mutates or consumes captures"))
+                    .with_help("pass the state as a mut parameter"));
+            }
+        }
         let id = ClosureId::new(self.module_name, self.closure_owner.clone(), span);
         let info = ClosureInfo {
             id: id.clone(),

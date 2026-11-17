@@ -73,6 +73,35 @@ Named functions like these are *thin* function values: a pointer to code, with
 nothing else attached. They are copy values, so passing one around never moves
 anything, and they can go anywhere a value can go, including across tasks.
 
+## Give A Closure A Statement Body
+
+Suppose we want a counter that keeps its current value between calls. We
+can give the update a name and a body with two statements.
+
+```aura
+def counter(start: int64) -> Callable[mut def() -> int64]:
+    mut count = start
+    def bump() -> int64:
+        count += 1
+        return count
+    return bump
+
+
+def main() -> None:
+    mut next = counter(10)
+    print(next())
+    print(next())
+```
+
+We get `11` and then `12`. The declaration of `bump` captures the
+current value of `count`. The assignment updates that capture each time
+we call the function. Its return type records that a call needs mutable
+access. The caller provides that access with `mut next`.
+
+We can use an ordinary `return` anywhere in a local function. It returns
+to the caller of that function. A local function can also call itself
+when its captures are shared or it has no captures.
+
 ## Capturing the limit
 
 `is_slow` has its limit, 100, written into its body. In a real tool the limit

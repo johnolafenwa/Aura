@@ -1250,7 +1250,18 @@ impl<'a> AnalysisBuilder<'a> {
     ) {
         match &expr.kind {
             ExprKind::Lambda { params, body, .. } => {
-                if expression_contains_position(body, target_line, character) {
+                let inside = match body {
+                    crate::ast::ClosureBody::Expression(value) => {
+                        expression_contains_position(value, target_line, character)
+                    }
+                    crate::ast::ClosureBody::Function { statements, .. } => {
+                        target_line >= expr.span.line
+                            && statements
+                                .last()
+                                .is_some_and(|stmt| target_line <= stmt_end_line(stmt))
+                    }
+                };
+                if inside {
                     if let Some(info) = self.closure_info(expr) {
                         for (param, contract) in params.iter().zip(&info.params) {
                             let definition = range_from_span(param.span, param.name.len());
@@ -1265,7 +1276,16 @@ impl<'a> AnalysisBuilder<'a> {
                             );
                         }
                     }
-                    self.extend_lambda_scope_from_expr(body, target_line, character, scope);
+                    match body {
+                        crate::ast::ClosureBody::Expression(value) => {
+                            self.extend_lambda_scope_from_expr(value, target_line, character, scope)
+                        }
+                        crate::ast::ClosureBody::Function { statements, .. } => {
+                            self.accumulate_scope_from_stmts(statements, target_line, scope);
+                            self.extend_lambda_scope_from_stmts(statements, target_line, character, scope);
+                        }
+
+                    }
                 }
             }
             ExprKind::Membership {
@@ -3567,7 +3587,14 @@ impl<'a> AnalysisBuilder<'a> {
                         lambda_scope.insert(param.name.clone(), binding);
                     }
                 }
-                self.visit_expr(body, &lambda_scope);
+                match body {
+                    crate::ast::ClosureBody::Expression(value) => {
+                        self.visit_expr(value, &lambda_scope)
+                    }
+                    crate::ast::ClosureBody::Function { statements, .. } => {
+                        self.visit_stmts(statements, &mut lambda_scope)
+                    }
+                }
             }
             ExprKind::Cast { expr, ty } => {
                 self.visit_expr(expr, scope);
@@ -6867,7 +6894,13 @@ fn expression_end_line(expr: &Expr) -> usize {
         | ExprKind::IsNone { value: object, .. }
         | ExprKind::Try(object)
         | ExprKind::Group(object) => expression_end_line(object),
-        ExprKind::Lambda { body, .. } => expression_end_line(body),
+        ExprKind::Lambda { body, .. } => match body {
+            crate::ast::ClosureBody::Expression(value) => expression_end_line(value),
+            crate::ast::ClosureBody::Function { statements, .. } => statements
+                .last()
+                .map(stmt_end_line)
+                .unwrap_or(expr.span.line),
+        },
         ExprKind::Call { callee, args } => args
             .iter()
             .map(|arg| expression_end_line(&arg.value))

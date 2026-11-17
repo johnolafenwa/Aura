@@ -8096,6 +8096,7 @@ fn local_binding(
             .collect(),
         frozen_places: BTreeMap::new(),
         shared_match_places: BTreeMap::new(),
+        local_function: None,
         captured: false,
         view: None,
         closure_loans: Vec::new(),
@@ -14382,6 +14383,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14417,6 +14419,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -14449,6 +14452,7 @@ fn checker_helper_paths_cover_imported_modules_type_args_and_binding_consumption
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -19639,6 +19643,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 ]),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19686,6 +19691,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19711,6 +19717,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
                 moved_fields: BTreeMap::new(),
                 frozen_places: BTreeMap::new(),
                 shared_match_places: BTreeMap::new(),
+                local_function: None,
                 captured: false,
                 view: None,
                 closure_loans: Vec::new(),
@@ -19863,6 +19870,7 @@ fn place_path_and_resource_helpers_cover_remaining_checker_paths() {
             moved_fields: BTreeMap::new(),
             frozen_places: BTreeMap::new(),
             shared_match_places: BTreeMap::new(),
+            local_function: None,
             captured: false,
             view: None,
             closure_loans: Vec::new(),
@@ -33725,5 +33733,31 @@ fn callable_destination_keeps_every_packing_rule() {
             "{source}\n{}",
             error.message
         );
+    }
+}
+
+#[test]
+fn locally_declared_functions_preserve_capture_ownership_and_call_kind() {
+    let cases = [
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_mutable_recursion.au"),
+            "AU3003",
+            "pass the state as a mut parameter",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_binding_reassign.au"),
+            "AU3003",
+            "immutable binding",
+        ),
+        (
+            include_str!("../tests/fixtures/check-fail/local_function_capture_escape.au"),
+            "AU3010",
+            "view",
+        ),
+    ];
+    for (source, code, message) in cases {
+        let error = crate::check_source(source).expect_err("invalid local function usage");
+        assert_eq!(error.code, code, "{error:?}");
+        assert!(format!("{error:?}").contains(message), "{error:?}");
     }
 }

@@ -16,8 +16,8 @@ Last updated: 2026-11-16
 - Done: direct calls through stored closures. A closure in a field or a
   list element is called where it is kept, and `benchmarks/closures`
   compares the calls with Rust and Python.
-- Remaining: step 2, a `def` statement inside a function for closures with
-  statement bodies (ADR-0105).
+- Local functions with statement bodies and recursion are in development
+  under ADR-0116. See `2026-11-17-local-functions.md` for verification.
 
 ## Book chapters on tensors and machine learning (complete)
 

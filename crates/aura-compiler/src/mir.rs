@@ -12337,6 +12337,8 @@ struct Lowerer<'a> {
     /// The MIR name of the function whose arguments are being lowered next,
     /// so an omitted default calls that function's generated default helper.
     default_helper_owner: Option<String>,
+    /// A local function's lexical name and the shared captures forwarded by direct recursion.
+    recursive_local: Option<(String, ClosureInfo)>,
     metadata_module_name: Option<String>,
     metadata_owner: Option<ClosureOwner>,
     return_type: Type,
@@ -12617,6 +12619,7 @@ impl<'a> Lowerer<'a> {
             function_name,
             module_name,
             default_helper_owner: None,
+            recursive_local: None,
             metadata_module_name: None,
             metadata_owner: None,
             return_type,
@@ -13426,7 +13429,7 @@ impl<'a> Lowerer<'a> {
         &mut self,
         expr: &Expr,
         params: &[crate::ast::LambdaParam],
-        body: &Expr,
+        body: &crate::ast::ClosureBody,
     ) -> Operand {
         let info = self
             .closure_info_at(expr.span)
@@ -13498,12 +13501,27 @@ impl<'a> Lowerer<'a> {
         // The body is lowered as a `return` statement, so the hidden loans
         // its expression takes (`lambda: items[0].area()` lends `items[0]`
         // to the call) end before the function returns.
-        let stmt = Stmt::Return(crate::ast::ReturnStmt {
-            value: Some(body.clone()),
-            view: None,
-            span: body.span,
-        });
-        lowerer.lower_stmts(std::slice::from_ref(&stmt));
+        match body {
+            crate::ast::ClosureBody::Expression(expr) => {
+                let stmt = Stmt::Return(crate::ast::ReturnStmt {
+                    value: Some((**expr).clone()),
+                    view: None,
+                    span: expr.span,
+                });
+                lowerer.lower_stmts(std::slice::from_ref(&stmt));
+            }
+            crate::ast::ClosureBody::Function { name, statements } => {
+                lowerer.local_types.insert(
+                    name.clone(),
+                    Type::Function {
+                        params: info.params.clone(),
+                        return_type: Box::new(info.return_type.clone()),
+                    },
+                );
+                lowerer.recursive_local = Some((name.clone(), info.clone()));
+                lowerer.lower_stmts(statements);
+            }
+        }
         self.generated_functions
             .extend(lowerer.finish_with_generated(MirFunctionSpec {
                 name: name.clone(),
@@ -25761,6 +25779,31 @@ impl<'a> Lowerer<'a> {
         args: &[Argument],
         expected: Option<&Type>,
     ) -> Operand {
+        if let Some((name, info)) = &self.recursive_local {
+            if matches!(&grouped_mir_expr(callee).kind, ExprKind::Name(called) if called == name) {
+                let info = info.clone();
+                let mut forwarded = info
+                    .captures
+                    .iter()
+                    .map(|capture| MirArg {
+                        name: None,
+                        value: Operand::Place(self.render_local_name(&capture.name)),
+                        writeback_place: None,
+                    })
+                    .collect::<Vec<_>>();
+                forwarded.extend(self.lower_function_value_args(args, &info.params, callee.span));
+                let target = self.new_typed_temp(info.return_type);
+                self.emit(Instruction::Assign {
+                    target: target.clone(),
+                    value: Rvalue::Call {
+                        callee: CallTarget::Name(self.function_name.to_string()),
+                        args: forwarded,
+                        type_args: Default::default(),
+                    },
+                });
+                return Operand::Place(target);
+            }
+        }
         self.lower_recursive_call_measure(callee, args);
         match &callee.kind {
             ExprKind::Name(name) if name == "len" && args.len() == 1 => {

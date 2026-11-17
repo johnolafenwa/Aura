@@ -238,7 +238,12 @@ fn p64_extern_declarations_reserve_variadics_callbacks_and_raw_pointers() {
 fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let lambda = parse_expression("lambda value, own text, mut output: output")
         .expect("lambda with all supported parameter modes should parse");
-    let ExprKind::Lambda { params, body, .. } = lambda.kind else {
+    let ExprKind::Lambda {
+        params,
+        body: crate::ast::ClosureBody::Expression(body),
+        ..
+    } = lambda.kind
+    else {
         panic!("expected lambda expression");
     };
     assert!(matches!(
@@ -269,7 +274,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
     let no_params = parse_expression("lambda: 42").expect("zero-parameter lambda should parse");
     assert!(matches!(
         no_params.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params.is_empty() && matches!(body.kind, ExprKind::Int(42))
     ));
 
@@ -277,7 +282,7 @@ fn p63_lambda_parameters_are_contextual_and_the_body_is_an_expression() {
         .expect("contextual identifier parameter should parse");
     assert!(matches!(
         contextual_name.kind,
-        ExprKind::Lambda { ref params, ref body, .. }
+        ExprKind::Lambda { ref params, body: crate::ast::ClosureBody::Expression(ref body), .. }
             if params[0].name == "from"
                 && matches!(body.kind, ExprKind::Name(ref name) if name == "from")
     ));
@@ -289,7 +294,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("conditional expression should remain inside the lambda body");
     assert!(matches!(
         conditional_body.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Conditional { .. })
     ));
 
@@ -306,7 +311,7 @@ fn p63_lambda_has_python_precedence_and_nests_in_expression_positions() {
         .expect("lambda bodies should permit nested lambdas");
     assert!(matches!(
         nested.kind,
-        ExprKind::Lambda { ref body, .. }
+        ExprKind::Lambda { body: crate::ast::ClosureBody::Expression(ref body), .. }
             if matches!(body.kind, ExprKind::Lambda { .. })
     ));
 
@@ -1088,7 +1093,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
         [ComprehensionClause {
             iterable:
                 Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 },
             ..
@@ -1107,7 +1112,7 @@ fn comprehension_iterables_and_filters_preserve_unparenthesized_lambda_ast() {
             if matches!(
                 filters.as_slice(),
                 [Expr {
-                    kind: ExprKind::Lambda { params, body, .. },
+                    kind: ExprKind::Lambda { params, body: crate::ast::ClosureBody::Expression(body), .. },
                     ..
                 }] if matches!(
                     params.as_slice(),

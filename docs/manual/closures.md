@@ -1,6 +1,6 @@
 # Closures
 
-A closure is a small callable value with an expression body, written `lambda parameters: expression`. Parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
+A closure is a callable value that can capture its surroundings. Write a lambda for an expression body or declare a local function for a statement body. Lambda parameter types come from context. A zero-parameter lambda may infer its result type from its body. A lambda without a capture list captures by value. An explicit capture list names outer locals and requests shared, mutable, or owned access to each one, and it must be exhaustive.
 
 ```aura
 def main():
@@ -25,6 +25,36 @@ This prints `42`, `12`, `6`, `6`, and `owned` on separate lines:
 - `factor` is copied into `scale`.
 - `name` moves into a read-only closure that can be called repeatedly.
 - `token` moves into a consuming closure that is called once.
+
+## Local Functions
+
+A `def` inside a function binds its name in the current block. Its
+parameters and result have written types. Bare, `mut`, `own` and
+keyword-only parameters work as in a module function. Each declaration
+captures the values it uses when control reaches it. A declaration may
+spell an exhaustive capture list after its name.
+
+```aura
+def main() -> None:
+    mut total = 2
+    def add[mut total](*, amount: int64) -> None:
+        total += amount
+    add(amount=5)
+    print(total)
+```
+
+An owned local function can be returned or stored in a matching
+`Callable` type. A local function that captures a loan stays in its
+declaring block. A capture-free local function can be used as a thin
+function value. The declaration binds an immutable name, including
+when calling the closure updates its private state.
+
+A local function with shared captures can call itself with the same
+environment. To recurse with mutable state, pass the state as a `mut`
+parameter. Define mutually recursive functions at module scope.
+Defaults, type parameters, decorators, contracts, `view` results and
+`yield` belong to module functions or methods.
+
 
 ## Grammar
 
