@@ -11474,3 +11474,27 @@ fn array_selection_results_complete_as_arrays() {
     assert!(completions.iter().any(|item| item.name == "wrapping_add"));
     assert!(!completions.iter().any(|item| item.name == "transpose"));
 }
+
+#[test]
+fn a_named_index_in_a_callable_field_call_refers_to_its_parameter() {
+    let source = include_str!("../tests/fixtures/run-pass/callable_indexed_places.au");
+    let analysis = analyze_source(source);
+    assert!(
+        analysis.diagnostics.is_empty(),
+        "{:?}",
+        analysis.diagnostics
+    );
+    let (line, text) = source
+        .lines()
+        .enumerate()
+        .find(|(_, line)| line.contains("steps[index]"))
+        .unwrap();
+    let column = text.find("[index]").unwrap() + 1;
+    let read = analysis
+        .occurrences
+        .iter()
+        .find(|entry| entry.line == line && entry.start_character == column)
+        .expect("the named index has an editor occurrence");
+    assert!(read.hover.contains("index: int64"));
+    assert_eq!(read.definition.as_ref().unwrap().line, line - 1);
+}

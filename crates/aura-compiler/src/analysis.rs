@@ -3438,7 +3438,23 @@ impl<'a> AnalysisBuilder<'a> {
         }
     }
 
+    fn indexed_collection_callee(
+        &self,
+        expr: &Expr,
+        scope: &BTreeMap<String, BindingInfo>,
+    ) -> Option<Expr> {
+        expr.indexed_collection_callee(|object| {
+            self.infer_expr_type(object, scope).is_some_and(
+                |ty| matches!(&ty, Type::Named(name, _) if name == "list" || name == "dict"),
+            )
+        })
+    }
+
     fn visit_expr(&mut self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) {
+        if let Some(indexed) = self.indexed_collection_callee(expr, scope) {
+            self.visit_expr(&indexed, scope);
+            return;
+        }
         match &expr.kind {
             ExprKind::Membership {
                 value, container, ..
@@ -5137,6 +5153,9 @@ impl<'a> AnalysisBuilder<'a> {
     }
 
     fn infer_expr_type(&self, expr: &Expr, scope: &BTreeMap<String, BindingInfo>) -> Option<Type> {
+        if let Some(indexed) = self.indexed_collection_callee(expr, scope) {
+            return self.infer_expr_type(&indexed, scope);
+        }
         match &expr.kind {
             ExprKind::IsNone { .. }
             | ExprKind::Membership { .. }
