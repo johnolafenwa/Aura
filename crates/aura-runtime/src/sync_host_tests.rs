@@ -249,6 +249,21 @@ fn a_released_outer_lock_does_not_hide_a_new_lock_from_recovery() {
 }
 
 #[test]
+fn returning_the_outer_of_two_held_cells_keeps_the_inner_registered() {
+    let outer = SyncValue::cell(Value::Unit);
+    let inner = SyncValue::cell(Value::Unit);
+    let held = outer.take().unwrap();
+    let boundary = mark_held_cells();
+    inner.take().unwrap();
+    outer.put(held).unwrap();
+    assert!(inner.take().unwrap_err().message.contains("already holds"));
+    outer.take().unwrap();
+    abandon_held_cells_since(boundary);
+    assert!(inner.is_poisoned().unwrap());
+    assert!(outer.is_poisoned().unwrap());
+}
+
+#[test]
 fn standard_mutex_and_atomic_wrappers_render_as_opaque_handles() {
     for name in [
         "sync.Mutex",
