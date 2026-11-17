@@ -1,10 +1,10 @@
-# ADR-0104: A callable value packs where owned callable storage is expected
+# ADR-0115: A callable value packs where owned callable storage is expected
 
 - Status: Accepted
 - Date: 2026-11-16
 - Amends: ADR-0058 (answer C1, explicit erasure), ADR-0037 (capture of a
   shared parameter)
-- Design checkpoint: [First-class closures](../29-first-class-closures-design-checkpoint.md)
+- Design checkpoint: [First-class closures](../30-first-class-closures-design-checkpoint.md)
 
 ## Context
 

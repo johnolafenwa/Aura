@@ -15542,7 +15542,7 @@ impl<'a> Lowerer<'a> {
             (AssignTarget::Name(name), Some(annotation)) => {
                 let annotation = self.lower_type_ref_with_provenance(annotation);
                 // A structural `def` annotation leaves a closure its own
-                // type. Owned callable storage packs it (ADR-0104).
+                // type. Owned callable storage packs it (ADR-0115).
                 let storage_type = self
                     .infer_expr_type(&assign.value)
                     .filter(|ty| {
@@ -24360,7 +24360,7 @@ impl<'a> Lowerer<'a> {
 
     /// Packs a function value, a lambda, a bound method or a closure
     /// written where the owned callable storage type `expected` is the
-    /// destination (ADR-0104). The value is lowered under the storage's
+    /// destination (ADR-0115). The value is lowered under the storage's
     /// contract and packed as the explicit constructor packs it. A value
     /// that is packed already moves as it is.
     fn lower_callable_destination(

@@ -7569,7 +7569,7 @@ impl<'a> FunctionChecker<'a> {
 
     /// Checks one callable value against the owned storage type it packs
     /// into, for the explicit constructor and for a typed destination
-    /// (ADR-0104). `actual` is the value's own type and `name` is how
+    /// (ADR-0115). `actual` is the value's own type and `name` is how
     /// diagnostics spell the destination.
     fn check_callable_pack_value(
         &self,
@@ -7695,7 +7695,7 @@ impl<'a> FunctionChecker<'a> {
     }
 
     /// Types a value written where owned callable storage is expected
-    /// (ADR-0104). A function value, a lambda, a bound method or a closure
+    /// (ADR-0115). A function value, a lambda, a bound method or a closure
     /// packs there under the rules of the explicit constructor. A value that
     /// is packed already, or is not callable, keeps its own type for the
     /// destination to judge.
