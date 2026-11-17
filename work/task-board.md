@@ -16,6 +16,9 @@ Last updated: 2026-11-17
 - Done: direct calls through stored closures. A closure in a field or a
   list element is called where it is kept, and `benchmarks/closures`
   compares the calls with Rust and Python.
+- A confined list caches stored callable addresses. Boxed closures own
+  string, nested callable and wide captures independently of their creating
+  task. The complete tool runner and decorated functions free every box.
 - Calls through `self.steps[index]` and tuple positions pass MIR validation.
   Benchmark measurements are in `benchmarks/closures/README.md`.
 - Local functions with statement bodies and recursion are in development

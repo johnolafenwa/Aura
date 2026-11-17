@@ -757,13 +757,16 @@ pub struct FunctionValue {
 /// them. A Mutable closure changes them on each call. Its boxed captures
 /// are made from the words when runtime code first needs them, and the
 /// words are released then, so one of the two holds the state at a time.
+// Generated code reads the ABI key and release flag before calling through
+// the environment. Keep this layout stable across compiler and runtime builds.
+#[repr(C)]
 pub struct DirectCallable {
     words: std::cell::UnsafeCell<[i64; 4]>,
     abi_key: i64,
-    mutable: bool,
     capture_count: usize,
-    released: AtomicBool,
     boxed_captures: fn(&DirectCallable) -> Vec<ClosureCaptureValue>,
+    mutable: bool,
+    released: AtomicBool,
 }
 
 // SAFETY: the words are read and written only by the one owner of the
@@ -783,6 +786,12 @@ impl fmt::Debug for DirectCallable {
 }
 
 impl DirectCallable {
+    /// Offsets used by generated code while a boxed value owns the callable.
+    /// The runtime checks them in the direct list-layout fingerprint.
+    pub const WORDS_OFFSET: i32 = std::mem::offset_of!(Self, words) as i32;
+    pub const ABI_KEY_OFFSET: i32 = std::mem::offset_of!(Self, abi_key) as i32;
+    pub const RELEASED_OFFSET: i32 = std::mem::offset_of!(Self, released) as i32;
+
     /// The offset of the `drop` adapter in a callable descriptor.
     pub const DESCRIPTOR_DROP: usize = 8;
     /// The offset of the `retain` adapter in a callable descriptor.
@@ -1800,8 +1809,8 @@ impl PartialEq for EnumVariantValue {
 pub struct VecValue {
     pub element_type: SharedType,
     pub elements: ListElements,
-    /// Where a `list[str]`'s elements lie, which the native runtime builds
-    /// for generated code. It is not part of the value.
+    /// Native lookup data for strings, callables and borrowed elements.
+    /// Cloning a list starts its lookup cache empty.
     pub str_view: crate::list_elements::StrViewCache,
 }
 

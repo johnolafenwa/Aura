@@ -17720,10 +17720,18 @@ def main() -> None:
         "{wrapper_symbol} must preserve the caller's sink-free path"
     );
     let references = object_function_referenced_symbols(&object, &wrapper_symbol);
+    // The wrapper forwards its receiver and arguments unchanged to a leaf.
+    // Its combined body pushes both source frames only when arithmetic traps.
     assert!(
         references
             .iter()
-            .any(|name| name.ends_with("aura_fn_Count_add__leaf")),
+            .any(|name| name.ends_with("aura_direct_fail_integer_overflow")),
+        "{references:?}"
+    );
+    assert!(
+        !references
+            .iter()
+            .any(|name| name.ends_with("aura_direct_frame_stack")),
         "{references:?}"
     );
     let main_references = object_function_referenced_symbols(&object, "aura_fn_main");

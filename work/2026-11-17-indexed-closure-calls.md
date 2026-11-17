@@ -20,3 +20,11 @@ and the extended stored-call branch both reproduced it. The compiler boxes
 handle-owning captures into runtime values at the storage boundary. A
 cleanup test exercises the decorated function to shutdown and checks its
 output, exit status and allocation/free counts.
+
+The rebuilt compiler runs the decorated-functions program to completion
+and frees all 57 allocated boxes. The tool runner matches its pinned
+output and frees all 742. The numeric-call path now reads live callable
+words directly from confined function boxes and list tables. Mutable
+closures that exactly forward to a plain receiver's leaf method defer
+both frame records until a trap. The overflow regression retains the
+method, closure and caller locations on both backends.

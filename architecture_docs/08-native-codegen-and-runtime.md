@@ -500,23 +500,30 @@ environment words. A class field and a list element hold a runtime
 function value. When that value keeps the native words, callers can
 invoke its descriptor directly.
 
-- **Kept words.** The `box` adapter of a Shared or Mutable shape with
-  captures that own no runtime handles hands the four words to `aura_direct_closure_value_deferred`. The function
-  value keeps them in a `DirectCallable` with the key of the contract's
-  `invoke` signature (`contract_abi_key`). The descriptor's
-  `box_captures` adapter, at offset 48, turns the captures into runtime
-  values. The runtime calls it the first time runtime code reads them. A
-  Mutable callable then moves its state to those values and releases the
-  words. A Consuming shape or a shape that captures a task-tracked handle
-  boxes its captures eagerly. The resulting function can outlive its
-  creator without retaining an entry in the creator's task ledger.
-- **A call in place.** `stored_callable_in_place` in `native_codegen.rs`
-  recognizes a callee that is a field of an instance kept in place, an
-  element of a local list, or an element of a list in such a field. It
-  asks `aura_direct_function_callable` or `aura_direct_vec_callable` for
-  the address of the kept words and calls `invoke` on them. No value is
-  copied and no reference is taken. A value with no words for the
-  caller's contract is called through its box.
+- **Kept words.** A Shared or Mutable shape can keep its native words
+  when the captures fit in three environment words and own no runtime
+  handles. The `box` adapter hands the words to
+  `aura_direct_closure_value_deferred`. Its `DirectCallable` records the
+  ABI key of the contract's `invoke` signature. When runtime code first
+  reads the captures, the descriptor's `box_captures` adapter at offset
+  48 materializes them. A Mutable callable moves its state to those
+  values and releases the words. Consuming shapes, wider environments
+  and handle-owning captures use the eager representation. The resulting
+  function owns its captures independently of the creating task's ledger.
+- **A call in place.** `stored_callable_in_place` recognizes a field of an
+  instance kept in place, an element of a local list, or an element of a
+  list in such a field. A confined list builds a table of callable
+  addresses after enough reads to pay for a traversal. A write or task
+  handoff invalidates the table. Generated code reads the table or the
+  function box directly. It checks the ABI key and the release flag
+  before invoking the stored words. Shared values and cache misses use
+  `aura_direct_function_callable` or `aura_direct_vec_callable`. A value
+  with no live words for the contract is called through its box.
+- **A forwarding closure.** A sink-free mutable closure that only passes
+  its plain receiver and unchanged positional arguments to a leaf method
+  can enter that method body directly. Its overflow path pushes the
+  closure's frame followed by the method's frame, preserving both source
+  locations in the diagnostic.
 - **A loop.** `compile_callable_element_read` lowers the element read of
   a `for` loop over a list of callables. `aura_direct_vec_callable_copy`
   copies the words of a Shared callable into the loop variable with a
