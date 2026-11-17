@@ -747,11 +747,12 @@ fn a_callback_copies_the_c_text_it_receives() {
             };
             assert_eq!(text.capacity(), crate::text::INLINE_CAPACITY);
         });
-        // The box is frozen: a release leaves it, and the callback's body
-        // frees it.
+        let retained = aura_direct_retain_value(text);
         aura_direct_release_value(text);
-        assert_eq!(rendered(text), "caf\u{e9}");
         aura_direct_ffi_release_callback_text(text);
+        // A value retained by the Aura function outlives the callback.
+        assert_eq!(rendered(retained), "caf\u{e9}");
+        aura_direct_release_value(retained);
         aura_direct_ffi_release_callback_text(std::ptr::null_mut());
     }
 
@@ -1187,6 +1188,73 @@ fn a_struct_with_an_array_field_is_packed_and_unpacked_by_the_runtime() {
             "{}",
             diagnostic.message
         );
+    }
+}
+
+#[test]
+fn a_mutable_struct_array_keeps_native_field_access_after_c_writes_it() {
+    use crate::native_runtime::{register_class_layout, TypedFields, FIRST_CLASS_ACCESS};
+    use crate::runtime_value::InstanceFields;
+    use aura_core::layout::{encode_descriptor, ClassDefinition, LayoutEnv};
+
+    let class = Type::named("Flagged");
+    let env = LayoutEnv {
+        classes: [(
+            "Flagged".to_owned(),
+            ClassDefinition {
+                type_params: Vec::new(),
+                fields: vec![
+                    ("on".to_owned(), Type::named("bool")),
+                    (
+                        "bytes".to_owned(),
+                        Type::Named("list".into(), vec![Type::named("uint8")]),
+                    ),
+                ],
+            },
+        )]
+        .into(),
+        ..Default::default()
+    };
+    let native = encode_descriptor(&class, &env).expect("a native class layout");
+    let native = register_class_layout(&native, FIRST_CLASS_ACCESS + 0x1100_0010).unwrap();
+    let Value::Instance(mut input) = flagged(true, &[1, 2, 3]) else {
+        unreachable!()
+    };
+    let fields = std::mem::take(input.fields.map_mut());
+    input.fields = InstanceFields::Typed(TypedFields::from_map(native, fields).unwrap());
+    let mut elements = ListElements::from(vec![Value::Instance(input)]);
+    elements.lend(0).expect("the caller borrows this element");
+    let values = boxed_value(Value::Vec(VecValue::new(class, elements)));
+    let descriptor = flagged_layout();
+    let symbol = b"set";
+    unsafe {
+        let array = aura_direct_ffi_pack_structs(values, descriptor.as_ptr(), descriptor.len());
+        array.copy_from_nonoverlapping([0_u8, 4, 5, 6].as_ptr(), 4);
+        aura_direct_ffi_unpack_structs(
+            values,
+            descriptor.as_ptr(),
+            descriptor.len(),
+            array,
+            symbol.as_ptr(),
+            symbol.len(),
+        );
+        with_value(values, |value| {
+            let Value::Vec(list) = value else {
+                unreachable!()
+            };
+            assert!(matches!(list.elements, ListElements::Boxes(_)));
+            let first = list.elements.first().unwrap();
+            let Value::Instance(item) = &*first else {
+                unreachable!()
+            };
+            assert_eq!(
+                item.fields.typed().unwrap().layout().access(),
+                native.access()
+            );
+            assert_eq!(*first, flagged(false, &[4, 5, 6]));
+        });
+        aura_direct_ffi_release_structs(array);
+        aura_direct_release_value(values);
     }
 }
 

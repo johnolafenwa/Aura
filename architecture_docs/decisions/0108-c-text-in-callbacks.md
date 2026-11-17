@@ -16,9 +16,12 @@ the first NUL, and copy the text before entering the Aura body. An empty
 C string is valid. A null pointer or invalid UTF-8 records `AU4005`.
 The callback follows the existing failure convention and the enclosing
 foreign call reports the diagnostic when control returns from C. If the
-Aura body traps, C receives the callback’s failure return value and
-finishes its cleanup. The native callback guard then delivers the original
-diagnostic to its Aura caller. Converted strings are released on each path.
+Aura body traps, resource managers opened inside the callback exit first.
+C then receives the failure return value and finishes its cleanup. The
+enclosing foreign call delivers the original diagnostic and its caller's
+resource managers exit. The callback entry releases its references to the
+converted strings on each path. A retained string follows the ordinary
+Aura reference lifetime.
 
 ## Rationale
 

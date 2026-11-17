@@ -167,13 +167,19 @@ allocated. The regression checks the native allocation counters. The entry
 now frees each converted argument after the guarded body exits, including
 when conversion of a later argument or the Aura function traps. The C fixture
 finishes cleanup before Aura reports the trap. With two text arguments,
-the native regression reports 11 boxes allocated and 11 freed.
+the original two-text fixture reports 11 boxes allocated and 11 freed.
+A second regression checks the order of three cleanups. The callback's Aura
+manager exits, the C caller finishes, and the enclosing Aura manager exits.
+A failed callback records its own cleanup depth so each language can
+finish its part before the trap continues.
 
 A four-record array passed to C 64 times incurred 256 conversions from
 native records into Aura values. Generated code checks the C and Aura layouts
 and gives C a private copy of matching record storage. Other lists retain
 the field-by-field conversion. Small fixed scalar arrays can be copied
 directly from a typed class field after checking its storage and length.
+A mutable array written by C keeps the native field layout of its class
+elements so later reads of union members can use their byte fields.
 
 The three-language benchmark is in
 [`benchmarks/ffi_calls`](../benchmarks/ffi_calls/README.md#struct-arrays-array-fields-unions-and-text-callbacks).

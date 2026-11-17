@@ -678,7 +678,9 @@ returns a scalar or `None`.
 - **Failures.** A failure in the callback, such as an index out of range,
   does not unwind through the C function. The callback returns zero to C,
   later callbacks return zero without running, and the foreign call fails
-  with the callback's diagnostic when the C function returns.
+  with the callback's diagnostic when the C function returns. Resource
+  managers opened inside the callback exit before C resumes. Managers
+  surrounding the foreign call exit after C finishes.
 
 List, struct, and opaque-handle callback parameters produce `AU2002`.
 The function-pointer parameter of the extern declaration uses the default

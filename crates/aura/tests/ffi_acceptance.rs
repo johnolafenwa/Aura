@@ -2460,17 +2460,28 @@ def main() -> int32:
 fn a_trap_in_a_text_callback_releases_its_arguments() {
     let (_package, source) = fixture_package(
         r#"
+class Marker:
+    name: str
+
+    def close(mut self) -> None:
+        print(self.name)
+
 def log(message: str, value: float64, unit: str) -> None:
-    assert value < 0.0, "callback stopped"
+    with inner = Marker(name="Aura callback cleanup"):
+        assert value < 0.0, "callback stopped"
 
 def main() -> int32:
-    fx_log_with_cleanup(log)
+    with outer = Marker(name="Aura caller cleanup"):
+        fx_log_with_cleanup(log)
     return 0
 "#,
     );
     let interpreted = run_mir(&source);
     assert!(!interpreted.status.success());
-    assert_eq!(interpreted.stdout, b"C finished cleanup\n");
+    assert_eq!(
+        interpreted.stdout,
+        b"Aura callback cleanup\nC finished cleanup\nAura caller cleanup\n"
+    );
     let (direct, stats) = native_stats(&source);
     assert_eq!(direct.stdout, interpreted.stdout);
     let stderr = String::from_utf8_lossy(&direct.stderr);

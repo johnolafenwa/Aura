@@ -19,13 +19,16 @@ use std::str;
 use aura_core::diag::Diagnostic;
 
 use super::{
-    allocate_box, boxed_value, free_frozen_direct_value, runtime_diagnostic_error, runtime_error,
-    task_runtime_boundary, value_mut, value_type_name, with_value, OpaqueValue,
+    allocate_box, boxed_value, register_direct_owned_value, release_untracked_value,
+    runtime_diagnostic_error, runtime_error, task_runtime_boundary, value_mut, value_type_name,
+    with_value, OpaqueValue,
 };
 use crate::c_layout::CStruct;
 use crate::c_values::{self, CValueError};
-use crate::list_elements::ListForm;
-use crate::runtime_value::{ArrayValue, FfiHandleDrop, FfiHandleValue, Value, VecValue};
+use crate::list_elements::{ListElements, ListForm};
+use crate::runtime_value::{
+    ArrayValue, FfiHandleDrop, FfiHandleValue, InstanceFields, TypedFields, Value, VecValue,
+};
 
 /// A pointer-length view as generated code reads it back: the address of
 /// the first byte, or null when there are none, and the byte count.
@@ -683,14 +686,18 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
         if state.foreign_callback_failure.is_some() {
             return None;
         }
-        Some(std::mem::replace(&mut state.foreign_callback_active, true))
+        Some(
+            state
+                .foreign_callback_cleanup_base
+                .replace(state.cleanup_stack.len()),
+        )
     });
     let Some(previous) = previous else {
         return;
     };
     let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| unsafe { body(frame) }));
     super::with_direct_task_runtime_state(|state| {
-        state.foreign_callback_active = previous;
+        state.foreign_callback_cleanup_base = previous;
         if let Err(payload) = outcome {
             state.foreign_callback_failure = Some(payload);
             MAY_HAVE_CALLBACK_FAILURE.set(true);
@@ -699,11 +706,9 @@ pub unsafe extern "C" fn aura_direct_ffi_callback_guard(
 }
 
 /// A new `str` that holds a copy of the C text a callback received.
-/// `function` names the Aura function the callback runs. The box is
-/// frozen, as the box of a `str` literal is: the function borrows it, a
-/// release of it does nothing, and anything that keeps the text copies it.
-/// The callback entry frees it with [`aura_direct_ffi_release_callback_text`]
-/// after the guarded body returns or traps.
+/// `function` names the Aura function the callback runs. The ordinary
+/// parameter reference belongs to the task. The callback entry holds a
+/// second reference and releases it after the guarded body returns or traps.
 ///
 /// # Safety
 ///
@@ -718,13 +723,13 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
     task_runtime_boundary(|| unsafe {
         match crate::ffi::checked_callback_text(text as usize) {
             Ok(text) => {
-                // This string has no mutable list view or ledger entry. It
-                // is born frozen and is owned by the callback entry alone.
+                // Publish both references together. The task releases its
+                // argument in the normal way, even if another call retains it.
                 let mut boxed = OpaqueValue::new(Value::String(text.into()), None);
-                *boxed.ref_count.get_mut() = super::FROZEN_REFERENCES;
-                *boxed.shared_lock.get_mut() =
-                    std::ptr::from_ref(&super::FROZEN_VALUE_LOCK).cast_mut();
-                allocate_box(boxed)
+                *boxed.ref_count.get_mut() = 2;
+                let pointer = allocate_box(boxed);
+                register_direct_owned_value(pointer);
+                pointer
             }
             Err(failure) => {
                 foreign_call_failure(metadata_text(function, function_length), "AU4005", failure)
@@ -733,7 +738,7 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
     })
 }
 
-/// Frees the copy of C text that [`aura_direct_ffi_callback_text`] made.
+/// Releases the callback entry's reference to its converted C text.
 ///
 /// # Safety
 ///
@@ -741,8 +746,8 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_callback_text(
 #[cfg_attr(not(coverage), no_mangle)]
 pub unsafe extern "C-unwind" fn aura_direct_ffi_release_callback_text(text: *mut OpaqueValue) {
     if !text.is_null() {
-        // SAFETY: the caller's contract. Nothing else holds the frozen box.
-        unsafe { free_frozen_direct_value(text) }
+        // SAFETY: the entry owns this reference outside the task's ledger.
+        unsafe { release_untracked_value(text) }
     }
 }
 
@@ -754,7 +759,14 @@ pub extern "C-unwind" fn aura_direct_ffi_callback_check() {
         if let Some(payload) =
             super::with_direct_task_runtime_state(|state| state.foreign_callback_failure.take())
         {
-            task_runtime_boundary(|| std::panic::resume_unwind(payload));
+            // A nested C call may have just returned to another Aura callback.
+            // Unwind that callback's own exits before its C caller resumes.
+            task_runtime_boundary(|| {
+                match payload.downcast::<super::LightweightTaskFailureSignal>() {
+                    Ok(signal) => runtime_diagnostic_error(signal.0),
+                    Err(payload) => std::panic::resume_unwind(payload),
+                }
+            });
         }
     }
 }
@@ -1006,7 +1018,36 @@ pub unsafe extern "C-unwind" fn aura_direct_ffi_unpack_structs(
                     value_type_name(value)
                 ));
             };
-            vector.elements = read.elements;
+            // A list of generated class instances can keep using its native
+            // field offsets after C fills it. Decode the entire array first:
+            // one invalid member must leave every element of the list alone.
+            let mut elements = read.elements;
+            let class = match &vector.elements {
+                ListElements::Values(_) | ListElements::Boxes(_) => {
+                    vector.elements.first().and_then(|first| match &*first {
+                        Value::Instance(instance) => {
+                            instance.fields.typed().map(TypedFields::layout)
+                        }
+                        _ => None,
+                    })
+                }
+                _ => None,
+            };
+            if let Some(class) = class.filter(|class| class.class_name() == layout.name) {
+                for element in elements.values_mut() {
+                    if let Value::Instance(instance) = element {
+                        let fields = std::mem::take(instance.fields.map_mut());
+                        instance.fields = TypedFields::from_map(class, fields)
+                            .map_or_else(InstanceFields::Map, InstanceFields::Typed);
+                    }
+                }
+            }
+            if matches!(vector.elements, ListElements::Boxes(_)) {
+                // A borrowed element already had a stable box before C ran.
+                // Let generated code borrow the replacements the same way.
+                let _ = elements.lend(0);
+            }
+            vector.elements = elements;
         })
     })
 }
