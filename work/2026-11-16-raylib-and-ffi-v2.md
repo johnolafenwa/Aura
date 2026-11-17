@@ -198,3 +198,11 @@ measured the numeric union getter at 8.94 ns with a frame on every read and
 5.62 ns with a frame only for the slow conversion. A malformed union still
 reports `AU4005` with the same `Word.code` and `main` frames on both backends.
 Union reads and text callbacks remain above the three-times-Rust goal.
+
+A follow-up native build kept validated, private C writeback storage for
+union lists whose only element uses are immutable numeric reads. Eight
+noise-controlled pairs reduced the median union read from 4.54 to 0.78 ns.
+The independent three-way run measured 0.82 ns for Aura, 0.67 ns for Rust,
+and 216.12 ns for Python ctypes. The native backend and interpreter agreed
+on refills, replacements, edits to a union's bytes, AU4003 for an invalid
+index and AU4005 for an incorrect byte count.

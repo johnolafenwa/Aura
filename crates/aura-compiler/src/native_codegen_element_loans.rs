@@ -2552,6 +2552,91 @@ impl FunctionCompiler<'_> {
         Ok(true)
     }
 
+    /// A field-only getter borrows its receiver without publishing or replacing
+    /// it. Pass the element directly to that call. A missed slot still loads
+    /// through the ordinary checked path in `pass_native_element`.
+    pub(super) fn compile_lent_element_getter(
+        &mut self,
+        block: &BasicBlock,
+        index: usize,
+    ) -> std::result::Result<bool, String> {
+        let [Instruction::Lend {
+            place,
+            temp,
+            mutable: false,
+        }, Instruction::Assign {
+            target,
+            value:
+                Rvalue::Call {
+                    callee:
+                        CallTarget::Member {
+                            object: Operand::Place(receiver),
+                            receiver_place: Some(writeback),
+                            field,
+                            dispatch: Some(dispatch @ MethodDispatch::Static { function }),
+                        },
+                    args,
+                    type_args,
+                },
+        }, Instruction::EndLend {
+            place: ended,
+            temp: ended_temp,
+            mutable: false,
+        }, ..] = &block.instructions[index..]
+        else {
+            return Ok(false);
+        };
+        if receiver != temp
+            || writeback != temp
+            || ended != place
+            || ended_temp != temp
+            || !args.is_empty()
+            || !self.element_lend_temps.contains(temp)
+            || !matches!(
+                self.native_loans.get(place),
+                Some(NativeLoan {
+                    target: LoanTarget::Slot,
+                    ..
+                })
+            )
+            || !self.program_shapes.keeps_receiver_shape(function)
+            || self
+                .borrowing
+                .get(function)
+                .and_then(|callee| callee.receiver)
+                != Some(MirReceiverKind::Borrow)
+            || !matches!(self.local_type(target), Ok(DirectType::Scalar(_)))
+        {
+            return Ok(false);
+        }
+        // An unrelated outer loan may need to take ownership at one of
+        // the instructions this pair would skip.
+        if !self.element_promotions.is_empty()
+            && [index, index + 2].iter().any(|i| {
+                self.element_promotions
+                    .contains_key(&(block.label.clone(), *i))
+            })
+        {
+            return Ok(false);
+        }
+        let call = Instruction::Assign {
+            target: target.clone(),
+            value: Rvalue::Call {
+                callee: CallTarget::Member {
+                    object: Operand::Place(place.clone()),
+                    field: field.clone(),
+                    receiver_place: Some(place.clone()),
+                    dispatch: Some(dispatch.clone()),
+                },
+                args: Vec::new(),
+                type_args: type_args.clone(),
+            },
+        };
+        self.current_snapshot_instruction = index + 1;
+        self.compile_instruction(&block.label, index + 1, &call)?;
+        Ok(true)
+    }
+
     /// Loads `place`, an argument to a parameter the callee borrows, as the
     /// box in the slot a followed loan reaches when `place` is such a loan:
     /// the callee reads the element where the list keeps it. A loan that

@@ -44,6 +44,7 @@ pub(super) struct ProgramShapes {
     field_only_methods: HashSet<String>,
     /// Only compiler-supplied methods have no user source path.
     collection_methods: HashMap<String, crate::diag::Span>,
+    pub(super) numeric_union_projections: HashMap<String, (String, usize, crate::ffi::FfiScalar)>,
 }
 
 impl ProgramShapes {
@@ -62,6 +63,11 @@ impl ProgramShapes {
                     .insert(function.name.clone(), function.span);
             }
             let name = function.name.as_str();
+            if let Some(projection) = super::foreign_reads::numeric_projection(function) {
+                shapes
+                    .numeric_union_projections
+                    .insert(function.name.clone(), projection);
+            }
             // A method qualifies when only named calls and statically
             // dispatched method calls reach it, which the ownership pass
             // records in `borrowing`.

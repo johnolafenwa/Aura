@@ -810,7 +810,12 @@ impl FunctionCompiler<'_> {
                         (packed, packed)
                     };
                     arguments.push_word(array);
-                    struct_arrays.push(allocation);
+                    let cached = place
+                        .as_ref()
+                        .is_some_and(|(name, _)| self.union_read_buffers.contains_key(name));
+                    if !cached {
+                        struct_arrays.push(allocation);
+                    }
                     if call.params[index].passing != MirReceiverKind::BorrowMut {
                         continue;
                     }
@@ -937,6 +942,15 @@ impl FunctionCompiler<'_> {
                             symbol_len,
                         ],
                     );
+                    if let Some(buffer) = self.union_read_buffers.get(&place).copied() {
+                        self.release_union_buffer(buffer);
+                        let count = match buffer.literal_count {
+                            Some(n) => self.builder.iconst(types::I64, n as i64),
+                            None => self.emit_list_len(value.values[0], false),
+                        };
+                        self.builder.def_var(buffer.data, array);
+                        self.builder.def_var(buffer.count, count);
+                    }
                     value
                 }
             };
@@ -1559,7 +1573,7 @@ impl FunctionCompiler<'_> {
     /// Releases the list the runtime made to lay a pointer argument's
     /// elements out as a C array. A list that lent its own elements made
     /// none, which is the common case, so the release sits on a cold path.
-    fn release_foreign_allocation(&mut self, copy: Val, helper: RuntimeFn) {
+    pub(super) fn release_foreign_allocation(&mut self, copy: Val, helper: RuntimeFn) {
         let release = self.builder.create_block();
         let done = self.builder.create_block();
         self.builder.set_cold_block(release);
@@ -1603,7 +1617,7 @@ impl FunctionCompiler<'_> {
     /// The Aura word of a scalar a foreign function returned. A C function
     /// may leave the bits of a register above a narrow result undefined, so
     /// the word is extended here from the narrow value.
-    fn foreign_scalar_result(
+    pub(super) fn foreign_scalar_result(
         &mut self,
         scalar: &ForeignScalar,
         raw: Val,
