@@ -28,6 +28,7 @@ serde_json = { version = "1", features = ["arbitrary_precision", "unbounded_dept
 sha2 = "0.10"
 subtle = "2"
 toml = "0.8"
+triomphe = { version = "0.1.17", default-features = false }
 tungstenite = { version = "0.25", features = ["rustls-tls-native-roots"] }
 url = "2"
 webpki-roots = "1"
