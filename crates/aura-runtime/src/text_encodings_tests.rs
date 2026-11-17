@@ -1,19 +1,5 @@
 use super::{decode, encode, Encoding, EncodingError};
 
-const ALL: [Encoding; 11] = [
-    Encoding::Utf8,
-    Encoding::Utf8Sig,
-    Encoding::Utf16,
-    Encoding::Utf16Le,
-    Encoding::Utf16Be,
-    Encoding::Utf32,
-    Encoding::Utf32Le,
-    Encoding::Utf32Be,
-    Encoding::Latin1,
-    Encoding::Ascii,
-    Encoding::Windows1252,
-];
-
 #[test]
 fn names_ignore_case_and_separators() {
     for (name, encoding) in [
@@ -43,7 +29,7 @@ fn names_ignore_case_and_separators() {
 #[test]
 fn ascii_text_round_trips_in_every_encoding() {
     let text = "Aura 0.17, plain text.";
-    for encoding in ALL {
+    for encoding in Encoding::ALL {
         let bytes = encode(text, encoding).expect("ASCII encodes everywhere");
         assert_eq!(
             decode(&bytes, encoding).as_deref(),
@@ -56,7 +42,7 @@ fn ascii_text_round_trips_in_every_encoding() {
 #[test]
 fn unicode_text_round_trips_in_the_unicode_encodings() {
     let text = "h\u{e9}llo \u{20ac} \u{1F30C}";
-    for encoding in &ALL[..8] {
+    for encoding in &Encoding::ALL[..8] {
         let bytes = encode(text, *encoding).expect("Unicode encodes");
         assert_eq!(
             decode(&bytes, *encoding).as_deref(),

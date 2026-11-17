@@ -9485,6 +9485,55 @@ impl<'a> FunctionCompiler<'a> {
         if let Some(scalar) = self.compile_json_scalar_accessor(builtin, args)? {
             return Ok(scalar);
         }
+        use aura_runtime::text_encodings::Encoding;
+        let literal_codec = match (name, args) {
+            ("bytes::encode" | "bytes::decode", [source, label]) => {
+                match (&source.value, &label.value) {
+                    (Operand::Place(source), Operand::String(label)) => Encoding::from_name(label)
+                        .and_then(|encoding| {
+                            Encoding::ALL
+                                .iter()
+                                .position(|supported| supported == &encoding)
+                        })
+                        .map(|code| (source, code)),
+                    _ => None,
+                }
+            }
+            _ => None,
+        };
+        let results = if let Some((source, code)) = literal_codec {
+            let source = self.load_place(source)?;
+            let code = self.builder.iconst(types::I64, code as i64);
+            let decode = self
+                .builder
+                .iconst(types::I64, i64::from(name == "bytes::decode"));
+            self.builder
+                .call(
+                    self.runtime[RuntimeFn::TextCodec],
+                    &[source.values[0], code, decode],
+                )
+                .results
+        } else {
+            self.call_host_arg_buffer(builtin, args)?
+        };
+        let semantic_type = RuntimeOp::Host(builtin)
+            .result_type(None, &[])
+            .expect("a host builtin names its result type");
+        let result = self.owned_opaque_result(results, semantic_type.clone());
+        let target = ensure_direct_type(
+            &semantic_type,
+            &self.classes,
+            &format!("return value of `{name}`"),
+        )?;
+        self.coerce_value(result, &target)
+    }
+
+    fn call_host_arg_buffer(
+        &mut self,
+        builtin: HostBuiltin,
+        args: &[MirArg],
+    ) -> std::result::Result<Vec<Val>, String> {
+        let name = builtin.name();
         // Checked MIR materializes builtin defaults before direct code generation, so
         // optional metadata parameters are present in this argument list too.
         let mut loaded_args = Vec::with_capacity(args.len());
@@ -9513,17 +9562,7 @@ impl<'a> FunctionCompiler<'a> {
         }
         let entry = self.host_builtin_ref(builtin)?;
         let call = self.builder.call(entry, &[buffer, count]);
-
-        let semantic_type = RuntimeOp::Host(builtin)
-            .result_type(None, &[])
-            .expect("a host builtin names its result type");
-        let result = self.owned_opaque_result(call.results, semantic_type.clone());
-        let target = ensure_direct_type(
-            &semantic_type,
-            &self.classes,
-            &format!("return value of `{name}`"),
-        )?;
-        self.coerce_value(result, &target)
+        Ok(call.results)
     }
 
     /// `json.as_int`, `json.as_float`, or `json.as_bool` whose `T | None`
