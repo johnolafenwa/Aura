@@ -30469,11 +30469,20 @@ fn direct_char_at_reads_one_character_and_traps_out_of_range() {
 fn native_numbers_read_borrowed_limbs_and_return_modular_powers_in_one_word() {
     use crate::list_elements::ListElements;
     let words = |digits: Vec<u64>| {
-        Value::Vec(VecValue::new(Type::named("uint64"), ListElements::Uint64(digits.into())))
+        Value::Vec(VecValue::new(
+            Type::named("uint64"),
+            ListElements::Uint64(digits.into()),
+        ))
     };
     let left = super::boxed_value(words(vec![1, 0, 0, 0, u64::MAX]));
     let sum = super::aura_direct_big_add_words(left, left);
-    assert_eq!(unsafe { take_value(sum) }, words(vec![1, 0, 0, 0, u64::MAX - 1, 1]));
-    assert_eq!(unsafe { take_value(left) }, words(vec![1, 0, 0, 0, u64::MAX]));
+    assert_eq!(
+        unsafe { take_value(sum) },
+        words(vec![1, 0, 0, 0, u64::MAX - 1, 1])
+    );
+    assert_eq!(
+        unsafe { take_value(left) },
+        words(vec![1, 0, 0, 0, u64::MAX])
+    );
     assert_eq!(super::aura_direct_small_pow_mod(-2, 3, -5), -3);
 }

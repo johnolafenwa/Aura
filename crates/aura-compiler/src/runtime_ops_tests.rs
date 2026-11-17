@@ -1034,9 +1034,27 @@ fn host_builtins_round_trip_through_their_names() {
         assert_eq!(json, format!("\"{}\"", builtin.name()));
         assert_eq!(serde_json::from_str::<HostBuiltin>(&json).unwrap(), builtin);
     }
-    // `sys::monotonic_time_ms`, twelve `time` functions, and ten `regex`
-    // functions have dedicated helpers.
-    assert_eq!(count + 23, HOST_BUILTIN_SYMBOLS.len());
+    // Every exported host entry is reachable through generic dispatch or
+    // a named operation with its own native helper.
+    let mut dedicated = 0;
+    for &(name, _) in HOST_BUILTIN_SYMBOLS {
+        if HostBuiltin::from_name(name).is_none() {
+            assert!(
+                FunctionOp::from_name(name).is_some(),
+                "{name} has no dispatch"
+            );
+            dedicated += 1;
+        }
+    }
+    assert_eq!(count + dedicated, HOST_BUILTIN_SYMBOLS.len());
+    assert_eq!(
+        FunctionOp::from_name("numbers::__aura_big_add_words"),
+        Some(FunctionOp::BigAddWords)
+    );
+    assert_eq!(
+        FunctionOp::from_name("numbers::__aura_small_pow_mod"),
+        Some(FunctionOp::SmallPowMod)
+    );
     assert_eq!(HostBuiltin::from_name("time::__aura_rfc3339"), None);
     assert_eq!(HostBuiltin::from_name("regex::__aura_is_match"), None);
     assert_eq!(HostBuiltin::from_name("sys::monotonic_time_ms"), None);

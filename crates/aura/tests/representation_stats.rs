@@ -826,6 +826,9 @@ fn small_bigint_arithmetic_keeps_the_loop_accumulator_inline() {
     };
     let short = sample(16);
     let long = sample(256);
-    assert_eq!(long.opaque_boxes, short.opaque_boxes, "additional small additions allocate no boxes");
+    assert_eq!(
+        long.opaque_boxes, short.opaque_boxes,
+        "additional small additions allocate no boxes"
+    );
     assert_eq!(long.union_payload_boxes, short.union_payload_boxes);
 }

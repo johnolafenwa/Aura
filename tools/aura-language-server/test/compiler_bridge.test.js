@@ -4798,6 +4798,27 @@ test("compiler bridge exposes control-plane module completions", async () => {
   }
 });
 
+test("numbers methods expose their argument types in completion and hover", async () => {
+  const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-numbers-"));
+  try {
+    const uri = `file://${path.join(tempRoot, "main.au")}`;
+    setWorkspaceRoots([repoRoot, tempRoot]);
+    const lines = ["from numbers import Decimal", "", "def main() -> None:", "    price = Decimal.from_int(12)"];
+    const end = "    price.";
+    const completions = await completeWithCompiler(uri, [...lines, end].join("\n"), lines.length, end.length, ".");
+    const fixed = completions.find((item) => item.name === "to_fixed");
+    assert.ok(fixed, "a Decimal completes its fixed-point formatter");
+    assert.ok(fixed.detail.includes("places: int64") && fixed.detail.includes("str"), fixed.detail);
+    const line = "    print(price.to_fixed(2))";
+    const analysis = await analyzeWithCompiler(uri, [...lines, line].join("\n"));
+    assert.deepEqual(analysis.diagnostics, []);
+    const hover = compilerHoverAtPosition(analysis, lines.length, line.indexOf("to_fixed"));
+    assert.ok(hover?.value.includes("to_fixed") && hover.value.includes("places: int64"), hover?.value);
+  } finally {
+    fs.rmSync(tempRoot, { recursive: true, force: true });
+  }
+});
+
 test("compiler bridge exposes the recursive json.Value contract", async () => {
   const tempRoot = fs.mkdtempSync(path.join(os.tmpdir(), "aura-lsp-json-value-"));
   try {
