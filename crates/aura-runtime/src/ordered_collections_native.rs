@@ -18,6 +18,7 @@ fn field_mut<R>(
         return Err(invalid_store());
     };
     match &mut instance.fields {
+        InstanceFields::Recovered(_) => Err(invalid_store()),
         InstanceFields::Map(fields) => action(fields.get_mut(name).ok_or_else(invalid_store)?),
         InstanceFields::Typed(fields) => fields
             .with_field_mut(name, action)
@@ -29,6 +30,9 @@ fn read(value: &Value, op: I64Op, key: i64, nested: bool) -> Result<Option<i64>,
     let Value::Instance(instance) = value else {
         return Err(invalid_store());
     };
+    if matches!(instance.fields, InstanceFields::Recovered(_)) {
+        return Err(invalid_store());
+    }
     if nested {
         let map = instance.fields.get("map").ok_or_else(invalid_store)?;
         return read(&map, op, key, false);
@@ -193,4 +197,24 @@ pub unsafe extern "C-unwind" fn aura_direct_ordered_local_step(
         };
         runtime_diagnostic_error(diagnostic)
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ordered_receivers_reject_an_unformatted_trap_without_reading_its_fields() {
+        let mut trap = crate::runtime_value::deferred_recovered_trap_value(|| {
+            panic!("checking a collection receiver formatted its trap")
+        });
+        assert_eq!(
+            field_mut(&mut trap, "store", |_| Ok(())).unwrap_err().code,
+            "AU4001"
+        );
+        assert_eq!(
+            read(&trap, I64Op::MapGet, 0, false).unwrap_err().code,
+            "AU4001"
+        );
+    }
 }
